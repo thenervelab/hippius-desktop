@@ -13,6 +13,8 @@ import FailedFilesModal from "@/components/page-sections/drive/FailedFilesModal"
 import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
 import ShareDriveModal from "@/components/page-sections/drive/ShareDriveModal";
 import RenameDialog from "@/components/page-sections/drive/RenameDialog";
+import NewFolderDialog from "@/components/page-sections/drive/NewFolderDialog";
+import AppContextMenu from "@/components/ui/context-menu/AppContextMenu";
 import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
 import { LocalWalletProvider } from "@/app/contexts/LocalWalletContext";
@@ -36,6 +38,11 @@ export default function ProtectedLayout({
         {/* Renders nothing while SHARED_DRIVES_ENABLED is off. */}
         <ShareDriveModal />
         <RenameDialog />
+        <NewFolderDialog />
+        {/* Replaces the WebView's Back / Reload / Inspect Element menu.
+            Yields to the row and card menus, which handle their own
+            right-clicks. */}
+        <AppContextMenu />
         <RecoveryEventListener />
         <AccountRecoveryDialog />
         <div className="flex flex-col min-h-screen w-full bg-cover bg-center bg-no-repeat bg-fixed bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]">

@@ -96,3 +96,60 @@ describe("DrivePlanCard price", () => {
   });
 });
 
+/**
+ * Two cards claiming to be the plan in use is the bug this replaces: the
+ * free card returned "none" for every account, and "none" is labelled
+ * "Current Plan" — so a subscriber saw it beside their paid plan's
+ * "Cancel subscription".
+ *
+ * "Default Plan" is what it actually is: the plan underneath a
+ * subscription, which cancelling returns you to. Inert, because the way
+ * back is the paid card's own Cancel.
+ */
+describe("the free plan card beside a paid subscription", () => {
+  const freePlan = plan({ code: "free", name: "Free Drive Plan", is_free: true });
+
+  it("says Default Plan, not Current Plan", () => {
+    render(
+      <DrivePlanCard
+        plan={freePlan}
+        action="default"
+        isCurrent={false}
+        isBusy={false}
+        onAction={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Default Plan")).toBeTruthy();
+    expect(screen.queryByText("Current Plan")).toBeNull();
+  });
+
+  it("is not clickable", () => {
+    const onAction = vi.fn();
+    render(
+      <DrivePlanCard
+        plan={freePlan}
+        action="default"
+        isCurrent={false}
+        isBusy={false}
+        onAction={onAction}
+      />,
+    );
+    fireEvent.click(screen.getByText("Default Plan"));
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  // An account genuinely on the free tier still reads "Current Plan".
+  it("still says Current Plan for an account actually on it", () => {
+    render(
+      <DrivePlanCard
+        plan={freePlan}
+        action="none"
+        isCurrent
+        isBusy={false}
+        onAction={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Current Plan")).toBeTruthy();
+  });
+});
+

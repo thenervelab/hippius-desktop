@@ -2,6 +2,7 @@
 
 import React, { Suspense } from "react";
 
+import PlanRenewalNotice from "@/components/ui/plan-chip/PlanRenewalNotice";
 import CreditsWidget from "./CreditsWidget";
 import TaoDepositWidget from "./TaoDepositWidget";
 import DrivePlansSection from "@/components/page-sections/drive-plans/DrivePlansSection";
@@ -31,6 +32,13 @@ import DrivePlansSection from "@/components/page-sections/drive-plans/DrivePlans
 export default function BillingSections() {
   return (
     <>
+      {/* Above the credits widget, because topping THAT balance up is the
+          fix. Renders nothing unless Rust says the balance will not cover
+          the next renewal. It previously lived in the withdrawn
+          `SubscriptionPlansSection`, so it had stopped appearing here at
+          all — on the one page where the user can do something about it. */}
+      <PlanRenewalNotice className="mt-4" />
+
       {/* Credits stay: a credits-funded Drive plan renews out of this
           balance, so topping up is part of managing the plan below. */}
       {/* Two cards, two columns. The third column was left over from when

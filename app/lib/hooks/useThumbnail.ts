@@ -129,7 +129,16 @@ function isHeicFileName(fileName: string): boolean {
 async function downscaleThumbnail(blob: Blob, maxDim: number): Promise<Blob> {
   if (typeof createImageBitmap !== "function") return blob;
 
-  const bitmap = await createImageBitmap(blob);
+  // `imageOrientation: "from-image"` is NOT the default for
+  // `createImageBitmap` — it is "from-image" only in newer specs and
+  // historically "none", so it is stated rather than assumed. Without it
+  // the bitmap holds the camera's unrotated pixels, the canvas bakes them
+  // into a JPEG with no EXIF to correct it, and the thumbnail sits
+  // sideways next to a viewer that shows the same file upright (an `<img>`
+  // applies the tag by itself).
+  const bitmap = await createImageBitmap(blob, {
+    imageOrientation: "from-image",
+  });
   try {
     const scale = Math.min(1, maxDim / bitmap.width, maxDim / bitmap.height);
     if (scale >= 1) return blob;

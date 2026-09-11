@@ -131,8 +131,14 @@ describe("the low-credit warning reads one sentence, from one place", () => {
     ["the billing strip", "../PlanRenewalNotice.tsx"],
   ] as const;
 
-  it.each(surfaces)("%s takes its copy from getPlanActionNote", (_name, path) => {
-    expect(readCode(path)).toContain("getPlanActionNote");
+  it("the header chip takes the one-line version", () => {
+    expect(readCode("../index.tsx")).toContain("getPlanActionNote");
+  });
+
+  // The card has room to explain, so it takes the longer sentence — but
+  // from the same module, so the two cannot drift apart.
+  it("the billing card takes the full version", () => {
+    expect(readCode("../PlanRenewalNotice.tsx")).toContain("getRenewalNotice");
   });
 
   // Whether the balance is short is Rust's call; neither surface may
@@ -142,10 +148,22 @@ describe("the low-credit warning reads one sentence, from one place", () => {
     expect(src).not.toMatch(/funding\s*===|creditsHip/);
   });
 
-  // Billing is where the user acts on it, so the strip must be there.
-  it("the billing plans section shows the strip", () => {
-    const billing = readCode("../../../page-sections/billing/SubscriptionPlansSection.tsx");
+  // Billing is where the user acts on it, so the card must be on the page
+  // the Billing route actually renders. It used to be pinned into
+  // `SubscriptionPlansSection`, which that page stopped rendering when the
+  // credit-reload products were withdrawn — so this assertion passed while
+  // the warning appeared nowhere.
+  it("the billing page itself shows the card", () => {
+    const billing = readCode("../../../page-sections/billing/BillingSections.tsx");
     expect(billing).toContain("PlanRenewalNotice");
+  });
+
+  // Red, like the cancelled-plan banner: the plan stops unless the user
+  // acts. Amber read as an aside.
+  it("the card carries the same weight as a cancelled plan", () => {
+    const notice = readCode("../PlanRenewalNotice.tsx");
+    expect(notice).toContain('tone: "danger"');
+    expect(notice).toContain("StatusBanner");
   });
 });
 

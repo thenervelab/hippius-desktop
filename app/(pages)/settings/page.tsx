@@ -19,14 +19,32 @@ import BillingSections from "@/components/page-sections/billing/BillingSections"
 import {
   VPN_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
+  API_TOKEN_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
+import {
+  DEFAULT_SETTINGS_SECTION,
+  resolveSettingsSection,
+} from "@/app/components/sidebar/settingsNavGating";
 
 const SECTION_META: Record<
   string,
   {
     title: string;
     description: string;
-    tooltip?: string;
+    /**
+     * What the tooltip says. `ReactNode` rather than `string` because a
+     * section whose tooltip is a short guide needs structure — a run-on
+     * sentence of numbered steps is not a guide.
+     *
+     * Falls back to `description` when absent, so a section with nothing
+     * extra to say is not forced to repeat itself deliberately. Billing
+     * DID repeat itself: it had no tooltip, so the hint under the title
+     * and the hint behind the icon were the same sentence.
+     */
+    tooltip?: React.ReactNode;
+    /** Widens the tooltip for a section whose hint is more than a line. */
+    tooltipClassName?: string;
+    /** Opened externally through Tauri, never in the app webview. */
     learnMoreUrl?: string;
     showDescription?: boolean;
   }
@@ -35,6 +53,32 @@ const SECTION_META: Record<
     title: "Billing",
     description:
       "Your plan, your credits, and everything you have been charged for.",
+    // The subtitle says what the page IS; the tooltip says how to use it.
+    // Both routes are laid out because the choice is not obvious from the
+    // page: the plan cards show a price, and nothing on them explains
+    // that credits are an alternative to a card, or that a credit is a
+    // dollar.
+    tooltip: (
+      <>
+        <span className="mb-1 block font-semibold text-grey-10 dark:text-white">
+          Two ways to pay for a storage plan
+        </span>
+        <span className="mb-1 block">
+          <span className="font-semibold">By card:</span> pick a plan, choose
+          Card, and Stripe opens in your browser. Your card then funds each
+          renewal.
+        </span>
+        <span className="block">
+          <span className="font-semibold">From credits:</span> add credits
+          first (1 credit = $1), then pick a plan and choose Credits. Renewals
+          come out of your balance, so keep it topped up.
+        </span>
+      </>
+    ),
+    // The default 260px is sized for one sentence; three short blocks
+    // need the extra room or every line wraps twice.
+    tooltipClassName: "max-w-[320px]",
+    learnMoreUrl: "https://docs.hippius.com/use/desktop/billing",
     showDescription: true,
   },
   sync: {
@@ -101,8 +145,15 @@ const SECTION_META: Record<
 
 function SettingsContent() {
   const searchParams = useSearchParams();
-  const section = searchParams.get("section") ?? "sync";
-  const meta = SECTION_META[section] ?? SECTION_META["sync"];
+  // Resolved against the feature gates, not just read: the section comes
+  // from the query string, so a hidden sidebar entry does not make it
+  // unreachable. See `resolveSettingsSection`.
+  const section = resolveSettingsSection(searchParams.get("section"), {
+    vpnEnabled: VPN_FEATURE_ENABLED,
+    walletEnabled: WALLET_FEATURE_ENABLED,
+    apiTokenEnabled: API_TOKEN_FEATURE_ENABLED,
+  });
+  const meta = SECTION_META[section] ?? SECTION_META[DEFAULT_SETTINGS_SECTION];
 
   return (
     <div className="px-4 py-3">
@@ -112,7 +163,10 @@ function SettingsContent() {
           <h1 className="font-geist text-[24px] leading-[32px] font-medium text-[#0A0A0A] dark:text-white">
             {meta.title}
           </h1>
-          <InfoTooltip learnMoreUrl={meta.learnMoreUrl}>
+          <InfoTooltip
+            learnMoreUrl={meta.learnMoreUrl}
+            contentClassName={meta.tooltipClassName}
+          >
             {meta.tooltip ?? meta.description}
           </InfoTooltip>
         </div>
@@ -148,7 +202,11 @@ function SettingsContent() {
 
         {section === "notifications" && <NotificationSection />}
 
-        {section === "api-key" && <ApiTokenSection />}
+        {/* API Token is hidden behind the same release gate as its sidebar
+            entry (code kept). Gated at the render too, not just in the nav:
+            the section is addressable directly, and a hidden link is not a
+            gate. See featureFlags.ts. */}
+        {API_TOKEN_FEATURE_ENABLED && section === "api-key" && <ApiTokenSection />}
 
         {section === "updates" && <ReleaseChannelSettings />}
 

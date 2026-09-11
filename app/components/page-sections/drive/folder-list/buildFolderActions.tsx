@@ -34,7 +34,6 @@ export interface FolderActionHandlers {
   onSyncRemote?: (folder: RemoteFolder) => void;
   onBrowseRemote?: (folder: RemoteFolder) => void;
   /** Selective-sync picker for a LOCAL drive. */
-  onBrowseLocal?: (folder: SyncFolder) => void;
   /** Only offered while `SHARED_DRIVES_ENABLED`, and never on a member row. */
   onShareDrive?: (folder: SyncFolder) => void;
 }
@@ -67,18 +66,11 @@ export function buildFolderActions(
         onItemClick: () => handlers.onOpen?.(row),
       });
     }
-    if (handlers.onBrowseLocal) {
-      items.push({
-        icon: <FolderSearch className="size-4" />,
-        itemTitle: "Browse Contents",
-        onItemClick: () => handlers.onBrowseLocal?.(folder),
-      });
-    }
     if (handlers.onPause || handlers.onResume) {
       const paused = folder.status === "paused";
       items.push({
         icon: paused ? <PlayCircle className="size-4" /> : <PauseCircle className="size-4" />,
-        itemTitle: paused ? "Resume Sync" : "Pause Sync",
+        itemTitle: paused ? "Resume syncing" : "Pause syncing",
         onItemClick: () =>
           paused ? handlers.onResume?.(folder) : handlers.onPause?.(folder),
       });
@@ -107,25 +99,24 @@ export function buildFolderActions(
     if (plan.showExclusions && handlers.onManageExclusions) {
       items.push({
         icon: <FolderMinus className="size-4" />,
-        itemTitle: "Excluded from Sync",
+        itemTitle: "Sync exclusions…",
         onItemClick: () => handlers.onManageExclusions?.(folder),
-      });
-    }
-    if (plan.showDeleteFromServer && handlers.onDeleteFromServer) {
-      items.push({
-        icon: <Icons.Trash className="size-4" />,
-        itemTitle: "Delete from Server",
-        variant: "destructive",
-        onItemClick: () => handlers.onDeleteFromServer?.(folder.folderName, folder.id),
       });
     }
     if (handlers.onRemove) {
       items.push({
         icon: <Icons.CloseCircle className="size-4" />,
         itemTitle: plan.removeItemTitle,
-        variant: "destructive",
         onItemClick: () =>
           handlers.onRemove?.(folder, plan.removeIsLeave ? "leave" : "remove"),
+      });
+    }
+    if (plan.showDeleteFromServer && handlers.onDeleteFromServer) {
+      items.push({
+        icon: <Icons.Trash className="size-4" />,
+        itemTitle: "Delete from Hippius",
+        variant: "destructive",
+        onItemClick: () => handlers.onDeleteFromServer?.(folder.folderName, folder.id),
       });
     }
     return items;
@@ -151,14 +142,14 @@ export function buildFolderActions(
   if (handlers.onBrowseRemote) {
     items.push({
       icon: <FolderSearch className="size-4" />,
-      itemTitle: "Browse Contents",
+      itemTitle: "Choose what syncs…",
       onItemClick: () => handlers.onBrowseRemote?.(folder),
     });
   }
   if (handlers.onDeleteFromServer) {
     items.push({
       icon: <Icons.Trash className="size-4" />,
-      itemTitle: "Delete from Server",
+      itemTitle: "Delete from Hippius",
       variant: "destructive",
       onItemClick: () => handlers.onDeleteFromServer?.(folder.folderName),
     });
