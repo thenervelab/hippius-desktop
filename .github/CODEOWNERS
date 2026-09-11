@@ -1,0 +1,12 @@
+# Code owners for hippius-desktop.
+#
+# The `main` branch ruleset sets `require_code_owner_review`, which is VACUOUS
+# without this file: with no owners defined, GitHub has no owner review to
+# request and any collaborator's approval satisfies the rule. This file is what
+# makes "production changes need a named reviewer" actually true.
+#
+# GitHub reads CODEOWNERS from the BASE branch of a pull request, so this must
+# stay on `main` for PRs into `main` to be gated by it.
+#
+# Everything, including workflows, release scripts and signing configuration.
+* @GeorgiosDelkos
