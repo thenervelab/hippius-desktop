@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowRight } from "@/components/ui/icons";
 import GripIcon from "@/components/page-sections/home/GripIcon";
 import {
+  formatPlanPrice,
   formatPlanStorage,
   hasSharedTeamDrive,
   type DrivePlan,
@@ -113,7 +114,7 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
       <div className="flex flex-1 flex-col justify-between gap-4 rounded-t-[8px] border-t border-grey-dark-100 bg-white py-3 dark:border-black-300 dark:bg-black-600">
         <div className="flex flex-col gap-4 px-2">
           <p className="flex items-center gap-1 font-mono text-[24px] font-medium leading-[30px] tracking-[-0.96px] text-[#111] dark:text-white">
-            {plan.is_free ? "Free" : `$${plan.price_credits_monthly}`}
+            {formatPlanPrice(plan)}
             {plan.is_free ? null : (
               <span className="text-[12px] tracking-[-0.48px] opacity-50">
                 /Mo

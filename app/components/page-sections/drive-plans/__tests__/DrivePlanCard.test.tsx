@@ -71,6 +71,32 @@ describe("DrivePlanCard shared drive perk", () => {
 });
 
 /**
+ * The card states a plan's cost ONCE, in the price figure. A second line
+ * under it restated the same number in credits ("A charge of 7 credits
+ * monthly", "No monthly charge"), which said the same thing twice in a
+ * different unit and pushed the one fact the card is chosen on — how much
+ * storage — further down.
+ */
+describe("DrivePlanCard price", () => {
+  it("states the cost once and does not restate it in credits", () => {
+    renderCard(plan());
+    expect(screen.getByText(/\$7/)).toBeTruthy();
+    expect(screen.queryByText(/credits monthly/i)).toBeNull();
+  });
+
+  it("says nothing about a monthly charge on the free plan either", () => {
+    renderCard(plan({ is_free: true, price_credits_monthly: 0, name: "Free Drive Plan" }));
+    expect(screen.queryByText(/monthly charge/i)).toBeNull();
+  });
+
+  // The line that replaced it is the one the plan is actually chosen on.
+  it("still names the storage the plan grants", () => {
+    renderCard(plan());
+    expect(screen.getByText(/storage on Hippius/i)).toBeTruthy();
+  });
+});
+
+/**
  * Two cards claiming to be the plan in use is the bug this replaces: the
  * free card returned "none" for every account, and "none" is labelled
  * "Current Plan" — so a subscriber saw it beside their paid plan's
