@@ -31,7 +31,20 @@ const SECTION_META: Record<
   {
     title: string;
     description: string;
-    tooltip?: string;
+    /**
+     * What the tooltip says. `ReactNode` rather than `string` because a
+     * section whose tooltip is a short guide needs structure — a run-on
+     * sentence of numbered steps is not a guide.
+     *
+     * Falls back to `description` when absent, so a section with nothing
+     * extra to say is not forced to repeat itself deliberately. Billing
+     * DID repeat itself: it had no tooltip, so the hint under the title
+     * and the hint behind the icon were the same sentence.
+     */
+    tooltip?: React.ReactNode;
+    /** Widens the tooltip for a section whose hint is more than a line. */
+    tooltipClassName?: string;
+    /** Opened externally through Tauri, never in the app webview. */
     learnMoreUrl?: string;
     showDescription?: boolean;
   }
@@ -40,6 +53,32 @@ const SECTION_META: Record<
     title: "Billing",
     description:
       "Your plan, your credits, and everything you have been charged for.",
+    // The subtitle says what the page IS; the tooltip says how to use it.
+    // Both routes are laid out because the choice is not obvious from the
+    // page: the plan cards show a price, and nothing on them explains
+    // that credits are an alternative to a card, or that a credit is a
+    // dollar.
+    tooltip: (
+      <>
+        <span className="mb-1 block font-semibold text-grey-10 dark:text-white">
+          Two ways to pay for a storage plan
+        </span>
+        <span className="mb-1 block">
+          <span className="font-semibold">By card:</span> pick a plan, choose
+          Card, and Stripe opens in your browser. Your card then funds each
+          renewal.
+        </span>
+        <span className="block">
+          <span className="font-semibold">From credits:</span> add credits
+          first (1 credit = $1), then pick a plan and choose Credits. Renewals
+          come out of your balance, so keep it topped up.
+        </span>
+      </>
+    ),
+    // The default 260px is sized for one sentence; three short blocks
+    // need the extra room or every line wraps twice.
+    tooltipClassName: "max-w-[320px]",
+    learnMoreUrl: "https://docs.hippius.com/use/desktop/billing",
     showDescription: true,
   },
   sync: {
@@ -124,7 +163,10 @@ function SettingsContent() {
           <h1 className="font-geist text-[24px] leading-[32px] font-medium text-[#0A0A0A] dark:text-white">
             {meta.title}
           </h1>
-          <InfoTooltip learnMoreUrl={meta.learnMoreUrl}>
+          <InfoTooltip
+            learnMoreUrl={meta.learnMoreUrl}
+            contentClassName={meta.tooltipClassName}
+          >
             {meta.tooltip ?? meta.description}
           </InfoTooltip>
         </div>
