@@ -18,6 +18,8 @@ import * as Typography from "@/components/ui/typography";
 import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
 import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import DriveOnboarding from "./DriveOnboarding";
+import { AddLocalFolderDialog } from "@/components/page-sections/settings/AddLocalFolderDialog";
+import type { AddButtonRef } from "./AddFileButton";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
@@ -40,6 +42,7 @@ import { useHasExclusions } from "@/app/lib/hooks/useDriveExclusions";
 import { shouldOfferExcludedFilter } from "./excludedFilterVisibility";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
+import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { navReclickAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { shouldHandleReclick } from "@/app/components/sidebar/navReclick";
@@ -108,11 +111,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // below (so they can branch on `isNested`). See `isLoading` / `isFetching`
   // declarations following the `useNestedFolderListing` call.
 
-  const addButtonRef = useRef<{
-    openWithFiles(files: FileList): Promise<void>;
-    openWithPaths(paths: string[]): Promise<void>;
-    isDialogOpen(): boolean;
-  }>(null);
+  const addButtonRef = useRef<AddButtonRef>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
 
   // Folder upload dialog state (lifted from DriveHeader so context menus can trigger it)
@@ -371,6 +370,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Which remote drive an upload from this view belongs to — the same
   // label the listing below reads, so the two cannot point at different
   // folders.
+  // The LOCAL counterpart of `isRemoteRoot`: a drive the user has opened
+  // from the cards must win over the onboarding/cards screens, exactly as a
+  // remote one does. `isSyncPathConfigured` only tracks whether a PRIVATE
+  // sync path is selected, so an account whose drives are all shared or
+  // browsed sits on the onboarding branch permanently — and opening one of
+  // them re-rendered that same branch, which is what made those rows look
+  // unclickable while remote rows worked.
+  const isLocalDriveOpen =
+    !isRecentFiles && !isNested && !isOnLocalView && Boolean(activeSyncFolderLabel);
+
   const remoteUploadLabel = nestedDrive?.label ?? (isRemoteRoot ? activeRemoteLabel : null);
 
   const nestedListing = useNestedFolderListing({
@@ -1025,9 +1034,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setIsFolderUploadOpen(true);
   }, []);
 
+  // Open the picker here rather than sending the user to Settings.
+  //
+  // This is the same dialog the Drive page's own "Sync a Folder" button
+  // opens; navigating away answered the request by handing the user a
+  // different screen and losing the one they were on. Nothing about
+  // choosing a folder needs the settings page.
+  const [showSyncFolderDialog, setShowSyncFolderDialog] = useState(false);
   const handleContextAddSyncFolder = useCallback(() => {
-    router.push("/settings?section=sync");
-  }, [router]);
+    setShowSyncFolderDialog(true);
+  }, []);
 
   // Breadcrumb / Local-view navigation handlers.
   //
@@ -1095,6 +1111,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setActiveSyncFolderLabel(label);
     setActiveRemoteLabel(null);
     setIsOnLocalView(false);
+    // Opening a drive is an answer to "which folder?", so the Start
+    // Syncing selector has served its purpose. Without this the selector
+    // branch re-renders the same cards and the click reads as dead.
+    setShowPrivateStartSyncingSelector(false);
   }, []);
 
   // Open a REMOTE (server-only) drive from its card row — the browsable
@@ -1149,6 +1169,33 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // the user is on the Local cards view (DriveOnboarding); otherwise the
   // first segment is the active sync folder display name, followed by one
   // segment per nested directory the user has dived into.
+  // Where the right-click menu's New Folder creates, for whichever view is
+  // on screen. Resolved here because this is the component that knows
+  // which drive is open and whether it is synced or only browsed — a
+  // browsed drive has no directory to make, so it takes the other command.
+  //
+  // `undefined` on Recent Files: there is no folder open there, and the
+  // menu falls back to the main drive's root.
+  const newFolderTarget = useMemo<NewFolderTarget | undefined>(() => {
+    if (isRecentFiles || isOnLocalView) return undefined;
+    const label = isNested ? nestedDrive?.label : (activeRemoteLabel ?? activeSyncFolderLabel);
+    if (!label) return undefined;
+    const remote = isNested ? Boolean(nestedDrive?.remote) : Boolean(activeRemoteLabel);
+    return {
+      kind: remote ? "remote" : "local",
+      label,
+      parentPath: isNested ? (urlSubFolderPath ?? undefined) : undefined,
+    };
+  }, [
+    isRecentFiles,
+    isOnLocalView,
+    isNested,
+    nestedDrive,
+    activeRemoteLabel,
+    activeSyncFolderLabel,
+    urlSubFolderPath,
+  ]);
+
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];
     const segments: BreadcrumbSegment[] = [];
@@ -1490,14 +1537,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     isSyncPathConfigured === false &&
     !isRecentFiles &&
     !isNested &&
-    !isRemoteRoot
+    !isRemoteRoot &&
+    !isLocalDriveOpen
   ) {
-    // `!isRemoteRoot` on this and the two branches below: an account with NO
-    // local drives can still browse into a remote (server-only) drive, and
+    // `!isRemoteRoot` / `!isLocalDriveOpen` on this and the branches below:
+    // an account with no PRIVATE sync path can still open a drive — a
+    // browsed one, or a shared one installed from another account — and
     // that view must win over the onboarding/cards screens.
     content = (
       <DriveOnboarding
         onSyncStarted={handleOnboardingSyncStarted}
+        onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
       />
     );
@@ -1507,10 +1557,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     !isNested &&
     !isRemoteRoot
   ) {
-    // Show onboarding when Start Syncing is clicked
+    // Show onboarding when Start Syncing is clicked. It still takes
+    // `onSelectFolder`: the cards it renders are the same rows, and a row
+    // that opens on one screen and does nothing on another is the bug this
+    // pair of omissions caused.
     content = (
       <DriveOnboarding
         onSyncStarted={handleOnboardingSyncStarted}
+        onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
       />
     );
@@ -1585,6 +1639,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 isStorageFull={isStorageFull}
                 isRemoteView={isRemoteView}
+                newFolderTarget={newFolderTarget}
                 onSyncPathConfigured={
                   isRecentFiles ? handleNavigateToSettings : handleStartSyncing
                 }
@@ -1746,6 +1801,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         mnemonic={mnemonicToBackup || ""}
         onConfirm={handleMnemonicBackupConfirm}
         onClose={handleMnemonicBackupConfirm}
+      />
+
+      {/* The same picker the Drive page opens from its own Sync a Folder
+          button. Mounted here so Recent Files can offer it without
+          navigating to Settings; renders nothing while closed. */}
+      <AddLocalFolderDialog
+        open={showSyncFolderDialog}
+        onClose={() => setShowSyncFolderDialog(false)}
+        onSuccess={() => {
+          setShowSyncFolderDialog(false);
+          refetchUserFiles();
+        }}
       />
     </>
   );

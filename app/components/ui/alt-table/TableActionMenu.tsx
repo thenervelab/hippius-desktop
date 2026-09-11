@@ -124,6 +124,17 @@ const TableActionMenu = memo(function TableActionMenu({
                   onOpenChange?.(false);
                   return false;
                 }
+                // Choosing a menu item is never also a click on whatever
+                // the menu sits inside.
+                //
+                // The menu content is portalled, but React bubbles
+                // synthetic events through the REACT tree rather than the
+                // DOM one — so without this the click reached the row
+                // that owns the trigger. On the folder list that row
+                // opens the drive, so every action appeared to "just open
+                // the folder": Pause ran, and the navigation immediately
+                // replaced the dialog it had opened.
+                e.stopPropagation();
                 item.onItemClick?.(e);
               }}
               onMouseDown={(e) => {

@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button, Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { ArrowUpToLine } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
-import AddButton from "./AddFileButton";
+import AddButton, { type AddButtonRef } from "./AddFileButton";
 import StorageStateList from "./storage-stats";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
@@ -77,11 +77,7 @@ interface DriveHeaderProps {
   activeFilters: ActiveFilter[];
   handleRemoveFilter: (filter: ActiveFilter) => void;
   refetchUserFiles: () => void;
-  addButtonRef: React.RefObject<{
-    openWithFiles(files: FileList): Promise<void>;
-    openWithPaths(paths: string[]): Promise<void>;
-    isDialogOpen(): boolean;
-  } | null>;
+  addButtonRef: React.RefObject<AddButtonRef | null>;
   privateFileCount?: number;
   publicFileCount?: number;
   isSyncPathEmpty?: boolean;

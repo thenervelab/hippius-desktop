@@ -166,6 +166,31 @@ export function chargeAmount(
 }
 
 /**
+ * A plan's price, in the ONE unit plans are ever quoted in: dollars.
+ *
+ * The underlying field is `price_credits_*` because a credit is the rail
+ * the chain settles in, and one credit is one dollar. That naming is what
+ * made the app quote a single plan two ways — "$4 /Mo" on the card and "4
+ * credits for the first month" in the dialog confirming it, from the same
+ * number. A price is a price; the reader should not have to learn an
+ * exchange rate to compare two screens.
+ *
+ * Credits stay visible exactly where they ARE the subject: the balance,
+ * the top-up flow, and the credits payment rail — which says "1 credit =
+ * $1" on the spot rather than assuming it is known.
+ *
+ * Every plan price renders through here so the two spellings cannot come
+ * back. Pinned by `__tests__/planPricing.test.ts`.
+ */
+export function formatPlanPrice(
+  plan: DrivePlan,
+  period: DriveBillingPeriod = "monthly",
+): string {
+  if (plan.is_free) return "Free";
+  return `$${chargeAmount(plan, period)}`;
+}
+
+/**
  * Plan sizes are exact powers of 1024 (10 GiB, 1 TiB, 3 TiB, 10 TiB) but the
  * plans are sold in the marketing units, so they are rendered as GB and TB.
  * `formatBinaryBytes` would print "10 GiB" on a card that the pricing page,

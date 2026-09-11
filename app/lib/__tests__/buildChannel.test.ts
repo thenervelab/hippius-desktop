@@ -112,19 +112,26 @@ describe("the channel actually reaches the bundle", () => {
 });
 
 /**
- * The point of the whole mechanism: the lane decides, so this file is
- * identical on staging, beta and main. A literal here would have to be
- * edited per branch, which is the merge hazard that shipped a broken
- * production updater key.
+ * The mechanism has no live consumer right now — shared drives was gated
+ * to beta and has since been turned off on every lane — so these pin the
+ * gate itself rather than a particular flag. The reason it exists outlasts
+ * any one feature: a value edited per branch either conflicts on every
+ * promotion or rides into production through an unread hunk, the same
+ * shape as the per-branch updater key that shipped a broken updater.
  */
-describe("shared drives is gated by lane, not by branch", () => {
+describe("the lane gate stays usable", () => {
   const flags = read("app/lib/featureFlags.ts");
 
-  it("turns on from beta outwards", () => {
-    expect(flags).toMatch(/SHARED_DRIVES_ENABLED\s*=\s*enabledFrom\("beta"\)/);
+  it("is documented where the flags are written", () => {
+    expect(flags).toContain("enabledFrom");
+    expect(flags).toContain("buildChannel");
   });
 
-  it("is not a per-branch literal", () => {
-    expect(flags).not.toMatch(/SHARED_DRIVES_ENABLED\s*=\s*(true|false)/);
+  // A flag file that imports it without using it fails lint, so the
+  // import goes when the last consumer does.
+  it("imports it only while something uses it", () => {
+    const imported = /^import \{[^}]*enabledFrom[^}]*\} from/m.test(flags);
+    const used = /=\s*enabledFrom\(/.test(flags);
+    expect(imported).toBe(used);
   });
 });
