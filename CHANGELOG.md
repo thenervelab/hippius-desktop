@@ -17,6 +17,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Right-clicking anywhere on Overview or Drive now opens Hippius's own menu**
+  instead of the browser's Back / Reload / Inspect menu, with Upload File, Upload
+  Folder, New Folder, and Sync a Folder where each applies.
+- **You can create an empty folder.** New Folder works inside a synced drive, inside
+  a drive you are only browsing, and from Overview — where it asks which drive.
+
 - **File Details now shows the file's Arion hash** (the BLAKE3 content digest)
   so you can copy it or open it on the file tracker.
 - **Finder shows how each file in your Hippius folders is doing.** Files and
@@ -69,6 +75,16 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Clearer names in the folder menu.** "Pause syncing", "Sync exclusions…",
+  "Stop syncing on this device" and "Delete from Hippius" replace wording that did
+  not say what each one affected. Stopping sync is no longer coloured like a
+  deletion — it leaves your files alone — and deletion now sits last on its own.
+
+- **A drive already synced to this computer no longer offers "Browse Contents".**
+  That option picks which parts of a drive to sync, which is a question an
+  already-synced drive has answered; Open shows its files. Drives not synced here
+  keep it.
+
 - **If your account has no storage plan, the Overview page now says so plainly.**
   A red notice above the Storage and Plan cards warns that files you have already
   uploaded are permanently deleted after 30 days without a plan, and that you
@@ -81,9 +97,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **The upload buttons are tidier.** The icon sits closer to its label, and on the
   Drive page the icon now matches the size of the text beside it instead of
   looking oversized.
-- **Shared drives are available to beta testers.** Team drive sharing is switched
-  on in beta builds while it is proven against a live fleet; production builds are
-  unchanged and do not show it yet.
 - **Subscription plan cards are less cluttered.** Each plan states its price once
   instead of repeating it underneath as a credits charge.
 - **The plan card in the page header is much smaller.** It used to grow to four
@@ -225,6 +238,40 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   empty state, instead of an empty page with nothing to do next.
 
 ### Fixed
+
+- **Storage bars are visible in light mode again.** The groove behind the bar was
+  almost the same colour as the card, so a drive with little used looked like it
+  had no bar at all.
+
+- **The folder menu's actions work again.** Pause syncing, Sync exclusions and the
+  rest all opened the folder instead of doing what they said, because choosing an
+  item also registered as a click on the row behind it.
+
+- **Folders that are not synced on this computer can be opened again.** Drives
+  shared with you, and your own drives from other devices, did nothing when
+  clicked on some screens — so their files could not be browsed at all.
+
+- **The Billing page's help tooltip is now a short guide.** It repeated the
+  subtitle word for word; it explains the two ways to pay for a plan instead —
+  by card through Stripe, or from your credit balance — and links to the billing
+  documentation.
+- **The low-credits warning now explains itself, on the page where you can fix
+  it.** Billing shows a red card naming your plan, what it costs a month, your
+  balance, and when the renewal falls due — replacing a one-line amber note that
+  only said credits were low, and which had stopped appearing on Billing at all.
+- **Plan prices are quoted in dollars everywhere.** The dialog that confirms a
+  subscription used to describe the same price in credits that the plan card had
+  just shown in dollars. Credits are still named where they are the subject — the
+  balance, topping up, and the credits payment option, which states that one
+  credit is one dollar.
+- **The API token screen is no longer part of Settings.** The token is for
+  calling the Hippius API from scripts and the console, not from the desktop app.
+- **The Free plan card no longer claims to be your current plan when it isn't.**
+  Subscribers saw it labelled "Current Plan" beside their actual plan's Cancel
+  button; it now reads "Default Plan", the one you return to if you cancel.
+- **Accounts signed in with an access key no longer see the Free plan at all.**
+  They are not entitled to it, so offering it was misleading — and cancelling a
+  paid plan now says plainly that it leaves them without storage.
 
 - **The rename dialog closes as soon as you confirm.** It used to stay on screen
   until the rename finished, which on a cloud folder could take several seconds;
