@@ -24,30 +24,41 @@ describe("uploading a folder into a drive that is not synced here", () => {
     }
   });
 
+  // The pick/upload sequence moved into `useRemoteUploadActions` so the
+  // right-click menu runs the SAME action as this button — a browsed
+  // drive's menu previously had nothing but New Folder in it. These pin
+  // the behaviour where it now lives.
   const button = readCode("../RemoteFolderUploadButton.tsx");
+  const action = readCode("../../../../lib/hooks/useRemoteUploadActions.ts");
+
+  it("the button delegates rather than keeping its own copy", () => {
+    expect(button).toContain("useRemoteFolderUpload");
+    expect(button).not.toContain("openSelection");
+  });
 
   // A folder, not files: picking files here would silently upload the
   // wrong thing.
   it("picks a directory", () => {
-    expect(button).toMatch(/directory:\s*true/);
-    expect(button).toMatch(/multiple:\s*false/);
+    const folderUpload = action.slice(action.indexOf("useRemoteFolderUpload"));
+    expect(folderUpload).toMatch(/directory:\s*true/);
+    expect(folderUpload).toMatch(/multiple:\s*false/);
   });
 
   // The containing folder has to be threaded through, or a folder dropped
   // into a subfolder lands at the drive root instead.
   it("uploads under the folder being browsed", () => {
-    expect(button).toContain("parentPath");
-    expect(button).toMatch(/uploadFolderToRemoteFolder\([\s\S]*?parentPath,/);
+    expect(action).toContain("parentPath");
+    expect(action).toMatch(/uploadFolderToRemoteFolder\([\s\S]*?parentPath,/);
   });
 
   // Rust walks the tree; the frontend hands over one path.
   it("does not walk the folder itself", () => {
-    expect(button).not.toMatch(/readDir|readdir|walk/i);
+    expect(action).not.toMatch(/readDir|readdir/i);
   });
 
   // Same refusal dialog as every other storage limit, not a raw error.
   it("routes a storage refusal to the plans dialog", () => {
-    expect(button).toContain("STORAGE_LIMIT_REACHED");
+    expect(action).toContain("STORAGE_LIMIT_REACHED");
   });
 });
 
@@ -56,14 +67,19 @@ describe("the folder upload announces a folder", () => {
   // uploaded" for a folder of any size. The count cannot be known up front
   // — Rust only walks the tree once the upload starts.
   const surfaces = [
-    ["the in-folder button", "../RemoteFolderUploadButton.tsx"],
+    ["the in-folder action", "../../../../lib/hooks/useRemoteUploadActions.ts"],
     ["the upload dialog", "../FolderUploadDialog.tsx"],
   ] as const;
 
   it.each(surfaces)("%s uses the folder wording", (_name, path) => {
     const src = readCode(path);
     expect(src).toContain("reportRemoteFolderUploadStarted");
-    expect(src).not.toMatch(/reportRemoteUploadStarted\s*\(/);
+    // The hook holds both actions, so scope this to the folder one —
+    // the file action legitimately calls the file reporter.
+    const folderScope = src.includes("useRemoteFolderUpload")
+      ? src.slice(src.indexOf("useRemoteFolderUpload"))
+      : src;
+    expect(folderScope).not.toMatch(/reportRemoteUploadStarted\s*\(/);
   });
 
   it("the folder notice never says file", () => {

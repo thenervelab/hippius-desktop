@@ -9,6 +9,8 @@ import { currentPlanCode } from "@/lib/types/drive-plans";
 import { cn } from "@/lib/utils";
 
 import DrivePlansGrid from "./DrivePlansGrid";
+import { useStorageOverview } from "@/lib/hooks/api/useStorageOverview";
+import { isFreeTierEntitled, offeredPlans } from "./planVisibility";
 
 /**
  * The storage plans, offered under an empty Drive.
@@ -22,6 +24,10 @@ const DriveEmptyStatePlans: FC<{ className?: string }> = ({ className }) => {
   const router = useRouter();
   const { data: plans } = useDrivePlans();
   const { data: subscription } = useDriveSubscription();
+  // An access-key account is not entitled to the free tier, so it is
+  // neither "on" the free plan nor able to fall back to it.
+  const { data: overview } = useStorageOverview();
+  const entitled = isFreeTierEntitled(overview?.freeTierEntitled);
 
   // Wait for both reads: a flash of plans at a subscriber is worse than a
   // short delay for a new account.
@@ -35,12 +41,13 @@ const DriveEmptyStatePlans: FC<{ className?: string }> = ({ className }) => {
           Pick a storage plan
         </h2>
         <p className="text-[12px] font-medium text-grey-dark-600">
-          You are on the Free plan. Pick a larger one for more encrypted
-          storage, and change or cancel it at any time.
+          {entitled
+            ? "You are on the Free plan. Pick a larger one for more encrypted storage, and change or cancel it at any time."
+            : "You do not have a storage plan yet. Pick one to start uploading encrypted files, and change or cancel it at any time."}
         </p>
       </div>
       <DrivePlansGrid
-        plans={plans}
+        plans={offeredPlans(plans, overview?.freeTierEntitled) ?? plans}
         currentCode={currentPlanCode(subscription)}
         actionFor={(plan) => (plan.is_free ? "none" : "subscribe")}
         onAction={(plan) => router.push(`/drive-plans?plan=${plan.code}`)}

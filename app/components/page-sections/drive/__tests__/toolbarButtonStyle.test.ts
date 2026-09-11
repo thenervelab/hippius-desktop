@@ -46,10 +46,15 @@ describe("upload toolbar button spacing", () => {
  */
 describe("the compact folder-list toolbar", () => {
   const page = read("../DriveOnboarding.tsx");
-  const toolbar = page.slice(
-    page.indexOf("<AddButton") - 2000,
-    page.indexOf("<AddButton") + 600,
-  );
+  // The JSX element, not `useRef<AddButtonRef>` — a bare "<AddButton"
+  // matches the type parameter too, and then this window lands on the
+  // hooks at the top of the file instead of the toolbar.
+  const at = page.indexOf("<AddButton\n");
+  const toolbar = page.slice(Math.max(0, at - 2000), at + 600);
+
+  it("finds the toolbar's upload-file button", () => {
+    expect(at).toBeGreaterThan(-1);
+  });
 
   it("scales the upload-file glyph to the row", () => {
     expect(toolbar).toMatch(/iconClassName="size-3\.5"/);

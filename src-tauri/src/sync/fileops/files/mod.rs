@@ -24,6 +24,7 @@ mod listing;
 // `pub(super)` so a sibling in `fileops` can share the hidden-name rule
 // rather than writing a second copy of it — the rule exists precisely so
 // that every walk agrees on which names the engine skips.
+mod new_folder;
 pub(super) mod pathops;
 mod recent;
 mod rename;
@@ -36,6 +37,7 @@ pub use asset_scope::{allow_asset_directory, allow_asset_scope};
 pub use delete::{DeleteFilesResult, FileDeleteError, FileDeleteRequest, delete_files};
 pub use export_zip::export_folder_zip;
 pub use listing::{FileEntry, GroupedListing, list_sync_folder, list_sync_folder_grouped, list_sync_folder_grouped_inner};
+pub use new_folder::create_sync_folder;
 pub use recent::{RecentFile, get_recent_files};
 pub use rename::{FileRenameRequest, RenameEntryResult, rename_entry};
 pub use resolve::{FilePathInfo, export_file, resolve_file_info, resolve_file_path};

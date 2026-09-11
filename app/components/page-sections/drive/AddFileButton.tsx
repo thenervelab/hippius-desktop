@@ -65,6 +65,8 @@ type AddButtonProps = {
 // Callers that don't care about the result can fire-and-forget; the
 // hook handles surfacing the insufficient-credits dialog itself.
 export interface AddButtonRef {
+  /** Open the picker with nothing preselected, as clicking the button does. */
+  open: () => Promise<void>;
   openWithFiles: (files: FileList) => Promise<void>;
   openWithPaths: (paths: string[]) => Promise<void>;
   isDialogOpen: () => boolean;
@@ -98,6 +100,21 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     useImperativeHandle(
       ref,
       () => ({
+        // Same gate order as the button's own click: eligibility first,
+        // then a configured drive, so a surface that opens this by ref
+        // cannot skip a check the button applies.
+        open: async () => {
+          if (!(await checkEligibility("file-upload"))) return;
+          if (!hasConfiguredDrives) {
+            toast.warning(
+              "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
+            );
+            return;
+          }
+          setDroppedFiles(null);
+          setDroppedPaths(null);
+          setIsOpen(true);
+        },
         openWithFiles: async (files: FileList) => {
           if (!(await checkEligibility("file-upload"))) return;
           if (!hasConfiguredDrives) {

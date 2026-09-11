@@ -130,7 +130,7 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
           </span>
           {planView === "skeleton" ? (
             <span
-              className="h-[18px] w-[72px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+              className="h-[18px] w-[72px] rounded bg-grey-80 dark:bg-grey-dark-200 animate-pulse"
               aria-label="Loading plan"
             />
           ) : (
@@ -155,7 +155,7 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
           row restating the bar in words. */}
       {planView === "skeleton" ? (
         <span
-          className="h-[18px] w-[132px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+          className="h-[18px] w-[132px] rounded bg-grey-80 dark:bg-grey-dark-200 animate-pulse"
           aria-hidden="true"
         />
       ) : showUsageBar ? (
@@ -166,7 +166,11 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
             aria-valuemin={0}
             aria-valuemax={100}
             aria-label="Storage used"
-            className="h-[4px] min-w-[56px] flex-1 overflow-hidden rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
+            // `grey-80` (#e3e3e3), not the `grey-light-*` family: those
+            // are all #f0–f3, which is ~1.06:1 against the white card and
+            // reads as nothing at all. The groove has to be visible or a
+            // low percentage looks like no bar at been drawn.
+            className="h-[4px] min-w-[56px] flex-1 overflow-hidden rounded-full bg-grey-80 dark:bg-grey-dark-200"
           >
             <div
               className={cn("h-full rounded-full transition-[width] duration-500", BAR_TONE[tone])}

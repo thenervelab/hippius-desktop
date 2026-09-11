@@ -129,16 +129,16 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
             <>
               <div className="flex items-center justify-between">
                 <div
-                  className="h-[30px] w-[180px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                  className="h-[30px] w-[180px] rounded bg-grey-80 dark:bg-grey-dark-200 animate-pulse"
                   aria-label="Loading storage"
                 />
                 <div
-                  className="h-[30px] w-[56px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                  className="h-[30px] w-[56px] rounded bg-grey-80 dark:bg-grey-dark-200 animate-pulse"
                   aria-hidden="true"
                 />
               </div>
               <div
-                className="h-[10px] w-full rounded-full bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                className="h-[10px] w-full rounded-full bg-grey-80 dark:bg-grey-dark-200 animate-pulse"
                 aria-hidden="true"
               />
             </>
@@ -221,7 +221,10 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-label="Storage used"
-                className="h-[10px] w-full overflow-hidden rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
+                // See the plan chip: the `grey-light-*` family is all
+                // #f0–f3, invisible on this white card, so the groove used
+                // the same token as the card itself.
+                className="h-[10px] w-full overflow-hidden rounded-full bg-grey-80 dark:bg-grey-dark-200"
               >
                 <div
                   className={cn(

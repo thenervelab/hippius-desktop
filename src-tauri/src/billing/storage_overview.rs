@@ -234,6 +234,20 @@ pub struct StorageOverview {
     /// What the header should offer — see [`PlanAction`]. Render this;
     /// never re-derive it from `source` / `percent` / `plan` on the FE.
     pub plan_action: PlanAction,
+    /// Whether this account may have the included free allowance at all.
+    ///
+    /// Distinct from `source`, and both are needed. `source` says what the
+    /// account is living on RIGHT NOW, so an unentitled account holding a
+    /// paid plan reports `Subscription` and is indistinguishable from an
+    /// entitled one — which is exactly the case the plans page has to tell
+    /// apart, because cancelling drops the first to nothing and the second
+    /// to the free tier.
+    ///
+    /// On the wire rather than re-derived on the FE for the usual reason:
+    /// the provider-to-entitlement rule is a domain rule, and a second
+    /// copy of it in TypeScript is one that drifts the first time a
+    /// sign-in method is added.
+    pub free_tier_entitled: bool,
 }
 
 /// Pure composition of the overview from its inputs.
@@ -250,19 +264,26 @@ fn build_overview(
 ) -> StorageOverview {
     if let Some(plan) = plan {
         let total_bytes = plan.storage_bytes;
-        return finish_overview(used_bytes, total_bytes, CapacitySource::Subscription, Some(plan), credits_hip);
+        return finish_overview(
+            used_bytes,
+            total_bytes,
+            CapacitySource::Subscription,
+            Some(plan),
+            credits_hip,
+            free_tier_entitled,
+        );
     }
     if !free_tier_entitled {
         // An access-key account with no subscription has no capacity at
         // all. Zero rather than the free allowance: the bar, the "N free"
         // line and the upload prompt all read from this, and a fabricated
         // 10 GB would promise room the server will refuse to use.
-        return finish_overview(used_bytes, 0, CapacitySource::None, None, credits_hip);
+        return finish_overview(used_bytes, 0, CapacitySource::None, None, credits_hip, free_tier_entitled);
     }
     // No subscription, but entitled: the free tier is the floor, so there
     // is always a capacity to plot.
     let total_bytes = free_tier_bytes.unwrap_or_else(|| FREE_TIER_FALLBACK_GB.saturating_mul(BYTES_PER_GB));
-    finish_overview(used_bytes, total_bytes, CapacitySource::Free, None, credits_hip)
+    finish_overview(used_bytes, total_bytes, CapacitySource::Free, None, credits_hip, free_tier_entitled)
 }
 
 fn finish_overview(
@@ -271,6 +292,7 @@ fn finish_overview(
     source: CapacitySource,
     plan: Option<PlanInfo>,
     credits_hip: Option<String>,
+    free_tier_entitled: bool,
 ) -> StorageOverview {
     let labels = format_overview_labels(used_bytes, total_bytes);
     let percent = percent_of(used_bytes, total_bytes);
@@ -292,6 +314,7 @@ fn finish_overview(
         total_display: labels.total,
         free_display: labels.free,
         plan_action,
+        free_tier_entitled,
     }
 }
 
@@ -726,6 +749,35 @@ mod tests {
     fn a_free_account_is_asked_to_upgrade_not_to_top_up() {
         let o = build_overview(0, None, Some(10 * BYTES_PER_GB), Some("0".into()), true);
         assert_eq!(o.plan_action, PlanAction::Upgrade);
+    }
+
+    /// The plans page has to tell an unentitled account apart from an
+    /// entitled one EVEN WHILE IT HOLDS A PAID PLAN — cancelling drops the
+    /// first to nothing and the second to the free tier. `source` cannot
+    /// answer that: both report `Subscription`.
+    #[test]
+    fn entitlement_is_reported_independently_of_what_the_account_lives_on() {
+        let plan = pro_plan(2);
+        let unentitled = build_overview(1, Some(plan.clone()), None, Some("9".into()), false);
+        assert_eq!(unentitled.source, CapacitySource::Subscription);
+        assert!(!unentitled.free_tier_entitled);
+
+        let entitled = build_overview(1, Some(plan), None, Some("9".into()), true);
+        assert_eq!(entitled.source, CapacitySource::Subscription);
+        assert!(entitled.free_tier_entitled);
+    }
+
+    /// And it survives the no-subscription branches, where `source` does
+    /// distinguish them — so the two facts never disagree.
+    #[test]
+    fn entitlement_matches_the_source_when_there_is_no_plan() {
+        let none = build_overview(0, None, Some(10 * BYTES_PER_GB), None, false);
+        assert_eq!(none.source, CapacitySource::None);
+        assert!(!none.free_tier_entitled);
+
+        let free = build_overview(0, None, Some(10 * BYTES_PER_GB), None, true);
+        assert_eq!(free.source, CapacitySource::Free);
+        assert!(free.free_tier_entitled);
     }
 
     /// Running out of SPACE is answered by a bigger plan whatever funds it,

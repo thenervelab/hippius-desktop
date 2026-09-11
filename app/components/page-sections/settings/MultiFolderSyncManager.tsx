@@ -581,17 +581,6 @@ function openTarget(row: FolderRow): string {
               onDeleteFromServer: openDeleteServerDialog,
               onSyncRemote: handleSyncRemoteFolder,
               onBrowseRemote: (folder) => void handleBrowseFolder(folder),
-              onBrowseLocal: (folder) =>
-                void handleBrowseFolder(
-                  {
-                    folderName: folder.folderName,
-                    deviceName: folder.deviceName ?? "This Device",
-                    lastModified: folder.lastModified ?? 0,
-                    fileCount: folder.fileCount ?? 0,
-                    totalBytes: folder.totalBytes ?? 0,
-                  },
-                  true,
-                ),
             })
           }
           emptyState={
