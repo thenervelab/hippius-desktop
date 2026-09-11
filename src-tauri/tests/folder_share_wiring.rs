@@ -93,24 +93,37 @@ fn every_file_mint_path_uploads_an_owner_wrap() {
 }
 
 #[test]
-fn the_file_list_opens_owner_wraps() {
+fn the_file_list_reconciles_owner_wraps() {
     let source = include_str!("../src/shares/commands.rs");
     let body = fn_body(source, "pub async fn hcfs_list_shares(");
     assert!(
-        body.contains("hydrate_file_keystore"),
+        body.contains("sync_file_wraps"),
         "hcfs_list_shares must open listing wraps into the keystore so a share minted on \
          another device is copyable here"
+    );
+    // One reconciliation call, not a push followed by a hydrate. The old
+    // shape re-sealed and wrote back every wrap it had just read, and
+    // rewrote every row this device held a key for on every open.
+    assert!(
+        !body.contains("push_for_account"),
+        "hcfs_list_shares must not push wraps separately from sync_file_wraps: the push has \
+         to be filtered by what the listing says is missing, which only the sync sees"
     );
 }
 
 #[test]
-fn the_folder_list_opens_owner_wraps() {
+fn the_folder_list_reconciles_owner_wraps() {
     let source = include_str!("../src/shares/commands.rs");
     let body = fn_body(source, "pub async fn list_folder_shares_inner");
     assert!(
-        body.contains("hydrate_folder_keystore"),
+        body.contains("sync_folder_wraps"),
         "list_folder_shares_inner must open listing wraps into the keystore so a folder \
          share minted on another device is copyable here"
+    );
+    assert!(
+        !body.contains("push_folder_for_account"),
+        "list_folder_shares_inner must not push wraps separately from sync_folder_wraps; \
+         see the file-share twin"
     );
 }
 

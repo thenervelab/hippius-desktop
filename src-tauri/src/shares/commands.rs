@@ -30,7 +30,7 @@ use hcfs_client::client::share::{
 };
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::ipc::Channel;
@@ -1192,15 +1192,8 @@ pub async fn list_folder_shares_inner(state: &AppState, account_id: &str) -> Res
 
     let keystore = SqliteShareKeystore::new(pool.clone());
     let mut secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
-    let listing_hashes: HashSet<&str> = rows.iter().map(|row| row.token_hash.as_str()).collect();
-    let wrap_entries: Vec<(String, ShareSecret)> = secrets_by_hash
-        .iter()
-        .filter(|(hash, _)| listing_hashes.contains(hash.as_str()))
-        .map(|(_, (token, secret))| (token.clone(), secret.clone()))
-        .collect();
-    super::owner_wrap::push_folder_for_account(state, account_id, &wrap_entries).await;
     let hashes: Vec<String> = rows.iter().map(|row| row.token_hash.clone()).collect();
-    super::owner_wrap::hydrate_folder_keystore(state, account_id, &keystore, &mut secrets_by_hash, &hashes).await;
+    super::owner_wrap::sync_folder_wraps(state, account_id, &keystore, &mut secrets_by_hash, &hashes).await;
     Ok(resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url()))
 }
 
@@ -1487,9 +1480,7 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     // still offers Revoke.
     let tokens: Vec<&str> = summaries.iter().map(|s| s.share_token.as_str()).collect();
     let mut key_map = keystore.get_many(&tokens).map_err(|e| AppError::Hcfs(format!("keystore lookup: {e}")))?;
-    let wrap_entries: Vec<(String, ShareSecret)> = key_map.iter().map(|(token, secret)| (token.clone(), secret.clone())).collect();
-    super::owner_wrap::push_for_account(&state, &account_id, &wrap_entries).await;
-    super::owner_wrap::hydrate_file_keystore(&state, &account_id, &keystore, &mut key_map, &tokens).await;
+    super::owner_wrap::sync_file_wraps(&state, &account_id, &keystore, &mut key_map, &tokens).await;
     // Same batched-IN trick as the keystore: one round-trip for the
     // whole page so the per-file badge and Reshare button can resolve
     // origin in O(1) per row.

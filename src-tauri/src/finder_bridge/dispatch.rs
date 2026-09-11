@@ -401,7 +401,7 @@ mod tests {
 
         let handle_at = src.find("async fn handle_share(").expect("handle_share fn exists");
         let after_handle = &src[handle_at + "async fn handle_share(".len()..];
-        let next_fn = after_handle.find("async fn ").map_or(after_handle.len(), |i| i);
+        let next_fn = after_handle.find("async fn ").unwrap_or(after_handle.len());
         let body = &after_handle[..next_fn];
         assert!(
             body.contains("store_finder_share("),
