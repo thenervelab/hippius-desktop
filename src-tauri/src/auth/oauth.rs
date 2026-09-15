@@ -56,7 +56,15 @@ use tauri::Emitter;
 /// callback (audit M-2), and a wall clock also makes time spent asleep
 /// count against the TTL — macOS `Instant` does not tick during sleep
 /// (audit L-1).
-const PKCE_STATE_TTL_MS: i64 = 5 * 60 * 1000;
+///
+/// 30 minutes, not 5: the browser leg is not just a sign-in. A first-time
+/// user creates the Hippius account, clears a provider consent screen and
+/// often a 2FA challenge inside this window, which overruns 5 minutes
+/// routinely — the flow then expires and every retry of the console's
+/// "Open Hippius" button fails too, because the pending entry is already
+/// gone. Widening it costs little: the entry is single-use, consumed on
+/// first match, and carries no secret (see `persist_pending_state`).
+const PKCE_STATE_TTL_MS: i64 = 30 * 60 * 1000;
 
 /// In-flight OAuth flow states, keyed by the random `state` CSRF token.
 ///
@@ -197,7 +205,7 @@ async fn clear_pending_states(pool: &sqlx::SqlitePool) {
 /// Newest-wins because a state-less callback carries nothing to
 /// disambiguate on, and the newest entry is the flow whose browser tab the
 /// user most recently opened. The old rule — accept only when EXACTLY one
-/// flow was pending — rejected every callback for the full 5-minute TTL
+/// flow was pending — rejected every callback for the full state TTL
 /// whenever the user double-started a login (the sign-in button re-enables
 /// on window refocus, so "click → switch to browser → come back → click
 /// again" was routine), the top intermittent OAuth failure (audit H-2).
@@ -308,7 +316,7 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
     };
 
     // Cryptographically random CSRF token. UUID v4 gives us 122 bits
-    // of entropy from `OsRng` — more than enough for a 5-minute TTL
+    // of entropy from `OsRng` — more than enough for a 30-minute TTL
     // and a map that is purged on every access.
     let oauth_state = uuid::Uuid::new_v4().to_string();
     let created_at_ms = chrono::Utc::now().timestamp_millis();
@@ -508,7 +516,8 @@ pub async fn complete_oauth_flow(
     if let Some(ref err) = params.error {
         let desc = params.error_description.as_deref().unwrap_or("");
         error!("OAuth error from provider: {err} {desc}");
-        return Err(AppError::Auth("Authentication failed".into()));
+        let reason = if desc.is_empty() { err.as_str() } else { desc };
+        return Err(AppError::Auth(format!("The sign-in provider rejected the request: {reason}")));
     }
 
     // CSRF binding: every incoming callback MUST carry a `state`
@@ -554,7 +563,9 @@ pub async fn complete_oauth_flow(
             let Some(entry) = states.remove(received_state) else {
                 warn!("Rejected OAuth callback: state did not match any pending flow");
                 return Err(AppError::Auth(
-                    "Unknown or expired OAuth state. Start a new login from the sign-in screen.".into(),
+                    "This sign-in link has expired or was already used. \
+                     Please start a new sign-in from the Hippius app."
+                        .into(),
                 ));
             };
             // Mirror the consume before releasing the lock (see above).
@@ -566,7 +577,9 @@ pub async fn complete_oauth_flow(
             let Some(entry) = consume_fallback_flow(&mut states) else {
                 warn!("Rejected OAuth callback: no state parameter and no pending flow to bind it to");
                 return Err(AppError::Auth(
-                    "Missing state parameter. Start a new login from the sign-in screen.".into(),
+                    "This sign-in expired or was already completed. Please start a new sign-in \
+                     from the Hippius app — reopening the link from your browser won't work."
+                        .into(),
                 ));
             };
             // The fallback drained the whole map; drain the mirror too,
@@ -820,6 +833,24 @@ mod tests {
         assert!(states.contains_key("c"));
     }
 
+    /// A first-time signup — create the Hippius account, clear the provider
+    /// consent screen, answer a 2FA prompt — routinely runs past five minutes,
+    /// and the whole flow is dead the moment its pending entry is purged. Pins
+    /// the window against a well-meaning reduction.
+    #[test]
+    fn a_slow_first_time_signup_still_has_a_pending_flow() {
+        let ten_minutes = 10 * 60 * 1000;
+        let mut states = HashMap::new();
+        states.insert("slow-signup".to_string(), make_state(ten_minutes));
+
+        purge_expired(&mut states, NOW_MS);
+
+        assert!(
+            states.contains_key("slow-signup"),
+            "a sign-in started {ten_minutes} ms ago must still complete"
+        );
+    }
+
     #[test]
     fn purge_expired_keeps_everything_fresh() {
         let mut states = HashMap::new();
@@ -889,7 +920,7 @@ mod tests {
         states.insert("csrf-token-old".to_string(), make_state(PKCE_STATE_TTL_MS + 1_000));
 
         // Mirror `complete_oauth_flow`: purge_expired runs BEFORE the
-        // state lookup. A deep link that surfaces after the 5-minute
+        // state lookup. A deep link that surfaces after the
         // TTL is therefore rejected even though the state string
         // matches a once-valid entry.
         purge_expired(&mut states, NOW_MS);
@@ -901,7 +932,7 @@ mod tests {
     // The console does not yet forward `state` for desktop, so every
     // real callback takes the fallback path. These pin the tolerant
     // newest-wins rule that replaced the "exactly one pending" rule —
-    // the old rule rejected every callback for the 5-minute TTL after
+    // the old rule rejected every callback for the whole TTL after
     // a routine double-started login.
 
     /// The regression case: TWO pending flows (double-started login)
