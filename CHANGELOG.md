@@ -239,6 +239,16 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Signing in with Google or GitHub no longer runs out of time while you are still
+  signing in.** You had five minutes to finish in the browser, so creating your
+  account or clearing a two-factor prompt could quietly use it up — and once it did,
+  reopening the link from the browser could never work either. The window is now
+  thirty minutes, and Hippius says when a sign-in has expired and that you need to
+  start it again from the app.
+- **A sign-in that fails now tells you why**, instead of always saying "Failed to
+  complete authentication. Please try again." If Google or GitHub refused the
+  request, you see their reason.
+
 - **Right-clicking outside your files no longer offers New Folder.** The menu
   appeared on every page — Settings, Security, Notifications — where there are no
   folders to create one in. It is now limited to Overview, your drives and the

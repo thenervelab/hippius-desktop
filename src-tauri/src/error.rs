@@ -287,6 +287,16 @@ impl std::fmt::Display for NotReadyKind {
 /// dispatch on `err.subkind` instead of pattern-matching English
 /// substrings of `err.message` — the substring match was fragile and
 /// broke silently whenever the Display text was reworded.
+/// The two `AppError::Auth` messages that are routine rather than failures:
+/// account-scoped commands that fire before `restore_session` has hydrated the
+/// in-memory session. Matched on the exact strings produced by
+/// `AppState::require_session_account` / `active_account`, so a reworded or
+/// newly added auth failure logs at `warn` by default — the safe direction.
+/// Mirrors `isExpectedNoSessionError` in `app/lib/utils/errorUtils.ts`.
+fn is_boot_gap_auth(message: &str) -> bool {
+    message == "No active account set" || message == "Requested account is not the active session account"
+}
+
 impl AppError {
     /// True for the kinds that describe an expected user/state precondition
     /// (surfaced by the frontend, routinely hit in normal operation) rather
@@ -294,13 +304,17 @@ impl AppError {
     /// forces a decision about its logging tier.
     fn is_expected_precondition(&self) -> bool {
         match self {
-            // `Auth` is expected: the boot-gap rejection ("No active account
-            // set" from `require_session_account`) fires several times on
+            Self::NotReady(_) | Self::Validation(_) | Self::NotFound(_) => true,
+            // `Auth` splits. The boot-gap rejection fires several times on
             // every launch before `restore_session` hydrates, and the
-            // frontend documents it as such (`isExpectedNoSessionError`).
-            // Genuine auth failures still reach the debug stream and are
-            // surfaced prominently by the frontend.
-            Self::NotReady(_) | Self::Validation(_) | Self::NotFound(_) | Self::Auth(_) => true,
+            // frontend documents it as such (`isExpectedNoSessionError`) —
+            // at warn it would crowd the support bundle on every start.
+            // Every OTHER `Auth` is a terminal, user-visible failure, and
+            // blanket-classifying the variant made the whole OAuth sign-in
+            // flow invisible: its rejections logged at `debug`, which the
+            // default `Hippius=info` filter drops, so a failed sign-in left
+            // NOTHING in the log file to diagnose from.
+            Self::Auth(msg) => is_boot_gap_auth(msg),
             Self::Db(_)
             | Self::Io(_)
             | Self::Http(_)
@@ -1067,5 +1081,35 @@ mod tests {
         let text = capture.text();
         assert!(text.contains("DEBUG"), "expected a debug-level line: {text}");
         assert!(text.contains("bad-label-input"), "debug trace missing: {text}");
+    }
+
+    /// The boot-gap rejections stay at `debug`: they fire several times on
+    /// every launch, before `restore_session` hydrates the session.
+    #[test]
+    fn boot_gap_auth_errors_stay_at_debug() {
+        for message in ["No active account set", "Requested account is not the active session account"] {
+            let capture = crate::test_helpers::capture_logs();
+            let _ = serde_json::to_string(&AppError::Auth(message.into()));
+
+            let text = capture.text();
+            assert!(!text.contains("WARN"), "boot-gap auth should not warn ({message}): {text}");
+            assert!(text.contains("DEBUG"), "expected a debug-level line ({message}): {text}");
+        }
+    }
+
+    /// Every OTHER `Auth` is a terminal, user-visible failure and MUST reach
+    /// the log file. The default filter is `Hippius=info`, so a `debug!` here
+    /// is dropped on disk — which is exactly how a failed OAuth sign-in used
+    /// to leave no evidence at all for support to work from.
+    #[test]
+    fn genuine_auth_failures_log_at_warn() {
+        let capture = crate::test_helpers::capture_logs();
+        let _ = serde_json::to_string(&AppError::Auth(
+            "This sign-in expired or was already completed. Please start a new sign-in from the Hippius app.".into(),
+        ));
+
+        let text = capture.text();
+        assert!(text.contains("WARN"), "a real auth failure must warn: {text}");
+        assert!(text.contains("This sign-in expired"), "message missing from log: {text}");
     }
 }
