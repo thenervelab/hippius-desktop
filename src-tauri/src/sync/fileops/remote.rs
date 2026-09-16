@@ -767,24 +767,64 @@ const BROWSE_PAGE_LIMIT: u32 = 500;
 /// local listing stores there; `arion_cid` carries the content hash. Rows are
 /// `synced`: a server-only file is a stable cloud object, not "waiting in the
 /// queue" (the same semantics as the search mapper).
+/// A subfolder row in a `/browse` page, read with its date.
+///
+/// `hcfs_shared::network::BrowseFolderEntry` at the pinned revision carries
+/// `name`, `file_count` and `total_bytes` and nothing else. The server grew a
+/// `created_at` after that pin and is sending it on production today, but a
+/// `Deserialize` into the pinned struct drops the field silently, which is
+/// why remote folders rendered a dash in Date uploaded while the files beside
+/// them showed a date. Parsing into our own row picks the field up without a
+/// pin bump. Same fix the console shipped; the server half is hcfs #427/#428.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct BrowseFolderRow {
+    pub name: String,
+    pub file_count: u64,
+    pub total_bytes: u64,
+    /// When the folder first appeared: its oldest descendant file, or its own
+    /// registration if it was created empty. Absent from a server older than
+    /// the field, which is what `Option` is for.
+    #[serde(default)]
+    pub created_at: Option<i64>,
+}
+
+/// The half of `/browse`'s result this module reads.
+///
+/// Mirrors `hcfs_shared::network::BrowseResult` field for field except for the
+/// folder rows, which are ours for the reason above. The file half keeps the
+/// shared type, so a change to it still reaches us through the pin.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct BrowsePage {
+    pub folders: Vec<BrowseFolderRow>,
+    pub files: Vec<hcfs_shared::network::RemoteFileEntry>,
+    pub total_count: u64,
+    pub has_more: bool,
+}
+
 pub(crate) fn append_browse_page(
     folders: &mut Vec<super::files::FileEntry>,
     files: &mut Vec<super::files::FileEntry>,
-    page_folders: Vec<hcfs_shared::network::BrowseFolderEntry>,
+    page_folders: Vec<BrowseFolderRow>,
     page_files: Vec<hcfs_shared::network::RemoteFileEntry>,
 ) {
     for f in page_folders {
+        // Two sentinel cases, deliberately different. An ABSENT field means a
+        // server that predates it, and maps to 0 because 0 is what the date
+        // cell renders as a dash. A 0 FROM the server is kept as 0: it is its
+        // own "no date for this folder" answer, never a real timestamp, and
+        // it belongs on screen as a dash rather than as 1970.
+        let created_at = f.created_at.unwrap_or(0);
         folders.push(super::files::FileEntry {
             name: f.name,
             is_folder: true,
             size: f.total_bytes,
-            modified: None,
+            modified: u64::try_from(created_at).ok().filter(|t| *t > 0),
             sync_status: "synced".to_string(),
             arion_hash: String::new(),
             arion_cid: String::new(),
             file_count: f.file_count,
-            uploaded_at: 0,
-            updated_at: 0,
+            uploaded_at: created_at,
+            updated_at: created_at,
         });
     }
     for f in page_files {
@@ -849,7 +889,119 @@ pub struct RemoteGroupedPage {
 /// was never populated (uploads from very old clients, pre-backfill). Such
 /// files appear once any device syncing that drive runs the relative-path
 /// backfill.
+/// The URL for one browse request.
+///
+/// Split out so the sort mapping can be checked without a network round trip,
+/// which matters more than it looks: an unrecognised `sort_by` is not an error
+/// the server reports. It soft-falls back to its alphabetical listing, so a
+/// wrong field name here surfaces as "sorting does nothing" rather than as a
+/// failure anybody can see. The console splits its own query builder out for
+/// exactly this reason.
+#[allow(clippy::too_many_arguments)]
+fn build_browse_url(
+    base: &str,
+    ss58: &str,
+    folder_hash: &str,
+    path: &str,
+    offset: u32,
+    limit: u32,
+    sort_by: Option<&str>,
+    sort_order: Option<&str>,
+) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&format!("{base}/browse/{ss58}/{folder_hash}", base = base.trim_end_matches('/')))
+        .map_err(|e| AppError::Hcfs(format!("invalid browse URL: {e}")))?;
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("path", path);
+        q.append_pair("offset", &offset.to_string());
+        q.append_pair("limit", &limit.to_string());
+        // Only when asked. Absent keeps the server's historical alphabetical
+        // listing, which is what every caller got before this existed.
+        if let Some(field) = sort_by {
+            q.append_pair("sort_by", field);
+            // The server defaults an explicit `sort_by` to `desc`, so the
+            // direction is always stated rather than inferred.
+            q.append_pair("sort_order", sort_order.unwrap_or("asc"));
+        }
+    }
+    Ok(url)
+}
+
+/// `GET /browse`, issued directly rather than through `hcfs_client::browse`.
+///
+/// Two things this buys, both of which the console already has:
+///
+/// 1. **A sort the server applies before paging.** `hcfs_client::browse`
+///    builds `?path=&offset=&limit=` and nothing else, so a sort could only
+///    ever reorder the page already in hand — which reads as "sorting is
+///    broken" on any folder bigger than one page. `BrowseQuery` has taken
+///    `sort_by`/`sort_order` since the pinned revision and applies them to
+///    the whole folder first; the console passes them today.
+/// 2. **A connection pool that survives the call.** `build_client` mints a
+///    fresh `HcfsClient`, and therefore a fresh `reqwest::Client` with an
+///    empty pool, per invocation — so every page turn paid a new TCP and TLS
+///    handshake to a host that is often slow. `state.api_client` is the
+///    shared client `/search_files` and the drive summaries already use.
+///
+/// `browse` does no client-side crypto (it is a GET and a JSON parse), which
+/// is what makes bypassing the client crate safe here rather than a
+/// shortcut. Same reasoning as `drive_summaries.rs`.
+#[allow(clippy::too_many_arguments)] // mirrors BrowseQuery's own surface
+async fn browse_remote_page(
+    state: &AppState,
+    account_id: &str,
+    identity: &DriveIdentity,
+    path: &str,
+    offset: u32,
+    limit: u32,
+    sort_by: Option<&str>,
+    sort_order: Option<&str>,
+) -> Result<BrowsePage> {
+    let pool = state.pool()?;
+    let server_url = get_server_url(pool, account_id).await?;
+    let base = crate::sync::region::resolve_base_url(&server_url);
+    let token = get_api_token(pool, account_id)
+        .await?
+        .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
+
+    let url = build_browse_url(
+        base,
+        &identity.wire_ss58,
+        &identity.wire_folder_hash,
+        path,
+        offset,
+        limit,
+        sort_by,
+        sort_order,
+    )?;
+
+    let resp = state
+        .api_client
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("browse request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    let parsed: hcfs_shared::network::NetworkResponse<BrowsePage> = serde_json::from_str(&body).map_err(|e| {
+        error!(status = %status, "browse response did not parse: {e}");
+        AppError::Hcfs(format!("browse failed (status {status}): {body}"))
+    })?;
+
+    match parsed {
+        hcfs_shared::network::NetworkResponse::Success(result) => Ok(result),
+        hcfs_shared::network::NetworkResponse::Conflict(_) => Err(AppError::Hcfs("Unexpected conflict response from browse endpoint".into())),
+        hcfs_shared::network::NetworkResponse::Error(err) => Err(AppError::Hcfs(format!("browse failed (status {status}): {}", err.message))),
+    }
+}
+
 #[tauri::command]
+// The IPC surface stays flat: the FE sends the sort as two scalars, the same
+// shape the console puts on the query string.
+#[allow(clippy::too_many_arguments)]
 pub async fn list_remote_folder_grouped(
     state: tauri::State<'_, AppState>,
     account_id: String,
@@ -857,25 +1009,33 @@ pub async fn list_remote_folder_grouped(
     subfolder: String,
     offset: u32,
     limit: Option<u32>,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
 ) -> Result<RemoteGroupedPage> {
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     // Lenient resolver: the label usually names a server-only drive with no
     // local row (that is the whole point of browsable remote folders).
     let identity = resolve_drive_identity_or_own(pool, &account_id, &label).await?;
-    let client = build_client(pool, &account_id, &identity).await?;
     let path = subfolder.trim_matches('/');
 
     // The FE picks the page size (scroll-driven lazy loading wants small
     // pages); clamp to the server's per-request ceiling either way.
     let limit = limit.unwrap_or(BROWSE_PAGE_LIMIT).clamp(1, BROWSE_PAGE_LIMIT);
-    let page = client
-        .browse(&identity.wire_ss58, &identity.wire_folder_hash, path, offset, limit)
-        .await
-        .map_err(|e| {
-            error!(label = %label, path = %path, offset, "Failed to browse remote folder: {e}");
-            AppError::Hcfs(e.to_string())
-        })?;
+    let page = browse_remote_page(
+        state.inner(),
+        &account_id,
+        &identity,
+        path,
+        offset,
+        limit,
+        sort_by.as_deref(),
+        sort_order.as_deref(),
+    )
+    .await
+    .inspect_err(|e| {
+        error!(label = %label, path = %path, offset, "Failed to browse remote folder: {e}");
+    })?;
 
     let mut folders: Vec<super::files::FileEntry> = Vec::new();
     let mut files: Vec<super::files::FileEntry> = Vec::new();
@@ -894,6 +1054,66 @@ pub async fn list_remote_folder_grouped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole point of issuing `/browse` ourselves. `hcfs_client::browse`
+    /// builds `?path=&offset=&limit=` and stops, so a sort could only reorder
+    /// the page already fetched.
+    #[test]
+    fn browse_url_carries_the_sort_the_server_pages_on() {
+        let url = build_browse_url(
+            "https://arion.example.com",
+            "5Grwva",
+            "abc123",
+            "Camera Uploads",
+            30,
+            15,
+            Some("file_name"),
+            Some("asc"),
+        )
+        .expect("url");
+
+        let pairs: Vec<(String, String)> = url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+        assert!(pairs.contains(&("sort_by".into(), "file_name".into())), "{pairs:?}");
+        assert!(pairs.contains(&("sort_order".into(), "asc".into())), "{pairs:?}");
+        assert!(pairs.contains(&("offset".into(), "30".into())), "{pairs:?}");
+        assert!(pairs.contains(&("limit".into(), "15".into())), "{pairs:?}");
+        assert_eq!(url.path(), "/browse/5Grwva/abc123");
+    }
+
+    /// An unsorted browse must look exactly like it did before this existed,
+    /// or every caller that never asked for a sort silently changes order.
+    #[test]
+    fn browse_url_sends_no_sort_when_none_is_asked_for() {
+        let url = build_browse_url("https://arion.example.com", "5Grwva", "abc123", "", 0, 500, None, None).expect("url");
+
+        let keys: Vec<String> = url.query_pairs().map(|(k, _)| k.into_owned()).collect();
+        assert!(!keys.contains(&"sort_by".to_string()), "{keys:?}");
+        assert!(!keys.contains(&"sort_order".to_string()), "{keys:?}");
+    }
+
+    /// The server defaults an explicit `sort_by` to `desc`, so leaving the
+    /// direction off would silently invert an ascending sort.
+    #[test]
+    fn browse_url_always_states_the_direction_alongside_a_sort() {
+        let url = build_browse_url("https://arion.example.com/", "5Grwva", "abc123", "", 0, 15, Some("size_bytes"), None).expect("url");
+
+        let pairs: Vec<(String, String)> = url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+        assert!(pairs.contains(&("sort_order".into(), "asc".into())), "{pairs:?}");
+    }
+
+    /// A folder name with a space or a `/` must not escape the query value.
+    #[test]
+    fn browse_url_encodes_the_path_rather_than_splicing_it() {
+        let url = build_browse_url("https://arion.example.com", "5Grwva", "abc123", "Trip Photos/2024", 0, 15, None, None).expect("url");
+
+        let path_value = url
+            .query_pairs()
+            .find(|(k, _)| k == "path")
+            .map(|(_, v)| v.into_owned())
+            .expect("path pair");
+        assert_eq!(path_value, "Trip Photos/2024");
+        assert_eq!(url.path(), "/browse/5Grwva/abc123");
+    }
 
     /// This module hands the FE paths under `thumbnail_cache_root()` and
     /// `preview_cache_root_dir()`, which the webview loads through
@@ -956,6 +1176,93 @@ mod tests {
         }
     }
 
+    /// The crux of the bug. The server has been sending `created_at` on folder
+    /// rows since hcfs #427/#428, but the pinned `BrowseFolderEntry` does not
+    /// declare it, so deserialising into that struct dropped it silently and
+    /// every remote folder rendered a dash. Nothing failed; the field simply
+    /// was not there to read.
+    #[test]
+    fn browse_page_deserializes_the_folder_date_the_pinned_type_drops() {
+        // Shape taken from a live production response.
+        let body = r#"{
+            "folders": [{"name":"12mai","file_count":23,"total_bytes":20750257459,"created_at":1784659766}],
+            "files": [],
+            "total_count": 1,
+            "has_more": false
+        }"#;
+
+        let page: BrowsePage = serde_json::from_str(body).expect("parses");
+        assert_eq!(page.folders[0].created_at, Some(1784659766));
+        assert_eq!(page.folders[0].name, "12mai");
+    }
+
+    #[test]
+    fn browse_page_gives_a_folder_the_date_it_first_appeared() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![BrowseFolderRow {
+                name: "12mai".into(),
+                file_count: 23,
+                total_bytes: 999,
+                created_at: Some(1784659766),
+            }],
+            vec![],
+        );
+
+        assert_eq!(folders[0].uploaded_at, 1784659766);
+        assert_eq!(folders[0].updated_at, 1784659766);
+        assert_eq!(folders[0].modified, Some(1784659766));
+    }
+
+    /// A server older than the field omits it. `0` is the sentinel the date
+    /// cell renders as a dash; anything else would reach the formatter and
+    /// render an invalid date.
+    #[test]
+    fn browse_page_folder_without_a_date_falls_back_to_the_dash_sentinel() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![BrowseFolderRow {
+                name: "photos".into(),
+                file_count: 1,
+                total_bytes: 1,
+                created_at: None,
+            }],
+            vec![],
+        );
+
+        assert_eq!(folders[0].uploaded_at, 0);
+        assert_eq!(folders[0].modified, None);
+    }
+
+    /// A `0` FROM the server is its own answer: "no date for this folder". It
+    /// is never a real timestamp, so it survives as 0 and shows as a dash
+    /// rather than being turned into 1970.
+    #[test]
+    fn browse_page_keeps_a_server_sent_zero_as_zero() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![BrowseFolderRow {
+                name: "empty".into(),
+                file_count: 0,
+                total_bytes: 0,
+                created_at: Some(0),
+            }],
+            vec![],
+        );
+
+        assert_eq!(folders[0].uploaded_at, 0);
+        assert_eq!(folders[0].modified, None);
+    }
+
     #[test]
     fn browse_page_maps_folders_with_server_sizes() {
         let mut folders = Vec::new();
@@ -963,10 +1270,11 @@ mod tests {
         append_browse_page(
             &mut folders,
             &mut files,
-            vec![hcfs_shared::network::BrowseFolderEntry {
+            vec![BrowseFolderRow {
                 name: "photos".into(),
                 file_count: 2500,
                 total_bytes: 999,
+                created_at: None,
             }],
             vec![],
         );
@@ -1036,10 +1344,11 @@ mod tests {
         append_browse_page(
             &mut folders,
             &mut files,
-            vec![hcfs_shared::network::BrowseFolderEntry {
+            vec![BrowseFolderRow {
                 name: "photos".into(),
                 file_count: 1,
                 total_bytes: 2,
+                created_at: None,
             }],
             vec![browse_file(Some("a.jpg"), Some("a.jpg"), 3, 4, 5)],
         );

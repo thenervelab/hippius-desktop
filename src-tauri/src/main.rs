@@ -104,6 +104,7 @@ use crate::recovery::{
 use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
+use crate::sync::drive_summaries::{get_file_type_summary, get_source_summary};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, create_sync_folder, delete_files, export_file, export_folder_zip, filter_file_entries,
     get_recent_files, get_user_files, list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path,
@@ -407,6 +408,8 @@ fn main() {
             upload_files_to_remote_folder,
             upload_folder_to_remote_folder,
             search_files_in_drive,
+            get_file_type_summary,
+            get_source_summary,
             rename_remote_file,
             rename_remote_folder,
             create_remote_folder,
