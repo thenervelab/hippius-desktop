@@ -239,6 +239,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **"Sync needs your unlock password" no longer appears when nothing is wrong,
+  and no longer sends you to the sign-in screen.** The notice could stay up on a
+  device that was perfectly fine, and pressing it looked like being signed out.
+  It now checks and disappears on its own, and only asks for your seed phrase
+  when that really is the only way back.
+- **The sync notice and the encryption password dialog are readable in dark
+  mode.** Both were drawn in light colours whatever theme you were using.
+
 - **Hippius repairs a local database left over from a much older version.** If you
   had installed Hippius long enough ago, one leftover table could stop the app
   setting up its local storage at all — so signing in failed every time, on every
