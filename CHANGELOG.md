@@ -274,6 +274,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The app now tells you about a new version while it is running.** Updates were
+  only ever found when you restarted Hippius or checked by hand, so a copy left
+  open for days never offered one. It now checks in the background and offers the
+  update once, without nagging.
+
 - **Folders in a cloud drive now show a date.** They showed a dash where the files
   beside them showed the date they were uploaded; a folder now shows when it first
   appeared.
