@@ -104,6 +104,7 @@ use crate::recovery::{
 use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
+use crate::sync::drive_summaries::{get_file_type_summary, get_source_summary};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, create_sync_folder, delete_files, export_file, export_folder_zip, filter_file_entries,
     get_recent_files, get_user_files, list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path,
@@ -123,7 +124,9 @@ use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, renam
 use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
-use crate::updates::{check_for_update, current_release_channel, install_update, release_channel_status, switch_release_channel};
+use crate::updates::{
+    check_for_update, current_release_channel, install_update, release_channel_status, spawn_background_update_checks, switch_release_channel,
+};
 use crate::utils::app_location::is_app_translocated;
 use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
@@ -407,6 +410,8 @@ fn main() {
             upload_files_to_remote_folder,
             upload_folder_to_remote_folder,
             search_files_in_drive,
+            get_file_type_summary,
+            get_source_summary,
             rename_remote_file,
             rename_remote_folder,
             create_remote_folder,
@@ -1108,6 +1113,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     crate::finder_bridge::enablement::ensure_finder_extension_at_launch(handle).await;
                 });
             }
+
+            // Keep asking for a newer version for as long as the app runs.
+            // Startup checks once and the menu checks on demand, so a copy left
+            // open for days never heard about a release at all.
+            spawn_background_update_checks(app_handle.clone());
 
             // Migrate account keys from 8-char to 16-char format
             if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {

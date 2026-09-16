@@ -61,3 +61,48 @@ export function shouldUseDriveScopedSearch(opts: {
     !opts.isRecentFiles
   );
 }
+
+/**
+ * Whether the Drive page is showing a folder rather than a drive's root.
+ *
+ * Navigation into a folder is a URL, not a route: `/files` gains
+ * `folderName` and `subFolderPath`. Both are required, because one without
+ * the other is a half-built link that should keep showing the root rather
+ * than an empty folder.
+ *
+ * Shared so the page and `DriveContainer` cannot answer this differently.
+ * The page hides the plan card in here, and a second definition of "inside
+ * a folder" is how that would start disagreeing with what is on screen.
+ */
+export function isNestedFolderView(opts: {
+  folderName: string | null | undefined;
+  subFolderPath: string | null | undefined;
+}): boolean {
+  return Boolean(opts.folderName && opts.subFolderPath);
+}
+
+/**
+ * Whether the Drive page is showing its list of folders, rather than the
+ * inside of a drive.
+ *
+ * This is the drive root, and the only view the plan card belongs on.
+ *
+ * Deliberately not derived from the URL. Opening a synced drive from the
+ * folder list is a state change in `DriveContainer`, not a navigation, so
+ * `/files` stays `/files` all the way into a drive. A URL-only check reports
+ * the folder list while a drive's contents are on screen.
+ *
+ * - `isOnLocalView` is the folder list itself, and is what a drive click
+ *   clears.
+ * - `isNested` covers a link opened straight into a subfolder, which arrives
+ *   with `isOnLocalView` still at its initial true.
+ * - `isRecentFiles` is a different listing on the same container, and is not
+ *   the drive root either.
+ */
+export function isDriveFolderListView(opts: {
+  isOnLocalView: boolean;
+  isNested: boolean;
+  isRecentFiles: boolean;
+}): boolean {
+  return opts.isOnLocalView && !opts.isNested && !opts.isRecentFiles;
+}

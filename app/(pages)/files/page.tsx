@@ -4,10 +4,13 @@ import { Drive } from "@/components/page-sections";
 import { FC, useEffect } from "react";
 import PageHeader from "@/components/ui/page-header";
 import PlanSummaryCard from "@/components/ui/plan-chip/PlanSummaryCard";
-import { useSetAtom } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { isNestedFolderView } from "@/lib/utils/filesViewMode";
 
 import InfoTooltip from "@/components/ui/info-tooltip";
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
+import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 
 const DRIVE_DOCS_URL = "https://docs.hippius.com/use/desktop/drive";
 
@@ -18,6 +21,27 @@ const FilesPage: FC = () => {
   // atom on unmount so a selection from this page doesn't bleed into other
   // routes if the user navigates away with the panel still open.
   const setFileDetails = useSetAtom(fileDetailsPanelAtom);
+
+  // The plan card belongs to the drive as a whole, so it is drawn on the one
+  // view that is about the drive as a whole: the list of folders. Inside a
+  // drive it repeats an account-wide fact over a view scoped to one folder,
+  // next to a breadcrumb that is the thing actually worth reading up there.
+  //
+  // This cannot be read off the URL. Opening a synced drive from the folder
+  // list is a state change inside DriveContainer, not a navigation, so
+  // `/files` stays `/files` all the way into a drive; a URL-only check said
+  // "folder list" while a drive's contents were on screen, which is how the
+  // card survived one level in. DriveContainer publishes the answer instead.
+  const atFolderList = useAtomValue(driveAtFolderListAtom);
+  // The URL check stays as well, for the one case the atom cannot answer in
+  // time: a link opened straight into a subfolder paints once before
+  // DriveContainer's effect runs, and the atom still holds its initial true.
+  const { getParam } = useUrlParams();
+  const insideFolder = isNestedFolderView({
+    folderName: getParam("folderName"),
+    subFolderPath: getParam("subFolderPath"),
+  });
+  const showPlanCard = atFolderList && !insideFolder;
   useEffect(() => {
     return () => setFileDetails(null);
   }, [setFileDetails]);
@@ -47,10 +71,11 @@ const FilesPage: FC = () => {
           // it is was stated anywhere on this page.
           //
           // It goes in `actions`, not the header's own stats card, because
-          // that card is xl-only and this page hides it — and because
-          // `actions` renders at every width, in the cards view, and inside
-          // every folder of every local or remote drive alike.
-          <PlanSummaryCard />
+          // that card is xl-only and this page hides it, and because
+          // `actions` renders at every width and in the cards view.
+          //
+          // Only on the folder list: see `showPlanCard`.
+          showPlanCard ? <PlanSummaryCard /> : null
         }
       />
       <Drive />

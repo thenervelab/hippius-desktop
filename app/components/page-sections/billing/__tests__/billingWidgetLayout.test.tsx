@@ -31,7 +31,9 @@ import TaoDepositWidget from "../TaoDepositWidget";
 
 beforeEach(() => {
   creditsMocks.useUserCredits.mockReturnValue({
-    data: { planck: 0n, hip: "14.037794" },
+    // planck is the source of truth the widget renders from, so it has to
+    // agree with `hip` here or the mock describes an account that cannot exist.
+    data: { planck: 14037794000000000000n, hip: "14.037794" },
     isLoading: false,
     refetch: vi.fn(),
     dataUpdatedAt: Date.now(),
@@ -52,13 +54,14 @@ describe("billing widget layout", () => {
   it("gives the credits card inner panel padding and a gap between the stat and the button", () => {
     render(<CreditsWidget />);
 
-    expect(screen.getByText("14.037794")).toBeInTheDocument();
+    // Quoted as money, rounded to the cent, not as a six-decimal token amount.
+    expect(screen.getByText("$14.04")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /add credits/i }),
+      screen.getByRole("button", { name: /top up/i }),
     ).toBeInTheDocument();
 
     const panel = screen.getByRole("button", {
-      name: /add credits/i,
+      name: /top up/i,
     }).parentElement;
     expect(panel?.className).toContain("gap-4");
     expect(panel?.className).toContain("px-4");

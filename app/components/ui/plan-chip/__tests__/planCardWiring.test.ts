@@ -29,10 +29,61 @@ describe("the Drive header shows the plan card, not a standing plans button", ()
 
   // It has to go in `actions`, not the header's own stats card: that card
   // is xl-only and this page hides it, so the plan surface would vanish on
-  // a smaller window — and inside every folder, where the header stays put.
-  it("renders the shared card through the always-visible actions slot", () => {
+  // a smaller window and in the cards view.
+  it("renders the shared card through the actions slot", () => {
     expect(drivePage).toContain("PlanSummaryCard");
     expect(drivePage).toMatch(/actions=\{[\s\S]*?PlanSummaryCard/);
+  });
+
+  // The plan is a fact about the DRIVE as a whole, so it is drawn on the one
+  // view that is about the drive as a whole: the list of folders. Inside a
+  // drive it repeats an account-wide figure over a view scoped to one folder,
+  // beside a breadcrumb that is the thing worth reading up there.
+  it("draws the card only on the folder list", () => {
+    expect(drivePage).toMatch(/showPlanCard \? <PlanSummaryCard \/> : null/);
+  });
+
+  // The bug this replaced: the page asked the URL, and the URL does not know.
+  // Opening a synced drive from the folder list is a state change inside
+  // DriveContainer, not a navigation, so `/files` stays `/files` all the way
+  // into a drive and a URL-only check reported "folder list" while a drive's
+  // contents were on screen. The card survived one level in because of it.
+  it("takes the view from DriveContainer rather than deciding from the URL", () => {
+    expect(drivePage).toContain("driveAtFolderListAtom");
+    expect(drivePage).toMatch(/showPlanCard\s*=\s*atFolderList\s*&&/);
+  });
+
+  // The URL check stays alongside it, for the one case the atom cannot answer
+  // in time: a link opened straight into a subfolder paints once before
+  // DriveContainer's effect runs, with the atom still at its initial true.
+  it("still covers a deep link into a subfolder on first paint", () => {
+    expect(drivePage).toContain("isNestedFolderView");
+    expect(drivePage).not.toMatch(/Boolean\(\s*getParam\("folderName"\)/);
+  });
+});
+
+describe("DriveContainer publishes which view is on screen", () => {
+  const container = readCode(
+    "../../../page-sections/drive/DriveContainer.tsx",
+  );
+
+  // The page cannot see `isOnLocalView` — it is useState in the container —
+  // so the container has to hand the answer over.
+  it("writes the folder-list flag to the atom the page reads", () => {
+    expect(container).toContain("driveAtFolderListAtom");
+    expect(container).toContain("setAtFolderList");
+  });
+
+  // One rule, in one place, so the flag cannot be spelled differently here
+  // than it is reasoned about elsewhere.
+  it("derives the flag from the shared resolver", () => {
+    expect(container).toContain("isDriveFolderListView");
+  });
+
+  // Otherwise the next visit to Drive opens with the card hidden because the
+  // last visit ended inside a folder.
+  it("resets the flag when the page unmounts", () => {
+    expect(container).toMatch(/=>\s*\(\)\s*=>\s*setAtFolderList\(true\)/);
   });
 });
 
@@ -93,8 +144,8 @@ describe("the header cards drop the action cell, not just its button", () => {
 });
 
 describe("the Overview header carries no plan card", () => {
-  // The Storage and Plan cards sit immediately below it and already state
-  // the plan, the usage and Manage/Upgrade, with room to do it properly.
+  // The Storage card sits immediately below it and already states the plan,
+  // the usage and Manage/Upgrade, with room to do it properly.
   it("the home page turns the header card off", () => {
     const home = readCode("../../../page-sections/home/index.tsx");
     expect(home).toMatch(/<PageHeader[^>]*showPlanCard=\{false\}/);
@@ -108,8 +159,13 @@ describe("the Overview header carries no plan card", () => {
   });
 });
 
-describe("the home plan card states the plan, not its price", () => {
-  const card = readCode("../../../page-sections/home/plan-overview/index.tsx");
+describe("the home storage card states the plan, not its price", () => {
+  // The Plan card that used to sit beside this one is gone: it restated the
+  // plan name and allowance from the same fetch, so the pair said one thing
+  // twice. Its Manage button moved into this card, and these pins moved with
+  // it, because they are about what the Overview promises, not about which
+  // component happens to draw it.
+  const card = readCode("../../../page-sections/home/storage-overview/index.tsx");
 
   // What a plan costs is settled for the account already on it; Manage is
   // one click away for the billing detail.
@@ -117,9 +173,16 @@ describe("the home plan card states the plan, not its price", () => {
     expect(card).not.toMatch(/formatPlanPrice|plan\.amount|plan\.interval/);
   });
 
-  it("still names the plan and its allowance", () => {
-    expect(card).toContain("plan.name");
-    expect(card).toContain("plan.storageDisplay");
+  it("names the plan and the capacity it grants", () => {
+    expect(card).toContain("getCapacitySourceLabel");
+    expect(card).toContain("overview.totalDisplay");
+  });
+
+  // The only part of the old card that was not a repeat.
+  it("carries the action the Plan card used to own", () => {
+    expect(card).toContain("Manage");
+    expect(card).toContain("Upgrade");
+    expect(card).toContain("BILLING_ROUTE");
   });
 });
 

@@ -462,7 +462,7 @@ const CreateVMModal: React.FC<Props> = ({
                   className="h-[52px] w-full gap-2 rounded-[6px] px-4 text-[18px] font-medium leading-5 tracking-[-0.36px] shadow-[0px_4px_4px_0px_rgba(4,65,149,0.1)]"
                 >
                   {isChecking ? (
-                    <span>Checking credits...</span>
+                    <span>Checking balance...</span>
                   ) : isCreatingVM ? (
                     <span>Creating...</span>
                   ) : (

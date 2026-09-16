@@ -42,20 +42,20 @@ describe("getPlanActionNote", () => {
   // consequence — the plan not renewing — is the part worth reading.
   it("explains a top-up prompt, and counts down when Rust supplies a date", () => {
     expect(getPlanActionNote("top-up-credits", 6)).toBe(
-      "Low credits. Your plan renews in 6 days",
+      "Low balance. Your plan renews in 6 days",
     );
     expect(getPlanActionNote("top-up-credits", 1)).toBe(
-      "Low credits. Your plan renews tomorrow",
+      "Low balance. Your plan renews tomorrow",
     );
     expect(getPlanActionNote("top-up-credits", 0)).toBe(
-      "Low credits. Your plan renews today",
+      "Low balance. Your plan renews today",
     );
   });
 
   // No date from the rail, or one already past: say the thing that is true
   // either way rather than inventing a countdown.
   it("still says the balance is short with no usable date", () => {
-    const fallback = "Low credits. Not enough to renew your plan";
+    const fallback = "Low balance. Not enough to renew your plan";
     expect(getPlanActionNote("top-up-credits", null)).toBe(fallback);
     expect(getPlanActionNote("top-up-credits", undefined)).toBe(fallback);
     expect(getPlanActionNote("top-up-credits", -3)).toBe(fallback);
@@ -89,8 +89,8 @@ describe("the top-up label stays short", () => {
 
   // The note carries the "why"; the button carries the "what".
   it("leaves the explanation to the note", () => {
-    expect(label).not.toMatch(/credit/i);
-    expect(getPlanActionNote("top-up-credits", 6)).toMatch(/credits/i);
+    expect(label).not.toMatch(/credit|balance/i);
+    expect(getPlanActionNote("top-up-credits", 6)).toMatch(/balance/i);
   });
 });
 
@@ -119,7 +119,7 @@ describe("getRenewalNotice", () => {
     const notice = getRenewalNotice(overview());
     expect(notice?.description).toContain("Plus");
     expect(notice?.description).toContain("$7 a month");
-    expect(notice?.description).toContain("5.39 credits");
+    expect(notice?.description).toContain("$5.39");
   });
 
   // A price is always dollars; credits are named only where they are the
@@ -137,7 +137,9 @@ describe("getRenewalNotice", () => {
   // A warning that invents a price is worse than a shorter one.
   it("drops a clause rather than guessing at a missing input", () => {
     const noPrice = getRenewalNotice(overview({ plan: { name: "Plus", renewsInDays: 3 } }));
-    expect(noPrice?.description).not.toMatch(/\$/);
+    // The PRICE clause goes; the balance is still known and still quoted,
+    // so a dollar sign on its own no longer means a price was invented.
+    expect(noPrice?.description).not.toMatch(/a month/);
     expect(noPrice?.description).not.toMatch(/undefined|null|NaN/);
 
     const noBalance = getRenewalNotice(overview({ creditsHip: null }));
