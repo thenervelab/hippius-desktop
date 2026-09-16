@@ -239,6 +239,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Hippius repairs a local database left over from a much older version.** If you
+  had installed Hippius long enough ago, one leftover table could stop the app
+  setting up its local storage at all — so signing in failed every time, on every
+  launch, and reinstalling did not help because the old file was still there. That
+  file is now upgraded on the next launch, with nothing for you to do.
+- **One part of local storage failing can no longer take out the rest.** A single
+  problem used to discard every table, leaving an app that opened normally but
+  could not save anything. Each part is now handled on its own, and if the pieces
+  sign-in depends on are genuinely unavailable Hippius says so instead of failing
+  silently at the end of every sign-in.
+
 - **Signing in with Google or GitHub no longer runs out of time while you are still
   signing in.** You had five minutes to finish in the browser, so creating your
   account or clearing a two-factor prompt could quietly use it up — and once it did,
