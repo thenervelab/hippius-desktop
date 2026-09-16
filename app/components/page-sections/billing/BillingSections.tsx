@@ -4,8 +4,9 @@ import React, { Suspense } from "react";
 
 import PlanRenewalNotice from "@/components/ui/plan-chip/PlanRenewalNotice";
 import CreditsWidget from "./CreditsWidget";
-import TaoDepositWidget from "./TaoDepositWidget";
+import NextChargeCard from "./NextChargeCard";
 import DrivePlansSection from "@/components/page-sections/drive-plans/DrivePlansSection";
+import DriveSubscriptionHistory from "@/components/page-sections/drive-plans/DriveSubscriptionHistory";
 
 /**
  * Everything on the Billing page except the page chrome.
@@ -24,10 +25,15 @@ import DrivePlansSection from "@/components/page-sections/drive-plans/DrivePlans
  * ("3 / 15 / 150 / 450 Credits Reload"), which are a different product
  * and were removed from the console for the same reason: two unrelated
  * things called "Subscription Plans" on one screen, only one of which
- * governs the storage the user is actually looking at. Billing history
- * came out with them. `SubscriptionPlansSection` and
- * `BillingnHistoryTable` are left in the tree unreferenced rather than
- * deleted, matching how other withdrawn surfaces are kept.
+ * governs the storage the user is actually looking at.
+ *
+ * Billing history came out with them, as collateral: the objection was to
+ * the credit-reload product, not to a ledger. It is back, but as the DRIVE
+ * plan's own history (`DriveSubscriptionHistory`), so it lists the charges
+ * for the plans directly above it and cannot reintroduce the confusion the
+ * removal was about. `SubscriptionPlansSection` and `BillingnHistoryTable`
+ * stay in the tree unreferenced rather than deleted, matching how other
+ * withdrawn surfaces are kept.
  */
 export default function BillingSections() {
   return (
@@ -57,9 +63,18 @@ export default function BillingSections() {
           button stranded from the number it belongs to. Neither card
           absorbs the slack now, so on a very wide window the row ends
           where its content ends rather than stretching to the edge. */}
-      <div className="mt-4 grid grid-cols-1 gap-4 @md:grid-cols-2 @3xl:grid-cols-[minmax(0,26rem)_minmax(28rem,34rem)]">
+      {/* Balance and next charge, half the row each: what the account has,
+          and what is leaving it. They are the pair this page opens with.
+
+          The TAO deposit address used to take the right half. It was a
+          48-character string that never changed, holding half a row for a
+          thing almost nobody reads twice, and it forced this grid into
+          bounded columns sized around ITS content rather than the cards'.
+          Two equal halves that use the full width is what the row wanted
+          all along. */}
+      <div className="mt-4 grid grid-cols-1 gap-4 @3xl:grid-cols-2">
         <CreditsWidget />
-        <TaoDepositWidget />
+        <NextChargeCard />
       </div>
 
       {/* Drive plans — the plan detail that Billing now owns. Suspense
@@ -70,6 +85,12 @@ export default function BillingSections() {
           <DrivePlansSection />
         </Suspense>
       </div>
+
+      {/* Under the plans, because it is their ledger: what each charge was
+          for, what it cost and whether it went through. Full width rather
+          than a card in the row above, since five columns of dates and
+          amounts do not fit half a row. */}
+      <DriveSubscriptionHistory className="mt-4" />
     </>
   );
 }

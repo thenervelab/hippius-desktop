@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentProps, FC } from "react";
+import type { FC } from "react";
 
 import NoEntriesFound from "@/components/ui/NoEntriesFound";
 import {
@@ -13,31 +13,14 @@ import {
   THead,
   Tr,
 } from "@/components/ui/table";
-import StatusTypeBadge from "@/components/page-sections/billing/StatusTypeBadge";
+import StatusTypeBadge, {
+  toStatusType,
+} from "@/components/page-sections/billing/StatusTypeBadge";
 import TransactionTypeBadge from "@/components/page-sections/billing/TransactionTypeBadge";
 import useDriveSubscriptionHistory from "@/lib/hooks/api/useDriveSubscriptionHistory";
 import { cn } from "@/lib/utils";
 
-type StatusKind = NonNullable<ComponentProps<typeof StatusTypeBadge>["type"]>;
-// Every state the billing badge draws, so a drive charge never loses its pill.
-const STATUS_KINDS: ReadonlySet<string> = new Set([
-  "failed",
-  "error",
-  "declined",
-  "cancelled",
-  "canceled",
-  "expired",
-  "pending",
-  "processing",
-  "success",
-  "successful",
-]);
 
-/** The badge only knows a fixed set of states; anything else draws no pill. */
-function toStatusKind(status: string): StatusKind | null {
-  const key = status.toLowerCase();
-  return STATUS_KINDS.has(key) ? (key as StatusKind) : null;
-}
 
 function formatDate(iso: string): string {
   const ms = Date.parse(iso);
@@ -121,7 +104,13 @@ const DriveSubscriptionHistory: FC<{ className?: string }> = ({
                       />
                     </Td>
                     <Td>
-                      <StatusTypeBadge type={toStatusKind(row.status)} />
+                      {/* `fallback` is the raw status: a state the badge has
+                          no colour for still has to READ as something. An
+                          empty Status cell looks like missing data. */}
+                      <StatusTypeBadge
+                        type={toStatusType(row.status)}
+                        fallback={row.status}
+                      />
                     </Td>
                     <Td className="text-[12px] font-medium text-grey-dark-800">
                       {formatDate(row.transaction_date)}

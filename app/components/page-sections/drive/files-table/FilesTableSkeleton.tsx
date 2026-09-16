@@ -43,12 +43,18 @@ const SKELETON_BAR_CLASS =
  */
 const FilesTableSkeleton: React.FC<FilesTableSkeletonProps> = ({
   isRecentFiles = false,
-  rows = 8,
+  rows,
 }) => (
   <div
     className={cn(
       "flex flex-col gap-y-8 relative",
-      !isRecentFiles && "min-h-[43.75rem]",
+      // The 700px floor is for the lazily-revealed list, whose final height
+      // nothing knows in advance. A paged table DOES know: its caller passes
+      // the page size, so the skeleton is exactly as tall as the rows about
+      // to replace it. Keeping the floor there paints a full-height block for
+      // a ten-row page and then collapses, which is the jump the skeleton is
+      // supposed to prevent.
+      !isRecentFiles && rows === undefined && "min-h-[43.75rem]",
     )}
   >
     <div className="w-full relative">
@@ -90,7 +96,7 @@ const FilesTableSkeleton: React.FC<FilesTableSkeletonProps> = ({
             </tr>
           </thead>
           <tbody>
-            {Array.from({ length: rows }).map((_, rowIndex) => (
+            {Array.from({ length: rows ?? (isRecentFiles ? 5 : 8) }).map((_, rowIndex) => (
               <tr
                 key={`skeleton-row-${rowIndex}`}
                 className="border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 dark:odd:bg-black-500 dark:even:bg-black-primary-bg"

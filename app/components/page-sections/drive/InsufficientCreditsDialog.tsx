@@ -47,9 +47,9 @@ const copy: Record<
   },
   // VM creation is genuinely credit-priced and keeps the credits route.
   "vm-creation": {
-    title: "Insufficient Credits for VM Creation",
+    title: "Not enough balance for VM creation",
     description:
-      "You need at least 10 credits to create a virtual machine. Please add credits before proceeding.",
+      "Creating a virtual machine needs at least $10 on your account balance. Top up before proceeding.",
     needsPlan: false,
   },
 };
@@ -124,7 +124,7 @@ const InsufficientCreditsDialog: React.FC = () => {
             onClick={handleOpenConsoleCreditsPage}
             className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
           >
-            Buy Credits
+            Top up
           </Button>
         )}
       </div>

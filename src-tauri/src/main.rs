@@ -104,6 +104,7 @@ use crate::recovery::{
 use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
+use crate::sync::drive_summaries::{get_file_type_summary, get_source_summary};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, create_sync_folder, delete_files, export_file, export_folder_zip, filter_file_entries,
     get_recent_files, get_user_files, list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path,
@@ -123,7 +124,9 @@ use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, renam
 use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
-use crate::updates::{check_for_update, current_release_channel, install_update, release_channel_status, switch_release_channel};
+use crate::updates::{
+    check_for_update, current_release_channel, install_update, release_channel_status, spawn_background_update_checks, switch_release_channel,
+};
 use crate::utils::app_location::is_app_translocated;
 use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
@@ -407,6 +410,8 @@ fn main() {
             upload_files_to_remote_folder,
             upload_folder_to_remote_folder,
             search_files_in_drive,
+            get_file_type_summary,
+            get_source_summary,
             rename_remote_file,
             rename_remote_folder,
             create_remote_folder,
@@ -1061,14 +1066,32 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     return; // cannot propagate from spawned task; error is logged
                 }
             };
-            app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
-
-            // Ensure all tables and columns exist
+            // Ensure all tables and columns exist BEFORE publishing the pool.
+            //
+            // The pool used to be published first, so a failed schema init left
+            // every command running against a database with no tables: each one
+            // failed with a raw "no such table", the app looked healthy, and a
+            // sign-in died at the last step with nothing to tell the user. The
+            // pool is now published only once the core tables are confirmed, so
+            // the alternative is an honest `DatabaseNotReady` the frontend
+            // already knows how to show.
+            //
+            // A step failure is no longer fatal on its own: steps are isolated,
+            // so the tables that did migrate are committed and the app runs on
+            // a partial schema rather than none. Only missing CORE tables stop
+            // us here.
             if let Err(e) = crate::utils::schema::ensure_table_schema(&pool).await {
-                error!("FATAL: Failed to ensure table schema: {}", e);
+                error!("Schema initialization reported failures: {}", e);
+            }
+
+            if !crate::utils::schema::core_tables_present(&pool).await {
+                error!("FATAL: core tables are missing after schema initialization; not publishing the database");
                 show_main();
                 return;
             }
+
+            // Safe to publish: the core tables are confirmed present.
+            app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
 
             // Pool installed AND schema ensured — the backend can now service
             // IPC, so it is safe to reveal the window. Done before the
@@ -1090,6 +1113,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     crate::finder_bridge::enablement::ensure_finder_extension_at_launch(handle).await;
                 });
             }
+
+            // Keep asking for a newer version for as long as the app runs.
+            // Startup checks once and the menu checks on demand, so a copy left
+            // open for days never heard about a release at all.
+            spawn_background_update_checks(app_handle.clone());
 
             // Migrate account keys from 8-char to 16-char format
             if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {

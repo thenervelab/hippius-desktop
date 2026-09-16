@@ -57,7 +57,9 @@ describe("InsufficientCreditsDialog", () => {
       renderWithReason(reason);
 
       expect(screen.getByText("Not enough storage")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /buy credits/i })).not.toBeInTheDocument();
+      // Matched against the CTA's CURRENT wording, or renaming the button
+      // would quietly turn this guard into one that can never fail.
+      expect(screen.queryByRole("button", { name: /top up/i })).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: /view plans/i }));
       expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
@@ -78,9 +80,9 @@ describe("InsufficientCreditsDialog", () => {
   it("keeps VM creation on the credits route", () => {
     renderWithReason("vm-creation");
 
-    expect(screen.getByText(/Insufficient Credits for VM Creation/i)).toBeInTheDocument();
+    expect(screen.getByText(/Not enough balance for VM creation/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /buy credits/i }));
+    fireEvent.click(screen.getByRole("button", { name: /top up/i }));
     expect(openLinkByKey).toHaveBeenCalledWith("CREDITS");
     expect(push).not.toHaveBeenCalled();
   });
