@@ -559,6 +559,16 @@ mod tests {
         );
     }
 
+    /// `BaseUrl::join` concatenates verbatim, and a host-relative path that
+    /// lost its leading slash still parses as a URL — it just points at the
+    /// wrong host. Pin the one thing `Url::parse` cannot catch for us.
+    #[test]
+    fn every_endpoint_path_is_rooted() {
+        for path in [SHARES_LISTING_PATH, FOLDER_SHARES_LISTING_PATH, FILE_WRAPS_PATH, FOLDER_WRAPS_PATH] {
+            assert!(path.starts_with('/'), "{path} must start with '/'");
+        }
+    }
+
     /// A stored URL with a trailing slash must not produce `//v1/...`; the
     /// server routes that as a different path.
     #[test]
