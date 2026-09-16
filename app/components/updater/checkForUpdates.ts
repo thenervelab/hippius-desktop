@@ -9,6 +9,7 @@
 import {
   checkForUpdate,
   installUpdate,
+  noteUpdatePrompted,
   type AvailableUpdate,
 } from "@/lib/tauri/updates";
 import { tauriErrorDetail } from "@/lib/utils/dispatchTauriError";
@@ -98,6 +99,11 @@ export async function checkForUpdates(notifyOnce = false) {
       version: update.version,
       body: update.notes,
     });
+
+    // Whoever got here first owns the answer to "has the user seen this
+    // version?". The background check reads it, so a dismissed dialog is not
+    // reopened a minute later by the timer.
+    void noteUpdatePrompted(update.version);
 
     // If this is a startup check (notifyOnce = true), don't wait for user response
     // The dialog will handle the user interaction independently

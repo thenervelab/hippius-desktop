@@ -22,6 +22,7 @@
 use serde::Serialize;
 // `tauri::Url` is Tauri's re-export of `url::Url`, so the endpoint type matches
 // the plugin's without taking a direct dependency on `url` for one call.
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::utils::config::BundleType;
@@ -204,6 +205,35 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
 /// an interruption is not something to hand out every few minutes.
 pub const BACKGROUND_UPDATE_CHECK_INTERVAL: Duration = Duration::from_hours(1);
 
+/// The version already put in front of the user this run, by whichever path
+/// got there first.
+///
+/// Shared rather than owned by the background task, because the task is not
+/// the only thing that opens the dialog. Startup checks on every launch, and
+/// the menu checks on demand. With the memory private to the task, a user who
+/// dismissed the startup dialog got the same version again on the next tick:
+/// the task had announced nothing yet, so as far as it knew this was the first
+/// anyone had heard of it.
+static ANNOUNCED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Record that the user has been shown `version`, so the background check
+/// leaves it alone.
+///
+/// Called by the frontend whenever it opens the update dialog, which is the
+/// one moment that is true regardless of which path opened it. A manual
+/// "check for updates" still shows the dialog every time it is pressed; this
+/// only governs what the unattended timer is allowed to raise.
+#[tauri::command]
+pub fn note_update_prompted(version: String) {
+    if version.is_empty() {
+        return;
+    }
+    if let Ok(mut announced) = ANNOUNCED.lock() {
+        debug!(%version, "user has been shown this version");
+        *announced = Some(version);
+    }
+}
+
 /// Emitted when the background check finds a version it has not yet mentioned.
 ///
 /// Carries nothing: the frontend owns the presentation path (notification row,
@@ -236,7 +266,6 @@ pub fn should_announce(version: &str, already_announced: Option<&str>) -> bool {
 /// it at the moment it happens.
 pub fn spawn_background_update_checks(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let mut announced: Option<String> = None;
         loop {
             // Sleep FIRST: startup has just checked, so an immediate second
             // check would be a duplicate request on every launch.
@@ -244,12 +273,25 @@ pub fn spawn_background_update_checks(app: AppHandle) {
 
             match check_for_update(app.clone()).await {
                 Ok(Some(update)) => {
-                    if should_announce(&update.version, announced.as_deref()) {
+                    // Lock, decide and record in one go: the frontend writes
+                    // the same value the moment it opens the dialog.
+                    let announce = match ANNOUNCED.lock() {
+                        Ok(mut announced) => {
+                            let yes = should_announce(&update.version, announced.as_deref());
+                            if yes {
+                                *announced = Some(update.version.clone());
+                            }
+                            yes
+                        }
+                        // A poisoned lock must not turn into silence: being
+                        // told twice is better than never being told.
+                        Err(_) => true,
+                    };
+                    if announce {
                         info!(version = %update.version, "background check found a new version");
-                        announced = Some(update.version.clone());
                         let _ = app.emit(UPDATE_AVAILABLE_EVENT, ());
                     } else {
-                        debug!(version = %update.version, "already announced this version");
+                        debug!(version = %update.version, "already shown this version");
                     }
                 }
                 Ok(None) => debug!("background check: up to date"),
@@ -686,6 +728,33 @@ mod tests {
             !super::should_announce("0.6.4", Some("0.6.4")),
             "the same version must not be announced twice"
         );
+    }
+
+    /// The behaviour that matters most, and the one the first cut got wrong.
+    ///
+    /// Startup shows the dialog; the user skips it. A minute later the
+    /// background check must stay quiet. It only does because the frontend
+    /// records what it showed into the SAME place the task reads, rather than
+    /// the task keeping a private memory that starts empty and knows nothing
+    /// about the dialog the user just closed.
+    #[test]
+    fn a_version_dismissed_at_startup_is_not_raised_again_by_the_timer() {
+        super::note_update_prompted("0.6.2".into());
+        let announced = super::ANNOUNCED.lock().expect("lock");
+        assert!(
+            !super::should_announce("0.6.2", announced.as_deref()),
+            "the timer must not re-raise a version the startup dialog already showed"
+        );
+    }
+
+    /// An empty version must not latch the shared slot, or the real version
+    /// that follows would be suppressed by a non-answer.
+    #[test]
+    fn noting_an_empty_version_records_nothing() {
+        let before = super::ANNOUNCED.lock().expect("lock").clone();
+        super::note_update_prompted(String::new());
+        let after = super::ANNOUNCED.lock().expect("lock").clone();
+        assert_eq!(before, after);
     }
 
     /// A newer release landing while the app is still running is the whole
