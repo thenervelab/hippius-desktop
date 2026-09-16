@@ -41,6 +41,41 @@ const badgeVariants = cva(
 
 type StatusType = NonNullable<VariantProps<typeof badgeVariants>["type"]>;
 
+/**
+ * Every state this badge can draw, and the resolver for a raw API string.
+ *
+ * Exported because a caller keeping its OWN copy of the list is how a status
+ * goes unrendered: the drive history held a narrower set that omitted
+ * `completed`, `paid`, `confirmed`, `in_progress`, `refunded` and `reversed`,
+ * so a successful charge resolved to null and its Status cell drew nothing.
+ * Derive from here, or pass `fallback` so an unknown state still reads as
+ * text rather than as an empty cell.
+ */
+export const STATUS_TYPES: ReadonlySet<string> = new Set([
+  "failed",
+  "error",
+  "declined",
+  "cancelled",
+  "canceled",
+  "expired",
+  "pending",
+  "processing",
+  "in_progress",
+  "success",
+  "successful",
+  "completed",
+  "paid",
+  "confirmed",
+  "refunded",
+  "reversed",
+]);
+
+export function toStatusType(raw: string | null | undefined): StatusType | null {
+  if (!raw) return null;
+  const key = raw.toLowerCase().replace(/[\s-]+/g, "_");
+  return STATUS_TYPES.has(key) ? (key as StatusType) : null;
+}
+
 interface Props {
   type: StatusType | null;
   fallback?: string;

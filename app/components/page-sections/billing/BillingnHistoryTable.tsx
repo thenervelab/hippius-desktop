@@ -227,7 +227,7 @@ const BillingHistoryTable: React.FC = () => {
           description={
             errorMessage
               ? errorMessage
-              : "Subscribe to a plan above or top up credits to get started. Your invoices and credit purchases will show up here."
+              : "Subscribe to a plan above or top up your balance to get started. Your invoices and top-ups will show up here."
           }
           cardView={false}
           className="p-6 sm:p-10 rounded-[8px]"
