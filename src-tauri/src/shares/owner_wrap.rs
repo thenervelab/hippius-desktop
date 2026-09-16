@@ -18,7 +18,7 @@ use hcfs_client::client::share::{ShareKeystore, ShareSecret};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
-use tracing::debug;
+use tracing::{debug, warn};
 use zeroize::Zeroizing;
 
 const KDF_CONTEXT: &str = "hippius.hcfs.share-wrap.v1";
@@ -29,6 +29,13 @@ const FLAG_FOLDER_TOKEN: u8 = 0x02;
 const PRIVATE_BLOB_LEN: usize = hcfs_client::client::share::SHARE_WRAP_BLOB_LEN;
 const MAX_FOLDER_TOKEN_LEN: usize = 64;
 const MAX_BATCH: usize = 64;
+
+/// Endpoint paths, named so the tests can assert on the same strings the
+/// requests are built from rather than on copies of them.
+const SHARES_LISTING_PATH: &str = "/v1/shares";
+const FOLDER_SHARES_LISTING_PATH: &str = "/v1/folder-shares";
+const FILE_WRAPS_PATH: &str = "/v1/shares/owner-wraps";
+const FOLDER_WRAPS_PATH: &str = "/v1/folder-shares/owner-wraps";
 
 /// The wrap key, derived once.
 ///
@@ -201,27 +208,49 @@ fn decode_plaintext(plaintext: &[u8]) -> std::result::Result<Opened, String> {
 
 struct Transport {
     mnemonic: Zeroizing<String>,
-    server_url: String,
+    base_url: BaseUrl,
     bearer: String,
+}
+
+/// A base URL with the region sentinel already resolved away.
+///
+/// `get_server_url` returns `""` in auto-detect mode — the sentinel
+/// `normalize_for_region_probe` writes for anyone on the legacy default URL,
+/// which is most installs. `HcfsClient` races the regions on that sentinel,
+/// but every request in this module is built by hand with `reqwest`, and
+/// `reqwest` rejects a schemeless URL when it *builds* the request. Passing
+/// the raw config value through therefore failed each wrap call before it
+/// reached the network, disabling mint-time pushes, backfill and hydration
+/// at once, and only at `debug!`.
+///
+/// The newtype is the guard: [`BaseUrl::resolve`] is the only constructor, so
+/// a request here cannot be built from an unresolved value again.
+struct BaseUrl(String);
+
+impl BaseUrl {
+    fn resolve(configured: &str) -> Self {
+        Self(crate::sync::region::resolve_base_url(configured).trim_end_matches('/').to_string())
+    }
+
+    /// `path` is one of the `*_PATH` constants — it always starts with `/`.
+    fn join(&self, path: &str) -> String {
+        format!("{}{path}", self.0)
+    }
 }
 
 async fn transport_for(state: &crate::app_state::AppState, account_id: &str) -> Option<Transport> {
     let pool = state.pool().ok()?;
     let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(state, account_id).await.ok()?;
-    let server_url = crate::sync::remote::get_server_url(pool, account_id).await.ok()?;
+    let base_url = BaseUrl::resolve(&crate::sync::remote::get_server_url(pool, account_id).await.ok()?);
     let bearer = get_api_token(pool, account_id).await.ok().flatten()?;
-    Some(Transport {
-        mnemonic,
-        server_url,
-        bearer,
-    })
+    Some(Transport { mnemonic, base_url, bearer })
 }
 
 /// PUT wraps for the given file-share secrets. Unknown tokens are
 /// skipped by the server. Failures are logged, never returned.
 async fn upload_file_wraps(
     http: &reqwest::Client,
-    server_url: &str,
+    base_url: &BaseUrl,
     bearer: &str,
     key: &WrapKey,
     owner_ss58: &str,
@@ -240,18 +269,12 @@ async fn upload_file_wraps(
             Err(e) => debug!(error = %e, "share owner-wrap seal skipped"),
         }
     }
-    put_wrap_chunks(
-        http,
-        &format!("{}/v1/shares/owner-wraps", server_url.trim_end_matches('/')),
-        bearer,
-        wraps,
-    )
-    .await;
+    put_wrap_chunks(http, &base_url.join(FILE_WRAPS_PATH), bearer, wraps).await;
 }
 
 async fn upload_folder_wraps(
     http: &reqwest::Client,
-    server_url: &str,
+    base_url: &BaseUrl,
     bearer: &str,
     key: &WrapKey,
     owner_ss58: &str,
@@ -270,13 +293,7 @@ async fn upload_folder_wraps(
             Err(e) => debug!(error = %e, "folder owner-wrap seal skipped"),
         }
     }
-    put_wrap_chunks(
-        http,
-        &format!("{}/v1/folder-shares/owner-wraps", server_url.trim_end_matches('/')),
-        bearer,
-        wraps,
-    )
-    .await;
+    put_wrap_chunks(http, &base_url.join(FOLDER_WRAPS_PATH), bearer, wraps).await;
 }
 
 async fn put_wrap_chunks(http: &reqwest::Client, url: &str, bearer: &str, wraps: Vec<serde_json::Value>) {
@@ -290,12 +307,15 @@ async fn put_wrap_chunks(http: &reqwest::Client, url: &str, bearer: &str, wraps:
             .json(&serde_json::json!({ "wraps": chunk }))
             .send()
             .await;
+        // A wrap that does not land leaves the share copyable on this device
+        // only, with no user-visible symptom — so these are warnings, not
+        // debug chatter. They are per batch of up to `MAX_BATCH`, not per row.
         match res {
             Ok(resp) if resp.status().is_success() => {}
             Ok(resp) => {
-                debug!(status = %resp.status(), "share owner-wrap PUT ignored");
+                warn!(url = %url, status = %resp.status(), "share owner-wrap PUT rejected");
             }
-            Err(e) => debug!(error = %e, "share owner-wrap PUT failed"),
+            Err(e) => warn!(url = %url, error = %e, "share owner-wrap PUT failed"),
         }
     }
 }
@@ -313,7 +333,7 @@ pub(crate) async fn push_for_account(state: &crate::app_state::AppState, account
     let Ok(key) = derive_wrap_key(t.mnemonic.as_str()) else {
         return;
     };
-    upload_file_wraps(&state.api_client, &t.server_url, &t.bearer, &key, account_id, entries).await;
+    upload_file_wraps(&state.api_client, &t.base_url, &t.bearer, &key, account_id, entries).await;
 }
 
 /// Mint-time push for a folder share. See [`push_for_account`].
@@ -327,7 +347,7 @@ pub(crate) async fn push_folder_for_account(state: &crate::app_state::AppState, 
     let Ok(key) = derive_wrap_key(t.mnemonic.as_str()) else {
         return;
     };
-    upload_folder_wraps(&state.api_client, &t.server_url, &t.bearer, &key, account_id, entries).await;
+    upload_folder_wraps(&state.api_client, &t.base_url, &t.bearer, &key, account_id, entries).await;
 }
 
 #[derive(Deserialize)]
@@ -374,9 +394,15 @@ pub(crate) async fn sync_file_wraps(
     let Ok(key) = derive_wrap_key(t.mnemonic.as_str()) else {
         return;
     };
-    let url = format!("{}/v1/shares", t.server_url.trim_end_matches('/'));
-    let Ok(rows) = fetch_json::<Vec<FileWrapRow>>(&state.api_client, &url, &t.bearer).await else {
-        return;
+    let url = t.base_url.join(SHARES_LISTING_PATH);
+    let rows = match fetch_json::<Vec<FileWrapRow>>(&state.api_client, &url, &t.bearer).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            // Without the listing there is nothing to hydrate and no way to
+            // tell which rows still need a wrap, so both halves are skipped.
+            warn!(url = %url, error = %e, "share owner-wrap listing failed; wraps not synced");
+            return;
+        }
     };
 
     let listed: HashSet<&str> = tokens.iter().copied().collect();
@@ -409,7 +435,7 @@ pub(crate) async fn sync_file_wraps(
         .into_iter()
         .filter_map(|token| key_map.get(&token).map(|secret| (token, secret.clone())))
         .collect();
-    upload_file_wraps(&state.api_client, &t.server_url, &t.bearer, &key, account_id, &to_push).await;
+    upload_file_wraps(&state.api_client, &t.base_url, &t.bearer, &key, account_id, &to_push).await;
 }
 
 /// The folder-share twin of [`sync_file_wraps`], addressed by `token_hash`
@@ -431,9 +457,13 @@ pub(crate) async fn sync_folder_wraps(
     let Ok(key) = derive_wrap_key(t.mnemonic.as_str()) else {
         return;
     };
-    let url = format!("{}/v1/folder-shares", t.server_url.trim_end_matches('/'));
-    let Ok(rows) = fetch_json::<Vec<FolderWrapRow>>(&state.api_client, &url, &t.bearer).await else {
-        return;
+    let url = t.base_url.join(FOLDER_SHARES_LISTING_PATH);
+    let rows = match fetch_json::<Vec<FolderWrapRow>>(&state.api_client, &url, &t.bearer).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(url = %url, error = %e, "folder owner-wrap listing failed; wraps not synced");
+            return;
+        }
     };
 
     let listed: HashSet<&str> = token_hashes.iter().map(String::as_str).collect();
@@ -465,15 +495,20 @@ pub(crate) async fn sync_folder_wraps(
     // not pushable — which is exactly the row that has no wrap yet and no
     // local secret either.
     let to_push: Vec<(String, ShareSecret)> = unwrapped.into_iter().filter_map(|hash| secrets_by_hash.get(&hash).cloned()).collect();
-    upload_folder_wraps(&state.api_client, &t.server_url, &t.bearer, &key, account_id, &to_push).await;
+    upload_folder_wraps(&state.api_client, &t.base_url, &t.bearer, &key, account_id, &to_push).await;
 }
 
-async fn fetch_json<T: for<'de> Deserialize<'de>>(http: &reqwest::Client, url: &str, bearer: &str) -> std::result::Result<T, ()> {
-    let resp = http.get(url).bearer_auth(bearer).send().await.map_err(|_| ())?;
-    if !resp.status().is_success() {
-        return Err(());
+/// GET a JSON listing. The error is a message rather than `()` so the caller
+/// can say *why* the sync was skipped — a silent `Err(())` is what let a
+/// schemeless URL disable this whole feature unnoticed. Neither listing URL
+/// carries a share token, so echoing it is safe.
+async fn fetch_json<T: for<'de> Deserialize<'de>>(http: &reqwest::Client, url: &str, bearer: &str) -> std::result::Result<T, String> {
+    let resp = http.get(url).bearer_auth(bearer).send().await.map_err(|e| e.to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {status}"));
     }
-    resp.json::<T>().await.map_err(|_| ())
+    resp.json::<T>().await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -491,6 +526,46 @@ mod tests {
 
     fn key() -> WrapKey {
         derive_wrap_key(MNEMONIC).unwrap()
+    }
+
+    /// Every URL this module builds, from the base a given `hcfs_config`
+    /// value resolves to. Mirrors the four `format!`s in the request paths.
+    fn endpoints_for(configured: &str) -> Vec<String> {
+        let base = BaseUrl::resolve(configured);
+        [SHARES_LISTING_PATH, FOLDER_SHARES_LISTING_PATH, FILE_WRAPS_PATH, FOLDER_WRAPS_PATH]
+            .iter()
+            .map(|path| base.join(path))
+            .collect()
+    }
+
+    /// The regression. `get_server_url` hands back `""` for every install on
+    /// the legacy default URL, and the old code concatenated that straight
+    /// into the path — `reqwest` then failed at *builder* time with no
+    /// request sent, so no wrap was ever pushed or hydrated.
+    #[test]
+    fn auto_detect_server_url_still_builds_absolute_endpoints() {
+        for url in endpoints_for("") {
+            let parsed = reqwest::Url::parse(&url).unwrap_or_else(|e| panic!("{url} must be absolute: {e}"));
+            assert!(parsed.has_host(), "{url} must carry a host");
+        }
+    }
+
+    #[test]
+    fn explicit_server_url_is_used_verbatim() {
+        let urls = endpoints_for("https://eu-central-1-arion.hippius.com");
+        assert!(
+            urls.iter().all(|u| u.starts_with("https://eu-central-1-arion.hippius.com/v1/")),
+            "{urls:?}"
+        );
+    }
+
+    /// A stored URL with a trailing slash must not produce `//v1/...`; the
+    /// server routes that as a different path.
+    #[test]
+    fn trailing_slash_in_the_stored_url_is_dropped_once() {
+        for url in endpoints_for("https://example.test/") {
+            assert!(url.starts_with("https://example.test/v1/"), "{url}");
+        }
     }
 
     #[test]
