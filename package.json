@@ -1,7 +1,7 @@
 {
   "name": "hippius",
   "private": true,
-  "version": "0.6.3-beta.1",
+  "version": "0.6.3-beta.2",
   "type": "module",
   "scripts": {
     "dev": "next dev",
