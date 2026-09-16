@@ -49,6 +49,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 const signupCheck: RecoveryCheck = {
   hasServerBlob: false,
   hasLocalMnemonic: false,
+  canDecryptLocal: false,
   updatedAt: null,
   recommendedFlow: "signup",
 };
@@ -56,6 +57,7 @@ const signupCheck: RecoveryCheck = {
 const unlockCheck: RecoveryCheck = {
   hasServerBlob: true,
   hasLocalMnemonic: false,
+  canDecryptLocal: false,
   updatedAt: null,
   recommendedFlow: "unlock",
 };
@@ -139,6 +141,7 @@ describe("AccountRecoveryDialog — Signup branch after a refused seal", () => {
     const unknownCheck: RecoveryCheck = {
       hasServerBlob: false,
       hasLocalMnemonic: false,
+      canDecryptLocal: false,
       updatedAt: null,
       recommendedFlow: "unknown",
     };
