@@ -52,6 +52,27 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
 }
 
 /**
+ * Tell Rust the user has now seen `version`, so the background check leaves
+ * it alone.
+ *
+ * Called wherever the update dialog is opened, which is the one moment that
+ * holds whichever path opened it. Without it the timer only knows about the
+ * versions IT raised, so a startup dialog the user dismissed was offered
+ * again on the next tick.
+ *
+ * Never throws: this is bookkeeping, and a failure here must not take down
+ * the dialog it is reporting.
+ */
+export async function noteUpdatePrompted(version: string): Promise<void> {
+  try {
+    await invoke("note_update_prompted", { version });
+  } catch {
+    // Being prompted twice is a far smaller problem than a dialog that fails
+    // to open because its bookkeeping did.
+  }
+}
+
+/**
  * Download and install the update this channel is offering.
  *
  * Does not relaunch — the caller decides when to restart. Rust re-checks the
