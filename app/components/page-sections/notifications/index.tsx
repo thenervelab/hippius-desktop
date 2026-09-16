@@ -155,7 +155,7 @@ const Notifications = () => {
 
         <PageHeader
           title="Notifications Hub"
-          subtitle="Store. Compute. Own your infrastructure."
+          subtitle="Your files, encrypted, always yours."
         />
 
         <div className="px-3 flex-1 flex flex-col min-h-0">
