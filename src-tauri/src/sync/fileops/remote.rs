@@ -1192,7 +1192,7 @@ mod tests {
         }"#;
 
         let page: BrowsePage = serde_json::from_str(body).expect("parses");
-        assert_eq!(page.folders[0].created_at, Some(1784659766));
+        assert_eq!(page.folders[0].created_at, Some(1_784_659_766));
         assert_eq!(page.folders[0].name, "12mai");
     }
 
@@ -1207,14 +1207,14 @@ mod tests {
                 name: "12mai".into(),
                 file_count: 23,
                 total_bytes: 999,
-                created_at: Some(1784659766),
+                created_at: Some(1_784_659_766),
             }],
             vec![],
         );
 
-        assert_eq!(folders[0].uploaded_at, 1784659766);
-        assert_eq!(folders[0].updated_at, 1784659766);
-        assert_eq!(folders[0].modified, Some(1784659766));
+        assert_eq!(folders[0].uploaded_at, 1_784_659_766);
+        assert_eq!(folders[0].updated_at, 1_784_659_766);
+        assert_eq!(folders[0].modified, Some(1_784_659_766));
     }
 
     /// A server older than the field omits it. `0` is the sentinel the date
