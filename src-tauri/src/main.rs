@@ -1066,14 +1066,32 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     return; // cannot propagate from spawned task; error is logged
                 }
             };
-            app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
-
-            // Ensure all tables and columns exist
+            // Ensure all tables and columns exist BEFORE publishing the pool.
+            //
+            // The pool used to be published first, so a failed schema init left
+            // every command running against a database with no tables: each one
+            // failed with a raw "no such table", the app looked healthy, and a
+            // sign-in died at the last step with nothing to tell the user. The
+            // pool is now published only once the core tables are confirmed, so
+            // the alternative is an honest `DatabaseNotReady` the frontend
+            // already knows how to show.
+            //
+            // A step failure is no longer fatal on its own: steps are isolated,
+            // so the tables that did migrate are committed and the app runs on
+            // a partial schema rather than none. Only missing CORE tables stop
+            // us here.
             if let Err(e) = crate::utils::schema::ensure_table_schema(&pool).await {
-                error!("FATAL: Failed to ensure table schema: {}", e);
+                error!("Schema initialization reported failures: {}", e);
+            }
+
+            if !crate::utils::schema::core_tables_present(&pool).await {
+                error!("FATAL: core tables are missing after schema initialization; not publishing the database");
                 show_main();
                 return;
             }
+
+            // Safe to publish: the core tables are confirmed present.
+            app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
 
             // Pool installed AND schema ensured — the backend can now service
             // IPC, so it is safe to reveal the window. Done before the

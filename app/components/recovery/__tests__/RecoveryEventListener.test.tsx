@@ -45,6 +45,7 @@ function makeCheck(flow: RecoveryCheck["recommendedFlow"]): RecoveryCheck {
   return {
     hasServerBlob: flow === "unlock",
     hasLocalMnemonic: true,
+    canDecryptLocal: true,
     updatedAt: null,
     recommendedFlow: flow,
   };

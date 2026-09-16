@@ -62,6 +62,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 const unlockCheck: RecoveryCheck = {
   hasServerBlob: true,
   hasLocalMnemonic: true,
+  canDecryptLocal: false,
   updatedAt: null,
   recommendedFlow: "unlock",
 };

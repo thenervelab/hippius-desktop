@@ -94,7 +94,7 @@ export function HcfsSetupDialog({
                 e.preventDefault();
                 setShowPassword((v) => !v);
               }}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 hover:text-grey-30 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:text-grey-dark-800 transition-colors"
             >
               {showPassword ? (
                 <EyeOff className="size-4" />
@@ -134,7 +134,7 @@ export function HcfsSetupDialog({
                 e.preventDefault();
                 setShowConfirmPassword((v) => !v);
               }}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 hover:text-grey-30 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:text-grey-dark-800 transition-colors"
             >
               {showConfirmPassword ? (
                 <EyeOff className="size-4" />
