@@ -15,6 +15,7 @@ import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   formatPercentLabel,
   getCapacitySourceLabel,
+  getPlanView,
   getStorageOverviewView,
   getUsageTone,
   getUsedBytesDisplay,
@@ -84,6 +85,15 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
     source: overview?.source,
   });
 
+  // The same decision the Plan card made, from the same fetch: a held plan
+  // is managed, the free tier is upgraded. Anything else (error, unknown
+  // source) offers nothing rather than guessing at a route.
+  const planView = getPlanView({
+    showSkeleton: gate.showSkeleton,
+    isError,
+    source: overview?.source,
+  });
+
   const percent = overview?.percent ?? 0;
   const tone = getUsageTone(percent);
   const toneStyle = TONE_STYLES[tone];
@@ -94,6 +104,12 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
   return (
     <div
       className={cn(
+        // Its OWN container. The `@md:` inside this card would otherwise
+        // measure the page's scroll wrapper, so in a third-width column on a
+        // wide window the card would still lay the figure, the percent and
+        // the button out in one row and cram all three. Measuring itself is
+        // what lets the same card sit full width or in a third of one.
+        "@container",
         "flex flex-col items-center w-full rounded-[8px] border overflow-hidden",
         "bg-grey-light-300 border-grey-dark-100",
         "dark:bg-black-primary-bg dark:border-black-300",
@@ -101,20 +117,36 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
         className,
       )}
     >
-      <div className="flex h-[46px] w-full items-center justify-center">
-        <div className="flex flex-1 min-w-0 items-center justify-between pl-[14px] pr-[10px] py-2">
-          <div className="flex items-center gap-1">
-            <GripIcon className="size-[18px] text-primary-40 dark:text-primary-brand-dark" />
-            <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
-              Storage
-            </p>
-          </div>
-          <RefreshButton
-            onClick={handleRefresh}
-            refetching={isRefreshing}
-            ariaLabel="Refresh storage"
-          />
-        </div>
+      {/* `min-h-[52px]` matches the breakdown card's header beside it, which
+          is sized by its tab control. The two headers have to agree or the
+          pair reads as misaligned at the top of the row, which is the one
+          place a mismatch is most visible. */}
+      <div className="flex min-h-[52px] w-full items-center gap-2 py-2 pl-[14px] pr-[10px]">
+        <GripIcon className="size-[18px] shrink-0 text-primary-40 dark:text-primary-brand-dark" />
+        <p className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
+          Storage
+        </p>
+        {/* Refresh sits inboard of the action: the action is the thing being
+            reached for, so it takes the outer edge. */}
+        <RefreshButton
+          onClick={handleRefresh}
+          refetching={isRefreshing}
+          ariaLabel="Refresh storage"
+        />
+        {/* The plan action lives up here now. In the body it shared a row
+            with the figure and the bar, which is what forced that row to
+            reflow at narrow widths; the header has space it was not using. */}
+        {planView === "plan" || planView === "free" ? (
+          <Button
+            asLink
+            href={BILLING_ROUTE}
+            variant={planView === "plan" ? "defaultStable" : "primaryLight"}
+            size="auto"
+            className="h-[30px] shrink-0 px-3 text-[13px] font-medium leading-[1.109] tracking-[-0.26px]"
+          >
+            {planView === "plan" ? "Manage" : "Upgrade"}
+          </Button>
+        ) : null}
       </div>
 
       <div
@@ -192,6 +224,17 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
             </div>
           )}
 
+          {/* The action lives in this card now, beside the reading it acts
+              on, which is the shape the console's storage card already
+              uses. It used to sit on a second card that restated the plan
+              name and allowance this one was already showing, so the pair
+              said one thing twice and the button was the only part of the
+              second card that was not a repeat.
+
+              Which action, from the same `get_storage_overview` source as
+              the reading: a held plan is managed, the free tier is
+              upgraded. `getPlanView` is the helper that card used, so the
+              two surfaces cannot drift apart. */}
           {view === "usage" && overview && (
             <>
               <div className="flex items-end justify-between gap-3">
