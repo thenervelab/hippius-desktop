@@ -49,7 +49,7 @@ interface PageHeaderProps {
 
 const PageHeader: FC<PageHeaderProps> = ({
   title = "Welcome to Hippius",
-  subtitle = "Store. Compute. Own your infrastructure.",
+  subtitle = "Your files, encrypted, always yours.",
   infoButton,
   showTopUpCredits = true,
   showPlanCard = true,

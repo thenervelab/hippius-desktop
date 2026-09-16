@@ -1,5 +1,6 @@
 import type { PlanAction } from "@/app/lib/hooks/api/useStorageOverview";
 import { BILLING_ROUTE } from "@/app/lib/routes";
+import { formatBalanceUsd } from "@/lib/utils/formatBalanceUsd";
 
 export interface PlanActionView {
   label: string;
@@ -28,13 +29,13 @@ export function getPlanActionNote(
   if (typeof renewsInDays !== "number" || renewsInDays < 0) {
     // No date from the rail, or one already past: say the thing that is
     // true either way rather than inventing a countdown.
-    return "Low credits. Not enough to renew your plan";
+    return "Low balance. Not enough to renew your plan";
   }
-  return `Low credits. Your plan renews ${describeDaysAway(renewsInDays)}`;
+  return `Low balance. Your plan renews ${describeDaysAway(renewsInDays)}`;
 }
 
 /**
- * The full low-credit warning for a page with room to explain it.
+ * The full low-balance warning for a page with room to explain it.
  *
  * `getPlanActionNote` is the one-line version for the header, where
  * there is space for a clause and no more. "Low credits. Your plan
@@ -71,8 +72,13 @@ export function getRenewalNotice(
 
   // Each clause is dropped rather than guessed at when its input is
   // missing: a warning that invents a price is worse than a shorter one.
-  const cost = typeof plan?.amount === "number" ? ` costs $${plan.amount} a month and` : " needs more credits than you have —";
-  const balance = overview.creditsHip ? ` you have ${overview.creditsHip} credits` : " your balance will not cover it";
+  const cost =
+    typeof plan?.amount === "number"
+      ? ` costs $${plan.amount} a month and`
+      : " needs more than your account balance holds, and";
+  const balance = overview.creditsHip
+    ? ` your balance is ${formatBalanceUsd(overview.creditsHip)}`
+    : " your balance will not cover it";
 
   const days = plan?.renewsInDays;
   const when =
@@ -81,13 +87,19 @@ export function getRenewalNotice(
       : " Top up to keep it running.";
 
   return {
-    title: "Not enough credits to renew your plan",
+    title: "Not enough balance to renew your plan",
     description: `${named}${cost}${balance}.${when}`,
   };
 }
 
-/** "today" / "tomorrow" / "in 6 days", for the renewal countdown. */
-function describeDaysAway(days: number): string {
+/**
+ * "today" / "tomorrow" / "in 6 days", for the renewal countdown.
+ *
+ * Exported so the Billing page's next-charge card counts down in the same
+ * words as the low-balance warning. Two spellings of the same date is how
+ * one surface says "tomorrow" while the other says "in 1 day".
+ */
+export function describeDaysAway(days: number): string {
   if (days === 0) return "today";
   if (days === 1) return "tomorrow";
   return `in ${days} days`;

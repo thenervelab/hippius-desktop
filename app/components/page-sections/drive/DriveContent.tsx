@@ -1,5 +1,7 @@
 "use client";
 
+import type { SortingState } from "@tanstack/react-table";
+
 import { FC, useState, useRef, useEffect, useCallback, memo, useMemo } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import FilesTable from "./files-table";
@@ -55,6 +57,13 @@ interface DriveContentProps {
   /** A remote server page is being fetched — renders a skeleton strip under
    *  the rows so scroll-driven appends never look stalled. */
   isLoadingMore?: boolean;
+  /** Rows in the loading skeleton. Defaults to the pre-paging count. */
+  skeletonRows?: number;
+  sorting?: SortingState;
+  onSortingChange?: (next: SortingState) => void;
+  serverSorted?: boolean;
+  /** Where the rendered window starts in the sorted list. See FilesTable. */
+  windowStart?: number;
   isSyncPathEmpty?: boolean;
   /** True when the user has insufficient credits to upload files.
    *  Swaps the empty-state into the "Add Credits" variant. */
@@ -93,6 +102,11 @@ const DriveContent: FC<DriveContentProps> = ({
   hasMore,
   loadMore,
   isLoadingMore = false,
+  skeletonRows,
+  sorting,
+  onSortingChange,
+  serverSorted,
+  windowStart,
   isSyncPathEmpty = false,
   isStorageFull = false,
   isRemoteView = false,
@@ -399,12 +413,12 @@ const DriveContent: FC<DriveContentProps> = ({
       return viewMode === "card" ? (
         <CardViewSkeleton
           isRecentFiles={isRecentFiles}
-          cards={isRecentFiles ? 4 : 8}
+          cards={skeletonRows ?? (isRecentFiles ? 4 : 8)}
         />
       ) : (
         <FilesTableSkeleton
           isRecentFiles={isRecentFiles}
-          rows={isRecentFiles ? 5 : 8}
+          rows={skeletonRows ?? (isRecentFiles ? 5 : 8)}
         />
       );
     }
@@ -457,6 +471,10 @@ const DriveContent: FC<DriveContentProps> = ({
             isRecentFiles={isRecentFiles}
             files={displayedData}
             allFiles={filteredData}
+            sorting={sorting}
+            onSortingChange={onSortingChange}
+            serverSorted={serverSorted}
+            windowStart={windowStart}
             handleFileDownload={handleFileDownload}
             sharedState={sharedState}
             hasMore={hasMore}

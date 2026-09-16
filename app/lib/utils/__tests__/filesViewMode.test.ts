@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   filterCriteriaAreActive,
+  isDriveFolderListView,
+  isNestedFolderView,
   shouldRunInMemoryFilter,
   shouldUseDriveScopedSearch,
   shouldUseRecursiveSearch,
@@ -94,5 +96,63 @@ describe("shouldUseDriveScopedSearch", () => {
 
   it("never fires on Recent Files, which is not one drive", () => {
     expect(shouldUseDriveScopedSearch({ ...base, isRecentFiles: true })).toBe(false);
+  });
+});
+
+describe("isNestedFolderView", () => {
+  it("is a folder only when the URL names one", () => {
+    expect(
+      isNestedFolderView({ folderName: "Drive", subFolderPath: "Documents" }),
+    ).toBe(true);
+  });
+
+  it("is the drive root when neither param is set", () => {
+    expect(isNestedFolderView({ folderName: null, subFolderPath: null })).toBe(
+      false,
+    );
+  });
+
+  // Half a link is not a folder: showing an empty folder for one is worse
+  // than staying on the root the user can actually use.
+  it("needs both params, not either", () => {
+    expect(
+      isNestedFolderView({ folderName: "Drive", subFolderPath: null }),
+    ).toBe(false);
+    expect(
+      isNestedFolderView({ folderName: null, subFolderPath: "Documents" }),
+    ).toBe(false);
+    expect(isNestedFolderView({ folderName: "", subFolderPath: "" })).toBe(false);
+  });
+});
+
+describe("isDriveFolderListView", () => {
+  const view = (over: Partial<Parameters<typeof isDriveFolderListView>[0]> = {}) =>
+    isDriveFolderListView({
+      isOnLocalView: true,
+      isNested: false,
+      isRecentFiles: false,
+      ...over,
+    });
+
+  it("is the drive root, where the plan card belongs", () => {
+    expect(view()).toBe(true);
+  });
+
+  // The regression this exists for. Opening a synced drive from the folder
+  // list clears `isOnLocalView` and changes no URL, so a check that only
+  // looked for nested URL params reported the folder list while the drive's
+  // contents were on screen, and the plan card stayed up one level in.
+  it("is false inside a drive, even though the URL never changed", () => {
+    expect(view({ isOnLocalView: false, isNested: false })).toBe(false);
+  });
+
+  // A link opened straight into a subfolder arrives with `isOnLocalView`
+  // still at its initial true, so the nested flag has to be consulted too.
+  it("is false for a link opened straight into a subfolder", () => {
+    expect(view({ isOnLocalView: true, isNested: true })).toBe(false);
+  });
+
+  it("is false on Recent Files, which is a listing rather than the root", () => {
+    expect(view({ isRecentFiles: true })).toBe(false);
   });
 });

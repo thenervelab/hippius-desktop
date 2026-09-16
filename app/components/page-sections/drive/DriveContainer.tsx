@@ -32,14 +32,19 @@ import {
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
 import { useDriveScopedSearch } from "@/app/lib/hooks/useDriveScopedSearch";
+import { Pagination } from "@/components/ui/table";
+import type { SortingState } from "@tanstack/react-table";
 import {
   filterCriteriaAreActive,
+  isDriveFolderListView,
+  isNestedFolderView,
   shouldUseDriveScopedSearch,
   shouldUseRecursiveSearch,
 } from "@/lib/utils/filesViewMode";
 import { isExcludedSyncStatus } from "@/lib/utils/syncStatusDisplay";
 import { useHasExclusions } from "@/app/lib/hooks/useDriveExclusions";
 import { shouldOfferExcludedFilter } from "./excludedFilterVisibility";
+import { pagerStripeClass } from "./pagerStripe";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
@@ -56,6 +61,7 @@ import {
 } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useAtomValue, useSetAtom } from "jotai";
+import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
   getViewModePreference,
   saveViewModePreference,
@@ -76,6 +82,30 @@ import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { toast } from "sonner";
 import { cn } from "@/app/lib/utils";
+
+/**
+ * Rows per page in the browsed file list.
+ *
+ * Fifteen, the same default the console settled on: roughly what fits above
+ * the fold on a laptop, so the pager is reachable without scrolling to find
+ * it. A pager the reader has to hunt for is the problem infinite scroll had.
+ */
+const DEFAULT_BROWSE_PAGE_SIZE = 20;
+
+/**
+ * Table column id -> the field name `/browse` sorts on.
+ *
+ * Sending a name the server does not know is not an error it reports: it
+ * soft-falls back to its alphabetical listing, so a wrong key here shows up
+ * as "sorting does nothing" rather than as a failure. Same mapping the
+ * console keeps, for the same reason.
+ */
+const BROWSE_SORT_FIELD: Record<string, string | undefined> = {
+  name: "file_name",
+  size: "size_bytes",
+  date_uploaded: "created_at",
+  type: "extension",
+};
 
 const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   isRecentFiles = false,
@@ -289,7 +319,31 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const urlOpenLabel = getParam("openLabel");
   const urlOpenRemote = getParam("openRemote") === "1";
   const urlMainReqHash = getParam("mainReqHash");
-  const isNested = !isRecentFiles && Boolean(urlFolderName && urlSubFolderPath);
+  const isNested =
+    !isRecentFiles &&
+    isNestedFolderView({
+      folderName: urlFolderName,
+      subFolderPath: urlSubFolderPath,
+    });
+
+  // Tell the page which view is on screen, because it cannot work this out
+  // for itself: opening a synced drive from the folder list is a state
+  // change here, not a navigation, so the URL still reads `/files` inside a
+  // drive. `isOnLocalView` is the folder list; `isNested` covers a link
+  // opened straight into a subfolder, which arrives with `isOnLocalView`
+  // still at its initial true.
+  const setAtFolderList = useSetAtom(driveAtFolderListAtom);
+  const atFolderList = isDriveFolderListView({
+    isOnLocalView,
+    isNested,
+    isRecentFiles,
+  });
+  useEffect(() => {
+    setAtFolderList(atFolderList);
+  }, [atFolderList, setAtFolderList]);
+  // Leaving the page hands the next visitor the view it will actually open
+  // on, rather than whichever folder this visit ended in.
+  useEffect(() => () => setAtFolderList(true), [setAtFolderList]);
 
   // Resolve which sync drive the nested URL points at. `folderSource` is the
   // local FS path the user navigated from, so we match it against
@@ -382,6 +436,56 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   const remoteUploadLabel = nestedDrive?.label ?? (isRemoteRoot ? activeRemoteLabel : null);
 
+  // Pagination for the browsed level, the console's shape: a page of rows
+  // and a pager under them, instead of a list that grows as you scroll.
+  //
+  // It applies to the BROWSED listing only. A filter swaps the whole view to
+  // a server-side search result (`useDriveScopedSearch` for a remote drive,
+  // `useRecursiveFileSearch` for a local one), which spans every nested
+  // folder and is not what this pages.
+  const [browsePage, setBrowsePage] = useState(1);
+  const [browsePageSize, setBrowsePageSize] = useState(DEFAULT_BROWSE_PAGE_SIZE);
+
+  // Sorting lives here, not in the table, because on a remote level the sort
+  // is part of the REQUEST. The server orders the whole folder before paging
+  // (`BrowseQuery.sort_by`/`sort_order`), which is the only way an order can
+  // be right across page boundaries; a table sorting the rows it was handed
+  // can only ever reorder one page.
+  const [browseSorting, setBrowseSorting] = useState<SortingState>([]);
+  const browseSort = useMemo(() => {
+    const active = browseSorting[0];
+    if (!active) return { sortBy: undefined, sortDir: undefined } as const;
+    return {
+      sortBy: BROWSE_SORT_FIELD[active.id],
+      sortDir: (active.desc ? "desc" : "asc") as "asc" | "desc",
+    };
+  }, [browseSorting]);
+
+  // A new sort re-orders the whole folder, so page 4 of the old order means
+  // nothing in the new one.
+  const handleBrowseSortingChange = useCallback((next: SortingState) => {
+    setBrowseSorting(next);
+    setBrowsePage(1);
+  }, []);
+
+  // Page 1 whenever the level changes. Landing on page 4 of a folder the user
+  // just opened shows them a window they did not ask for, and for a folder
+  // with fewer pages than that it shows them nothing at all.
+  const browseLevelKey = `${remoteUploadLabel ?? ""}::${isNested ? urlSubFolderPath || "" : ""}`;
+  const lastBrowseLevelRef = useRef(browseLevelKey);
+  if (lastBrowseLevelRef.current !== browseLevelKey) {
+    lastBrowseLevelRef.current = browseLevelKey;
+    if (browsePage !== 1) setBrowsePage(1);
+  }
+
+  // Changing the size changes which rows page 1 holds, so the reader is put
+  // back on it rather than left on a page number that now means something
+  // else (or no longer exists).
+  const handleBrowsePageSizeChange = useCallback((size: number) => {
+    setBrowsePageSize(size);
+    setBrowsePage(1);
+  }, []);
+
   const nestedListing = useNestedFolderListing({
     accountId: polkadotAddress,
     syncPath: nestedDrive?.syncPath ?? null,
@@ -390,6 +494,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     refreshKey: nestedRefreshKey,
     enabled: isNested || isRemoteRoot,
     remote: isRemoteView,
+    page: browsePage,
+    pageSize: browsePageSize,
+    sortBy: browseSort.sortBy,
+    sortDir: browseSort.sortDir,
   });
 
   const refreshNestedListing = useCallback(() => {
@@ -595,10 +703,74 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       ? recursiveResults
       : inMemoryFilteredData;
 
+  // How many pages the browsed level has, and whether a pager is warranted.
+  // `totalCount` is the level's own size: the server's count for a remote
+  // drive, the listing's length for a local one. A filter is excluded
+  // because the view is then a search result, not this level.
+  //
+  // It covers the drive ROOT as well as a folder inside one. The root was
+  // excluded before, which is why the main Drive page had no pager at all
+  // and still grew as the reader scrolled.
+  const browsePagingActive = !isRecentFiles && !hasActiveSearchOrFilter;
+  // Stable identity, so a paged view does not hand the memoized table a new
+  // `loadMore` every render and defeat its row memo.
+  const noopLoadMore = useCallback(() => {}, []);
+  // A remote level is paged by the SERVER, so its count comes from there and
+  // the rows in hand are already the page. Everything else arrives whole and
+  // is counted and sliced here.
+  const browsePagedOnServer = browsePagingActive && isRemoteView;
+
   const statusFilteredData = useMemo(() => {
     if (!filterState.excludedOnly) return filteredData;
     return filteredData.filter((file) => isExcludedSyncStatus(file.syncStatus));
   }, [filteredData, filterState.excludedOnly]);
+
+  // How big the level is. A server-paged remote level reports its own size;
+  // every other view holds all of its rows, so the list IS the count.
+  const browseTotalItems = browsePagedOnServer
+    ? nestedListing.totalCount
+    : statusFilteredData.length;
+  const browseTotalPages = Math.max(
+    1,
+    Math.ceil(browseTotalItems / Math.max(1, browsePageSize)),
+  );
+  const showBrowsePager = browsePagingActive && browseTotalPages > 1;
+
+  // The rows for the page on screen.
+  //
+  // A server-paged level already holds exactly them. Everything else is
+  // sliced here, and this is the ONLY slice: the listing hook returns local
+  // levels whole for precisely this reason.
+  const browsePageRows = useMemo(() => {
+    if (!browsePagingActive) return null;
+    if (browsePagedOnServer) return statusFilteredData;
+    const start = (browsePage - 1) * browsePageSize;
+    return statusFilteredData.slice(start, start + browsePageSize);
+  }, [
+    browsePagingActive,
+    browsePagedOnServer,
+    statusFilteredData,
+    browsePage,
+    browsePageSize,
+  ]);
+
+  // Where the page begins inside the SORTED level.
+  //
+  // The table sorts the whole level and renders a window of it, so it needs
+  // the window's start, not just its length. A server-paged remote level is
+  // handed only its own page as `allFiles`, so that window starts at 0.
+  const browseWindowStart =
+    !browsePagingActive || browsePagedOnServer
+      ? 0
+      : (browsePage - 1) * browsePageSize;
+
+  // A page that no longer exists (files deleted, a smaller page size, a
+  // filter cleared) would render empty with a pager pointing past the end.
+  useEffect(() => {
+    if (browsePagingActive && browsePage > browseTotalPages) {
+      setBrowsePage(browseTotalPages);
+    }
+  }, [browsePagingActive, browsePage, browseTotalPages]);
 
   // Folded into `isLoading` so transitions where the underlying dataset
   // swaps — nested→root navigation, switching `activeSyncFolderLabel`
@@ -1627,18 +1799,32 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isRecentFiles={isRecentFiles}
                 isLoading={isLoading}
                 filteredData={statusFilteredData}
-                displayedData={visibleData}
+                // Paging owns what is on screen: the reveal-on-scroll
+                // window is the thing it replaces, so a paged view must
+                // not also be sliced by it.
+                displayedData={browsePageRows ?? visibleData}
                 searchTerm={searchTerm}
                 activeFilters={activeFilters}
                 viewMode={viewMode}
                 error={error}
                 addButtonRef={addButtonRef}
-                hasMore={effectiveHasMore}
-                loadMore={effectiveLoadMore}
-                isLoadingMore={remoteIsLoadingMore}
+                hasMore={browsePagingActive ? false : effectiveHasMore}
+                loadMore={browsePagingActive ? noopLoadMore : effectiveLoadMore}
+                isLoadingMore={browsePagingActive ? false : remoteIsLoadingMore}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 isStorageFull={isStorageFull}
                 isRemoteView={isRemoteView}
+                // The skeleton stands in for a PAGE, so it is the height of
+                // one. The old fixed count was sized for a lazily revealed
+                // window and left the table jumping when the rows landed.
+                skeletonRows={browsePagingActive ? browsePageSize : undefined}
+                sorting={browseSorting}
+                onSortingChange={handleBrowseSortingChange}
+                // Only a server-paged level arrives pre-ordered. A local
+                // level is held whole here, so the table still sorts it
+                // itself and gets a globally correct order for free.
+                serverSorted={browsePagedOnServer}
+                windowStart={browseWindowStart}
                 newFolderTarget={newFolderTarget}
                 onSyncPathConfigured={
                   isRecentFiles ? handleNavigateToSettings : handleStartSyncing
@@ -1660,6 +1846,35 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 }
               />
             );
+
+            // The pager sits under the rows it pages, and only for the
+            // browsed listing: Recent Files is a synthetic cross-drive merge
+            // with no level to page, and a filter replaces the whole view
+            // with a server-side search result that spans every folder.
+            const browsePager =
+              showBrowsePager ? (
+                // `pt-4`: the pager is a control under the table, not the
+                // table's last row. Without it the page numbers sat flush
+                // against the final row's bottom rule and read as part of it.
+                <div
+                  className={cn(
+                    "px-3 pb-3 pt-4 sm:px-5",
+                    // Carries the row striping past the last row, so the block
+                    // does not end on two bands of the same tone. Which band
+                    // that is depends on how many rows the page rendered, so
+                    // it cannot be a fixed class: see `pagerStripeClass`.
+                    pagerStripeClass((browsePageRows ?? visibleData).length),
+                  )}
+                >
+                  <Pagination
+                    currentPage={browsePage}
+                    totalPages={browseTotalPages}
+                    setPage={setBrowsePage}
+                    pageSize={browsePageSize}
+                    setPageSize={handleBrowsePageSizeChange}
+                  />
+                </div>
+              ) : null;
 
             const refreshForCurrentView = isRecentFiles
               ? refreshRecentFilesCallback
@@ -1747,7 +1962,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 }
                 isDownloadingFolder={isDownloadingFolder}
               >
-                {!isRecentFiles && driveContent}
+                {!isRecentFiles && (
+                  <>
+                    {driveContent}
+                    {browsePager}
+                  </>
+                )}
               </DriveHeader>
             );
 

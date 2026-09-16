@@ -772,6 +772,7 @@ mod tests {
         RecoveryCheck {
             has_server_blob: false,
             has_local_mnemonic: true,
+            can_decrypt_local: true,
             updated_at: None,
             recommended_flow: RecoveryFlow::Proceed,
         }

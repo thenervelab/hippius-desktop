@@ -3,6 +3,7 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import { getPaginationPageList } from "@/lib/utils/getPaginationPageList";
+import { buildPageSizeOptions } from "./pageSizeOptions";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 interface TablePaginationProps {
@@ -60,6 +61,24 @@ export const Pagination: React.FC<TablePaginationProps> = ({
   pageSizeOptions = PAGE_SIZE_OPTIONS,
 }) => {
   const pageData = getPaginationPageList({ currentPage, totalPages });
+  // Latch the size the table opened on. Merging only the CURRENT size made a
+  // non-preset default a one-way door: Drive opens at 20 (not a preset), and
+  // picking 25 recomputed the 20 option away for the rest of the session.
+  // A ref, not state — this never needs to trigger a re-render, and the first
+  // defined size is the answer forever.
+  const initialPageSizeRef = React.useRef<number | undefined>(pageSize);
+  if (initialPageSizeRef.current === undefined && pageSize !== undefined) {
+    initialPageSizeRef.current = pageSize;
+  }
+  const sizeOptions = React.useMemo(
+    () =>
+      buildPageSizeOptions({
+        options: pageSizeOptions,
+        current: pageSize,
+        initial: initialPageSizeRef.current,
+      }),
+    [pageSizeOptions, pageSize],
+  );
   const rangeLabel =
     totalCount && pageSize
       ? `${(currentPage - 1) * pageSize + 1}-${Math.min(currentPage * pageSize, totalCount)} OUT OF ${totalCount}`
@@ -135,7 +154,7 @@ export const Pagination: React.FC<TablePaginationProps> = ({
               onChange={(e) => setPageSize(Number(e.target.value))}
               className="h-8 w-full rounded-[8px] border border-[#e4e4e7] bg-white px-[10px] font-geist text-[14px] font-medium uppercase tracking-[-0.28px] text-[#585858] shadow-[0px_2px_5px_0px_rgba(0,0,0,0.05)] dark:border-black-300 dark:bg-white/[0.02] dark:text-[#ffffff79]"
             >
-              {pageSizeOptions.map((o) => (
+              {sizeOptions.map((o) => (
                 <option key={o} value={o}>
                   {o}/PAGE
                 </option>
