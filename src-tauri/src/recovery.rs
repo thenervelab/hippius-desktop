@@ -119,6 +119,15 @@ pub enum RecoveryFlow {
 pub struct RecoveryCheck {
     pub has_server_blob: bool,
     pub has_local_mnemonic: bool,
+    /// Whether the local mnemonic could actually be opened.
+    ///
+    /// Needed on the wire because `Proceed` covers two opposite states: a
+    /// healthy device where local is authoritative and nothing needs doing,
+    /// and a device whose local mnemonic is unopenable with nothing on the
+    /// server to unlock. `has_local_mnemonic` is `true` in both, so without
+    /// this the UI cannot tell "all is well" from "genuinely stuck" and has to
+    /// treat every `Proceed` as the worst case.
+    pub can_decrypt_local: bool,
     pub updated_at: Option<String>,
     pub recommended_flow: RecoveryFlow,
 }
@@ -234,6 +243,7 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     Ok(RecoveryCheck {
         has_server_blob: has_server_blob.unwrap_or(false),
         has_local_mnemonic: local,
+        can_decrypt_local: can_decrypt,
         updated_at,
         recommended_flow,
     })
