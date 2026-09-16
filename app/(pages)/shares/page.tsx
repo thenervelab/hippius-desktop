@@ -6,7 +6,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createColumnHelper,
   getCoreRowModel,
+  getPaginationRowModel,
   getSortedRowModel,
+  type PaginationState,
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
@@ -21,6 +23,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { AbstractIconWrapper, Icons } from "@/components/ui";
@@ -35,6 +38,7 @@ import {
   Tr,
   Th,
   Td,
+  Pagination,
 } from "@/components/ui/table";
 import TableActionMenu, {
   type ActionItem,
@@ -83,6 +87,9 @@ import {
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
+
+/** History only ever holds ended shares, so a short page is plenty. */
+const HISTORY_PAGE_SIZE = 10;
 
 // Destructive accent — matches drive/DeleteConfirmationDialog so the
 // "revoke this link" and "clear history" framed dialogs read as
@@ -915,6 +922,14 @@ interface HistoryTableProps {
 
 function HistoryTable({ rows, onRemove }: HistoryTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
+  const [pagination, setPagination] = React.useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: HISTORY_PAGE_SIZE,
+  });
+  const totalPages = Math.max(1, Math.ceil(rows.length / HISTORY_PAGE_SIZE));
+  // Removing the last entry on the last page would otherwise strand the user
+  // on an empty page; clamp at render rather than syncing state in an effect.
+  const pageIndex = Math.min(pagination.pageIndex, totalPages - 1);
 
   const columns = React.useMemo(
     () => [
@@ -988,10 +1003,15 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
   const table = useReactTable({
     data: rows,
     columns,
-    state: { sorting },
+    state: { sorting, pagination: { pageIndex, pageSize: HISTORY_PAGE_SIZE } },
     onSortingChange: setSorting,
+    onPaginationChange: setPagination,
+    // The history query polls, and a reset on every new data array would
+    // bounce the user back to page 1 mid-browse.
+    autoResetPageIndex: false,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     getRowId: (row) => row.shareToken,
   });
 
@@ -1033,6 +1053,16 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
           </TBody>
         </Table>
       </div>
+      {totalPages > 1 && (
+        <Pagination
+          className="px-4 py-3 border-t border-[#E3E3E3] dark:border-[#313131]"
+          currentPage={pageIndex + 1}
+          totalPages={totalPages}
+          setPage={(page) => table.setPageIndex(page - 1)}
+          totalCount={rows.length}
+          pageSize={HISTORY_PAGE_SIZE}
+        />
+      )}
     </TableWrapper>
   );
 }
@@ -1093,9 +1123,20 @@ function LinkCell({ shareUrl }: { shareUrl: string | null }) {
 
   return (
     <div className="flex items-center gap-1.5 min-w-0 max-w-[320px]">
-      <span className="text-xs text-primary-50 font-mono truncate" title={shareUrl}>
+      {/* The webview must not navigate itself to the share page; hand the
+          link to the system browser, like every other external link here. */}
+      <button
+        type="button"
+        onClick={() => {
+          openUrl(shareUrl).catch((err) =>
+            toast.error(`Could not open link: ${errorMessage(err)}`),
+          );
+        }}
+        className="min-w-0 text-left text-xs text-primary-50 font-mono truncate hover:underline underline-offset-2 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
+        title={shareUrl}
+      >
         {shareUrl}
-      </span>
+      </button>
       <button
         type="button"
         onClick={handleCopy}
