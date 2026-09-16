@@ -76,6 +76,29 @@ interface UseNestedFolderListingOptions {
    * so the existing download/preview/rename gates route them correctly.
    */
   remote?: boolean;
+  /**
+   * PAGED mode: which page to show, 1-based.
+   *
+   * Omit it and the hook behaves exactly as before: one small remote page
+   * plus scroll-driven `loadMore` appends, or the whole local listing. That
+   * default is what keeps `ExpandedFolderRows` (inline subtrees, no room for
+   * a pager) working untouched.
+   *
+   * Supplied, the page becomes part of the request key, so changing it is
+   * handled by the same generation and dedupe machinery that handles
+   * navigating to another folder: a superseded page's late result is
+   * dropped rather than painted over the page now on screen.
+   */
+  page?: number;
+  /** PAGED mode: rows per page. Ignored when `page` is omitted. */
+  pageSize?: number;
+  /**
+   * Server-side sort for a REMOTE level, applied to the whole folder before
+   * paging. A local level arrives whole and is sorted by the table instead,
+   * so these are ignored there.
+   */
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
 }
 
 /**
@@ -117,6 +140,14 @@ interface UseNestedFolderListingResult {
   loadMore: () => void;
   /** REMOTE mode only: a `loadMore` page is currently on the wire. */
   isLoadingMore: boolean;
+  /**
+   * PAGED mode: how many entries this level holds in total, for the pager.
+   *
+   * Remote takes it from the server's own count, so the pager knows the last
+   * page without walking there. Local counts the listing it already holds.
+   * Zero when the level has not loaded yet.
+   */
+  totalCount: number;
 }
 
 /**
@@ -135,7 +166,20 @@ export function useNestedFolderListing({
   refreshKey,
   enabled,
   remote = false,
+  page,
+  pageSize,
+  sortBy,
+  sortDir,
 }: UseNestedFolderListingOptions): UseNestedFolderListingResult {
+  // One flag, derived once: a caller that supplies a page is paging.
+  const paged = typeof page === "number" && page >= 1;
+  const rowsPerPage =
+    paged && typeof pageSize === "number" && pageSize >= 1
+      ? pageSize
+      : REMOTE_PAGE_SIZE;
+  // Remote pages come from the server, so the server has to be told which
+  // one; a local listing arrives whole and is sliced below.
+  const pageOffset = paged ? ((page as number) - 1) * rowsPerPage : 0;
   const [data, setData] = useState<FormattedUserFile[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -168,6 +212,9 @@ export function useNestedFolderListing({
   const [remoteHasMore, setRemoteHasMore] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const remoteNextOffsetRef = useRef(0);
+  // What the level holds in total, for the pager. Remote gets it from the
+  // server; local is the length of the listing it already has.
+  const [remoteTotalCount, setRemoteTotalCount] = useState(0);
   const loadingMoreRef = useRef(false);
   // A same-key bump (manual refresh, files-mutated event) that raced an
   // in-flight fetch is REMEMBERED and re-run when that fetch settles — the
@@ -197,8 +244,17 @@ export function useNestedFolderListing({
   // Remote drives have no local sync path — their root key is the label.
   const rootKey = remote ? (label ? `${REMOTE_SOURCE_PREFIX}${label}` : null) : syncPath || null;
 
+  // The page is part of the key ONLY in paged remote mode: that is the one
+  // case where a different page is a different request. A local listing
+  // arrives whole, so re-fetching it per page would be a round-trip for a
+  // slice the hook already holds.
+  const sortKeyPart = remote && sortBy ? `::s${sortBy}:${sortDir ?? "asc"}` : "";
+  const pageKeyPart =
+    paged && remote ? `::p${page}:${rowsPerPage}${sortKeyPart}` : "";
   const requestKey =
-    enabled && accountId && rootKey ? `${rootKey}::${subfolder ?? ""}` : null;
+    enabled && accountId && rootKey
+      ? `${rootKey}::${subfolder ?? ""}${pageKeyPart}`
+      : null;
   currentKeyRef.current = requestKey;
 
   // Synchronous loading flag — true the moment we know we're "supposed to
@@ -291,7 +347,7 @@ export function useNestedFolderListing({
       return;
     }
 
-    const effectRequestKey = `${rootKey}::${subfolder ?? ""}`;
+    const effectRequestKey = `${rootKey}::${subfolder ?? ""}${pageKeyPart}`;
     // A fetch for this exact key is already on the wire — let it land
     // instead of restarting it, but REMEMBER the bump so it re-runs when
     // the in-flight fetch settles (it may be reading pre-mutation state).
@@ -334,26 +390,31 @@ export function useNestedFolderListing({
           // `loadMore` when the user scrolls near the bottom, so a flat
           // 8k-entry camera roll costs one request up front and the row
           // array only grows as far as the user actually scrolls.
-          const page = await invoke<RemoteGroupedPage>(
+          const serverPage = await invoke<RemoteGroupedPage>(
             "list_remote_folder_grouped",
             {
               accountId,
               label: label || "",
               subfolder: subfolder || "",
-              offset: 0,
-              limit: REMOTE_PAGE_SIZE,
+                offset: pageOffset,
+              limit: rowsPerPage,
+              sortBy: sortBy ?? null,
+              sortOrder: sortDir ?? null,
             },
           );
           if (!stillCurrent()) return;
 
           const pageEntries: SyncFileEntry[] = [
-            ...page.folders,
-            ...page.files,
+            ...serverPage.folders,
+            ...serverPage.files,
           ];
           setData(mapEntries(pageEntries));
           dataKeyRef.current = effectRequestKey;
-          remoteNextOffsetRef.current = pageEntries.length;
-          setRemoteHasMore(page.hasMore);
+          remoteNextOffsetRef.current = pageOffset + pageEntries.length;
+          setRemoteTotalCount(serverPage.totalCount);
+          // Nothing scrolls in paged mode: the pager owns navigation, and a
+          // sentinel appending page 2 under page 1 is the bug this replaces.
+          setRemoteHasMore(paged ? false : serverPage.hasMore);
           markLoaded();
           return;
         }
@@ -407,6 +468,13 @@ export function useNestedFolderListing({
         }
       }
     })();
+    // `paged`, `pageOffset` and `rowsPerPage` are deliberately absent from
+    // the deps below. All three are encoded in `pageKeyPart` for the one
+    // mode that re-fetches on a page change (paged remote); listing them
+    // directly ALSO re-runs this effect for a LOCAL page change, which is a
+    // round-trip for a slice the hook already holds. Pinned by the "slices a
+    // local listing in the client instead of re-fetching it" test.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     accountId,
     syncPath,
@@ -418,6 +486,13 @@ export function useNestedFolderListing({
     remote,
     rootKey,
     mapEntries,
+    // A different page is a different request, so it has to re-run the
+    // effect. `pageKeyPart` alone, because it already encodes the page AND
+    // the size for the one mode that re-fetches, and is the empty string in
+    // local and unpaged modes. Listing `pageOffset`/`rowsPerPage` here
+    // instead re-ran the effect for a LOCAL page change too, which is a
+    // round-trip for a slice the hook already holds.
+    pageKeyPart,
   ]);
 
   // Fetch-and-append the next remote page. Driven by the table's scroll
@@ -425,6 +500,10 @@ export function useNestedFolderListing({
   // stack requests, and key-guarded so a page from a folder the user has
   // already left is dropped.
   const loadMore = useCallback(() => {
+    // Inert while paging: the pager decides which rows are on screen, and a
+    // scroll sentinel appending the next page underneath would put two pages
+    // in one view and desync the pager from what is rendered.
+    if (paged) return;
     if (!remote || !enabled || !accountId || !requestKey) return;
     if (!remoteHasMore || loadingMoreRef.current) return;
     // The initial fetch for this key is still in flight — let it land first.
@@ -443,7 +522,7 @@ export function useNestedFolderListing({
     const offset = remoteNextOffsetRef.current;
     void (async () => {
       try {
-        const page = await invoke<RemoteGroupedPage>(
+        const serverPage = await invoke<RemoteGroupedPage>(
           "list_remote_folder_grouped",
           {
             accountId,
@@ -454,10 +533,14 @@ export function useNestedFolderListing({
           },
         );
         if (currentKeyRef.current !== pageKey || fetchGenRef.current !== gen) return;
-        const pageEntries: SyncFileEntry[] = [...page.folders, ...page.files];
+        const pageEntries: SyncFileEntry[] = [
+          ...serverPage.folders,
+          ...serverPage.files,
+        ];
         setData((prev) => [...prev, ...mapEntries(pageEntries)]);
         remoteNextOffsetRef.current = offset + pageEntries.length;
-        setRemoteHasMore(page.hasMore && pageEntries.length > 0);
+        setRemoteTotalCount(serverPage.totalCount);
+        setRemoteHasMore(serverPage.hasMore && pageEntries.length > 0);
       } catch (err) {
         if (currentKeyRef.current !== pageKey || fetchGenRef.current !== gen) return;
         console.error("[useNestedFolderListing] loadMore failed:", err);
@@ -468,8 +551,13 @@ export function useNestedFolderListing({
         setIsLoadingMore(false);
       }
     })();
-  }, [remote, enabled, accountId, requestKey, remoteHasMore, label, subfolder, mapEntries]);
+  }, [paged, remote, enabled, accountId, requestKey, remoteHasMore, label, subfolder, mapEntries]);
 
+  // A remote page is already exactly the rows for `page`, because the server
+  // was asked for that window. A LOCAL listing arrives whole and is returned
+  // whole: the container slices every non-remote view (the drive root
+  // included, which this hook never sees), so slicing here as well took the
+  // page twice.
   return {
     data,
     isLoading,
@@ -479,6 +567,7 @@ export function useNestedFolderListing({
     hasMore: remote ? remoteHasMore : false,
     loadMore,
     isLoadingMore: remote ? isLoadingMore : false,
+    totalCount: remote ? remoteTotalCount : data.length,
   };
 }
 

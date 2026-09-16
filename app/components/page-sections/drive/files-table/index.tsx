@@ -435,6 +435,16 @@ const DriveFileRow = memo(function DriveFileRow({
 interface FilesTableProps {
   files: FormattedUserFile[];
   allFiles: FormattedUserFile[];
+  /**
+   * Where the rendered window starts inside the SORTED list.
+   *
+   * The table sorts `allFiles` whole so the order is globally correct, then
+   * renders a window of it. Under reveal-on-scroll that window always began
+   * at 0 and only its length grew, so the length alone described it. Paging
+   * moves the window instead of growing it, and a start of 0 there renders
+   * page one's rows on every page.
+   */
+  windowStart?: number;
   isRecentFiles?: boolean;
   sharedState?: FileViewSharedState;
   handleFileDownload: (
@@ -451,12 +461,32 @@ interface FilesTableProps {
   currentSubfolderPath?: string | null;
   searchTerm?: string;
   activeFilterCount?: number;
+  /**
+   * Sorting, lifted out when the level is paged.
+   *
+   * A sort has to reach the request, not just the rows in hand: on a remote
+   * level the page IS the request's answer, so sorting locally can only
+   * reorder the fifteen rows already fetched. The container owns the state so
+   * it can put it in the browse query and send the reader back to page one.
+   * Left uncontrolled, the table keeps its own state exactly as before.
+   */
+  sorting?: SortingState;
+  onSortingChange?: (next: SortingState) => void;
+  /**
+   * The rows arrived in their final order and must not be re-sorted here.
+   *
+   * The server sorts the whole folder before paging, so a second sort over
+   * one page is at best a no-op and at worst disagrees with it — the client
+   * comparator and the server's are not the same function.
+   */
+  serverSorted?: boolean;
 }
 
 const FilesTable: FC<FilesTableProps> = memo(
   ({
     files,
     allFiles,
+    windowStart = 0,
     isRecentFiles = false,
     sharedState,
     handleFileDownload,
@@ -467,6 +497,9 @@ const FilesTable: FC<FilesTableProps> = memo(
     currentSubfolderPath,
     searchTerm,
     activeFilterCount,
+    sorting: controlledSorting,
+    onSortingChange,
+    serverSorted = false,
   }) => {
     const { polkadotAddress } = useWalletAuth();
     const drivePaths = useMemo(
@@ -609,7 +642,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       setExpandedFolders({});
     }, [searchTerm, activeFilterCount, normalizedSubfolderPath, isRecentFiles]);
 
-    const [sorting, setSorting] = useState<SortingState>([]);
+    const [uncontrolledSorting, setUncontrolledSorting] =
+      useState<SortingState>([]);
+    const sorting = controlledSorting ?? uncontrolledSorting;
     const sortBy = useMemo<
       "name" | "size" | "date_uploaded" | undefined
     >(() => {
@@ -1532,13 +1567,26 @@ const FilesTable: FC<FilesTableProps> = memo(
       };
     }, [isResizing, handleResizeMove, handleResizeEnd]);
 
+    const sortingRef = useRef(sorting);
+    sortingRef.current = sorting;
     const handleSortingChange = useCallback(
       (
         updaterOrValue: SortingState | ((old: SortingState) => SortingState),
       ) => {
-        setSorting(updaterOrValue);
+        if (onSortingChange) {
+          // TanStack passes an updater; a controlled parent wants the value.
+          // Resolving against a ref rather than `sorting` keeps this callback
+          // stable, which the memoised rows depend on.
+          const next =
+            typeof updaterOrValue === "function"
+              ? updaterOrValue(sortingRef.current)
+              : updaterOrValue;
+          onSortingChange(next);
+          return;
+        }
+        setUncontrolledSorting(updaterOrValue);
       },
-      [],
+      [onSortingChange],
     );
 
     const tableConfig = useMemo(
@@ -1551,7 +1599,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         onSortingChange: handleSortingChange,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
-        manualSorting: false,
+        manualSorting: serverSorted,
         enableRowSelection: false,
         enableMultiRowSelection: false,
         enableSubRowSelection: false,
@@ -1575,7 +1623,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         getRowId: (row: FormattedUserFile) =>
           `${row.label ?? ""}::${row.actualFileName ?? row.name}`,
       }),
-      [columns, enrichedAllFiles, sorting, handleSortingChange],
+      [columns, enrichedAllFiles, sorting, handleSortingChange, serverSorted],
     );
 
     const table = useReactTable(tableConfig);
@@ -1588,16 +1636,20 @@ const FilesTable: FC<FilesTableProps> = memo(
     // chevron + active style). `enrichedAllFiles` keeps the rows in sync
     // when the data source changes (folder tab switch, sync re-enrichment).
     // Sorting runs over the FULL list (data: enrichedAllFiles) so the order
-    // is globally correct, but only the container's scroll window worth of
-    // rows is RENDERED (`files` is the windowed slice — its length is the
-    // window size). Without the cap the table painted every fetched row —
-    // including the remote prefetch buffer — so the DOM and every
-    // per-append reconciliation grew with the whole fetched list instead
-    // of what the user has scrolled to.
+    // is globally correct, and a WINDOW of that sorted order is rendered:
+    // `windowStart` says where it begins and `files.length` how long it is.
+    // Without the cap the table painted every fetched row, the remote
+    // prefetch buffer included, so the DOM and every per-append
+    // reconciliation grew with the whole fetched list rather than with what
+    // is on screen. The start matters as much as the length once the window
+    // is a page: sorting the level and then always rendering its first page
+    // is what made sorting look broken from page two onwards.
     const visibleRows = useMemo(() => {
-      return table.getRowModel().rows.slice(0, files.length);
+      return table
+        .getRowModel()
+        .rows.slice(windowStart, windowStart + files.length);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [table, enrichedAllFiles, sorting, files.length]);
+    }, [table, enrichedAllFiles, sorting, files.length, windowStart]);
 
     const headerRows = useMemo(
       () =>
