@@ -17,6 +17,20 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **The Overview shows what is in your Drive.** A card breaks your files down by
+  type (images, videos, docs, others), and a tab switches it to show where they
+  were uploaded from (desktop, console, mobile), the same picture the web
+  console shows.
+- **The plan card is out of the way inside folders.** It still sits at the top of
+  Drive, but opening a folder gives the space back to the breadcrumb and the files.
+- **Billing leads with your balance and your next charge**, side by side. The TAO
+  deposit address card is gone from that row.
+- **Billing now shows what you will be charged next.** A card beside your balance
+  names the plan, the amount, when it renews and what pays for it, instead of that
+  only appearing as a warning once your balance was too low to cover it.
+- **Your plan's charge history is back on Billing.** Every charge, renewal and plan
+  change for your Drive plan, with what it cost and whether it went through.
+
 - **Right-clicking anywhere on Overview or Drive now opens Hippius's own menu**
   instead of the browser's Back / Reload / Inspect menu, with Upload File, Upload
   Folder, New Folder, and Sync a Folder where each applies.
@@ -74,6 +88,27 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   puts the machine to sleep as normal.
 
 ### Changed
+
+- **Files are now shown a page at a time.** Drive and the folders inside it show
+  15 rows with a pager underneath and a size control, instead of a list that grows
+  as you scroll, and the loading placeholder is the size of the page you are about
+  to get. Searching or filtering still looks across the whole drive, not just the
+  page you are on.
+- **The light / dark switch is now in the account menu.** Pick Light, Dark or
+  System straight from the menu in the top right, instead of going to Settings.
+  It is the same setting, so changing it either way keeps them in step.
+- **Your balance is now shown in dollars.** What was "Total Credits" is now your
+  account balance, quoted as "$5.13" rather than a token amount, everywhere it
+  appears. One credit has always been one dollar; now you do not have to know that
+  to read the number.
+- **The Overview's plan card is gone, and its Manage button moved.** The storage
+  card beside it was already showing the same plan name and allowance, so the two
+  said one thing twice. Manage and Upgrade now sit in the storage card, next to the
+  reading they act on.
+- **The Plan card no longer says "about" the size of your plan.** A 500 GB plan is
+  exactly 500 GB, and the "≈" made an exact number look like a guess.
+- **A clearer line under "Welcome to Hippius".** The app is about your Drive, so the
+  subtitle says so instead of mentioning compute.
 
 - **Clearer names in the folder menu.** "Pause syncing", "Sync exclusions…",
   "Stop syncing on this device" and "Delete from Hippius" replace wording that did
@@ -238,6 +273,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   empty state, instead of an empty page with nothing to do next.
 
 ### Fixed
+
+- **Folders in a cloud drive now show a date.** They showed a dash where the files
+  beside them showed the date they were uploaded; a folder now shows when it first
+  appeared.
+- **Sorting a cloud folder now sorts the whole folder, not just the page you are
+  looking at.** Sorting by name or size reordered only the rows on screen, so the
+  order broke as soon as you turned the page.
+
+- **Sorting a folder now sorts the whole folder, not just the page you are on.**
+- **Plan charges show their status again.** The Status column in your plan's
+  charge history was blank for completed and paid charges.
 
 - **Signing in with Google or GitHub no longer runs out of time while you are still
   signing in.** You had five minutes to finish in the browser, so creating your
