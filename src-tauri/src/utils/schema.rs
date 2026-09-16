@@ -3,7 +3,7 @@
 use sqlx::sqlite::{SqliteConnection, SqlitePool};
 use sqlx::{Acquire, Row};
 use std::collections::HashSet;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Names of every table `ensure_table_schema` is expected to create.
 ///
@@ -117,31 +117,55 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // would default to storing seeds in plaintext, which `migrate_if_needed`
     // does not cover. Drop it. Safe and idempotent: no data was ever stored.
     sqlx::query("DROP TABLE IF EXISTS sub_accounts").execute(&mut *tx).await?;
-    ensure_sync_paths(&mut tx).await?;
-    ensure_sync_intent(&mut tx).await?;
-    ensure_sync_file_failures(&mut tx).await?;
-    ensure_folder_entries_local(&mut tx).await?;
-    ensure_wss_endpoint(&mut tx).await?;
-    ensure_security_scoped_bookmarks(&mut tx).await?;
-    ensure_auth_session(&mut tx).await?;
-    ensure_hcfs_config(&mut tx).await?;
-    ensure_encryption_version_columns(&mut tx).await?;
-    ensure_objectstore_auth(&mut tx).await?;
-    ensure_device_settings(&mut tx).await?;
-    ensure_migration_status(&mut tx).await?;
-    ensure_notifications(&mut tx).await?;
-    ensure_app_state(&mut tx).await?;
-    ensure_notification_preferences(&mut tx).await?;
-    ensure_address_book(&mut tx).await?;
-    ensure_onboarding(&mut tx).await?;
-    ensure_local_wallets(&mut tx).await?;
-    ensure_user_preferences(&mut tx).await?;
-    ensure_share_keystore(&mut tx).await?;
-    ensure_share_origin(&mut tx).await?;
-    ensure_folder_share_origin(&mut tx).await?;
-    ensure_bridge_transactions(&mut tx).await?;
-    ensure_credit_notification_flags(&mut tx).await?;
-    ensure_shared_link_history(&mut tx).await?;
+
+    // Every step runs inside its OWN savepoint and a failure is recorded rather
+    // than propagated. One malformed legacy table used to abort the shared
+    // transaction and roll back ALL the tables, including the ~20 that had
+    // nothing to do with it -- the app then ran with a database that had no
+    // `auth_session` at all and could not sign anyone in. Isolating the steps
+    // means a step that cannot migrate costs its own tables and nothing else.
+    let mut failed: Vec<(&'static str, String)> = Vec::new();
+
+    macro_rules! step {
+        ($name:literal, $f:ident) => {{
+            let mut sp = tx.begin().await?;
+            match $f(&mut sp).await {
+                Ok(()) => sp.commit().await?,
+                Err(e) => {
+                    // Dropping the savepoint rolls back just this step.
+                    drop(sp);
+                    warn!(step = $name, error = %e, "schema step failed; continuing with the rest");
+                    failed.push(($name, e.to_string()));
+                }
+            }
+        }};
+    }
+
+    step!("sync_paths", ensure_sync_paths);
+    step!("sync_intent", ensure_sync_intent);
+    step!("sync_file_failures", ensure_sync_file_failures);
+    step!("folder_entries_local", ensure_folder_entries_local);
+    step!("wss_endpoint", ensure_wss_endpoint);
+    step!("security_scoped_bookmarks", ensure_security_scoped_bookmarks);
+    step!("auth_session", ensure_auth_session);
+    step!("hcfs_config", ensure_hcfs_config);
+    step!("encryption_version_columns", ensure_encryption_version_columns);
+    step!("objectstore_auth", ensure_objectstore_auth);
+    step!("device_settings", ensure_device_settings);
+    step!("migration_status", ensure_migration_status);
+    step!("notifications", ensure_notifications);
+    step!("app_state", ensure_app_state);
+    step!("notification_preferences", ensure_notification_preferences);
+    step!("address_book", ensure_address_book);
+    step!("onboarding", ensure_onboarding);
+    step!("local_wallets", ensure_local_wallets);
+    step!("user_preferences", ensure_user_preferences);
+    step!("share_keystore", ensure_share_keystore);
+    step!("share_origin", ensure_share_origin);
+    step!("folder_share_origin", ensure_folder_share_origin);
+    step!("bridge_transactions", ensure_bridge_transactions);
+    step!("credit_notification_flags", ensure_credit_notification_flags);
+    step!("shared_link_history", ensure_shared_link_history);
 
     // No `bridge_transactions` helper by design: the first cut of the bridge
     // persisted a full per-account tx-history table, but the FE now mirrors
@@ -152,7 +176,49 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // `ensure_bridge_transactions` helper here alongside the new writer.
 
     tx.commit().await?;
+
+    // Report what could not be migrated, but only AFTER committing everything
+    // that could. The caller treats this as fatal; the tables that did migrate
+    // are already durable either way, so a partial schema beats none at all.
+    if !failed.is_empty() {
+        let summary = failed.iter().map(|(n, e)| format!("{n}: {e}")).collect::<Vec<_>>().join("; ");
+        error!(failed_steps = failed.len(), "schema steps failed: {summary}");
+        return Err(sqlx::Error::Protocol(format!("{} schema step(s) failed -- {summary}", failed.len())));
+    }
+
     Ok(())
+}
+
+/// The tables the app cannot function without. Checked after schema init so a
+/// database that lost them is never handed to the rest of the app: signing in
+/// writes `auth_session`, so without it every login fails at the last step with
+/// a raw "no such table" and no way for the user to tell what went wrong.
+pub const CORE_TABLES: [&str; 3] = ["auth_session", "oauth_pending_states", "user_preferences"];
+
+/// Whether every [`CORE_TABLES`] entry exists.
+///
+/// A `false` here means the database is unusable no matter what else migrated,
+/// and the caller must refuse to publish the pool rather than let commands fail
+/// one by one against tables that are not there.
+pub async fn core_tables_present(pool: &SqlitePool) -> bool {
+    for table in CORE_TABLES {
+        let found: Option<(String,)> = match sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .bind(table)
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(row) => row,
+            Err(e) => {
+                error!(table, error = %e, "could not check for a core table");
+                return false;
+            }
+        };
+        if found.is_none() {
+            error!(table, "core table missing after schema initialization");
+            return false;
+        }
+    }
+    true
 }
 
 /// `sync_paths` — create the table, add columns missing on older DBs, and swap
@@ -183,6 +249,23 @@ async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
     // Read sync_paths columns ONCE and reuse across the four column-add
     // migration blocks below. Saves three round-trips on every cold start.
     let sync_paths_cols = table_columns(&mut *conn, "sync_paths").await?;
+
+    // Migration: add the `owner` column if missing.
+    //
+    // MUST come before the constraint swap below, which SELECTs `owner` out of
+    // the existing table. The very first `sync_paths` had no owner at all --
+    // `(id, path, type, timestamp)` with `UNIQUE(type)` -- so on a database
+    // that old the swap failed with "no such column: owner", and because the
+    // whole initializer shares one transaction that single error rolled back
+    // ALL the tables. The app then kept running (the pool is set before the
+    // schema is ensured), so every write failed with "no such table" instead,
+    // on every launch, with no way for the database to heal itself.
+    if !sync_paths_cols.contains("owner") {
+        info!("Adding owner column to sync_paths");
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            .execute(&mut *conn)
+            .await?;
+    }
 
     // Migration: add label column if missing (existing dev databases)
     if !sync_paths_cols.contains("label") {
@@ -1410,6 +1493,93 @@ mod tests {
     /// The `sync_paths` table must end up with the `label` and `is_paused`
     /// columns regardless of whether it was created fresh or migrated from
     /// an older schema. This guards the migration block at lines 133-154.
+    /// The oldest shipped `sync_paths`: no `owner`, no `label`, and
+    /// `UNIQUE(type)`. The constraint swap SELECTs `owner` out of the source
+    /// table, so without an `owner` migration it failed with "no such column:
+    /// owner" -- and since the whole initializer shares ONE transaction, that
+    /// single error rolled back all 26 tables. Users on a database this old saw
+    /// every write fail with "no such table: auth_session" on every launch,
+    /// with no path to recovery.
+    /// A step that cannot migrate must cost its own tables and nothing else.
+    /// The initializer used to share one transaction, so a single malformed
+    /// legacy table rolled back all ~26 tables -- including `auth_session`,
+    /// which is what actually stopped users signing in. A view shadowing one
+    /// table stands in for any unmigratable shape: `CREATE TABLE IF NOT EXISTS`
+    /// silently no-ops against it and the follow-up ALTER then fails.
+    #[tokio::test]
+    async fn one_unmigratable_table_does_not_take_out_the_others() {
+        let pool = temp_pool().await;
+        sqlx::query("CREATE VIEW sync_paths AS SELECT 1 AS id")
+            .execute(&pool)
+            .await
+            .expect("view");
+
+        let result = ensure_table_schema(&pool).await;
+        assert!(result.is_err(), "the failing step must still be reported to the caller");
+
+        let tables = list_user_tables(&pool).await;
+        for expected in CORE_TABLES {
+            assert!(tables.contains(expected), "{expected} must survive an unrelated step failing: {tables:?}");
+        }
+        assert!(core_tables_present(&pool).await, "core tables must be usable despite the failure");
+    }
+
+    /// The guard the app gates on: a database missing a core table must be
+    /// reported as unusable, so the pool is never published and commands get an
+    /// honest "not ready" instead of a raw "no such table" each.
+    #[tokio::test]
+    async fn core_tables_present_is_false_when_one_is_missing() {
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("fresh schema");
+        assert!(core_tables_present(&pool).await);
+
+        sqlx::query("DROP TABLE auth_session").execute(&pool).await.expect("drop");
+        assert!(!core_tables_present(&pool).await, "a missing core table must fail the guard");
+    }
+
+    #[tokio::test]
+    async fn pre_owner_sync_paths_still_migrates_the_whole_schema() {
+        let pool = temp_pool().await;
+
+        sqlx::query(
+            "CREATE TABLE sync_paths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT NOT NULL,
+                type TEXT NOT NULL UNIQUE,
+                timestamp INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy sync_paths");
+        sqlx::query("INSERT INTO sync_paths (path, type, timestamp) VALUES ('/legacy', 'private', 1)")
+            .execute(&pool)
+            .await
+            .expect("seed legacy row");
+
+        ensure_table_schema(&pool).await.expect("schema must survive a pre-owner sync_paths");
+
+        let tables = list_user_tables(&pool).await;
+        // The tables whose absence the user actually hit.
+        for expected in ["auth_session", "oauth_pending_states", "user_preferences"] {
+            assert!(tables.contains(expected), "{expected} missing after migration: {tables:?}");
+        }
+
+        let cols = table_columns(&mut *pool.acquire().await.expect("conn"), "sync_paths")
+            .await
+            .expect("cols");
+        assert!(cols.contains("owner"), "sync_paths must gain an owner column");
+
+        // The legacy row survives the rebuild, defaulted to the empty owner so
+        // the first account can later claim it.
+        let (owner, path): (String, String) = sqlx::query_as("SELECT owner, path FROM sync_paths")
+            .fetch_one(&pool)
+            .await
+            .expect("legacy row preserved");
+        assert_eq!(owner, "");
+        assert_eq!(path, "/legacy");
+    }
+
     #[tokio::test]
     async fn sync_paths_has_required_columns_after_schema_ensure() {
         let pool = temp_pool().await;

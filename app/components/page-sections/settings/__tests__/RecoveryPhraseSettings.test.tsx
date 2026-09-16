@@ -63,6 +63,7 @@ function check(hasServerBlob: boolean): RecoveryCheck {
   return {
     hasServerBlob,
     hasLocalMnemonic: true,
+    canDecryptLocal: true,
     updatedAt: null,
     recommendedFlow: hasServerBlob ? "proceed" : "signup",
   };
@@ -131,6 +132,7 @@ describe("RecoveryPhraseSettings — Unlock Password row", () => {
     recoveryMocks.checkRecoveryState.mockResolvedValueOnce({
       hasServerBlob: false,
       hasLocalMnemonic: true,
+      canDecryptLocal: true,
       updatedAt: null,
       recommendedFlow: "unknown",
     });
