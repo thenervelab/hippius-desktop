@@ -28,6 +28,8 @@ const createDriveInviteMock = vi.fn();
 const listDriveMembersMock = vi.fn();
 const removeDriveMemberMock = vi.fn();
 const changeDriveMemberRoleMock = vi.fn();
+const listDriveInvitesMock = vi.fn();
+const revokeDriveInviteMock = vi.fn();
 
 /** A stable member address, so the role assertions read for themselves. */
 const MEMBER = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
@@ -40,6 +42,8 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     removeDriveMember: (...args: unknown[]) => removeDriveMemberMock(...args),
     changeDriveMemberRole: (...args: unknown[]) =>
       changeDriveMemberRoleMock(...args),
+    listDriveInvites: (...args: unknown[]) => listDriveInvitesMock(...args),
+    revokeDriveInvite: (...args: unknown[]) => revokeDriveInviteMock(...args),
   };
 });
 
@@ -358,5 +362,85 @@ describe("members tab", () => {
       expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", member.memberSs58),
     );
     await screen.findByText(/No one has joined this drive yet/);
+  });
+});
+
+describe("links tab", () => {
+  const liveInvite = {
+    inviteId: "abc123",
+    role: "writer",
+    expiresAt: "2126-09-12T12:00:00Z",
+    maxUses: 50,
+    useCount: 2,
+    revoked: false,
+    valid: true,
+    createdAt: "2026-09-17T12:00:00Z",
+  };
+
+  it("lists links only when the tab is opened", async () => {
+    listDriveInvitesMock.mockResolvedValue([liveInvite]);
+
+    renderModal();
+    expect(listDriveInvitesMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    await screen.findByText(/Editor · 2 of 50 used/);
+    expect(listDriveInvitesMock).toHaveBeenCalledWith("team-docs");
+  });
+
+  // The whole point: a minted link could not be killed at all before this.
+  it("revokes a link after the inline confirm, then refetches", async () => {
+    listDriveInvitesMock.mockResolvedValue([liveInvite]);
+    revokeDriveInviteMock.mockResolvedValue(undefined);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
+
+    // One click arms, a second commits -- revoking cannot be undone.
+    expect(revokeDriveInviteMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm revoke" }));
+
+    await waitFor(() =>
+      expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "abc123"),
+    );
+    await waitFor(() => expect(listDriveInvitesMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("calls a 100-year expiry what it is", async () => {
+    listDriveInvitesMock.mockResolvedValue([liveInvite]);
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    expect(await screen.findByText("Never expires")).toBeInTheDocument();
+  });
+
+  // A dead link needs no action; a disabled Revoke would imply otherwise.
+  it("offers no action on a revoked link, and says why", async () => {
+    listDriveInvitesMock.mockResolvedValue([
+      { ...liveInvite, revoked: true, valid: false },
+    ]);
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+
+    expect(await screen.findByText("Revoked")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revoke" })).not.toBeInTheDocument();
+  });
+
+  it("points at the Invite tab when there are no links", async () => {
+    listDriveInvitesMock.mockResolvedValue([]);
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    expect(await screen.findByText(/No invite links yet/)).toBeInTheDocument();
+  });
+
+  it("degrades quietly on a feature-off server", async () => {
+    listDriveInvitesMock.mockRejectedValue({
+      kind: "NotReady",
+      subkind: "SHARED_DRIVES_UNAVAILABLE",
+    });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    await waitFor(() => expect(listDriveInvitesMock).toHaveBeenCalled());
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 });

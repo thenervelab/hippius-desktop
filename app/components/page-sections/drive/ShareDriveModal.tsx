@@ -41,10 +41,17 @@ import {
   createDriveInvite,
   isSharedDrivesNotEntitled,
   isSharedDrivesUnavailable,
+  listDriveInvites,
   listDriveMembers,
   removeDriveMember,
+  revokeDriveInvite,
+  type DriveInviteInfo,
   type DriveMemberInfo,
 } from "@/app/lib/tauri/sharedDrives";
+import {
+  deadReasonLabel,
+  inviteRowView,
+} from "@/app/lib/shared-drives/inviteRowView";
 import {
   DRIVE_ROLES,
   MANAGER_INVITE_MAX_SECONDS,
@@ -59,17 +66,19 @@ import { middleTruncate } from "@/lib/utils/middleTruncate";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   DEFAULT_INVITE_TTL_SECS,
-  formatJoinedDate,
-  getMembersView,
   INVITE_TTL_OPTIONS,
   NEVER_EXPIRES_SECS,
+  formatJoinedDate,
+  getInvitesView,
+  getMembersView,
   type InviteState,
+  type InvitesState,
   type MembersState,
 } from "./shareDriveModalState";
 
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
-type Tab = "invite" | "members";
+type Tab = "invite" | "members" | "links";
 
 export default function ShareDriveModal() {
   const [target, setTarget] = useAtom(shareDriveModalAtom);
@@ -81,6 +90,7 @@ export default function ShareDriveModal() {
   // choice changes nothing for someone who does not touch it.
   const [inviteRole, setInviteRole] = useState<DriveRole>("writer");
   const [members, setMembers] = useState<MembersState>({ kind: "idle" });
+  const [invites, setInvites] = useState<InvitesState>({ kind: "idle" });
   // Auto-copy fires once per `done` transition (the ShareFileModal rule).
   const autoCopiedRef = useRef(false);
 
@@ -119,6 +129,51 @@ export default function ShareDriveModal() {
       }
     }
   }, []);
+
+  const loadInvites = useCallback(async (driveLabel: string) => {
+    setInvites({ kind: "loading" });
+    try {
+      const rows = await listDriveInvites(driveLabel);
+      if (driveLabel !== currentLabelRef.current) return;
+      setInvites({ kind: "ready", invites: rows });
+    } catch (err) {
+      if (driveLabel !== currentLabelRef.current) return;
+      if (isSharedDrivesUnavailable(err)) {
+        setInvites({ kind: "unavailable" });
+      } else {
+        setInvites({ kind: "error", message: errorMessage(err) });
+      }
+    }
+  }, []);
+
+  const revokeInvite = useCallback(
+    async (inviteId: string) => {
+      if (!label) return;
+      const labelAtCall = label;
+      try {
+        await revokeDriveInvite(labelAtCall, inviteId);
+        toast.success("Link revoked");
+        await loadInvites(labelAtCall);
+      } catch (err) {
+        if (labelAtCall !== currentLabelRef.current) return;
+        toast.error(`Could not revoke the link: ${errorMessage(err)}`);
+      }
+    },
+    [label, loadInvites],
+  );
+
+  // Same lazy rule as members: the tab pays for its own listing.
+  useEffect(() => {
+    if (!label || tab !== "links") return;
+    if (invites.kind !== "idle") return;
+    void loadInvites(label);
+  }, [label, tab, invites.kind, loadInvites]);
+
+  // A freshly minted link must show up in the list, not sit behind a stale
+  // fetch from before it existed.
+  useEffect(() => {
+    if (invite.kind === "done") setInvites({ kind: "idle" });
+  }, [invite.kind]);
 
   // Lazy members fetch: first activation of the tab only, so minting an
   // invite costs no member-listing round-trip.
@@ -239,6 +294,7 @@ export default function ShareDriveModal() {
             options={[
               { label: "Invite", value: "invite" },
               { label: "Members", value: "members" },
+              { label: "Links", value: "links" },
             ]}
           />
         </div>
@@ -252,6 +308,12 @@ export default function ShareDriveModal() {
             onRoleChange={setInviteRole}
             onMint={() => void mintInvite()}
             onRetry={() => setInvite({ kind: "choosing" })}
+            onClose={() => setTarget(null)}
+          />
+        ) : tab === "links" ? (
+          <LinksTab
+            state={invites}
+            onRevoke={(id) => void revokeInvite(id)}
             onClose={() => setTarget(null)}
           />
         ) : (
@@ -424,34 +486,158 @@ function InviteDone({
             "text-grey-10 dark:text-grey-dark-800",
           )}
         />
-        <button
-          type="button"
-          onClick={() => void handleCopy()}
-          title={copied ? "Copied!" : "Copy link"}
-          aria-label="Copy link"
-          className={cn(
-            "shrink-0 rounded-md border px-1.5 py-1 transition-colors",
-            copied
-              ? "border-success-90 bg-success-100 text-success-50 dark:border-success-50/60 dark:bg-success-50/10 dark:text-success-50"
-              : cn(
-                  "border-grey-80 bg-grey-90 text-grey-10 hover:bg-grey-80",
-                  "dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#363636]",
-                ),
-          )}
-        >
-          {copied ? <Check className="size-4" /> : <Icons.Copy className="size-4" />}
-        </button>
       </div>
+
+      {/* The link is the whole point of this screen, so copying it is the
+          primary action rather than an icon tucked beside the field. */}
+      <Button
+        type="button"
+        variant="primary"
+        size="auto"
+        onClick={() => void handleCopy()}
+        className={cn(primaryButtonClass, "mb-3 flex items-center justify-center gap-2")}
+      >
+        {copied ? <Check className="size-4" /> : <Icons.Copy className="size-4" />}
+        {copied ? "Copied to clipboard" : "Copy link"}
+      </Button>
 
       <p className="mb-6 text-xs text-grey-50 dark:text-grey-dark-600">
         {neverExpires
-          ? "This link never expires — anyone who has it can join the drive. To revoke someone's access after they joined, remove them from the Members tab."
-          : "Anyone with this link can join the drive until it expires. To revoke someone's access after they joined, remove them from the Members tab."}
+          ? "This link never expires — anyone who has it can join the drive. "
+          : "Anyone with this link can join the drive until it expires. "}
+        {/* The old copy sent people to Members to "revoke access", which only
+            removes someone who already joined and does nothing about a link
+            still circulating. Now that links can be revoked, say so. */}
+        Revoke the link itself in the Links tab, or remove someone who has
+        already joined from Members.
       </p>
 
       <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={secondaryButtonClass}>
         Done
       </Button>
+    </div>
+  );
+}
+
+/**
+ * The live invite links for this drive, and the only way to kill one.
+ *
+ * A minted link could not be revoked at all before this: the desktop never
+ * persists tokens and the server stores only their hashes, so a link handed to
+ * the wrong person stayed live for as long as it was configured to -- forever,
+ * for a "never expires" one. Removing a member does not help; that revokes
+ * somebody who already joined, not the link still circulating.
+ */
+function LinksTab({
+  state,
+  onRevoke,
+  onClose,
+}: {
+  state: InvitesState;
+  onRevoke: (inviteId: string) => void;
+  onClose: () => void;
+}) {
+  const view = getInvitesView(state);
+
+  if (view === "unavailable") return <SharedDrivesUnavailableNotice onClose={onClose} />;
+
+  if (view === "loading") {
+    return (
+      <p className="py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+        Loading links…
+      </p>
+    );
+  }
+
+  if (view === "error") {
+    return (
+      <p className="py-6 text-center text-sm text-error-70">
+        {state.kind === "error" ? state.message : "Could not load links"}
+      </p>
+    );
+  }
+
+  if (view === "empty") {
+    return (
+      <p className="py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+        No invite links yet. Create one from the Invite tab.
+      </p>
+    );
+  }
+
+  const invites = state.kind === "ready" ? state.invites : [];
+  return (
+    <div className="max-h-[260px] overflow-y-auto">
+      {invites.map((invite) => (
+        <InviteRow key={invite.inviteId} invite={invite} onRevoke={onRevoke} />
+      ))}
+    </div>
+  );
+}
+
+function InviteRow({
+  invite,
+  onRevoke,
+}: {
+  invite: DriveInviteInfo;
+  onRevoke: (inviteId: string) => void;
+}) {
+  // The same two-step inline confirm the member row uses: revoking is
+  // irreversible and the row is small.
+  const [confirming, setConfirming] = useState(false);
+  const view = inviteRowView(invite);
+
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
+      <div className="min-w-0">
+        <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
+          {view.summary}
+        </p>
+        <p className="text-[11px] text-grey-50 dark:text-grey-dark-600">
+          {view.live ? view.expiry : deadReasonLabel(view.deadReason)}
+        </p>
+      </div>
+
+      {view.live ? (
+        confirming ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="ghost"
+              size="auto"
+              onClick={() => {
+                setConfirming(false);
+                onRevoke(invite.inviteId);
+              }}
+              className="h-7 rounded-md border border-error-50/40 px-2 text-xs font-medium text-error-50 hover:bg-error-50/10"
+            >
+              Confirm revoke
+            </Button>
+            <Button
+              variant="ghost"
+              size="auto"
+              onClick={() => setConfirming(false)}
+              className="h-7 rounded-md px-2 text-xs font-medium text-grey-50 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:bg-white/10"
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <Button
+            variant="ghost"
+            size="auto"
+            onClick={() => setConfirming(true)}
+            className="h-7 shrink-0 rounded-md border border-grey-80 px-2 text-xs font-medium text-grey-30 hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
+          >
+            Revoke
+          </Button>
+        )
+      ) : (
+        // A dead link needs no action; showing a disabled Revoke would imply
+        // there is something left to do.
+        <span className="shrink-0 text-[11px] text-grey-60 dark:text-grey-dark-600">
+          No longer works
+        </span>
+      )}
     </div>
   );
 }
