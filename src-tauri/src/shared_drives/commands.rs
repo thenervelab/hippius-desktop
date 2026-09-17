@@ -64,6 +64,42 @@ const DEFAULT_INVITE_MAX_USES: u32 = 50;
 /// policy is unit-testable; [`create_drive_invite`] routes through it and
 /// [`http_create_invite`] takes the resolved values, so no call path can
 /// send an omitted field.
+/// The wire roles the server accepts, in its own spelling. Kept in step with
+/// `app/lib/shared-drives/roles.ts`, which holds the same list for the UI.
+pub(crate) const WIRE_ROLES: [&str; 3] = ["reader", "writer", "manager"];
+
+/// A manager invite is hard-capped by the server at one use and 24 hours.
+pub(crate) const MANAGER_INVITE_MAX_USES: u32 = 1;
+pub(crate) const MANAGER_INVITE_MAX_SECS: u64 = 24 * 60 * 60;
+
+/// Resolve and check the role an invite is minted for.
+///
+/// An omitted role keeps the historical `writer`, so a caller that predates
+/// the picker mints exactly what it always did.
+///
+/// Both refusals exist because the server answers a bare 400 and the user
+/// cannot tell which of their choices it objected to. A typo rejected by name,
+/// and a cap named as a cap, are the difference between "that role does not
+/// exist" and "something went wrong" — and a manager link minted for 7 days
+/// would be rejected AFTER the user had configured it.
+pub(crate) fn resolve_invite_role(role: Option<String>, expires_in_secs: u64, max_uses: u32) -> Result<String> {
+    let role = role.unwrap_or_else(|| "writer".to_string());
+    if !WIRE_ROLES.contains(&role.as_str()) {
+        return Err(AppError::Validation(format!(
+            "Unknown drive role: {role}. Expected one of reader, writer, manager."
+        )));
+    }
+    if role == "manager" {
+        if max_uses > MANAGER_INVITE_MAX_USES {
+            return Err(AppError::Validation("A manager invite can only be used once.".into()));
+        }
+        if expires_in_secs > MANAGER_INVITE_MAX_SECS {
+            return Err(AppError::Validation("A manager invite expires within 24 hours.".into()));
+        }
+    }
+    Ok(role)
+}
+
 fn resolve_invite_policy(expires_in_secs: Option<u64>, max_uses: Option<u32>) -> (u64, u32) {
     (
         expires_in_secs.unwrap_or(DEFAULT_INVITE_EXPIRES_IN_SECS),
@@ -182,21 +218,19 @@ pub async fn http_create_invite(
     folder_hash: &str,
     expires_in_secs: u64,
     max_uses: u32,
+    role: &str,
 ) -> Result<String> {
     let req = CreateDriveInviteRequest {
         folder_hash: folder_hash.to_string(),
         expires_in_secs: Some(expires_in_secs),
         max_uses: Some(max_uses),
-        // Both fields arrived with drive-invite roles and are `Option` with
-        // documented client-side defaults, so `None` preserves exactly what
-        // this call did before the bump rather than choosing new behaviour:
-        //   role: omitted means `writer`, which is what every shipped
-        //     desktop build already mints. Offering the choice in the UI is
-        //     a separate piece of work.
-        //   owner_ss58: omitted means caller-as-owner, and this path only
-        //     mints for a drive the caller owns. A manager minting for
-        //     someone else's drive is what that field exists for.
-        role: None,
+        // Sent explicitly rather than omitted. An omitted role means `writer`
+        // server-side, which is what every build before the picker minted --
+        // fine as a default, wrong as a silent one now that the user chooses.
+        role: Some(role.to_string()),
+        // Omitted means caller-as-owner, and this path only mints for a drive
+        // the caller owns. A manager minting for someone else's drive is what
+        // that field exists for.
         owner_ss58: None,
     };
     let resp = http
@@ -269,6 +303,57 @@ pub async fn http_remove_member(
         .send()
         .await
         .map_err(|e| AppError::Hcfs(format!("remove-member request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_error_status(status, &body));
+    }
+    Ok(())
+}
+
+/// `PATCH /v1/drives/{folder_hash}/members/{member_ss58}` — change a member's
+/// role in place.
+///
+/// The new role binds on the member's very next request, so there is no
+/// propagation delay to warn anyone about. The server refuses a caller
+/// targeting themselves with a 400: a manager cannot demote themself, they
+/// leave through the member DELETE instead.
+///
+/// A downward change is sticky. The server also revokes the invite that
+/// admitted the member when that link still outranks the new role, and a
+/// demotion out of `manager` additionally revokes every live invite that
+/// member minted, so a spare link cannot re-escalate them. Nothing here has
+/// to arrange that; it matters when explaining the result to the user.
+pub async fn http_change_member_role(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    member_ss58: &str,
+    role: &str,
+    owner: Option<&str>,
+) -> Result<()> {
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/v1/drives/{}/members/{}",
+        base_url.trim_end_matches('/'),
+        folder_hash,
+        member_ss58
+    ))
+    .map_err(|e| AppError::Hcfs(format!("invalid change-role URL: {e}")))?;
+    if let Some(owner) = owner {
+        url.query_pairs_mut().append_pair("owner", owner);
+    }
+
+    let resp = http
+        .patch(url)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "role": role }))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("change-role request failed: {e}")))?;
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
@@ -488,6 +573,7 @@ pub async fn create_drive_invite(
     label: String,
     expires_in_secs: Option<u64>,
     max_uses: Option<u32>,
+    role: Option<String>,
 ) -> Result<DriveInviteLink> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
@@ -509,8 +595,10 @@ pub async fn create_drive_invite(
     // server and not in the FE wrapper — see `resolve_invite_policy`.
     let (expires_in_secs, max_uses) = resolve_invite_policy(expires_in_secs, max_uses);
 
+    let role = resolve_invite_role(role, expires_in_secs, max_uses)?;
+
     let http = state.api_client.clone();
-    let token = http_create_invite(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, expires_in_secs, max_uses).await?;
+    let token = http_create_invite(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, expires_in_secs, max_uses, &role).await?;
 
     let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &token, &entropy);
 
@@ -559,6 +647,54 @@ pub async fn remove_drive_member(app: tauri::AppHandle, label: String, member_ss
     .await?;
 
     info!(label = %label, folder_hash = %identity.wire_folder_hash, "Drive member removed");
+    Ok(())
+}
+
+/// Change a member's role on a drive this account owns or manages.
+///
+/// The role is validated here rather than forwarded blind: the server answers
+/// 400 for anything outside its vocabulary, and a typo reaching the wire as a
+/// rejected request is a worse diagnostic than refusing it by name. Kept in
+/// step with `app/lib/shared-drives/roles.ts`, which holds the same list for
+/// the UI.
+#[tauri::command]
+pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, member_ss58: String, role: String) -> Result<()> {
+    const WIRE_ROLES: [&str; 3] = ["reader", "writer", "manager"];
+    if !WIRE_ROLES.contains(&role.as_str()) {
+        return Err(AppError::Validation(format!(
+            "Unknown drive role: {role}. Expected one of reader, writer, manager."
+        )));
+    }
+
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+
+    // Targeting yourself is the server's 400 (a manager demotes themself by
+    // leaving, not by PATCH). Refuse it here so the UI can say why instead of
+    // surfacing a bare rejection.
+    if member_ss58 == ctx.account_id {
+        return Err(AppError::Validation(
+            "You cannot change your own role. Leave the drive instead.".into(),
+        ));
+    }
+
+    // Owner path: the server keys the change by the caller's own identity, so
+    // no `?owner=` — that param exists for the self-leave branch.
+    http_change_member_role(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        &member_ss58,
+        &role,
+        None,
+    )
+    .await?;
+
+    // The member ss58 is an account identifier, not a secret, and the role is
+    // the point of the line; the drive label stays as the operator's handle.
+    info!(label = %label, folder_hash = %identity.wire_folder_hash, role = %role, "Drive member role changed");
     Ok(())
 }
 
@@ -830,6 +966,66 @@ mod tests {
     // constants (7 days / 50 uses), explicit values pass through untouched.
     // `http_create_invite` takes the resolved values (no Options), so this
     // resolver is the only place an omission can be interpreted.
+    /// An omitted role must keep minting what every pre-picker build minted.
+    #[test]
+    fn omitted_invite_role_stays_writer() {
+        assert_eq!(resolve_invite_role(None, 3600, 5).expect("omitted role"), "writer");
+    }
+
+    #[test]
+    fn every_wire_role_is_accepted() {
+        for role in WIRE_ROLES {
+            assert_eq!(
+                resolve_invite_role(Some(role.to_string()), 3600, 1).expect("wire role"),
+                role
+            );
+        }
+    }
+
+    /// The server answers a bare 400 for an unknown role, which tells the user
+    /// nothing about which choice it objected to.
+    #[test]
+    fn an_unknown_role_is_refused_by_name() {
+        let err = resolve_invite_role(Some("admin".into()), 3600, 1).expect_err("unknown role");
+        assert!(format!("{err}").contains("admin"), "the refusal must name the role: {err}");
+    }
+
+    /// A manager link minted for a week would be rejected AFTER the user had
+    /// configured it. Both caps are refused here, each naming the cap.
+    #[test]
+    fn a_manager_invite_is_held_to_the_server_caps() {
+        let too_many = resolve_invite_role(Some("manager".into()), 3600, 2).expect_err("uses cap");
+        assert!(format!("{too_many}").contains("once"), "{too_many}");
+
+        let too_long =
+            resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS + 1, 1).expect_err("ttl cap");
+        assert!(format!("{too_long}").contains("24 hours"), "{too_long}");
+
+        // Exactly at the cap is allowed — the caps ARE the defaults.
+        assert_eq!(
+            resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES)
+                .expect("at the cap"),
+            "manager"
+        );
+    }
+
+    /// The caps bind managers only; a reader or writer link is unaffected.
+    #[test]
+    fn the_manager_caps_do_not_bind_other_roles() {
+        for role in ["reader", "writer"] {
+            assert_eq!(
+                resolve_invite_role(Some(role.to_string()), MANAGER_INVITE_MAX_SECS * 7, 50).expect("wide link"),
+                role
+            );
+        }
+    }
+
+    /// The desktop and the UI must not drift apart on the wire vocabulary.
+    #[test]
+    fn wire_roles_match_the_frontend_list() {
+        assert_eq!(WIRE_ROLES, ["reader", "writer", "manager"]);
+    }
+
     #[test]
     fn resolve_invite_policy_applies_desktop_defaults() {
         assert_eq!(
