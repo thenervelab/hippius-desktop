@@ -61,7 +61,7 @@ pnpm test                       # Vitest
 # Rust backend (from src-tauri/)
 cd src-tauri
 cargo build                     # Build Rust backend
-cargo clippy --all -- -D warnings
+cargo clippy --all-targets -- -D warnings   # what CI runs: --all misses test code
 cargo fmt --all
 cargo test                      # All Rust tests
 cargo test --test auth_commands # Single test file

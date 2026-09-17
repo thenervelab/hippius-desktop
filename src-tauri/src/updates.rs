@@ -725,7 +725,7 @@ mod tests {
     static ANNOUNCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn with_clean_announced<T>(body: impl FnOnce() -> T) -> T {
-        let guard = ANNOUNCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = ANNOUNCE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *super::ANNOUNCED.lock().expect("lock") = None;
         let out = body();
         drop(guard);
@@ -878,14 +878,6 @@ mod tests {
         assert_eq!(unknown, serde_json::json!({"bytesDone": 12, "bytesTotal": null}));
     }
 
-    /// Behavioural pin for the rule this module exists to enforce.
-    ///
-    /// `updater_for` needs an AppHandle, so the reachable half is asserted
-    /// directly: staging has no manifest, which is what makes both commands
-    /// short-circuit before any endpoint is chosen. If this ever returns a URL,
-    /// staging builds resume checking SOME lane — and with one shared signing
-    /// key that lane's manifest would verify and install.
-    #[test]
     /// A stable user and a beta user must be told about their own lane's
     /// releases and not each other's. The background check asks
     /// `release_channel::current()`, so the routing is only ever as good as
@@ -906,6 +898,14 @@ mod tests {
         assert!(beta.contains("beta"), "beta manifest should name its own lane: {beta}");
     }
 
+    /// Behavioural pin for the rule this module exists to enforce.
+    ///
+    /// `updater_for` needs an AppHandle, so the reachable half is asserted
+    /// directly: staging has no manifest, which is what makes both commands
+    /// short-circuit before any endpoint is chosen. If this ever returns a URL,
+    /// staging builds resume checking SOME lane — and with one shared signing
+    /// key that lane's manifest would verify and install.
+    #[test]
     fn staging_has_no_manifest_to_check() {
         assert_eq!(ReleaseChannel::Staging.manifest_url(), None);
         assert!(ReleaseChannel::Production.manifest_url().is_some());
