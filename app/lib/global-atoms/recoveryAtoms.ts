@@ -7,6 +7,13 @@ export type RecoveryFlow = "signup" | "unlock" | "proceed" | "unknown";
 export interface RecoveryCheck {
   hasServerBlob: boolean;
   hasLocalMnemonic: boolean;
+  /**
+   * Whether the local mnemonic could actually be opened. `Proceed` covers two
+   * opposite states — healthy (local is authoritative, nothing to do) and
+   * genuinely stuck (local unopenable, nothing on the server to unlock) — and
+   * `hasLocalMnemonic` is true in both, so this is what separates them.
+   */
+  canDecryptLocal: boolean;
   updatedAt: string | null;
   recommendedFlow: RecoveryFlow;
 }

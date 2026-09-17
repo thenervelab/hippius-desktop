@@ -20,6 +20,7 @@ import {
     clearOAuthSessionHint,
     persistOAuthSessionHint,
 } from "@/app/lib/auth/oauthSessionHint";
+import { oauthCallbackErrorMessage } from "@/app/lib/auth/oauthCallbackError";
 import { activeRecoveryCheckAtom } from "@/app/lib/global-atoms/recoveryAtoms";
 import { checkRecoveryState } from "@/app/lib/utils/recovery";
 import { Button } from "@/components/ui/button";
@@ -172,11 +173,7 @@ export default function OAuthCallbackPage() {
                 router.replace(redirectPath);
             } catch (err) {
                 console.error("[OAuthCallback] Failed to process callback:", err);
-                setError(
-                    err instanceof Error
-                        ? err.message
-                        : "Failed to complete authentication. Please try again."
-                );
+                setError(oauthCallbackErrorMessage(err));
             }
         };
 

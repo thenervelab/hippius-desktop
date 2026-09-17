@@ -15,6 +15,101 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-17
+
+### Added
+
+- **The Overview shows what is in your Drive.** A card breaks your files down by
+  type (images, videos, docs, others), and a tab switches it to show where they
+  were uploaded from (desktop, console, mobile), the same picture the web
+  console shows.
+- **The plan card is out of the way inside folders.** It still sits at the top of
+  Drive, but opening a folder gives the space back to the breadcrumb and the files.
+- **Billing leads with your balance and your next charge**, side by side. The TAO
+  deposit address card is gone from that row.
+- **Billing now shows what you will be charged next.** A card beside your balance
+  names the plan, the amount, when it renews and what pays for it, instead of that
+  only appearing as a warning once your balance was too low to cover it.
+- **Your plan's charge history is back on Billing.** Every charge, renewal and plan
+  change for your Drive plan, with what it cost and whether it went through.
+
+### Changed
+
+- **Files are now shown a page at a time.** Drive and the folders inside it show
+  15 rows with a pager underneath and a size control, instead of a list that grows
+  as you scroll, and the loading placeholder is the size of the page you are about
+  to get. Searching or filtering still looks across the whole drive, not just the
+  page you are on.
+- **The light / dark switch is now in the account menu.** Pick Light, Dark or
+  System straight from the menu in the top right, instead of going to Settings.
+  It is the same setting, so changing it either way keeps them in step.
+- **Your balance is now shown in dollars.** What was "Total Credits" is now your
+  account balance, quoted as "$5.13" rather than a token amount, everywhere it
+  appears. One credit has always been one dollar; now you do not have to know that
+  to read the number.
+- **The Overview's plan card is gone, and its Manage button moved.** The storage
+  card beside it was already showing the same plan name and allowance, so the two
+  said one thing twice. Manage and Upgrade now sit in the storage card, next to the
+  reading they act on.
+- **The Plan card no longer says "about" the size of your plan.** A 500 GB plan is
+  exactly 500 GB, and the "≈" made an exact number look like a guess.
+- **A clearer line under "Welcome to Hippius".** The app is about your Drive, so the
+  subtitle says so instead of mentioning compute.
+
+### Fixed
+
+- **Hovering the Drive breakdown now tells you what a bar is.** The file type and
+  upload source charts on Overview showed coloured bars with no way to read one;
+  hovering now names the category, its file count and its share, and the rest of
+  the chart dims so you can see how far that category runs.
+- **The file types chart explains its grey bucket**, the same way the upload
+  sources chart already did.
+- **"Sync needs your unlock password" no longer appears when nothing is wrong,
+  and no longer sends you to the sign-in screen.** The notice could stay up on a
+  device that was perfectly fine, and pressing it looked like being signed out.
+  It now checks and disappears on its own, and only asks for your seed phrase
+  when that really is the only way back.
+- **The sync notice and the encryption password dialog are readable in dark
+  mode.** Both were drawn in light colours whatever theme you were using.
+- **Hippius repairs a local database left over from a much older version.** If you
+  had installed Hippius long enough ago, one leftover table could stop the app
+  setting up its local storage at all — so signing in failed every time, on every
+  launch, and reinstalling did not help because the old file was still there. That
+  file is now upgraded on the next launch, with nothing for you to do.
+- **One part of local storage failing can no longer take out the rest.** A single
+  problem used to discard every table, leaving an app that opened normally but
+  could not save anything. Each part is now handled on its own, and if the pieces
+  sign-in depends on are genuinely unavailable Hippius says so instead of failing
+  silently at the end of every sign-in.
+- **The app now tells you about a new version while it is running.** Updates were
+  only ever found when you restarted Hippius or checked by hand, so a copy left
+  open for days never offered one. It now checks in the background and offers the
+  update once, without nagging.
+- **Folders in a cloud drive now show a date.** They showed a dash where the files
+  beside them showed the date they were uploaded; a folder now shows when it first
+  appeared.
+- **Sorting a folder now sorts the whole folder, not just the page you are on.**
+  Sorting by name or size used to reorder only the rows on screen, so the order
+  broke as soon as you turned the page.
+- **Plan charges show their status again.** The Status column in your plan's
+  charge history was blank for completed and paid charges.
+- **Signing in with Google or GitHub no longer runs out of time while you are still
+  signing in.** You had five minutes to finish in the browser, so creating your
+  account or clearing a two-factor prompt could quietly use it up — and once it did,
+  reopening the link from the browser could never work either. The window is now
+  thirty minutes, and Hippius says when a sign-in has expired and that you need to
+  start it again from the app.
+- **A sign-in that fails now tells you why**, instead of always saying "Failed to
+  complete authentication. Please try again." If Google or GitHub refused the
+  request, you see their reason.
+- **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
+  disk image gave you the right-click share menu, but every automatic update after
+  that quietly replaced Hippius with a copy that did not include it — so the feature
+  disappeared and could not be switched back on from Settings, because it was no
+  longer there to switch on. Updates now install the same complete, Apple-checked
+  copy the disk image contains. If yours went missing, reinstall from the disk image
+  once; updates from then on keep it.
+
 ## [0.6.2] - 2026-09-11
 
 ### Added

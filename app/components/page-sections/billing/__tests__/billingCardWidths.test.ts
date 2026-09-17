@@ -9,43 +9,35 @@ const readCode = (rel: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
 
-describe("the billing top row is sized for the two cards in it", () => {
+/**
+ * The billing top row is the balance and the next charge, half each.
+ *
+ * It used to be sized around a third card holding the TAO deposit address:
+ * bounded columns with a floor wide enough for a 48-character SS58, because
+ * a fraction of the row truncated it on a small window and sprawled on a
+ * large one. That card is withdrawn, so the row is sized for the two cards
+ * actually in it.
+ */
+describe("the billing top row", () => {
   const sections = readCode("../BillingSections.tsx");
 
-  // Two cards in a three-column grid each took a THIRD of the row, so the
-  // deposit address was center-truncated on a window with room to spare
-  // while the remaining third went to whitespace.
-  it("no longer reserves a column for a widget that is gone", () => {
+  it("holds the balance and the next charge, and nothing else", () => {
+    expect(sections).toContain("<CreditsWidget />");
+    expect(sections).toContain("<NextChargeCard />");
+    expect(sections).not.toContain("TaoDepositWidget");
+  });
+
+  // Equal halves, so neither card absorbs the spare width on a wide window
+  // and neither is squeezed on a narrow one.
+  it("splits the row evenly rather than bounding either column", () => {
+    expect(sections).toMatch(/@3xl:grid-cols-2/);
+    // The bounded-column shape belonged to the deposit address; carrying it
+    // forward would size this row around a card that is no longer in it.
+    expect(sections).not.toMatch(/grid-cols-\[minmax/);
     expect(sections).not.toMatch(/grid-cols-3/);
   });
 
-  // Its content is a fixed 48-character address plus a copy button, so
-  // it has a width at which it is complete and past which it only adds
-  // empty field. A fraction could not express that: it truncated on a
-  // small window and sprawled on a large one.
-  it("bounds both columns instead of giving either a fraction of the row", () => {
-    expect(sections).toMatch(
-      /@3xl:grid-cols-\[minmax\(0,26rem\)_minmax\(28rem,34rem\)\]/,
-    );
-    // No `fr` anywhere in the row: a fraction is what made one card
-    // absorb every spare pixel on a wide window.
-    expect(sections).not.toMatch(/@3xl:grid-cols-\[[^\]]*fr[^\]]*\]/);
-  });
-
-  // The floor has to clear a full SS58 plus the copy button, or the
-  // measured truncation kicks in again and the bound achieves nothing.
-  // Matched on the DEPOSIT column specifically — the credits column has
-  // no truncation risk and deliberately floors at 0 so it can shrink.
-  it("sets a floor on the deposit column that fits the address", () => {
-    const [, floor] = sections.match(/_minmax\((\d+)rem,\s*\d+rem\)/) ?? [];
-    expect(Number(floor)).toBeGreaterThanOrEqual(26);
-  });
-
-  // The address is fitted by measurement, so widening the card is what
-  // makes it show in full — there is no character count to raise.
-  it("leaves the fitting to the measured truncation", () => {
-    expect(readCode("../TaoDepositWidget.tsx")).toContain(
-      "useCenterTruncatedText",
-    );
+  it("stacks before it splits, so neither card is squeezed", () => {
+    expect(sections).toMatch(/grid-cols-1[\s\S]{0,40}@3xl:grid-cols-2/);
   });
 });

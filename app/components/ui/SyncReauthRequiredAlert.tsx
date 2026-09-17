@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { KeyRound } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useRouter } from "next/navigation";
@@ -55,14 +55,40 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
   variant = "banner",
 }) => {
   const needsReauth = useAtomValue(syncRequiresReauthAtom);
+  const setNeedsReauth = useSetAtom(syncRequiresReauthAtom);
   const setRecoveryCheck = useSetAtom(activeRecoveryCheckAtom);
   const { authType } = useWalletAuth();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
-  if (!needsReauth) return null;
-
   const isOAuth = authType === "oauth";
+
+  // Self-dismiss a stale banner.
+  //
+  // `syncRequiresReauthAtom` is cleared after a successful
+  // `login_with_mnemonic` -- which an OAuth user never performs, so once the
+  // flag was raised it could not come down, and the banner outlived the
+  // condition it described. It is raised during session restore, before the
+  // keychain has rehydrated the mnemonic, so it is routinely raised on a
+  // device that turns out to be perfectly healthy. Re-ask Rust on mount and
+  // stand down when it says local is authoritative.
+  const verifyStillNeeded = useCallback(async () => {
+    try {
+      const check = await checkRecoveryState();
+      if (check.recommendedFlow === "proceed" && check.canDecryptLocal) {
+        setNeedsReauth(false);
+      }
+    } catch {
+      // Leave the banner up: an unreachable server is not evidence that the
+      // device is fine, and the button re-checks anyway.
+    }
+  }, [setNeedsReauth]);
+
+  useEffect(() => {
+    if (needsReauth && isOAuth) void verifyStillNeeded();
+  }, [needsReauth, isOAuth, verifyStillNeeded]);
+
+  if (!needsReauth) return null;
 
   const goToSeedPhraseForm = () => {
     // `?reauth=1` keeps the login page from bouncing an authenticated user
@@ -76,15 +102,24 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
       return;
     }
     // OAuth: ask Rust which recovery flow applies right now. A blob on
-    // the server → Unlock dialog; probe failure → retry dialog; only a
-    // definitive "nothing to unlock" falls back to the seed phrase.
+    // the server → Unlock dialog; probe failure → retry dialog. `proceed`
+    // splits: healthy means the banner is simply stale, and only an
+    // unopenable local mnemonic falls back to the seed phrase.
     setBusy(true);
     try {
       const check = await checkRecoveryState();
-      if (check.recommendedFlow === "proceed") {
-        goToSeedPhraseForm();
-      } else {
+      if (check.recommendedFlow !== "proceed") {
         setRecoveryCheck(check);
+      } else if (check.canDecryptLocal) {
+        // Nothing to unlock and nothing wrong: Rust says local is
+        // authoritative. Sending the user to the sign-in screen here read as
+        // being logged out for no reason.
+        setNeedsReauth(false);
+        toast.success("Sync is unlocked on this device.");
+      } else {
+        // Unopenable local mnemonic with nothing on the server to unlock:
+        // the seed phrase is the only remaining way back in.
+        goToSeedPhraseForm();
       }
     } catch (err) {
       console.error("[SyncReauthRequiredAlert] recovery check failed:", err);
@@ -112,7 +147,9 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
     return (
       <div
         className={cn(
-          "flex items-center gap-2 px-3 py-2 rounded-lg bg-orange-50 border border-orange-200 text-orange-800",
+          "flex items-center gap-2 px-3 py-2 rounded-lg border",
+          "bg-orange-50 border-orange-200 text-orange-800",
+          "dark:bg-orange-500/10 dark:border-orange-500/30 dark:text-orange-200",
           className
         )}
         role="alert"
@@ -134,23 +171,25 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
   return (
     <div
       className={cn(
-        "flex items-start gap-3 p-3 rounded-lg bg-orange-50 border border-orange-200",
+        "flex items-start gap-3 p-3 rounded-lg border",
+        "bg-orange-50 border-orange-200",
+        "dark:bg-orange-500/10 dark:border-orange-500/30",
         className
       )}
       role="alert"
     >
       <div className="flex-shrink-0 mt-0.5">
-        <KeyRound className="size-5 text-orange-600" />
+        <KeyRound className="size-5 text-orange-600 dark:text-orange-300" />
       </div>
       <div className="flex-1">
-        <p className="text-sm font-medium text-orange-800">{title}</p>
-        <p className="text-xs mt-1 text-orange-700">{body}</p>
+        <p className="text-sm font-medium text-orange-800 dark:text-orange-100">{title}</p>
+        <p className="text-xs mt-1 text-orange-700 dark:text-orange-200/80">{body}</p>
       </div>
       <button
         type="button"
         onClick={handleReauth}
         disabled={busy}
-        className="flex-shrink-0 self-center px-3 py-1.5 text-sm font-semibold text-white bg-orange-600 hover:bg-orange-700 rounded-md disabled:opacity-60"
+        className="flex-shrink-0 self-center px-3 py-1.5 text-sm font-semibold text-white bg-orange-600 hover:bg-orange-700 dark:bg-orange-500 dark:hover:bg-orange-400 dark:text-black-500 rounded-md disabled:opacity-60"
       >
         {cta}
       </button>

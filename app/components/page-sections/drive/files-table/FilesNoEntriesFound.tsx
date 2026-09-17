@@ -62,11 +62,11 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
   );
 
   const handlePrimaryClick = useCallback(() => {
-    // No credits — send the user to the plans page to top up. Checked
-    // FIRST so the button copy ("Add Credits") matches the click
-    // destination even when sync isn't configured yet.
+    // Out of room, so send the user to the plans page. Checked FIRST so
+    // the button copy ("View plans") matches the click destination even
+    // when sync isn't configured yet.
     // Storage is sold as a plan, so the way out of a full drive is a
-    // larger plan, not a credit top-up.
+    // larger plan, not a balance top-up.
     if (showStorageFullVariant) {
       router.push(BILLING_ROUTE);
       return;

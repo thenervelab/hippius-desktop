@@ -9,8 +9,16 @@
 //   - for OAuth users, re-run the recovery check and open
 //     `AccountRecoveryDialog` (via `activeRecoveryCheckAtom`) for any
 //     non-`proceed` flow;
-//   - fall back to the seed-phrase form only when Rust answers
-//     `proceed` (definitively nothing to unlock on the server).
+//   - fall back to the seed-phrase form only when Rust answers `proceed`
+//     AND the local mnemonic is unopenable -- the one state where the seed
+//     phrase really is the last way back.
+//
+// `proceed` covers two opposite states and the banner used to treat both as
+// the worst case: a healthy device (local authoritative, mnemonic openable)
+// was sent to the sign-in screen, which reads as being logged out for no
+// reason. Nothing clears the flag for an OAuth user either -- it is raised
+// during session restore before the keychain rehydrates -- so the banner
+// outlived its own condition. It now stands down on its own.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
@@ -40,13 +48,17 @@ vi.mock("@/app/lib/utils/recovery", () => ({
   checkRecoveryState: checkRecoveryStateMock,
 }));
 
-const toastMock = vi.hoisted(() => ({ error: vi.fn() }));
+const toastMock = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 vi.mock("sonner", () => ({ toast: toastMock }));
 
-function makeCheck(flow: RecoveryCheck["recommendedFlow"]): RecoveryCheck {
+function makeCheck(
+  flow: RecoveryCheck["recommendedFlow"],
+  canDecryptLocal = true
+): RecoveryCheck {
   return {
     hasServerBlob: flow === "unlock",
     hasLocalMnemonic: true,
+    canDecryptLocal,
     updatedAt: null,
     recommendedFlow: flow,
   };
@@ -93,6 +105,59 @@ describe("SyncReauthRequiredAlert", () => {
     expect(screen.getByText(/mnemonic seed if you forgot/i)).toBeInTheDocument();
   });
 
+  // `proceed` means two opposite things and the banner used to treat both as
+  // the worst case, sending a perfectly healthy device to the sign-in screen.
+  // A user whose mnemonic was present and openable read that as being logged
+  // out for no reason.
+  it("oauth user on a healthy device: dismisses itself instead of going to login", async () => {
+    authState.authType = "oauth";
+    checkRecoveryStateMock.mockResolvedValue(makeCheck("proceed", true));
+    const store = renderBanner();
+
+    fireEvent.click(screen.getByRole("button", { name: /enter unlock password/i }));
+
+    await waitFor(() => expect(store.get(syncRequiresReauthAtom)).toBe(false));
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(store.get(activeRecoveryCheckAtom)).toBeNull();
+  });
+
+  // The banner is raised during session restore, before the keychain has
+  // rehydrated the mnemonic, and nothing clears it for an OAuth user -- so it
+  // outlived the condition. It now stands down on its own.
+  it("oauth user on a healthy device: stands down on mount without being clicked", async () => {
+    authState.authType = "oauth";
+    checkRecoveryStateMock.mockResolvedValue(makeCheck("proceed", true));
+    const store = renderBanner();
+
+    await waitFor(() => expect(store.get(syncRequiresReauthAtom)).toBe(false));
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  // The other `proceed`: local mnemonic unopenable and nothing on the server
+  // to unlock. The seed phrase really is the only way back, so this one must
+  // keep its existing route.
+  it("oauth user whose local mnemonic is unopenable: still offers the seed-phrase form", async () => {
+    authState.authType = "oauth";
+    checkRecoveryStateMock.mockResolvedValue(makeCheck("proceed", false));
+    const store = renderBanner();
+
+    fireEvent.click(screen.getByRole("button", { name: /enter unlock password/i }));
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/login?reauth=1"));
+    expect(store.get(syncRequiresReauthAtom)).toBe(true);
+  });
+
+  // An unreachable server is not evidence the device is fine.
+  it("keeps the banner up when the recovery probe fails on mount", async () => {
+    authState.authType = "oauth";
+    checkRecoveryStateMock.mockRejectedValue(new Error("offline"));
+    const store = renderBanner();
+
+    await waitFor(() => expect(checkRecoveryStateMock).toHaveBeenCalled());
+    expect(store.get(syncRequiresReauthAtom)).toBe(true);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
   it("oauth user with a server blob: opens the recovery dialog instead of the login form", async () => {
     authState.authType = "oauth";
     const check = makeCheck("unlock");
@@ -115,17 +180,6 @@ describe("SyncReauthRequiredAlert", () => {
 
     await waitFor(() => expect(store.get(activeRecoveryCheckAtom)).toEqual(check));
     expect(pushMock).not.toHaveBeenCalled();
-  });
-
-  it("oauth user with nothing to unlock (proceed): falls back to the seed-phrase form", async () => {
-    authState.authType = "oauth";
-    checkRecoveryStateMock.mockResolvedValue(makeCheck("proceed"));
-    const store = renderBanner();
-
-    fireEvent.click(screen.getByRole("button", { name: /enter unlock password/i }));
-
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/login?reauth=1"));
-    expect(store.get(activeRecoveryCheckAtom)).toBeNull();
   });
 
   it("oauth user with a thrown recovery check: surfaces a toast and keeps the banner actionable", async () => {

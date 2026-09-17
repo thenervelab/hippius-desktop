@@ -21,7 +21,7 @@ import useNotificationSettings, {
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 const EMAIL_ITEMS: { key: keyof EmailSettings; label: string }[] = [
-  { key: "low_credit_alerts", label: "Low credit balance alerts" },
+  { key: "low_credit_alerts", label: "Low account balance alerts" },
   { key: "zero_balance_alerts", label: "Zero balance alerts" },
   { key: "marketing_emails", label: "Marketing emails & newsletter" },
 ];

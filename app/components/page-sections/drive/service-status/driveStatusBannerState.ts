@@ -115,8 +115,8 @@ export function getDriveStatusBanner(
       title: "Your Drive plan could not be renewed",
       description: elsewhere
         ? `The last payment did not go through. Manage this subscription in ${elsewhere} to keep your storage.`
-        : "The last payment did not go through. Top up your credits to keep your storage.",
-      ...(elsewhere ? {} : { action: { label: "Top up credits", href: BILLING_ROUTE } }),
+        : "The last payment did not go through. Top up your account balance to keep your storage.",
+      ...(elsewhere ? {} : { action: { label: "Top up", href: BILLING_ROUTE } }),
     };
   }
 

@@ -22,10 +22,12 @@
 use serde::Serialize;
 // `tauri::Url` is Tauri's re-export of `url::Url`, so the endpoint type matches
 // the plugin's without taking a direct dependency on `url` for one call.
+use std::sync::Mutex;
+use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::utils::config::BundleType;
 use tauri::utils::platform::bundle_type;
-use tauri::{AppHandle, Url};
+use tauri::{AppHandle, Emitter, Url};
 use tauri_plugin_updater::UpdaterExt;
 use tracing::{debug, error, info, warn};
 
@@ -189,6 +191,115 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
         &update.current_version,
         update.body.as_deref().unwrap_or(""),
     )))
+}
+
+/// How often a running app asks its channel whether a newer version exists.
+///
+/// The app only ever checked at startup and on an explicit "check for updates",
+/// so a copy left running for days never heard about a release. That is not a
+/// hypothetical: it is how a release sat uninstalled on the desk of the person
+/// who asked for it.
+///
+/// An hour is the balance. The check is one conditional GET of a manifest, so
+/// the cost is negligible, but the dialog it can raise is an interruption, and
+/// an interruption is not something to hand out every few minutes.
+pub const BACKGROUND_UPDATE_CHECK_INTERVAL: Duration = Duration::from_hours(1);
+
+/// The version already put in front of the user this run, by whichever path
+/// got there first.
+///
+/// Shared rather than owned by the background task, because the task is not
+/// the only thing that opens the dialog. Startup checks on every launch, and
+/// the menu checks on demand. With the memory private to the task, a user who
+/// dismissed the startup dialog got the same version again on the next tick:
+/// the task had announced nothing yet, so as far as it knew this was the first
+/// anyone had heard of it.
+static ANNOUNCED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Record that the user has been shown `version`, so the background check
+/// leaves it alone.
+///
+/// Called by the frontend whenever it opens the update dialog, which is the
+/// one moment that is true regardless of which path opened it. A manual
+/// "check for updates" still shows the dialog every time it is pressed; this
+/// only governs what the unattended timer is allowed to raise.
+#[tauri::command]
+pub fn note_update_prompted(version: String) {
+    if version.is_empty() {
+        return;
+    }
+    if let Ok(mut announced) = ANNOUNCED.lock() {
+        debug!(%version, "user has been shown this version");
+        *announced = Some(version);
+    }
+}
+
+/// Emitted when the background check finds a version it has not yet mentioned.
+///
+/// Carries nothing: the frontend owns the presentation path (notification row,
+/// dialog, install plan) and re-runs its own check, so a payload here would be
+/// a second source of truth for what the user is being offered.
+pub const UPDATE_AVAILABLE_EVENT: &str = "update://available";
+
+/// Whether a discovered version is worth interrupting the user about.
+///
+/// The frontend's `checkForUpdates` opens the dialog whenever an update
+/// exists. That is right for a startup or a button press, and wrong on a
+/// timer: called every hour it would raise a modal every hour, for the same
+/// version, forever, including for somebody who has already said no. So the
+/// timer speaks once per version and then stays quiet.
+///
+/// Deliberately scoped to the process rather than persisted. A restart runs
+/// the startup check, which prompts exactly as it does today; persisting a
+/// "seen" flag here would silently suppress that and change behaviour nobody
+/// asked to change.
+pub fn should_announce(version: &str, already_announced: Option<&str>) -> bool {
+    !version.is_empty() && already_announced != Some(version)
+}
+
+/// Re-check for updates for as long as the app is running.
+///
+/// Emits [`UPDATE_AVAILABLE_EVENT`] when it finds a version it has not already
+/// mentioned this run. Failures are logged and dropped: the app being offline,
+/// or a manifest being briefly unreachable, is the normal case for a check
+/// that runs unattended, and there is nothing the user could usefully do about
+/// it at the moment it happens.
+pub fn spawn_background_update_checks(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            // Sleep FIRST: startup has just checked, so an immediate second
+            // check would be a duplicate request on every launch.
+            tokio::time::sleep(BACKGROUND_UPDATE_CHECK_INTERVAL).await;
+
+            match check_for_update(app.clone()).await {
+                Ok(Some(update)) => {
+                    // Lock, decide and record in one go: the frontend writes
+                    // the same value the moment it opens the dialog.
+                    let announce = match ANNOUNCED.lock() {
+                        Ok(mut announced) => {
+                            let yes = should_announce(&update.version, announced.as_deref());
+                            if yes {
+                                *announced = Some(update.version.clone());
+                            }
+                            yes
+                        }
+                        // A poisoned lock must not turn into silence: being
+                        // told twice is better than never being told.
+                        Err(_) => true,
+                    };
+                    if announce {
+                        info!(version = %update.version, "background check found a new version");
+                        let _ = app.emit(UPDATE_AVAILABLE_EVENT, ());
+                    } else {
+                        debug!(version = %update.version, "already shown this version");
+                    }
+                }
+                Ok(None) => debug!("background check: up to date"),
+                // Offline, DNS, a 5xx on the manifest. Next tick tries again.
+                Err(err) => debug!("background update check failed: {err}"),
+            }
+        }
+    });
 }
 
 /// Human name of a lane, for copy the user reads.
@@ -606,6 +717,115 @@ pub fn current_release_channel() -> ReleaseChannel {
 
 #[cfg(test)]
 mod tests {
+    /// `ANNOUNCED` is one process-global slot, and cargo runs these in
+    /// parallel by default, so a test that writes it can land between another
+    /// test's read and its assertion. Same hazard `HOME_LOCK` exists for.
+    /// Every test that touches the slot takes this first and clears it, so
+    /// they are order-independent rather than merely lucky.
+    static ANNOUNCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_clean_announced<T>(body: impl FnOnce() -> T) -> T {
+        let guard = ANNOUNCE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        *super::ANNOUNCED.lock().expect("lock") = None;
+        let out = body();
+        drop(guard);
+        out
+    }
+
+    /// The rule that stops a timer becoming a nuisance. The frontend opens the
+    /// dialog whenever an update exists, so without this the hourly check
+    /// would raise the same modal every hour, forever, at somebody who has
+    /// already said no.
+    #[test]
+    fn a_version_is_announced_once_and_then_left_alone() {
+        assert!(super::should_announce("0.6.4", None), "first sighting must be announced");
+        assert!(
+            !super::should_announce("0.6.4", Some("0.6.4")),
+            "the same version must not be announced twice"
+        );
+    }
+
+    /// The behaviour that matters most, and the one the first cut got wrong.
+    ///
+    /// Startup shows the dialog; the user skips it. A minute later the
+    /// background check must stay quiet. It only does because the frontend
+    /// records what it showed into the SAME place the task reads, rather than
+    /// the task keeping a private memory that starts empty and knows nothing
+    /// about the dialog the user just closed.
+    #[test]
+    fn a_version_dismissed_at_startup_is_not_raised_again_by_the_timer() {
+        with_clean_announced(|| {
+            super::note_update_prompted("0.6.2".into());
+            let announced = super::ANNOUNCED.lock().expect("lock");
+            assert!(
+                !super::should_announce("0.6.2", announced.as_deref()),
+                "the timer must not re-raise a version the startup dialog already showed"
+            );
+        });
+    }
+
+    /// The case that keeps a long-running app current without nagging it.
+    ///
+    /// A user on 0.6.1 is offered 0.6.2 and turns it down. Hours later 0.6.3
+    /// is published. They must be offered THAT, because declining one release
+    /// is not a standing refusal of every release after it.
+    ///
+    /// Distinct from the pure-function test below: this goes through the same
+    /// shared slot the frontend writes when it opens the dialog, which is the
+    /// path that actually runs.
+    #[test]
+    fn a_release_after_the_one_the_user_declined_is_still_offered() {
+        with_clean_announced(|| {
+            // The user was shown 0.6.2 and dismissed it.
+            super::note_update_prompted("0.6.2".into());
+
+            let announced = super::ANNOUNCED.lock().expect("lock");
+            assert!(
+                !super::should_announce("0.6.2", announced.as_deref()),
+                "0.6.2 was already declined; offering it again is nagging"
+            );
+            assert!(
+                super::should_announce("0.6.3", announced.as_deref()),
+                "0.6.3 is a release the user has never been shown, and must be offered"
+            );
+        });
+    }
+
+    /// An empty version must not latch the shared slot, or the real version
+    /// that follows would be suppressed by a non-answer.
+    #[test]
+    fn noting_an_empty_version_records_nothing() {
+        with_clean_announced(|| {
+            let before = super::ANNOUNCED.lock().expect("lock").clone();
+            super::note_update_prompted(String::new());
+            let after = super::ANNOUNCED.lock().expect("lock").clone();
+            assert_eq!(before, after);
+        });
+    }
+
+    /// A newer release landing while the app is still running is the whole
+    /// point: having mentioned 0.6.4 must not silence 0.6.5.
+    #[test]
+    fn a_newer_version_is_announced_even_after_an_earlier_one() {
+        assert!(super::should_announce("0.6.5", Some("0.6.4")));
+    }
+
+    /// An empty version is not a release. It would otherwise be announced
+    /// once and then latch, suppressing the real version that follows.
+    #[test]
+    fn an_empty_version_is_never_announced() {
+        assert!(!super::should_announce("", None));
+        assert!(!super::should_announce("", Some("0.6.4")));
+    }
+
+    /// An hourly cadence is a deliberate balance: the check is one manifest
+    /// GET, but the dialog it can raise is an interruption. A value in
+    /// minutes here would mean interrupting people repeatedly.
+    #[test]
+    fn the_background_interval_is_an_hour() {
+        assert_eq!(super::BACKGROUND_UPDATE_CHECK_INTERVAL.as_secs(), 3600);
+    }
+
     use super::*;
 
     /// Wire-shape pins. The frontend reads these keys and there is no codegen
@@ -656,6 +876,26 @@ mod tests {
         })
         .expect("serialize");
         assert_eq!(unknown, serde_json::json!({"bytesDone": 12, "bytesTotal": null}));
+    }
+
+    /// A stable user and a beta user must be told about their own lane's
+    /// releases and not each other's. The background check asks
+    /// `release_channel::current()`, so the routing is only ever as good as
+    /// these URLs being distinct and pointed at the right thing.
+    #[test]
+    fn each_public_lane_checks_its_own_manifest() {
+        let production = ReleaseChannel::Production.manifest_url().expect("production manifest");
+        let beta = ReleaseChannel::Beta.manifest_url().expect("beta manifest");
+
+        assert_ne!(production, beta, "a lane checking the other's manifest offers the wrong builds");
+        // `releases/latest` resolves to the newest NON-prerelease, which is
+        // the production release and never a beta.
+        assert!(production.contains("/releases/latest/"), "production: {production}");
+        assert!(
+            !beta.contains("/releases/latest/"),
+            "beta publishes prereleases, which /releases/latest never resolves to: {beta}"
+        );
+        assert!(beta.contains("beta"), "beta manifest should name its own lane: {beta}");
     }
 
     /// Behavioural pin for the rule this module exists to enforce.

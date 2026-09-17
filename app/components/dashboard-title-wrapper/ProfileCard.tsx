@@ -22,6 +22,9 @@ import {
   Apple,
   WalletMinimal,
 } from "@/components/ui/icons";
+import { Monitor, Moon, Sun } from "lucide-react";
+import { useAppTheme } from "@/app/lib/theme-context";
+import { THEME_OPTIONS, type ThemePreference } from "@/app/lib/theme";
 import { resolveAccountIdentity } from "./accountIdentity";
 import {
   DropdownMenu,
@@ -45,6 +48,79 @@ interface ProfileCardProps {
   // interfere with the in-flight transition.
   centered?: boolean;
 }
+
+/**
+ * Light, dark and system, in the account menu.
+ *
+ * The switch lived only in Settings -> Appearance, which is two clicks and a
+ * page away from wherever somebody notices the theme is wrong. It stays there
+ * too: this is the same preference read through the same context, not a
+ * second one, so the two can never disagree.
+ *
+ * A row of three rather than a toggle, because the preference has three
+ * states and a toggle can only offer two. "System" is the default and the one
+ * a toggle would quietly destroy the moment it was touched.
+ *
+ * It sits directly above the address, so the menu reads settings-first and
+ * the destructive item stays last.
+ */
+const THEME_ICON: Record<ThemePreference, typeof Sun> = {
+  light: Sun,
+  dark: Moon,
+  system: Monitor,
+};
+
+export const ThemeMenuRow: React.FC = () => {
+  const { isLoaded, themePreference, setThemePreference } = useAppTheme();
+  // The static-export prerender cannot know the stored preference, and
+  // `isLoaded` alone is not enough: an outer boundary can hydrate and set it
+  // before this row hydrates, so the first client render already had a
+  // preference the prerendered markup did not. React does not patch that up,
+  // which leaves the wrong button looking selected until something
+  // re-renders. A mount flag owned by this row is false in both places by
+  // construction, so the two always agree.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const ready = mounted && isLoaded;
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Theme"
+      className="flex items-center gap-1 px-3 py-1.5"
+    >
+      <span className="flex-1 font-geist text-[13px] font-medium leading-4 tracking-[-0.26px] text-[#52525c] dark:text-[#a3a3a3]">
+        Theme
+      </span>
+      <span className="flex items-center gap-0.5 rounded-[8px] bg-[#f1f1f1] p-0.5 dark:bg-[#2c2c2c]">
+        {THEME_OPTIONS.map((option) => {
+          const Icon = THEME_ICON[option.value];
+          const selected = ready && themePreference === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-label={option.label}
+              title={option.label}
+              disabled={!ready}
+              onClick={() => setThemePreference(option.value)}
+              className={cn(
+                "flex size-6 items-center justify-center rounded-[6px] transition-colors",
+                selected
+                  ? "bg-white text-[#3f3f46] shadow-[0px_1px_2px_0px_rgba(0,0,0,0.08)] dark:bg-[#1e1e1e] dark:text-white"
+                  : "text-[#52525c] hover:text-[#3f3f46] dark:text-[#a3a3a3] dark:hover:text-white",
+              )}
+            >
+              <Icon className="size-3.5" />
+            </button>
+          );
+        })}
+      </span>
+    </div>
+  );
+};
 
 const ProfileCard: React.FC<ProfileCardProps> = ({
   collapsed = false,
@@ -377,6 +453,9 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             <div className="mx-1 mb-1 h-px bg-[#e3e3e3] dark:bg-[#313131]" />
           </>
         )}
+
+        <ThemeMenuRow />
+        <div className="mx-1 my-1 h-px bg-[#e3e3e3] dark:bg-[#313131]" />
 
         {/* The address IS the row: wallet mark → address → copy/check.
             Clicking anywhere on it copies the full SS58, and the handler
