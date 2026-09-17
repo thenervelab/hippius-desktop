@@ -717,6 +717,21 @@ pub fn current_release_channel() -> ReleaseChannel {
 
 #[cfg(test)]
 mod tests {
+    /// `ANNOUNCED` is one process-global slot, and cargo runs these in
+    /// parallel by default, so a test that writes it can land between another
+    /// test's read and its assertion. Same hazard `HOME_LOCK` exists for.
+    /// Every test that touches the slot takes this first and clears it, so
+    /// they are order-independent rather than merely lucky.
+    static ANNOUNCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_clean_announced<T>(body: impl FnOnce() -> T) -> T {
+        let guard = ANNOUNCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        *super::ANNOUNCED.lock().expect("lock") = None;
+        let out = body();
+        drop(guard);
+        out
+    }
+
     /// The rule that stops a timer becoming a nuisance. The frontend opens the
     /// dialog whenever an update exists, so without this the hourly check
     /// would raise the same modal every hour, forever, at somebody who has
@@ -739,22 +754,53 @@ mod tests {
     /// about the dialog the user just closed.
     #[test]
     fn a_version_dismissed_at_startup_is_not_raised_again_by_the_timer() {
-        super::note_update_prompted("0.6.2".into());
-        let announced = super::ANNOUNCED.lock().expect("lock");
-        assert!(
-            !super::should_announce("0.6.2", announced.as_deref()),
-            "the timer must not re-raise a version the startup dialog already showed"
-        );
+        with_clean_announced(|| {
+            super::note_update_prompted("0.6.2".into());
+            let announced = super::ANNOUNCED.lock().expect("lock");
+            assert!(
+                !super::should_announce("0.6.2", announced.as_deref()),
+                "the timer must not re-raise a version the startup dialog already showed"
+            );
+        });
+    }
+
+    /// The case that keeps a long-running app current without nagging it.
+    ///
+    /// A user on 0.6.1 is offered 0.6.2 and turns it down. Hours later 0.6.3
+    /// is published. They must be offered THAT, because declining one release
+    /// is not a standing refusal of every release after it.
+    ///
+    /// Distinct from the pure-function test below: this goes through the same
+    /// shared slot the frontend writes when it opens the dialog, which is the
+    /// path that actually runs.
+    #[test]
+    fn a_release_after_the_one_the_user_declined_is_still_offered() {
+        with_clean_announced(|| {
+            // The user was shown 0.6.2 and dismissed it.
+            super::note_update_prompted("0.6.2".into());
+
+            let announced = super::ANNOUNCED.lock().expect("lock");
+            assert!(
+                !super::should_announce("0.6.2", announced.as_deref()),
+                "0.6.2 was already declined; offering it again is nagging"
+            );
+            assert!(
+                super::should_announce("0.6.3", announced.as_deref()),
+                "0.6.3 is a release the user has never been shown, and must be offered"
+            );
+        });
     }
 
     /// An empty version must not latch the shared slot, or the real version
     /// that follows would be suppressed by a non-answer.
     #[test]
     fn noting_an_empty_version_records_nothing() {
-        let before = super::ANNOUNCED.lock().expect("lock").clone();
-        super::note_update_prompted(String::new());
-        let after = super::ANNOUNCED.lock().expect("lock").clone();
-        assert_eq!(before, after);
+        with_clean_announced(|| {
+            let before = super::ANNOUNCED.lock().expect("lock").clone();
+            super::note_update_prompted(String::new());
+            let after = super::ANNOUNCED.lock().expect("lock").clone();
+            assert_eq!(before, after);
+        });
     }
 
     /// A newer release landing while the app is still running is the whole
@@ -840,6 +886,26 @@ mod tests {
     /// staging builds resume checking SOME lane — and with one shared signing
     /// key that lane's manifest would verify and install.
     #[test]
+    /// A stable user and a beta user must be told about their own lane's
+    /// releases and not each other's. The background check asks
+    /// `release_channel::current()`, so the routing is only ever as good as
+    /// these URLs being distinct and pointed at the right thing.
+    #[test]
+    fn each_public_lane_checks_its_own_manifest() {
+        let production = ReleaseChannel::Production.manifest_url().expect("production manifest");
+        let beta = ReleaseChannel::Beta.manifest_url().expect("beta manifest");
+
+        assert_ne!(production, beta, "a lane checking the other's manifest offers the wrong builds");
+        // `releases/latest` resolves to the newest NON-prerelease, which is
+        // the production release and never a beta.
+        assert!(production.contains("/releases/latest/"), "production: {production}");
+        assert!(
+            !beta.contains("/releases/latest/"),
+            "beta publishes prereleases, which /releases/latest never resolves to: {beta}"
+        );
+        assert!(beta.contains("beta"), "beta manifest should name its own lane: {beta}");
+    }
+
     fn staging_has_no_manifest_to_check() {
         assert_eq!(ReleaseChannel::Staging.manifest_url(), None);
         assert!(ReleaseChannel::Production.manifest_url().is_some());
