@@ -15,8 +15,6 @@
 // per-branch value either conflicts on every promotion or rides into
 // production through a hunk nobody read.
 
-import { enabledFrom } from "@/app/lib/buildChannel";
-
 /**
  * Switch the home-page Credit Usage chart and the Total Credit Used
  * tile between the wallet-wide marketplace credits source (`false`,
@@ -113,26 +111,27 @@ export const VM_VPN_ENABLED = false;
  * silently anyway (the backend maps the unmounted routes to
  * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches and hides).
  *
- * **Staging only.** The flow spans three systems: invites are minted and
- * accepted at the console, so it completes only where the server fleet
- * runs `HCFS_FEATURE_SHARED_DRIVES=1` AND the console's `/invite/{token}`
- * page is live — and the console's own flag is development-only for the
- * same reason. Staging is where all three line up, so that is where the
- * surface is on.
+ * **On.** The surface is reachable on every lane, including production.
  *
- * Beta and production stay dark deliberately. It was left `true` through
- * 0.6.0 without ever being announced, which left the app contradicting
- * itself: the Drive plan cards grey out the shared team drive perk as
- * "coming soon" while the sharing surfaces were reachable. Widen this to
- * `enabledFrom("beta")` when the console and the server fleet are ready
- * to be used by testers, and to `true` at launch.
+ * Two gates still stand in front of it, which is what makes that safe:
  *
- * Safe on a feature-off server regardless: the backend maps the unmounted
- * routes to `NotReady(SHARED_DRIVES_UNAVAILABLE)` and the FE hides the
- * surface rather than erroring, so the gate widening ahead of a fleet
- * never shows a flow that cannot complete.
+ *   - a plan without the perk never sees "Share drive" at all
+ *     (`planSupportsSharedDrives`), and the server refuses a mint with
+ *     `shared_drives_not_entitled` even if it somehow did;
+ *   - a server fleet without `HCFS_FEATURE_SHARED_DRIVES=1` answers the
+ *     unmounted routes as `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the
+ *     UI hides rather than erroring on.
+ *
+ * So the worst case on a lane whose fleet is not ready is a menu item that
+ * opens a modal saying the feature is not available — not a broken flow.
+ *
+ * Worth remembering why it was dark: it was left `true` through 0.6.0 without
+ * ever being announced, which left the app contradicting itself — the Drive
+ * plan cards grey out the shared team drive perk as "coming soon" while the
+ * sharing surfaces were reachable. Check that copy still matches before this
+ * reaches production.
  */
-export const SHARED_DRIVES_ENABLED = enabledFrom("staging");
+export const SHARED_DRIVES_ENABLED = true;
 
 /**
  * API token settings. When `false`, the surface is fully invisible: the
