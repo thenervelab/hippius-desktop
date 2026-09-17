@@ -21,6 +21,9 @@ function localRow(over: Partial<SyncFolder> = {}): FolderRow {
     presence: "on-this-device",
     status: folder.status,
     lastModified: 1,
+    // Carried through so a row can be a member drive: `toFolderRows` copies
+    // this from the sync folder, and the shared badge is what reads it.
+    ownerSs58: folder.ownerSs58,
     local: folder,
   };
 }
@@ -69,5 +72,70 @@ describe("FolderList hosted-root note", () => {
     expect(note).toHaveTextContent("Documents");
     expect(note).toHaveTextContent("special");
     expect(note).not.toHaveTextContent("download each file");
+  });
+});
+
+const OWNER = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+
+describe("shared drives in the list", () => {
+  // A drive belonging to another account rendered identically to an owned one,
+  // so there was nothing to say whose it was or what the viewer could do.
+  it("marks a drive owned by another account", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+      />,
+    );
+    expect(screen.getByText(/Shared/)).toBeInTheDocument();
+  });
+
+  it("leaves an owned drive unmarked", () => {
+    render(<FolderList rows={[localRow({ id: "own", folderName: "Mine" })]} />);
+    expect(screen.queryByText(/Shared/)).not.toBeInTheDocument();
+  });
+
+  it("names the role when the membership listing has arrived", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+        rolesByLabel={new Map([["team-docs", "manager" as const]])}
+      />,
+    );
+    expect(screen.getByText("Shared · Manager")).toBeInTheDocument();
+  });
+
+  // Rows and roles come from different sources. Showing "Shared" alone beats
+  // withholding the badge until a second request lands, which would make the
+  // row flicker between two meanings.
+  it("still marks the drive when its role has not arrived", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+        rolesByLabel={new Map()}
+      />,
+    );
+    expect(screen.getByText("Shared")).toBeInTheDocument();
+  });
+
+  // The join is by local label, which both sides agree on: a row's folderName
+  // is `sync_paths.label`, and so is a membership's localLabel.
+  it("does not borrow another drive's role", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+        rolesByLabel={new Map([["a-different-drive", "manager" as const]])}
+      />,
+    );
+    expect(screen.getByText("Shared")).toBeInTheDocument();
+    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+  });
+
+  it("names the owner in the badge tooltip", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+      />,
+    );
+    expect(screen.getByTitle(`Shared by ${OWNER}`)).toBeInTheDocument();
   });
 });

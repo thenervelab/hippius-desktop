@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import { Cloud, CloudOff } from "lucide-react";
+import { Cloud, CloudOff, Users } from "lucide-react";
 
 import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import TableActionMenu, { type ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { SettingsCard } from "@/components/page-sections/settings/SettingsCard";
+import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
+import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import FolderRowSkeleton from "@/components/page-sections/settings/multi-folder-sync/FolderRowSkeleton";
 import HostedRootNote from "@/components/page-sections/settings/multi-folder-sync/HostedRootNote";
@@ -41,6 +43,34 @@ const Dot = () => (
  * now, `Cloud` for one another device is syncing: both are "not here", but
  * only one of them is being kept up to date by something.
  */
+/**
+ * The shared mark.
+ *
+ * A drive that belongs to another account rendered identically to an owned
+ * one — same icon, same name — so there was nothing to say whose it was or
+ * what the viewer could do in it. The row already carried `ownerSs58`; this
+ * is what reads it.
+ *
+ * The role rides alongside when it is known. When it is not, the badge still
+ * says "Shared": that a drive belongs to someone else is a fact the row has
+ * on its own, and withholding it until a second request lands would make the
+ * list flicker between two meanings.
+ */
+const SharedMark: React.FC<{ row: FolderRow; role?: DriveRole }> = ({ row, role }) => {
+  const sharing = driveRowSharing({ ownerSs58: row.ownerSs58, role });
+  if (!sharing.isShared) return null;
+
+  return (
+    <span
+      title={sharing.title ?? undefined}
+      className="flex flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-[#1F50BD]/30 bg-[#1F50BD]/10 px-1.5 py-0.5 text-[11px] font-medium text-[#1F50BD] dark:border-[#6b93ea]/30 dark:bg-[#6b93ea]/10 dark:text-[#9dbaf2]"
+    >
+      <Users className="size-3" aria-hidden="true" />
+      {sharing.roleLabel ? `Shared · ${sharing.roleLabel}` : "Shared"}
+    </span>
+  );
+};
+
 const PresenceMark: React.FC<{ row: FolderRow }> = ({ row }) => {
   if (!isCloudOnly(row.presence)) return null;
   const Mark = row.presence === "not-synced-here" ? CloudOff : Cloud;
@@ -92,6 +122,14 @@ export interface FolderListProps {
   buildActions?: (row: FolderRow) => ActionItem[];
   /** Shown when there are no folders at all. */
   emptyState?: React.ReactNode;
+  /**
+   * Role per local drive label, for drives shared with this account.
+   *
+   * Optional and joined by label: rows come from `sync_paths` and roles from
+   * the membership listing, so a row can render before its role arrives. A
+   * missing entry shows the shared badge without a role rather than guessing.
+   */
+  rolesByLabel?: ReadonlyMap<string, DriveRole>;
 }
 
 /**
@@ -115,6 +153,7 @@ const FolderList: React.FC<FolderListProps> = ({
   onOpenRow,
   buildActions,
   emptyState,
+  rolesByLabel,
 }) => {
   // Right-click opens the SAME menu as the three dots. The sectioned list
   // it replaced offered both, and they were built from one resolver so
@@ -166,6 +205,7 @@ const FolderList: React.FC<FolderListProps> = ({
                   <span className="truncate font-geist text-[14px] font-medium text-[#0A0A0A] dark:text-white">
                     {row.folderName}
                   </span>
+                  <SharedMark row={row} role={rolesByLabel?.get(row.folderName)} />
                   <PresenceMark row={row} />
                   <StatusPill row={row} />
 

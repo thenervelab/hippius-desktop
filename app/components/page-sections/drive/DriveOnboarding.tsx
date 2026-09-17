@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -81,6 +82,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const driveStatuses = useAtomValue(driveStatusesAtom);
+  const sharedDriveRoles = useSharedDriveRoles();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -609,6 +611,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             headings; what they said now rides on each row as a cloud
             mark and a short label. */}
         <FolderList
+          rolesByLabel={sharedDriveRoles}
           rows={folderRows}
           isLoading={isLoading}
           headerAction={

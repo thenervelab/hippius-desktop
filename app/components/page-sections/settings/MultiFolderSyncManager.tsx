@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
@@ -70,6 +71,7 @@ function openTarget(row: FolderRow): string {
 }
 
   const router = useRouter();
+  const sharedDriveRoles = useSharedDriveRoles();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -548,6 +550,7 @@ function openTarget(row: FolderRow): string {
             folder list at all. Opening a row leaves Settings for the Drive
             page, which is where a folder's contents live. */}
         <FolderList
+          rolesByLabel={sharedDriveRoles}
           rows={toFolderRows(syncFolders, remoteFolders)}
           isLoading={isLoading}
           headerAction={
