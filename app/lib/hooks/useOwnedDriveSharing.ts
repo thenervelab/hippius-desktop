@@ -53,24 +53,48 @@ export function useOwnedDriveSharing(
     void (async () => {
       const entries = await Promise.all(
         ownLabels.map(async (label) => {
-          try {
-            const [members, invites] = await Promise.all([
-              listDriveMembers(label),
-              listDriveInvites(label),
-            ]);
-            return [
-              label,
-              {
-                memberCount: members.length,
-                liveInviteCount: invites.filter((i) => i.valid && !i.revoked).length,
-              },
-            ] as const;
-          } catch (err) {
-            if (!isSharedDrivesUnavailable(err)) {
-              console.warn(`[useOwnedDriveSharing] ${label} failed:`, err);
+          // SETTLED, not `all`. The two listings answer independently and one
+          // must not erase the other: `/invites` is a newer route than
+          // `/members`, so a server that serves members but not invites would
+          // otherwise drop the drive entirely and hide a badge for people who
+          // have demonstrably joined.
+          const [membersResult, invitesResult] = await Promise.allSettled([
+            listDriveMembers(label),
+            listDriveInvites(label),
+          ]);
+
+          for (const result of [membersResult, invitesResult]) {
+            if (
+              result.status === "rejected" &&
+              !isSharedDrivesUnavailable(result.reason)
+            ) {
+              console.warn(`[useOwnedDriveSharing] ${label}:`, result.reason);
             }
+          }
+
+          // Both failing means we know nothing about this drive, which is not
+          // the same as knowing it is private -- leave it out of the map.
+          if (
+            membersResult.status === "rejected" &&
+            invitesResult.status === "rejected"
+          ) {
             return null;
           }
+
+          return [
+            label,
+            {
+              memberCount:
+                membersResult.status === "fulfilled"
+                  ? membersResult.value.length
+                  : 0,
+              liveInviteCount:
+                invitesResult.status === "fulfilled"
+                  ? invitesResult.value.filter((i) => i.valid && !i.revoked)
+                      .length
+                  : 0,
+            },
+          ] as const;
         }),
       );
       if (cancelled) return;

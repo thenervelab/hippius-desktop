@@ -214,7 +214,11 @@ const FolderList: React.FC<FolderListProps> = ({
     >
       {isLoading ? (
         <div className="flex flex-col">
-          {[0, 1, 2].map((i) => (
+          {/* Five, not three: three left a short stub of a card that read as
+              "you have three folders" mid-load and then jumped. Five fills
+              the space a typical list occupies, so the swap to real rows is
+              a fill rather than a resize. */}
+          {[0, 1, 2, 3, 4].map((i) => (
             <FolderRowSkeleton key={i} />
           ))}
         </div>
