@@ -250,9 +250,11 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # The script fails the build when the secret carries no INDEXER_API_KEY —
-      # without it the app renders indexer-backed screens as zeros rather than
-      # errors, so a broken beta build looks healthy to users.
+      # The script ALLOWLISTS: only HIPPIUS_INDEXER_URL and HIPPIUS_CONSOLE_BASE_URL
+      # survive out of the secret. Everything in this file ships inside the installer
+      # and can be unzipped back out, and the secret is hand-maintained and still
+      # carries INDEXER_API_KEY -- which the app stopped reading, but which is still a
+      # live operator credential. Filtering here is what makes that not ship.
       - name: Create src-tauri/.env
         shell: bash
         env:

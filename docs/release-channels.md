@@ -294,10 +294,13 @@ Corollary for local work: point a dev build at another console by putting
 ## Secrets each lane needs
 
 Shared by all three: `HCFS_DEPLOY_KEY_B64` (read access to the private `thenervelab/hcfs`),
-`TAURI_ENV_FILE` (full contents of `src-tauri/.env`, and it **must** carry
-`INDEXER_API_KEY` — `scripts/write-tauri-env.sh` fails the build otherwise,
-because a missing key makes every indexer-backed screen render a confident zero
-instead of an error), and the six `APPLE_*` secrets for signing + notarization.
+`TAURI_ENV_FILE` (contents for `src-tauri/.env`; the file is required only because
+`tauri.conf.json` bundles it as a resource, and every value in it is optional).
+`scripts/write-tauri-env.sh` allowlists `HIPPIUS_INDEXER_URL` and
+`HIPPIUS_CONSOLE_BASE_URL` out of it and drops everything else, so a leftover
+`INDEXER_API_KEY` in that secret is not shipped. The secret is still worth
+cleaning, but nothing depends on remembering to. Plus the six `APPLE_*` secrets
+for signing + notarization.
 
 Also shared by all three: `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. There are no per-lane signing secrets —

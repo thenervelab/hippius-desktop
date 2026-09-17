@@ -91,7 +91,7 @@ async fn cached_drive_snapshots(state: &crate::app_state::AppState, account_id: 
 /// [`MAX_PAGES`] with a warning rather than looping forever if the
 /// indexer ever returns a runaway count.
 async fn fetch_all_drive_snapshots(state: &crate::app_state::AppState, account_id: &str) -> Result<Vec<DriveStorageSnapshot>, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let indexer = IndexerClient::for_session(state, state.api_client.clone())?;
     let limit_str = PAGE_LIMIT.to_string();
     let mut all = Vec::new();
 
@@ -224,7 +224,7 @@ fn render_storage_points(dates: &[NaiveDate], by_day: &BTreeMap<NaiveDate, f64>,
 #[tauri::command]
 pub async fn get_drive_storage_chart(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     range: String,
 ) -> Result<Vec<ChartPoint>, AppError> {
     let snapshots = cached_drive_snapshots(&state, &account_id).await?;
