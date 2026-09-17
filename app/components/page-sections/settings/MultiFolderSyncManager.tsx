@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
+import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
@@ -44,7 +45,7 @@ import { buildFolderActions } from "@/components/page-sections/drive/folder-list
 import { SYNC_FOLDER_LABEL } from "@/components/page-sections/drive/uploadActions";
 import { driveFolderRoute } from "@/app/lib/routes";
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import {
   SharedWithMeSection,
   RemoveFolderDialog,
@@ -74,6 +75,7 @@ function openTarget(row: FolderRow): string {
   const router = useRouter();
   const sharedDriveRoles = useSharedDriveRoles();
   const sharedDrivesInPlan = useSharedDrivesInPlan();
+  const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -572,6 +574,16 @@ function openTarget(row: FolderRow): string {
           buildActions={(row) =>
             buildFolderActions(row, {
               planSupportsSharedDrives: sharedDrivesInPlan,
+              onShareDrive: (folder) =>
+                setShareDriveTarget({
+                  label: folder.folderName,
+                  folderName: folder.folderName,
+                }),
+              onShareRemoteDrive: (folder) =>
+                setShareDriveTarget({
+                  label: folder.folderName,
+                  folderName: folder.folderName,
+                }),
               onOpen: (row) =>
                 router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device")),
               onPause: (folder) => setPauseDialog({ open: true, folder }),

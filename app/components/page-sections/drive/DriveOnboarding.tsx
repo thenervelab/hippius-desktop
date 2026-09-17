@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
+import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -59,7 +60,7 @@ import {
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 
 interface DriveOnboardingProps {
   // Fired when a folder is added or a remote folder is synced. `newLabel`
@@ -85,6 +86,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const driveStatuses = useAtomValue(driveStatusesAtom);
   const sharedDriveRoles = useSharedDriveRoles();
   const sharedDrivesInPlan = useSharedDrivesInPlan();
+  const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -577,6 +579,16 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const buildRowActions = (row: FolderRow) =>
     buildFolderActions(row, {
       planSupportsSharedDrives: sharedDrivesInPlan,
+      onShareDrive: (folder) =>
+        setShareDriveTarget({
+          label: folder.folderName,
+          folderName: folder.folderName,
+        }),
+      onShareRemoteDrive: (folder) =>
+        setShareDriveTarget({
+          label: folder.folderName,
+          folderName: folder.folderName,
+        }),
       onOpen: handleOpenRow,
       onPause: (folder) => setPauseDialog({ open: true, folder }),
       onResume: (folder) => void handleResumeSync(folder),

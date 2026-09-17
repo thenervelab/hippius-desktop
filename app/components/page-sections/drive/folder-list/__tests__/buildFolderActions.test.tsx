@@ -174,3 +174,37 @@ describe("a menu click stays in the menu", () => {
   });
 });
 
+describe("Share drive reachability", () => {
+  // The item was gated on a handler no call site ever passed, so it could
+  // never appear -- the whole feature was unreachable from the folder list.
+  it("offers Share drive on an own local drive when a handler is wired", () => {
+    const items = buildFolderActions(localRow(), {
+      onShareDrive: vi.fn(),
+      planSupportsSharedDrives: true,
+    });
+    expect(items.map((i) => i.itemTitle)).toContain("Share drive…");
+  });
+
+  // A drive owned on the server but not synced HERE -- synced from another
+  // machine, or never synced locally. Sharing needs no local row.
+  it("offers Share drive on a cloud-only drive this account owns", () => {
+    const items = buildFolderActions(remoteRow(), {
+      onShareRemoteDrive: vi.fn(),
+      planSupportsSharedDrives: true,
+    });
+    expect(items.map((i) => i.itemTitle)).toContain("Share drive…");
+  });
+
+  it("hides it on either row when the plan does not include shared drives", () => {
+    const local = buildFolderActions(localRow(), {
+      onShareDrive: vi.fn(),
+      planSupportsSharedDrives: false,
+    });
+    const remote = buildFolderActions(remoteRow(), {
+      onShareRemoteDrive: vi.fn(),
+      planSupportsSharedDrives: false,
+    });
+    expect(local.map((i) => i.itemTitle)).not.toContain("Share drive…");
+    expect(remote.map((i) => i.itemTitle)).not.toContain("Share drive…");
+  });
+});

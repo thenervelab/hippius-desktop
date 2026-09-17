@@ -41,6 +41,12 @@ export interface FolderActionHandlers {
    * known yet", which permits the item — see `resolveFolderMenuPlan`.
    */
   planSupportsSharedDrives?: boolean;
+  /**
+   * Share a drive that exists on the server but is not synced on this device.
+   * Separate from `onShareDrive` only because the two branches hold different
+   * folder shapes; both open the same modal.
+   */
+  onShareRemoteDrive?: (folder: RemoteFolder) => void;
 }
 
 /**
@@ -150,6 +156,23 @@ export function buildFolderActions(
       icon: <FolderSearch className="size-4" />,
       itemTitle: "Choose what syncs…",
       onItemClick: () => handlers.onBrowseRemote?.(folder),
+    });
+  }
+  // A drive listed here is one this account owns on the server that is not
+  // synced on THIS device -- synced from another machine, or never synced
+  // locally. Sharing it needs no local row: the invite is metadata plus a
+  // folder mnemonic derived from the master and the label. Withholding the
+  // item here meant an owner could not invite anyone to most of their drives
+  // from a second machine.
+  if (
+    SHARED_DRIVES_ENABLED &&
+    (handlers.planSupportsSharedDrives ?? true) &&
+    handlers.onShareRemoteDrive
+  ) {
+    items.push({
+      icon: <UserPlus className="size-4" />,
+      itemTitle: "Share drive…",
+      onItemClick: () => handlers.onShareRemoteDrive?.(folder),
     });
   }
   if (handlers.onDeleteFromServer) {
