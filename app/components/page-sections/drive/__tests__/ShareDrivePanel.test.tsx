@@ -10,11 +10,29 @@ import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import type { ReactNode } from "react";
 
-import ShareDriveModal from "../ShareDriveModal";
+import ShareDriveModal from "../ShareDrivePanel";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Flip the flag per test — the modal reads it at render time.
+// The panel slides inline on large screens and overlays below; jsdom has no
+// matchMedia, and these tests are about the tabs rather than the shell, so
+// they run in the inline shape.
+vi.mock("@/app/lib/hooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/lib/hooks")>();
+  return {
+    ...actual,
+    useBreakpoint: () => ({
+      breakpoint: "xl",
+      isMobile: false,
+      isTablet: false,
+      isLaptop: false,
+      isDesktop: true,
+      isLargeDesktop: false,
+    }),
+  };
+});
+
 const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {

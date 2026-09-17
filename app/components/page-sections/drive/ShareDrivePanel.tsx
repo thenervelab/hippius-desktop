@@ -24,13 +24,15 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
 import { useAtom } from "jotai";
-import { AlertCircle, Check } from "lucide-react";
+import { AlertCircle, Check, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons } from "@/components/ui";
-import { FramedDialog } from "@/components/ui/FramedDialog";
+import { useBreakpoint } from "@/app/lib/hooks";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Select } from "@/components/ui/select/Select";
 import { cn } from "@/lib/utils";
@@ -78,10 +80,14 @@ import {
 
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
+/** Wider than File Details' 305: this panel holds lists, not labels. */
+const PANEL_WIDTH_PX = 360;
+
 type Tab = "invite" | "members" | "links";
 
-export default function ShareDriveModal() {
+export default function ShareDrivePanel() {
   const [target, setTarget] = useAtom(shareDriveModalAtom);
+  const { isDesktop, isLargeDesktop } = useBreakpoint();
 
   const [tab, setTab] = useState<Tab>("invite");
   const [invite, setInvite] = useState<InviteState>({ kind: "choosing" });
@@ -225,7 +231,7 @@ export default function ShareDriveModal() {
       .writeText(invite.inviteUrl)
       .then(() => toast.success("Invite link copied to clipboard"))
       .catch((err: unknown) => {
-        console.warn("[ShareDriveModal] auto-copy failed:", err);
+        console.warn("[ShareDrivePanel] auto-copy failed:", err);
       });
   }, [invite]);
 
@@ -274,17 +280,32 @@ export default function ShareDriveModal() {
     [label, loadMembers],
   );
 
-  if (!SHARED_DRIVES_ENABLED || !target) return null;
+  const onClose = () => setTarget(null);
+  const open = Boolean(SHARED_DRIVES_ENABLED && target);
 
-  return (
-    <FramedDialog
-      open
-      onClose={() => setTarget(null)}
-      title={`Share "${target.folderName}"`}
-      icon={<Icons.Link className="size-4 text-white" />}
-      maxWidth="max-w-[585px]"
-    >
-      <div className="font-geist">
+  // Body first, so the inline panel and the small-screen overlay render
+  // exactly the same thing and cannot drift.
+  const body = target ? (
+      <div className="flex h-full flex-col px-3 pt-4 font-geist">
+        <div className="mb-4 flex items-start justify-between gap-2 px-2">
+          <div className="min-w-0">
+            <p className="text-[16px] font-medium leading-5 text-black-900 dark:text-white">
+              Share access
+            </p>
+            <p className="mt-0.5 truncate text-[13px] text-black-900/40 dark:text-white/40">
+              {target.folderName}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="mt-1 flex size-[18px] shrink-0 items-center justify-center rounded-md bg-[#0000000F] text-black-900/40 transition-colors hover:bg-black/15 hover:text-black-900 dark:bg-[#FFFFFF0F] dark:text-grey-light-100/40 dark:hover:bg-white/25 dark:hover:text-white"
+          >
+            <X className="size-[10px]" strokeWidth={2.5} />
+          </button>
+        </div>
+
         <div className="mb-5">
           <SegmentedControl<Tab>
             ariaLabel="Share drive sections"
@@ -324,7 +345,45 @@ export default function ShareDriveModal() {
           />
         )}
       </div>
-    </FramedDialog>
+  ) : null;
+
+  // Same shell as File Details: an inline width-slide on large screens so the
+  // drive list stays visible beside it -- managing access is something you do
+  // WHILE looking at your drives -- and a slide-in overlay below that, where
+  // there is no room for both.
+  if (isDesktop || isLargeDesktop) {
+    return (
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.aside
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: PANEL_WIDTH_PX, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            className="h-full shrink-0 overflow-hidden"
+          >
+            <div className="h-full overflow-y-auto" style={{ width: PANEL_WIDTH_PX }}>
+              {body}
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
+    );
+  }
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[1002] bg-white/72 backdrop-blur-[5.75px] dark:bg-[rgba(4,4,4,0.4)] dark:backdrop-blur-[11.5px] animate-fade-in-0.2" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed bottom-0 right-0 top-0 z-[1003] w-full max-w-[360px] overflow-y-auto bg-cover bg-fixed bg-center bg-no-repeat font-geist animate-panel-in bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]"
+        >
+          <Dialog.Title className="sr-only">Share access</Dialog.Title>
+          {body}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
