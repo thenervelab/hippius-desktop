@@ -2,8 +2,9 @@
 //
 // The Rust source of truth lives at `src-tauri/src/shared_drives/`.
 // `create_drive_invite`, `list_drive_members`, `remove_drive_member`,
-// `list_my_drive_memberships`, `leave_shared_drive`, and `add_shared_drive`
-// are the six commands; this file is the only place in the FE that talks to
+// `change_drive_member_role`, `list_my_drive_memberships`,
+// `leave_shared_drive`, and `add_shared_drive` are the seven commands; this
+// file is the only place in the FE that talks to
 // them (the `shares.ts` convention), so swapping the wire shape is a
 // one-file change.
 //
@@ -17,6 +18,7 @@
 // the surface reacting.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 
 /**
@@ -76,12 +78,13 @@ export interface AddSharedDriveResult {
  */
 export async function createDriveInvite(
   label: string,
-  opts?: { expiresInSecs?: number; maxUses?: number },
+  opts?: { expiresInSecs?: number; maxUses?: number; role?: DriveRole },
 ): Promise<DriveInviteLink> {
   return invoke<DriveInviteLink>("create_drive_invite", {
     label,
     expiresInSecs: opts?.expiresInSecs,
     maxUses: opts?.maxUses,
+    role: opts?.role,
   });
 }
 
@@ -99,6 +102,27 @@ export async function removeDriveMember(
   memberSs58: string,
 ): Promise<void> {
   await invoke<void>("remove_drive_member", { label, memberSs58 });
+}
+
+/**
+ * Change a member's role on an OWN drive.
+ *
+ * The new role binds on the member's very next request, so nothing here has
+ * to warn about propagation. Two refusals come back as `Validation` and are
+ * worth surfacing verbatim: targeting yourself (a manager leaves rather than
+ * demoting themself) and a role outside the server's vocabulary.
+ *
+ * A downward change is sticky — the server revokes the invite that admitted
+ * the member when that link still outranks the new role, and demoting a
+ * manager revokes every live invite they minted, so a spare link cannot
+ * re-escalate them.
+ */
+export async function changeDriveMemberRole(
+  label: string,
+  memberSs58: string,
+  role: DriveRole,
+): Promise<void> {
+  await invoke<void>("change_drive_member_role", { label, memberSs58, role });
 }
 
 /** List the drives shared WITH this account. */
