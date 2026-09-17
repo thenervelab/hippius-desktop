@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { createPortal } from "react-dom";
 
 import { cn } from "@/app/lib/utils";
 
@@ -13,6 +14,32 @@ export interface BreakdownSlice {
   color: string;
   /** Appended to the legend in muted text, for a bucket that needs a caveat. */
   note?: string;
+}
+
+/** Share of the whole, as a percentage string, or null when nothing is known. */
+export function sharePercent(count: number, total: number): string | null {
+  if (total <= 0 || count <= 0) return null;
+  const pct = (count / total) * 100;
+  // Never round a non-empty slice to "0%": it exists, and saying otherwise
+  // contradicts the bar the reader is pointing at.
+  return pct < 1 ? "<1%" : `${Math.round(pct)}%`;
+}
+
+/**
+ * Where each slice's bars begin, as an index into the rendered row.
+ *
+ * The tooltip anchors over the segment the pointer is on rather than the
+ * middle of the card, so with four slices across 35 bars it still reads as
+ * belonging to the bars under it.
+ */
+export function barOffsets(counts: readonly number[]): number[] {
+  const offsets: number[] = [];
+  let run = 0;
+  for (const n of counts) {
+    offsets.push(run);
+    run += n;
+  }
+  return offsets;
 }
 
 /**
@@ -110,6 +137,52 @@ const BreakdownCard: React.FC<{
   const bars = React.useMemo(() => allocateBars(slices), [slices]);
   const total = slices.reduce((sum, s) => sum + Math.max(0, s.count), 0);
 
+  // One tooltip driven by which slice the pointer is on, not one tooltip per
+  // bar: there are 35 bars per card and two cards, and mounting a positioned
+  // popover for each would cost far more than the hint is worth.
+  const [hovered, setHovered] = React.useState<string | null>(null);
+  const offsets = React.useMemo(() => barOffsets(bars), [bars]);
+  const hoveredIndex = slices.findIndex((s) => s.key === hovered);
+  const hoveredSlice = hoveredIndex >= 0 ? slices[hoveredIndex] : null;
+
+  // The card is `overflow-hidden` for its rounded corners, so a bubble
+  // positioned inside it is clipped the moment it reaches an edge — which for
+  // the first slice is immediately. The tooltip is therefore portalled to the
+  // body and positioned in viewport coordinates, the same escape
+  // `LivePhotoToggle` makes for the same class of problem.
+  const rowRef = React.useRef<HTMLDivElement>(null);
+  const tipRef = React.useRef<HTMLDivElement>(null);
+  const [anchor, setAnchor] = React.useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+
+  // Anchor over the centre of the hovered slice's own run, not the bar under
+  // the pointer: a run of twenty bars would otherwise drag the bubble along
+  // with the cursor for no reason.
+  React.useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row || hoveredIndex < 0 || bars[hoveredIndex] <= 0) {
+      setAnchor(null);
+      return;
+    }
+    const rect = row.getBoundingClientRect();
+    const centre =
+      (offsets[hoveredIndex] + bars[hoveredIndex] / 2) / TOTAL_BARS;
+    const width = tipRef.current?.getBoundingClientRect().width ?? 0;
+    const margin = 8;
+    // Keep the whole bubble on screen: at the extremes the anchor stops
+    // tracking the bars rather than letting half the text run off the edge.
+    const half = width / 2;
+    const wanted = rect.left + centre * rect.width;
+    const x = Math.min(
+      Math.max(wanted, margin + half),
+      window.innerWidth - margin - half,
+    );
+    setAnchor({ x, y: rect.top });
+  }, [hoveredIndex, bars, offsets, slices]);
+
   return (
     <section
       className={cn(
@@ -156,28 +229,90 @@ const BreakdownCard: React.FC<{
           </p>
         ) : (
           <>
-            <div
-              className="flex h-[72px] items-stretch gap-[3px]"
-              role="img"
-              aria-label={`${title}: ${slices
-                .filter((s) => s.count > 0)
-                .map((s) => `${s.label} ${s.count}`)
-                .join(", ")}`}
-            >
-              {slices.flatMap((slice, i) =>
-                Array.from({ length: bars[i] }, (_, j) => (
-                  <span
-                    key={`${slice.key}-${j}`}
-                    className="min-w-0 flex-1 rounded-[2px]"
-                    style={{ backgroundColor: slice.color }}
-                  />
-                )),
-              )}
+            <div data-breakdown-chart onMouseLeave={() => setHovered(null)}>
+              {mounted && hoveredSlice
+                ? createPortal(
+                <div
+                  ref={tipRef}
+                  // `pointer-events-none`: the bubble sits over the bars, and
+                  // a pointer landing on it would read as leaving them, so the
+                  // tooltip would flicker itself out from under the cursor.
+                  className={cn(
+                    "pointer-events-none fixed z-[9999] -translate-x-1/2 -translate-y-full whitespace-nowrap",
+                    "rounded-[6px] border px-2 py-1",
+                    "border-grey-dark-100 bg-white text-grey-10",
+                    "dark:border-black-300 dark:bg-black-600 dark:text-white",
+                    "shadow-[0px_4px_12px_0px_rgba(0,0,0,0.12)]",
+                    // Hidden until measured, or the first frame paints it at
+                    // the top-left corner before the anchor is known.
+                    anchor ? "opacity-100" : "opacity-0",
+                  )}
+                  style={{
+                    left: anchor?.x ?? 0,
+                    // 8px clear of the bars.
+                    top: (anchor?.y ?? 0) - 8,
+                  }}
+                  role="status"
+                >
+                  <span className="font-mono text-[11px] font-medium uppercase leading-4 tracking-[-0.22px]">
+                    {hoveredSlice.label}
+                  </span>
+                  <span className="ml-1.5 font-mono text-[11px] leading-4 tracking-[-0.22px] text-grey-50 dark:text-grey-dark-500">
+                    {hoveredSlice.count.toLocaleString()}
+                    {sharePercent(hoveredSlice.count, total)
+                      ? ` · ${sharePercent(hoveredSlice.count, total)}`
+                      : ""}
+                  </span>
+                  {hoveredSlice.note ? (
+                    <span className="ml-1.5 font-mono text-[10px] leading-4 text-grey-50 dark:text-grey-dark-500">
+                      {hoveredSlice.note}
+                    </span>
+                  ) : null}
+                </div>,
+                document.body,
+                  )
+                : null}
+
+              <div
+                ref={rowRef}
+                className="flex h-[72px] items-stretch gap-[3px]"
+                role="img"
+                aria-label={`${title}: ${slices
+                  .filter((s) => s.count > 0)
+                  .map((s) => `${s.label} ${s.count}`)
+                  .join(", ")}`}
+              >
+                {slices.flatMap((slice, i) =>
+                  Array.from({ length: bars[i] }, (_, j) => (
+                    <span
+                      key={`${slice.key}-${j}`}
+                      data-slice={slice.key}
+                      onMouseEnter={() => setHovered(slice.key)}
+                      className={cn(
+                        "min-w-0 flex-1 rounded-[2px] transition-opacity",
+                        // Dim the rest so the hovered run reads as one
+                        // segment; four slices share 35 bars, so without this
+                        // a hover over the middle says nothing about extent.
+                        hovered && hovered !== slice.key && "opacity-40",
+                      )}
+                      style={{ backgroundColor: slice.color }}
+                    />
+                  )),
+                )}
+              </div>
             </div>
 
             <dl className="flex flex-wrap items-center gap-x-5 gap-y-2">
               {slices.map((slice) => (
-                <div key={slice.key} className="flex items-center gap-1.5">
+                <div
+                  key={slice.key}
+                  className="flex items-center gap-1.5"
+                  tabIndex={0}
+                  onMouseEnter={() => setHovered(slice.key)}
+                  onMouseLeave={() => setHovered(null)}
+                  onFocus={() => setHovered(slice.key)}
+                  onBlur={() => setHovered(null)}
+                >
                   <span
                     className="size-2 shrink-0 rounded-full"
                     style={{ backgroundColor: slice.color }}
