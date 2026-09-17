@@ -721,6 +721,11 @@ pub async fn list_drive_members(app: tauri::AppHandle, label: String) -> Result<
     let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
 
     let resp = http_list_members(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
+    // Logged because the sharing badge is derived from this count, and when it
+    // fails to appear the first question is whether the call happened at all.
+    // A frontend `console.warn` cannot answer that: it reaches devtools, never
+    // the on-disk log a user can actually send.
+    info!(label = %label, count = resp.members.len(), "Listed drive members");
     Ok(resp
         .members
         .into_iter()
@@ -815,7 +820,9 @@ pub async fn list_drive_invites(app: tauri::AppHandle, label: String) -> Result<
     let ctx = api_ctx(&state).await?;
     let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
 
-    http_list_invites(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await
+    let invites = http_list_invites(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
+    info!(label = %label, count = invites.len(), "Listed drive invites");
+    Ok(invites)
 }
 
 /// Revoke one invite for a drive this account owns.
