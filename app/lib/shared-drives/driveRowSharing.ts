@@ -51,6 +51,12 @@ export function driveRowSharing(params: {
    * rather than claiming the drive is private.
    */
   memberCount?: number;
+  /**
+   * Invite links that can still admit someone. A drive whose invite has been
+   * sent but not yet accepted has no members and is very much shared, so the
+   * badge cannot key on members alone.
+   */
+  liveInviteCount?: number;
 }): DriveRowSharing {
   // A drive belonging to someone else carries their ss58 on the row; both
   // identity columns are NULL on an own drive by construction.
@@ -69,13 +75,30 @@ export function driveRowSharing(params: {
   // An own drive with members is one the user has shared. Before this, an
   // owner had no way to tell a drive they had shared from a private one --
   // the badge only ever appeared on the receiving side.
-  if (params.memberCount && params.memberCount > 0) {
-    const people = params.memberCount === 1 ? "1 person" : `${params.memberCount} people`;
+  const members = params.memberCount ?? 0;
+  const liveInvites = params.liveInviteCount ?? 0;
+
+  if (members > 0) {
+    const people = members === 1 ? "1 person" : `${members} people`;
     return {
       isShared: true,
       direction: "by-me",
-      label: `Shared with ${params.memberCount}`,
+      label: `Shared with ${members}`,
       title: `You shared this drive with ${people}`,
+    };
+  }
+
+  // Invited but nobody has accepted yet. Saying "Shared with 0" would read as
+  // a mistake; what is true is that a link is out there.
+  if (liveInvites > 0) {
+    return {
+      isShared: true,
+      direction: "by-me",
+      label: "Invite sent",
+      title:
+        liveInvites === 1
+          ? "An invite link to this drive is live"
+          : `${liveInvites} invite links to this drive are live`,
     };
   }
 

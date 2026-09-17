@@ -8,6 +8,10 @@ import { Button } from "@/components/ui/button";
 import TableActionMenu, { type ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { SettingsCard } from "@/components/page-sections/settings/SettingsCard";
 import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
+import {
+  isDriveShared,
+  type DriveSharing,
+} from "@/app/lib/hooks/useOwnedDriveSharing";
 import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import FolderRowSkeleton from "@/components/page-sections/settings/multi-folder-sync/FolderRowSkeleton";
@@ -59,12 +63,13 @@ const Dot = () => (
 const SharedMark: React.FC<{
   row: FolderRow;
   role?: DriveRole;
-  memberCount?: number;
-}> = ({ row, role, memberCount }) => {
+  sharing?: DriveSharing;
+}> = ({ row, role, sharing: driveSharing }) => {
   const sharing = driveRowSharing({
     ownerSs58: row.ownerSs58,
     role,
-    memberCount,
+    memberCount: driveSharing?.memberCount,
+    liveInviteCount: driveSharing?.liveInviteCount,
   });
   if (!sharing.isShared) return null;
 
@@ -158,7 +163,7 @@ export interface FolderListProps {
    * Absent means "not known yet", which shows no badge — an own drive with
    * nothing known about it must not read as private when it might not be.
    */
-  shareCountsByLabel?: ReadonlyMap<string, number>;
+  sharingByLabel?: ReadonlyMap<string, DriveSharing>;
   /**
    * Open the sharing surface for a drive. Rendered inline on a drive that has
    * members, where managing who can see it is the likely next action.
@@ -188,7 +193,7 @@ const FolderList: React.FC<FolderListProps> = ({
   buildActions,
   emptyState,
   rolesByLabel,
-  shareCountsByLabel,
+  sharingByLabel,
   onManageAccess,
 }) => {
   // Right-click opens the SAME menu as the three dots. The sectioned list
@@ -244,7 +249,7 @@ const FolderList: React.FC<FolderListProps> = ({
                   <SharedMark
                     row={row}
                     role={rolesByLabel?.get(row.folderName)}
-                    memberCount={shareCountsByLabel?.get(row.folderName)}
+                    sharing={sharingByLabel?.get(row.folderName)}
                   />
                   <PresenceMark row={row} />
                   <StatusPill row={row} />
@@ -302,7 +307,7 @@ const FolderList: React.FC<FolderListProps> = ({
                   something: an own drive with people in it. */}
               {onManageAccess &&
                 !row.ownerSs58 &&
-                (shareCountsByLabel?.get(row.folderName) ?? 0) > 0 && (
+                isDriveShared(sharingByLabel?.get(row.folderName)) && (
                   <Button
                     variant="ghost"
                     size="auto"

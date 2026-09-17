@@ -135,3 +135,15 @@ export type ShareDriveModalTarget = {
 };
 
 export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);
+
+/**
+ * The drive whose "create invite link" dialog is open.
+ *
+ * Separate from the panel so minting keeps its own focused surface. The panel
+ * is for managing what already exists -- who is in the drive, which links are
+ * live -- and a mint is a short, decision-shaped flow that ends in a link to
+ * copy. Putting it in the panel made a list surface carry a wizard.
+ */
+export const createDriveInviteDialogAtom = atom<ShareDriveModalTarget | null>(
+  null,
+);
