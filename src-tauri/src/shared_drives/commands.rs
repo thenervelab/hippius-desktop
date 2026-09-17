@@ -419,7 +419,24 @@ async fn api_ctx(state: &AppState) -> Result<ApiCtx> {
 /// owner-side command (`create_drive_invite`, `list_drive_members`,
 /// `remove_drive_member`) resolves through.
 pub async fn resolve_own_drive(pool: &sqlx::SqlitePool, account_id: &str, label: &str) -> Result<crate::sync::identity::DriveIdentity> {
-    let identity = crate::sync::identity::resolve_drive_identity(pool, account_id, label).await?;
+    // LENIENT on purpose, matching `create_folder_share_inner`.
+    //
+    // A drive can exist on the server with no local `sync_paths` row -- one
+    // synced only from another device, or never synced here at all. The strict
+    // resolver refused those by label, so an owner could not invite anyone to
+    // a drive they own but do not happen to sync on this machine, which is
+    // most of them on a second device.
+    //
+    // Nothing here needs the row: the invite is metadata plus a folder
+    // mnemonic derived from the master and the label, so the key chain is
+    // identical whether or not the drive is local. A row that DOES exist still
+    // resolves normally, so a member row still resolves to member identity and
+    // is refused below -- the owner-only gate is unchanged.
+    //
+    // Trade-off, same as the folder-share mint: a stale or mistyped label no
+    // longer earns a client-side refusal. It reaches the server and comes back
+    // as a domain 404 instead.
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, label).await?;
     if identity.is_member {
         return Err(AppError::Validation(format!(
             "'{label}' is a drive shared with you — only its owner can manage invites and members"
@@ -598,7 +615,16 @@ pub async fn create_drive_invite(
     let role = resolve_invite_role(role, expires_in_secs, max_uses)?;
 
     let http = state.api_client.clone();
-    let token = http_create_invite(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, expires_in_secs, max_uses, &role).await?;
+    let token = http_create_invite(
+        &http,
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        expires_in_secs,
+        max_uses,
+        &role,
+    )
+    .await?;
 
     let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &token, &entropy);
 
@@ -674,9 +700,7 @@ pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, memb
     // leaving, not by PATCH). Refuse it here so the UI can say why instead of
     // surfacing a bare rejection.
     if member_ss58 == ctx.account_id {
-        return Err(AppError::Validation(
-            "You cannot change your own role. Leave the drive instead.".into(),
-        ));
+        return Err(AppError::Validation("You cannot change your own role. Leave the drive instead.".into()));
     }
 
     // Owner path: the server keys the change by the caller's own identity, so
@@ -975,10 +999,7 @@ mod tests {
     #[test]
     fn every_wire_role_is_accepted() {
         for role in WIRE_ROLES {
-            assert_eq!(
-                resolve_invite_role(Some(role.to_string()), 3600, 1).expect("wire role"),
-                role
-            );
+            assert_eq!(resolve_invite_role(Some(role.to_string()), 3600, 1).expect("wire role"), role);
         }
     }
 
@@ -997,14 +1018,12 @@ mod tests {
         let too_many = resolve_invite_role(Some("manager".into()), 3600, 2).expect_err("uses cap");
         assert!(format!("{too_many}").contains("once"), "{too_many}");
 
-        let too_long =
-            resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS + 1, 1).expect_err("ttl cap");
+        let too_long = resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS + 1, 1).expect_err("ttl cap");
         assert!(format!("{too_long}").contains("24 hours"), "{too_long}");
 
         // Exactly at the cap is allowed — the caps ARE the defaults.
         assert_eq!(
-            resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES)
-                .expect("at the cap"),
+            resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES).expect("at the cap"),
             "manager"
         );
     }
