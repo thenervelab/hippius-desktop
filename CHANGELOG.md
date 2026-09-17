@@ -17,6 +17,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
+  shared: invite someone by link, choose what they can do, and manage who has
+  access. Starter plans do not include shared drives, so the option is not shown.
 - **Shared drives show who they belong to and what you can do in them.** A drive
   someone shared with you is marked in your drive list and says whether you are a
   Viewer, an Editor or a Manager, instead of looking exactly like your own drives.
