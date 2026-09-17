@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import FolderList from "../FolderList";
@@ -181,5 +181,65 @@ describe("a drive the owner has shared", () => {
     );
     expect(screen.getByText("Shared · Editor")).toBeInTheDocument();
     expect(screen.queryByText(/Shared with 9/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Manage access on the row", () => {
+  it("offers it on an own drive that has members", () => {
+    const onManageAccess = vi.fn();
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        shareCountsByLabel={new Map([["team-docs", 2]])}
+        onManageAccess={onManageAccess}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage access" }));
+    expect(onManageAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ folderName: "team-docs" }),
+    );
+  });
+
+  // Nothing to manage on a private drive; the menu still offers Share drive.
+  it("stays hidden on a drive nobody has joined", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        shareCountsByLabel={new Map([["team-docs", 0]])}
+        onManageAccess={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Manage access" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Managing access is the owner's, and a member drive's owner is elsewhere.
+  it("stays hidden on a drive owned by someone else", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+        shareCountsByLabel={new Map([["team-docs", 5]])}
+        onManageAccess={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Manage access" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Opening the sharing surface is not opening the drive.
+  it("does not open the row", () => {
+    const onOpenRow = vi.fn();
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        shareCountsByLabel={new Map([["team-docs", 1]])}
+        onManageAccess={vi.fn()}
+        onOpenRow={onOpenRow}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage access" }));
+    expect(onOpenRow).not.toHaveBeenCalled();
   });
 });

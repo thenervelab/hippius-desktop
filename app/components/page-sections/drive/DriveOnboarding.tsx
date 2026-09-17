@@ -569,7 +569,11 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // question, not ours.
   const ownDriveShareCounts = useOwnedDriveShareCounts(
     useMemo(
-      () => folderRows.filter((r) => r.local && !r.ownerSs58).map((r) => r.folderName),
+      // Every OWN drive, local or cloud-only. Scoping this to local rows
+      // meant a drive synced only from another device -- which is most of
+      // them on a second machine -- never had its members counted, so the
+      // badge could not appear on the drives most likely to be shared.
+      () => folderRows.filter((r) => !r.ownerSs58).map((r) => r.folderName),
       [folderRows],
     ),
   );
@@ -638,6 +642,12 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
         <FolderList
           rolesByLabel={sharedDriveRoles}
           shareCountsByLabel={ownDriveShareCounts}
+          onManageAccess={(row) =>
+            setShareDriveTarget({
+              label: row.folderName,
+              folderName: row.folderName,
+            })
+          }
           rows={folderRows}
           isLoading={isLoading}
           headerAction={

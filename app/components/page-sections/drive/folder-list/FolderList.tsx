@@ -79,10 +79,12 @@ const SharedMark: React.FC<{
     <span
       title={sharing.title ?? undefined}
       className={cn(
-        "flex flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[11px] font-medium",
+        // Same shape as StatusPill so the row reads as one row of facts
+        // rather than a pill plus a smaller afterthought.
+        "inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium",
         withMe
-          ? "border-[#1F50BD]/30 bg-[#1F50BD]/10 text-[#1F50BD] dark:border-[#6b93ea]/30 dark:bg-[#6b93ea]/10 dark:text-[#9dbaf2]"
-          : "border-grey-80 bg-grey-90/60 text-grey-30 dark:border-white/10 dark:bg-white/[0.04] dark:text-grey-dark-600",
+          ? "border-[#1F50BD]/50 bg-[#1F50BD]/10 text-[#1F50BD] dark:border-[#6b93ea]/50 dark:bg-[#6b93ea]/10 dark:text-[#9dbaf2]"
+          : "border-[#1F50BD]/40 text-[#1F50BD] dark:border-[#6b93ea]/40 dark:text-[#9dbaf2]",
       )}
     >
       <Users className="size-3" aria-hidden="true" />
@@ -157,6 +159,11 @@ export interface FolderListProps {
    * nothing known about it must not read as private when it might not be.
    */
   shareCountsByLabel?: ReadonlyMap<string, number>;
+  /**
+   * Open the sharing surface for a drive. Rendered inline on a drive that has
+   * members, where managing who can see it is the likely next action.
+   */
+  onManageAccess?: (row: FolderRow) => void;
 }
 
 /**
@@ -182,6 +189,7 @@ const FolderList: React.FC<FolderListProps> = ({
   emptyState,
   rolesByLabel,
   shareCountsByLabel,
+  onManageAccess,
 }) => {
   // Right-click opens the SAME menu as the three dots. The sectioned list
   // it replaced offered both, and they were built from one resolver so
@@ -287,6 +295,23 @@ const FolderList: React.FC<FolderListProps> = ({
                   </p>
                 )}
               </div>
+
+              {/* A shared drive's most likely next action is deciding who has
+                  it, so it gets a control of its own rather than being three
+                  clicks into an overflow menu. Only on rows where it means
+                  something: an own drive with people in it. */}
+              {onManageAccess &&
+                !row.ownerSs58 &&
+                (shareCountsByLabel?.get(row.folderName) ?? 0) > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="auto"
+                    onClick={() => onManageAccess(row)}
+                    className="action-menu-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-grey-80 px-2.5 text-xs font-medium text-grey-30 transition-colors hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
+                  >
+                    Manage access
+                  </Button>
+                )}
 
               {buildActions && (
                 <TableActionMenu dropdownTitle="" items={buildActions(row)}>
