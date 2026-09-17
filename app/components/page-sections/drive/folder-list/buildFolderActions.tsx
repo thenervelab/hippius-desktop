@@ -36,6 +36,11 @@ export interface FolderActionHandlers {
   /** Selective-sync picker for a LOCAL drive. */
   /** Only offered while `SHARED_DRIVES_ENABLED`, and never on a member row. */
   onShareDrive?: (folder: SyncFolder) => void;
+  /**
+   * Whether the account's plan includes shared drives. Omitted means "not
+   * known yet", which permits the item — see `resolveFolderMenuPlan`.
+   */
+  planSupportsSharedDrives?: boolean;
 }
 
 /**
@@ -56,6 +61,7 @@ export function buildFolderActions(
     const folder = row.local;
     const plan = resolveFolderMenuPlan(folder, {
       sharedDrivesEnabled: SHARED_DRIVES_ENABLED,
+      planSupportsSharedDrives: handlers.planSupportsSharedDrives,
     });
     const items: ActionItem[] = [];
 

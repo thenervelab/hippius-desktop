@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
@@ -72,6 +73,7 @@ function openTarget(row: FolderRow): string {
 
   const router = useRouter();
   const sharedDriveRoles = useSharedDriveRoles();
+  const sharedDrivesInPlan = useSharedDrivesInPlan();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -569,6 +571,7 @@ function openTarget(row: FolderRow): string {
           onOpenRow={(row) => router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device"))}
           buildActions={(row) =>
             buildFolderActions(row, {
+              planSupportsSharedDrives: sharedDrivesInPlan,
               onOpen: (row) =>
                 router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device")),
               onPause: (folder) => setPauseDialog({ open: true, folder }),

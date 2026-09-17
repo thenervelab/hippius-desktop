@@ -74,3 +74,51 @@ describe("resolveFolderMenuPlan", () => {
     });
   });
 });
+
+describe("plan gating", () => {
+  const own = { ownerSs58: undefined };
+
+  // A plan without the perk is refused by the server with
+  // `shared_drives_not_entitled`, so offering the item is a click that can
+  // only end in an upgrade prompt.
+  it("hides Share drive on a plan without shared drives", () => {
+    const plan = resolveFolderMenuPlan(own, {
+      sharedDrivesEnabled: true,
+      planSupportsSharedDrives: false,
+    });
+    expect(plan.showShareDrive).toBe(false);
+  });
+
+  it("shows Share drive on a plan that includes them", () => {
+    const plan = resolveFolderMenuPlan(own, {
+      sharedDrivesEnabled: true,
+      planSupportsSharedDrives: true,
+    });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  // A control that appears a moment late is jank; one that appears and then
+  // vanishes reads as a bug.
+  it("permits the item while the plan is still loading", () => {
+    const plan = resolveFolderMenuPlan(own, { sharedDrivesEnabled: true });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  // The flag and the member check both still bind: a generous plan cannot
+  // resurrect the item on a drive the user does not own.
+  it("never shows Share drive on a member drive, whatever the plan", () => {
+    const plan = resolveFolderMenuPlan(
+      { ownerSs58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY" },
+      { sharedDrivesEnabled: true, planSupportsSharedDrives: true },
+    );
+    expect(plan.showShareDrive).toBe(false);
+  });
+
+  it("stays hidden when the feature flag is off, whatever the plan", () => {
+    const plan = resolveFolderMenuPlan(own, {
+      sharedDrivesEnabled: false,
+      planSupportsSharedDrives: true,
+    });
+    expect(plan.showShareDrive).toBe(false);
+  });
+});

@@ -9,6 +9,17 @@ import type { SyncFolder } from "@/app/lib/types/sync-folder";
 export interface FolderMenuFlags {
   /** `SHARED_DRIVES_ENABLED` — passed in so the resolver stays pure. */
   sharedDrivesEnabled: boolean;
+  /**
+   * Whether the account's plan includes shared drives
+   * (`planSupportsSharedDrives`). Passed in for the same reason as the flag:
+   * the resolver stays pure and the plan is fetched once by the caller.
+   *
+   * Optional so a caller with no plan data yet keeps the previous behaviour
+   * rather than hiding the item while the overview loads — a control that
+   * appears a second late reads as jank, but one that vanishes and returns
+   * reads as a bug.
+   */
+  planSupportsSharedDrives?: boolean;
 }
 
 /**
@@ -68,6 +79,13 @@ export function isMemberDrive(folder: Pick<SyncFolder, "ownerSs58">): boolean {
  * the folder list, the cosmetic owner badge) stays hidden until the
  * feature ships, since minting invites against a feature-off server is a
  * dead control.
+ *
+ * The PLAN gate sits alongside it, for the same reason at a different layer:
+ * a plan without the perk is refused by the server with
+ * `shared_drives_not_entitled`, so offering the item to a Starter account is
+ * a click that can only end in an upgrade prompt. It defaults to permitted,
+ * so an account whose plan has not loaded keeps the item rather than watching
+ * it appear a moment later.
  */
 export function resolveFolderMenuPlan(
   folder: Pick<SyncFolder, "ownerSs58">,
@@ -76,7 +94,10 @@ export function resolveFolderMenuPlan(
   const member = isMemberDrive(folder);
 
   return {
-    showShareDrive: flags.sharedDrivesEnabled && !member,
+    showShareDrive:
+      flags.sharedDrivesEnabled &&
+      !member &&
+      (flags.planSupportsSharedDrives ?? true),
     showExclusions: !member,
     showDeleteFromServer: !member,
     removeItemTitle: member ? "Leave shared drive" : "Stop syncing on this device",

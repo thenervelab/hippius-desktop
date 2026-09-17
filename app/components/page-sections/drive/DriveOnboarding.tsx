@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -83,6 +84,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const driveStatuses = useAtomValue(driveStatusesAtom);
   const sharedDriveRoles = useSharedDriveRoles();
+  const sharedDrivesInPlan = useSharedDrivesInPlan();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -574,6 +576,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
 
   const buildRowActions = (row: FolderRow) =>
     buildFolderActions(row, {
+      planSupportsSharedDrives: sharedDrivesInPlan,
       onOpen: handleOpenRow,
       onPause: (folder) => setPauseDialog({ open: true, folder }),
       onResume: (folder) => void handleResumeSync(folder),
