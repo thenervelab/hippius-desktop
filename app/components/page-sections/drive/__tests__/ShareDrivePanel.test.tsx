@@ -12,7 +12,6 @@ import type { ReactNode } from "react";
 
 import ShareDriveModal from "../ShareDrivePanel";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Flip the flag per test — the modal reads it at render time.
 // The panel slides inline on large screens and overlays below; jsdom has no
@@ -88,17 +87,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const UNAVAILABLE = { kind: "NotReady", subkind: "SHARED_DRIVES_UNAVAILABLE", message: "off" };
-const NOT_ENTITLED = {
-  kind: "NotReady",
-  subkind: "SHARED_DRIVES_NOT_ENTITLED",
-  message: "Shared drives need a Plus, Max, or Scale plan",
-};
 
-function installClipboard() {
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  Object.assign(navigator, { clipboard: { writeText } });
-  return { writeText };
-}
 
 function renderModal(target: { label: string; folderName: string } | null = { label: "team-docs", folderName: "team-docs" }) {
   const store = createStore();
@@ -112,11 +101,6 @@ beforeEach(() => {
 });
 
 
-/** Drive the custom Select: open by its aria-label, then click the option. */
-function chooseRole(optionLabel: string) {
-  fireEvent.click(screen.getByLabelText("Invite role"));
-  fireEvent.click(screen.getByText(optionLabel));
-}
 
 describe("flag gating", () => {
   it("renders nothing while SHARED_DRIVES_ENABLED is off, even with a target set", () => {
