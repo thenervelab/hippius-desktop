@@ -274,6 +274,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Hovering the Drive breakdown now tells you what a bar is.** The file type and
+  upload source charts on Overview showed coloured bars with no way to read one;
+  hovering now names the category, its file count and its share, and the rest of
+  the chart dims so you can see how far that category runs.
+- **The file types chart explains its grey bucket**, the same way the upload
+  sources chart already did.
+
 - **"Sync needs your unlock password" no longer appears when nothing is wrong,
   and no longer sends you to the sign-in screen.** The notice could stay up on a
   device that was perfectly fine, and pressing it looked like being signed out.
