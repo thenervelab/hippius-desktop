@@ -125,6 +125,45 @@ export async function changeDriveMemberRole(
   await invoke<void>("change_drive_member_role", { label, memberSs58, role });
 }
 
+/** One live invite for a drive, as the server lists it. */
+export interface DriveInviteInfo {
+  /**
+   * The blake3 hash of the token, never the token. The server cannot hand
+   * back a link, which is why revoking by id is the only way to kill an
+   * invite whose link the caller no longer holds.
+   */
+  inviteId: string;
+  role: string;
+  expiresAt: string;
+  maxUses: number;
+  useCount: number;
+  revoked: boolean;
+  valid: boolean;
+  createdAt: string;
+}
+
+/** The live invites for an OWN drive. */
+export async function listDriveInvites(
+  label: string,
+): Promise<DriveInviteInfo[]> {
+  return invoke<DriveInviteInfo[]>("list_drive_invites", { label });
+}
+
+/**
+ * Revoke one invite for an OWN drive.
+ *
+ * Succeeds on a 404 as well: malformed, unknown, another drive's and
+ * already-revoked ids all answer the same plain 404, so a failure is never
+ * proof the invite existed — and "gone" is the state the caller asked for
+ * either way.
+ */
+export async function revokeDriveInvite(
+  label: string,
+  inviteId: string,
+): Promise<void> {
+  await invoke<void>("revoke_drive_invite", { label, inviteId });
+}
+
 /** List the drives shared WITH this account. */
 export async function listMyDriveMemberships(): Promise<DriveMembershipInfo[]> {
   return invoke<DriveMembershipInfo[]>("list_my_drive_memberships");

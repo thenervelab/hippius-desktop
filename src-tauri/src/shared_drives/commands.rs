@@ -36,7 +36,7 @@ use crate::shared_drives::grant;
 use crate::sync::identity::MemberDriveIdentity;
 use base64::Engine;
 use hcfs_shared::network::{CreateDriveInviteRequest, CreateDriveInviteResponse, DriveMembersResponse, DriveMembershipsResponse};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
@@ -356,6 +356,87 @@ pub async fn http_change_member_role(
         .map_err(|e| AppError::Hcfs(format!("change-role request failed: {e}")))?;
 
     let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_error_status(status, &body));
+    }
+    Ok(())
+}
+
+/// One live invite for a drive, as the server lists it.
+///
+/// `invite_id` is the blake3 hash of the token, never the token itself — the
+/// server cannot hand back a link, which is exactly why revoke-by-id exists:
+/// it is the only way to kill an invite whose link the caller no longer holds,
+/// and that is every link once the mint dialog has closed.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveInviteInfo {
+    #[serde(rename = "invite_id", alias = "inviteId")]
+    pub invite_id: String,
+    pub role: String,
+    #[serde(rename = "expires_at", alias = "expiresAt")]
+    pub expires_at: String,
+    #[serde(rename = "max_uses", alias = "maxUses")]
+    pub max_uses: u32,
+    #[serde(rename = "use_count", alias = "useCount")]
+    pub use_count: u32,
+    pub revoked: bool,
+    pub valid: bool,
+    #[serde(rename = "created_at", alias = "createdAt")]
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DriveInvitesResponse {
+    #[serde(default)]
+    invites: Vec<DriveInviteInfo>,
+}
+
+/// `GET /v1/drives/{folder_hash}/invites` — the live invites for a drive.
+pub async fn http_list_invites(http: &reqwest::Client, base_url: &str, bearer: &str, folder_hash: &str) -> Result<Vec<DriveInviteInfo>> {
+    let resp = http
+        .get(format!("{}/v1/drives/{}/invites", base_url.trim_end_matches('/'), folder_hash))
+        .header("Authorization", format!("Bearer {bearer}"))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("list-invites request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_error_status(status, &body));
+    }
+    let parsed: DriveInvitesResponse =
+        serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("list-invites response did not parse: {e}")))?;
+    Ok(parsed.invites)
+}
+
+/// `DELETE /v1/drives/{folder_hash}/invites/{invite_id}` — revoke one invite.
+///
+/// Malformed, unknown, another drive's and already-revoked ids all answer the
+/// same plain 404, so a failure here is never proof the invite existed. The
+/// caller treats 404 as "it is gone", which is the state the user asked for
+/// either way.
+pub async fn http_revoke_invite(http: &reqwest::Client, base_url: &str, bearer: &str, folder_hash: &str, invite_id: &str) -> Result<()> {
+    let resp = http
+        .delete(format!(
+            "{}/v1/drives/{}/invites/{}",
+            base_url.trim_end_matches('/'),
+            folder_hash,
+            invite_id
+        ))
+        .header("Authorization", format!("Bearer {bearer}"))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("revoke-invite request failed: {e}")))?;
+
+    let status = resp.status();
+    if status.as_u16() == 404 {
+        return Ok(());
+    }
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         return Err(classify_error_status(status, &body));
@@ -719,6 +800,49 @@ pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, memb
     // The member ss58 is an account identifier, not a secret, and the role is
     // the point of the line; the drive label stays as the operator's handle.
     info!(label = %label, folder_hash = %identity.wire_folder_hash, role = %role, "Drive member role changed");
+    Ok(())
+}
+
+/// List the live invites for a drive this account owns.
+///
+/// The only place an invite id exists outside the server. Revoking needs one,
+/// and the mint cannot supply it — the server returns a token, and the id is
+/// that token's hash, which is precisely what makes a minted link
+/// unrevocable without this listing.
+#[tauri::command]
+pub async fn list_drive_invites(app: tauri::AppHandle, label: String) -> Result<Vec<DriveInviteInfo>> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+
+    http_list_invites(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await
+}
+
+/// Revoke one invite for a drive this account owns.
+///
+/// Until this existed, a minted link could not be killed at all: the desktop
+/// never persists tokens and the server stores only their hashes, so a
+/// "never expires" link handed to the wrong person stayed live forever.
+/// Removing a member does not help — that revokes someone who already joined,
+/// not the link still circulating.
+#[tauri::command]
+pub async fn revoke_drive_invite(app: tauri::AppHandle, label: String, invite_id: String) -> Result<()> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+
+    http_revoke_invite(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        &invite_id,
+    )
+    .await?;
+
+    // The id is a token HASH, not the token, so it is safe to log -- it cannot
+    // be turned back into a link.
+    info!(label = %label, invite_id = %invite_id, "Drive invite revoked");
     Ok(())
 }
 
