@@ -102,6 +102,13 @@ beforeEach(() => {
 
 
 
+
+/** Drive the app's Select: open by its aria-label, then click the option. */
+function chooseMemberRole(memberSs58: string, optionLabel: string) {
+  fireEvent.click(screen.getByLabelText(`Role for ${memberSs58}`));
+  fireEvent.click(screen.getByText(optionLabel));
+}
+
 describe("flag gating", () => {
   it("renders nothing while SHARED_DRIVES_ENABLED is off, even with a target set", () => {
     flagState.sharedDrivesEnabled = false;
@@ -146,12 +153,14 @@ describe("members tab", () => {
 
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    const picker = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    // The trigger shows the current role; opening it lists all three.
+    const trigger = await screen.findByLabelText(`Role for ${MEMBER}`);
+    expect(trigger).toHaveTextContent("Editor");
 
-    expect(picker.value).toBe("writer");
-    expect(
-      Array.from(picker.options).map((o) => o.textContent),
-    ).toEqual(["Viewer", "Editor", "Manager"]);
+    fireEvent.click(trigger);
+    for (const label of ["Viewer", "Editor", "Manager"]) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
   });
 
   it("changes a role and refetches, so the row reflects the server", async () => {
@@ -162,9 +171,8 @@ describe("members tab", () => {
 
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    const picker = await screen.findByRole("combobox");
-
-    fireEvent.change(picker, { target: { value: "manager" } });
+    await screen.findByLabelText(`Role for ${MEMBER}`);
+    chooseMemberRole(MEMBER, "Manager");
 
     await waitFor(() =>
       expect(changeDriveMemberRoleMock).toHaveBeenCalledWith(
@@ -192,8 +200,8 @@ describe("members tab", () => {
 
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    const picker = await screen.findByRole("combobox");
-    fireEvent.change(picker, { target: { value: "reader" } });
+    await screen.findByLabelText(`Role for ${MEMBER}`);
+    chooseMemberRole(MEMBER, "Viewer");
 
     await waitFor(() =>
       expect(toastErrorMock).toHaveBeenCalledWith(
@@ -213,7 +221,9 @@ describe("members tab", () => {
 
     // Two destructive-ish controls side by side invite a mis-click on the one
     // the user was not looking at.
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(`Role for ${MEMBER}`),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Confirm remove" }),
     ).toBeInTheDocument();

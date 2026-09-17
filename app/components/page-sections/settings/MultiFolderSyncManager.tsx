@@ -4,7 +4,10 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
-import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  createDriveInviteDialogAtom,
+  shareDriveModalAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
@@ -77,6 +80,7 @@ function openTarget(row: FolderRow): string {
   const sharedDriveRoles = useSharedDriveRoles();
   const sharedDrivesInPlan = useSharedDrivesInPlan();
   const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
+  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -596,13 +600,16 @@ function openTarget(row: FolderRow): string {
           buildActions={(row) =>
             buildFolderActions(row, {
               planSupportsSharedDrives: sharedDrivesInPlan,
+              // Nothing to manage until a drive has been shared, so the first
+              // share goes straight to the mint. Once it has members or a live
+              // link the row offers Manage access, which opens the panel.
               onShareDrive: (folder) =>
-                setShareDriveTarget({
+                setInviteDialogTarget({
                   label: folder.folderName,
                   folderName: folder.folderName,
                 }),
               onShareRemoteDrive: (folder) =>
-                setShareDriveTarget({
+                setInviteDialogTarget({
                   label: folder.folderName,
                   folderName: folder.folderName,
                 }),

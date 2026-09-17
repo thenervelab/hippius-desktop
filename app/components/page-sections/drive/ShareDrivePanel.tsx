@@ -32,6 +32,7 @@ import { AlertCircle, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui";
+import { Select } from "@/components/ui/select/Select";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
@@ -55,7 +56,6 @@ import {
 } from "@/app/lib/shared-drives/inviteRowView";
 import {
   DRIVE_ROLES,
-  driveRoleDescription,
   driveRoleLabel,
   parseDriveRole,
   type DriveRole,
@@ -268,7 +268,16 @@ export default function ShareDrivePanel() {
             state={members}
             onRemove={(ss58) => void removeMember(ss58)}
             onChangeRole={(ss58, role) => void changeRole(ss58, role)}
-            onCreateInvite={() => target && setInviteDialogTarget(target)}
+            onCreateInvite={() => {
+              if (!target) return;
+              // Close the panel as the dialog opens. They are two surfaces for
+              // one drive, and a focused mint does not need the list behind
+              // it -- which also avoids the dialog opening underneath the
+              // panel's own overlay on small screens, where the panel sits
+              // above FramedDialog's layer.
+              setTarget(null);
+              setInviteDialogTarget(target);
+            }}
           />
         )}
       </div>
@@ -559,21 +568,26 @@ function MemberRow({
       </div>
 
       {!confirming && (
-        <label className="shrink-0">
-          <span className="sr-only">Role for {member.memberSs58}</span>
-          <select
+        // The app's own Select, not a bare `<select>`: the native control
+        // renders with the platform's chrome, which in a dark panel reads as
+        // a foreign element rather than part of the row. `minimal` is the
+        // variant built for inline use -- no scroll buttons, no outer shadow.
+        <div className="w-[116px] shrink-0">
+          <Select
+            ariaLabel={`Role for ${member.memberSs58}`}
+            minimal
             value={role}
-            onChange={(e) => onChangeRole(member.memberSs58, e.target.value as DriveRole)}
-            title={driveRoleDescription(role)}
-            className="h-7 rounded-md border border-grey-80 bg-transparent px-2 text-xs font-medium text-grey-30 dark:border-white/10 dark:text-grey-dark-600"
-          >
-            {DRIVE_ROLES.map((r) => (
-              <option key={r} value={r}>
-                {driveRoleLabel(r)}
-              </option>
-            ))}
-          </select>
-        </label>
+            onValueChange={(value) =>
+              onChangeRole(member.memberSs58, value as DriveRole)
+            }
+            options={DRIVE_ROLES.map((r) => ({
+              label: driveRoleLabel(r),
+              value: r,
+            }))}
+            triggerClassName="h-7 rounded-md border border-grey-80 px-2 text-xs font-medium dark:border-white/10"
+            valueClassName="text-xs font-medium text-grey-30 dark:text-grey-dark-600"
+          />
+        </div>
       )}
 
       {confirming ? (
