@@ -459,9 +459,19 @@ struct MemberDrive {
 /// open, `install_member_drive`, resolver, engine unlock — asserting the
 /// contract at each seam.
 async fn member_accept_and_install(env: &LiveEnv, http: &reqwest::Client, owner: &OwnerDrive) -> MemberDrive {
-    let invite_token = http_create_invite(http, &env.server_url, &env.owner_bearer, &owner.identity.wire_folder_hash, 3600, 5)
-        .await
-        .expect("mint invite");
+    // `writer` keeps the live lane exercising the shape every shipped build
+    // minted before the role picker existed.
+    let invite_token = http_create_invite(
+        http,
+        &env.server_url,
+        &env.owner_bearer,
+        &owner.identity.wire_folder_hash,
+        3600,
+        5,
+        "writer",
+    )
+    .await
+    .expect("mint invite");
 
     // The `#k=` fragment entropy — `create_drive_invite`'s derivation.
     let fragment_entropy = grant::entropy_from_phrase(&owner.folder_phrase).expect("fragment entropy");

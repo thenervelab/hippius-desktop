@@ -189,7 +189,9 @@ async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
     .await;
     let http = reqwest::Client::new();
 
-    let token = http_create_invite(&http, &base, BEARER, WIRE_HASH, 3600, 5).await.expect("mint");
+    let token = http_create_invite(&http, &base, BEARER, WIRE_HASH, 3600, 5, "writer")
+        .await
+        .expect("mint");
     assert_eq!(token, "tok_mock_1");
 
     // The resolved policy values land on the wire as concrete fields — the
@@ -198,9 +200,13 @@ async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
     let body = recorded.invite_bodies.lock().unwrap().last().cloned().expect("a mint landed");
     assert_eq!(body["expires_in_secs"], serde_json::json!(3600));
     assert_eq!(body["max_uses"], serde_json::json!(5));
+    // The role lands as a concrete field too: an omitted role means `writer`
+    // server-side, so sending it explicitly is what keeps a chosen role from
+    // silently degrading to the default.
+    assert_eq!(body["role"], serde_json::json!("writer"));
 
     // A missing bearer is refused by the server and surfaces as Auth.
-    let err = http_create_invite(&http, &base, "wrong-bearer", WIRE_HASH, 3600, 5)
+    let err = http_create_invite(&http, &base, "wrong-bearer", WIRE_HASH, 3600, 5, "writer")
         .await
         .expect_err("bad bearer must fail");
     assert!(matches!(err, AppError::Auth(_)), "got {err:?}");
