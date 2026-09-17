@@ -15,29 +15,71 @@ import { driveRoleLabel, parseDriveRole, type DriveRole } from "./roles";
  * user can actually write to is worse than saying nothing yet.
  */
 export interface DriveRowSharing {
-  /** True when this drive belongs to another account. */
+  /** True when the row should carry a sharing badge at all. */
   isShared: boolean;
-  /** The role label to show, or `null` when unknown or not applicable. */
-  roleLabel: string | null;
-  /** Tooltip for the badge — the owner's address when we have it. */
+  /**
+   * Which direction the sharing runs.
+   *
+   * `"with-me"` — someone else's drive that this account was invited into.
+   * `"by-me"`   — this account's own drive that other people are in.
+   *
+   * The two are opposite facts and must not read the same. On a drive shared
+   * WITH you the useful thing is what you may do in it; on one you shared, it
+   * is that other people can see it and how many.
+   */
+  direction: "with-me" | "by-me" | null;
+  /** The badge text. */
+  label: string | null;
+  /** Tooltip. */
   title: string | null;
 }
+
+const NOT_SHARED: DriveRowSharing = {
+  isShared: false,
+  direction: null,
+  label: null,
+  title: null,
+};
 
 export function driveRowSharing(params: {
   ownerSs58?: string | null;
   /** Wire role from the membership listing, joined by local label. */
   role?: string | null;
+  /**
+   * How many people this account has shared THIS drive with. Only meaningful
+   * on an own drive; `undefined` means "not known yet", which shows no badge
+   * rather than claiming the drive is private.
+   */
+  memberCount?: number;
 }): DriveRowSharing {
-  // An own drive has no owner column: both identity columns are NULL by
-  // construction, which is what makes it own.
-  if (!params.ownerSs58) {
-    return { isShared: false, roleLabel: null, title: null };
+  // A drive belonging to someone else carries their ss58 on the row; both
+  // identity columns are NULL on an own drive by construction.
+  if (params.ownerSs58) {
+    const roleLabel = params.role
+      ? driveRoleLabel(parseDriveRole(params.role))
+      : null;
+    return {
+      isShared: true,
+      direction: "with-me",
+      label: roleLabel ? `Shared · ${roleLabel}` : "Shared",
+      title: `Shared with you by ${params.ownerSs58}`,
+    };
   }
-  return {
-    isShared: true,
-    roleLabel: params.role ? driveRoleLabel(parseDriveRole(params.role)) : null,
-    title: `Shared by ${params.ownerSs58}`,
-  };
+
+  // An own drive with members is one the user has shared. Before this, an
+  // owner had no way to tell a drive they had shared from a private one --
+  // the badge only ever appeared on the receiving side.
+  if (params.memberCount && params.memberCount > 0) {
+    const people = params.memberCount === 1 ? "1 person" : `${params.memberCount} people`;
+    return {
+      isShared: true,
+      direction: "by-me",
+      label: `Shared with ${params.memberCount}`,
+      title: `You shared this drive with ${people}`,
+    };
+  }
+
+  return NOT_SHARED;
 }
 
 /**

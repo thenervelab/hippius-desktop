@@ -56,17 +56,37 @@ const Dot = () => (
  * on its own, and withholding it until a second request lands would make the
  * list flicker between two meanings.
  */
-const SharedMark: React.FC<{ row: FolderRow; role?: DriveRole }> = ({ row, role }) => {
-  const sharing = driveRowSharing({ ownerSs58: row.ownerSs58, role });
+const SharedMark: React.FC<{
+  row: FolderRow;
+  role?: DriveRole;
+  memberCount?: number;
+}> = ({ row, role, memberCount }) => {
+  const sharing = driveRowSharing({
+    ownerSs58: row.ownerSs58,
+    role,
+    memberCount,
+  });
   if (!sharing.isShared) return null;
+
+  // Two opposite facts, so two readings. A drive shared WITH you is someone
+  // else's and the useful thing is what you may do in it, so it takes the
+  // blue "belongs elsewhere" treatment. One you shared is still yours, so it
+  // takes a quieter neutral chip that says how far it has travelled rather
+  // than claiming the row is foreign.
+  const withMe = sharing.direction === "with-me";
 
   return (
     <span
       title={sharing.title ?? undefined}
-      className="flex flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-[#1F50BD]/30 bg-[#1F50BD]/10 px-1.5 py-0.5 text-[11px] font-medium text-[#1F50BD] dark:border-[#6b93ea]/30 dark:bg-[#6b93ea]/10 dark:text-[#9dbaf2]"
+      className={cn(
+        "flex flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[11px] font-medium",
+        withMe
+          ? "border-[#1F50BD]/30 bg-[#1F50BD]/10 text-[#1F50BD] dark:border-[#6b93ea]/30 dark:bg-[#6b93ea]/10 dark:text-[#9dbaf2]"
+          : "border-grey-80 bg-grey-90/60 text-grey-30 dark:border-white/10 dark:bg-white/[0.04] dark:text-grey-dark-600",
+      )}
     >
       <Users className="size-3" aria-hidden="true" />
-      {sharing.roleLabel ? `Shared · ${sharing.roleLabel}` : "Shared"}
+      {sharing.label}
     </span>
   );
 };
@@ -130,6 +150,13 @@ export interface FolderListProps {
    * missing entry shows the shared badge without a role rather than guessing.
    */
   rolesByLabel?: ReadonlyMap<string, DriveRole>;
+  /**
+   * How many people each OWN drive has been shared with, by local label.
+   *
+   * Absent means "not known yet", which shows no badge — an own drive with
+   * nothing known about it must not read as private when it might not be.
+   */
+  shareCountsByLabel?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -154,6 +181,7 @@ const FolderList: React.FC<FolderListProps> = ({
   buildActions,
   emptyState,
   rolesByLabel,
+  shareCountsByLabel,
 }) => {
   // Right-click opens the SAME menu as the three dots. The sectioned list
   // it replaced offered both, and they were built from one resolver so
@@ -205,7 +233,11 @@ const FolderList: React.FC<FolderListProps> = ({
                   <span className="truncate font-geist text-[14px] font-medium text-[#0A0A0A] dark:text-white">
                     {row.folderName}
                   </span>
-                  <SharedMark row={row} role={rolesByLabel?.get(row.folderName)} />
+                  <SharedMark
+                    row={row}
+                    role={rolesByLabel?.get(row.folderName)}
+                    memberCount={shareCountsByLabel?.get(row.folderName)}
+                  />
                   <PresenceMark row={row} />
                   <StatusPill row={row} />
 

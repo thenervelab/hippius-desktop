@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useOwnedDriveShareCounts } from "@/app/lib/hooks/useOwnedDriveShareCounts";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
@@ -563,6 +564,15 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
 
   // One list, built from the two sources the page already loads.
   const folderRows = toFolderRows(syncFolders, remoteFolders);
+  // Own drives only: a member drive's sharing is described by the role
+  // badge, and asking the server for its members would be the owner's
+  // question, not ours.
+  const ownDriveShareCounts = useOwnedDriveShareCounts(
+    useMemo(
+      () => folderRows.filter((r) => r.local && !r.ownerSs58).map((r) => r.folderName),
+      [folderRows],
+    ),
+  );
 
   // Opening a row: a local folder selects it, a remote one opens the
   // browsable server view. Both were row clicks before; they still are.
@@ -627,6 +637,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             mark and a short label. */}
         <FolderList
           rolesByLabel={sharedDriveRoles}
+          shareCountsByLabel={ownDriveShareCounts}
           rows={folderRows}
           isLoading={isLoading}
           headerAction={

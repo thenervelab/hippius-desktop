@@ -136,6 +136,50 @@ describe("shared drives in the list", () => {
         rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
       />,
     );
-    expect(screen.getByTitle(`Shared by ${OWNER}`)).toBeInTheDocument();
+    expect(screen.getByTitle(`Shared with you by ${OWNER}`)).toBeInTheDocument();
+  });
+});
+
+describe("a drive the owner has shared", () => {
+  // The gap: the badge only ever appeared on the receiving side, so an owner
+  // could not tell a drive they had shared from a private one.
+  it("says how many people an own drive reached", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        shareCountsByLabel={new Map([["team-docs", 3]])}
+      />,
+    );
+    expect(screen.getByText("Shared with 3")).toBeInTheDocument();
+  });
+
+  it("leaves a private own drive unmarked", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        shareCountsByLabel={new Map([["team-docs", 0]])}
+      />,
+    );
+    expect(screen.queryByText(/Shared/)).not.toBeInTheDocument();
+  });
+
+  // Not knowing must not read as "private".
+  it("shows nothing while the count is still unknown", () => {
+    render(
+      <FolderList rows={[localRow({ id: "own", folderName: "team-docs" })]} />,
+    );
+    expect(screen.queryByText(/Shared/)).not.toBeInTheDocument();
+  });
+
+  it("prefers the with-me reading on a drive owned by someone else", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+        rolesByLabel={new Map([["team-docs", "writer" as const]])}
+        shareCountsByLabel={new Map([["team-docs", 9]])}
+      />,
+    );
+    expect(screen.getByText("Shared · Editor")).toBeInTheDocument();
+    expect(screen.queryByText(/Shared with 9/)).not.toBeInTheDocument();
   });
 });
