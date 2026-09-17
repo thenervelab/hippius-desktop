@@ -27,6 +27,10 @@ vi.mock("@/app/lib/featureFlags", () => ({
 const createDriveInviteMock = vi.fn();
 const listDriveMembersMock = vi.fn();
 const removeDriveMemberMock = vi.fn();
+const changeDriveMemberRoleMock = vi.fn();
+
+/** A stable member address, so the role assertions read for themselves. */
+const MEMBER = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
   return {
@@ -34,11 +38,15 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     createDriveInvite: (...args: unknown[]) => createDriveInviteMock(...args),
     listDriveMembers: (...args: unknown[]) => listDriveMembersMock(...args),
     removeDriveMember: (...args: unknown[]) => removeDriveMemberMock(...args),
+    changeDriveMemberRole: (...args: unknown[]) =>
+      changeDriveMemberRoleMock(...args),
   };
 });
 
+const toastErrorMock = vi.hoisted(() => vi.fn());
+const toastSuccessMock = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: toastSuccessMock, error: toastErrorMock },
 }));
 
 // `next/dynamic` wraps boring-avatars; a plain stub avoids lazy-loading
@@ -174,8 +182,94 @@ describe("members tab", () => {
     expect(listDriveMembersMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByText(/writer/);
+    // The row reads the role people recognise, not the wire spelling. "Editor"
+    // appears twice by design -- the row's label and the picker's option -- so
+    // this asserts the wire word is absent rather than counting matches.
+    await waitFor(() =>
+      expect(screen.getAllByText(/Editor/).length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByText(/writer/)).not.toBeInTheDocument();
     expect(listDriveMembersMock).toHaveBeenCalledWith("team-docs");
+  });
+
+  it("offers every role in the picker, selecting the member's current one", async () => {
+    listDriveMembersMock.mockResolvedValue([
+      { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
+    ]);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Members" }));
+    const picker = (await screen.findByRole("combobox")) as HTMLSelectElement;
+
+    expect(picker.value).toBe("writer");
+    expect(
+      Array.from(picker.options).map((o) => o.textContent),
+    ).toEqual(["Viewer", "Editor", "Manager"]);
+  });
+
+  it("changes a role and refetches, so the row reflects the server", async () => {
+    listDriveMembersMock.mockResolvedValue([
+      { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
+    ]);
+    changeDriveMemberRoleMock.mockResolvedValue(undefined);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Members" }));
+    const picker = await screen.findByRole("combobox");
+
+    fireEvent.change(picker, { target: { value: "manager" } });
+
+    await waitFor(() =>
+      expect(changeDriveMemberRoleMock).toHaveBeenCalledWith(
+        "team-docs",
+        MEMBER,
+        "manager",
+      ),
+    );
+    // Refetched rather than patched in place: the server is the authority on
+    // what the role became, and a demotion has side effects (revoked invites)
+    // this row cannot infer.
+    await waitFor(() => expect(listDriveMembersMock).toHaveBeenCalledTimes(2));
+  });
+
+  // The backend's refusals are written for the user -- "you cannot change your
+  // own role", the named role, the manager caps -- so they must reach them.
+  it("surfaces the backend's refusal verbatim", async () => {
+    listDriveMembersMock.mockResolvedValue([
+      { memberSs58: MEMBER, role: "manager", createdAt: "2026-08-20T00:00:00Z" },
+    ]);
+    changeDriveMemberRoleMock.mockRejectedValue({
+      kind: "Validation",
+      message: "You cannot change your own role. Leave the drive instead.",
+    });
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Members" }));
+    const picker = await screen.findByRole("combobox");
+    fireEvent.change(picker, { target: { value: "reader" } });
+
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        expect.stringContaining("You cannot change your own role"),
+      ),
+    );
+  });
+
+  it("hides the role picker while a removal is being confirmed", async () => {
+    listDriveMembersMock.mockResolvedValue([
+      { memberSs58: MEMBER, role: "reader", createdAt: "2026-08-20T00:00:00Z" },
+    ]);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Members" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+
+    // Two destructive-ish controls side by side invite a mis-click on the one
+    // the user was not looking at.
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Confirm remove" }),
+    ).toBeInTheDocument();
   });
 
   it("shows the empty state when nobody joined yet", async () => {

@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import {
+  changeDriveMemberRole,
   createDriveInvite,
   isSharedDrivesNotEntitled,
   isSharedDrivesUnavailable,
@@ -44,6 +45,13 @@ import {
   removeDriveMember,
   type DriveMemberInfo,
 } from "@/app/lib/tauri/sharedDrives";
+import {
+  DRIVE_ROLES,
+  driveRoleDescription,
+  driveRoleLabel,
+  parseDriveRole,
+  type DriveRole,
+} from "@/app/lib/shared-drives/roles";
 import { useRouter } from "next/navigation";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
@@ -172,6 +180,31 @@ export default function ShareDriveModal() {
     [label, loadMembers],
   );
 
+  const changeRole = useCallback(
+    async (memberSs58: string, role: DriveRole) => {
+      if (!label) return;
+      const labelAtCall = label;
+      try {
+        await changeDriveMemberRole(labelAtCall, memberSs58, role);
+        // The new role binds on the member's next request, so there is no
+        // propagation delay to caveat.
+        toast.success(`Role changed to ${driveRoleLabel(role)}`);
+        await loadMembers(labelAtCall);
+      } catch (err) {
+        if (labelAtCall !== currentLabelRef.current) return;
+        if (isSharedDrivesUnavailable(err)) {
+          setMembers({ kind: "unavailable" });
+        } else {
+          // The backend's refusals are written for the user -- "you cannot
+          // change your own role", the named role, the manager caps -- so
+          // they are surfaced verbatim rather than replaced.
+          toast.error(`Could not change role: ${errorMessage(err)}`);
+        }
+      }
+    },
+    [label, loadMembers],
+  );
+
   if (!SHARED_DRIVES_ENABLED || !target) return null;
 
   return (
@@ -206,7 +239,11 @@ export default function ShareDriveModal() {
             onClose={() => setTarget(null)}
           />
         ) : (
-          <MembersTab state={members} onRemove={(ss58) => void removeMember(ss58)} />
+          <MembersTab
+            state={members}
+            onRemove={(ss58) => void removeMember(ss58)}
+            onChangeRole={(ss58, role) => void changeRole(ss58, role)}
+          />
         )}
       </div>
     </FramedDialog>
@@ -381,9 +418,11 @@ function InviteDone({
 function MembersTab({
   state,
   onRemove,
+  onChangeRole,
 }: {
   state: MembersState;
   onRemove: (memberSs58: string) => void;
+  onChangeRole: (memberSs58: string, role: DriveRole) => void;
 }) {
   const view = getMembersView(state);
 
@@ -424,7 +463,12 @@ function MembersTab({
   return (
     <div className="max-h-[320px] overflow-y-auto">
       {members.map((member) => (
-        <MemberRow key={member.memberSs58} member={member} onRemove={onRemove} />
+        <MemberRow
+          key={member.memberSs58}
+          member={member}
+          onRemove={onRemove}
+          onChangeRole={onChangeRole}
+        />
       ))}
     </div>
   );
@@ -433,15 +477,18 @@ function MembersTab({
 function MemberRow({
   member,
   onRemove,
+  onChangeRole,
 }: {
   member: DriveMemberInfo;
   onRemove: (memberSs58: string) => void;
+  onChangeRole: (memberSs58: string, role: DriveRole) => void;
 }) {
   // Two-step inline confirm: the first click arms the row, the second
   // actually removes — the SharesPageClient treatment, without a nested
   // dialog inside a dialog.
   const [confirming, setConfirming] = useState(false);
   const joined = formatJoinedDate(member.createdAt);
+  const role = parseDriveRole(member.role);
 
   return (
     <div className="flex items-center justify-between gap-3 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
@@ -454,11 +501,32 @@ function MemberRow({
             {middleTruncate(member.memberSs58, 22)}
           </p>
           <p className="text-[11px] text-grey-50 dark:text-grey-dark-600">
-            {member.role}
+            {/* The wire says reader/writer/manager; people read Viewer/
+                Editor/Manager, and an unknown role degrades to Viewer
+                rather than reading as management. */}
+            {driveRoleLabel(role)}
             {joined ? ` · Joined ${joined}` : ""}
           </p>
         </div>
       </div>
+
+      {!confirming && (
+        <label className="shrink-0">
+          <span className="sr-only">Role for {member.memberSs58}</span>
+          <select
+            value={role}
+            onChange={(e) => onChangeRole(member.memberSs58, e.target.value as DriveRole)}
+            title={driveRoleDescription(role)}
+            className="h-7 rounded-md border border-grey-80 bg-transparent px-2 text-xs font-medium text-grey-30 dark:border-white/10 dark:text-grey-dark-600"
+          >
+            {DRIVE_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {driveRoleLabel(r)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       {confirming ? (
         <div className="flex shrink-0 items-center gap-2">
