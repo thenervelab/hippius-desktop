@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { createPortal } from "react-dom";
 
 import { cn } from "@/app/lib/utils";
 
@@ -143,12 +144,44 @@ const BreakdownCard: React.FC<{
   const offsets = React.useMemo(() => barOffsets(bars), [bars]);
   const hoveredIndex = slices.findIndex((s) => s.key === hovered);
   const hoveredSlice = hoveredIndex >= 0 ? slices[hoveredIndex] : null;
-  // Centre of the hovered slice's own run of bars, as a percentage across the
-  // row. `translate-x-[-50%]` then centres the bubble on that point.
-  const hoveredCentre =
-    hoveredIndex >= 0 && bars[hoveredIndex] > 0
-      ? ((offsets[hoveredIndex] + bars[hoveredIndex] / 2) / TOTAL_BARS) * 100
-      : null;
+
+  // The card is `overflow-hidden` for its rounded corners, so a bubble
+  // positioned inside it is clipped the moment it reaches an edge — which for
+  // the first slice is immediately. The tooltip is therefore portalled to the
+  // body and positioned in viewport coordinates, the same escape
+  // `LivePhotoToggle` makes for the same class of problem.
+  const rowRef = React.useRef<HTMLDivElement>(null);
+  const tipRef = React.useRef<HTMLDivElement>(null);
+  const [anchor, setAnchor] = React.useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+
+  // Anchor over the centre of the hovered slice's own run, not the bar under
+  // the pointer: a run of twenty bars would otherwise drag the bubble along
+  // with the cursor for no reason.
+  React.useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row || hoveredIndex < 0 || bars[hoveredIndex] <= 0) {
+      setAnchor(null);
+      return;
+    }
+    const rect = row.getBoundingClientRect();
+    const centre =
+      (offsets[hoveredIndex] + bars[hoveredIndex] / 2) / TOTAL_BARS;
+    const width = tipRef.current?.getBoundingClientRect().width ?? 0;
+    const margin = 8;
+    // Keep the whole bubble on screen: at the extremes the anchor stops
+    // tracking the bars rather than letting half the text run off the edge.
+    const half = width / 2;
+    const wanted = rect.left + centre * rect.width;
+    const x = Math.min(
+      Math.max(wanted, margin + half),
+      window.innerWidth - margin - half,
+    );
+    setAnchor({ x, y: rect.top });
+  }, [hoveredIndex, bars, offsets, slices]);
 
   return (
     <section
@@ -196,20 +229,29 @@ const BreakdownCard: React.FC<{
           </p>
         ) : (
           <>
-            <div className="relative" onMouseLeave={() => setHovered(null)}>
-              {hoveredSlice && hoveredCentre !== null ? (
+            <div data-breakdown-chart onMouseLeave={() => setHovered(null)}>
+              {mounted && hoveredSlice
+                ? createPortal(
                 <div
+                  ref={tipRef}
                   // `pointer-events-none`: the bubble sits over the bars, and
                   // a pointer landing on it would read as leaving them, so the
                   // tooltip would flicker itself out from under the cursor.
                   className={cn(
-                    "pointer-events-none absolute bottom-full z-10 mb-2 -translate-x-1/2 whitespace-nowrap",
+                    "pointer-events-none fixed z-[9999] -translate-x-1/2 -translate-y-full whitespace-nowrap",
                     "rounded-[6px] border px-2 py-1",
                     "border-grey-dark-100 bg-white text-grey-10",
                     "dark:border-black-300 dark:bg-black-600 dark:text-white",
                     "shadow-[0px_4px_12px_0px_rgba(0,0,0,0.12)]",
+                    // Hidden until measured, or the first frame paints it at
+                    // the top-left corner before the anchor is known.
+                    anchor ? "opacity-100" : "opacity-0",
                   )}
-                  style={{ left: `${hoveredCentre}%` }}
+                  style={{
+                    left: anchor?.x ?? 0,
+                    // 8px clear of the bars.
+                    top: (anchor?.y ?? 0) - 8,
+                  }}
                   role="status"
                 >
                   <span className="font-mono text-[11px] font-medium uppercase leading-4 tracking-[-0.22px]">
@@ -226,10 +268,13 @@ const BreakdownCard: React.FC<{
                       {hoveredSlice.note}
                     </span>
                   ) : null}
-                </div>
-              ) : null}
+                </div>,
+                document.body,
+                  )
+                : null}
 
               <div
+                ref={rowRef}
                 className="flex h-[72px] items-stretch gap-[3px]"
                 role="img"
                 aria-label={`${title}: ${slices

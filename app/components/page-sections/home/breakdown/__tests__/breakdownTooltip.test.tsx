@@ -64,6 +64,19 @@ describe("barOffsets", () => {
 });
 
 describe("BreakdownCard hover", () => {
+  // The card is `overflow-hidden` for its rounded corners, so a bubble drawn
+  // inside it is clipped at the edges — which for the first slice is
+  // immediately, and is exactly how this shipped invisible the first time.
+  it("renders the tooltip outside the card so it cannot be clipped", () => {
+    const { container } = renderCard();
+    fireEvent.mouseEnter(barsFor("images")[0]);
+
+    const tip = screen.getByRole("status");
+    expect(container.contains(tip)).toBe(false);
+    expect(document.body.contains(tip)).toBe(true);
+    expect(tip.className).toMatch(/fixed/);
+  });
+
   it("says nothing until a bar is hovered", () => {
     renderCard();
     expect(screen.queryByRole("status")).toBeNull();
@@ -99,7 +112,7 @@ describe("BreakdownCard hover", () => {
     fireEvent.mouseEnter(barsFor("images")[0]);
     expect(screen.getByRole("status")).toBeInTheDocument();
 
-    fireEvent.mouseLeave(container.querySelector(".relative")!);
+    fireEvent.mouseLeave(container.querySelector("[data-breakdown-chart]")!);
     expect(screen.queryByRole("status")).toBeNull();
   });
 
