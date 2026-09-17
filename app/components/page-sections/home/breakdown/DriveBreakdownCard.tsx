@@ -48,7 +48,15 @@ const DriveBreakdownCard: React.FC<{ className?: string }> = ({ className }) => 
       { key: "images", label: "Images", count: types.data?.images ?? 0, color: "#F34E5E" },
       { key: "videos", label: "Videos", count: types.data?.videos ?? 0, color: "#7CD4F5" },
       { key: "docs", label: "Docs", count: types.data?.docs ?? 0, color: "#3066DD" },
-      { key: "others", label: "Others", count: types.data?.others ?? 0, color: "#9A9A9A" },
+      {
+        key: "others",
+        label: "Others",
+        count: types.data?.others ?? 0,
+        color: "#9A9A9A",
+        // The same caveat the sources card carries on its grey bucket, so the
+        // two tabs explain themselves the same way.
+        note: "(before tracking)",
+      },
     ],
     [types.data],
   );
