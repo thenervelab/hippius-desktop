@@ -46,6 +46,7 @@ describe("useOwnedDriveSharing", () => {
     expect(result.current.get("team-docs")).toEqual({
       memberCount: 1,
       liveInviteCount: 1,
+      totalInviteCount: 1,
     });
   });
 
@@ -86,7 +87,7 @@ describe("useOwnedDriveSharing", () => {
     expect(isDriveShared(result.current.get("team-docs"))).toBe(false);
   });
 
-  it("counts a revoked or expired invite as not live", async () => {
+  it("still calls a drive shared when every invite has lapsed", async () => {
     listDriveMembersMock.mockResolvedValue([]);
     listDriveInvitesMock.mockResolvedValue([
       { ...liveInvite, revoked: true, valid: false },
@@ -95,7 +96,13 @@ describe("useOwnedDriveSharing", () => {
 
     const { result } = renderHook(() => useOwnedDriveSharing(["team-docs"]));
     await waitFor(() => expect(result.current.size).toBe(1));
-    expect(isDriveShared(result.current.get("team-docs"))).toBe(false);
+
+    const sharing = result.current.get("team-docs");
+    expect(sharing?.liveInviteCount).toBe(0);
+    expect(sharing?.totalInviteCount).toBe(2);
+    // The owner did share it, and the spent links are what they may want to
+    // review or replace.
+    expect(isDriveShared(sharing)).toBe(true);
   });
 
   it("asks for nothing when there are no drives", async () => {
@@ -106,9 +113,11 @@ describe("useOwnedDriveSharing", () => {
 
 describe("isDriveShared", () => {
   it.each([
-    ["members only", { memberCount: 1, liveInviteCount: 0 }, true],
-    ["a live invite only", { memberCount: 0, liveInviteCount: 1 }, true],
-    ["neither", { memberCount: 0, liveInviteCount: 0 }, false],
+    ["members only", { memberCount: 1, liveInviteCount: 0, totalInviteCount: 0 }, true],
+    ["a live invite", { memberCount: 0, liveInviteCount: 1, totalInviteCount: 1 }, true],
+    // The case that was being hidden: shared once, every link since lapsed.
+    ["only lapsed links", { memberCount: 0, liveInviteCount: 0, totalInviteCount: 2 }, true],
+    ["never shared", { memberCount: 0, liveInviteCount: 0, totalInviteCount: 0 }, false],
   ])("%s", (_l, sharing, expected) => {
     expect(isDriveShared(sharing)).toBe(expected);
   });

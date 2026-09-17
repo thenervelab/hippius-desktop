@@ -125,3 +125,31 @@ describe("rolesByLocalLabel", () => {
     expect(rolesByLocalLabel([]).size).toBe(0);
   });
 });
+
+// The state that was rendering as "never shared": the owner shared the drive,
+// every link has since lapsed, and nobody joined.
+describe("a drive whose invites have all lapsed", () => {
+  it("is still marked, and says what happened", () => {
+    const sharing = driveRowSharing({ totalInviteCount: 2 });
+    expect(sharing.isShared).toBe(true);
+    expect(sharing.direction).toBe("by-me");
+    expect(sharing.label).toBe("Link expired");
+  });
+
+  it("prefers a live link over a lapsed one", () => {
+    expect(
+      driveRowSharing({ liveInviteCount: 1, totalInviteCount: 3 }).label,
+    ).toBe("Invite sent");
+  });
+
+  it("prefers members over any link state", () => {
+    expect(
+      driveRowSharing({ memberCount: 2, liveInviteCount: 0, totalInviteCount: 5 })
+        .label,
+    ).toBe("Shared with 2");
+  });
+
+  it("leaves a drive with no invites and no members unmarked", () => {
+    expect(driveRowSharing({ totalInviteCount: 0 }).isShared).toBe(false);
+  });
+});

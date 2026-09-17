@@ -147,7 +147,7 @@ describe("a drive the owner has shared", () => {
     render(
       <FolderList
         rows={[localRow({ id: "own", folderName: "team-docs" })]}
-        sharingByLabel={new Map([["team-docs", { memberCount: 3, liveInviteCount: 0 }]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 3, liveInviteCount: 0, totalInviteCount: 0 }]])}
       />,
     );
     expect(screen.getByText("Shared with 3")).toBeInTheDocument();
@@ -157,7 +157,7 @@ describe("a drive the owner has shared", () => {
     render(
       <FolderList
         rows={[localRow({ id: "own", folderName: "team-docs" })]}
-        sharingByLabel={new Map([["team-docs", { memberCount: 0, liveInviteCount: 0 }]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 0, liveInviteCount: 0, totalInviteCount: 0 }]])}
       />,
     );
     expect(screen.queryByText(/Shared/)).not.toBeInTheDocument();
@@ -176,7 +176,7 @@ describe("a drive the owner has shared", () => {
       <FolderList
         rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
         rolesByLabel={new Map([["team-docs", "writer" as const]])}
-        sharingByLabel={new Map([["team-docs", { memberCount: 9, liveInviteCount: 0 }]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 9, liveInviteCount: 0, totalInviteCount: 0 }]])}
       />,
     );
     expect(screen.getByText("Shared · Editor")).toBeInTheDocument();
@@ -190,7 +190,7 @@ describe("Manage access on the row", () => {
     render(
       <FolderList
         rows={[localRow({ id: "own", folderName: "team-docs" })]}
-        sharingByLabel={new Map([["team-docs", { memberCount: 2, liveInviteCount: 0 }]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 2, liveInviteCount: 0, totalInviteCount: 0 }]])}
         onManageAccess={onManageAccess}
       />,
     );
@@ -205,7 +205,7 @@ describe("Manage access on the row", () => {
     render(
       <FolderList
         rows={[localRow({ id: "own", folderName: "team-docs" })]}
-        sharingByLabel={new Map([["team-docs", { memberCount: 0, liveInviteCount: 0 }]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 0, liveInviteCount: 0, totalInviteCount: 0 }]])}
         onManageAccess={vi.fn()}
       />,
     );
@@ -219,7 +219,7 @@ describe("Manage access on the row", () => {
     render(
       <FolderList
         rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
-        sharingByLabel={new Map([["team-docs", { memberCount: 5, liveInviteCount: 0 }]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 5, liveInviteCount: 0, totalInviteCount: 0 }]])}
         onManageAccess={vi.fn()}
       />,
     );
@@ -234,7 +234,7 @@ describe("Manage access on the row", () => {
     render(
       <FolderList
         rows={[localRow({ id: "own", folderName: "team-docs" })]}
-        sharingByLabel={new Map([["team-docs", { memberCount: 1, liveInviteCount: 0 }]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 1, liveInviteCount: 0, totalInviteCount: 0 }]])}
         onManageAccess={vi.fn()}
         onOpenRow={onOpenRow}
       />,

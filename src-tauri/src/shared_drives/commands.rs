@@ -821,7 +821,8 @@ pub async fn list_drive_invites(app: tauri::AppHandle, label: String) -> Result<
     let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
 
     let invites = http_list_invites(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
-    info!(label = %label, count = invites.len(), "Listed drive invites");
+    let live = invites.iter().filter(|i| i.valid && !i.revoked).count();
+    info!(label = %label, count = invites.len(), live, "Listed drive invites");
     Ok(invites)
 }
 

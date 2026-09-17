@@ -57,6 +57,8 @@ export function driveRowSharing(params: {
    * badge cannot key on members alone.
    */
   liveInviteCount?: number;
+  /** Every invite the server still lists, lapsed and revoked included. */
+  totalInviteCount?: number;
 }): DriveRowSharing {
   // A drive belonging to someone else carries their ss58 on the row; both
   // identity columns are NULL on an own drive by construction.
@@ -99,6 +101,19 @@ export function driveRowSharing(params: {
         liveInvites === 1
           ? "An invite link to this drive is live"
           : `${liveInvites} invite links to this drive are live`,
+    };
+  }
+
+  // Shared once, but every link has lapsed and nobody joined. Still marked:
+  // the owner did share it, and the spent links are the thing they may want
+  // to review or replace. Saying so is more use than saying nothing.
+  if ((params.totalInviteCount ?? 0) > 0) {
+    return {
+      isShared: true,
+      direction: "by-me",
+      label: "Link expired",
+      title:
+        "You shared this drive, but no invite link is still live and nobody has joined",
     };
   }
 

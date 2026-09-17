@@ -70,6 +70,7 @@ const SharedMark: React.FC<{
     role,
     memberCount: driveSharing?.memberCount,
     liveInviteCount: driveSharing?.liveInviteCount,
+    totalInviteCount: driveSharing?.totalInviteCount,
   });
   if (!sharing.isShared) return null;
 

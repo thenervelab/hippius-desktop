@@ -15,6 +15,16 @@ export interface DriveSharing {
   memberCount: number;
   /** Invite links that can still admit someone. */
   liveInviteCount: number;
+  /**
+   * Every invite ever minted for this drive that the server still lists,
+   * expired and revoked included.
+   *
+   * The badge keys on this rather than on live links alone. An owner who
+   * shared a drive last week and whose link has since lapsed still shared it,
+   * still has links worth reviewing, and would not understand a row that
+   * looked identical to one they had never touched.
+   */
+  totalInviteCount: number;
 }
 
 const EMPTY: ReadonlyMap<string, DriveSharing> = new Map();
@@ -93,6 +103,10 @@ export function useOwnedDriveSharing(
                   ? invitesResult.value.filter((i) => i.valid && !i.revoked)
                       .length
                   : 0,
+              totalInviteCount:
+                invitesResult.status === "fulfilled"
+                  ? invitesResult.value.length
+                  : 0,
             },
           ] as const;
         }),
@@ -113,8 +127,16 @@ export function useOwnedDriveSharing(
   return sharing;
 }
 
-/** Whether a drive has been shared at all. */
+/**
+ * Whether a drive has been shared at all.
+ *
+ * Any invite counts, not just a live one. Keying on live links alone made a
+ * drive whose invites had lapsed look exactly like one that was never shared
+ * -- no badge, no way in to the links -- which is wrong twice over: the owner
+ * did share it, and the lapsed links are the very thing they might want to
+ * review or replace.
+ */
 export function isDriveShared(sharing: DriveSharing | undefined): boolean {
   if (!sharing) return false;
-  return sharing.memberCount > 0 || sharing.liveInviteCount > 0;
+  return sharing.memberCount > 0 || sharing.totalInviteCount > 0;
 }
