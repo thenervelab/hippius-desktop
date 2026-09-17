@@ -47,6 +47,7 @@ import {
 } from "@/app/lib/tauri/sharedDrives";
 import {
   DRIVE_ROLES,
+  MANAGER_INVITE_MAX_SECONDS,
   driveRoleDescription,
   driveRoleLabel,
   parseDriveRole,
@@ -76,6 +77,9 @@ export default function ShareDriveModal() {
   const [tab, setTab] = useState<Tab>("invite");
   const [invite, setInvite] = useState<InviteState>({ kind: "choosing" });
   const [ttlSecs, setTtlSecs] = useState<number>(DEFAULT_INVITE_TTL_SECS);
+  // `writer` is what every build before the picker minted, so the default
+  // choice changes nothing for someone who does not touch it.
+  const [inviteRole, setInviteRole] = useState<DriveRole>("writer");
   const [members, setMembers] = useState<MembersState>({ kind: "idle" });
   // Auto-copy fires once per `done` transition (the ShareFileModal rule).
   const autoCopiedRef = useRef(false);
@@ -130,7 +134,17 @@ export default function ShareDriveModal() {
     setInvite({ kind: "running" });
     autoCopiedRef.current = false;
     try {
-      const link = await createDriveInvite(labelAtCall, { expiresInSecs: ttlSecs });
+      // A manager invite is capped by the server at one use and 24 hours, and
+      // exceeding either is a 400. Clamping here means the link the user gets
+      // is the link the form described, rather than a rejection after the fact.
+      const effectiveTtl =
+        inviteRole === "manager"
+          ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
+          : ttlSecs;
+      const link = await createDriveInvite(labelAtCall, {
+        expiresInSecs: effectiveTtl,
+        role: inviteRole,
+      });
       if (labelAtCall !== currentLabelRef.current) return;
       setInvite({ kind: "done", inviteUrl: link.inviteUrl });
     } catch (err) {
@@ -145,7 +159,7 @@ export default function ShareDriveModal() {
         setInvite({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [label, ttlSecs]);
+  }, [label, ttlSecs, inviteRole]);
 
   // Auto-copy once we reach `done`; the URL stays in a selectable textbox
   // so the user can re-copy if focus rules block the auto-copy.
@@ -234,6 +248,8 @@ export default function ShareDriveModal() {
             state={invite}
             ttlSecs={ttlSecs}
             onTtlChange={setTtlSecs}
+            role={inviteRole}
+            onRoleChange={setInviteRole}
             onMint={() => void mintInvite()}
             onRetry={() => setInvite({ kind: "choosing" })}
             onClose={() => setTarget(null)}
@@ -254,6 +270,8 @@ function InviteTab({
   state,
   ttlSecs,
   onTtlChange,
+  role,
+  onRoleChange,
   onMint,
   onRetry,
   onClose,
@@ -261,6 +279,8 @@ function InviteTab({
   state: InviteState;
   ttlSecs: number;
   onTtlChange: (secs: number) => void;
+  role: DriveRole;
+  onRoleChange: (role: DriveRole) => void;
   onMint: () => void;
   onRetry: () => void;
   onClose: () => void;
@@ -302,8 +322,27 @@ function InviteTab({
   }
 
   const running = state.kind === "running";
+  const managerCapped = role === "manager";
   return (
     <div>
+      <div className="mb-5 flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+          They join as
+        </span>
+        <Select
+          ariaLabel="Invite role"
+          value={role}
+          onValueChange={(value) => onRoleChange(value as DriveRole)}
+          options={DRIVE_ROLES.map((r) => ({
+            label: driveRoleLabel(r),
+            value: r,
+          }))}
+        />
+        <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
+          {driveRoleDescription(role)}
+        </p>
+      </div>
+
       <div className="mb-6 flex flex-col gap-1.5">
         <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">Invite expires</span>
         <Select
@@ -316,9 +355,11 @@ function InviteTab({
           }))}
         />
         <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-          {neverExpires
-            ? "Anyone with the link can join this drive — and read and change its files — for as long as the link exists. Share it only with people you trust."
-            : "Anyone with the link can join this drive — and read and change its files — until the link expires. Share it only with people you trust."}
+          {managerCapped
+            ? "A manager link can only be used once and expires within 24 hours, whatever is chosen above — managers can invite and remove people, so the link itself is short-lived."
+            : neverExpires
+              ? `Anyone with the link can join this drive as ${driveRoleLabel(role)} for as long as the link exists. Share it only with people you trust.`
+              : `Anyone with the link can join this drive as ${driveRoleLabel(role)} until the link expires. Share it only with people you trust.`}
         </p>
       </div>
 

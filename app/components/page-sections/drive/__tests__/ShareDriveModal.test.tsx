@@ -89,6 +89,13 @@ beforeEach(() => {
   flagState.sharedDrivesEnabled = true;
 });
 
+
+/** Drive the custom Select: open by its aria-label, then click the option. */
+function chooseRole(optionLabel: string) {
+  fireEvent.click(screen.getByLabelText("Invite role"));
+  fireEvent.click(screen.getByText(optionLabel));
+}
+
 describe("flag gating", () => {
   it("renders nothing while SHARED_DRIVES_ENABLED is off, even with a target set", () => {
     flagState.sharedDrivesEnabled = false;
@@ -114,6 +121,9 @@ describe("invite tab", () => {
 
     expect(createDriveInviteMock).toHaveBeenCalledWith("team-docs", {
       expiresInSecs: 7 * 24 * 60 * 60,
+      // `writer` is the historical default, so an untouched form mints
+      // exactly what every build before the picker did.
+      role: "writer",
     });
     await screen.findByDisplayValue("https://console.example.com/invite/tok#k=abc");
     await waitFor(() =>
@@ -165,6 +175,44 @@ describe("invite tab", () => {
     // the user is never sent to the console for a plan the app can change.
     fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
     expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
+  });
+
+  it("mints as Editor by default, which is what every prior build minted", async () => {
+    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /create invite link/i }));
+
+    await waitFor(() =>
+      expect(createDriveInviteMock).toHaveBeenCalledWith(
+        "team-docs",
+        expect.objectContaining({ role: "writer" }),
+      ),
+    );
+  });
+
+  // The server caps a manager link at one use and 24 hours and answers 400
+  // past either. Clamping in the form means the link the user gets is the link
+  // the form described, instead of a rejection after they configured it.
+  it("clamps a manager invite to the server's 24-hour cap", async () => {
+    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+
+    renderModal();
+    chooseRole("Manager");
+    fireEvent.click(screen.getByRole("button", { name: /create invite link/i }));
+
+    await waitFor(() => expect(createDriveInviteMock).toHaveBeenCalled());
+    const [, opts] = createDriveInviteMock.mock.calls[0];
+    expect(opts.role).toBe("manager");
+    expect(opts.expiresInSecs).toBeLessThanOrEqual(24 * 60 * 60);
+  });
+
+  it("names the role in the warning, so the link's power is stated", async () => {
+    renderModal();
+    chooseRole("Viewer");
+
+    expect(screen.getByText(/join this drive as Viewer/i)).toBeInTheDocument();
+    expect(screen.getByText(/Can open and download files/i)).toBeInTheDocument();
   });
 });
 
