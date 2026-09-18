@@ -36,6 +36,10 @@ import {
 } from "@/app/lib/utils/userPreferencesDb";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import {
+  driveRoleLabel,
+  parseDriveRole,
+} from "@/app/lib/shared-drives/roles";
+import {
   getMembershipRowAction,
   getSharedWithMeView,
   type SharedWithMeData,
@@ -142,7 +146,11 @@ export function SharedWithMeSection({ onDriveAdded }: SharedWithMeSectionProps) 
                     className="truncate font-mono text-[11px] text-grey-50 dark:text-grey-dark-600"
                     title={membership.ownerSs58}
                   >
-                    {middleTruncate(membership.ownerSs58, 22)} · {membership.role}
+                    {middleTruncate(membership.ownerSs58, 22)} ·{" "}
+                    {/* The wire says reader/writer/manager; people read
+                        Viewer/Editor/Manager. This row printed the wire word
+                        raw, so a shared drive announced itself as "writer". */}
+                    {driveRoleLabel(parseDriveRole(membership.role))}
                   </p>
                 </div>
               </div>
