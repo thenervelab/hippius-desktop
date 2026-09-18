@@ -10,6 +10,7 @@ import {
   canManageDrive,
   canWriteToDrive,
   parseDriveRole,
+  type DriveRole,
 } from "@/app/lib/shared-drives/roles";
 import { isDriveShared, useOwnedDriveSharing } from "./useOwnedDriveSharing";
 import { useSharedDriveMembership } from "./useSharedDriveRoles";
@@ -21,6 +22,13 @@ export interface DriveSharing {
   sharing: DriveRowSharing;
   /** Shared in either direction: by this account, or with it. */
   isShared: boolean;
+  /**
+   * The role this account holds on the drive, when it is one shared WITH
+   * them and the membership listing has answered. `null` for an own drive
+   * (ownership is identity, not a role) and while the listing is in flight,
+   * where claiming a role would be guessing.
+   */
+  role: DriveRole | null;
   /**
    * Whether the viewer may manage who has access — invite, remove, re-role.
    *
@@ -49,6 +57,7 @@ export interface DriveSharing {
 const NOT_SHARED: DriveSharing = {
   sharing: { isShared: false, direction: null, label: null, title: null },
   isShared: false,
+  role: null,
   canManage: false,
   canWrite: true,
 };
@@ -79,12 +88,14 @@ export function useDriveSharing(label: string | null | undefined): DriveSharing 
       role: membership?.role,
       ...own,
     });
+    const role = membership ? parseDriveRole(membership.role) : null;
     return {
       sharing,
       isShared: sharing.isShared,
+      role,
       canManage: canManageDrive({
         isOwner: !membership,
-        role: membership ? parseDriveRole(membership.role) : undefined,
+        role: role ?? undefined,
       })
         // An owner with nothing shared has nothing to manage; a manager
         // always does, since being one means the drive is already shared.
@@ -93,7 +104,7 @@ export function useDriveSharing(label: string | null | undefined): DriveSharing 
         // No membership row means this account owns the drive -- or the
         // listing has not answered yet, which reads the same way on purpose.
         isOwner: !membership,
-        role: membership ? parseDriveRole(membership.role) : undefined,
+        role: role ?? undefined,
       }),
     };
   }, [label, membership, own]);

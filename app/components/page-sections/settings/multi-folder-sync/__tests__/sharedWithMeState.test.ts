@@ -72,7 +72,9 @@ describe("the Shared with me row's role", () => {
       join(dirname(fileURLToPath(import.meta.url)), "../SharedWithMeSection.tsx"),
       "utf8",
     );
-    expect(source).toContain("driveRoleLabel(role)");
+    // The row now renders the shared role CHIP, which does the labelling
+    // itself. What must never appear is the raw wire word.
+    expect(source).toContain("<DriveRoleChip role={role} />");
     expect(source).toContain("parseDriveRole(membership.role)");
     expect(source).not.toMatch(/·\s*\{membership\.role\}/);
   });

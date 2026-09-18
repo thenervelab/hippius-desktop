@@ -30,6 +30,7 @@ import { middleTruncate } from "@/lib/utils/middleTruncate";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRowDate } from "@/components/page-sections/drive/folder-list/formatRowDate";
 import { RowDot as Dot } from "@/components/page-sections/drive/folder-list/RowDot";
+import DriveRoleChip from "@/components/page-sections/drive/DriveRoleChip";
 import {
   sharedDriveStatsKey,
   useSharedDriveStats,
@@ -256,15 +257,10 @@ export function SharedWithMeSection({
                   >
                     {membership.displayLabel}
                   </span>
-                  {/* The role as a chip, the shape the drive list already
-                      uses for "Shared with N" -- so the two read as one
-                      family rather than a badge beside loose text. */}
-                  <span className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-[#1F50BD]/50 bg-[#1F50BD]/10 px-2 py-0.5 text-[11px] font-medium text-[#1F50BD] dark:border-[#6b93ea]/50 dark:bg-[#6b93ea]/10 dark:text-[#9dbaf2]">
-                    <Users className="size-3" aria-hidden="true" />
-                    {/* The wire says reader/writer/manager; people read
-                        Viewer/Editor/Manager. */}
-                    {driveRoleLabel(role)}
-                  </span>
+                  {/* The console's role chip, ported verbatim: colour
+                      carries the same ordering the roles do, so a list can
+                      be read for access at a glance. */}
+                  <DriveRoleChip role={role} />
                   {action.kind === "synced" && (
                     <span className="flex-shrink-0 whitespace-nowrap text-[11px] font-medium text-[#04c870]">
                       Synced here

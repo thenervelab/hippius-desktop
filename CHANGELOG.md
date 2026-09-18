@@ -27,6 +27,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **Viewer, Editor and Manager now read as coloured badges**, the same ones the
+  web console uses, so a list of drives can be read for access at a glance.
 - **The Drive breakdown cards no longer list categories nothing is in.** A drive
   uploaded only from the console showed "Desktop 0", "Mobile 0" and "Other 0"
   under the bar; those rows are gone.

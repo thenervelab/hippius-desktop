@@ -19,6 +19,7 @@ import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
 import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
 import { parseDriveRole } from "@/app/lib/shared-drives/roles";
+import DriveRoleChip from "./DriveRoleChip";
 
 export default function DriveSharingHeaderMark({
   label,
@@ -62,9 +63,15 @@ export default function DriveSharingHeaderMark({
   if (!sharing.isShared) return null;
 
   const withMe = sharing.direction === "with-me";
+  // The role this account holds here, when it is known: a member drive is
+  // described by what the viewer may do in it, not by the word "Shared".
+  const heldRole = browsedSharedDrive ? browsedRole : bySynced.role;
 
   return (
     <div className="flex min-w-0 items-center gap-2">
+      {withMe && heldRole ? (
+        <DriveRoleChip role={heldRole} />
+      ) : (
       <span
         title={sharing.title ?? undefined}
         className={cn(
@@ -77,6 +84,7 @@ export default function DriveSharingHeaderMark({
         <Users className="size-3" aria-hidden="true" />
         {sharing.label}
       </span>
+      )}
 
       {/* Owners, and managers on a drive they do not own. A Viewer or Editor
           sees the badge and their role, which is the whole of what the drive

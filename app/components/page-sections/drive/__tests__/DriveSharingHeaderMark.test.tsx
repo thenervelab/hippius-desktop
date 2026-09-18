@@ -100,7 +100,11 @@ describe("the drive header's sharing mark", () => {
   it("shows a member their role and no Manage access", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([MEMBERSHIP]);
     renderMark();
-    expect(await screen.findByText("Shared · Editor")).toBeInTheDocument();
+    // A drive shared WITH you is described by the ROLE, in the console's
+    // colour-coded chip: that is the useful fact, and "Shared" is already
+    // obvious from the section it sits in.
+    expect(await screen.findByText("Editor")).toBeInTheDocument();
+    expect(screen.queryByText(/Shared ·/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
   });
 
@@ -109,7 +113,7 @@ describe("the drive header's sharing mark", () => {
   it("never asks the owner-only listing about a member drive", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([MEMBERSHIP]);
     renderMark();
-    await screen.findByText("Shared · Editor");
+    await screen.findByText("Editor");
     expect(listOwnedDriveSharingMock).not.toHaveBeenCalled();
   });
 

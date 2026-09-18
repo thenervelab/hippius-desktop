@@ -101,7 +101,7 @@ describe("shared drives in the list", () => {
         rolesByLabel={new Map([["team-docs", "manager" as const]])}
       />,
     );
-    expect(screen.getByText("Shared · Manager")).toBeInTheDocument();
+    expect(screen.getByText("Manager")).toBeInTheDocument();
   });
 
   // Rows and roles come from different sources. Showing "Shared" alone beats
@@ -179,7 +179,7 @@ describe("a drive the owner has shared", () => {
         sharingByLabel={new Map([["team-docs", { memberCount: 9, liveInviteCount: 0, totalInviteCount: 0 }]])}
       />,
     );
-    expect(screen.getByText("Shared · Editor")).toBeInTheDocument();
+    expect(screen.getByText("Editor")).toBeInTheDocument();
     expect(screen.queryByText(/Shared with 9/)).not.toBeInTheDocument();
   });
 });

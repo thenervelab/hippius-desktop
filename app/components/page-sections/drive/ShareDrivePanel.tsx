@@ -37,6 +37,7 @@ import { FramedDialog } from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import { Select } from "@/components/ui/select/Select";
+import DriveRoleChip from "./DriveRoleChip";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
@@ -709,13 +710,17 @@ function MemberRow({
             >
               {middleTruncate(member.memberSs58, 22)}
             </p>
-            <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
-              {/* The wire says reader/writer/manager; people read Viewer/
-                  Editor/Manager, and an unknown role degrades to Viewer
-                  rather than reading as management. */}
-              {driveRoleLabel(role)}
-              {joined ? ` · Joined ${joined}` : ""}
-            </p>
+            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
+              {/* The role reads as a chip here too, so a member list and a
+                  drive list say access the same way. An unknown role
+                  degrades to Viewer rather than reading as management. */}
+              <DriveRoleChip role={role} />
+              {joined && (
+                <span className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
+                  Joined {joined}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

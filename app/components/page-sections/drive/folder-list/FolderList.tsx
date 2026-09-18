@@ -13,6 +13,7 @@ import {
 } from "./folderListPaging";
 import { SettingsCard } from "@/components/page-sections/settings/SettingsCard";
 import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
+import DriveRoleChip from "../DriveRoleChip";
 import {
   isDriveShared,
   type DriveSharing,
@@ -63,6 +64,15 @@ const SharedMark: React.FC<{
     totalInviteCount: driveSharing?.totalInviteCount,
   });
   if (!sharing.isShared) return null;
+
+  // A drive somebody shared with US is described by the ROLE, in the console's
+  // colour-coded chip: that is the useful fact, and the chip says it in one
+  // word. The generic "Shared" badge below stays for the case the role has
+  // not arrived yet, where claiming a role would be guessing, and for a drive
+  // WE shared, which has no role to show.
+  if (sharing.direction === "with-me" && role) {
+    return <DriveRoleChip role={role} />;
+  }
 
   // Two opposite facts, so two readings. A drive shared WITH you is someone
   // else's and the useful thing is what you may do in it, so it takes the
