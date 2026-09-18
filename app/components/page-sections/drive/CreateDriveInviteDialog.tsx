@@ -288,11 +288,26 @@ function InviteDone({
     }
   };
 
+  // Title, then what the link grants, then the link, then the action on it,
+  // then the way out. The explanation used to sit BETWEEN the copy button and
+  // Done, which put a paragraph in the one gap the eye travels fastest and
+  // left the title sitting directly on top of an opaque blob of URL.
   return (
     <div>
+      <p className="mb-4 text-center text-xs text-grey-50 dark:text-grey-dark-600">
+        {neverExpires
+          ? "This link never expires — anyone who has it can join the drive. "
+          : "Anyone with this link can join the drive until it expires. "}
+        {/* The old copy sent people to Members to "revoke access", which only
+            removes someone who already joined and does nothing about a link
+            still circulating. Now that links can be revoked, say so. */}
+        Revoke the link itself in the Links tab, or remove someone who has
+        already joined from Members.
+      </p>
+
       <div
         className={cn(
-          "mb-3 flex items-start gap-2 rounded-[8px] border p-3",
+          "mb-3 rounded-[8px] border p-3",
           "border-grey-80 bg-white",
           "dark:border-[#494949] dark:bg-[#1f1f1f]",
         )}
@@ -301,16 +316,20 @@ function InviteDone({
           readOnly
           value={inviteUrl}
           onFocus={(e) => e.currentTarget.select()}
-          rows={2}
+          rows={3}
           className={cn(
-            "flex-1 resize-none overflow-hidden break-all bg-transparent font-mono text-xs outline-none",
+            // `overflow-y-auto`, never `hidden`: a token's length varies, and
+            // a clipped URL reads as a broken one. The reader has to be able
+            // to see the whole thing they are about to hand someone.
+            "block w-full resize-none overflow-y-auto break-all bg-transparent font-mono text-xs leading-relaxed outline-none",
             "text-grey-10 dark:text-grey-dark-800",
           )}
         />
       </div>
 
       {/* The link is the whole point of this screen, so copying it is the
-          primary action rather than an icon tucked beside the field. */}
+          primary action rather than an icon tucked beside the field, and it
+          sits directly under the thing it copies. */}
       <Button
         type="button"
         variant="primary"
@@ -321,17 +340,6 @@ function InviteDone({
         {copied ? <Check className="size-4" /> : <Icons.Copy className="size-4" />}
         {copied ? "Copied to clipboard" : "Copy link"}
       </Button>
-
-      <p className="mb-6 text-xs text-grey-50 dark:text-grey-dark-600">
-        {neverExpires
-          ? "This link never expires — anyone who has it can join the drive. "
-          : "Anyone with this link can join the drive until it expires. "}
-        {/* The old copy sent people to Members to "revoke access", which only
-            removes someone who already joined and does nothing about a link
-            still circulating. Now that links can be revoked, say so. */}
-        Revoke the link itself in the Links tab, or remove someone who has
-        already joined from Members.
-      </p>
 
       <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={secondaryButtonClass}>
         Done

@@ -252,6 +252,33 @@ describe("the invite dialog's frame", () => {
     expect(source).toContain('contentClassName="sm:w-[405px]"');
   });
 
+  // Title → what the link grants → the link → copy it → done. The paragraph
+  // used to sit between Copy and Done, which put prose in the gap the eye
+  // crosses fastest and sat the title straight on top of a wall of URL.
+  it("orders the finished screen explanation, link, copy, done", () => {
+    const done = source.slice(source.indexOf("function InviteDone"));
+    const explanation = done.indexOf("never expires");
+    const link = done.indexOf("<textarea");
+    const copy = done.indexOf("Copy link");
+    const dismiss = done.indexOf(">\n        Done");
+    for (const [name, i] of Object.entries({ explanation, link, copy, dismiss })) {
+      expect(i, `${name} must be present`).toBeGreaterThan(-1);
+    }
+    expect(explanation).toBeLessThan(link);
+    expect(link).toBeLessThan(copy);
+    expect(copy).toBeLessThan(dismiss);
+  });
+
+  // A token's length varies, so a fixed box WILL cut some links off. A
+  // half-shown URL reads as a broken one, and the reader cannot check what
+  // they are about to hand someone.
+  it("never clips the invite link", () => {
+    const done = source.slice(source.indexOf("function InviteDone"));
+    const field = done.slice(done.indexOf("<textarea"), done.indexOf("/>", done.indexOf("<textarea")));
+    expect(field).toContain("overflow-y-auto");
+    expect(field).not.toContain("overflow-hidden");
+  });
+
   it("matches the widths ConfirmationDialog defaults to", () => {
     const confirmation = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "../../../ConfirmationDialog.tsx"),
