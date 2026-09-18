@@ -90,3 +90,32 @@ export function canWriteToDrive(params: {
  */
 export const MANAGER_INVITE_MAX_USES = 1;
 export const MANAGER_INVITE_MAX_SECONDS = 24 * 60 * 60;
+
+/** Rank, for deciding whether a role change is a demotion. */
+const ROLE_RANK: Record<DriveRole, number> = {
+  reader: 0,
+  writer: 1,
+  manager: 2,
+};
+
+/**
+ * What a role change costs the member, when it costs them something.
+ *
+ * The server makes a demotion sticky: it revokes the invite that admitted
+ * the member when that link outranks their new role, and demoting a manager
+ * revokes every live invite THAT manager minted, so a spare link cannot
+ * re-escalate anyone. Both are invisible from the picker, and both are
+ * discovered later as links that mysteriously stopped working -- so the role
+ * dialog says it before Save.
+ *
+ * `null` for an unchanged role and for a promotion, which takes nothing away.
+ */
+export function driveRoleDemotionWarning(
+  current: DriveRole,
+  next: DriveRole,
+): string | null {
+  if (ROLE_RANK[next] >= ROLE_RANK[current]) return null;
+  return current === "manager"
+    ? "Demoting a manager also revokes every invite link they created, so a spare link cannot restore their access."
+    : "The invite link that admitted them is revoked too, if it granted more than their new role.";
+}

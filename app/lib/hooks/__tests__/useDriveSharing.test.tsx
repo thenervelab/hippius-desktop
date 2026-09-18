@@ -74,6 +74,52 @@ describe("useDriveSharing", () => {
     expect(listOwnedDriveSharingMock).not.toHaveBeenCalled();
   });
 
+  // The gap this closed: a Viewer was offered Upload File / Upload Folder /
+  // New Folder on a drive the server refuses every write to, so the refusal
+  // arrived later as a sync error, far from the button that caused it.
+  it("refuses writes for a Viewer on somebody else's drive", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([
+      {
+        ownerSs58: "5Owner",
+        folderHash: "h",
+        displayLabel: "team",
+        role: "reader",
+        createdAt: "",
+        syncedLocally: true,
+        localLabel: "team",
+      },
+    ]);
+    const { result } = renderHook(() => useDriveSharing("team"), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.canWrite).toBe(false));
+  });
+
+  it("allows an Editor to write", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([
+      {
+        ownerSs58: "5Owner",
+        folderHash: "h",
+        displayLabel: "team",
+        role: "writer",
+        createdAt: "",
+        syncedLocally: true,
+        localLabel: "team",
+      },
+    ]);
+    const { result } = renderHook(() => useDriveSharing("team"), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isShared).toBe(true));
+    expect(result.current.canWrite).toBe(true);
+  });
+
+  // Own drives vastly outnumber member ones, so a write control that appears
+  // a moment late on every drive is a worse trade than one that briefly
+  // appears for a Viewer.
+  it("permits writes on an own drive, and while the listing is in flight", async () => {
+    const { result } = renderHook(() => useDriveSharing("solo"), { wrapper: wrapper() });
+    expect(result.current.canWrite).toBe(true);
+    await waitFor(() => expect(listOwnedDriveSharingMock).toHaveBeenCalled());
+    expect(result.current.canWrite).toBe(true);
+  });
+
   it("asks nothing when no drive is open", () => {
     const { result } = renderHook(() => useDriveSharing(null), { wrapper: wrapper() });
     expect(result.current.isShared).toBe(false);

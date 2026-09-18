@@ -6,6 +6,7 @@ import {
   MANAGER_INVITE_MAX_USES,
   canManageDrive,
   canWriteToDrive,
+  driveRoleDemotionWarning,
   driveRoleDescription,
   driveRoleLabel,
   parseDriveRole,
@@ -105,5 +106,28 @@ describe("cross-client contract", () => {
   it("types every wire role as a DriveRole", () => {
     const roles: DriveRole[] = [...DRIVE_ROLES];
     expect(roles).toHaveLength(3);
+  });
+});
+
+// The server makes a demotion sticky, and neither effect is visible from the
+// picker -- both are discovered later as links that stopped working.
+describe("driveRoleDemotionWarning", () => {
+  it("names the manager case, where every link that manager minted dies", () => {
+    expect(driveRoleDemotionWarning("manager", "reader")).toContain(
+      "every invite link they created",
+    );
+  });
+
+  it("warns on an editor demoted to viewer", () => {
+    expect(driveRoleDemotionWarning("writer", "reader")).toContain("revoked");
+  });
+
+  it("stays quiet on a promotion, which takes nothing away", () => {
+    expect(driveRoleDemotionWarning("reader", "manager")).toBeNull();
+    expect(driveRoleDemotionWarning("reader", "writer")).toBeNull();
+  });
+
+  it("stays quiet when the role did not change", () => {
+    expect(driveRoleDemotionWarning("writer", "writer")).toBeNull();
   });
 });

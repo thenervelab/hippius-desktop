@@ -61,6 +61,7 @@ import {
 } from "@/app/lib/shared-drives/inviteRowView";
 import {
   DRIVE_ROLES,
+  driveRoleDemotionWarning,
   driveRoleDescription,
   driveRoleLabel,
   parseDriveRole,
@@ -574,6 +575,7 @@ function ChangeRoleDialog({
 }) {
   const current = parseDriveRole(member.role);
   const [role, setRole] = useState<DriveRole>(current);
+  const demotionWarning = driveRoleDemotionWarning(current, role);
 
   return (
     <FramedDialog
@@ -605,6 +607,16 @@ function ChangeRoleDialog({
           <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
             {driveRoleDescription(role)}
           </p>
+          {/* A demotion has a side effect nobody would guess: the server
+              revokes the link that admitted this member when it outranks
+              their new role, and demoting a manager revokes every link that
+              manager minted. Said here, before Save, rather than discovered
+              later as links that stopped working. */}
+          {demotionWarning && (
+            <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
+              {demotionWarning}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-3">

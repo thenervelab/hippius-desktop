@@ -27,6 +27,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **A Viewer is no longer offered uploads they cannot make.** On a drive shared
+  with you as a Viewer, the upload buttons are absent rather than failing later
+  as a sync error. Editors and Managers are unaffected.
+- **Changing a role says what it costs before you save it.** Demoting someone now
+  warns that the invite link which admitted them is revoked too, and that
+  demoting a manager revokes every link that manager created.
 - **File Details says who uploaded a file in a shared drive.** Opening a file in
   a drive you share shows the person who put it there, or "You" when it was you.
   Files on your own private drives are unchanged — there is only one answer there.

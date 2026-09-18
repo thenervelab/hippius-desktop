@@ -135,6 +135,8 @@ interface DriveHeaderProps {
    */
   openDriveLabel?: string | null;
   openDriveDisplayName?: string | null;
+  /** True when the open drive is one this account may only read. */
+  isReadOnlyDrive?: boolean;
   // Nested folder browsing mode. When `isNested` is true:
   //  - the Upload File and Upload Folder actions target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
@@ -199,6 +201,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   breadcrumbSegments = [],
   openDriveLabel,
   openDriveDisplayName,
+  isReadOnlyDrive = false,
   onBreadcrumbLocalClick,
   isNested = false,
   nestedFolderName = null,
@@ -229,6 +232,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   // One decision for both upload buttons — see `resolveUploadAction`.
   const uploadAction = resolveUploadAction({
     hideUploads,
+    isReadOnlyDrive,
     isRecentFiles: Boolean(isRecentFiles),
     hasNoSyncPaths: Boolean(hasNoSyncPaths),
     isSyncPathEmpty: Boolean(isSyncPathEmpty),

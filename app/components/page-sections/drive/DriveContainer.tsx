@@ -60,6 +60,7 @@ import {
   pickFolderZipSavePath,
 } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
+import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useAtomValue, useSetAtom } from "jotai";
 import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
@@ -1385,6 +1386,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     activeSyncFolderLabel,
   ]);
 
+  // A Viewer on somebody else's drive may not add to it. The server refuses
+  // the write anyway, so this decides only what the UI OFFERS -- and an
+  // upload button that can only fail reports the failure as a sync error,
+  // far from the button that caused it.
+  const { canWrite: openDriveCanWrite } = useDriveSharing(openDriveLabel);
+
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];
     const segments: BreadcrumbSegment[] = [];
@@ -1959,6 +1966,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
                 openDriveLabel={openDriveLabel}
+                isReadOnlyDrive={!openDriveCanWrite}
                 openDriveDisplayName={
                   openDriveLabel
                     ? (labelDisplayNames[openDriveLabel] ?? openDriveLabel)
