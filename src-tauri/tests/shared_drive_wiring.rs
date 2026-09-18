@@ -435,8 +435,8 @@ fn revoked_latch_clears_ride_the_existing_teardown_edges() {
 }
 
 /// A MANAGER minting on a drive they do not own must take the folder key from
-/// the drive's OWNER-sealed `enc_mnemonic.json`, never from this account's
-/// master.
+/// the ONE resolver that knows where a drive's key lives, never from a copy
+/// of that branch.
 ///
 /// The master chain (`derive_folder_mnemonic(master, label)`) yields the key
 /// for a drive of that name owned by THIS account. On a member drive it is
@@ -450,24 +450,24 @@ fn a_delegated_mint_takes_the_owners_sealed_folder_key() {
     let body = fn_body(&shared_drive_commands_src(), "pub async fn create_drive_invite");
 
     assert!(
-        body.contains("identity.is_member"),
-        "the mint must branch on member-ness before choosing a key source"
-    );
-    assert!(
-        body.contains("enc_mnemonic.json"),
-        "a delegated mint must read the owner-sealed folder mnemonic"
-    );
-    assert!(
-        body.contains("recover_mnemonic"),
-        "the sealed folder mnemonic must be opened, not re-derived"
+        body.contains("folder_phrase_for_label"),
+        "the mint must take its folder key from the one resolver that knows all three sources"
     );
 
-    // The master chain must still be there for an owner's own mint, but it
-    // must not be the only source.
+    // It used to carry its own copy of the member branch, and that copy read
+    // the drive password WITHOUT the session mnemonic -- so an encrypted
+    // password could not be decrypted and a manager could not mint at all.
+    // The resolver takes the mnemonic; a second copy here would be free to
+    // forget it again.
     assert!(
-        body.contains("derive_folder_mnemonic"),
-        "an owner's own mint still derives from the master"
+        !body.contains("enc_mnemonic.json"),
+        "the mint must not re-implement where a member drive's key lives"
     );
+    assert!(
+        !body.contains("get_drive_password"),
+        "the mint must not read the drive password itself: that is how it came to read it without a mnemonic"
+    );
+    assert!(!body.contains("derive_folder_mnemonic"), "nor re-derive an own drive's phrase");
 }
 
 /// Every delegated management call names the drive's owner.

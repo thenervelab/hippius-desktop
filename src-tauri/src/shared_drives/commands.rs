@@ -860,34 +860,21 @@ pub async fn create_drive_invite(
     // means every return path — including the HTTP error below — scrubs the
     // entropy by drop, with no manual zeroize choreography to miss.
     let entropy: Zeroizing<[u8; 32]> = {
+        // The master read is serialized against password rotation
+        // (`recovery_lock`), the sanctioned discipline for every
+        // master-mnemonic consumer. `Zeroizing` means every return path --
+        // including the HTTP error below -- scrubs the entropy by drop.
         let _recovery_guard = state.recovery_lock.lock().await;
-        if identity.is_member {
-            // A MANAGER minting for a drive they do not own. The folder key is
-            // the OWNER's and is NOT derivable from this account's master --
-            // it was sealed into this drive's `enc_mnemonic.json` when the
-            // grant was accepted. Deriving from the master here would mint a
-            // link whose `#k=` fragment decrypts nothing, and the recipient
-            // would discover that only after joining. Same reasoning, and the
-            // same file, as `remote::encryption_key_for_label`.
-            let password = crate::sync::config::get_drive_password(state.pool()?, &ctx.account_id, None).await?;
-            let folder_enc = crate::sync::mnemonic::config_dir_for_folder(&ctx.account_id, &label)?.join("enc_mnemonic.json");
-            if folder_enc.exists() {
-                let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
-                    .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
-                let phrase = Zeroizing::new(folder.to_string());
-                grant::entropy_from_phrase(&phrase)?
-            } else {
-                // A manager who never synced this drive has no seal on disk.
-                // The same key is in their own grant blob on the server,
-                // sealed to them, so open that instead of refusing. Argon2id
-                // is ~1.5s, so it is offloaded -- never a KDF on the runtime.
-                open_grant_entropy_inner(&state, &ctx, &identity).await?
-            }
-        } else {
-            let master = crate::sync::mnemonic::get_mnemonic_for_account(&state, &ctx.account_id).await?;
-            let phrase = Zeroizing::new(crate::sync::mnemonic::derive_folder_mnemonic(&master, &label)?);
-            grant::entropy_from_phrase(&phrase)?
-        }
+        // ONE resolver for the folder key, shared with uploads and renames.
+        // It knows all three sources: this account's master for an own drive,
+        // the OWNER-sealed mnemonic for a member drive synced here, and this
+        // account's own grant for one that never was. The mint used to carry
+        // its own copy of that branch, which read the drive password without
+        // the session mnemonic -- so an encrypted password could not be
+        // decrypted and a manager simply could not mint.
+        let mnemonic = crate::sync::remote::session_mnemonic(&state)?;
+        let phrase = crate::sync::remote::folder_phrase_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await?;
+        grant::entropy_from_phrase(&phrase)?
     };
 
     // Omitted parameters resolve to the desktop policy here, not on the
