@@ -480,7 +480,13 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               Lives inside the outer grey card's top section (px-2.5 py-2 per Figma).
               The default mt-6/mb-5 from SyncFolderBreadcrumb is overridden so the
               row stays compact and vertically aligned with the buttons. */}
-          <div className="flex items-center justify-between gap-4 flex-wrap min-w-0 w-full px-2.5 py-2">
+          {/* Left-aligned, NOT `justify-between`. With both groups on one
+              line, between pushed the actions to the right edge; once the
+              breadcrumb grew enough to wrap them onto a second line, that
+              same rule left them at the start of it. So the toolbar moved
+              depending on how deep the folder was, which is the one thing a
+              toolbar must not do. Left always, wrapped or not. */}
+          <div className="flex items-center gap-x-4 gap-y-2 flex-wrap min-w-0 w-full px-2.5 py-2">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <SyncFolderBreadcrumb
                 segments={breadcrumbSegments}

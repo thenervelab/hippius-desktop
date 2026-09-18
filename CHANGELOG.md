@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **The Drive toolbar stays put as you go deeper into folders.** New Folder,
+  upload and the rest sat at the right edge until a long breadcrumb pushed them
+  onto a second line, where they jumped to the left. They are on the left either way now.
 - **Uploading and dropping files inside a shared drive works.** Opening a folder
   inside one lost track of the drive, so uploads quietly went to a folder on this
   computer instead. Drag and drop works there too.
