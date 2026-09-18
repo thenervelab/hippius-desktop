@@ -349,6 +349,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Downloading and sharing a file from a drive someone shared with you now
+  works.** Both refused with "no local key material on this device" on a shared
+  drive you are browsing rather than syncing — including for a Viewer, whose only
+  way to use the drive is to open and download from it.
 - **Hovering the Drive breakdown now tells you what a bar is.** The file type and
   upload source charts on Overview showed coloured bars with no way to read one;
   hovering now names the category, its file count and its share, and the rest of

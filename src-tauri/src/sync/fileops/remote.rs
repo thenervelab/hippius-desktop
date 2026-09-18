@@ -149,39 +149,40 @@ pub(crate) fn encryption_key_from_phrase(phrase: &str) -> Result<[u8; 32]> {
     Ok(key)
 }
 
+/// The 32-byte file-encryption key for a drive.
+///
+/// Delegates to [`folder_phrase_for_label`] rather than deriving anything
+/// itself: it held a SECOND copy of the member branch, and that copy knew
+/// only about the sealed `enc_mnemonic.json`. A drive shared with this
+/// account and merely BROWSED has no local row and so no seal, which the
+/// copy reported as "has no local key material on this device" — so a Viewer
+/// could list a shared drive but neither download from it nor mint a share
+/// link, while an upload into the same drive worked, because the upload path
+/// had already moved onto the funnel and its grant fallback.
+///
+/// One derivation for both key uses is also what keeps a remote upload's
+/// encryption key and its manifest signing key in step; see the funnel's
+/// own docs.
 pub(crate) async fn encryption_key_for_label(
-    pool: &SqlitePool,
+    state: &AppState,
     account_id: &str,
     label: &str,
     mnemonic: &str,
     identity: &DriveIdentity,
 ) -> Result<[u8; 32]> {
+    let phrase = folder_phrase_for_label(state, account_id, label, mnemonic, identity).await?;
+    encryption_key_from_phrase(&phrase)
+}
+
+/// The OWN-drive half of that derivation, straight from hcfs-client's
+/// `derive_encryption_key`.
+///
+/// Exists for [`encryption_key_for_tests`] only: the live lane holds a pool
+/// and an own drive, not an `AppState`, and a member key genuinely needs one
+/// (the grant is fetched with the session's bearer). `the_two_own_drive_key_chains_agree`
+/// pins it against the funnel so the two cannot drift.
+async fn own_drive_encryption_key(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str) -> Result<[u8; 32]> {
     let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
-
-    // A member drive's folder key comes from the OWNER's invite, sealed into
-    // this drive's `enc_mnemonic.json` by `add_shared_drive` — it is NOT
-    // derivable from this account's master, so the master chain below would
-    // yield a key that decrypts nothing on the owner's drive. Mirror the tail
-    // of hcfs-client's `derive_encryption_key` chain instead
-    // (`folder_mnemonic → to_seed("")[..32]`), which is exactly what
-    // `Drive::unlock` derives from the same sealed file.
-    if identity.is_member {
-        let folder_enc = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?.join("enc_mnemonic.json");
-        if !folder_enc.exists() {
-            return Err(AppError::Validation(format!(
-                "Shared drive '{label}' has no local key material on this device — remove it and \
-                 re-add it from your shared drives."
-            )));
-        }
-        let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
-            .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
-        let mut seed = folder.to_seed("");
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&seed[..32]);
-        seed.zeroize();
-        return Ok(key);
-    }
-
     let master_path = master_mnemonic_path(account_id)?;
     let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
         .map_err(|e| AppError::Hcfs(format!("Failed to recover master mnemonic: {e}")))?
@@ -298,7 +299,8 @@ pub async fn encryption_key_for_tests(
     mnemonic: &str,
     identity: &DriveIdentity,
 ) -> Result<[u8; 32]> {
-    encryption_key_for_label(pool, account_id, label, mnemonic, identity).await
+    debug_assert!(!identity.is_member, "the live lane derives own-drive keys only");
+    own_drive_encryption_key(pool, account_id, label, mnemonic).await
 }
 
 pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, label: &str) -> Result<Vec<RemoteFileInfo>> {
@@ -310,7 +312,7 @@ pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, 
     // local row (the remote-folder browser) — that case keeps today's
     // own-drive derivation, while a member row yields the OWNER's wire pair.
     let identity = resolve_drive_identity_or_own(pool, account_id, label).await?;
-    let encryption_key = encryption_key_for_label(pool, account_id, label, &mnemonic, &identity).await?;
+    let encryption_key = encryption_key_for_label(state, account_id, label, &mnemonic, &identity).await?;
     let client = build_client(pool, account_id, &identity).await?;
 
     let access = hcfs_client::drive::remote::RemoteFileAccess {
@@ -344,7 +346,7 @@ pub async fn download_remote_file(
     let mnemonic = session_mnemonic(&state)?;
     // Lenient resolve, once per IPC — see list_remote_folder_files_inner.
     let identity = resolve_drive_identity_or_own(pool, &account_id, &label).await?;
-    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic, &identity).await?;
+    let encryption_key = encryption_key_for_label(&state, &account_id, &label, &mnemonic, &identity).await?;
     let client = build_client(pool, &account_id, &identity).await?;
 
     let progress_file_id = file_id.clone();
@@ -468,7 +470,7 @@ pub async fn cache_remote_file(
     let mnemonic = session_mnemonic(&state)?;
     // Lenient resolve, once per IPC — see list_remote_folder_files_inner.
     let identity = resolve_drive_identity_or_own(pool, &account_id, &label).await?;
-    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic, &identity).await?;
+    let encryption_key = encryption_key_for_label(&state, &account_id, &label, &mnemonic, &identity).await?;
     let client = build_client(pool, &account_id, &identity).await?;
 
     let part = unique_part_path(&cache_root, &cache_name);
@@ -661,7 +663,7 @@ pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &
     let mnemonic = session_mnemonic(state)?;
     // Lenient resolve, once per IPC — see list_remote_folder_files_inner.
     let identity = resolve_drive_identity_or_own(pool, account_id, label).await?;
-    let encryption_key = encryption_key_for_label(pool, account_id, label, &mnemonic, &identity).await?;
+    let encryption_key = encryption_key_for_label(state, account_id, label, &mnemonic, &identity).await?;
     let client = build_client(pool, account_id, &identity).await?;
     let access = hcfs_client::drive::remote::RemoteFileAccess {
         client: &client,
@@ -1651,7 +1653,9 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mk folder dir");
         hcfs_client::auth::save_encrypted_mnemonic(dir.join("enc_mnemonic.json"), owner_folder, PW).expect("seal folder key");
 
-        let key = encryption_key_for_label(&pool, ACCT, LABEL, "unused-session-mnemonic", &member_identity())
+        let state = AppState::new();
+        state.set_pool(pool);
+        let key = encryption_key_for_label(&state, ACCT, LABEL, "unused-session-mnemonic", &member_identity())
             .await
             .expect("member key derivation succeeds");
 
@@ -1665,16 +1669,23 @@ mod tests {
         );
     }
 
-    /// A member drive whose seal is missing has no local key path at all
-    /// (the grant blob is Task 4's territory) — surfaced as `Validation`,
-    /// not the FE-silenced `Auth`/`NotReady` kinds, and never a fallthrough
-    /// into the master-derivation branch.
+    /// A member drive whose seal is missing is a drive shared with this
+    /// account and merely BROWSED — never synced here, so there is no
+    /// `enc_mnemonic.json` to read. That is not an error: the key lives in
+    /// this account's own grant, and the funnel goes and fetches it.
+    ///
+    /// What must never happen is the fallthrough this test pins the absence
+    /// of — dropping into the master-derivation branch and handing back a key
+    /// derived from THIS account, which decrypts nothing on the owner's drive
+    /// and fails as corruption rather than as a refusal. With no session
+    /// account there is no grant to fetch, so the call errors; the assertion
+    /// is that it errors rather than returning the own-drive key.
     #[tokio::test]
     #[allow(
         clippy::await_holding_lock,
         reason = "HOME_LOCK is held across awaits to serialise the process-global $HOME override; current-thread test runtime, see test_helpers.rs"
     )]
-    async fn member_encryption_key_missing_seal_is_a_surfaced_validation_error() {
+    async fn a_member_drive_with_no_seal_reaches_for_the_grant_not_this_accounts_master() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
         unsafe {
@@ -1682,15 +1693,78 @@ mod tests {
         }
 
         const ACCT: &str = "5RemoteMemberKeyMissingSealAccount";
-        let pool = pool_with_plaintext_password(ACCT, "pw").await;
+        const LABEL: &str = "team";
+        const PW: &str = "pw";
+        let pool = pool_with_plaintext_password(ACCT, PW).await;
 
-        let err = encryption_key_for_label(&pool, ACCT, "team", "unused-session-mnemonic", &member_identity())
+        // A master seal that WOULD satisfy the own-drive branch, so a
+        // fallthrough returns a key instead of failing for want of one.
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let master_path = master_mnemonic_path(ACCT).expect("master path");
+        std::fs::create_dir_all(master_path.parent().expect("parent")).expect("mk config dir");
+        hcfs_client::auth::save_encrypted_mnemonic(&master_path, master, PW).expect("seal master");
+
+        // Proof that the fallthrough would have succeeded: the own-drive
+        // chain answers for this exact account and label.
+        own_drive_encryption_key(&pool, ACCT, LABEL, "unused-session-mnemonic")
             .await
-            .expect_err("missing seal must error");
+            .expect("own-drive derivation is available, so a fallthrough would return a key");
+
+        let state = AppState::new();
+        state.set_pool(pool);
+        let err = encryption_key_for_label(&state, ACCT, LABEL, "unused-session-mnemonic", &member_identity())
+            .await
+            .expect_err("a member drive must not fall through to this account's master");
         assert!(
-            matches!(err, AppError::Validation(_)),
-            "missing member seal must surface as Validation, got {err:?}"
+            matches!(err, AppError::Auth(_)),
+            "with no session the grant cannot be fetched, so the failure is the session's, got {err:?}"
         );
+    }
+
+    /// The live lane's `encryption_key_for_tests` derives an own-drive key
+    /// straight from hcfs-client, while every in-app caller goes through the
+    /// folder-phrase funnel. Collapsing the member branches left those two
+    /// own-drive chains side by side, so pin that they agree: a drift makes
+    /// the live lane upload under one key and the app read under another.
+    #[tokio::test]
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "HOME_LOCK is held across awaits to serialise the process-global $HOME override; current-thread test runtime, see test_helpers.rs"
+    )]
+    async fn the_two_own_drive_key_chains_agree() {
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        const ACCT: &str = "5RemoteOwnDriveKeyChainAccount";
+        const LABEL: &str = "chains";
+        const PW: &str = "pw";
+        let pool = pool_with_plaintext_password(ACCT, PW).await;
+
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let master_path = master_mnemonic_path(ACCT).expect("master path");
+        std::fs::create_dir_all(master_path.parent().expect("parent")).expect("mk config dir");
+        hcfs_client::auth::save_encrypted_mnemonic(&master_path, master, PW).expect("seal master");
+
+        let direct = own_drive_encryption_key(&pool, ACCT, LABEL, "unused-session-mnemonic")
+            .await
+            .expect("own-drive chain");
+
+        let state = AppState::new();
+        state.set_pool(pool);
+        let via_funnel = encryption_key_for_label(
+            &state,
+            ACCT,
+            LABEL,
+            "unused-session-mnemonic",
+            &DriveIdentity::own(ACCT, &hcfs_client::drive::keys::folder_hash(LABEL)),
+        )
+        .await
+        .expect("funnel");
+
+        assert_eq!(direct, via_funnel, "the funnel and the live lane must derive one own-drive key");
     }
 
     #[test]

@@ -103,7 +103,7 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
     }
 
     let mnemonic = super::remote::session_mnemonic(state)?;
-    let encryption_key = super::remote::encryption_key_for_label(pool, account_id, label, &mnemonic, identity).await?;
+    let encryption_key = super::remote::encryption_key_for_label(state, account_id, label, &mnemonic, identity).await?;
     let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
     let signing_key = signing_key_for_folder(&folder_phrase)?;
 
@@ -414,7 +414,7 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
     }
 
     let mnemonic = super::remote::session_mnemonic(state)?;
-    let encryption_key = super::remote::encryption_key_for_label(pool, account_id, label, &mnemonic, identity).await?;
+    let encryption_key = super::remote::encryption_key_for_label(state, account_id, label, &mnemonic, identity).await?;
     let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
     let signing_key = signing_key_for_folder(&folder_phrase)?;
 

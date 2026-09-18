@@ -984,7 +984,7 @@ pub async fn create_folder_share_inner(
     // carries this key, never folder-mnemonic entropy. Wiped on drop.
     let mnemonic = crate::sync::remote::session_mnemonic(state)?;
     let file_key =
-        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(pool, account_id, folder_label, &mnemonic, &identity).await?);
+        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, &identity).await?);
 
     // Drive-scoped client: `create_folder_share` sends the folder_hash from
     // the client CONFIG, so `build_account_client`'s label-less client would
