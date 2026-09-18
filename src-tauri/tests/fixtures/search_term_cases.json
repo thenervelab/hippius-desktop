@@ -1,0 +1,13 @@
+[
+  { "input": "", "sent": null, "note": "empty" },
+  { "input": "   ", "sent": null, "note": "whitespace only" },
+  { "input": "a", "sent": null, "note": "one character" },
+  { "input": "ab", "sent": null, "note": "two characters" },
+  { "input": "  ab  ", "sent": null, "note": "padding does not count toward the minimum" },
+  { "input": "a b", "sent": "a b", "note": "an inner space is a character" },
+  { "input": "abc", "sent": "abc", "note": "exactly the minimum" },
+  { "input": "  report  ", "sent": "report", "note": "trimmed before sending" },
+  { "input": "中文", "sent": null, "note": "two CJK characters are six bytes but still two characters" },
+  { "input": "中文字", "sent": "中文字", "note": "three CJK characters" },
+  { "input": "\ud835\udc9c\ud835\udcb7", "sent": null, "note": "two astral (math script) characters are four UTF-16 units but still two characters" }
+]
