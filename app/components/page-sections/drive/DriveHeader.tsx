@@ -11,6 +11,7 @@ import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
+import DriveSharingHeaderMark from "./DriveSharingHeaderMark";
 import SyncFolderBreadcrumb, {
   BreadcrumbSegment,
 } from "./SyncFolderBreadcrumb";
@@ -127,6 +128,13 @@ interface DriveHeaderProps {
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
   breadcrumbSegments?: BreadcrumbSegment[];
   onBreadcrumbLocalClick?: () => void;
+  /**
+   * The drive currently open, by local label. Drives the header's shared
+   * badge and its way in to managing access, so standing inside a drive says
+   * the same thing its row in the list does.
+   */
+  openDriveLabel?: string | null;
+  openDriveDisplayName?: string | null;
   // Nested folder browsing mode. When `isNested` is true:
   //  - the Upload File and Upload Folder actions target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
@@ -189,6 +197,8 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   onSetFolderUploadOpen,
   folderUploadInitialPath,
   breadcrumbSegments = [],
+  openDriveLabel,
+  openDriveDisplayName,
   onBreadcrumbLocalClick,
   isNested = false,
   nestedFolderName = null,
@@ -460,11 +470,17 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               The default mt-6/mb-5 from SyncFolderBreadcrumb is overridden so the
               row stays compact and vertically aligned with the buttons. */}
           <div className="flex items-center justify-between gap-4 flex-wrap min-w-0 w-full px-2.5 py-2">
-            <SyncFolderBreadcrumb
-              segments={breadcrumbSegments}
-              onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
-              className="mt-0 mb-0"
-            />
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <SyncFolderBreadcrumb
+                segments={breadcrumbSegments}
+                onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
+                className="mt-0 mb-0"
+              />
+              <DriveSharingHeaderMark
+                label={openDriveLabel}
+                displayName={openDriveDisplayName}
+              />
+            </div>
             <div className="flex items-center gap-3 flex-wrap">
               {refreshButton}
               {actionButtons}

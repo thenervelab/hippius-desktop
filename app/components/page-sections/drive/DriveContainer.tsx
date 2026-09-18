@@ -1368,6 +1368,23 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     urlSubFolderPath,
   ]);
 
+  // The drive the breadcrumb's TOP segment names -- the same expression the
+  // segment itself is built from, so the header's shared badge can never
+  // describe a different drive from the one the crumb points at.
+  const openDriveLabel = useMemo(() => {
+    if (isRecentFiles || isOnLocalView) return null;
+    return isNested
+      ? (nestedDrive?.label ?? null)
+      : (activeRemoteLabel ?? activeSyncFolderLabel ?? null);
+  }, [
+    isRecentFiles,
+    isOnLocalView,
+    isNested,
+    nestedDrive,
+    activeRemoteLabel,
+    activeSyncFolderLabel,
+  ]);
+
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];
     const segments: BreadcrumbSegment[] = [];
@@ -1941,6 +1958,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 folderUploadInitialPath={folderUploadInitialPath}
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
+                openDriveLabel={openDriveLabel}
+                openDriveDisplayName={
+                  openDriveLabel
+                    ? (labelDisplayNames[openDriveLabel] ?? openDriveLabel)
+                    : null
+                }
                 isNested={isNested}
                 nestedFolderName={isNested ? urlFolderName : null}
                 nestedSubfolderPath={isNested ? urlSubFolderPath : null}

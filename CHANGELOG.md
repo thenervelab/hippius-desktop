@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **A shared drive says so from the inside too.** Opening a shared drive shows
+  the badge and, if it is yours, a Manage access button beside the breadcrumb —
+  previously the only sign a drive was shared disappeared the moment you opened it.
 - **Change someone's role without removing them.** Each member in the list has a
   menu offering Change role and Remove from drive; changing a role opens a dialog
   that says what the new role grants before you save it. Previously the only way
