@@ -53,9 +53,13 @@ const DriveBreakdownCard: React.FC<{ className?: string }> = ({ className }) => 
         label: "Others",
         count: types.data?.others ?? 0,
         color: "#9A9A9A",
-        // The same caveat the sources card carries on its grey bucket, so the
-        // two tabs explain themselves the same way.
-        note: "(before tracking)",
+        // NO "(before tracking)" note here, unlike the sources card. There it
+        // is true: a file uploaded before the client recorded which app sent
+        // it genuinely has no known source. A file's TYPE is read from the
+        // file itself and has always been known, so "Others" is audio,
+        // archives, code and the server's catch-all, not files that predate
+        // anything. Carrying the caveat across made the card explain a
+        // limitation it does not have.
       },
     ],
     [types.data],

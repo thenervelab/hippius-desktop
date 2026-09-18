@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **The file-types card no longer says "(before tracking)".** That caveat is true
+  of where a file was uploaded from, which older files do not record, but a file's
+  type has always been known.
 - **A Manager can manage a shared drive without syncing it first**, and an Editor
   can upload into one they are only browsing. Both used to need a copy of the
   drive on this computer.
