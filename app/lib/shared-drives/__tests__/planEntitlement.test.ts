@@ -1,39 +1,60 @@
-import { describe, expect, it } from "vitest";
-
-import { planSupportsSharedDrives } from "@/app/lib/shared-drives/planEntitlement";
+import { describe, it, expect } from "vitest";
+import {
+  SHARED_DRIVE_PLAN_CODES,
+  planSupportsSharedDrives,
+} from "../planEntitlement";
 
 describe("planSupportsSharedDrives", () => {
-  it.each(["Plus", "Max", "Scale"])("includes %s", (plan) => {
-    expect(planSupportsSharedDrives(plan)).toBe(true);
+  // The bug this replaced: a denylist of ["starter", "free"] compared against
+  // the plan's DISPLAY NAME. "starter" is not a plan code at all, so it
+  // matched nothing, and `solo` fell through as permitted — Solo customers
+  // were offered a control the server refuses.
+  it.each(["duo", "max", "scale"])("includes %s", (code) => {
+    expect(planSupportsSharedDrives(code)).toBe(true);
   });
 
-  it.each(["Starter", "Free"])("excludes %s", (plan) => {
-    expect(planSupportsSharedDrives(plan)).toBe(false);
+  it.each(["free", "solo"])("excludes %s", (code) => {
+    expect(planSupportsSharedDrives(code)).toBe(false);
   });
 
-  // The plan name arrives from a billing rail, where casing and stray spaces
-  // are not meaningful and are easy to introduce.
-  it.each(["starter", "STARTER", "  Starter  "])(
-    "matches %s regardless of casing or padding",
-    (plan) => {
-      expect(planSupportsSharedDrives(plan)).toBe(false);
-    },
-  );
-
-  it.each([
-    ["no plan at all", null],
-    ["an absent field", undefined],
-    ["an empty name", ""],
-    ["whitespace only", "   "],
-  ])("treats %s as the free tier", (_label, plan) => {
-    expect(planSupportsSharedDrives(plan)).toBe(false);
+  it.each(["DUO", "  max  ", "Scale"])("tolerates casing and padding in %s", (code) => {
+    expect(planSupportsSharedDrives(code)).toBe(true);
   });
 
-  // A denylist fails OPEN, and that is the point: hiding the feature from a
-  // plan that includes it strands a paying customer with no route to it, while
-  // showing it to one that does not ends at the server's upgrade prompt.
-  it("shows the surface for an unrecognised plan, leaving the server to decide", () => {
-    expect(planSupportsSharedDrives("Enterprise")).toBe(true);
-    expect(planSupportsSharedDrives("Team 2027")).toBe(true);
+  it("excludes solo whatever its casing", () => {
+    expect(planSupportsSharedDrives("  SOLO ")).toBe(false);
+  });
+
+  // No plan object at all is the free tier.
+  it.each([null, undefined])("treats %s as the free tier", (code) => {
+    expect(planSupportsSharedDrives(code)).toBe(false);
+  });
+
+  // A plan that EXISTS but whose code the rail did not report — the legacy
+  // Stripe storage subscription has none. Hiding a perk from a paying
+  // customer with no explanation is worse than a click the server answers
+  // with an upgrade prompt.
+  it("permits a plan whose code is unknown, and lets the server decide", () => {
+    expect(planSupportsSharedDrives("")).toBe(true);
+    expect(planSupportsSharedDrives("   ")).toBe(true);
+  });
+
+  // A tier shipped after this build. Same asymmetry: a new plan is far more
+  // likely to include shared drives than not, and the server still refuses.
+  it("permits a plan code this build has never heard of", () => {
+    expect(planSupportsSharedDrives("team")).toBe(true);
+    expect(planSupportsSharedDrives("enterprise")).toBe(true);
+  });
+
+  // A display name must never be mistaken for a code. If one is passed by
+  // accident it falls through to "unknown", which is loud in testing rather
+  // than silently excluding a paying customer.
+  it("does not accept a marketing name as a code", () => {
+    expect(planSupportsSharedDrives("Plus")).toBe(true);
+    expect(planSupportsSharedDrives("Starter")).toBe(true);
+  });
+
+  it("exports the allowed codes for the surfaces that name them", () => {
+    expect([...SHARED_DRIVE_PLAN_CODES]).toEqual(["duo", "max", "scale"]);
   });
 });

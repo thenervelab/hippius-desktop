@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **Sharing a drive is offered on the plans that actually include it.** The
+  option now appears for Plus, Max and Scale only. Solo accounts were being shown
+  it even though the server refuses their invites.
 - **A Manager can manage the drive they were made a manager of.** Someone given
   the Manager role on a drive shared with them can now invite people, change
   roles and remove members from the desktop app, instead of only from the web

@@ -14,5 +14,10 @@ import { planSupportsSharedDrives } from "@/app/lib/shared-drives/planEntitlemen
 export function useSharedDrivesInPlan(): boolean | undefined {
   const { data: overview, isLoading } = useStorageOverview();
   if (isLoading && !overview) return undefined;
-  return planSupportsSharedDrives(overview?.plan?.name);
+  // The CODE, never the display name: a marketing label changes without a
+  // release and a gate written against it stops matching silently. A missing
+  // `plan` object is the free tier (`null`); a plan whose code the rail did
+  // not report is unknown, and `planSupportsSharedDrives` leaves that to the
+  // server rather than refusing it here.
+  return planSupportsSharedDrives(overview?.plan ? (overview.plan.code ?? "") : null);
 }
