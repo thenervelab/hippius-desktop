@@ -176,6 +176,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Search starts at three characters.** In the sidebar search and when searching a
+  folder that is not synced to this device, one or two letters now show "Type at
+  least 3 characters" instead of a misleading "no results".
 - **Sharing a folder as a link is no longer offered on a drive shared with you.**
   Only a drive's owner can mint a folder link, so the action used to be offered
   and then refused after you had chosen an expiry. Sharing a single file from

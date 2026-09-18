@@ -43,6 +43,12 @@ The ~32 submodules are organized into six private sub-domain group directories, 
 - `get_recent_uploads` sends `sort_by=created_at&sort_order=desc` for the empty-state "last uploads" slice.
 - `search_files` builds the console's query params via the pure, unit-tested `build_search_query` (`q` + file_type/size/date filters + sort mapping) and backs the sidebar palette's cross-folder text search — the cloud equivalent of the local `search_user_files_recursive`, so uploads from other devices are found too.
 
+**Server listing caps (`/browse`, `/search_files`).** The server COERCES rather than rejects: a `limit` above 200 becomes 200 (the response echoes the effective value), and a `q` of 1-2 characters after trimming returns an empty page with `200 OK`. Neither is an error, so neither is visible unless the code states it:
+
+- Every walk advances by rows RETURNED and stops on `has_more`, never on `total_count` (it is approximate). `BROWSE_PAGE_LIMIT` (`remote.rs`) and `BROWSE_PAGE` (`remote_rename.rs`) are both 200, the real page size. `remote_rename.rs` pairs it with `MAX_BROWSE_PAGES = 500` so the "too large to rename" threshold stays at 100 000 entries; a `const` assertion fails the build if one is retuned without the other. `MAX_LIMIT` in `recent_uploads.rs` is const-asserted to stay under the cap.
+- `classify_query` never puts a `q` under `MIN_QUERY_CHARS` (3, counted in characters) on the wire. With a narrowing filter (extension, size, date) the search runs filter-only; with none, `is_unanswerable` short-circuits to an empty list, because dropping the term would turn "search for `ab`" into "list the newest files" presented as matches. `folder_hash` is scope, not a filter. The frontend mirrors the number only to choose its hint (`app/lib/utils/searchTerm.ts`); `tests/fixtures/search_term_cases.json` drives both sides' tests.
+- `/get_state` is separate (max 5000) and unaffected.
+
 **`sync_status` semantics**: a hit is `pending` ONLY when its drive label is configured on this device AND the file is not yet on disk — a genuine "queued for local download" state, probed via an injected `path_exists` predicate so the mapper stays pure/unit-testable. Files whose drive label isn't configured here (uploaded from another device, or under a removed-or-renamed label) and files already on disk are `synced`. The earlier rule — `pending` whenever the label wasn't configured locally — perpetually mislabeled stable server-only files as "Waiting in the sync queue".
 
 ## Member drives: the local label is NOT the wire identity
