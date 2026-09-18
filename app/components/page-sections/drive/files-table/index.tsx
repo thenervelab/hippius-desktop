@@ -47,9 +47,11 @@ import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
+  offersShareAction,
   FOLDER_SHARE_DISABLED_TOOLTIP,
   shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
+import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
@@ -553,6 +555,8 @@ const FilesTable: FC<FilesTableProps> = memo(
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
     const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
+    // Which of this listing's rows sit in a drive shared WITH this account.
+    const memberDriveLabels = useMemberDriveLabels();
     const setShareModalFile = useSetAtom(shareModalFileAtom);
     const setRenameModalFile = useSetAtom(renameModalFileAtom);
     const enableFolderExpander = !isRecentFiles;
@@ -1031,7 +1035,11 @@ const FilesTable: FC<FilesTableProps> = memo(
           // disabled until the server confirms the `folder_shares` capability
           // (`canShareFolder`) — visible-but-disabled, like Rename, so the
           // capability is discoverable rather than silently absent.
-          ...((file.isFolder || file.syncStatus === "synced") && shareEnabled
+          // A FOLDER on a drive shared with this account is not offered at
+          // all: only its owner can mint a folder link (`offersShareAction`).
+          ...((file.isFolder || file.syncStatus === "synced") &&
+          shareEnabled &&
+          offersShareAction(file, memberDriveLabels)
             ? [
                 {
                   icon: <Link2 className="size-4" />,
@@ -1120,6 +1128,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         polkadotAddress,
         shareEnabled,
         folderSharesEnabled,
+        memberDriveLabels,
         setShareModalFile,
         setRenameModalFile,
         isItemDeleting,

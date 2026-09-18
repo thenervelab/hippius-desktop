@@ -160,6 +160,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Sharing a folder as a link is no longer offered on a drive shared with you.**
+  Only a drive's owner can mint a folder link, so the action used to be offered
+  and then refused after you had chosen an expiry. Sharing a single file from
+  such a drive still works.
 - **A drive shared with you as a Viewer no longer offers you upload controls.**
   New Folder, Folder and File are hidden on a drive you can only read, and a file
   dropped onto it is refused with a line saying you have Viewer access and should

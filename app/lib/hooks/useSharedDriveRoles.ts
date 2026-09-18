@@ -14,6 +14,7 @@ import {
 
 const EMPTY_ROLES: ReadonlyMap<string, DriveRole> = new Map();
 const EMPTY_LIST: readonly DriveMembershipInfo[] = [];
+const EMPTY_LABELS: ReadonlySet<string> = new Set();
 
 export const SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY = "shared-drive-memberships";
 
@@ -118,6 +119,28 @@ export function useSharedDriveRoles(): ReadonlyMap<string, DriveRole> {
   const memberships = useSharedDriveMemberships();
   return useMemo(
     () => (memberships.length === 0 ? EMPTY_ROLES : rolesByLocalLabel(memberships)),
+    [memberships],
+  );
+}
+
+/**
+ * The local labels of the shared drives synced on this device.
+ *
+ * The set form, for the row-by-row questions: a listing can hold rows from
+ * more than one drive, so "is this row's drive mine?" is asked per row and a
+ * set answers it without re-scanning the memberships each time.
+ *
+ * It covers only drives with a local row. A drive being browsed without
+ * syncing it has no label here, and needs none — its synthetic label says it
+ * is shared on its own (`isMemberDriveLabel`).
+ */
+export function useMemberDriveLabels(): ReadonlySet<string> {
+  const memberships = useSharedDriveMemberships();
+  return useMemo(
+    () =>
+      memberships.length === 0
+        ? EMPTY_LABELS
+        : new Set(memberships.map((m) => m.localLabel).filter((l): l is string => Boolean(l))),
     [memberships],
   );
 }
