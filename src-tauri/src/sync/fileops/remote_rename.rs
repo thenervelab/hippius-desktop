@@ -373,9 +373,24 @@ async fn collect_folder_tree(
 const RENAME_BATCH: usize = 500;
 /// Directory rows per `register`/`unregister_folder_entries` call.
 const FOLDER_ENTRY_BATCH: usize = 500;
-/// Pages per directory level, and directories per tree.
-const BROWSE_PAGE: u32 = 500;
-const MAX_BROWSE_PAGES: u32 = 200;
+/// Rows per `/browse` request. This is the server's own per-request cap: it
+/// coerces a larger `limit` down to 200 rather than rejecting it, so asking
+/// for more only hides the real page size.
+const BROWSE_PAGE: u32 = 200;
+/// Pages walked per directory level before the rename is refused.
+///
+/// Sized so that `BROWSE_PAGE * MAX_BROWSE_PAGES` stays at 100 000 entries,
+/// the documented "too large to rename" threshold. It was 200 pages of 500;
+/// left alone under the 200-row cap, the threshold would have quietly fallen
+/// to 40 000 and refused folders that used to rename fine.
+const MAX_BROWSE_PAGES: u32 = 500;
+/// Entries one directory level may hold and still be renamed remotely.
+const MAX_DIRECTORY_ENTRIES: u32 = BROWSE_PAGE * MAX_BROWSE_PAGES;
+
+// Retuning either constant alone moves the threshold; make that a build error
+// rather than a behaviour change someone finds in production.
+const _: () = assert!(MAX_DIRECTORY_ENTRIES == 100_000);
+/// Directories per tree.
 const MAX_TREE_DIRECTORIES: usize = 5_000;
 
 /// Rename a FOLDER in a drive this device does not sync.
@@ -611,6 +626,15 @@ pub async fn rename_remote_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The walk advances by rows RETURNED, so its reach is pages times the
+    /// server's page size, not pages times whatever we ask for. Pin both
+    /// halves: the page size is the server's, and the reach is unchanged.
+    #[test]
+    fn browse_walk_still_reaches_one_hundred_thousand_entries() {
+        assert_eq!(BROWSE_PAGE, 200, "the server returns at most 200 rows per /browse request");
+        assert_eq!(MAX_DIRECTORY_ENTRIES, 100_000);
+    }
 
     fn file(path: &str, seed: u8) -> RemoteEntry {
         RemoteEntry {
