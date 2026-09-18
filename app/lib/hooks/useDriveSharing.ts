@@ -6,7 +6,11 @@ import {
   driveRowSharing,
   type DriveRowSharing,
 } from "@/app/lib/shared-drives/driveRowSharing";
-import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
+import {
+  canManageDrive,
+  canWriteToDrive,
+  parseDriveRole,
+} from "@/app/lib/shared-drives/roles";
 import { isDriveShared, useOwnedDriveSharing } from "./useOwnedDriveSharing";
 import { useSharedDriveMembership } from "./useSharedDriveRoles";
 
@@ -17,7 +21,14 @@ export interface DriveSharing {
   sharing: DriveRowSharing;
   /** Shared in either direction: by this account, or with it. */
   isShared: boolean;
-  /** Only an owner of an already-shared drive may manage access. */
+  /**
+   * Whether the viewer may manage who has access — invite, remove, re-role.
+   *
+   * An owner may, once the drive is actually shared. A MANAGER may too, on a
+   * drive they do not own: the server admits a delegated manager by name
+   * (`?owner=`), and refusing them here is what made the desktop mint Manager
+   * invites it could not then honour.
+   */
   canManage: boolean;
   /**
    * Whether the viewer may upload, delete or create folders here.
@@ -71,7 +82,13 @@ export function useDriveSharing(label: string | null | undefined): DriveSharing 
     return {
       sharing,
       isShared: sharing.isShared,
-      canManage: sharing.direction === "by-me" && isDriveShared(own),
+      canManage: canManageDrive({
+        isOwner: !membership,
+        role: membership ? parseDriveRole(membership.role) : undefined,
+      })
+        // An owner with nothing shared has nothing to manage; a manager
+        // always does, since being one means the drive is already shared.
+        && (Boolean(membership) || isDriveShared(own)),
       canWrite: canWriteToDrive({
         // No membership row means this account owns the drive -- or the
         // listing has not answered yet, which reads the same way on purpose.

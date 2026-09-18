@@ -5,6 +5,7 @@
 // convention. Unit-tested in `__tests__/folderMenuGating.test.ts`.
 
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
+import { canManageDrive, type DriveRole } from "@/app/lib/shared-drives/roles";
 
 export interface FolderMenuFlags {
   /** `SHARED_DRIVES_ENABLED` — passed in so the resolver stays pure. */
@@ -20,6 +21,15 @@ export interface FolderMenuFlags {
    * reads as a bug.
    */
   planSupportsSharedDrives?: boolean;
+  /**
+   * The viewer's role on THIS drive, when it is one shared with them.
+   *
+   * A manager may invite on a drive they do not own -- the server admits a
+   * delegated manager by name -- so member-ness alone cannot decide whether
+   * to offer the mint. Absent for an own drive, and for a member drive whose
+   * role has not arrived yet, which stays conservative and offers nothing.
+   */
+  role?: DriveRole;
 }
 
 /**
@@ -28,7 +38,10 @@ export interface FolderMenuFlags {
  * not represented here — they render for every row unconditionally.
  */
 export interface FolderMenuPlan {
-  /** "Share drive…" — own drives only, and only while the flag is on. */
+  /**
+   * "Share drive…" — an own drive, or one this account manages for somebody
+   * else. Gated on the flag either way.
+   */
   showShareDrive: boolean;
   /**
    * Owner-only items a member has no authority over: "Excluded from Sync"
@@ -94,10 +107,13 @@ export function resolveFolderMenuPlan(
   const member = isMemberDrive(folder);
 
   return {
+    // The plan gate binds the OWNER's mint only. A manager invites on the
+    // owner's drive, against the owner's plan, so holding them to this
+    // account's plan would refuse something the server allows.
     showShareDrive:
       flags.sharedDrivesEnabled &&
-      !member &&
-      (flags.planSupportsSharedDrives ?? true),
+      canManageDrive({ isOwner: !member, role: flags.role }) &&
+      (member || (flags.planSupportsSharedDrives ?? true)),
     showExclusions: !member,
     showDeleteFromServer: !member,
     removeItemTitle: member ? "Leave shared drive" : "Stop syncing on this device",

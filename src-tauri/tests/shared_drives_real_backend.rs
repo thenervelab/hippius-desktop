@@ -143,7 +143,7 @@ use hcfs_client::engine::runner::{DriveSlot, SyncRunner, trigger_sync};
 
 use tauri_project_lib::auth::account_key::account_key;
 use tauri_project_lib::shared_drives::commands::{
-    MemberDriveInstall, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
+    MemberDriveInstall, MintInvite, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
 };
 use tauri_project_lib::shared_drives::grant;
 use tauri_project_lib::sync::events::SHARED_DRIVE_REVOKED_MARKER;
@@ -465,10 +465,14 @@ async fn member_accept_and_install(env: &LiveEnv, http: &reqwest::Client, owner:
         http,
         &env.server_url,
         &env.owner_bearer,
-        &owner.identity.wire_folder_hash,
-        3600,
-        5,
-        "writer",
+        MintInvite {
+            folder_hash: &owner.identity.wire_folder_hash,
+            expires_in_secs: 3600,
+            max_uses: 5,
+            role: "writer",
+            // The owner's own mint; a manager's delegated mint names the owner.
+            owner: None,
+        },
     )
     .await
     .expect("mint invite");

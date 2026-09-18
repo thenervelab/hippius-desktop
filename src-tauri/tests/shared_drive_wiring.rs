@@ -188,21 +188,36 @@ fn leave_shared_drive_always_passes_the_owner_param() {
     );
 }
 
-/// Every owner-side command resolves its label through the single
-/// `resolve_own_drive` gate (which refuses member labels). Counting the call
-/// sites means dropping the gate from ONE command still fails here.
+/// Every management command resolves its label through ONE of the two named
+/// gates, never the raw lenient resolver.
+///
+/// Management used to be owner-only (`resolve_own_drive`, which refuses member
+/// labels). It now admits a delegated manager, which means the local refusal
+/// is gone and the SERVER is the authority on role — so the thing worth
+/// pinning changed shape: not "everything uses the owner gate", but "nothing
+/// reaches `resolve_drive_identity_or_own` directly". A command that did would
+/// silently skip whichever gate its siblings share, and the difference between
+/// the two is invisible at the call site.
 #[test]
-fn owner_side_commands_route_through_the_own_drive_gate() {
+fn management_commands_route_through_a_named_gate() {
     let src = shared_drive_commands_src();
     for command in [
         "pub async fn create_drive_invite(",
         "pub async fn list_drive_members(",
         "pub async fn remove_drive_member(",
+        "pub async fn change_drive_member_role(",
+        "pub async fn list_drive_invites(",
+        "pub async fn revoke_drive_invite(",
+        "pub async fn list_owned_drive_sharing(",
     ] {
         let body = fn_body(&src, command);
         assert!(
-            body.contains("resolve_own_drive("),
-            "{command} must resolve its label through resolve_own_drive"
+            body.contains("resolve_manageable_drive(") || body.contains("resolve_own_drive("),
+            "{command} must resolve its label through a named gate"
+        );
+        assert!(
+            !body.contains("resolve_drive_identity_or_own("),
+            "{command} must not reach past its gate to the raw lenient resolver"
         );
     }
 }
@@ -417,4 +432,94 @@ fn revoked_latch_clears_ride_the_existing_teardown_edges() {
         reset.contains("revoked_notify.clear_all()"),
         "handle_sync_reset must wipe the revocation latch across accounts"
     );
+}
+
+/// A MANAGER minting on a drive they do not own must take the folder key from
+/// the drive's OWNER-sealed `enc_mnemonic.json`, never from this account's
+/// master.
+///
+/// The master chain (`derive_folder_mnemonic(master, label)`) yields the key
+/// for a drive of that name owned by THIS account. On a member drive it is
+/// simply a different key, and nothing here would fail: the mint succeeds, the
+/// link looks right, and the recipient joins and finds that nothing decrypts.
+/// The same reasoning, and the same file, as `remote::encryption_key_for_label`
+/// — which is unit-tested; this pins the mint to it so the branch cannot be
+/// refactored away.
+#[test]
+fn a_delegated_mint_takes_the_owners_sealed_folder_key() {
+    let body = fn_body(&shared_drive_commands_src(), "pub async fn create_drive_invite");
+
+    assert!(
+        body.contains("identity.is_member"),
+        "the mint must branch on member-ness before choosing a key source"
+    );
+    assert!(
+        body.contains("enc_mnemonic.json"),
+        "a delegated mint must read the owner-sealed folder mnemonic"
+    );
+    assert!(
+        body.contains("recover_mnemonic"),
+        "the sealed folder mnemonic must be opened, not re-derived"
+    );
+
+    // The master chain must still be there for an owner's own mint, but it
+    // must not be the only source.
+    assert!(
+        body.contains("derive_folder_mnemonic"),
+        "an owner's own mint still derives from the master"
+    );
+}
+
+/// Every delegated management call names the drive's owner.
+///
+/// `folder_hash` is label-derived and collides across owners as a matter of
+/// course, so a call that drops the owner addresses whichever row the server
+/// finds first. The value comes from ONE helper so a new management command
+/// cannot quietly omit it.
+#[test]
+fn every_management_command_passes_the_delegated_owner() {
+    let src = shared_drive_commands_src();
+
+    for sig in [
+        "pub async fn list_drive_members",
+        "pub async fn list_drive_invites",
+        "pub async fn revoke_drive_invite",
+        "pub async fn change_drive_member_role",
+        "pub async fn remove_drive_member",
+        "pub async fn create_drive_invite",
+    ] {
+        let body = fn_body(&src, sig);
+        assert!(
+            body.contains("delegated_owner(&identity)"),
+            "{sig} must pass the delegated owner, or a manager's call addresses the wrong drive"
+        );
+    }
+}
+
+/// The management commands resolve through the MANAGEABLE resolver, not the
+/// owner-only one — otherwise a manager is refused locally before the server
+/// ever sees the call, which is what made the desktop mint Manager invites it
+/// could not then honour.
+#[test]
+fn management_commands_admit_a_delegated_manager() {
+    let src = shared_drive_commands_src();
+
+    for sig in [
+        "pub async fn list_drive_members",
+        "pub async fn list_drive_invites",
+        "pub async fn revoke_drive_invite",
+        "pub async fn change_drive_member_role",
+        "pub async fn create_drive_invite",
+    ] {
+        let body = fn_body(&src, sig);
+        assert!(
+            body.contains("resolve_manageable_drive"),
+            "{sig} must admit a manager on somebody else's drive"
+        );
+    }
+
+    // The badge listing is the exception and stays owner-only: it answers
+    // "which of MY drives have I shared".
+    let sharing = fn_body(&src, "pub async fn list_owned_drive_sharing");
+    assert!(sharing.contains("resolve_own_drive"), "the sharing badge listing stays owner-only");
 }

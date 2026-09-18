@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 
 use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::shared_drives::commands::{
-    MemberDriveInstall, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
+    MemberDriveInstall, MintInvite, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
 };
 use tauri_project_lib::shared_drives::grant;
 use tauri_project_lib::sync::identity::{MemberDriveIdentity, member_row_for_wire_identity, resolve_drive_identity};
@@ -189,9 +189,7 @@ async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
     .await;
     let http = reqwest::Client::new();
 
-    let token = http_create_invite(&http, &base, BEARER, WIRE_HASH, 3600, 5, "writer")
-        .await
-        .expect("mint");
+    let token = http_create_invite(&http, &base, BEARER, mint_args(WIRE_HASH)).await.expect("mint");
     assert_eq!(token, "tok_mock_1");
 
     // The resolved policy values land on the wire as concrete fields — the
@@ -206,7 +204,7 @@ async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
     assert_eq!(body["role"], serde_json::json!("writer"));
 
     // A missing bearer is refused by the server and surfaces as Auth.
-    let err = http_create_invite(&http, &base, "wrong-bearer", WIRE_HASH, 3600, 5, "writer")
+    let err = http_create_invite(&http, &base, "wrong-bearer", mint_args(WIRE_HASH))
         .await
         .expect_err("bad bearer must fail");
     assert!(matches!(err, AppError::Auth(_)), "got {err:?}");
@@ -693,4 +691,16 @@ async fn resolve_own_drive_refuses_member_labels() {
         .await
         .expect("own label passes");
     assert!(!own.is_member);
+}
+
+/// The mint args these tests all send, so a new field on `MintInvite` is one
+/// edit here rather than one per call site.
+fn mint_args(folder_hash: &str) -> MintInvite<'_> {
+    MintInvite {
+        folder_hash,
+        expires_in_secs: 3600,
+        max_uses: 5,
+        role: "writer",
+        owner: None,
+    }
 }

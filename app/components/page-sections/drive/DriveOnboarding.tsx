@@ -597,6 +597,9 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const buildRowActions = (row: FolderRow) =>
     buildFolderActions(row, {
       planSupportsSharedDrives: sharedDrivesInPlan,
+      // A manager reaches the mint on a drive they do not own; the row's
+      // own `ownerSs58` cannot say which member drives those are.
+      role: sharedDriveRoles.get(row.folderName),
       // Nothing to manage until a drive has been shared, so the first
       // share goes straight to the mint. Once it has members or a live
       // link the row offers Manage access, which opens the panel.

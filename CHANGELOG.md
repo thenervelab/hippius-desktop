@@ -27,6 +27,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **A Manager can manage the drive they were made a manager of.** Someone given
+  the Manager role on a drive shared with them can now invite people, change
+  roles and remove members from the desktop app, instead of only from the web
+  console.
 - **A Viewer is no longer offered uploads they cannot make.** On a drive shared
   with you as a Viewer, the upload buttons are absent rather than failing later
   as a sync error. Editors and Managers are unaffected.

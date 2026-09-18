@@ -210,27 +210,40 @@ fn classify_error_status(status: reqwest::StatusCode, body: &str) -> AppError {
 /// Takes RESOLVED policy values, not `Option`s: the desktop always sends a
 /// concrete lifetime and claim cap (see [`resolve_invite_policy`]), so the
 /// server's own defaults never silently apply to a desktop mint.
-pub async fn http_create_invite(
-    http: &reqwest::Client,
-    base_url: &str,
-    bearer: &str,
-    folder_hash: &str,
-    expires_in_secs: u64,
-    max_uses: u32,
-    role: &str,
-) -> Result<String> {
+/// What the mint endpoint needs — an args struct, the `MemberDriveInstall`
+/// precedent, once delegation added the owner and the list outgrew a readable
+/// positional call.
+pub struct MintInvite<'a> {
+    pub folder_hash: &'a str,
+    pub expires_in_secs: u64,
+    pub max_uses: u32,
+    pub role: &'a str,
+    /// Set by a MANAGER minting for a drive they do not own; `None` for an
+    /// owner, which the server reads as caller-as-owner.
+    pub owner: Option<&'a str>,
+}
+
+pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: &str, mint: MintInvite<'_>) -> Result<String> {
+    let MintInvite {
+        folder_hash,
+        expires_in_secs,
+        max_uses,
+        role,
+        owner,
+    } = mint;
     let req = CreateDriveInviteRequest {
         folder_hash: folder_hash.to_string(),
+        // A MANAGER mints for the drive's OWNER, and names them here rather
+        // than in a query param -- `folder_hash` alone is not globally
+        // unique. Owners send `None`, which the server reads as
+        // caller-as-owner.
+        owner_ss58: owner.map(str::to_string),
         expires_in_secs: Some(expires_in_secs),
         max_uses: Some(max_uses),
         // Sent explicitly rather than omitted. An omitted role means `writer`
         // server-side, which is what every build before the picker minted --
         // fine as a default, wrong as a silent one now that the user chooses.
         role: Some(role.to_string()),
-        // Omitted means caller-as-owner, and this path only mints for a drive
-        // the caller owns. A manager minting for someone else's drive is what
-        // that field exists for.
-        owner_ss58: None,
     };
     let resp = http
         .post(format!("{}/v1/drive-invites", base_url.trim_end_matches('/')))
@@ -252,9 +265,18 @@ pub async fn http_create_invite(
 }
 
 /// `GET /v1/drives/{folder_hash}/members` — owner-side member listing.
-pub async fn http_list_members(http: &reqwest::Client, base_url: &str, bearer: &str, folder_hash: &str) -> Result<DriveMembersResponse> {
+pub async fn http_list_members(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    owner: Option<&str>,
+) -> Result<DriveMembersResponse> {
     let resp = http
-        .get(format!("{}/v1/drives/{}/members", base_url.trim_end_matches('/'), folder_hash))
+        .get(with_owner(
+            &format!("{}/v1/drives/{}/members", base_url.trim_end_matches('/'), folder_hash),
+            owner,
+        )?)
         .header("Authorization", format!("Bearer {bearer}"))
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -402,9 +424,18 @@ struct DriveInvitesResponse {
 }
 
 /// `GET /v1/drives/{folder_hash}/invites` — the live invites for a drive.
-pub async fn http_list_invites(http: &reqwest::Client, base_url: &str, bearer: &str, folder_hash: &str) -> Result<Vec<DriveInviteInfo>> {
+pub async fn http_list_invites(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    owner: Option<&str>,
+) -> Result<Vec<DriveInviteInfo>> {
     let resp = http
-        .get(format!("{}/v1/drives/{}/invites", base_url.trim_end_matches('/'), folder_hash))
+        .get(with_owner(
+            &format!("{}/v1/drives/{}/invites", base_url.trim_end_matches('/'), folder_hash),
+            owner,
+        )?)
         .header("Authorization", format!("Bearer {bearer}"))
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -427,14 +458,19 @@ pub async fn http_list_invites(http: &reqwest::Client, base_url: &str, bearer: &
 /// same plain 404, so a failure here is never proof the invite existed. The
 /// caller treats 404 as "it is gone", which is the state the user asked for
 /// either way.
-pub async fn http_revoke_invite(http: &reqwest::Client, base_url: &str, bearer: &str, folder_hash: &str, invite_id: &str) -> Result<()> {
+pub async fn http_revoke_invite(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    invite_id: &str,
+    owner: Option<&str>,
+) -> Result<()> {
     let resp = http
-        .delete(format!(
-            "{}/v1/drives/{}/invites/{}",
-            base_url.trim_end_matches('/'),
-            folder_hash,
-            invite_id
-        ))
+        .delete(with_owner(
+            &format!("{}/v1/drives/{}/invites/{}", base_url.trim_end_matches('/'), folder_hash, invite_id),
+            owner,
+        )?)
         .header("Authorization", format!("Bearer {bearer}"))
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -532,6 +568,48 @@ pub async fn resolve_own_drive(pool: &sqlx::SqlitePool, account_id: &str, label:
         )));
     }
     Ok(identity)
+}
+
+/// Append `?owner=` when a call is delegated.
+///
+/// One helper rather than a `query_pairs_mut` block per endpoint: the param
+/// is what makes a manager's call address the right drive, and a route that
+/// quietly forgets it falls back to a `folder_hash` that collides across
+/// owners who both named a drive the same thing.
+fn with_owner(url: &str, owner: Option<&str>) -> Result<reqwest::Url> {
+    let mut parsed = reqwest::Url::parse(url).map_err(|e| AppError::Hcfs(format!("invalid shared-drive URL: {e}")))?;
+    if let Some(owner) = owner {
+        parsed.query_pairs_mut().append_pair("owner", owner);
+    }
+    Ok(parsed)
+}
+
+/// Resolve `label` for a MANAGEMENT operation — owner or delegated manager.
+///
+/// Unlike [`resolve_own_drive`] this admits a member drive, because the
+/// server admits one: a manager manages a drive they do not own by naming its
+/// owner (`?owner=` on the member/invite routes, `owner_ss58` in the mint
+/// body). Refusing member drives locally is what made the desktop mint
+/// Manager invites it could not then honour.
+///
+/// Role is NOT checked here, deliberately. Only the server knows it, and its
+/// refusal is a domain 404 whose body is identical for "no such drive", "not
+/// a member" and "insufficient role" — delegated management never leaks drive
+/// existence. Guessing locally would either duplicate that rule badly or leak
+/// what the server hides.
+pub async fn resolve_manageable_drive(pool: &sqlx::SqlitePool, account_id: &str, label: &str) -> Result<crate::sync::identity::DriveIdentity> {
+    crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, label).await
+}
+
+/// The `owner` a delegated management call must name, or `None` for an own
+/// drive where the server keys by the caller's own identity.
+///
+/// A member drive's `wire_ss58` IS the owner's address, so this is the whole
+/// of the delegation: pass it and a manager's call addresses the right drive;
+/// omit it and `folder_hash` alone collides across owners who both named a
+/// drive the same thing.
+fn delegated_owner(identity: &crate::sync::identity::DriveIdentity) -> Option<&str> {
+    identity.is_member.then_some(identity.wire_ss58.as_str())
 }
 
 /// The inputs [`install_member_drive`] needs (an args struct — the row
@@ -683,7 +761,7 @@ pub async fn create_drive_invite(
 ) -> Result<DriveInviteLink> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
 
     // The folder-key entropy the link's fragment carries. The master read is
     // serialized against password rotation (`recovery_lock`), the sanctioned
@@ -692,9 +770,31 @@ pub async fn create_drive_invite(
     // entropy by drop, with no manual zeroize choreography to miss.
     let entropy: Zeroizing<[u8; 32]> = {
         let _recovery_guard = state.recovery_lock.lock().await;
-        let master = crate::sync::mnemonic::get_mnemonic_for_account(&state, &ctx.account_id).await?;
-        let phrase = Zeroizing::new(crate::sync::mnemonic::derive_folder_mnemonic(&master, &label)?);
-        grant::entropy_from_phrase(&phrase)?
+        if identity.is_member {
+            // A MANAGER minting for a drive they do not own. The folder key is
+            // the OWNER's and is NOT derivable from this account's master --
+            // it was sealed into this drive's `enc_mnemonic.json` when the
+            // grant was accepted. Deriving from the master here would mint a
+            // link whose `#k=` fragment decrypts nothing, and the recipient
+            // would discover that only after joining. Same reasoning, and the
+            // same file, as `remote::encryption_key_for_label`.
+            let password = crate::sync::config::get_drive_password(state.pool()?, &ctx.account_id, None).await?;
+            let folder_enc = crate::sync::mnemonic::config_dir_for_folder(&ctx.account_id, &label)?.join("enc_mnemonic.json");
+            if !folder_enc.exists() {
+                return Err(AppError::Validation(format!(
+                    "Shared drive '{label}' has no local key material on this device — remove it and \
+                     re-add it from your shared drives."
+                )));
+            }
+            let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
+                .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
+            let phrase = Zeroizing::new(folder.to_string());
+            grant::entropy_from_phrase(&phrase)?
+        } else {
+            let master = crate::sync::mnemonic::get_mnemonic_for_account(&state, &ctx.account_id).await?;
+            let phrase = Zeroizing::new(crate::sync::mnemonic::derive_folder_mnemonic(&master, &label)?);
+            grant::entropy_from_phrase(&phrase)?
+        }
     };
 
     // Omitted parameters resolve to the desktop policy here, not on the
@@ -708,10 +808,13 @@ pub async fn create_drive_invite(
         &http,
         &ctx.base_url,
         &ctx.bearer,
-        &identity.wire_folder_hash,
-        expires_in_secs,
-        max_uses,
-        &role,
+        MintInvite {
+            folder_hash: &identity.wire_folder_hash,
+            expires_in_secs,
+            max_uses,
+            role: &role,
+            owner: delegated_owner(&identity),
+        },
     )
     .await?;
 
@@ -726,9 +829,16 @@ pub async fn create_drive_invite(
 pub async fn list_drive_members(app: tauri::AppHandle, label: String) -> Result<Vec<DriveMemberInfo>> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
 
-    let resp = http_list_members(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
+    let resp = http_list_members(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        delegated_owner(&identity),
+    )
+    .await?;
     // Logged because the sharing badge is derived from this count, and when it
     // fails to appear the first question is whether the call happened at all.
     // A frontend `console.warn` cannot answer that: it reaches devtools, never
@@ -752,17 +862,18 @@ pub async fn list_drive_members(app: tauri::AppHandle, label: String) -> Result<
 pub async fn remove_drive_member(app: tauri::AppHandle, label: String, member_ss58: String) -> Result<()> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
 
-    // Owner path: the server keys the delete by the caller's own identity;
-    // no `?owner=` (that param exists for the self-leave branch).
+    // `None` for an owner (the server keys the delete by the caller's own
+    // identity); the owner's address for a manager removing somebody from a
+    // drive they do not own.
     http_remove_member(
         &state.api_client.clone(),
         &ctx.base_url,
         &ctx.bearer,
         &identity.wire_folder_hash,
         &member_ss58,
-        None,
+        delegated_owner(&identity),
     )
     .await?;
 
@@ -788,7 +899,7 @@ pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, memb
 
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
 
     // Targeting yourself is the server's 400 (a manager demotes themself by
     // leaving, not by PATCH). Refuse it here so the UI can say why instead of
@@ -797,8 +908,8 @@ pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, memb
         return Err(AppError::Validation("You cannot change your own role. Leave the drive instead.".into()));
     }
 
-    // Owner path: the server keys the change by the caller's own identity, so
-    // no `?owner=` — that param exists for the self-leave branch.
+    // `None` for an owner; the owner's address for a manager re-roling
+    // somebody on a drive they do not own.
     http_change_member_role(
         &state.api_client.clone(),
         &ctx.base_url,
@@ -806,7 +917,7 @@ pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, memb
         &identity.wire_folder_hash,
         &member_ss58,
         &role,
-        None,
+        delegated_owner(&identity),
     )
     .await?;
 
@@ -826,9 +937,16 @@ pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, memb
 pub async fn list_drive_invites(app: tauri::AppHandle, label: String) -> Result<Vec<DriveInviteInfo>> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
 
-    let invites = http_list_invites(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
+    let invites = http_list_invites(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        delegated_owner(&identity),
+    )
+    .await?;
     let live = invites.iter().filter(|i| i.valid && !i.revoked).count();
     info!(label = %label, count = invites.len(), live, "Listed drive invites");
     Ok(invites)
@@ -906,12 +1024,15 @@ pub async fn list_owned_drive_sharing(app: tauri::AppHandle, labels: Vec<String>
         let http = http.clone();
         let ctx = &ctx;
         async move {
+            // Owner-only on purpose: this answers "which of MY drives have I
+            // shared". A drive shared WITH this account is described by its
+            // role badge, which needs no counts.
             let identity = resolve_own_drive(pool, &ctx.account_id, label).await.ok()?;
             // Both listings are asked independently and neither is allowed to
             // discard the other's answer.
             let (members, invites) = futures_util::future::join(
-                http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash),
-                http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash),
+                http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
+                http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
             )
             .await;
 
@@ -950,7 +1071,7 @@ pub async fn list_owned_drive_sharing(app: tauri::AppHandle, labels: Vec<String>
 pub async fn revoke_drive_invite(app: tauri::AppHandle, label: String, invite_id: String) -> Result<()> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
 
     http_revoke_invite(
         &state.api_client.clone(),
@@ -958,6 +1079,7 @@ pub async fn revoke_drive_invite(app: tauri::AppHandle, label: String, invite_id
         &ctx.bearer,
         &identity.wire_folder_hash,
         &invite_id,
+        delegated_owner(&identity),
     )
     .await?;
 
@@ -1396,6 +1518,53 @@ mod tests {
     fn fold_reports_an_unshared_drive_as_answered_with_zeros() {
         let s = fold_drive_sharing("team", Some(0), Some(&[])).expect("answered");
         assert_eq!((s.member_count, s.live_invite_count, s.total_invite_count), (0, 0, 0));
+    }
+
+    fn own(hash: &str) -> crate::sync::identity::DriveIdentity {
+        crate::sync::identity::DriveIdentity {
+            wire_ss58: "5Me".into(),
+            wire_folder_hash: hash.into(),
+            is_member: false,
+        }
+    }
+
+    fn member_of(owner: &str, hash: &str) -> crate::sync::identity::DriveIdentity {
+        crate::sync::identity::DriveIdentity {
+            wire_ss58: owner.into(),
+            wire_folder_hash: hash.into(),
+            is_member: true,
+        }
+    }
+
+    // `folder_hash` is label-derived, so two owners who both name a drive
+    // "Documents" collide. A delegated call that forgets the owner addresses
+    // whichever row the server finds first.
+    #[test]
+    fn a_member_drive_delegates_by_naming_its_owner() {
+        assert_eq!(delegated_owner(&member_of("5Owner", "abc")), Some("5Owner"));
+    }
+
+    // An owner's own call must NOT carry it: the server keys those by the
+    // caller's identity, and naming yourself is a different code path.
+    #[test]
+    fn an_own_drive_names_nobody() {
+        assert_eq!(delegated_owner(&own("abc")), None);
+    }
+
+    #[test]
+    fn with_owner_appends_the_param_only_when_delegated() {
+        let base = "https://s.example.com/v1/drives/abc/members";
+        assert_eq!(with_owner(base, None).unwrap().as_str(), base);
+        assert_eq!(with_owner(base, Some("5Owner")).unwrap().as_str(), format!("{base}?owner=5Owner"));
+    }
+
+    // An ss58 is alphanumeric, but the encoder must still be used rather than
+    // string concatenation -- a param assembled by hand is one server-side
+    // rename away from injecting into the query.
+    #[test]
+    fn with_owner_encodes_rather_than_concatenates() {
+        let url = with_owner("https://s.example.com/v1/drives/abc/invites", Some("a&b=c")).unwrap();
+        assert_eq!(url.query(), Some("owner=a%26b%3Dc"));
     }
 
     // The bug this pins: every multi-word field crossed IPC as snake_case

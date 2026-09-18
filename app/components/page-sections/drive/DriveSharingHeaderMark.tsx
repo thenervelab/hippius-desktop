@@ -48,8 +48,9 @@ export default function DriveSharingHeaderMark({
         {sharing.label}
       </span>
 
-      {/* Only the owner can manage access. A member sees the badge and their
-          role, which is the whole of what the drive means for them here. */}
+      {/* Owners, and managers on a drive they do not own. A Viewer or Editor
+          sees the badge and their role, which is the whole of what the drive
+          means for them here. */}
       {canManage && (
         <Button
           variant="ghost"

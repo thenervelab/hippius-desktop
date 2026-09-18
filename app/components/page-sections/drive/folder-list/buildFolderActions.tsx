@@ -19,6 +19,7 @@ import { Icons } from "@/components/ui";
 import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { resolveFolderMenuPlan } from "@/components/page-sections/settings/multi-folder-sync/folderMenuGating";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import type { RemoteFolder, SyncFolder } from "@/app/lib/types/sync-folder";
 
 import type { FolderRow } from "./folderRows";
@@ -41,6 +42,11 @@ export interface FolderActionHandlers {
    * known yet", which permits the item — see `resolveFolderMenuPlan`.
    */
   planSupportsSharedDrives?: boolean;
+  /**
+   * The viewer's role on this row's drive, when somebody shared it with them.
+   * Lets a MANAGER reach the mint on a drive they do not own.
+   */
+  role?: DriveRole;
   /**
    * Share a drive that exists on the server but is not synced on this device.
    * Separate from `onShareDrive` only because the two branches hold different
@@ -68,6 +74,7 @@ export function buildFolderActions(
     const plan = resolveFolderMenuPlan(folder, {
       sharedDrivesEnabled: SHARED_DRIVES_ENABLED,
       planSupportsSharedDrives: handlers.planSupportsSharedDrives,
+      role: handlers.role,
     });
     const items: ActionItem[] = [];
 
