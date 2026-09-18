@@ -63,6 +63,92 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 /// "Decryption failed - wrong password?" and surfaces as "Failed to load
 /// remote files" in the browse-folder dialog (and the matching failure in
 /// `download_remote_file`).
+/// Which drive an upload writes into.
+///
+/// Same rule as browsing: a drive shared with this account that is not synced
+/// here has no local row, and the lenient resolver answers with THIS
+/// account's namespace — writing into the wrong drive rather than failing. So
+/// the caller may name the wire identity, and half an identity is refused.
+pub(crate) async fn upload_target_identity(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<DriveIdentity> {
+    match (owner_ss58, folder_hash) {
+        (Some(owner), Some(hash)) => shared_drive_identity(&owner, &hash),
+        (None, Some(_)) | (Some(_), None) => Err(AppError::Validation(
+            "Uploading to a shared drive needs both its owner and its folder hash.".into(),
+        )),
+        (None, None) => resolve_drive_identity_or_own(pool, account_id, label).await,
+    }
+}
+
+/// The folder mnemonic a drive's keys are derived from.
+///
+/// ONE source for both the encryption key and the manifest signing key. They
+/// were derived separately, and only the encryption path had a member branch:
+/// on a drive shared with this account, a remote upload encrypted with the
+/// OWNER's folder key and signed with one derived from this account's master.
+/// Two different keys for one file, and nothing local fails when they
+/// disagree.
+///
+/// Three sources, in order of what the drive actually is:
+///   - an OWN drive derives from this account's master;
+///   - a member drive synced here reads the owner-sealed `enc_mnemonic.json`;
+///   - a member drive never synced here opens this account's own grant, which
+///     carries the same key sealed to them.
+pub(crate) async fn folder_phrase_for_label(
+    state: &AppState,
+    account_id: &str,
+    label: &str,
+    mnemonic: &str,
+    identity: &DriveIdentity,
+) -> Result<zeroize::Zeroizing<String>> {
+    let pool = state.pool()?;
+    let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
+
+    if identity.is_member {
+        let folder_enc = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?.join("enc_mnemonic.json");
+        if folder_enc.exists() {
+            let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
+                .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
+            return Ok(zeroize::Zeroizing::new(folder.to_string()));
+        }
+
+        // Never synced here: the grant holds the same key, sealed to this
+        // account. Argon2id is offloaded inside `open_grant_entropy`.
+        let ctx = crate::shared_drives::commands::api_ctx_for(state).await?;
+        let entropy = crate::shared_drives::commands::open_grant_entropy_inner(state, &ctx, identity).await?;
+        let folder =
+            bip39::Mnemonic::from_entropy(entropy.as_ref()).map_err(|e| AppError::Crypto(format!("grant entropy is not a folder key: {e}")))?;
+        return Ok(zeroize::Zeroizing::new(folder.to_string()));
+    }
+
+    let master_path = master_mnemonic_path(account_id)?;
+    let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
+        .map_err(|e| AppError::Hcfs(format!("Failed to recover master mnemonic: {e}")))?
+        .to_string();
+    let phrase = hcfs_client::drive::keys::derive_folder_mnemonic(&master_mnemonic, label)
+        .map_err(|e| AppError::Crypto(format!("Failed to derive folder mnemonic: {e}")));
+    master_mnemonic.zeroize();
+    Ok(zeroize::Zeroizing::new(phrase?))
+}
+
+/// The 32-byte file-encryption key: the folder mnemonic's seed, first 32
+/// bytes — the tail of hcfs-client's `derive_encryption_key` chain, and what
+/// `Drive::unlock` derives from the same phrase.
+pub(crate) fn encryption_key_from_phrase(phrase: &str) -> Result<[u8; 32]> {
+    use std::str::FromStr;
+    let folder = bip39::Mnemonic::from_str(phrase).map_err(|e| AppError::Crypto(format!("Invalid folder mnemonic: {e}")))?;
+    let mut seed = folder.to_seed("");
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&seed[..32]);
+    seed.zeroize();
+    Ok(key)
+}
+
 pub(crate) async fn encryption_key_for_label(
     pool: &SqlitePool,
     account_id: &str,

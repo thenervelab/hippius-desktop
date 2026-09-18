@@ -104,7 +104,8 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
 
     let mnemonic = super::remote::session_mnemonic(state)?;
     let encryption_key = super::remote::encryption_key_for_label(pool, account_id, label, &mnemonic, identity).await?;
-    let signing_key = signing_key_for_folder(&mnemonic, label)?;
+    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
+    let signing_key = signing_key_for_folder(&folder_phrase)?;
 
     let old_relative = wire_relative_path(parent_path, old_name);
     let new_relative = wire_relative_path(parent_path, new_name);
@@ -410,7 +411,8 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
 
     let mnemonic = super::remote::session_mnemonic(state)?;
     let encryption_key = super::remote::encryption_key_for_label(pool, account_id, label, &mnemonic, identity).await?;
-    let signing_key = signing_key_for_folder(&mnemonic, label)?;
+    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
+    let signing_key = signing_key_for_folder(&folder_phrase)?;
 
     let old_prefix = wire_relative_path(parent_path, old_name);
     let new_prefix = wire_relative_path(parent_path, new_name);
@@ -494,10 +496,15 @@ pub async fn create_remote_folder(
     label: String,
     parent_path: Option<String>,
     name: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
 ) -> Result<String> {
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
-    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+    // A drive shared with this account that is not synced here has no local
+    // row; the lenient resolver would create the folder in THIS account's
+    // namespace instead. Same rule as uploading and browsing.
+    let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
     create_remote_folder_inner(pool, &account_id, parent_path.as_deref().unwrap_or_default(), &name, &identity).await
 }
 

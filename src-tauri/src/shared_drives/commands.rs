@@ -515,7 +515,7 @@ pub async fn http_list_memberships(http: &reqwest::Client, base_url: &str, beare
 // ─── Shared command plumbing ───────────────────────────────────────────────
 
 /// The resolved account + connection triple every command needs.
-struct ApiCtx {
+pub(crate) struct ApiCtx {
     account_id: String,
     base_url: String,
     bearer: String,
@@ -523,6 +523,12 @@ struct ApiCtx {
 
 /// Resolve the session account, the concrete regional base URL, and the
 /// bearer token — the `recent_uploads::fetch_search_files` plumbing.
+/// [`api_ctx`] for callers outside this module (`sync::fileops::remote` needs
+/// it to open a grant for a drive that was never synced here).
+pub(crate) async fn api_ctx_for(state: &AppState) -> Result<ApiCtx> {
+    api_ctx(state).await
+}
+
 async fn api_ctx(state: &AppState) -> Result<ApiCtx> {
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
@@ -604,6 +610,47 @@ fn with_owner(url: &str, owner: Option<&str>) -> Result<reqwest::Url> {
 /// what the server hides.
 pub async fn resolve_manageable_drive(pool: &sqlx::SqlitePool, account_id: &str, label: &str) -> Result<crate::sync::identity::DriveIdentity> {
     crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, label).await
+}
+
+/// Resolve the drive a management call addresses.
+///
+/// A manager may hold a drive they have never synced here, and every manage
+/// command resolved a LOCAL label — which for such a drive resolves to
+/// nothing, and the lenient fallback then answers with THIS account's
+/// namespace. So the caller may name the wire identity instead, exactly as
+/// browsing does.
+///
+/// Half an identity is refused rather than guessed: falling through to the
+/// label would manage the wrong drive instead of failing.
+async fn resolve_manage_target(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    label: &str,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<crate::sync::identity::DriveIdentity> {
+    match (owner_ss58, folder_hash) {
+        (Some(owner), Some(hash)) => {
+            let owner = owner.trim();
+            let hash = hash.trim();
+            if owner.is_empty() || hash.is_empty() {
+                return Err(AppError::Validation(
+                    "Managing a shared drive needs both its owner and its folder hash.".into(),
+                ));
+            }
+            Ok(crate::sync::identity::DriveIdentity {
+                wire_ss58: owner.to_string(),
+                wire_folder_hash: hash.to_string(),
+                // Somebody else's drive by construction; the flag is what
+                // makes `delegated_owner` name them on the wire.
+                is_member: true,
+            })
+        }
+        (None, Some(_)) | (Some(_), None) => Err(AppError::Validation(
+            "Managing a shared drive needs both its owner and its folder hash.".into(),
+        )),
+        (None, None) => resolve_manageable_drive(pool, account_id, label).await,
+    }
 }
 
 /// The `owner` a delegated management call must name, or `None` for an own
@@ -751,6 +798,43 @@ async fn seal_folder_mnemonic(
 
 // ─── IPC commands ──────────────────────────────────────────────────────────
 
+/// This account's folder-key entropy for a member drive, from the grant the
+/// server holds for it.
+///
+/// `pub(crate)` for `sync::fileops::remote`, which needs the same key to
+/// upload into a shared drive that was never synced here.
+///
+/// The local seal is the usual source, but a drive that was never synced here
+/// has none — and refusing on that basis made managing a drive conditional on
+/// copying it to this machine. The grant blob carries the same key, sealed to
+/// this account, so it is opened directly.
+///
+/// Argon2id at grant cost is multi-second, so the open is offloaded; running a
+/// KDF on the runtime stalls every other IPC.
+pub(crate) async fn open_grant_entropy_inner(
+    state: &AppState,
+    ctx: &ApiCtx,
+    identity: &crate::sync::identity::DriveIdentity,
+) -> Result<Zeroizing<[u8; 32]>> {
+    let memberships = http_list_memberships(&state.api_client.clone(), &ctx.base_url, &ctx.bearer).await?;
+    let entry = memberships
+        .memberships
+        .into_iter()
+        .find(|m| m.owner_ss58 == identity.wire_ss58 && m.folder_hash == identity.wire_folder_hash)
+        .ok_or_else(|| AppError::Validation("You are no longer a member of this drive.".into()))?;
+
+    let grant_blob = base64::engine::general_purpose::STANDARD
+        .decode(&entry.grant_blob)
+        .map_err(|e| AppError::Crypto(format!("grant blob is not valid base64: {e}")))?;
+
+    let master = crate::sync::mnemonic::get_mnemonic_for_account(state, &ctx.account_id).await?;
+    let master_owned = Zeroizing::new(master.to_string());
+    let member_ss58 = ctx.account_id.clone();
+    tokio::task::spawn_blocking(move || grant::open_grant(&master_owned, &member_ss58, &grant_blob))
+        .await
+        .map_err(|e| AppError::Other(format!("grant-open task failed to join: {e}")))?
+}
+
 /// Mint an invite link for an OWN drive.
 ///
 /// The link is assembled here, in Rust: the invite token and the folder-key
@@ -763,10 +847,12 @@ pub async fn create_drive_invite(
     expires_in_secs: Option<u64>,
     max_uses: Option<u32>,
     role: Option<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
 ) -> Result<DriveInviteLink> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     // The folder-key entropy the link's fragment carries. The master read is
     // serialized against password rotation (`recovery_lock`), the sanctioned
@@ -785,16 +871,18 @@ pub async fn create_drive_invite(
             // same file, as `remote::encryption_key_for_label`.
             let password = crate::sync::config::get_drive_password(state.pool()?, &ctx.account_id, None).await?;
             let folder_enc = crate::sync::mnemonic::config_dir_for_folder(&ctx.account_id, &label)?.join("enc_mnemonic.json");
-            if !folder_enc.exists() {
-                return Err(AppError::Validation(format!(
-                    "Shared drive '{label}' has no local key material on this device — remove it and \
-                     re-add it from your shared drives."
-                )));
+            if folder_enc.exists() {
+                let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
+                    .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
+                let phrase = Zeroizing::new(folder.to_string());
+                grant::entropy_from_phrase(&phrase)?
+            } else {
+                // A manager who never synced this drive has no seal on disk.
+                // The same key is in their own grant blob on the server,
+                // sealed to them, so open that instead of refusing. Argon2id
+                // is ~1.5s, so it is offloaded -- never a KDF on the runtime.
+                open_grant_entropy_inner(&state, &ctx, &identity).await?
             }
-            let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
-                .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
-            let phrase = Zeroizing::new(folder.to_string());
-            grant::entropy_from_phrase(&phrase)?
         } else {
             let master = crate::sync::mnemonic::get_mnemonic_for_account(&state, &ctx.account_id).await?;
             let phrase = Zeroizing::new(crate::sync::mnemonic::derive_folder_mnemonic(&master, &label)?);
@@ -831,10 +919,15 @@ pub async fn create_drive_invite(
 
 /// List the members of an OWN drive.
 #[tauri::command]
-pub async fn list_drive_members(app: tauri::AppHandle, label: String) -> Result<Vec<DriveMemberInfo>> {
+pub async fn list_drive_members(
+    app: tauri::AppHandle,
+    label: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<Vec<DriveMemberInfo>> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     let resp = http_list_members(
         &state.api_client.clone(),
@@ -864,10 +957,16 @@ pub async fn list_drive_members(app: tauri::AppHandle, label: String) -> Result<
 /// The member's next request is denied server-side; their drive surfaces the
 /// revoked state on its next sync cycle (Task 5).
 #[tauri::command]
-pub async fn remove_drive_member(app: tauri::AppHandle, label: String, member_ss58: String) -> Result<()> {
+pub async fn remove_drive_member(
+    app: tauri::AppHandle,
+    label: String,
+    member_ss58: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<()> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     // `None` for an owner (the server keys the delete by the caller's own
     // identity); the owner's address for a manager removing somebody from a
@@ -894,7 +993,14 @@ pub async fn remove_drive_member(app: tauri::AppHandle, label: String, member_ss
 /// step with `app/lib/shared-drives/roles.ts`, which holds the same list for
 /// the UI.
 #[tauri::command]
-pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, member_ss58: String, role: String) -> Result<()> {
+pub async fn change_drive_member_role(
+    app: tauri::AppHandle,
+    label: String,
+    member_ss58: String,
+    role: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<()> {
     const WIRE_ROLES: [&str; 3] = ["reader", "writer", "manager"];
     if !WIRE_ROLES.contains(&role.as_str()) {
         return Err(AppError::Validation(format!(
@@ -904,7 +1010,7 @@ pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, memb
 
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     // Targeting yourself is the server's 400 (a manager demotes themself by
     // leaving, not by PATCH). Refuse it here so the UI can say why instead of
@@ -939,10 +1045,15 @@ pub async fn change_drive_member_role(app: tauri::AppHandle, label: String, memb
 /// that token's hash, which is precisely what makes a minted link
 /// unrevocable without this listing.
 #[tauri::command]
-pub async fn list_drive_invites(app: tauri::AppHandle, label: String) -> Result<Vec<DriveInviteInfo>> {
+pub async fn list_drive_invites(
+    app: tauri::AppHandle,
+    label: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<Vec<DriveInviteInfo>> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     let invites = http_list_invites(
         &state.api_client.clone(),
@@ -1073,10 +1184,16 @@ pub async fn list_owned_drive_sharing(app: tauri::AppHandle, labels: Vec<String>
 /// Removing a member does not help — that revokes someone who already joined,
 /// not the link still circulating.
 #[tauri::command]
-pub async fn revoke_drive_invite(app: tauri::AppHandle, label: String, invite_id: String) -> Result<()> {
+pub async fn revoke_drive_invite(
+    app: tauri::AppHandle,
+    label: String,
+    invite_id: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<()> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_manageable_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     http_revoke_invite(
         &state.api_client.clone(),
@@ -1717,6 +1834,41 @@ mod tests {
     fn with_owner_encodes_rather_than_concatenates() {
         let url = with_owner("https://s.example.com/v1/drives/abc/invites", Some("a&b=c")).unwrap();
         assert_eq!(url.query(), Some("owner=a%26b%3Dc"));
+    }
+
+    /// A manager may hold a drive they never synced here. Resolving a LOCAL
+    /// label for one falls through to this account's own namespace, which
+    /// manages the wrong drive rather than failing, so the caller may name
+    /// the wire identity instead.
+    #[tokio::test]
+    async fn a_named_drive_is_managed_in_its_owners_namespace() {
+        let pool = sqlx::SqlitePool::connect(":memory:").await.expect("pool");
+        let id = resolve_manage_target(&pool, "5Me", "team-docs", Some("5Owner".into()), Some("abc123".into()))
+            .await
+            .expect("identity");
+
+        assert_eq!(id.wire_ss58, "5Owner");
+        assert_eq!(id.wire_folder_hash, "abc123");
+        assert!(id.is_member, "somebody else's drive is never own");
+        assert_eq!(delegated_owner(&id), Some("5Owner"), "and it is named on the wire");
+    }
+
+    /// Half an identity must not fall through to the label: the lenient
+    /// resolver would answer with this account's namespace.
+    #[tokio::test]
+    async fn half_a_named_identity_is_refused() {
+        let pool = sqlx::SqlitePool::connect(":memory:").await.expect("pool");
+        for (owner, hash) in [
+            (Some("5Owner".to_string()), None),
+            (None, Some("abc123".to_string())),
+            (Some(String::new()), Some("abc123".to_string())),
+            (Some("5Owner".to_string()), Some("  ".to_string())),
+        ] {
+            assert!(
+                resolve_manage_target(&pool, "5Me", "team-docs", owner, hash).await.is_err(),
+                "half an identity must fail rather than resolve the label"
+            );
+        }
     }
 
     // The bug this pins: every multi-word field crossed IPC as snake_case

@@ -87,6 +87,12 @@ export default function CreateDriveInviteDialog() {
       const link = await createDriveInvite(labelAtCall, {
         expiresInSecs: effectiveTtl,
         role: inviteRole,
+        // Named only for a drive shared with this account that is not synced
+        // here; an own drive's label resolves on its own.
+        target:
+          target?.ownerSs58 && target?.folderHash
+            ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
+            : undefined,
       });
       if (labelAtCall !== currentLabelRef.current) return;
       setInvite({ kind: "done", inviteUrl: link.inviteUrl });
@@ -103,7 +109,7 @@ export default function CreateDriveInviteDialog() {
         setInvite({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [label, ttlSecs, inviteRole, queryClient]);
+  }, [label, ttlSecs, inviteRole, queryClient, target?.ownerSs58, target?.folderHash]);
 
   useEffect(() => {
     if (invite.kind !== "done" || autoCopiedRef.current) return;

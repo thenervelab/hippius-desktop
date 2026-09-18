@@ -53,3 +53,21 @@ export function parseSharedDriveLabel(
 export function isSharedDriveLabel(label: string | null | undefined): boolean {
   return parseSharedDriveLabel(label) !== null;
 }
+
+/**
+ * The identity args a drive-scoped IPC takes, derived from the browse label.
+ *
+ * `null` for an ordinary drive, which the backend reads as "resolve the
+ * label". One helper so a new call site cannot pass half an identity, which
+ * both sides refuse rather than fall back on.
+ */
+export function sharedDriveTargetArgs(label: string | null | undefined): {
+  ownerSs58: string | null;
+  folderHash: string | null;
+} {
+  const identity = parseSharedDriveLabel(label);
+  return {
+    ownerSs58: identity?.ownerSs58 ?? null,
+    folderHash: identity?.folderHash ?? null,
+  };
+}

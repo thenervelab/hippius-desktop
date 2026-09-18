@@ -212,7 +212,7 @@ fn management_commands_route_through_a_named_gate() {
     ] {
         let body = fn_body(&src, command);
         assert!(
-            body.contains("resolve_manageable_drive(") || body.contains("resolve_own_drive("),
+            body.contains("resolve_manage_target(") || body.contains("resolve_own_drive("),
             "{command} must resolve its label through a named gate"
         );
         assert!(
@@ -513,8 +513,9 @@ fn management_commands_admit_a_delegated_manager() {
     ] {
         let body = fn_body(&src, sig);
         assert!(
-            body.contains("resolve_manageable_drive"),
-            "{sig} must admit a manager on somebody else's drive"
+            body.contains("resolve_manage_target"),
+            "{sig} must resolve through the target gate, which admits a delegated manager \
+             and lets the caller name a drive that is not synced here"
         );
     }
 
@@ -522,4 +523,48 @@ fn management_commands_admit_a_delegated_manager() {
     // "which of MY drives have I shared".
     let sharing = fn_body(&src, "pub async fn list_owned_drive_sharing");
     assert!(sharing.contains("resolve_own_drive"), "the sharing badge listing stays owner-only");
+}
+
+/// A file's encryption key and its manifest signing key come from ONE folder
+/// phrase.
+///
+/// They used to be derived separately, and only the encryption path had a
+/// member branch: on a drive shared with this account, a remote upload
+/// encrypted with the OWNER's folder key and signed with one derived from this
+/// account's master. Two keys for one file, and nothing local fails when they
+/// disagree — the file uploads, and the mismatch is somebody else's problem
+/// later. Pinned on the source because no hermetic test round-trips a real
+/// manifest.
+#[test]
+fn upload_and_rename_take_both_keys_from_one_folder_phrase() {
+    for (file, sig) in [
+        ("/src/sync/fileops/remote_upload.rs", "async fn upload_one_file"),
+        ("/src/sync/fileops/remote_rename.rs", "pub async fn rename_remote_file"),
+    ] {
+        let src = std::fs::read_to_string(format!("{}{file}", env!("CARGO_MANIFEST_DIR"))).unwrap_or_else(|e| panic!("read {file}: {e}"));
+
+        assert!(
+            src.contains("folder_phrase_for_label"),
+            "{file} must take its folder phrase from the one resolver that knows about member drives"
+        );
+        assert!(
+            !src.contains("signing_key_for_folder(&mnemonic, label)"),
+            "{file} must not re-derive a signing key from the master: a member drive's key is the OWNER's"
+        );
+        let _ = sig;
+    }
+}
+
+/// `signing_key_for_folder` takes a PHRASE, never `(master, label)`.
+///
+/// The old signature is what made the member bug invisible: deriving the
+/// phrase inside meant the call site could not pass the owner's.
+#[test]
+fn the_signing_key_is_derived_from_a_phrase_not_a_master() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
+    let body = fn_body(&src, "pub(crate) fn signing_key_for_folder");
+    assert!(
+        !body.contains("derive_folder_mnemonic"),
+        "deriving the phrase inside means the caller cannot pass the owner's"
+    );
 }

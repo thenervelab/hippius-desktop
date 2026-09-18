@@ -61,6 +61,8 @@ import {
 } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
+import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
+import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import {
   makeSharedDriveLabel,
   parseSharedDriveLabel,
@@ -1427,7 +1429,23 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // the write anyway, so this decides only what the UI OFFERS -- and an
   // upload button that can only fail reports the failure as a sync error,
   // far from the button that caused it.
-  const { canWrite: openDriveCanWrite } = useDriveSharing(openDriveLabel);
+  const { canWrite: syncedDriveCanWrite } = useDriveSharing(
+    browsedSharedDrive ? null : openDriveLabel,
+  );
+  // A drive browsed without syncing it has no local label to look a role up
+  // by, so its membership is found by wire identity. Permitted until the
+  // listing answers: own drives vastly outnumber member ones, and a write
+  // control that appears late on every drive is a worse trade than one that
+  // briefly appears for a Viewer.
+  const browsedMembership = useSharedDriveMembershipByIdentity(browsedSharedDrive);
+  const openDriveCanWrite = browsedSharedDrive
+    ? canWriteToDrive({
+        isOwner: false,
+        role: browsedMembership.membership
+          ? parseDriveRole(browsedMembership.membership.role)
+          : undefined,
+      }) || !browsedMembership.isSettled
+    : syncedDriveCanWrite;
 
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];
@@ -1975,11 +1993,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 addButtonRef={addButtonRef}
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
-                // A shared drive browsed without syncing it has no local
-                // root, and the upload path resolves its destination from the
-                // label — which here names somebody else's namespace. Syncing
-                // it locally is the way to add to it.
-                hideUploads={isRemoteView || Boolean(browsedSharedDrive)}
+                // A browsed shared drive is no longer excluded: its wire
+                // identity travels in the label, so uploads and New Folder
+                // address the owner's namespace rather than this account's.
+                // Whether the viewer MAY write is the role's business, and
+                // that is `isReadOnlyDrive`.
+                hideUploads={isRemoteView}
                 remoteUpload={
                   // The label the remote listing itself reads, so the
                   // upload lands in the folder on screen rather than in

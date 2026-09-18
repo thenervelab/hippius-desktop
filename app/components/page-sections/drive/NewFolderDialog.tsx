@@ -1,5 +1,6 @@
 "use client";
 
+import { sharedDriveTargetArgs } from "@/app/lib/shared-drives/sharedDriveLabel";
 import React, { useEffect, useRef, useState } from "react";
 import { useAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
@@ -80,6 +81,7 @@ const NewFolderDialog: React.FC = () => {
           label: destination.label ?? null,
           parentPath: destination.parentPath ?? null,
           name: trimmed,
+          ...sharedDriveTargetArgs(destination.label),
         },
       );
       toast.success(`Created "${trimmed}"`);

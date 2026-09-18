@@ -52,10 +52,11 @@ export default function DriveSharingHeaderMark({
         role: byIdentity.membership?.role,
       })
     : bySynced.sharing;
+  // Managing no longer needs a local copy: the manage calls address the drive
+  // by its wire identity, and the mint falls back to this account's own grant
+  // for the folder key when no seal is on disk.
   const canManage = browsedSharedDrive
-    // Managing resolves a LOCAL label, so a drive browsed without being
-    // synced here has nothing to resolve. Sync it first.
-    ? browsedRole === "manager" && Boolean(byIdentity.membership?.localLabel)
+    ? browsedRole === "manager"
     : bySynced.canManage;
 
   if (!sharing.isShared) return null;
@@ -86,11 +87,17 @@ export default function DriveSharingHeaderMark({
           size="auto"
           onClick={() =>
             setShareTarget({
-              // The manage IPCs resolve a LOCAL label. A browsed drive that is
-              // also synced here has one; one that is not cannot be managed
-              // from this surface yet, and the button is withheld above.
+              // A synced drive resolves by its local label; one that is not
+              // synced here names its wire identity instead, which is what
+              // lets the manage calls address somebody else's namespace.
               label: byIdentity.membership?.localLabel ?? label,
               folderName: displayName ?? label,
+              ...(browsedSharedDrive && !byIdentity.membership?.localLabel
+                ? {
+                    ownerSs58: browsedSharedDrive.ownerSs58,
+                    folderHash: browsedSharedDrive.folderHash,
+                  }
+                : {}),
             })
           }
           className="h-7 flex-shrink-0 rounded-md border border-grey-80 px-2.5 text-xs font-medium text-grey-30 transition-colors hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"

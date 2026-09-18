@@ -191,7 +191,9 @@ describe("members tab", () => {
       expect(screen.getAllByText(/Editor/).length).toBeGreaterThan(0),
     );
     expect(screen.queryByText(/writer/)).not.toBeInTheDocument();
-    expect(listDriveMembersMock).toHaveBeenCalledWith("team-docs");
+    // An own drive resolves by label and names no wire identity; passing one
+    // would address somebody else's namespace.
+    expect(listDriveMembersMock).toHaveBeenCalledWith("team-docs", undefined);
   });
 
   it("offers every role in the dialog, starting on the one the member has", async () => {
@@ -263,6 +265,7 @@ describe("members tab", () => {
         "team-docs",
         MEMBER,
         "manager",
+        undefined,
       ),
     );
     // Refetched rather than patched in place: the server is the authority on
@@ -329,7 +332,7 @@ describe("members tab", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
     await waitFor(() =>
-      expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", member.memberSs58),
+      expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", member.memberSs58, undefined),
     );
     await screen.findByText(/No one has joined this drive yet/);
   });
@@ -355,7 +358,7 @@ describe("links tab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Links" }));
     await screen.findByText(/Editor · 2 of 50 used/);
-    expect(listDriveInvitesMock).toHaveBeenCalledWith("team-docs");
+    expect(listDriveInvitesMock).toHaveBeenCalledWith("team-docs", undefined);
   });
 
   // The whole point: a minted link could not be killed at all before this.
@@ -372,7 +375,7 @@ describe("links tab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm revoke" }));
 
     await waitFor(() =>
-      expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "abc123"),
+      expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "abc123", undefined),
     );
     await waitFor(() => expect(listDriveInvitesMock).toHaveBeenCalledTimes(2));
   });
@@ -412,5 +415,60 @@ describe("links tab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Links" }));
     await waitFor(() => expect(listDriveInvitesMock).toHaveBeenCalled());
     expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+});
+
+// A manager may hold a drive they never synced here. The manage calls used to
+// resolve a local `sync_paths` row such a drive does not have, and the lenient
+// fallback then answers with THIS account's namespace: managing the wrong
+// drive rather than failing.
+describe("managing a drive that is not synced here", () => {
+  const TARGET = { ownerSs58: "5Owner", folderHash: "abc123" };
+
+  function renderUnsynced() {
+    const store = createStore();
+    store.set(shareDriveModalAtom, {
+      label: "team-docs",
+      folderName: "team-docs",
+      ...TARGET,
+    });
+    return render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("names the owner's drive when listing members", async () => {
+    listDriveMembersMock.mockResolvedValue([]);
+    renderUnsynced();
+    await waitFor(() =>
+      expect(listDriveMembersMock).toHaveBeenCalledWith("team-docs", TARGET),
+    );
+  });
+
+  it("names it when listing links", async () => {
+    listDriveMembersMock.mockResolvedValue([]);
+    listDriveInvitesMock.mockResolvedValue([]);
+    renderUnsynced();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    await waitFor(() =>
+      expect(listDriveInvitesMock).toHaveBeenCalledWith("team-docs", TARGET),
+    );
+  });
+
+  it("names it when removing a member", async () => {
+    const member = { memberSs58: MEMBER, role: "writer", createdAt: "" };
+    listDriveMembersMock.mockResolvedValue([member]);
+    removeDriveMemberMock.mockResolvedValue(undefined);
+
+    renderUnsynced();
+    await screen.findByRole("button", { name: "Remove from drive" });
+    openMemberMenu(MEMBER, "Remove from drive");
+    fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
+
+    await waitFor(() =>
+      expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", MEMBER, TARGET),
+    );
   });
 });

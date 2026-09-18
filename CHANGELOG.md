@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **A Manager can manage a shared drive without syncing it first**, and an Editor
+  can upload into one they are only browsing. Both used to need a copy of the
+  drive on this computer.
 - **Drives shared with you show their size, file count and last change**, the
   same facts your own drives show. A drive whose figures have not arrived yet
   shows none rather than claiming to be empty.

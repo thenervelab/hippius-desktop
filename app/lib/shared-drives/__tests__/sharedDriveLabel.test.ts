@@ -3,6 +3,7 @@ import {
   isSharedDriveLabel,
   makeSharedDriveLabel,
   parseSharedDriveLabel,
+  sharedDriveTargetArgs,
 } from "../sharedDriveLabel";
 
 const IDENTITY = { ownerSs58: "5Owner", folderHash: "abc123" };
@@ -43,5 +44,35 @@ describe("the shared-drive browse label", () => {
   it("keeps a hash containing a slash intact", () => {
     const parsed = parseSharedDriveLabel("shared://5Owner/a/b");
     expect(parsed).toEqual({ ownerSs58: "5Owner", folderHash: "a/b" });
+  });
+});
+
+// Every drive-scoped IPC on a browsed shared drive takes its identity from
+// the label. One helper, so a new call site cannot pass half an identity,
+// which both sides refuse rather than falling back to this account's own
+// namespace.
+describe("sharedDriveTargetArgs", () => {
+  it("names the owner's drive for a browse label", () => {
+    expect(sharedDriveTargetArgs(makeSharedDriveLabel(IDENTITY))).toEqual({
+      ownerSs58: "5Owner",
+      folderHash: "abc123",
+    });
+  });
+
+  // An ordinary drive resolves by label; naming an identity would address
+  // somebody else's namespace.
+  it.each(["Documents", "", null, undefined])("names nobody for %s", (label) => {
+    expect(sharedDriveTargetArgs(label)).toEqual({
+      ownerSs58: null,
+      folderHash: null,
+    });
+  });
+
+  // Nulls, never undefined: the backend distinguishes "absent" from "half
+  // an identity", and an undefined key can drop out of an IPC payload.
+  it("sends nulls rather than dropping the keys", () => {
+    const args = sharedDriveTargetArgs("Documents");
+    expect(Object.keys(args).sort()).toEqual(["folderHash", "ownerSs58"]);
+    expect(args.ownerSs58).toBeNull();
   });
 });

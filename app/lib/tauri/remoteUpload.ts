@@ -1,4 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { DriveTarget } from "@/app/lib/tauri/sharedDrives";
+
+/**
+ * The identity args the remote-upload IPCs accept, normalised to nulls.
+ *
+ * Named only for a drive shared with this account that is NOT synced here:
+ * it has no local row, and the backend's lenient fallback would otherwise
+ * resolve to THIS account's namespace, writing into the wrong drive rather
+ * than failing.
+ */
+function targetArgs(target?: DriveTarget) {
+  return {
+    ownerSs58: target?.ownerSs58 ?? null,
+    folderHash: target?.folderHash ?? null,
+  };
+}
 
 /** One file that did not upload, mirroring Rust's `RemoteUploadFailure`. */
 export interface RemoteUploadFailure {
@@ -23,12 +39,14 @@ export async function uploadFilesToRemoteFolder(
   label: string,
   filePaths: string[],
   parentPath?: string,
+  target?: DriveTarget,
 ): Promise<RemoteUploadFailure[]> {
   return invoke<RemoteUploadFailure[]>("upload_files_to_remote_folder", {
     accountId,
     label,
     parentPath: parentPath ?? null,
     filePaths,
+    ...targetArgs(target),
   });
 }
 
@@ -46,11 +64,13 @@ export async function uploadFolderToRemoteFolder(
   label: string,
   folderPath: string,
   parentPath?: string,
+  target?: DriveTarget,
 ): Promise<RemoteUploadFailure[]> {
   return invoke<RemoteUploadFailure[]>("upload_folder_to_remote_folder", {
     accountId,
     label,
     parentPath: parentPath ?? null,
     folderPath,
+    ...targetArgs(target),
   });
 }

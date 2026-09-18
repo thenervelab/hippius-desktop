@@ -23,7 +23,7 @@
 
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
@@ -101,6 +101,16 @@ export default function ShareDrivePanel() {
   const [invites, setInvites] = useState<InvitesState>({ kind: "idle" });
 
   const label = target?.label ?? null;
+  // Named only for a drive this account has NOT synced here; an own drive's
+  // label resolves on its own. `useMemo` so the identity is a stable value in
+  // the callbacks' dependency lists.
+  const driveTarget = useMemo(
+    () =>
+      target?.ownerSs58 && target?.folderHash
+        ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
+        : undefined,
+    [target?.ownerSs58, target?.folderHash],
+  );
   // Stale-async guard: the modal never unmounts and `label` changes on
   // close/reopen, so a response still in flight for a previous drive must
   // not land on the current session's state (the reset effect below runs
@@ -120,7 +130,7 @@ export default function ShareDrivePanel() {
   const loadMembers = useCallback(async (driveLabel: string) => {
     setMembers({ kind: "loading" });
     try {
-      const rows = await listDriveMembers(driveLabel);
+      const rows = await listDriveMembers(driveLabel, driveTarget);
       if (driveLabel !== currentLabelRef.current) return;
       setMembers({ kind: "ready", members: rows });
     } catch (err) {
@@ -132,12 +142,12 @@ export default function ShareDrivePanel() {
         setMembers({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, []);
+  }, [driveTarget]);
 
   const loadInvites = useCallback(async (driveLabel: string) => {
     setInvites({ kind: "loading" });
     try {
-      const rows = await listDriveInvites(driveLabel);
+      const rows = await listDriveInvites(driveLabel, driveTarget);
       if (driveLabel !== currentLabelRef.current) return;
       setInvites({ kind: "ready", invites: rows });
     } catch (err) {
@@ -148,14 +158,14 @@ export default function ShareDrivePanel() {
         setInvites({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, []);
+  }, [driveTarget]);
 
   const revokeInvite = useCallback(
     async (inviteId: string) => {
       if (!label) return;
       const labelAtCall = label;
       try {
-        await revokeDriveInvite(labelAtCall, inviteId);
+        await revokeDriveInvite(labelAtCall, inviteId, driveTarget);
         toast.success("Link revoked");
         void invalidateOwnedDriveSharing(queryClient);
         await loadInvites(labelAtCall);
@@ -164,7 +174,7 @@ export default function ShareDrivePanel() {
         toast.error(`Could not revoke the link: ${errorMessage(err)}`);
       }
     },
-    [label, loadInvites, queryClient],
+    [label, loadInvites, queryClient, driveTarget],
   );
 
   // Same lazy rule as members: the tab pays for its own listing.
@@ -190,7 +200,7 @@ export default function ShareDrivePanel() {
       if (!label) return;
       const labelAtCall = label;
       try {
-        await removeDriveMember(labelAtCall, memberSs58);
+        await removeDriveMember(labelAtCall, memberSs58, driveTarget);
         toast.success("Member removed");
         void invalidateOwnedDriveSharing(queryClient);
         await loadMembers(labelAtCall);
@@ -203,7 +213,7 @@ export default function ShareDrivePanel() {
         }
       }
     },
-    [label, loadMembers, queryClient],
+    [label, loadMembers, queryClient, driveTarget],
   );
 
   const changeRole = useCallback(
@@ -211,7 +221,7 @@ export default function ShareDrivePanel() {
       if (!label) return;
       const labelAtCall = label;
       try {
-        await changeDriveMemberRole(labelAtCall, memberSs58, role);
+        await changeDriveMemberRole(labelAtCall, memberSs58, role, driveTarget);
         // The new role binds on the member's next request, so there is no
         // propagation delay to caveat.
         toast.success(`Role changed to ${driveRoleLabel(role)}`);
@@ -229,7 +239,7 @@ export default function ShareDrivePanel() {
         }
       }
     },
-    [label, loadMembers, queryClient],
+    [label, loadMembers, queryClient, driveTarget],
   );
 
   const onClose = () => setTarget(null);

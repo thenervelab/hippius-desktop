@@ -132,6 +132,18 @@ export const finderShareAtom = atom<FinderShareState | null>(null);
 export type ShareDriveModalTarget = {
   label: string;
   folderName: string;
+  /**
+   * The drive's WIRE identity, when it is one shared with this account that
+   * is not synced here.
+   *
+   * A manager may hold a drive they never synced. The manage IPCs resolve a
+   * local `sync_paths` row such a drive does not have, and the lenient
+   * fallback then answers with THIS account's namespace — managing the wrong
+   * drive rather than failing. Naming the identity is what addresses theirs.
+   * Absent for an own drive, where the label resolves.
+   */
+  ownerSs58?: string;
+  folderHash?: string;
 };
 
 export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);

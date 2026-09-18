@@ -72,21 +72,54 @@ export interface AddSharedDriveResult {
  * modal's expiry preset row is a display concern only
  * (`shareDriveModalState.ts::DEFAULT_INVITE_TTL_SECS`).
  */
+/**
+ * Which drive a manage call addresses when there is no local label.
+ *
+ * A manager may hold a drive they never synced here; the label-keyed path
+ * resolves a `sync_paths` row such a drive does not have, and the lenient
+ * fallback then answers with THIS account's namespace. Naming the wire
+ * identity is how those calls address the right drive.
+ */
+export interface DriveTarget {
+  ownerSs58?: string | null;
+  folderHash?: string | null;
+}
+
+/** The identity args every manage IPC accepts, normalised to nulls. */
+function targetArgs(target?: DriveTarget) {
+  return {
+    ownerSs58: target?.ownerSs58 ?? null,
+    folderHash: target?.folderHash ?? null,
+  };
+}
+
 export async function createDriveInvite(
   label: string,
-  opts?: { expiresInSecs?: number; maxUses?: number; role?: DriveRole },
+  opts?: {
+    expiresInSecs?: number;
+    maxUses?: number;
+    role?: DriveRole;
+    target?: DriveTarget;
+  },
 ): Promise<DriveInviteLink> {
   return invoke<DriveInviteLink>("create_drive_invite", {
     label,
     expiresInSecs: opts?.expiresInSecs,
     maxUses: opts?.maxUses,
     role: opts?.role,
+    ...targetArgs(opts?.target),
   });
 }
 
 /** List the members of an OWN drive. */
-export async function listDriveMembers(label: string): Promise<DriveMemberInfo[]> {
-  return invoke<DriveMemberInfo[]>("list_drive_members", { label });
+export async function listDriveMembers(
+  label: string,
+  target?: DriveTarget,
+): Promise<DriveMemberInfo[]> {
+  return invoke<DriveMemberInfo[]>("list_drive_members", {
+    label,
+    ...targetArgs(target),
+  });
 }
 
 /**
@@ -96,8 +129,13 @@ export async function listDriveMembers(label: string): Promise<DriveMemberInfo[]
 export async function removeDriveMember(
   label: string,
   memberSs58: string,
+  target?: DriveTarget,
 ): Promise<void> {
-  await invoke<void>("remove_drive_member", { label, memberSs58 });
+  await invoke<void>("remove_drive_member", {
+    label,
+    memberSs58,
+    ...targetArgs(target),
+  });
 }
 
 /**
@@ -117,8 +155,14 @@ export async function changeDriveMemberRole(
   label: string,
   memberSs58: string,
   role: DriveRole,
+  target?: DriveTarget,
 ): Promise<void> {
-  await invoke<void>("change_drive_member_role", { label, memberSs58, role });
+  await invoke<void>("change_drive_member_role", {
+    label,
+    memberSs58,
+    role,
+    ...targetArgs(target),
+  });
 }
 
 /** One live invite for a drive, as the server lists it. */
@@ -146,8 +190,12 @@ export interface DriveInviteInfo {
 /** The live invites for an OWN drive. */
 export async function listDriveInvites(
   label: string,
+  target?: DriveTarget,
 ): Promise<DriveInviteInfo[]> {
-  return invoke<DriveInviteInfo[]>("list_drive_invites", { label });
+  return invoke<DriveInviteInfo[]>("list_drive_invites", {
+    label,
+    ...targetArgs(target),
+  });
 }
 
 /**
@@ -190,8 +238,13 @@ export async function listOwnedDriveSharing(
 export async function revokeDriveInvite(
   label: string,
   inviteId: string,
+  target?: DriveTarget,
 ): Promise<void> {
-  await invoke<void>("revoke_drive_invite", { label, inviteId });
+  await invoke<void>("revoke_drive_invite", {
+    label,
+    inviteId,
+    ...targetArgs(target),
+  });
 }
 
 /**

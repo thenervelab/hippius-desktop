@@ -1,5 +1,6 @@
 "use client";
 
+import { parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 import { useCallback, useState } from "react";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { useSetAtom } from "jotai";
@@ -78,6 +79,9 @@ export function useRemoteFileUpload({
         label,
         paths,
         parentPath,
+        // A shared drive browsed without syncing it carries its wire
+        // identity IN the label, so nothing has to thread it separately.
+        parseSharedDriveLabel(label) ?? undefined,
       );
       reportRemoteUploadOutcome(paths.length, failures);
       const uploaded = paths.length - failures.length;
@@ -128,6 +132,7 @@ export function useRemoteFolderUpload({
         label,
         folderPath,
         parentPath,
+        parseSharedDriveLabel(label) ?? undefined,
       );
       reportRemoteUploadOutcomeForFolder(failures);
       onUploaded?.();
