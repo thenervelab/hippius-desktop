@@ -173,7 +173,6 @@ export function buildFolderActions(
   // from a second machine.
   if (
     SHARED_DRIVES_ENABLED &&
-    (handlers.planSupportsSharedDrives ?? true) &&
     handlers.onShareRemoteDrive
   ) {
     items.push({

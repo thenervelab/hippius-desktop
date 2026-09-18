@@ -25,12 +25,13 @@ const toolbarRow = header.slice(
 );
 
 /**
- * The toolbar must not move as you go deeper.
+ * The toolbar sits at the right edge, and must not move as you go deeper.
  *
- * With `justify-between`, the actions sat at the right edge while the
- * breadcrumb was short, and then jumped to the LEFT of a second line the
- * moment the breadcrumb grew enough to wrap them — so the same buttons were
- * in two different places depending on how deep the folder was.
+ * `justify-between` cannot express that: it pushes the two groups apart on a
+ * shared line, but on a wrapped line the actions are the only group and it
+ * leaves them at the START. So the same buttons sat right at shallow depths
+ * and left at deeper ones. `ml-auto` belongs to the actions group itself, so
+ * it holds the right edge on whichever line the group lands on.
  */
 describe("the drive header's toolbar row", () => {
   it("was actually found", () => {
@@ -38,8 +39,9 @@ describe("the drive header's toolbar row", () => {
     expect(toolbarRow.length).toBeGreaterThan(50);
   });
 
-  it("aligns left rather than pushing the actions to the far edge", () => {
+  it("holds the right edge without justify-between", () => {
     expect(toolbarRow).not.toContain("justify-between");
+    expect(toolbarRow).toContain("ml-auto");
   });
 
   // A deep breadcrumb has to be able to wrap: the alternative is a row that

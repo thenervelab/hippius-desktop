@@ -202,7 +202,10 @@ describe("Share drive reachability", () => {
     expect(items.map((i) => i.itemTitle)).toContain("Share drive…");
   });
 
-  it("hides it on either row when the plan does not include shared drives", () => {
+  // Hiding it hid the feature's existence from exactly the people who would
+  // pay for it. The mint dialog turns an unentitled plan into an upgrade
+  // prompt that names the plans, so the control stays reachable.
+  it("still offers it on either row when the plan does not include shared drives", () => {
     const local = buildFolderActions(localRow(), {
       onShareDrive: vi.fn(),
       planSupportsSharedDrives: false,
@@ -211,7 +214,7 @@ describe("Share drive reachability", () => {
       onShareRemoteDrive: vi.fn(),
       planSupportsSharedDrives: false,
     });
-    expect(local.map((i) => i.itemTitle)).not.toContain("Share drive…");
-    expect(remote.map((i) => i.itemTitle)).not.toContain("Share drive…");
+    expect(local.map((i) => i.itemTitle)).toContain("Share drive…");
+    expect(remote.map((i) => i.itemTitle)).toContain("Share drive…");
   });
 });

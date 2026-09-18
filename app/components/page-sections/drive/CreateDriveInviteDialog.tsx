@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { createDriveInviteDialogAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import {
   createDriveInvite,
@@ -51,6 +52,7 @@ const secondaryButtonClass =
 export default function CreateDriveInviteDialog() {
   const [target, setTarget] = useAtom(createDriveInviteDialogAtom);
   const queryClient = useQueryClient();
+  const planIncludesSharedDrives = useSharedDrivesInPlan();
   const [invite, setInvite] = useState<InviteState>({ kind: "choosing" });
   const [ttlSecs, setTtlSecs] = useState<number>(DEFAULT_INVITE_TTL_SECS);
   // `writer` is what every build before the picker minted, so the default
@@ -62,14 +64,27 @@ export default function CreateDriveInviteDialog() {
   currentLabelRef.current = label;
 
   // A fresh open starts a fresh mint, never the previous drive's finished link.
+  //
+  // A plan without the perk opens STRAIGHT into the upgrade prompt rather
+  // than letting someone configure a link the server will refuse. The
+  // surface is deliberately not hidden from them -- hiding it hid the
+  // feature's existence from the people most likely to buy it -- so this is
+  // where they are told, once, with the plans named.
   useEffect(() => {
     if (target) {
-      setInvite({ kind: "choosing" });
+      setInvite(
+        planIncludesSharedDrives === false
+          ? { kind: "notEntitled" }
+          : { kind: "choosing" },
+      );
       setTtlSecs(DEFAULT_INVITE_TTL_SECS);
       setInviteRole("writer");
       autoCopiedRef.current = false;
     }
-  }, [target]);
+    // `undefined` while the plan is still loading: the dialog opens on the
+    // form and the server's own refusal is the backstop, rather than
+    // flashing an upgrade prompt at somebody who has already paid.
+  }, [target, planIncludesSharedDrives]);
 
   const mintInvite = useCallback(async () => {
     if (!label) return;
@@ -388,8 +403,8 @@ function SharedDrivesNotEntitledNotice({ onClose }: { onClose: () => void }) {
         Shared drives need Plus, Max, or Scale
       </p>
       <p className="mb-6 text-center text-xs text-grey-50 dark:text-grey-dark-600">
-        Upgrade this drive&apos;s plan to invite members. Anyone you&apos;ve
-        already shared with keeps their access.
+        Upgrade your plan to invite people into your drives. Anyone
+        you&apos;ve already shared with keeps their access.
       </p>
       <div className="flex flex-col gap-3">
         <Button

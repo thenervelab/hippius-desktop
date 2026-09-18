@@ -11,14 +11,12 @@ export interface FolderMenuFlags {
   /** `SHARED_DRIVES_ENABLED` — passed in so the resolver stays pure. */
   sharedDrivesEnabled: boolean;
   /**
-   * Whether the account's plan includes shared drives
-   * (`planSupportsSharedDrives`). Passed in for the same reason as the flag:
-   * the resolver stays pure and the plan is fetched once by the caller.
+   * Kept for callers that still pass it, and deliberately unread.
    *
-   * Optional so a caller with no plan data yet keeps the previous behaviour
-   * rather than hiding the item while the overview loads — a control that
-   * appears a second late reads as jank, but one that vanishes and returns
-   * reads as a bug.
+   * The plan no longer decides whether "Share drive…" APPEARS: the mint
+   * dialog turns a plan without the perk into an upgrade prompt, so the
+   * feature stays discoverable. Removing the field would be a churn of call
+   * sites for no behaviour.
    */
   planSupportsSharedDrives?: boolean;
   /**
@@ -107,13 +105,13 @@ export function resolveFolderMenuPlan(
   const member = isMemberDrive(folder);
 
   return {
-    // The plan gate binds the OWNER's mint only. A manager invites on the
-    // owner's drive, against the owner's plan, so holding them to this
-    // account's plan would refuse something the server allows.
-    showShareDrive:
-      flags.sharedDrivesEnabled &&
-      canManageDrive({ isOwner: !member, role: flags.role }) &&
-      (member || (flags.planSupportsSharedDrives ?? true)),
+    // NOT gated on the plan. Hiding it from a plan without the perk hid the
+    // feature's existence from exactly the people who would pay for it, and
+    // left them no way to discover why other accounts had it. The mint
+    // dialog answers instead, opening straight into an upgrade prompt that
+    // names the plans -- one click, no wasted round trip, and the feature is
+    // visible to everyone.
+    showShareDrive: flags.sharedDrivesEnabled && canManageDrive({ isOwner: !member, role: flags.role }),
     showExclusions: !member,
     showDeleteFromServer: !member,
     removeItemTitle: member ? "Leave shared drive" : "Stop syncing on this device",

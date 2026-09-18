@@ -38,6 +38,14 @@ vi.mock("@/app/lib/hooks", async (importOriginal) => {
 });
 
 const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
+// The dialog asks whether the plan includes shared drives, so it can open
+// straight into the upgrade prompt instead of letting somebody configure a
+// link the server will refuse.
+const planState = vi.hoisted(() => ({ included: true as boolean | undefined }));
+vi.mock("@/app/lib/hooks/useSharedDrivesInPlan", () => ({
+  useSharedDrivesInPlan: () => planState.included,
+}));
+
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
     return flagState.sharedDrivesEnabled;
@@ -115,6 +123,7 @@ function renderModal(target: { label: string; folderName: string } | null = { la
 }
 
 beforeEach(() => {
+  planState.included = true;
   vi.clearAllMocks();
   flagState.sharedDrivesEnabled = true;
 });
@@ -286,5 +295,43 @@ describe("the invite dialog's frame", () => {
     );
     expect(confirmation).toContain('maxWidth = "max-w-[585px]"');
     expect(confirmation).toContain('contentClassName = "sm:w-[405px]"');
+  });
+});
+
+// The control is deliberately NOT hidden from a plan without the perk:
+// hiding it hid the feature's existence from the people most likely to buy
+// it. The dialog is where they are told, once, with the plans named.
+describe("a plan that does not include shared drives", () => {
+  it("opens straight into the upgrade prompt, without asking the server", async () => {
+    planState.included = false;
+    renderModal();
+
+    await screen.findByText(/Shared drives need Plus, Max, or Scale/);
+    expect(createDriveInviteMock).not.toHaveBeenCalled();
+    // No form to fill in: the answer is the same whatever they pick.
+    expect(screen.queryByRole("button", { name: "Create invite link" })).not.toBeInTheDocument();
+  });
+
+  it("names the plans that do include it", async () => {
+    planState.included = false;
+    renderModal();
+    const prompt = await screen.findByText(/Shared drives need/);
+    expect(prompt.textContent).toMatch(/Plus/);
+    expect(prompt.textContent).toMatch(/Max/);
+    expect(prompt.textContent).toMatch(/Scale/);
+  });
+
+  // `undefined` is "still loading". Flashing an upgrade prompt at somebody
+  // who has already paid is worse than a form that works.
+  it("shows the form while the plan is still unknown", async () => {
+    planState.included = undefined;
+    renderModal();
+    expect(await screen.findByRole("button", { name: "Create invite link" })).toBeInTheDocument();
+  });
+
+  it("shows the form on a plan that does include it", async () => {
+    planState.included = true;
+    renderModal();
+    expect(await screen.findByRole("button", { name: "Create invite link" })).toBeInTheDocument();
   });
 });

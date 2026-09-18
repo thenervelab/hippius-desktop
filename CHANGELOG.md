@@ -28,8 +28,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
 - **The Drive toolbar stays put as you go deeper into folders.** New Folder,
-  upload and the rest sat at the right edge until a long breadcrumb pushed them
-  onto a second line, where they jumped to the left. They are on the left either way now.
+  upload and the rest sat at the right edge until a long breadcrumb pushed them onto
+  a second line, where they jumped to the left. They hold the right edge either way now.
 - **Uploading and dropping files inside a shared drive works.** Opening a folder
   inside one lost track of the drive, so uploads quietly went to a folder on this
   computer instead. Drag and drop works there too.
@@ -61,9 +61,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Your drive list pages once it gets long, so "Shared with me" stays in view.**
   Drives other people shared with you sit below your own; with a lot of drives
   they were pushed off the bottom of the page.
-- **Sharing a drive is offered on the plans that actually include it.** The
-  option now appears for Plus, Max and Scale only. Solo accounts were being shown
-  it even though the server refuses their invites.
+- **Sharing a drive is offered on every plan, and says what it costs.** Picking it
+  on a plan that does not include shared drives opens an upgrade prompt naming Plus,
+  Max and Scale, rather than the option being hidden with no explanation.
 - **A Manager can manage the drive they were made a manager of.** Someone given
   the Manager role on a drive shared with them can now invite people, change
   roles and remove members from the desktop app, instead of only from the web

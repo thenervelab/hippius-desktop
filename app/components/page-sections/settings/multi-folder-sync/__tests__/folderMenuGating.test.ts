@@ -81,12 +81,15 @@ describe("plan gating", () => {
   // A plan without the perk is refused by the server with
   // `shared_drives_not_entitled`, so offering the item is a click that can
   // only end in an upgrade prompt.
-  it("hides Share drive on a plan without shared drives", () => {
+  // Hiding it hid the feature's existence from exactly the people who would
+  // pay for it, and left them no way to discover why other accounts had it.
+  // The mint dialog turns an unentitled plan into a named upgrade prompt.
+  it("still offers Share drive on a plan without shared drives, so the feature is discoverable", () => {
     const plan = resolveFolderMenuPlan(own, {
       sharedDrivesEnabled: true,
       planSupportsSharedDrives: false,
     });
-    expect(plan.showShareDrive).toBe(false);
+    expect(plan.showShareDrive).toBe(true);
   });
 
   it("shows Share drive on a plan that includes them", () => {
@@ -160,12 +163,12 @@ describe("a manager on somebody else's drive", () => {
   });
 
   // An owner on a Starter plan still is.
-  it("still holds an owner to theirs", () => {
+  it("does not hold an owner to their plan either: the dialog prompts instead", () => {
     const plan = resolveFolderMenuPlan({}, {
       sharedDrivesEnabled: true,
       planSupportsSharedDrives: false,
     });
-    expect(plan.showShareDrive).toBe(false);
+    expect(plan.showShareDrive).toBe(true);
   });
 
   // Member protections key on ownerSs58 alone, never on the role.
