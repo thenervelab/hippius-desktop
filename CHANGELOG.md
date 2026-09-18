@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **Your drive list pages once it gets long, so "Shared with me" stays in view.**
+  Drives other people shared with you sit below your own; with a lot of drives
+  they were pushed off the bottom of the page.
 - **Sharing a drive is offered on the plans that actually include it.** The
   option now appears for Plus, Max and Scale only. Solo accounts were being shown
   it even though the server refuses their invites.

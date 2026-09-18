@@ -6,6 +6,11 @@ import { Cloud, CloudOff, Users } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import TableActionMenu, { type ActionItem } from "@/components/ui/alt-table/TableActionMenu";
+import { Pagination } from "@/components/ui/alt-table";
+import {
+  FOLDER_LIST_PAGE_SIZE,
+  resolveFolderListPage,
+} from "./folderListPaging";
 import { SettingsCard } from "@/components/page-sections/settings/SettingsCard";
 import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
 import {
@@ -170,6 +175,12 @@ export interface FolderListProps {
    * members, where managing who can see it is the likely next action.
    */
   onManageAccess?: (row: FolderRow) => void;
+  /**
+   * Drives per page. The list is paged because "Shared with me" sits BELOW
+   * it: an account with twenty drives pushed the drives other people shared
+   * off the bottom of a surface nobody scrolls.
+   */
+  pageSize?: number;
 }
 
 /**
@@ -196,6 +207,7 @@ const FolderList: React.FC<FolderListProps> = ({
   rolesByLabel,
   sharingByLabel,
   onManageAccess,
+  pageSize = FOLDER_LIST_PAGE_SIZE,
 }) => {
   // Right-click opens the SAME menu as the three dots. The sectioned list
   // it replaced offered both, and they were built from one resolver so
@@ -206,6 +218,17 @@ const FolderList: React.FC<FolderListProps> = ({
     y: number;
     row: FolderRow;
   } | null>(null);
+
+  const [page, setPage] = useState(1);
+  // Clamped rather than trusted: removing the last drive on the last page
+  // leaves this index past the end, which would render an empty list under a
+  // pager still claiming there are drives.
+  const pageView = resolveFolderListPage({
+    total: rows.length,
+    page,
+    pageSize,
+  });
+  const visibleRows = rows.slice(pageView.start, pageView.end);
 
   return (
     <SettingsCard
@@ -227,7 +250,7 @@ const FolderList: React.FC<FolderListProps> = ({
         <div className="px-3 py-6">{emptyState}</div>
       ) : (
         <div className="flex flex-col">
-          {rows.map((row) => (
+          {visibleRows.map((row) => (
             <div
               key={`${row.presence}:${row.id}`}
               onClick={(e) => {
@@ -340,6 +363,17 @@ const FolderList: React.FC<FolderListProps> = ({
               )}
             </div>
           ))}
+          {/* Only once the list outgrows a page: a pager that can only say
+              "1 of 1" is a control with nothing to do. */}
+          {pageView.showPager && (
+            <div className="border-t border-grey-dark-100 px-3 py-3 dark:border-black-300">
+              <Pagination
+                currentPage={pageView.page}
+                totalPages={pageView.totalPages}
+                setPage={setPage}
+              />
+            </div>
+          )}
         </div>
       )}
       {contextMenu && buildActions && (
