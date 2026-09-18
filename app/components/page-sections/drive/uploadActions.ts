@@ -76,6 +76,17 @@ export interface UploadActionGates {
   hasNoSyncPaths: boolean;
   /** The active drive has no sync path resolved yet. */
   isSyncPathEmpty: boolean;
+  /**
+   * The viewer may not write to the drive on screen -- a Viewer on a drive
+   * somebody shared with them.
+   *
+   * Hidden rather than disabled. A disabled upload button says "not now";
+   * the truthful statement is that this drive is not theirs to add to, and
+   * the role badge beside the breadcrumb already says so. The server refuses
+   * the write regardless, so offering it only moves the refusal to a sync
+   * error far from the button that caused it.
+   */
+  isReadOnlyDrive?: boolean;
 }
 
 /**
@@ -90,7 +101,7 @@ export interface UploadActionGates {
  * belong in `hideUploads`, and every surface then follows.
  */
 export function resolveUploadAction(gates: UploadActionGates): UploadActionState {
-  if (gates.hideUploads) return "hidden";
+  if (gates.hideUploads || gates.isReadOnlyDrive) return "hidden";
   if (gates.isRecentFiles && gates.hasNoSyncPaths) return "disabled";
   if (gates.isSyncPathEmpty) return "hidden";
   return "enabled";

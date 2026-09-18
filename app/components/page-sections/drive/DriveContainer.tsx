@@ -60,6 +60,14 @@ import {
   pickFolderZipSavePath,
 } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
+import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
+import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
+import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
+import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
+import {
+  makeSharedDriveLabel,
+  parseSharedDriveLabel,
+} from "@/app/lib/shared-drives/sharedDriveLabel";
 import { useAtomValue, useSetAtom } from "jotai";
 import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
@@ -383,6 +391,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // A REMOTE drive opened at its root. State-based (not URL-based) because
   // the root of a remote drive has no subfolder to put in the URL; deeper
   // levels switch to the normal nested URLs via the remote:// folderSource.
+  // Display names for the shared drives browsed this session, keyed by their
+  // synthetic label. Display-only, so a stale entry costs a breadcrumb
+  // caption and never a wrong request.
+  const [sharedDriveNames, setSharedDriveNames] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
   const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(
     null,
   );
@@ -486,11 +500,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setBrowsePage(1);
   }, []);
 
+  // Derived from the label, never held beside it: a navigation that cleared
+  // one and not the other would browse the next drive under somebody else's
+  // namespace. See `sharedDriveLabel.ts`.
+  const browsedSharedDrive = parseSharedDriveLabel(remoteUploadLabel);
+
   const nestedListing = useNestedFolderListing({
     accountId: polkadotAddress,
     syncPath: nestedDrive?.syncPath ?? null,
     subfolder: isNested ? urlSubFolderPath || null : null,
     label: remoteUploadLabel,
+    sharedDrive: browsedSharedDrive,
     refreshKey: nestedRefreshKey,
     enabled: isNested || isRemoteRoot,
     remote: isRemoteView,
@@ -1296,6 +1316,27 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setIsOnLocalView(false);
   }, []);
 
+  /**
+   * Open a drive somebody shared with this account, WITHOUT syncing it here.
+   *
+   * It browses exactly like any other server-only drive — the synthetic label
+   * carries the owner and folder hash the backend needs, and `/browse`
+   * authorises any member of the named drive.
+   */
+  const handleOpenSharedDrive = useCallback(
+    (identity: { ownerSs58: string; folderHash: string; displayLabel: string }) => {
+      const label = makeSharedDriveLabel(identity);
+      setSharedDriveNames((prev) =>
+        prev.get(label) === identity.displayLabel
+          ? prev
+          : new Map(prev).set(label, identity.displayLabel),
+      );
+      setActiveRemoteLabel(label);
+      setIsOnLocalView(false);
+    },
+    [],
+  );
+
   // Clicking "Drive" in the sidebar returns to the folder list from
   // wherever the user is — a folder, a nested subfolder, a remote drive.
   //
@@ -1368,6 +1409,53 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     urlSubFolderPath,
   ]);
 
+  // The drive the breadcrumb's TOP segment names -- the same expression the
+  // segment itself is built from, so the header's shared badge can never
+  // describe a different drive from the one the crumb points at.
+  const openDriveLabel = useMemo(() => {
+    if (isRecentFiles || isOnLocalView) return null;
+    return isNested
+      ? (nestedDrive?.label ?? null)
+      : (activeRemoteLabel ?? activeSyncFolderLabel ?? null);
+  }, [
+    isRecentFiles,
+    isOnLocalView,
+    isNested,
+    nestedDrive,
+    activeRemoteLabel,
+    activeSyncFolderLabel,
+  ]);
+
+  // A Viewer on somebody else's drive may not add to it. The server refuses
+  // the write anyway, so this decides only what the UI OFFERS -- and an
+  // upload button that can only fail reports the failure as a sync error,
+  // far from the button that caused it.
+  const { canWrite: syncedDriveCanWrite, role: syncedDriveRole } = useDriveSharing(
+    browsedSharedDrive ? null : openDriveLabel,
+  );
+  // A drive browsed without syncing it has no local label to look a role up
+  // by, so its membership is found by wire identity. Permitted until the
+  // listing answers: own drives vastly outnumber member ones, and a write
+  // control that appears late on every drive is a worse trade than one that
+  // briefly appears for a Viewer.
+  const browsedMembership = useSharedDriveMembershipByIdentity(browsedSharedDrive);
+  // The role this account holds on the open drive, for the refusal wording.
+  const openDriveRole = browsedSharedDrive
+    ? browsedMembership.membership
+      ? parseDriveRole(browsedMembership.membership.role)
+      : null
+    : syncedDriveRole;
+  const openDriveWriteRefusal = driveWriteRefusal(openDriveRole);
+
+  const openDriveCanWrite = browsedSharedDrive
+    ? canWriteToDrive({
+        isOwner: false,
+        role: browsedMembership.membership
+          ? parseDriveRole(browsedMembership.membership.role)
+          : undefined,
+      }) || !browsedMembership.isSettled
+    : syncedDriveCanWrite;
+
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];
     const segments: BreadcrumbSegment[] = [];
@@ -1379,7 +1467,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       ? Boolean(nestedDrive?.remote)
       : Boolean(activeRemoteLabel);
     if (topLabel) {
-      const topDisplayName = labelDisplayNames[topLabel] ?? topLabel;
+      const topDisplayName =
+        sharedDriveNames.get(topLabel) ?? labelDisplayNames[topLabel] ?? topLabel;
       segments.push({
         label: topDisplayName,
         title: topDisplayName,
@@ -1435,6 +1524,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     nestedDrive,
     activeSyncFolderLabel,
     labelDisplayNames,
+    sharedDriveNames,
     urlSubFolderPath,
     urlMainFolderActualName,
     activeRemoteLabel,
@@ -1721,6 +1811,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
+        onOpenSharedDrive={handleOpenSharedDrive}
       />
     );
   } else if (
@@ -1738,6 +1829,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
+        onOpenSharedDrive={handleOpenSharedDrive}
       />
     );
   } else if (isOnLocalView && !isRecentFiles && !isNested && !isRemoteRoot) {
@@ -1751,6 +1843,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
+        onOpenSharedDrive={handleOpenSharedDrive}
       />
     );
   } else {
@@ -1796,6 +1889,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             // inner white card per Figma).
             const driveContent = (
               <DriveContent
+                // A drop lands whatever the permission, so a Viewer is told
+                // why rather than watching nothing happen.
+                writeRefusal={openDriveWriteRefusal}
                 isRecentFiles={isRecentFiles}
                 isLoading={isLoading}
                 filteredData={statusFilteredData}
@@ -1909,6 +2005,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 addButtonRef={addButtonRef}
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
+                // A browsed shared drive is no longer excluded: its wire
+                // identity travels in the label, so uploads and New Folder
+                // address the owner's namespace rather than this account's.
+                // Whether the viewer MAY write is the role's business, and
+                // that is `isReadOnlyDrive`.
                 hideUploads={isRemoteView}
                 remoteUpload={
                   // The label the remote listing itself reads, so the
@@ -1941,6 +2042,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 folderUploadInitialPath={folderUploadInitialPath}
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
+                openDriveLabel={openDriveLabel}
+                browsedSharedDrive={browsedSharedDrive}
+                isReadOnlyDrive={!openDriveCanWrite}
+                openDriveDisplayName={
+                  openDriveLabel
+                    ? (labelDisplayNames[openDriveLabel] ?? openDriveLabel)
+                    : null
+                }
                 isNested={isNested}
                 nestedFolderName={isNested ? urlFolderName : null}
                 nestedSubfolderPath={isNested ? urlSubFolderPath : null}

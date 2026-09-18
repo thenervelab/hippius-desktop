@@ -1,5 +1,6 @@
 "use client";
 
+import { sharedDriveTargetArgs } from "@/app/lib/shared-drives/sharedDriveLabel";
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -50,6 +51,10 @@ const RemoteNewFolderButton: React.FC<{
         label,
         parentPath: parentPath ?? null,
         name: trimmed,
+        // A shared drive browsed without syncing it carries its wire
+        // identity IN the label; without it the folder would be created in
+        // THIS account's namespace.
+        ...sharedDriveTargetArgs(label),
       });
       toast.success(`Created "${trimmed}"`);
       close();

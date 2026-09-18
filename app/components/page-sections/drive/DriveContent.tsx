@@ -65,6 +65,15 @@ interface DriveContentProps {
   /** Where the rendered window starts in the sorted list. See FilesTable. */
   windowStart?: number;
   isSyncPathEmpty?: boolean;
+  /**
+   * Why a drop into this drive will be refused, or `null` when it will not.
+   *
+   * A Viewer on a drive somebody shared with them. The file has already
+   * landed by the time anything can check, so the refusal is spoken rather
+   * than silent -- see `shared-drives/writeRefusal.ts` for the wording and
+   * why it names the role.
+   */
+  writeRefusal?: string | null;
   /** True when the user has insufficient credits to upload files.
    *  Swaps the empty-state into the "Add Credits" variant. */
   isStorageFull?: boolean;
@@ -108,6 +117,7 @@ const DriveContent: FC<DriveContentProps> = ({
   serverSorted,
   windowStart,
   isSyncPathEmpty = false,
+  writeRefusal = null,
   isStorageFull = false,
   isRemoteView = false,
   onSyncPathConfigured,
@@ -253,6 +263,15 @@ const DriveContent: FC<DriveContentProps> = ({
           if (addButtonRef?.current?.isDialogOpen()) return;
           if (isFolderUploadOpen) return;
 
+          // A drop has already landed by the time anything can check, so the
+          // refusal has to be spoken. Silence reads as the app being broken,
+          // and the server's own error reads as a fault rather than a
+          // permission.
+          if (writeRefusal) {
+            toast.error(writeRefusal);
+            return;
+          }
+
           if (isSyncPathEmpty && !isRecentFiles) {
             toast.info("Please set up sync folder first to upload files.");
             return;
@@ -335,6 +354,9 @@ const DriveContent: FC<DriveContentProps> = ({
     isRecentFiles,
     isFolderUploadOpen,
     onAddFolderFromDrop,
+    // The listener closes over it; without this a role that arrives after
+    // mount would leave a stale refusal (or none) in the handler.
+    writeRefusal,
   ]);
 
   const handleFileDownload = (

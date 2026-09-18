@@ -76,3 +76,46 @@ describe("upload action labels", () => {
     expect(SYNC_FOLDER_LABEL).not.toBe(UPLOAD_FOLDER_LABEL);
   });
 });
+
+// A Viewer on somebody else's drive may not add to it. Offering the button
+// anyway moves the server's refusal to a sync error far from the click.
+describe("a drive the viewer may only read", () => {
+  it("hides the upload affordance outright", () => {
+    expect(
+      resolveUploadAction({
+        hideUploads: false,
+        isRecentFiles: false,
+        hasNoSyncPaths: false,
+        isSyncPathEmpty: false,
+        isReadOnlyDrive: true,
+      }),
+    ).toBe("hidden");
+  });
+
+  // Hidden, never disabled: a disabled button says "not now", where the
+  // truthful statement is that this drive is not theirs to add to.
+  it("never merely disables it", () => {
+    expect(
+      resolveUploadAction({
+        hideUploads: false,
+        isRecentFiles: true,
+        hasNoSyncPaths: true,
+        isSyncPathEmpty: false,
+        isReadOnlyDrive: true,
+      }),
+    ).toBe("hidden");
+  });
+
+  // Own drives are the overwhelming case and must be unaffected.
+  it("leaves a writable drive alone", () => {
+    expect(
+      resolveUploadAction({
+        hideUploads: false,
+        isRecentFiles: false,
+        hasNoSyncPaths: false,
+        isSyncPathEmpty: false,
+        isReadOnlyDrive: false,
+      }),
+    ).toBe("enabled");
+  });
+});

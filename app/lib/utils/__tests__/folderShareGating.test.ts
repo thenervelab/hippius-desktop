@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import {
   canShareFile,
   canShareFolder,
+  isMemberDriveLabel,
+  offersShareAction,
   driveFolderHash,
   folderShareRelativePath,
   shareTargetFor,
@@ -178,5 +182,82 @@ describe("canShareFile", () => {
   // Folders mint a different kind of share, gated by `canShareFolder`.
   it("refuses a folder", () => {
     expect(canShareFile(file({ isFolder: true, source: "/Users/a/drive" }))).toBe(false);
+  });
+});
+
+/**
+ * Only a drive's OWNER can mint a folder link. The mint looks the folder up
+ * under the authenticated bearer's own account, so a member's request finds
+ * nothing — the refusal is the server's, and no client can route around it.
+ * Offering the action anyway sent the user through the expiry picker to reach
+ * "only the owner of a shared drive can share its folders as a link".
+ */
+describe("offersShareAction — folder shares on a drive shared with you", () => {
+  const BROWSED = "shared:5DSQAMf3JVb3VyuXwqWUx3tj6aX6EX9f5p1UDJYh5TMdSK63~263bad4ad83e395a";
+
+  it("does not offer a folder link on a drive being browsed, with no listing at all", () => {
+    // The synthetic label says the drive is shared on its own, so there is no
+    // window in which a drive that cannot mint still offers to.
+    expect(offersShareAction(folder({ label: BROWSED }))).toBe(false);
+  });
+
+  it("does not offer a folder link on a shared drive synced here", () => {
+    expect(offersShareAction(folder({ label: "team" }), new Set(["team"]))).toBe(false);
+  });
+
+  it("offers a folder link on this account's own drive", () => {
+    expect(offersShareAction(folder({ label: "chains" }), new Set(["team"]))).toBe(true);
+    expect(offersShareAction(folder({ label: "chains" }))).toBe(true);
+  });
+
+  it("still offers a FILE link on a shared drive", () => {
+    // A file share uploads a re-encrypted copy to the sharer's own share
+    // storage, which a member may do on any drive they can read.
+    const file = folder({ isFolder: false, label: BROWSED });
+    expect(offersShareAction(file)).toBe(true);
+    expect(offersShareAction(folder({ isFolder: false, label: "team" }), new Set(["team"]))).toBe(true);
+  });
+
+  it("treats a row with no label as own — nothing says otherwise", () => {
+    expect(offersShareAction(folder({ label: undefined }))).toBe(true);
+  });
+});
+
+describe("isMemberDriveLabel", () => {
+  it("reads a browsed shared drive off its label alone", () => {
+    expect(isMemberDriveLabel("shared:5Owner~0123456789abcdef")).toBe(true);
+  });
+
+  it("does not mistake an ordinary label that merely starts with the word", () => {
+    expect(isMemberDriveLabel("shared-photos")).toBe(false);
+    expect(isMemberDriveLabel("shared")).toBe(false);
+  });
+
+  it("is false for an absent label", () => {
+    expect(isMemberDriveLabel(undefined)).toBe(false);
+    expect(isMemberDriveLabel(null)).toBe(false);
+    expect(isMemberDriveLabel("")).toBe(false);
+  });
+});
+
+/**
+ * Three surfaces offer "Share via link" and each embeds the visibility
+ * condition in its own JSX, so the gate being correct is not enough — a
+ * surface that forgets it puts the action back in front of a member, and the
+ * only symptom is a refusal several clicks later. The gate itself is unit
+ * tested above; this pins that all three actually consult it.
+ */
+describe("every surface that offers Share via link consults the gate", () => {
+  const SURFACES = [
+    "app/components/page-sections/drive/files-table/index.tsx",
+    "app/components/page-sections/drive/card-view/index.tsx",
+    "app/components/ui/context-menu/index.tsx",
+  ];
+
+  it.each(SURFACES)("%s gates the item on offersShareAction", (surface) => {
+    const src = readFileSync(join(process.cwd(), surface), "utf8");
+    expect(src).toContain("offersShareAction(file, memberDriveLabels)");
+    // The labels have to come from the listing, not from a local guess.
+    expect(src).toContain("useMemberDriveLabels()");
   });
 });

@@ -1,6 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
+import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
+import {
+  createDriveInviteDialogAtom,
+  shareDriveModalAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
@@ -42,7 +49,7 @@ import { buildFolderActions } from "@/components/page-sections/drive/folder-list
 import { SYNC_FOLDER_LABEL } from "@/components/page-sections/drive/uploadActions";
 import { driveFolderRoute } from "@/app/lib/routes";
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import {
   SharedWithMeSection,
   RemoveFolderDialog,
@@ -70,6 +77,10 @@ function openTarget(row: FolderRow): string {
 }
 
   const router = useRouter();
+  const sharedDriveRoles = useSharedDriveRoles();
+  const sharedDrivesInPlan = useSharedDrivesInPlan();
+  const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
+  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -90,6 +101,20 @@ function openTarget(row: FolderRow): string {
     );
   }, [driveStatuses]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
+  const folderRows = toFolderRows(syncFolders, remoteFolders);
+  // Own drives only: a member drive's sharing is described by the role
+  // badge, and asking the server for its members would be the owner's
+  // question, not ours.
+  const ownDriveSharing = useOwnedDriveSharing(
+    useMemo(
+      // Every OWN drive, local or cloud-only. Scoping this to local rows
+      // meant a drive synced only from another device -- which is most of
+      // them on a second machine -- never had its members counted, so the
+      // badge could not appear on the drives most likely to be shared.
+      () => folderRows.filter((r) => !r.ownerSs58).map((r) => r.folderName),
+      [folderRows],
+    ),
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -548,7 +573,15 @@ function openTarget(row: FolderRow): string {
             folder list at all. Opening a row leaves Settings for the Drive
             page, which is where a folder's contents live. */}
         <FolderList
-          rows={toFolderRows(syncFolders, remoteFolders)}
+          rolesByLabel={sharedDriveRoles}
+          sharingByLabel={ownDriveSharing}
+          onManageAccess={(row) =>
+            setShareDriveTarget({
+              label: row.folderName,
+              folderName: row.folderName,
+            })
+          }
+          rows={folderRows}
           isLoading={isLoading}
           headerAction={
             <Button
@@ -566,6 +599,23 @@ function openTarget(row: FolderRow): string {
           onOpenRow={(row) => router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device"))}
           buildActions={(row) =>
             buildFolderActions(row, {
+              planSupportsSharedDrives: sharedDrivesInPlan,
+              // A manager reaches the mint on a drive they do not own; the
+              // row's own `ownerSs58` cannot say which member drives those are.
+              role: sharedDriveRoles.get(row.folderName),
+              // Nothing to manage until a drive has been shared, so the first
+              // share goes straight to the mint. Once it has members or a live
+              // link the row offers Manage access, which opens the panel.
+              onShareDrive: (folder) =>
+                setInviteDialogTarget({
+                  label: folder.folderName,
+                  folderName: folder.folderName,
+                }),
+              onShareRemoteDrive: (folder) =>
+                setInviteDialogTarget({
+                  label: folder.folderName,
+                  folderName: folder.folderName,
+                }),
               onOpen: (row) =>
                 router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device")),
               onPause: (folder) => setPauseDialog({ open: true, folder }),

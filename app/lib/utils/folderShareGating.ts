@@ -1,6 +1,7 @@
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { driveRelativePathFor } from "@/app/lib/utils/driveRelativePath";
 import type { ShareModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
+import { isSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 
 /**
  * Single gate for whether a folder row's "Share via link" action is enabled.
@@ -14,9 +15,8 @@ import type { ShareModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
  * new servers, so the item disables (with {@link FOLDER_SHARE_DISABLED_TOOLTIP})
  * until `capabilities.folder_shares` is confirmed.
  *
- * Member drives stay owner-mint-only (server v1); the drive listing rows never
- * reach these file surfaces with an owner marker, so that refusal lives in
- * Rust (`hcfs_create_folder_share` rejects with a message the modal shows).
+ * Whether a member drive may mint one is a separate question, and a
+ * visibility one rather than an enabled one — see {@link offersShareAction}.
  */
 export function canShareFolder(
   file: FormattedUserFile,
@@ -24,6 +24,55 @@ export function canShareFolder(
 ): boolean {
   if (!file.isFolder) return false;
   return folderSharesEnabled;
+}
+
+/**
+ * Whether a row's "Share via link" action is offered at all.
+ *
+ * Folder shares are owner-mint-only, and that is the SERVER's rule rather than
+ * a desktop policy: the mint looks the folder up under the authenticated
+ * bearer's own account, so a member's request finds nothing and is refused.
+ * The link would be unusable even if it were minted, since it names the
+ * minter's namespace rather than the owner's. Nothing this client can do makes
+ * it work, so the action is hidden on a drive shared WITH this account instead
+ * of being offered and then refused — which is what it did, with Rust's "only
+ * the owner of a shared drive can share its folders as a link" arriving in the
+ * share dialog after the user had already chosen an expiry.
+ *
+ * Hidden rather than disabled-with-a-tooltip, which is how the missing server
+ * capability reads: that one is a "not yet", worth making discoverable, while
+ * this is a "not here, ever". Rust keeps its refusal — it is the enforcement,
+ * and this is the affordance.
+ *
+ * FILE shares are unaffected. They upload a re-encrypted copy to the sharer's
+ * own share storage, which a member may do on any drive they can read.
+ */
+export function offersShareAction(
+  file: FormattedUserFile,
+  memberDriveLabels?: ReadonlySet<string>,
+): boolean {
+  if (!file.isFolder) return true;
+  return !isMemberDriveLabel(file.label, memberDriveLabels);
+}
+
+/**
+ * Whether a drive label names a drive shared WITH this account rather than one
+ * it owns.
+ *
+ * Two shapes, because a shared drive reaches the UI two ways. One synced here
+ * has an ordinary label and is known only from the membership listing, so the
+ * caller passes the labels that listing returned. One merely BROWSED has no
+ * local row at all and carries the synthetic `shared:<owner>~<hash>` label,
+ * which says so on its own — no listing, no waiting, and no window in which a
+ * drive that cannot mint still offers to.
+ */
+export function isMemberDriveLabel(
+  label: string | null | undefined,
+  memberDriveLabels?: ReadonlySet<string>,
+): boolean {
+  if (!label) return false;
+  if (isSharedDriveLabel(label)) return true;
+  return memberDriveLabels?.has(label) ?? false;
 }
 
 export const FOLDER_SHARE_DISABLED_TOOLTIP =

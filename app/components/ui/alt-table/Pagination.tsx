@@ -54,8 +54,15 @@ export const Pagination: React.FC<TablePaginationProps> = ({
           return (
             <div
               className={cn(
+                // `bg-grey-90` and `text-grey-70` are LIGHT-mode fills with
+                // no dark counterpart, so every page button rendered as a
+                // near-white pill on a dark page. The dark tones mirror the
+                // `ui/table` pager, which is the one already written for both
+                // themes, so the app's two pagers agree.
                 "size-7 sm:size-9 bg-grey-90 relative rounded-lg border border-transparent flex items-center justify-center font-medium text-xs sm:text-sm text-grey-70 overflow-hidden",
-                isActive && "text-primary-40 border-primary-60 bg-transparent"
+                "dark:border-black-300 dark:bg-white/[0.02] dark:text-grey-light-100/60",
+                isActive &&
+                  "text-primary-40 border-primary-60 bg-transparent dark:border-primary-50 dark:bg-transparent dark:text-primary-60"
               )}
               key={`${i}-${currentPage}`}
             >
