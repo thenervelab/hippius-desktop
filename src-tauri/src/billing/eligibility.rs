@@ -470,13 +470,28 @@ pub async fn check_action_eligibility(
 /// }
 /// ```
 pub async fn require_eligible(state: &crate::app_state::AppState, account_id: &str, action: InsufficientCreditsAction, bytes: u64) -> Result<()> {
+    require_eligible_for_drive(state, account_id, action, bytes, None).await
+}
+
+/// [`require_eligible`] for a write whose destination drive is known.
+///
+/// A write into a drive shared WITH this account is paid for by its OWNER, so
+/// the quota question is about their allowance, not the caller's. Naming the
+/// drive is what routes the server's pre-flight to the right account.
+pub async fn require_eligible_for_drive(
+    state: &crate::app_state::AppState,
+    account_id: &str,
+    action: InsufficientCreditsAction,
+    bytes: u64,
+    drive: Option<&crate::sync::identity::DriveIdentity>,
+) -> Result<()> {
     // Drive writes are paid for by a plan, so the question is whether the
     // bytes fit the allowance, not whether a balance covers them. Keeping
     // the check here means it stays atomic with the action and cannot be
     // bypassed by a direct invoke or stale frontend state.
     if action.is_drive_storage() {
         let account = state.require_session_account_typed(account_id)?;
-        let verdict = crate::billing::drive_quota::check_drive_quota(state, &account, bytes).await;
+        let verdict = crate::billing::drive_quota::check_drive_quota_for(state, &account, bytes, drive).await;
         return if verdict.allowed {
             Ok(())
         } else {

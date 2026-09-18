@@ -100,17 +100,30 @@ impl QuotaVerdict {
 /// module doc), and the reason is logged so a refusal that failed to fire is
 /// traceable from a support bundle.
 pub async fn check_drive_quota(state: &AppState, account: &SessionAccount, incoming_bytes: u64) -> QuotaVerdict {
+    check_drive_quota_for(state, account, incoming_bytes, None).await
+}
+
+/// The same pre-flight, for a write whose destination drive is known.
+///
+/// `drive` names the drive being written to. It matters for a drive shared
+/// WITH this account: storage there is paid for by the OWNER, and the server
+/// checks the owner's allowance when the request names a real folder hash.
+/// Sending the empty hash asks about the CALLER's plan instead, which refuses
+/// a member whose own plan is full while the drive they are writing to has
+/// room, and lets one through whose drive is full while their own plan is not.
+///
+/// `None` is an own-drive write, where caller and payer are the same account.
+pub async fn check_drive_quota_for(
+    state: &AppState,
+    account: &SessionAccount,
+    incoming_bytes: u64,
+    drive: Option<&crate::sync::identity::DriveIdentity>,
+) -> QuotaVerdict {
     let Some((base_url, token)) = preflight_target(state, account).await else {
         return QuotaVerdict::unknown();
     };
 
-    let request = CanUploadRequest {
-        ss58_address: account.as_str().to_owned(),
-        // Own drive: the empty hash keeps the server's membership fallback
-        // inert and checks quota against the caller, who pays.
-        folder_hash: String::new(),
-        size_bytes: incoming_bytes,
-    };
+    let request = preflight_request(account.as_str(), incoming_bytes, drive);
     let response = state
         .api_client
         .post(format!("{base_url}/can_upload"))
@@ -155,6 +168,25 @@ pub async fn check_drive_quota(state: &AppState, account: &SessionAccount, incom
 /// path has no such step, so it resolves one here the way `console_access`
 /// does. Either region is correctness-equivalent (shared replicated DB), so
 /// the race is a pure latency choice.
+/// Who the pre-flight asks about.
+///
+/// A member drive names the OWNER and the drive's wire hash, which is what
+/// routes the server to the owner's allowance; storage there is paid for by
+/// them. An own drive sends the empty hash, which keeps the server's
+/// membership fallback inert and checks the caller, who pays.
+///
+/// Pure, so the rule is testable without a server: it is invisible from the
+/// app either way, since a wrong answer here is a refusal the user reads as
+/// "my plan is full" whoever's plan it actually was.
+fn preflight_request(caller_ss58: &str, incoming_bytes: u64, drive: Option<&crate::sync::identity::DriveIdentity>) -> CanUploadRequest {
+    let member_drive = drive.filter(|d| d.is_member);
+    CanUploadRequest {
+        ss58_address: member_drive.map_or_else(|| caller_ss58.to_owned(), |d| d.wire_ss58.clone()),
+        folder_hash: member_drive.map(|d| d.wire_folder_hash.clone()).unwrap_or_default(),
+        size_bytes: incoming_bytes,
+    }
+}
+
 async fn preflight_target(state: &AppState, account: &SessionAccount) -> Option<(String, String)> {
     let pool = state.pool().ok()?;
 
@@ -204,6 +236,42 @@ async fn preflight_target(state: &AppState, account: &SessionAccount) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use crate::sync::identity::DriveIdentity;
+
+    fn member(owner: &str, hash: &str) -> DriveIdentity {
+        DriveIdentity {
+            wire_ss58: owner.into(),
+            wire_folder_hash: hash.into(),
+            is_member: true,
+        }
+    }
+
+    /// Storage on a drive shared WITH this account is paid for by its OWNER,
+    /// and the server checks their allowance when the request names a real
+    /// folder hash. Sending the empty hash asked about the caller's own plan:
+    /// a member whose plan was full could not upload to a drive with room,
+    /// and one whose plan had room could pass a pre-flight for a drive that
+    /// was full. Either way the refusal reads as "my plan is full", whoever's
+    /// plan it actually was.
+    #[test]
+    fn a_member_drive_is_checked_against_its_owner() {
+        let req = preflight_request("5Me", 100, Some(&member("5Owner", "abc123")));
+        assert_eq!(req.ss58_address, "5Owner", "the owner pays, so the owner is asked about");
+        assert_eq!(req.folder_hash, "abc123", "a real hash is what routes the server to them");
+        assert_eq!(req.size_bytes, 100);
+    }
+
+    /// An own drive keeps the previous shape exactly: the empty hash leaves
+    /// the server's membership fallback inert.
+    #[test]
+    fn an_own_drive_is_checked_against_the_caller() {
+        for drive in [None, Some(&DriveIdentity::own("5Me", "abc123"))] {
+            let req = preflight_request("5Me", 100, drive);
+            assert_eq!(req.ss58_address, "5Me");
+            assert!(req.folder_hash.is_empty(), "an own drive must not name a folder");
+        }
+    }
+
     use super::*;
 
     fn preflight(result: bool, error: Option<&str>) -> CanUploadResponse {

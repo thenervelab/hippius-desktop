@@ -514,21 +514,24 @@ pub async fn upload_files_to_remote_folder(
 ) -> Result<Vec<RemoteUploadFailure>> {
     let account_id = state.require_session_account(&account_id)?;
 
+    let pool = state.pool()?;
+    // Resolved BEFORE the gate, and resolved ONCE. Two things depend on it:
+    // a drive shared with this account that is not synced here has no local
+    // row, so the lenient fallback would answer with THIS account's namespace
+    // and upload into the wrong drive; and storage there is paid for by the
+    // OWNER, so the pre-flight has to name the drive or it asks about the
+    // caller's own allowance instead.
+    let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
+
     let total_bytes: u64 = file_paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
-    crate::billing::eligibility::require_eligible(
+    crate::billing::eligibility::require_eligible_for_drive(
         state.inner(),
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
         total_bytes,
+        Some(&identity),
     )
     .await?;
-
-    let pool = state.pool()?;
-    // A drive shared with this account that is NOT synced here has no local
-    // row, and the lenient resolver would answer with THIS account's
-    // namespace -- uploading into the wrong drive rather than failing. The
-    // caller names the wire identity instead, exactly as browsing does.
-    let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
     let parent = parent_path.unwrap_or_default();
 
     // Announce the WHOLE batch before uploading any of it, so the widget
@@ -663,21 +666,20 @@ pub async fn upload_folder_to_remote_folder(
         return Err(AppError::Validation("That folder has no files to upload.".into()));
     }
 
+    let pool = state.pool()?;
+    // See the sibling above: the drive is named so the OWNER's allowance is
+    // what the pre-flight asks about.
+    let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
+
     let total_bytes: u64 = planned.iter().filter_map(|p| std::fs::metadata(&p.source).ok()).map(|m| m.len()).sum();
-    crate::billing::eligibility::require_eligible(
+    crate::billing::eligibility::require_eligible_for_drive(
         state.inner(),
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload,
         total_bytes,
+        Some(&identity),
     )
     .await?;
-
-    let pool = state.pool()?;
-    // A drive shared with this account that is NOT synced here has no local
-    // row, and the lenient resolver would answer with THIS account's
-    // namespace -- uploading into the wrong drive rather than failing. The
-    // caller names the wire identity instead, exactly as browsing does.
-    let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
     let batch = UploadBatch::new(app);
 
     // The whole batch is announced before any of it moves, so the widget

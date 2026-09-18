@@ -568,3 +568,37 @@ fn the_signing_key_is_derived_from_a_phrase_not_a_master() {
         "deriving the phrase inside means the caller cannot pass the owner's"
     );
 }
+
+/// A remote upload resolves its destination drive BEFORE the storage gate.
+///
+/// Storage on a drive shared with this account is paid for by its OWNER, so
+/// the pre-flight has to name the drive; gating first asks about the caller's
+/// own allowance instead. The refusal that produces reads as "my plan is
+/// full" whoever's plan it actually was, which is why it needs pinning rather
+/// than documenting.
+#[test]
+fn a_remote_upload_names_its_drive_before_the_storage_gate() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
+
+    for sig in [
+        "pub async fn upload_files_to_remote_folder",
+        "pub async fn upload_folder_to_remote_folder",
+    ] {
+        let body = fn_body(&src, sig);
+        let resolved = body.find("upload_target_identity").unwrap_or(usize::MAX);
+        let gated = body.find("require_eligible").unwrap_or(0);
+        assert!(
+            resolved < gated,
+            "{sig} must resolve its drive before the storage gate, or the gate asks about the wrong account"
+        );
+        assert!(
+            body.contains("require_eligible_for_drive"),
+            "{sig} must name the drive it is writing into"
+        );
+        assert_eq!(
+            body.matches("upload_target_identity").count(),
+            1,
+            "{sig} must resolve the drive exactly once"
+        );
+    }
+}
