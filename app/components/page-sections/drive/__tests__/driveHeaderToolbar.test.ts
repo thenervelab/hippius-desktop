@@ -56,3 +56,23 @@ describe("the drive header's toolbar row", () => {
     expect(toolbarRow).toMatch(/gap-y-\d/);
   });
 });
+
+/**
+ * A Viewer is offered no way to write, on either upload path.
+ *
+ * The header has two: the local buttons, which go through
+ * `resolveUploadAction`, and the REMOTE block, which does not. The role gate
+ * reached only the first, so a Viewer browsing a shared drive was still shown
+ * New Folder, Folder and File — on a drive the server refuses every write to.
+ */
+describe("the header's write controls on a read-only drive", () => {
+  it("gates the remote upload block on the role, not just on having a label", () => {
+    const block = header.slice(header.indexOf("{remoteUpload &&"));
+    expect(block.slice(0, 200)).toContain("!isReadOnlyDrive");
+  });
+
+  // The local path keeps its own gate; both must hold.
+  it("gates the local upload buttons too", () => {
+    expect(header).toContain("isReadOnlyDrive,");
+  });
+});

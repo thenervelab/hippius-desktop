@@ -63,6 +63,7 @@ import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
+import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
 import {
   makeSharedDriveLabel,
   parseSharedDriveLabel,
@@ -1429,7 +1430,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // the write anyway, so this decides only what the UI OFFERS -- and an
   // upload button that can only fail reports the failure as a sync error,
   // far from the button that caused it.
-  const { canWrite: syncedDriveCanWrite } = useDriveSharing(
+  const { canWrite: syncedDriveCanWrite, role: syncedDriveRole } = useDriveSharing(
     browsedSharedDrive ? null : openDriveLabel,
   );
   // A drive browsed without syncing it has no local label to look a role up
@@ -1438,6 +1439,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // control that appears late on every drive is a worse trade than one that
   // briefly appears for a Viewer.
   const browsedMembership = useSharedDriveMembershipByIdentity(browsedSharedDrive);
+  // The role this account holds on the open drive, for the refusal wording.
+  const openDriveRole = browsedSharedDrive
+    ? browsedMembership.membership
+      ? parseDriveRole(browsedMembership.membership.role)
+      : null
+    : syncedDriveRole;
+  const openDriveWriteRefusal = driveWriteRefusal(openDriveRole);
+
   const openDriveCanWrite = browsedSharedDrive
     ? canWriteToDrive({
         isOwner: false,
@@ -1880,6 +1889,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             // inner white card per Figma).
             const driveContent = (
               <DriveContent
+                // A drop lands whatever the permission, so a Viewer is told
+                // why rather than watching nothing happen.
+                writeRefusal={openDriveWriteRefusal}
                 isRecentFiles={isRecentFiles}
                 isLoading={isLoading}
                 filteredData={statusFilteredData}

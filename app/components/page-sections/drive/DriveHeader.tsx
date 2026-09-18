@@ -310,7 +310,12 @@ const DriveHeader: FC<DriveHeaderProps> = ({
 
       {/* A folder that is not synced here uploads straight to the server,
           so it gets its own button rather than the local flow's. */}
-      {remoteUpload && (
+      {/* `isReadOnlyDrive` as well as `remoteUpload`: these three bypass
+          `resolveUploadAction` entirely, so the role gate that hides the
+          local upload buttons never reached them and a Viewer was offered
+          New Folder, Folder and File on a drive the server refuses every
+          write to. */}
+      {remoteUpload && !isReadOnlyDrive && (
         <>
           <RemoteNewFolderButton
             label={remoteUpload.label}

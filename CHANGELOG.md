@@ -160,6 +160,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **A drive shared with you as a Viewer no longer offers you upload controls.**
+  New Folder, Folder and File are hidden on a drive you can only read, and a file
+  dropped onto it is refused with a line saying you have Viewer access and should
+  ask whoever shared the drive to make you an Editor — instead of a failed upload.
 - **Files are now shown a page at a time.** Drive and the folders inside it show
   15 rows with a pager underneath and a size control, instead of a list that grows
   as you scroll, and the loading placeholder is the size of the page you are about
