@@ -11,6 +11,13 @@ import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
+// These tests are about REACHABILITY given the feature is on -- whether a
+// handler is wired, whether the row is own or member. The lane the flag
+// happens to be gated to is a separate decision, pinned in
+// `buildChannel.test.ts`; without this mock these tests silently become
+// assertions about the release lane and fail the moment it changes.
+vi.mock("@/app/lib/featureFlags", () => ({ SHARED_DRIVES_ENABLED: true }));
+
 const localRow = (over: Partial<SyncFolder> = {}): FolderRow => {
   const folder: SyncFolder = {
     id: "drive-1",

@@ -7,13 +7,14 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). No flag needs the lane gate right now; it
-// is there for the next one that ships to testers before production.
+// staging, never production). `SHARED_DRIVES_ENABLED` uses it.
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
 // per-branch value either conflicts on every promotion or rides into
 // production through a hunk nobody read.
+
+import { enabledFrom } from "@/app/lib/buildChannel";
 
 /**
  * Switch the home-page Credit Usage chart and the Total Credit Used
@@ -130,8 +131,18 @@ export const VM_VPN_ENABLED = false;
  * plan cards grey out the shared team drive perk as "coming soon" while the
  * sharing surfaces were reachable. Check that copy still matches before this
  * reaches production.
+ *
+ * **Gated to beta because the console gates itself the same way.** The desktop
+ * owns only part of the flow: an invite link is ACCEPTED on the console's
+ * `/invite/[token]` page, and the console keeps its own `SHARED_DRIVES` flag
+ * off in production. On everywhere here would let a production owner mint
+ * links that land on a console page with the feature off — the desktop half
+ * working perfectly and the flow dying at the one step it does not own.
+ * Nothing in either codebase catches that, so the two flags flip together at
+ * launch. `pnpm dev` resolves to staging (see `next.config.ts`), so local
+ * work still sees it.
  */
-export const SHARED_DRIVES_ENABLED = true;
+export const SHARED_DRIVES_ENABLED = enabledFrom("beta");
 
 /**
  * API token settings. When `false`, the surface is fully invisible: the
