@@ -25,10 +25,10 @@ describe("the shared-drive browse label", () => {
   // Half an identity would let the backend fall back to this account's own
   // namespace — browsing the wrong drive rather than failing.
   it("refuses half an identity", () => {
-    expect(parseSharedDriveLabel("shared://5Owner")).toBeNull();
-    expect(parseSharedDriveLabel("shared://5Owner/")).toBeNull();
-    expect(parseSharedDriveLabel("shared:///abc123")).toBeNull();
-    expect(parseSharedDriveLabel("shared://")).toBeNull();
+    expect(parseSharedDriveLabel("shared:5Owner")).toBeNull();
+    expect(parseSharedDriveLabel("shared:5Owner~")).toBeNull();
+    expect(parseSharedDriveLabel("shared:~abc123")).toBeNull();
+    expect(parseSharedDriveLabel("shared:")).toBeNull();
   });
 
   // Two owners may both call a drive "Documents", and so may you.
@@ -39,11 +39,18 @@ describe("the shared-drive browse label", () => {
     expect(parseSharedDriveLabel(a)).not.toEqual(parseSharedDriveLabel(b));
   });
 
-  // A folder hash is hex today, but the parser must not assume a shape the
-  // server could widen — only that the two halves are separable.
-  it("keeps a hash containing a slash intact", () => {
-    const parsed = parseSharedDriveLabel("shared://5Owner/a/b");
-    expect(parsed).toEqual({ ownerSs58: "5Owner", folderHash: "a/b" });
+  // The label is carried in a URL parameter and joined into folder paths by
+  // machinery that splits on "/". A slash in it broke navigation into a
+  // shared drive, which silently dropped uploads into the LOCAL flow.
+  it("never contains a slash", () => {
+    expect(makeSharedDriveLabel(IDENTITY)).not.toContain("/");
+  });
+
+  it("survives a URL round trip unchanged", () => {
+    const label = makeSharedDriveLabel(IDENTITY);
+    expect(decodeURIComponent(encodeURIComponent(label))).toBe(label);
+    // And as a path segment, which is where the slashes did the damage.
+    expect(`remote://${label}`.split("/").length).toBe(3);
   });
 });
 

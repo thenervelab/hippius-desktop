@@ -15,8 +15,27 @@
  * call a drive "Documents", and so may you.
  */
 
-/** Marks a label as a shared drive's synthetic browse label. */
-const SHARED_DRIVE_LABEL_PREFIX = "shared://";
+/**
+ * Marks a label as a shared drive's synthetic browse label.
+ *
+ * Contains NO SLASH, deliberately. The first cut was `shared://owner/hash`,
+ * which broke the moment anyone opened a folder inside such a drive: the
+ * label is carried in a URL parameter and joined into folder paths by
+ * machinery that splits on `/`, so it came back mangled, the view stopped
+ * reading as remote, and uploads silently fell through to the LOCAL flow --
+ * files landing in a sync folder instead of the shared drive, with nothing
+ * erroring.
+ */
+const SHARED_DRIVE_LABEL_PREFIX = "shared:";
+
+/**
+ * Separator between the owner and the folder hash.
+ *
+ * `~` because an ss58 is base58 (alphanumeric only) and a folder hash is
+ * hex, so neither half can contain one — and unlike `/` it survives every
+ * path and URL join the label passes through.
+ */
+const SHARED_DRIVE_LABEL_SEPARATOR = "~";
 
 export interface SharedDriveIdentity {
   ownerSs58: string;
@@ -24,7 +43,7 @@ export interface SharedDriveIdentity {
 }
 
 export function makeSharedDriveLabel(identity: SharedDriveIdentity): string {
-  return `${SHARED_DRIVE_LABEL_PREFIX}${identity.ownerSs58}/${identity.folderHash}`;
+  return `${SHARED_DRIVE_LABEL_PREFIX}${identity.ownerSs58}${SHARED_DRIVE_LABEL_SEPARATOR}${identity.folderHash}`;
 }
 
 /**
@@ -40,11 +59,11 @@ export function parseSharedDriveLabel(
 ): SharedDriveIdentity | null {
   if (!label || !label.startsWith(SHARED_DRIVE_LABEL_PREFIX)) return null;
   const rest = label.slice(SHARED_DRIVE_LABEL_PREFIX.length);
-  const slash = rest.indexOf("/");
-  if (slash <= 0) return null;
+  const at = rest.indexOf(SHARED_DRIVE_LABEL_SEPARATOR);
+  if (at <= 0) return null;
 
-  const ownerSs58 = rest.slice(0, slash);
-  const folderHash = rest.slice(slash + 1);
+  const ownerSs58 = rest.slice(0, at);
+  const folderHash = rest.slice(at + 1);
   if (!ownerSs58 || !folderHash) return null;
   return { ownerSs58, folderHash };
 }

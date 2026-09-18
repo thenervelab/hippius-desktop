@@ -306,14 +306,28 @@ export function SharedWithMeSection({
               {/* Managing access is a manager's likely next action, so it
                   gets a control of its own rather than a place in the
                   overflow -- the treatment an own shared drive's row has. */}
-              {canManage && action.kind === "synced" && onManageAccess && (
+              {/* No longer conditional on a local copy: the manage calls
+                  address the drive by its wire identity, so a manager can
+                  manage one they have never synced here. */}
+              {canManage && onManageAccess && (
                 <Button
                   variant="ghost"
                   size="auto"
                   onClick={() =>
                     onManageAccess({
-                      label: action.localLabel,
+                      // A synced drive resolves by its local label; one that
+                      // is not names its wire identity instead.
+                      label:
+                        action.kind === "synced"
+                          ? action.localLabel
+                          : membership.displayLabel,
                       folderName: membership.displayLabel,
+                      ...(action.kind === "synced"
+                        ? {}
+                        : {
+                            ownerSs58: membership.ownerSs58,
+                            folderHash: membership.folderHash,
+                          }),
                     })
                   }
                   className="row-action-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-grey-80 px-2.5 text-xs font-medium text-grey-30 transition-colors hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"

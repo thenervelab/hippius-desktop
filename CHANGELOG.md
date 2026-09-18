@@ -27,6 +27,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **Uploading and dropping files inside a shared drive works.** Opening a folder
+  inside one lost track of the drive, so uploads quietly went to a folder on this
+  computer instead. Drag and drop works there too.
+- **Manage access shows on a shared drive you manage**, whether or not you have
+  synced it to this computer.
 - **Viewer, Editor and Manager now read as coloured badges**, the same ones the
   web console uses, so a list of drives can be read for access at a glance.
 - **The Drive breakdown cards no longer list categories nothing is in.** A drive
