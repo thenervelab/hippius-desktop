@@ -103,3 +103,39 @@ describe("deadReasonLabel", () => {
     expect(deadReasonLabel(null)).toBe("");
   });
 });
+
+// Provenance earns its place only now that a MANAGER can mint too: before,
+// every link on a drive came from its owner and "by you" on every row was
+// noise.
+describe("who minted a link", () => {
+  const base = {
+    role: "writer",
+    expiresAt: "2126-01-01T00:00:00Z",
+    maxUses: 50,
+    useCount: 0,
+    revoked: false,
+    valid: true,
+  };
+
+  it("names a manager's link when the owner is reading", () => {
+    const view = inviteRowView({ ...base, mintedBy: "5Manager" }, undefined, "5Owner");
+    expect(view.mintedBy).toBe("5Manager");
+  });
+
+  it("says nothing about the reader's own link", () => {
+    const view = inviteRowView({ ...base, mintedBy: "5Owner" }, undefined, "5Owner");
+    expect(view.mintedBy).toBeNull();
+  });
+
+  // Invites predating provenance carry an empty string, which must not
+  // render as a blank "by".
+  it("says nothing when the server has no provenance", () => {
+    expect(inviteRowView({ ...base, mintedBy: "" }, undefined, "5Owner").mintedBy).toBeNull();
+    expect(inviteRowView({ ...base, mintedBy: "   " }, undefined, "5Owner").mintedBy).toBeNull();
+    expect(inviteRowView(base, undefined, "5Owner").mintedBy).toBeNull();
+  });
+
+  it("names it when the reader is unknown", () => {
+    expect(inviteRowView({ ...base, mintedBy: "5Someone" }).mintedBy).toBe("5Someone");
+  });
+});

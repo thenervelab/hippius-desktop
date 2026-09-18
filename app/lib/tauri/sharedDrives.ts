@@ -130,6 +130,11 @@ export interface DriveInviteInfo {
    */
   inviteId: string;
   role: string;
+  /**
+   * Who minted it — the owner, or a manager they delegated to. Empty for
+   * invites the server has no provenance for.
+   */
+  mintedBy: string;
   expiresAt: string;
   maxUses: number;
   useCount: number;

@@ -10,6 +10,13 @@ export interface InviteRowView {
   live: boolean;
   /** Why it cannot, when it cannot. Null while live. */
   deadReason: "revoked" | "expired" | "used-up" | null;
+  /**
+   * Who minted it, as the row should read it. Null when the server has no
+   * provenance for the invite, or when the reader minted it themselves --
+   * on a drive only its owner can invite into, "Minted by you" on every row
+   * is noise. It earns its place once a manager can mint too.
+   */
+  mintedBy: string | null;
 }
 
 /**
@@ -42,8 +49,11 @@ export function inviteRowView(
     useCount: number;
     revoked: boolean;
     valid: boolean;
+    mintedBy?: string;
   },
   now: Date = new Date(),
+  /** The reader's own address, so their own links say nothing extra. */
+  viewerSs58?: string | null,
 ): InviteRowView {
   const role = driveRoleLabel(parseDriveRole(invite.role));
   const summary = `${role} · ${invite.useCount} of ${invite.maxUses} used`;
@@ -77,11 +87,13 @@ export function inviteRowView(
         ? ("used-up" as const)
         : null;
 
+  const minter = invite.mintedBy?.trim();
   return {
     summary,
     expiry,
     live: invite.valid && deadReason === null,
     deadReason,
+    mintedBy: !minter || minter === viewerSs58 ? null : minter,
   };
 }
 

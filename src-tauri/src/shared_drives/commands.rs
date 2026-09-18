@@ -405,6 +405,11 @@ pub struct DriveInviteInfo {
     #[serde(alias = "invite_id")]
     pub invite_id: String,
     pub role: String,
+    /// Who minted it — the owner, or a manager they delegated to. Empty for
+    /// invites predating provenance, and `#[serde(default)]` so those rows
+    /// still parse rather than failing the whole listing.
+    #[serde(default, alias = "minted_by")]
+    pub minted_by: String,
     #[serde(alias = "expires_at")]
     pub expires_at: String,
     #[serde(alias = "max_uses")]
@@ -1468,6 +1473,7 @@ mod tests {
         DriveInviteInfo {
             invite_id: "i".into(),
             role: "writer".into(),
+            minted_by: String::new(),
             expires_at: String::new(),
             max_uses: 1,
             use_count: 0,
@@ -1576,10 +1582,20 @@ mod tests {
         let keys = json.as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
             keys,
-            ["createdAt", "expiresAt", "inviteId", "maxUses", "revoked", "role", "useCount", "valid"]
-                .into_iter()
-                .map(String::from)
-                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "createdAt",
+                "expiresAt",
+                "inviteId",
+                "maxUses",
+                "mintedBy",
+                "revoked",
+                "role",
+                "useCount",
+                "valid"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<std::collections::BTreeSet<_>>(),
             "DriveInviteInfo wire keys must stay exactly these camelCase names"
         );
     }

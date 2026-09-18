@@ -38,6 +38,7 @@ import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import { Select } from "@/components/ui/select/Select";
 import { useBreakpoint } from "@/app/lib/hooks";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
@@ -87,6 +88,8 @@ type Tab = "members" | "links";
 export default function ShareDrivePanel() {
   const [target, setTarget] = useAtom(shareDriveModalAtom);
   const queryClient = useQueryClient();
+  // Own links say nothing extra; somebody else's name who made them.
+  const { polkadotAddress } = useWalletAuth();
   const { isDesktop, isLargeDesktop } = useBreakpoint();
 
   const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
@@ -273,6 +276,7 @@ export default function ShareDrivePanel() {
             state={invites}
             onRevoke={(id) => void revokeInvite(id)}
             onClose={() => setTarget(null)}
+            viewerSs58={polkadotAddress}
           />
         ) : (
           <MembersTab
@@ -348,10 +352,12 @@ function LinksTab({
   state,
   onRevoke,
   onClose,
+  viewerSs58,
 }: {
   state: InvitesState;
   onRevoke: (inviteId: string) => void;
   onClose: () => void;
+  viewerSs58?: string | null;
 }) {
   const view = getInvitesView(state);
 
@@ -385,7 +391,12 @@ function LinksTab({
   return (
     <div className="max-h-[260px] overflow-y-auto">
       {invites.map((invite) => (
-        <InviteRow key={invite.inviteId} invite={invite} onRevoke={onRevoke} />
+        <InviteRow
+          key={invite.inviteId}
+          invite={invite}
+          onRevoke={onRevoke}
+          viewerSs58={viewerSs58}
+        />
       ))}
     </div>
   );
@@ -394,14 +405,16 @@ function LinksTab({
 function InviteRow({
   invite,
   onRevoke,
+  viewerSs58,
 }: {
   invite: DriveInviteInfo;
   onRevoke: (inviteId: string) => void;
+  viewerSs58?: string | null;
 }) {
   // The same two-step inline confirm the member row uses: revoking is
   // irreversible and the row is small.
   const [confirming, setConfirming] = useState(false);
-  const view = inviteRowView(invite);
+  const view = inviteRowView(invite, undefined, viewerSs58);
 
   return (
     <div className="flex items-center justify-between gap-3 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
@@ -409,8 +422,14 @@ function InviteRow({
         <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
           {view.summary}
         </p>
-        <p className="text-[11px] text-grey-50 dark:text-grey-dark-600">
+        <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
           {view.live ? view.expiry : deadReasonLabel(view.deadReason)}
+          {/* Only somebody ELSE's link says who made it. Now that a manager
+              can mint, a drive's links no longer all come from one person,
+              and "who let them in" is a question the list has to answer. */}
+          {view.mintedBy && (
+            <> · by {middleTruncate(view.mintedBy, 14)}</>
+          )}
         </p>
       </div>
 

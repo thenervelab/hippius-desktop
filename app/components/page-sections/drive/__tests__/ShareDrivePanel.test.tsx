@@ -59,6 +59,12 @@ vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
   ),
 }));
 
+// The panel reads the signed-in address so a link the reader minted
+// themselves does not say so on every row.
+vi.mock("@/app/lib/wallet-auth-context", () => ({
+  useWalletAuth: () => ({ polkadotAddress: "5Me" }),
+}));
+
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
     return flagState.sharedDrivesEnabled;
