@@ -6,7 +6,11 @@ import { Cloud, CloudOff, Users } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import TableActionMenu, { type ActionItem } from "@/components/ui/alt-table/TableActionMenu";
-import { Pagination } from "@/components/ui/alt-table";
+// The files list's pager, NOT `alt-table`'s. That one styles its page
+// buttons with `bg-grey-90` and no `dark:` variant, so on a dark drive list
+// they rendered as near-white pills. This one is written for both themes,
+// and `pageSize`/`setPageSize` are optional, so it drops in unchanged.
+import { Pagination } from "@/components/ui/table";
 import {
   FOLDER_LIST_PAGE_SIZE,
   resolveFolderListPage,

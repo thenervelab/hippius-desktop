@@ -58,6 +58,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Clicking a drive under "Shared with me" opens it and browses its folders and
   files, the same way a drive you keep only in the cloud does. Syncing it locally
   is still there when you want a copy on this machine.
+- **The drive list's pager is readable in dark mode.** Its page numbers were
+  white tiles on a dark page.
 - **Your drive list pages once it gets long, so "Shared with me" stays in view.**
   Drives other people shared with you sit below your own; with a lot of drives
   they were pushed off the bottom of the page.
