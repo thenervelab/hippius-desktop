@@ -83,6 +83,30 @@ export function useSharedDriveMembership(label: string | null | undefined): {
 }
 
 /**
+ * The membership for a drive named by its WIRE identity.
+ *
+ * A drive browsed without syncing it has no local label to look up, so the
+ * owner + folder hash is the only handle there is.
+ */
+export function useSharedDriveMembershipByIdentity(
+  identity: { ownerSs58: string; folderHash: string } | null | undefined,
+): { membership: DriveMembershipInfo | undefined; isSettled: boolean } {
+  const { memberships, isSettled } = useSharedDriveMembershipsQuery();
+  const membership = useMemo(
+    () =>
+      identity
+        ? memberships.find(
+            (m) =>
+              m.ownerSs58 === identity.ownerSs58 &&
+              m.folderHash === identity.folderHash,
+          )
+        : undefined,
+    [memberships, identity?.ownerSs58, identity?.folderHash],
+  );
+  return { membership, isSettled };
+}
+
+/**
  * Roles for the shared drives synced on this device, keyed by local label.
  *
  * Drive rows come from `sync_paths` and roles from the membership listing, so

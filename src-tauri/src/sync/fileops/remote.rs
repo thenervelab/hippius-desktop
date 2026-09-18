@@ -952,6 +952,26 @@ fn build_browse_url(
 /// `browse` does no client-side crypto (it is a GET and a JSON parse), which
 /// is what makes bypassing the client crate safe here rather than a
 /// shortcut. Same reasoning as `drive_summaries.rs`.
+/// The wire identity of a shared drive named by the caller.
+///
+/// `is_member` is TRUE by construction: this path exists for a drive owned by
+/// somebody else, and the flag is what keeps every downstream site from
+/// treating the pair as this account's own namespace.
+fn shared_drive_identity(owner_ss58: &str, folder_hash: &str) -> Result<DriveIdentity> {
+    let owner = owner_ss58.trim();
+    let hash = folder_hash.trim();
+    if owner.is_empty() || hash.is_empty() {
+        return Err(AppError::Validation(
+            "Browsing a shared drive needs both its owner and its folder hash.".into(),
+        ));
+    }
+    Ok(DriveIdentity {
+        wire_ss58: owner.to_string(),
+        wire_folder_hash: hash.to_string(),
+        is_member: true,
+    })
+}
+
 #[allow(clippy::too_many_arguments)] // mirrors BrowseQuery's own surface
 async fn browse_remote_page(
     state: &AppState,
@@ -1017,12 +1037,30 @@ pub async fn list_remote_folder_grouped(
     limit: Option<u32>,
     sort_by: Option<String>,
     sort_order: Option<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
 ) -> Result<RemoteGroupedPage> {
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
-    // Lenient resolver: the label usually names a server-only drive with no
-    // local row (that is the whole point of browsable remote folders).
-    let identity = resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+    // A drive shared with this account that is NOT synced here has no local
+    // row to resolve, so the caller names its wire identity directly. The
+    // server authorises `/browse` for a member of the named drive, and
+    // listing needs no folder key at all -- names and paths come back in
+    // plaintext, and the key is only wanted to open a file's contents.
+    let identity = match (owner_ss58, folder_hash) {
+        (Some(owner), Some(hash)) => shared_drive_identity(&owner, &hash)?,
+        // Exactly one half is a caller bug, and the lenient fallback below
+        // would resolve to THIS account's namespace -- browsing the wrong
+        // drive rather than failing. Fail closed, like `DriveIdentity` does.
+        (None, Some(_)) | (Some(_), None) => {
+            return Err(AppError::Validation(
+                "Browsing a shared drive needs both its owner and its folder hash.".into(),
+            ));
+        }
+        // Lenient resolver: the label usually names a server-only drive with
+        // no local row (that is the whole point of browsable remote folders).
+        (None, None) => resolve_drive_identity_or_own(pool, &account_id, &label).await?,
+    };
     let path = subfolder.trim_matches('/');
 
     // The FE picks the page size (scroll-driven lazy loading wants small
@@ -1060,6 +1098,27 @@ pub async fn list_remote_folder_grouped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shared drive browsed without syncing it resolves to the OWNER's
+    /// namespace, and says so. Without `is_member` every downstream site that
+    /// asks would treat the pair as this account's own drive.
+    #[test]
+    fn a_named_shared_drive_resolves_to_its_owner() {
+        let id = shared_drive_identity("5Owner", "abc123").expect("identity");
+        assert_eq!(id.wire_ss58, "5Owner");
+        assert_eq!(id.wire_folder_hash, "abc123");
+        assert!(id.is_member, "somebody else's drive is never own");
+    }
+
+    /// Half an identity must fail rather than fall back: the lenient resolver
+    /// would answer with THIS account's namespace, which browses the wrong
+    /// drive instead of failing.
+    #[test]
+    fn half_an_identity_is_refused_rather_than_guessed() {
+        assert!(shared_drive_identity("", "abc123").is_err());
+        assert!(shared_drive_identity("5Owner", "").is_err());
+        assert!(shared_drive_identity("  ", "  ").is_err());
+    }
 
     /// The whole point of issuing `/browse` ourselves. `hcfs_client::browse`
     /// builds `?path=&offset=&limit=` and stops, so a sort could only reorder

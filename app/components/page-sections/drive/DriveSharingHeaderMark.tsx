@@ -16,20 +16,49 @@ import { cn } from "@/lib/utils";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
+import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
+import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
+import { parseDriveRole } from "@/app/lib/shared-drives/roles";
 
 export default function DriveSharingHeaderMark({
   label,
   displayName,
+  browsedSharedDrive = null,
 }: {
   /** The open drive's local label — the key both listings agree on. */
   label: string | null | undefined;
   /** What the breadcrumb calls it, for the manage panel's header. */
   displayName?: string | null;
+  /**
+   * Set when the drive is being browsed WITHOUT being synced here: it has no
+   * local label, so its membership is found by wire identity instead.
+   */
+  browsedSharedDrive?: { ownerSs58: string; folderHash: string } | null;
 }) {
   const setShareTarget = useSetAtom(shareDriveModalAtom);
-  const { sharing, canManage } = useDriveSharing(label);
+  const bySynced = useDriveSharing(browsedSharedDrive ? null : label);
+  const byIdentity = useSharedDriveMembershipByIdentity(browsedSharedDrive);
 
-  if (!SHARED_DRIVES_ENABLED || !label || !sharing.isShared) return null;
+  if (!SHARED_DRIVES_ENABLED || !label) return null;
+
+  // A browsed drive is somebody else's by construction, so it reads as
+  // "with-me" and its role comes straight off the membership.
+  const browsedRole = byIdentity.membership
+    ? parseDriveRole(byIdentity.membership.role)
+    : null;
+  const sharing = browsedSharedDrive
+    ? driveRowSharing({
+        ownerSs58: byIdentity.membership?.ownerSs58 ?? browsedSharedDrive.ownerSs58,
+        role: byIdentity.membership?.role,
+      })
+    : bySynced.sharing;
+  const canManage = browsedSharedDrive
+    // Managing resolves a LOCAL label, so a drive browsed without being
+    // synced here has nothing to resolve. Sync it first.
+    ? browsedRole === "manager" && Boolean(byIdentity.membership?.localLabel)
+    : bySynced.canManage;
+
+  if (!sharing.isShared) return null;
 
   const withMe = sharing.direction === "with-me";
 
@@ -56,7 +85,13 @@ export default function DriveSharingHeaderMark({
           variant="ghost"
           size="auto"
           onClick={() =>
-            setShareTarget({ label, folderName: displayName ?? label })
+            setShareTarget({
+              // The manage IPCs resolve a LOCAL label. A browsed drive that is
+              // also synced here has one; one that is not cannot be managed
+              // from this surface yet, and the button is withheld above.
+              label: byIdentity.membership?.localLabel ?? label,
+              folderName: displayName ?? label,
+            })
           }
           className="h-7 flex-shrink-0 rounded-md border border-grey-80 px-2.5 text-xs font-medium text-grey-30 transition-colors hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
         >

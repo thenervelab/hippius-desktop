@@ -49,6 +49,22 @@ const OwnerAvatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
 interface SharedWithMeSectionProps {
   /**
+   * Open a drive for browsing without syncing it here.
+   *
+   * The row used to offer only "Sync locally", which made looking at what
+   * somebody shared conditional on copying it to this machine. Browsing needs
+   * no local copy and no folder key: `/browse` authorises any member of the
+   * drive and returns names and paths in plaintext.
+   *
+   * Omitted on surfaces with nowhere to browse to (Settings), where the row
+   * stays a plain row.
+   */
+  onOpenDrive?: (identity: {
+    ownerSs58: string;
+    folderHash: string;
+    displayLabel: string;
+  }) => void;
+  /**
    * Fired after `add_shared_drive` succeeds with the allocated local
    * label — the parent refreshes its drive lists (and may navigate to
    * the new drive).
@@ -56,7 +72,7 @@ interface SharedWithMeSectionProps {
   onDriveAdded?: (label: string) => void;
 }
 
-export function SharedWithMeSection({ onDriveAdded }: SharedWithMeSectionProps) {
+export function SharedWithMeSection({ onDriveAdded, onOpenDrive }: SharedWithMeSectionProps) {
   const [data, setData] = useState<SharedWithMeData>({ kind: "idle" });
   // The row whose add_shared_drive call is in flight, keyed by
   // `${ownerSs58}:${folderHash}` (the membership's wire identity).
@@ -133,7 +149,44 @@ export function SharedWithMeSection({ onDriveAdded }: SharedWithMeSectionProps) 
           const key = `${membership.ownerSs58}:${membership.folderHash}`;
           const action = getMembershipRowAction(membership);
           return (
-            <div key={key} className="flex items-center justify-between gap-3 p-3 hover:bg-grey-light-400 dark:hover:bg-white/5">
+            <div
+              key={key}
+              role={onOpenDrive ? "button" : undefined}
+              tabIndex={onOpenDrive ? 0 : undefined}
+              // Named, or the row's accessible name is every word it
+              // contains -- including its own "Sync locally" button's.
+              aria-label={onOpenDrive ? `Open ${membership.displayLabel}` : undefined}
+              onClick={
+                onOpenDrive
+                  ? (e) => {
+                      // The row's own buttons are not opens.
+                      if ((e.target as HTMLElement).closest(".row-action-area")) return;
+                      onOpenDrive({
+                        ownerSs58: membership.ownerSs58,
+                        folderHash: membership.folderHash,
+                        displayLabel: membership.displayLabel,
+                      });
+                    }
+                  : undefined
+              }
+              onKeyDown={
+                onOpenDrive
+                  ? (e) => {
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      e.preventDefault();
+                      onOpenDrive({
+                        ownerSs58: membership.ownerSs58,
+                        folderHash: membership.folderHash,
+                        displayLabel: membership.displayLabel,
+                      });
+                    }
+                  : undefined
+              }
+              className={cn(
+                "flex items-center justify-between gap-3 p-3 hover:bg-grey-light-400 dark:hover:bg-white/5",
+                onOpenDrive && "cursor-pointer",
+              )}
+            >
               <div className="flex min-w-0 items-center gap-2.5">
                 <div className="size-[28px] shrink-0 overflow-hidden rounded-full">
                   <OwnerAvatar name={membership.ownerSs58} size={28} variant="pixel" />
@@ -161,7 +214,7 @@ export function SharedWithMeSection({ onDriveAdded }: SharedWithMeSectionProps) 
                   single management surface (pause/leave/browse), and a
                   second set of controls here would duplicate its gating. */}
               {action.kind === "synced" ? (
-                <span className="shrink-0 text-xs font-medium text-[#04c870]">
+                <span className="row-action-area shrink-0 text-xs font-medium text-[#04c870]">
                   Synced as &quot;{action.localLabel}&quot;
                 </span>
               ) : (
@@ -172,7 +225,7 @@ export function SharedWithMeSection({ onDriveAdded }: SharedWithMeSectionProps) 
                   loading={busyKey === key}
                   onClick={() => void syncLocally(membership)}
                   className={cn(
-                    "h-[30px] shrink-0 gap-[7px] rounded-[6px] border px-3 text-[13px] font-normal",
+                    "row-action-area h-[30px] shrink-0 gap-[7px] rounded-[6px] border px-3 text-[13px] font-normal",
                     "border-grey-dark-100 bg-[#FEFEFE] text-[#111]",
                     "hover:bg-[#F5F5F5]",
                     "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-300 dark:hover:bg-black-500",

@@ -137,6 +137,12 @@ interface DriveHeaderProps {
   openDriveDisplayName?: string | null;
   /** True when the open drive is one this account may only read. */
   isReadOnlyDrive?: boolean;
+  /**
+   * Set when the open drive is one somebody shared with this account and it
+   * is being browsed WITHOUT being synced here — there is no local label, so
+   * the header identifies it by its wire identity.
+   */
+  browsedSharedDrive?: { ownerSs58: string; folderHash: string } | null;
   // Nested folder browsing mode. When `isNested` is true:
   //  - the Upload File and Upload Folder actions target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
@@ -202,6 +208,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   openDriveLabel,
   openDriveDisplayName,
   isReadOnlyDrive = false,
+  browsedSharedDrive = null,
   onBreadcrumbLocalClick,
   isNested = false,
   nestedFolderName = null,
@@ -483,6 +490,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               <DriveSharingHeaderMark
                 label={openDriveLabel}
                 displayName={openDriveDisplayName}
+                browsedSharedDrive={browsedSharedDrive}
               />
             </div>
             <div className="flex items-center gap-3 flex-wrap">

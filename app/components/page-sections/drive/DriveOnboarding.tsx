@@ -78,12 +78,22 @@ interface DriveOnboardingProps {
   // When provided, clicking a REMOTE folder card opens it as a browsable
   // drive in the files view (server-only browsing — no local sync needed).
   onOpenRemoteFolder?: (label: string) => void;
+  /**
+   * Open a drive somebody shared with this account, without syncing it here.
+   * Browsing needs its WIRE identity, since no local row names it.
+   */
+  onOpenSharedDrive?: (identity: {
+    ownerSs58: string;
+    folderHash: string;
+    displayLabel: string;
+  }) => void;
 }
 
 const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSyncStarted,
   onSelectFolder,
   onOpenRemoteFolder,
+  onOpenSharedDrive,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
@@ -726,6 +736,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             account. onDriveAdded routes the new label to the breadcrumb
             exactly like a freshly added local folder. */}
         <SharedWithMeSection
+          onOpenDrive={onOpenSharedDrive}
           onDriveAdded={(label) => {
             loadFolders();
             onSyncStarted(label);

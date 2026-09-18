@@ -191,3 +191,49 @@ describe("sync locally", () => {
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(message));
   });
 });
+
+// Looking at what somebody shared with you used to require copying it to
+// this machine first: "Sync locally" was the row's only action. Browsing
+// needs no local copy and no folder key — /browse authorises any member of
+// the drive and returns names and paths in plaintext.
+describe("opening a shared drive without syncing it", () => {
+  it("opens the drive by its wire identity when the row is clicked", async () => {
+    const onOpenDrive = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection onOpenDrive={onOpenDrive} />);
+
+    fireEvent.click(await screen.findByText("team-docs"));
+    expect(onOpenDrive).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerSs58: OWNER, displayLabel: "team-docs" }),
+    );
+  });
+
+  // The row's own control must not also open the drive behind the dialog it
+  // raises — the classic nested-affordance mis-click.
+  it("does not open the drive when Sync locally is pressed", async () => {
+    const onOpenDrive = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection onOpenDrive={onOpenDrive} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Sync locally/ }));
+    expect(onOpenDrive).not.toHaveBeenCalled();
+  });
+
+  it("is reachable from the keyboard", async () => {
+    const onOpenDrive = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection onOpenDrive={onOpenDrive} />);
+
+    const row = await screen.findByRole("button", { name: "Open team-docs" });
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onOpenDrive).toHaveBeenCalledTimes(1);
+  });
+
+  // Settings has nowhere to browse to, so the row stays a plain row there.
+  it("stays inert on a surface that cannot browse", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection />);
+    await screen.findByText("team-docs");
+    expect(screen.queryByRole("button", { name: /Open team-docs/ })).not.toBeInTheDocument();
+  });
+});

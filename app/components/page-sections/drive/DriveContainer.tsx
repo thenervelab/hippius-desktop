@@ -61,6 +61,10 @@ import {
 } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
+import {
+  makeSharedDriveLabel,
+  parseSharedDriveLabel,
+} from "@/app/lib/shared-drives/sharedDriveLabel";
 import { useAtomValue, useSetAtom } from "jotai";
 import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
@@ -384,6 +388,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // A REMOTE drive opened at its root. State-based (not URL-based) because
   // the root of a remote drive has no subfolder to put in the URL; deeper
   // levels switch to the normal nested URLs via the remote:// folderSource.
+  // Display names for the shared drives browsed this session, keyed by their
+  // synthetic label. Display-only, so a stale entry costs a breadcrumb
+  // caption and never a wrong request.
+  const [sharedDriveNames, setSharedDriveNames] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
   const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(
     null,
   );
@@ -487,11 +497,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setBrowsePage(1);
   }, []);
 
+  // Derived from the label, never held beside it: a navigation that cleared
+  // one and not the other would browse the next drive under somebody else's
+  // namespace. See `sharedDriveLabel.ts`.
+  const browsedSharedDrive = parseSharedDriveLabel(remoteUploadLabel);
+
   const nestedListing = useNestedFolderListing({
     accountId: polkadotAddress,
     syncPath: nestedDrive?.syncPath ?? null,
     subfolder: isNested ? urlSubFolderPath || null : null,
     label: remoteUploadLabel,
+    sharedDrive: browsedSharedDrive,
     refreshKey: nestedRefreshKey,
     enabled: isNested || isRemoteRoot,
     remote: isRemoteView,
@@ -1297,6 +1313,27 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setIsOnLocalView(false);
   }, []);
 
+  /**
+   * Open a drive somebody shared with this account, WITHOUT syncing it here.
+   *
+   * It browses exactly like any other server-only drive — the synthetic label
+   * carries the owner and folder hash the backend needs, and `/browse`
+   * authorises any member of the named drive.
+   */
+  const handleOpenSharedDrive = useCallback(
+    (identity: { ownerSs58: string; folderHash: string; displayLabel: string }) => {
+      const label = makeSharedDriveLabel(identity);
+      setSharedDriveNames((prev) =>
+        prev.get(label) === identity.displayLabel
+          ? prev
+          : new Map(prev).set(label, identity.displayLabel),
+      );
+      setActiveRemoteLabel(label);
+      setIsOnLocalView(false);
+    },
+    [],
+  );
+
   // Clicking "Drive" in the sidebar returns to the folder list from
   // wherever the user is — a folder, a nested subfolder, a remote drive.
   //
@@ -1403,7 +1440,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       ? Boolean(nestedDrive?.remote)
       : Boolean(activeRemoteLabel);
     if (topLabel) {
-      const topDisplayName = labelDisplayNames[topLabel] ?? topLabel;
+      const topDisplayName =
+        sharedDriveNames.get(topLabel) ?? labelDisplayNames[topLabel] ?? topLabel;
       segments.push({
         label: topDisplayName,
         title: topDisplayName,
@@ -1459,6 +1497,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     nestedDrive,
     activeSyncFolderLabel,
     labelDisplayNames,
+    sharedDriveNames,
     urlSubFolderPath,
     urlMainFolderActualName,
     activeRemoteLabel,
@@ -1745,6 +1784,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
+        onOpenSharedDrive={handleOpenSharedDrive}
       />
     );
   } else if (
@@ -1762,6 +1802,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
+        onOpenSharedDrive={handleOpenSharedDrive}
       />
     );
   } else if (isOnLocalView && !isRecentFiles && !isNested && !isRemoteRoot) {
@@ -1775,6 +1816,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
+        onOpenSharedDrive={handleOpenSharedDrive}
       />
     );
   } else {
@@ -1933,7 +1975,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 addButtonRef={addButtonRef}
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
-                hideUploads={isRemoteView}
+                // A shared drive browsed without syncing it has no local
+                // root, and the upload path resolves its destination from the
+                // label — which here names somebody else's namespace. Syncing
+                // it locally is the way to add to it.
+                hideUploads={isRemoteView || Boolean(browsedSharedDrive)}
                 remoteUpload={
                   // The label the remote listing itself reads, so the
                   // upload lands in the folder on screen rather than in
@@ -1966,6 +2012,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
                 openDriveLabel={openDriveLabel}
+                browsedSharedDrive={browsedSharedDrive}
                 isReadOnlyDrive={!openDriveCanWrite}
                 openDriveDisplayName={
                   openDriveLabel
