@@ -9,7 +9,10 @@ import {
   useSourceSummary,
 } from "@/app/lib/hooks/api/useDriveSummaries";
 
-import BreakdownCard, { type BreakdownSlice } from "./BreakdownCard";
+import BreakdownCard, {
+  nonEmptySlices,
+  type BreakdownSlice,
+} from "./BreakdownCard";
 
 /**
  * What is in the drive, two ways, behind one tab control.
@@ -94,7 +97,11 @@ const DriveBreakdownCard: React.FC<{ className?: string }> = ({ className }) => 
           <MonitorSmartphone className="size-[14px]" />
         )
       }
-      slices={showingTypes ? typeSlices : sourceSlices}
+      // Categories nothing landed in are dropped rather than listed as
+      // zeroes: a drive uploaded only from the console showed "Desktop 0",
+      // "Mobile 0" and "Other 0" under the bar, which reads as a fact about
+      // the account rather than as an absent category.
+      slices={nonEmptySlices(showingTypes ? typeSlices : sourceSlices)}
       isLoading={active.isLoading}
       isError={active.isError}
       emptyText={

@@ -50,6 +50,24 @@ export function barOffsets(counts: readonly number[]): number[] {
 const TOTAL_BARS = 35;
 
 /**
+ * Drop the categories nothing landed in.
+ *
+ * A zero slice draws no bar (see `allocateBars`) but still took a legend
+ * entry, so a drive uploaded only from the console listed "Desktop 0",
+ * "Mobile 0" and "Other 0" beneath it. Those read as facts about the account
+ * rather than as absent categories, and three of the four legend rows said
+ * nothing.
+ *
+ * Everything zero leaves an empty array, which the card renders as its empty
+ * state: the total is zero either way, so nothing has to special-case it.
+ */
+export function nonEmptySlices(
+  slices: readonly BreakdownSlice[],
+): BreakdownSlice[] {
+  return slices.filter((s) => s.count > 0);
+}
+
+/**
  * Allocate whole bars to slices, proportionally, losing nothing.
  *
  * Largest-remainder rather than rounding each share independently: rounding

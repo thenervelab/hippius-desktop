@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **The Drive breakdown cards no longer list categories nothing is in.** A drive
+  uploaded only from the console showed "Desktop 0", "Mobile 0" and "Other 0"
+  under the bar; those rows are gone.
 - **The file-types card no longer says "(before tracking)".** That caveat is true
   of where a file was uploaded from, which older files do not record, but a file's
   type has always been known.
