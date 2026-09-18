@@ -23,25 +23,10 @@ import FolderRowSkeleton from "@/components/page-sections/settings/multi-folder-
 import HostedRootNote from "@/components/page-sections/settings/multi-folder-sync/HostedRootNote";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
+import { formatRowDate } from "./formatRowDate";
+import { RowDot as Dot } from "./RowDot";
 
 import { isCloudOnly, presenceLabel, type FolderRow } from "./folderRows";
-
-function formatRowDate(timestamp: number) {
-  const d = new Date(timestamp);
-  const month = d.toLocaleString("en-US", { month: "short" });
-  let hours = d.getHours();
-  const minutes = String(d.getMinutes()).padStart(2, "0");
-  const ampm = hours >= 12 ? "pm" : "am";
-  hours = hours % 12 || 12;
-  return `${month} ${d.getDate()}, ${d.getFullYear()} at ${hours}:${minutes} ${ampm}`;
-}
-
-const Dot = () => (
-  <span
-    aria-hidden="true"
-    className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0"
-  />
-);
 
 /**
  * The cloud mark.

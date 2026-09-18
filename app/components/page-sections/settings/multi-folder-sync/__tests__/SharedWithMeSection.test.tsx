@@ -5,12 +5,24 @@
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@testing-library/jest-dom";
 
 // The overflow menu is Radix-backed and does not open under jsdom. These
 // tests are about what the row OFFERS and what pressing it does, not about
 // Radix, so the shell renders its items as plain buttons.
+const listSharedDriveStatsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/app/lib/hooks/useSharedDriveStats", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/app/lib/hooks/useSharedDriveStats")
+  >();
+  return {
+    ...actual,
+    useSharedDriveStats: () => listSharedDriveStatsMock(),
+  };
+});
+
 vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
   __esModule: true,
   default: ({
@@ -41,6 +53,16 @@ vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
 }));
 
 import { SharedWithMeSection } from "../SharedWithMeSection";
+
+// The section asks the owners' listings for each drive's size and counts, so
+// it reads the query client.
+const render = (ui: React.ReactElement) =>
+  rtlRender(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      {ui}
+    </QueryClientProvider>,
+  );
+
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
 
 const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
@@ -107,6 +129,7 @@ function membership(overrides: Partial<DriveMembershipInfo> = {}): DriveMembersh
 }
 
 beforeEach(() => {
+  listSharedDriveStatsMock.mockReturnValue(new Map());
   vi.clearAllMocks();
   flagState.sharedDrivesEnabled = true;
   getLastBrowseDirectoryMock.mockResolvedValue("/Users/me");
@@ -273,5 +296,68 @@ describe("opening a shared drive without syncing it", () => {
     render(<SharedWithMeSection />);
     await screen.findByText("team-docs");
     expect(screen.queryByRole("button", { name: /Open team-docs/ })).not.toBeInTheDocument();
+  });
+});
+
+// The membership listing carries no counts, so a row starts with nothing to
+// show and only the OWNER's listing can correct it. Rendering an uncorrected
+// row as "0 B - 0 files" claims a drive is empty when nobody successfully
+// asked, which is the failure nobody files a bug for.
+describe("a shared drive's size and counts", () => {
+  it("shows them once the owner's listing has answered", async () => {
+    listSharedDriveStatsMock.mockReturnValue(
+      new Map([
+        [
+          `${OWNER}:0123456789abcdef`,
+          {
+            ownerSs58: OWNER,
+            folderHash: "0123456789abcdef",
+            fileCount: 5,
+            totalBytes: 5_890_000,
+            updatedAt: 1_789_000_000,
+          },
+        ],
+      ]),
+    );
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection />);
+
+    await screen.findByText("team-docs");
+    expect(screen.getByText((_t, el) => el?.textContent?.trim() === "5 files")).toBeInTheDocument();
+    expect(screen.getByText(/MB/)).toBeInTheDocument();
+  });
+
+  it("shows nothing at all while the drive's size is unknown", async () => {
+    listSharedDriveStatsMock.mockReturnValue(new Map());
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection />);
+
+    await screen.findByText("team-docs");
+    // Never "0 B" or "0 files": an unknown is not an empty drive.
+    expect(screen.queryByText((_t, el) => el?.textContent?.trim() === "0 files")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^0 B$/)).not.toBeInTheDocument();
+  });
+
+  // A drive that really is empty has answered, and says so.
+  it("says zero for a drive the owner's listing reports as empty", async () => {
+    listSharedDriveStatsMock.mockReturnValue(
+      new Map([
+        [
+          `${OWNER}:0123456789abcdef`,
+          {
+            ownerSs58: OWNER,
+            folderHash: "0123456789abcdef",
+            fileCount: 0,
+            totalBytes: 0,
+            updatedAt: 0,
+          },
+        ],
+      ]),
+    );
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection />);
+
+    await screen.findByText("team-docs");
+    expect(screen.getByText((_t, el) => el?.textContent?.trim() === "0 files")).toBeInTheDocument();
   });
 });

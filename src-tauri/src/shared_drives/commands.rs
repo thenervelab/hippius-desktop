@@ -1136,6 +1136,108 @@ pub async fn list_my_drive_memberships(app: tauri::AppHandle) -> Result<Vec<Driv
 /// local drive is the plain `remove_drive` path — Task 5's revoked-state
 /// "Remove" affordance and Task 6 wire it deliberately rather than this
 /// command guessing that the membership no longer matters.
+/// Size, file count and last-changed for the drives shared with this account.
+///
+/// `/v1/drive-memberships` carries no counts at all, so a row listing a shared
+/// drive has nothing to show beside its name. Only the OWNER's folder listing
+/// has the figures, and `/list_folders/{owner}` serves a member a view
+/// filtered to the drives they actually belong to — so this is one request per
+/// distinct OWNER, not per drive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedDriveStats {
+    pub owner_ss58: String,
+    pub folder_hash: String,
+    pub file_count: u64,
+    pub total_bytes: u64,
+    /// Server-side last-change time, Unix seconds.
+    pub updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct ListFoldersResult {
+    #[serde(default)]
+    folders: Vec<hcfs_shared::network::RemoteFolderInfo>,
+}
+
+/// `GET /list_folders/{owner}` — the owner's drives, filtered by the server to
+/// the ones the calling member belongs to.
+async fn http_list_owner_folders(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    owner_ss58: &str,
+) -> Result<Vec<hcfs_shared::network::RemoteFolderInfo>> {
+    let resp = http
+        .get(format!("{}/list_folders/{}", base_url.trim_end_matches('/'), owner_ss58))
+        .header("Authorization", format!("Bearer {bearer}"))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("list-folders request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_error_status(status, &body));
+    }
+    let parsed: ListFoldersResult = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("list-folders response did not parse: {e}")))?;
+    Ok(parsed.folders)
+}
+
+/// Stats for every drive shared with this account by one of `owners`.
+///
+/// A drive whose owner's listing did not come back is ABSENT from the result,
+/// never present with zeroes. An unknown size is not a zero: summing one in as
+/// though it were under-reports the total while looking perfectly healthy,
+/// which is the failure nobody files a bug for. The caller renders absence as
+/// "not known yet" rather than as an empty drive.
+#[tauri::command]
+pub async fn list_shared_drive_stats(app: tauri::AppHandle, owners: Vec<String>) -> Result<Vec<SharedDriveStats>> {
+    if owners.is_empty() {
+        return Ok(Vec::new());
+    }
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let http = state.api_client.clone();
+
+    // One request per DISTINCT owner: several drives shared by the same
+    // person come back in one listing.
+    let mut distinct: Vec<String> = owners;
+    distinct.sort();
+    distinct.dedup();
+
+    let stats = futures_util::future::join_all(distinct.iter().map(|owner| {
+        let http = http.clone();
+        let ctx = &ctx;
+        async move {
+            match http_list_owner_folders(&http, &ctx.base_url, &ctx.bearer, owner).await {
+                Ok(folders) => folders
+                    .into_iter()
+                    .map(|f| SharedDriveStats {
+                        owner_ss58: owner.clone(),
+                        folder_hash: f.folder_hash,
+                        file_count: f.file_count,
+                        total_bytes: f.total_bytes,
+                        updated_at: f.updated_at,
+                    })
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    debug!(owner = %owner, error = %e, "Owner folder listing failed; their drives stay unknown");
+                    Vec::new()
+                }
+            }
+        }
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    info!(owners = distinct.len(), drives = stats.len(), "Listed shared-drive stats");
+    Ok(stats)
+}
+
 /// Leave a shared drive named by its WIRE identity.
 ///
 /// The label-keyed [`leave_shared_drive`] resolves a local `sync_paths` row,

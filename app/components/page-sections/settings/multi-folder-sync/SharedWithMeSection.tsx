@@ -13,7 +13,7 @@
 
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { Users } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -27,6 +27,13 @@ import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { buildSharedDriveActions } from "./sharedDriveRowActions";
 import { SettingsCard } from "../SettingsCard";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
+import { formatBytes } from "@/lib/utils/formatBytes";
+import { formatRowDate } from "@/components/page-sections/drive/folder-list/formatRowDate";
+import { RowDot as Dot } from "@/components/page-sections/drive/folder-list/RowDot";
+import {
+  sharedDriveStatsKey,
+  useSharedDriveStats,
+} from "@/app/lib/hooks/useSharedDriveStats";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   addSharedDrive,
@@ -94,6 +101,15 @@ export function SharedWithMeSection({
   // Leaving is irreversible from this surface, so it goes through the app's
   // confirm dialog rather than straight off a menu item.
   const [leaveTarget, setLeaveTarget] = useState<DriveMembershipInfo | null>(null);
+  // Size and counts live only on the OWNER's listing; the membership rows
+  // carry none. Hooks run before the view's early returns, so the owners are
+  // read off whatever the fetch currently holds.
+  const owners = useMemo(
+    () =>
+      data.kind === "ready" ? data.memberships.map((m) => m.ownerSs58) : [],
+    [data],
+  );
+  const statsByDrive = useSharedDriveStats(owners);
 
 
   const load = useCallback(async () => {
@@ -187,6 +203,7 @@ export function SharedWithMeSection({
           const action = getMembershipRowAction(membership);
           const role = parseDriveRole(membership.role);
           const canManage = role === "manager";
+          const stats = statsByDrive.get(sharedDriveStatsKey(membership));
           return (
             <div
               key={key}
@@ -252,6 +269,34 @@ export function SharedWithMeSection({
                     <span className="flex-shrink-0 whitespace-nowrap text-[11px] font-medium text-[#04c870]">
                       Synced here
                     </span>
+                  )}
+                  {/* A drive whose owner's listing has not come back is
+                      UNKNOWN, not empty. Rendering it as "0 B · 0 files"
+                      claims the drive is empty when nobody successfully
+                      asked -- so an absent entry shows nothing at all. */}
+                  {stats && (
+                    <>
+                      <span className="h-4 w-px flex-shrink-0 bg-grey-80 dark:bg-[#3a3a3a]" />
+                      <span className="flex items-center gap-1 whitespace-nowrap text-xs text-grey-60 dark:text-grey-dark-600">
+                        <Icons.Database className="size-3.5 text-[#1F50BD]" />
+                        {formatBytes(stats.totalBytes)}
+                      </span>
+                      <Dot />
+                      <span className="flex items-center gap-1 whitespace-nowrap text-xs text-grey-60 dark:text-grey-dark-600">
+                        <Icons.Folders className="size-3.5 text-[#1F50BD]" />
+                        {stats.fileCount} {stats.fileCount === 1 ? "file" : "files"}
+                      </span>
+                      {stats.updatedAt > 0 && (
+                        <>
+                          <Dot />
+                          <span className="flex items-center gap-1 whitespace-nowrap text-xs text-grey-60 dark:text-grey-dark-600">
+                            <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
+                            {/* The wire is SECONDS; the formatter takes ms. */}
+                            {formatRowDate(stats.updatedAt * 1000)}
+                          </span>
+                        </>
+                      )}
+                    </>
                   )}
                 </div>
                 <p

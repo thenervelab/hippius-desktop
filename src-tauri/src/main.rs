@@ -446,6 +446,7 @@ fn main() {
             crate::shared_drives::commands::change_drive_member_role,
             crate::shared_drives::commands::list_drive_invites,
             crate::shared_drives::commands::list_owned_drive_sharing,
+            crate::shared_drives::commands::list_shared_drive_stats,
             crate::shared_drives::commands::revoke_drive_invite,
             crate::shared_drives::commands::list_my_drive_memberships,
             crate::shared_drives::commands::leave_shared_drive,

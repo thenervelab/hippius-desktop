@@ -194,6 +194,36 @@ export async function revokeDriveInvite(
   await invoke<void>("revoke_drive_invite", { label, inviteId });
 }
 
+/**
+ * Size, file count and last-changed for one drive shared with this account.
+ *
+ * A drive whose owner's listing did not come back is ABSENT from the result,
+ * never present with zeroes — an unknown size is not a zero, and a row that
+ * renders one as "0 B" claims a drive is empty when nobody asked successfully.
+ */
+export interface SharedDriveStats {
+  ownerSs58: string;
+  folderHash: string;
+  fileCount: number;
+  totalBytes: number;
+  /** Server-side last-change time, Unix SECONDS. */
+  updatedAt: number;
+}
+
+/**
+ * Stats for the drives shared with this account, by owner.
+ *
+ * The membership listing carries no counts, so only the owner's folder
+ * listing has them. One request per distinct owner, not per drive.
+ */
+export async function listSharedDriveStats(
+  owners: readonly string[],
+): Promise<SharedDriveStats[]> {
+  return invoke<SharedDriveStats[]>("list_shared_drive_stats", {
+    owners: [...owners],
+  });
+}
+
 /** List the drives shared WITH this account. */
 export async function listMyDriveMemberships(): Promise<DriveMembershipInfo[]> {
   return invoke<DriveMembershipInfo[]>("list_my_drive_memberships");

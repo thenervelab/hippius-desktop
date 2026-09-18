@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **Drives shared with you show their size, file count and last change**, the
+  same facts your own drives show. A drive whose figures have not arrived yet
+  shows none rather than claiming to be empty.
 - **Drives shared with you read like your own drives.** Each row shows a folder
   icon, its role as a badge, and a menu with Open, Sync to this computer and
   Leave drive; managers get Manage access on the row itself.
