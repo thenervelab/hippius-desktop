@@ -11,7 +11,6 @@ import FailedFilesListener from "./FailedFilesListener";
 import FinderShareListener from "./FinderShareListener";
 import FailedFilesModal from "@/components/page-sections/drive/FailedFilesModal";
 import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
-import ShareDriveModal from "@/components/page-sections/drive/ShareDriveModal";
 import RenameDialog from "@/components/page-sections/drive/RenameDialog";
 import NewFolderDialog from "@/components/page-sections/drive/NewFolderDialog";
 import AppContextMenu from "@/components/ui/context-menu/AppContextMenu";
@@ -36,7 +35,6 @@ export default function ProtectedLayout({
         <FailedFilesModal />
         <ShareFileModal />
         {/* Renders nothing while SHARED_DRIVES_ENABLED is off. */}
-        <ShareDriveModal />
         <RenameDialog />
         <NewFolderDialog />
         {/* Replaces the WebView's Back / Reload / Inspect Element menu.

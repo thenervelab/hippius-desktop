@@ -8,8 +8,10 @@ import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
+  offersShareAction,
   FOLDER_SHARE_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderShareGating";
+import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
 import { useAtomValue } from "jotai";
@@ -77,6 +79,8 @@ export default function FileContextMenu({
   const { getParam } = useUrlParams();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
+  // Which of this listing's rows sit in a drive shared WITH this account.
+  const memberDriveLabels = useMemberDriveLabels();
 
   useEffect(() => {
     setMounted(true);
@@ -230,6 +234,7 @@ export default function FileContextMenu({
           */}
           {(file.isFolder || file.syncStatus === "synced")
             && shareEnabled
+            && offersShareAction(file, memberDriveLabels)
             && onShareFile && (
               <button
                 // `menuItemClass` hard-codes cursor-pointer and hover styling

@@ -9,6 +9,8 @@ import CreditsExhaustedBanner from "@/components/billing/CreditsExhaustedBanner"
 import OfflineBanner from "@/components/ui/OfflineBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
+import ShareDrivePanel from "../components/page-sections/drive/ShareDrivePanel";
+import CreateDriveInviteDialog from "../components/page-sections/drive/CreateDriveInviteDialog";
 
 /**
  * Distance the content's left margin changes between the expanded and collapsed
@@ -123,6 +125,8 @@ export default function ResponsiveContent({
         </div>
       </main>
       <FileDetailsPanel />
+      <ShareDrivePanel />
+      <CreateDriveInviteDialog />
     </div>
   );
 }

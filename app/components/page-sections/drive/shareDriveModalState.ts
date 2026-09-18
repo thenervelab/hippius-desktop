@@ -3,7 +3,10 @@
 // unit-testable without a render. Tested in
 // `__tests__/shareDriveModalState.test.ts`.
 
-import type { DriveMemberInfo } from "@/app/lib/tauri/sharedDrives";
+import type {
+  DriveInviteInfo,
+  DriveMemberInfo,
+} from "@/app/lib/tauri/sharedDrives";
 
 /**
  * Invite-tab lifecycle. Mirrors `ShareFileModal`'s machine minus progress
@@ -32,6 +35,31 @@ export type MembersState =
   | { kind: "ready"; members: DriveMemberInfo[] }
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
+
+export type InvitesState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ready"; invites: DriveInviteInfo[] }
+  | { kind: "unavailable" }
+  | { kind: "error"; message: string };
+
+/**
+ * Same five-state shape as members, deliberately: both tabs load the same way
+ * against the same server, so one reader can learn one shape.
+ */
+export function getInvitesView(state: InvitesState): MembersView {
+  switch (state.kind) {
+    case "loading":
+    case "idle":
+      return "loading";
+    case "unavailable":
+      return "unavailable";
+    case "error":
+      return "error";
+    default:
+      return state.invites.length === 0 ? "empty" : "rows";
+  }
+}
 
 export type MembersView = "loading" | "rows" | "empty" | "unavailable" | "error";
 

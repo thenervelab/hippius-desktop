@@ -26,7 +26,17 @@ const nextConfig = {
     // Dropping this line does not fail anything: every channel-gated flag
     // silently falls back to production, so a beta-only feature simply
     // never appears in beta. Pinned by `release_lane_pins.rs`.
-    RELEASE_CHANNEL: process.env.HIPPIUS_RELEASE_CHANNEL ?? "",
+    //
+    // A `next dev` build with no variable set resolves to STAGING, not
+    // production: a developer working on a lane-gated feature has to be able
+    // to see it, and telling everyone to export a variable before
+    // `pnpm tauri:dev` is a step that gets forgotten and reads as the feature
+    // being broken. Keyed on NODE_ENV rather than an npm script so it holds
+    // on Windows, where an inline `VAR=x` prefix in a script does not run.
+    // `next build` is NODE_ENV=production, so a real build is unaffected.
+    RELEASE_CHANNEL:
+      process.env.HIPPIUS_RELEASE_CHANNEL ??
+      (process.env.NODE_ENV === "development" ? "staging" : ""),
   },
 
   // Performance settings from next.config.ts

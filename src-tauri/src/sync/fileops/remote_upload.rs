@@ -103,13 +103,18 @@ impl UploadBatch {
 /// first 32 bytes. Derived here rather than reusing the encryption key —
 /// the two happen to be the same bytes today, and writing that assumption
 /// into a second place is how it survives a change upstream that breaks it.
-pub(crate) fn signing_key_for_folder(master_mnemonic: &str, label: &str) -> Result<SigningKey> {
+///
+/// Takes the FOLDER PHRASE, not the master. It used to derive the phrase
+/// itself from `(master, label)`, which has no member branch: on a drive
+/// shared with this account a file was encrypted with the OWNER's folder key
+/// and signed with one derived from this account's master. Two keys for one
+/// file, and nothing local fails when they disagree. Both now come from
+/// `remote::folder_phrase_for_label`.
+pub(crate) fn signing_key_for_folder(folder_phrase: &str) -> Result<SigningKey> {
     use bip39::Mnemonic;
     use std::str::FromStr;
 
-    let folder_phrase = hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label)
-        .map_err(|e| AppError::Crypto(format!("Failed to derive folder mnemonic: {e}")))?;
-    let folder = Mnemonic::from_str(&folder_phrase).map_err(|e| AppError::Crypto(format!("Invalid derived folder mnemonic: {e}")))?;
+    let folder = Mnemonic::from_str(folder_phrase).map_err(|e| AppError::Crypto(format!("Invalid folder mnemonic: {e}")))?;
     let mut seed = folder.to_seed("");
     let mut secret = [0u8; 32];
     secret.copy_from_slice(&seed[..32]);
@@ -209,8 +214,10 @@ struct SealRequest<'a> {
     ciphertext_path: &'a Path,
     encryption_key: &'a [u8; 32],
     signing_key: &'a SigningKey,
-    account_id: &'a str,
-    label: &'a str,
+    /// The drive this file is being written INTO, resolved once by the
+    /// caller. The manifest names the namespace the file lands in, which for
+    /// a drive shared with this account is the OWNER's -- not the caller's.
+    identity: &'a DriveIdentity,
     size_bytes: u64,
     path_hash: [u8; 32],
     salted_hash: [u8; 32],
@@ -229,8 +236,15 @@ fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
     let signature = req.signing_key.sign(Manifest::generate_text(&ciphertext_hash).as_bytes());
 
     Ok(Manifest {
-        ss58_address: req.account_id.to_string(),
-        folder_hash: hcfs_client::drive::keys::folder_hash(req.label),
+        // The WIRE identity, never the caller's account or the local label.
+        // Both were wrong for a member drive in the same way: a file uploaded
+        // into a drive somebody shared landed in the uploader's OWN namespace
+        // under a hash derived from their local name for it, and the server
+        // accepted it because it is a perfectly valid file -- just not in the
+        // drive they were looking at. This is land mine 3 from the
+        // shared-drive rules, in a manifest assembled by hand.
+        ss58_address: req.identity.wire_ss58.clone(),
+        folder_hash: req.identity.wire_folder_hash.clone(),
         ciphertext_hash,
         size_bytes: req.size_bytes,
         timestamp: chrono::Utc::now().timestamp(),
@@ -352,18 +366,25 @@ pub async fn upload_to_remote_folder(
     source: &Path,
     identity: &DriveIdentity,
 ) -> Result<()> {
-    upload_to_remote_folder_with_progress(state, pool, account_id, label, parent_path, source, identity, None).await
+    let mnemonic = crate::sync::fileops::remote::session_mnemonic(state)?;
+    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
+    upload_to_remote_folder_with_progress(pool, account_id, label, parent_path, source, identity, &folder_phrase, None).await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // one file's worth of context, not a call site's
 pub(crate) async fn upload_to_remote_folder_with_progress(
-    state: &AppState,
     pool: &SqlitePool,
     account_id: &str,
     label: &str,
     parent_path: &str,
     source: &Path,
     identity: &DriveIdentity,
+    // The drive's folder phrase, resolved ONCE by the caller. Deriving it
+    // here meant a key derivation PER FILE, and for a drive shared with this
+    // account that is not synced here that is an Argon2id grant open apiece,
+    // seconds each, so a fifty-file upload spent over a minute re-deriving
+    // the same key.
+    folder_phrase: &zeroize::Zeroizing<String>,
     batch: Option<&UploadBatch>,
 ) -> Result<()> {
     let file_name = source
@@ -372,14 +393,19 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
         .ok_or_else(|| AppError::Validation("File has no usable name".into()))?
         .to_string();
 
-    let mnemonic = crate::sync::fileops::remote::session_mnemonic(state)?;
-    let encryption_key = crate::sync::fileops::remote::encryption_key_for_label(pool, account_id, label, &mnemonic, identity).await?;
-    let signing_key = signing_key_for_folder(&mnemonic, label)?;
+    // ONE folder phrase for both keys: they must agree, and only the
+    // encryption path used to have a member branch.
+    let encryption_key = crate::sync::fileops::remote::encryption_key_from_phrase(folder_phrase)?;
+    let signing_key = signing_key_for_folder(folder_phrase)?;
 
     // The salted hash is over the PLAINTEXT and is what the server uses to
     // recognise the same content again, so it is computed from the source
     // file, never from the ciphertext.
-    let (salted_hash, size_bytes) = hcfs_client::crypto::compute_salted_hash_file(source, account_id)
+    // Salted with the namespace the file LANDS in, matching the manifest: the
+    // server recognises identical content by this, so salting with the
+    // uploader's account on somebody else's drive would never match the
+    // drive's own files.
+    let (salted_hash, size_bytes) = hcfs_client::crypto::compute_salted_hash_file(source, &identity.wire_ss58)
         .map_err(|e| AppError::Crypto(format!("Failed to hash {}: {e}", source.display())))?;
 
     let relative_path = wire_relative_path(parent_path, &file_name);
@@ -416,8 +442,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
         ciphertext_path: &ciphertext_path,
         encryption_key: &encryption_key,
         signing_key: &signing_key,
-        account_id,
-        label,
+        identity,
         size_bytes,
         path_hash,
         salted_hash,
@@ -481,6 +506,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
 /// should not discard the ones that landed — so failures come back per
 /// file rather than as a single error.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // the IPC payload's shape, not a call site's
 pub async fn upload_files_to_remote_folder(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -488,20 +514,29 @@ pub async fn upload_files_to_remote_folder(
     label: String,
     parent_path: Option<String>,
     file_paths: Vec<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
 ) -> Result<Vec<RemoteUploadFailure>> {
     let account_id = state.require_session_account(&account_id)?;
 
+    let pool = state.pool()?;
+    // Resolved BEFORE the gate, and resolved ONCE. Two things depend on it:
+    // a drive shared with this account that is not synced here has no local
+    // row, so the lenient fallback would answer with THIS account's namespace
+    // and upload into the wrong drive; and storage there is paid for by the
+    // OWNER, so the pre-flight has to name the drive or it asks about the
+    // caller's own allowance instead.
+    let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
+
     let total_bytes: u64 = file_paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
-    crate::billing::eligibility::require_eligible(
+    crate::billing::eligibility::require_eligible_for_drive(
         state.inner(),
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
         total_bytes,
+        Some(&identity),
     )
     .await?;
-
-    let pool = state.pool()?;
-    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
     let parent = parent_path.unwrap_or_default();
 
     // Announce the WHOLE batch before uploading any of it, so the widget
@@ -510,6 +545,13 @@ pub async fn upload_files_to_remote_folder(
     // been read yet; a file that cannot be stat'd still gets a row, since
     // a missing row is worse than an unknown size.
     let batch = UploadBatch::new(app);
+    // ONCE per upload, not per file: deriving it inside the loop meant a key
+    // derivation for every file, and for an unsynced shared drive that is an
+    // Argon2id grant open apiece.
+    let folder_phrase = {
+        let mnemonic = crate::sync::fileops::remote::session_mnemonic(state.inner())?;
+        crate::sync::fileops::remote::folder_phrase_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
+    };
     for path in &file_paths {
         let source = std::path::Path::new(path);
         let Some(name) = source.file_name().and_then(|n| n.to_str()) else {
@@ -530,7 +572,7 @@ pub async fn upload_files_to_remote_folder(
     let mut failures = Vec::new();
     for path in &file_paths {
         let source = std::path::Path::new(path);
-        let sent = upload_to_remote_folder_with_progress(state.inner(), pool, &account_id, &label, &parent, source, &identity, Some(&batch)).await;
+        let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &parent, source, &identity, &folder_phrase, Some(&batch)).await;
         if let Err(e) = sent {
             tracing::warn!(file = %path, error = %e, "remote upload failed");
             failures.push(RemoteUploadFailure {
@@ -606,6 +648,7 @@ fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
 /// Drive write, and reports per-file failures rather than one error — the
 /// files are independent and one failure must not discard the rest.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // the IPC payload's shape, not a call site's
 pub async fn upload_folder_to_remote_folder(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -613,6 +656,8 @@ pub async fn upload_folder_to_remote_folder(
     label: String,
     parent_path: Option<String>,
     folder_path: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
 ) -> Result<Vec<RemoteUploadFailure>> {
     let account_id = state.require_session_account(&account_id)?;
     let root = std::path::Path::new(&folder_path);
@@ -633,18 +678,28 @@ pub async fn upload_folder_to_remote_folder(
         return Err(AppError::Validation("That folder has no files to upload.".into()));
     }
 
+    let pool = state.pool()?;
+    // See the sibling above: the drive is named so the OWNER's allowance is
+    // what the pre-flight asks about.
+    let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
+
     let total_bytes: u64 = planned.iter().filter_map(|p| std::fs::metadata(&p.source).ok()).map(|m| m.len()).sum();
-    crate::billing::eligibility::require_eligible(
+    crate::billing::eligibility::require_eligible_for_drive(
         state.inner(),
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload,
         total_bytes,
+        Some(&identity),
     )
     .await?;
-
-    let pool = state.pool()?;
-    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
     let batch = UploadBatch::new(app);
+    // ONCE per upload, not per file: deriving it inside the loop meant a key
+    // derivation for every file, and for an unsynced shared drive that is an
+    // Argon2id grant open apiece.
+    let folder_phrase = {
+        let mnemonic = crate::sync::fileops::remote::session_mnemonic(state.inner())?;
+        crate::sync::fileops::remote::folder_phrase_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
+    };
 
     // The whole batch is announced before any of it moves, so the widget
     // shows a queue rather than one row replaced per file.
@@ -667,13 +722,13 @@ pub async fn upload_folder_to_remote_folder(
     let mut failures = Vec::new();
     for item in &planned {
         let sent = upload_to_remote_folder_with_progress(
-            state.inner(),
             pool,
             &account_id,
             &label,
             &item.parent,
             &item.source,
             &identity,
+            &folder_phrase,
             Some(&batch),
         )
         .await;

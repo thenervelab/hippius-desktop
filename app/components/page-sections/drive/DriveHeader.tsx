@@ -11,6 +11,7 @@ import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
+import DriveSharingHeaderMark from "./DriveSharingHeaderMark";
 import SyncFolderBreadcrumb, {
   BreadcrumbSegment,
 } from "./SyncFolderBreadcrumb";
@@ -127,6 +128,21 @@ interface DriveHeaderProps {
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
   breadcrumbSegments?: BreadcrumbSegment[];
   onBreadcrumbLocalClick?: () => void;
+  /**
+   * The drive currently open, by local label. Drives the header's shared
+   * badge and its way in to managing access, so standing inside a drive says
+   * the same thing its row in the list does.
+   */
+  openDriveLabel?: string | null;
+  openDriveDisplayName?: string | null;
+  /** True when the open drive is one this account may only read. */
+  isReadOnlyDrive?: boolean;
+  /**
+   * Set when the open drive is one somebody shared with this account and it
+   * is being browsed WITHOUT being synced here — there is no local label, so
+   * the header identifies it by its wire identity.
+   */
+  browsedSharedDrive?: { ownerSs58: string; folderHash: string } | null;
   // Nested folder browsing mode. When `isNested` is true:
   //  - the Upload File and Upload Folder actions target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
@@ -189,6 +205,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   onSetFolderUploadOpen,
   folderUploadInitialPath,
   breadcrumbSegments = [],
+  openDriveLabel,
+  openDriveDisplayName,
+  isReadOnlyDrive = false,
+  browsedSharedDrive = null,
   onBreadcrumbLocalClick,
   isNested = false,
   nestedFolderName = null,
@@ -219,6 +239,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   // One decision for both upload buttons — see `resolveUploadAction`.
   const uploadAction = resolveUploadAction({
     hideUploads,
+    isReadOnlyDrive,
     isRecentFiles: Boolean(isRecentFiles),
     hasNoSyncPaths: Boolean(hasNoSyncPaths),
     isSyncPathEmpty: Boolean(isSyncPathEmpty),
@@ -289,7 +310,12 @@ const DriveHeader: FC<DriveHeaderProps> = ({
 
       {/* A folder that is not synced here uploads straight to the server,
           so it gets its own button rather than the local flow's. */}
-      {remoteUpload && (
+      {/* `isReadOnlyDrive` as well as `remoteUpload`: these three bypass
+          `resolveUploadAction` entirely, so the role gate that hides the
+          local upload buttons never reached them and a Viewer was offered
+          New Folder, Folder and File on a drive the server refuses every
+          write to. */}
+      {remoteUpload && !isReadOnlyDrive && (
         <>
           <RemoteNewFolderButton
             label={remoteUpload.label}
@@ -459,13 +485,26 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               Lives inside the outer grey card's top section (px-2.5 py-2 per Figma).
               The default mt-6/mb-5 from SyncFolderBreadcrumb is overridden so the
               row stays compact and vertically aligned with the buttons. */}
-          <div className="flex items-center justify-between gap-4 flex-wrap min-w-0 w-full px-2.5 py-2">
-            <SyncFolderBreadcrumb
-              segments={breadcrumbSegments}
-              onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
-              className="mt-0 mb-0"
-            />
-            <div className="flex items-center gap-3 flex-wrap">
+          {/* Right-aligned, and NOT via `justify-between`. That rule pushes
+              the two groups apart on a shared line but leaves the actions at
+              the START of a wrapped one, so the toolbar moved depending on
+              how deep the folder was. `ml-auto` on the actions group is a
+              property of the group itself, so it holds the right edge on
+              whichever line it lands on. */}
+          <div className="flex items-center gap-x-4 gap-y-2 flex-wrap min-w-0 w-full px-2.5 py-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <SyncFolderBreadcrumb
+                segments={breadcrumbSegments}
+                onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
+                className="mt-0 mb-0"
+              />
+              <DriveSharingHeaderMark
+                label={openDriveLabel}
+                displayName={openDriveDisplayName}
+                browsedSharedDrive={browsedSharedDrive}
+              />
+            </div>
+            <div className="flex items-center gap-3 flex-wrap ml-auto">
               {refreshButton}
               {actionButtons}
             </div>

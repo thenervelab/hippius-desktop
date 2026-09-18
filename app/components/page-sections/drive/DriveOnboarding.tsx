@@ -1,6 +1,13 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
+import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
+import {
+  createDriveInviteDialogAtom,
+  shareDriveModalAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -57,7 +64,7 @@ import {
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 
 interface DriveOnboardingProps {
   // Fired when a folder is added or a remote folder is synced. `newLabel`
@@ -71,16 +78,30 @@ interface DriveOnboardingProps {
   // When provided, clicking a REMOTE folder card opens it as a browsable
   // drive in the files view (server-only browsing — no local sync needed).
   onOpenRemoteFolder?: (label: string) => void;
+  /**
+   * Open a drive somebody shared with this account, without syncing it here.
+   * Browsing needs its WIRE identity, since no local row names it.
+   */
+  onOpenSharedDrive?: (identity: {
+    ownerSs58: string;
+    folderHash: string;
+    displayLabel: string;
+  }) => void;
 }
 
 const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSyncStarted,
   onSelectFolder,
   onOpenRemoteFolder,
+  onOpenSharedDrive,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const driveStatuses = useAtomValue(driveStatusesAtom);
+  const sharedDriveRoles = useSharedDriveRoles();
+  const sharedDrivesInPlan = useSharedDrivesInPlan();
+  const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
+  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -557,6 +578,19 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
 
   // One list, built from the two sources the page already loads.
   const folderRows = toFolderRows(syncFolders, remoteFolders);
+  // Own drives only: a member drive's sharing is described by the role
+  // badge, and asking the server for its members would be the owner's
+  // question, not ours.
+  const ownDriveSharing = useOwnedDriveSharing(
+    useMemo(
+      // Every OWN drive, local or cloud-only. Scoping this to local rows
+      // meant a drive synced only from another device -- which is most of
+      // them on a second machine -- never had its members counted, so the
+      // badge could not appear on the drives most likely to be shared.
+      () => folderRows.filter((r) => !r.ownerSs58).map((r) => r.folderName),
+      [folderRows],
+    ),
+  );
 
   // Opening a row: a local folder selects it, a remote one opens the
   // browsable server view. Both were row clicks before; they still are.
@@ -572,6 +606,23 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
 
   const buildRowActions = (row: FolderRow) =>
     buildFolderActions(row, {
+      planSupportsSharedDrives: sharedDrivesInPlan,
+      // A manager reaches the mint on a drive they do not own; the row's
+      // own `ownerSs58` cannot say which member drives those are.
+      role: sharedDriveRoles.get(row.folderName),
+      // Nothing to manage until a drive has been shared, so the first
+      // share goes straight to the mint. Once it has members or a live
+      // link the row offers Manage access, which opens the panel.
+      onShareDrive: (folder) =>
+        setInviteDialogTarget({
+          label: folder.folderName,
+          folderName: folder.folderName,
+        }),
+      onShareRemoteDrive: (folder) =>
+        setInviteDialogTarget({
+          label: folder.folderName,
+          folderName: folder.folderName,
+        }),
       onOpen: handleOpenRow,
       onPause: (folder) => setPauseDialog({ open: true, folder }),
       onResume: (folder) => void handleResumeSync(folder),
@@ -609,6 +660,14 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             headings; what they said now rides on each row as a cloud
             mark and a short label. */}
         <FolderList
+          rolesByLabel={sharedDriveRoles}
+          sharingByLabel={ownDriveSharing}
+          onManageAccess={(row) =>
+            setShareDriveTarget({
+              label: row.folderName,
+              folderName: row.folderName,
+            })
+          }
           rows={folderRows}
           isLoading={isLoading}
           headerAction={
@@ -677,6 +736,8 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             account. onDriveAdded routes the new label to the breadcrumb
             exactly like a freshly added local folder. */}
         <SharedWithMeSection
+          onOpenDrive={onOpenSharedDrive}
+          onManageAccess={setShareDriveTarget}
           onDriveAdded={(label) => {
             loadFolders();
             onSyncStarted(label);

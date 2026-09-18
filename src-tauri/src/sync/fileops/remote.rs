@@ -63,39 +63,126 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 /// "Decryption failed - wrong password?" and surfaces as "Failed to load
 /// remote files" in the browse-folder dialog (and the matching failure in
 /// `download_remote_file`).
-pub(crate) async fn encryption_key_for_label(
+/// Which drive an upload writes into.
+///
+/// Same rule as browsing: a drive shared with this account that is not synced
+/// here has no local row, and the lenient resolver answers with THIS
+/// account's namespace — writing into the wrong drive rather than failing. So
+/// the caller may name the wire identity, and half an identity is refused.
+pub(crate) async fn upload_target_identity(
     pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<DriveIdentity> {
+    match (owner_ss58, folder_hash) {
+        (Some(owner), Some(hash)) => shared_drive_identity(&owner, &hash),
+        (None, Some(_)) | (Some(_), None) => Err(AppError::Validation(
+            "Uploading to a shared drive needs both its owner and its folder hash.".into(),
+        )),
+        (None, None) => resolve_drive_identity_or_own(pool, account_id, label).await,
+    }
+}
+
+/// The folder mnemonic a drive's keys are derived from.
+///
+/// ONE source for both the encryption key and the manifest signing key. They
+/// were derived separately, and only the encryption path had a member branch:
+/// on a drive shared with this account, a remote upload encrypted with the
+/// OWNER's folder key and signed with one derived from this account's master.
+/// Two different keys for one file, and nothing local fails when they
+/// disagree.
+///
+/// Three sources, in order of what the drive actually is:
+///   - an OWN drive derives from this account's master;
+///   - a member drive synced here reads the owner-sealed `enc_mnemonic.json`;
+///   - a member drive never synced here opens this account's own grant, which
+///     carries the same key sealed to them.
+pub(crate) async fn folder_phrase_for_label(
+    state: &AppState,
+    account_id: &str,
+    label: &str,
+    mnemonic: &str,
+    identity: &DriveIdentity,
+) -> Result<zeroize::Zeroizing<String>> {
+    let pool = state.pool()?;
+    let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
+
+    if identity.is_member {
+        let folder_enc = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?.join("enc_mnemonic.json");
+        if folder_enc.exists() {
+            let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
+                .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
+            return Ok(zeroize::Zeroizing::new(folder.to_string()));
+        }
+
+        // Never synced here: the grant holds the same key, sealed to this
+        // account. Argon2id is offloaded inside `open_grant_entropy`.
+        let ctx = crate::shared_drives::commands::api_ctx_for(state).await?;
+        let entropy = crate::shared_drives::commands::open_grant_entropy_inner(state, &ctx, identity).await?;
+        let folder =
+            bip39::Mnemonic::from_entropy(entropy.as_ref()).map_err(|e| AppError::Crypto(format!("grant entropy is not a folder key: {e}")))?;
+        return Ok(zeroize::Zeroizing::new(folder.to_string()));
+    }
+
+    let master_path = master_mnemonic_path(account_id)?;
+    let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
+        .map_err(|e| AppError::Hcfs(format!("Failed to recover master mnemonic: {e}")))?
+        .to_string();
+    let phrase = hcfs_client::drive::keys::derive_folder_mnemonic(&master_mnemonic, label)
+        .map_err(|e| AppError::Crypto(format!("Failed to derive folder mnemonic: {e}")));
+    master_mnemonic.zeroize();
+    Ok(zeroize::Zeroizing::new(phrase?))
+}
+
+/// The 32-byte file-encryption key: the folder mnemonic's seed, first 32
+/// bytes — the tail of hcfs-client's `derive_encryption_key` chain, and what
+/// `Drive::unlock` derives from the same phrase.
+pub(crate) fn encryption_key_from_phrase(phrase: &str) -> Result<[u8; 32]> {
+    use std::str::FromStr;
+    let folder = bip39::Mnemonic::from_str(phrase).map_err(|e| AppError::Crypto(format!("Invalid folder mnemonic: {e}")))?;
+    let mut seed = folder.to_seed("");
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&seed[..32]);
+    seed.zeroize();
+    Ok(key)
+}
+
+/// The 32-byte file-encryption key for a drive.
+///
+/// Delegates to [`folder_phrase_for_label`] rather than deriving anything
+/// itself: it held a SECOND copy of the member branch, and that copy knew
+/// only about the sealed `enc_mnemonic.json`. A drive shared with this
+/// account and merely BROWSED has no local row and so no seal, which the
+/// copy reported as "has no local key material on this device" — so a Viewer
+/// could list a shared drive but neither download from it nor mint a share
+/// link, while an upload into the same drive worked, because the upload path
+/// had already moved onto the funnel and its grant fallback.
+///
+/// One derivation for both key uses is also what keeps a remote upload's
+/// encryption key and its manifest signing key in step; see the funnel's
+/// own docs.
+pub(crate) async fn encryption_key_for_label(
+    state: &AppState,
     account_id: &str,
     label: &str,
     mnemonic: &str,
     identity: &DriveIdentity,
 ) -> Result<[u8; 32]> {
+    let phrase = folder_phrase_for_label(state, account_id, label, mnemonic, identity).await?;
+    encryption_key_from_phrase(&phrase)
+}
+
+/// The OWN-drive half of that derivation, straight from hcfs-client's
+/// `derive_encryption_key`.
+///
+/// Exists for [`encryption_key_for_tests`] only: the live lane holds a pool
+/// and an own drive, not an `AppState`, and a member key genuinely needs one
+/// (the grant is fetched with the session's bearer). `the_two_own_drive_key_chains_agree`
+/// pins it against the funnel so the two cannot drift.
+async fn own_drive_encryption_key(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str) -> Result<[u8; 32]> {
     let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
-
-    // A member drive's folder key comes from the OWNER's invite, sealed into
-    // this drive's `enc_mnemonic.json` by `add_shared_drive` — it is NOT
-    // derivable from this account's master, so the master chain below would
-    // yield a key that decrypts nothing on the owner's drive. Mirror the tail
-    // of hcfs-client's `derive_encryption_key` chain instead
-    // (`folder_mnemonic → to_seed("")[..32]`), which is exactly what
-    // `Drive::unlock` derives from the same sealed file.
-    if identity.is_member {
-        let folder_enc = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?.join("enc_mnemonic.json");
-        if !folder_enc.exists() {
-            return Err(AppError::Validation(format!(
-                "Shared drive '{label}' has no local key material on this device — remove it and \
-                 re-add it from your shared drives."
-            )));
-        }
-        let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
-            .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
-        let mut seed = folder.to_seed("");
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&seed[..32]);
-        seed.zeroize();
-        return Ok(key);
-    }
-
     let master_path = master_mnemonic_path(account_id)?;
     let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
         .map_err(|e| AppError::Hcfs(format!("Failed to recover master mnemonic: {e}")))?
@@ -212,7 +299,8 @@ pub async fn encryption_key_for_tests(
     mnemonic: &str,
     identity: &DriveIdentity,
 ) -> Result<[u8; 32]> {
-    encryption_key_for_label(pool, account_id, label, mnemonic, identity).await
+    debug_assert!(!identity.is_member, "the live lane derives own-drive keys only");
+    own_drive_encryption_key(pool, account_id, label, mnemonic).await
 }
 
 pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, label: &str) -> Result<Vec<RemoteFileInfo>> {
@@ -224,7 +312,7 @@ pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, 
     // local row (the remote-folder browser) — that case keeps today's
     // own-drive derivation, while a member row yields the OWNER's wire pair.
     let identity = resolve_drive_identity_or_own(pool, account_id, label).await?;
-    let encryption_key = encryption_key_for_label(pool, account_id, label, &mnemonic, &identity).await?;
+    let encryption_key = encryption_key_for_label(state, account_id, label, &mnemonic, &identity).await?;
     let client = build_client(pool, account_id, &identity).await?;
 
     let access = hcfs_client::drive::remote::RemoteFileAccess {
@@ -258,7 +346,7 @@ pub async fn download_remote_file(
     let mnemonic = session_mnemonic(&state)?;
     // Lenient resolve, once per IPC — see list_remote_folder_files_inner.
     let identity = resolve_drive_identity_or_own(pool, &account_id, &label).await?;
-    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic, &identity).await?;
+    let encryption_key = encryption_key_for_label(&state, &account_id, &label, &mnemonic, &identity).await?;
     let client = build_client(pool, &account_id, &identity).await?;
 
     let progress_file_id = file_id.clone();
@@ -382,7 +470,7 @@ pub async fn cache_remote_file(
     let mnemonic = session_mnemonic(&state)?;
     // Lenient resolve, once per IPC — see list_remote_folder_files_inner.
     let identity = resolve_drive_identity_or_own(pool, &account_id, &label).await?;
-    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic, &identity).await?;
+    let encryption_key = encryption_key_for_label(&state, &account_id, &label, &mnemonic, &identity).await?;
     let client = build_client(pool, &account_id, &identity).await?;
 
     let part = unique_part_path(&cache_root, &cache_name);
@@ -575,7 +663,7 @@ pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &
     let mnemonic = session_mnemonic(state)?;
     // Lenient resolve, once per IPC — see list_remote_folder_files_inner.
     let identity = resolve_drive_identity_or_own(pool, account_id, label).await?;
-    let encryption_key = encryption_key_for_label(pool, account_id, label, &mnemonic, &identity).await?;
+    let encryption_key = encryption_key_for_label(state, account_id, label, &mnemonic, &identity).await?;
     let client = build_client(pool, account_id, &identity).await?;
     let access = hcfs_client::drive::remote::RemoteFileAccess {
         client: &client,
@@ -825,6 +913,8 @@ pub(crate) fn append_browse_page(
             file_count: f.file_count,
             uploaded_at: created_at,
             updated_at: created_at,
+            // A folder is not uploaded by anyone; its contents are.
+            uploaded_by: None,
         });
     }
     for f in page_files {
@@ -854,6 +944,10 @@ pub(crate) fn append_browse_page(
             file_count: 0,
             uploaded_at: f.created_at,
             updated_at: f.updated_at,
+            // The server has attributed uploads since the shared-drive work;
+            // an empty string is the same as absent and must not reach the UI
+            // as a blank "uploaded by".
+            uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
         });
     }
 }
@@ -946,6 +1040,26 @@ fn build_browse_url(
 /// `browse` does no client-side crypto (it is a GET and a JSON parse), which
 /// is what makes bypassing the client crate safe here rather than a
 /// shortcut. Same reasoning as `drive_summaries.rs`.
+/// The wire identity of a shared drive named by the caller.
+///
+/// `is_member` is TRUE by construction: this path exists for a drive owned by
+/// somebody else, and the flag is what keeps every downstream site from
+/// treating the pair as this account's own namespace.
+fn shared_drive_identity(owner_ss58: &str, folder_hash: &str) -> Result<DriveIdentity> {
+    let owner = owner_ss58.trim();
+    let hash = folder_hash.trim();
+    if owner.is_empty() || hash.is_empty() {
+        return Err(AppError::Validation(
+            "Browsing a shared drive needs both its owner and its folder hash.".into(),
+        ));
+    }
+    Ok(DriveIdentity {
+        wire_ss58: owner.to_string(),
+        wire_folder_hash: hash.to_string(),
+        is_member: true,
+    })
+}
+
 #[allow(clippy::too_many_arguments)] // mirrors BrowseQuery's own surface
 async fn browse_remote_page(
     state: &AppState,
@@ -1011,12 +1125,30 @@ pub async fn list_remote_folder_grouped(
     limit: Option<u32>,
     sort_by: Option<String>,
     sort_order: Option<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
 ) -> Result<RemoteGroupedPage> {
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
-    // Lenient resolver: the label usually names a server-only drive with no
-    // local row (that is the whole point of browsable remote folders).
-    let identity = resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+    // A drive shared with this account that is NOT synced here has no local
+    // row to resolve, so the caller names its wire identity directly. The
+    // server authorises `/browse` for a member of the named drive, and
+    // listing needs no folder key at all -- names and paths come back in
+    // plaintext, and the key is only wanted to open a file's contents.
+    let identity = match (owner_ss58, folder_hash) {
+        (Some(owner), Some(hash)) => shared_drive_identity(&owner, &hash)?,
+        // Exactly one half is a caller bug, and the lenient fallback below
+        // would resolve to THIS account's namespace -- browsing the wrong
+        // drive rather than failing. Fail closed, like `DriveIdentity` does.
+        (None, Some(_)) | (Some(_), None) => {
+            return Err(AppError::Validation(
+                "Browsing a shared drive needs both its owner and its folder hash.".into(),
+            ));
+        }
+        // Lenient resolver: the label usually names a server-only drive with
+        // no local row (that is the whole point of browsable remote folders).
+        (None, None) => resolve_drive_identity_or_own(pool, &account_id, &label).await?,
+    };
     let path = subfolder.trim_matches('/');
 
     // The FE picks the page size (scroll-driven lazy loading wants small
@@ -1054,6 +1186,27 @@ pub async fn list_remote_folder_grouped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shared drive browsed without syncing it resolves to the OWNER's
+    /// namespace, and says so. Without `is_member` every downstream site that
+    /// asks would treat the pair as this account's own drive.
+    #[test]
+    fn a_named_shared_drive_resolves_to_its_owner() {
+        let id = shared_drive_identity("5Owner", "abc123").expect("identity");
+        assert_eq!(id.wire_ss58, "5Owner");
+        assert_eq!(id.wire_folder_hash, "abc123");
+        assert!(id.is_member, "somebody else's drive is never own");
+    }
+
+    /// Half an identity must fail rather than fall back: the lenient resolver
+    /// would answer with THIS account's namespace, which browses the wrong
+    /// drive instead of failing.
+    #[test]
+    fn half_an_identity_is_refused_rather_than_guessed() {
+        assert!(shared_drive_identity("", "abc123").is_err());
+        assert!(shared_drive_identity("5Owner", "").is_err());
+        assert!(shared_drive_identity("  ", "  ").is_err());
+    }
 
     /// The whole point of issuing `/browse` ourselves. `hcfs_client::browse`
     /// builds `?path=&offset=&limit=` and stops, so a sort could only reorder
@@ -1174,6 +1327,61 @@ mod tests {
             // read the uploader.
             uploaded_by: None,
         }
+    }
+
+    /// The server attributes every upload it can; the desktop dropped the
+    /// field on the floor, so a shared drive could not say who put a file
+    /// there. Folders are never attributed, and an empty string is the
+    /// server's "unattributed", not a blank name to render.
+    #[test]
+    fn browse_page_carries_the_uploader_through() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        let attributed = hcfs_shared::network::RemoteFileEntry {
+            uploaded_by: Some("5Member".to_string()),
+            ..browse_file(Some("theirs.png"), None, 1, 10, 10)
+        };
+        let blank = hcfs_shared::network::RemoteFileEntry {
+            uploaded_by: Some(String::new()),
+            ..browse_file(Some("blank.png"), None, 1, 10, 10)
+        };
+        let unattributed = browse_file(Some("old.png"), None, 1, 10, 10);
+
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![BrowseFolderRow {
+                name: "sub".to_string(),
+                file_count: 1,
+                total_bytes: 1,
+                created_at: Some(10),
+            }],
+            vec![attributed, blank, unattributed],
+        );
+
+        assert_eq!(files[0].uploaded_by.as_deref(), Some("5Member"));
+        assert_eq!(files[1].uploaded_by, None, "an empty ss58 is unattributed, not a blank name");
+        assert_eq!(files[2].uploaded_by, None);
+        assert_eq!(folders[0].uploaded_by, None, "a folder is not uploaded by anyone");
+    }
+
+    /// Wire pin: `FileEntry` is serialized with no `rename_all`, so the FE
+    /// reads snake_case here. There is no codegen across IPC to catch a drift.
+    #[test]
+    fn file_entry_sends_the_uploader_as_snake_case() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            Vec::new(),
+            vec![hcfs_shared::network::RemoteFileEntry {
+                uploaded_by: Some("5Member".to_string()),
+                ..browse_file(Some("a.png"), None, 1, 10, 10)
+            }],
+        );
+        let json = serde_json::to_value(&files[0]).unwrap();
+        assert_eq!(json["uploaded_by"], "5Member");
     }
 
     /// The crux of the bug. The server has been sending `created_at` on folder
@@ -1445,7 +1653,9 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mk folder dir");
         hcfs_client::auth::save_encrypted_mnemonic(dir.join("enc_mnemonic.json"), owner_folder, PW).expect("seal folder key");
 
-        let key = encryption_key_for_label(&pool, ACCT, LABEL, "unused-session-mnemonic", &member_identity())
+        let state = AppState::new();
+        state.set_pool(pool);
+        let key = encryption_key_for_label(&state, ACCT, LABEL, "unused-session-mnemonic", &member_identity())
             .await
             .expect("member key derivation succeeds");
 
@@ -1459,16 +1669,23 @@ mod tests {
         );
     }
 
-    /// A member drive whose seal is missing has no local key path at all
-    /// (the grant blob is Task 4's territory) — surfaced as `Validation`,
-    /// not the FE-silenced `Auth`/`NotReady` kinds, and never a fallthrough
-    /// into the master-derivation branch.
+    /// A member drive whose seal is missing is a drive shared with this
+    /// account and merely BROWSED — never synced here, so there is no
+    /// `enc_mnemonic.json` to read. That is not an error: the key lives in
+    /// this account's own grant, and the funnel goes and fetches it.
+    ///
+    /// What must never happen is the fallthrough this test pins the absence
+    /// of — dropping into the master-derivation branch and handing back a key
+    /// derived from THIS account, which decrypts nothing on the owner's drive
+    /// and fails as corruption rather than as a refusal. With no session
+    /// account there is no grant to fetch, so the call errors; the assertion
+    /// is that it errors rather than returning the own-drive key.
     #[tokio::test]
     #[allow(
         clippy::await_holding_lock,
         reason = "HOME_LOCK is held across awaits to serialise the process-global $HOME override; current-thread test runtime, see test_helpers.rs"
     )]
-    async fn member_encryption_key_missing_seal_is_a_surfaced_validation_error() {
+    async fn a_member_drive_with_no_seal_reaches_for_the_grant_not_this_accounts_master() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
         unsafe {
@@ -1476,15 +1693,78 @@ mod tests {
         }
 
         const ACCT: &str = "5RemoteMemberKeyMissingSealAccount";
-        let pool = pool_with_plaintext_password(ACCT, "pw").await;
+        const LABEL: &str = "team";
+        const PW: &str = "pw";
+        let pool = pool_with_plaintext_password(ACCT, PW).await;
 
-        let err = encryption_key_for_label(&pool, ACCT, "team", "unused-session-mnemonic", &member_identity())
+        // A master seal that WOULD satisfy the own-drive branch, so a
+        // fallthrough returns a key instead of failing for want of one.
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let master_path = master_mnemonic_path(ACCT).expect("master path");
+        std::fs::create_dir_all(master_path.parent().expect("parent")).expect("mk config dir");
+        hcfs_client::auth::save_encrypted_mnemonic(&master_path, master, PW).expect("seal master");
+
+        // Proof that the fallthrough would have succeeded: the own-drive
+        // chain answers for this exact account and label.
+        own_drive_encryption_key(&pool, ACCT, LABEL, "unused-session-mnemonic")
             .await
-            .expect_err("missing seal must error");
+            .expect("own-drive derivation is available, so a fallthrough would return a key");
+
+        let state = AppState::new();
+        state.set_pool(pool);
+        let err = encryption_key_for_label(&state, ACCT, LABEL, "unused-session-mnemonic", &member_identity())
+            .await
+            .expect_err("a member drive must not fall through to this account's master");
         assert!(
-            matches!(err, AppError::Validation(_)),
-            "missing member seal must surface as Validation, got {err:?}"
+            matches!(err, AppError::Auth(_)),
+            "with no session the grant cannot be fetched, so the failure is the session's, got {err:?}"
         );
+    }
+
+    /// The live lane's `encryption_key_for_tests` derives an own-drive key
+    /// straight from hcfs-client, while every in-app caller goes through the
+    /// folder-phrase funnel. Collapsing the member branches left those two
+    /// own-drive chains side by side, so pin that they agree: a drift makes
+    /// the live lane upload under one key and the app read under another.
+    #[tokio::test]
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "HOME_LOCK is held across awaits to serialise the process-global $HOME override; current-thread test runtime, see test_helpers.rs"
+    )]
+    async fn the_two_own_drive_key_chains_agree() {
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        const ACCT: &str = "5RemoteOwnDriveKeyChainAccount";
+        const LABEL: &str = "chains";
+        const PW: &str = "pw";
+        let pool = pool_with_plaintext_password(ACCT, PW).await;
+
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let master_path = master_mnemonic_path(ACCT).expect("master path");
+        std::fs::create_dir_all(master_path.parent().expect("parent")).expect("mk config dir");
+        hcfs_client::auth::save_encrypted_mnemonic(&master_path, master, PW).expect("seal master");
+
+        let direct = own_drive_encryption_key(&pool, ACCT, LABEL, "unused-session-mnemonic")
+            .await
+            .expect("own-drive chain");
+
+        let state = AppState::new();
+        state.set_pool(pool);
+        let via_funnel = encryption_key_for_label(
+            &state,
+            ACCT,
+            LABEL,
+            "unused-session-mnemonic",
+            &DriveIdentity::own(ACCT, &hcfs_client::drive::keys::folder_hash(LABEL)),
+        )
+        .await
+        .expect("funnel");
+
+        assert_eq!(direct, via_funnel, "the funnel and the live lane must derive one own-drive key");
     }
 
     #[test]

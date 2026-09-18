@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
@@ -80,5 +83,29 @@ describe("the Drive breakdown card", () => {
 
     fireEvent.click(screen.getByText("Upload sources"));
     expect(screen.getByText(/Couldn't load this breakdown/)).toBeInTheDocument();
+  });
+});
+
+// "(before tracking)" is true of an upload SOURCE and not of a file TYPE.
+// A file's type is read from the file and has always been known; "Others"
+// there is audio, archives, code and the server's catch-all. Carrying the
+// caveat across made the card explain a limitation it does not have.
+describe("the before-tracking caveat", () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "../DriveBreakdownCard.tsx"),
+    "utf8",
+  );
+
+  it("is not attached to any file-type slice", () => {
+    const types = source.slice(
+      source.indexOf("typeSlices"),
+      source.indexOf("sourceSlices"),
+    );
+    expect(types).not.toMatch(/note:\s*["'`]\(before tracking\)/);
+  });
+
+  it("stays on the upload-source slice, where it is true", () => {
+    const sources = source.slice(source.indexOf("sourceSlices"));
+    expect(sources).toMatch(/note:\s*["'`]\(before tracking\)/);
   });
 });

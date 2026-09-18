@@ -11,6 +11,13 @@ import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
+// These tests are about REACHABILITY given the feature is on -- whether a
+// handler is wired, whether the row is own or member. The lane the flag
+// happens to be gated to is a separate decision, pinned in
+// `buildChannel.test.ts`; without this mock these tests silently become
+// assertions about the release lane and fail the moment it changes.
+vi.mock("@/app/lib/featureFlags", () => ({ SHARED_DRIVES_ENABLED: true }));
+
 const localRow = (over: Partial<SyncFolder> = {}): FolderRow => {
   const folder: SyncFolder = {
     id: "drive-1",
@@ -174,3 +181,40 @@ describe("a menu click stays in the menu", () => {
   });
 });
 
+describe("Share drive reachability", () => {
+  // The item was gated on a handler no call site ever passed, so it could
+  // never appear -- the whole feature was unreachable from the folder list.
+  it("offers Share drive on an own local drive when a handler is wired", () => {
+    const items = buildFolderActions(localRow(), {
+      onShareDrive: vi.fn(),
+      planSupportsSharedDrives: true,
+    });
+    expect(items.map((i) => i.itemTitle)).toContain("Share drive…");
+  });
+
+  // A drive owned on the server but not synced HERE -- synced from another
+  // machine, or never synced locally. Sharing needs no local row.
+  it("offers Share drive on a cloud-only drive this account owns", () => {
+    const items = buildFolderActions(remoteRow(), {
+      onShareRemoteDrive: vi.fn(),
+      planSupportsSharedDrives: true,
+    });
+    expect(items.map((i) => i.itemTitle)).toContain("Share drive…");
+  });
+
+  // Hiding it hid the feature's existence from exactly the people who would
+  // pay for it. The mint dialog turns an unentitled plan into an upgrade
+  // prompt that names the plans, so the control stays reachable.
+  it("still offers it on either row when the plan does not include shared drives", () => {
+    const local = buildFolderActions(localRow(), {
+      onShareDrive: vi.fn(),
+      planSupportsSharedDrives: false,
+    });
+    const remote = buildFolderActions(remoteRow(), {
+      onShareRemoteDrive: vi.fn(),
+      planSupportsSharedDrives: false,
+    });
+    expect(local.map((i) => i.itemTitle)).toContain("Share drive…");
+    expect(remote.map((i) => i.itemTitle)).toContain("Share drive…");
+  });
+});
