@@ -15,6 +15,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+### Changed
+
+- **Search starts at three characters.** In the sidebar search and when searching a
+  folder that is not synced to this device, one or two letters now show "Type at
+  least 3 characters" instead of a misleading "no results".
+
 ## [0.6.3] - 2026-09-17
 
 ### Added
