@@ -25,6 +25,10 @@ import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatUploadedDate } from "@/app/lib/utils/formatUploadedDate";
+import {
+  isSearchTermTooShort,
+  SEARCH_TERM_TOO_SHORT_HINT,
+} from "@/app/lib/utils/searchTerm";
 import { getSidebarSearchView } from "./sidebarSearchState";
 
 // The palette is a screen-centered overlay (ClickUp-style command bar)
@@ -113,11 +117,12 @@ const SidebarSearchModal: FC<SidebarSearchModalProps> = ({
 
   const trimmed = value.trim();
   const hasQuery = trimmed.length > 0;
+  const queryTooShort = isSearchTermTooShort(value);
 
   const { data: results, isFetching } = useGlobalFileSearch({
     accountId,
     searchTerm: value,
-    enabled: hasQuery,
+    enabled: hasQuery && !queryTooShort,
   });
 
   // "Last uploads" — account-wide recent uploads from the HCFS server's
@@ -133,6 +138,7 @@ const SidebarSearchModal: FC<SidebarSearchModalProps> = ({
 
   const view = getSidebarSearchView({
     hasQuery,
+    queryTooShort,
     isFetching,
     resultCount: results.length,
     recentLoading,
@@ -284,6 +290,13 @@ const SidebarSearchModal: FC<SidebarSearchModalProps> = ({
             Array.from({ length: SKELETON_ROW_COUNT }).map((_, index) => (
               <SkeletonRow key={`sidebar-search-skel-${index}`} index={index} />
             ))}
+
+          {view === "query-too-short" && (
+            <EmptyState
+              title="Keep typing"
+              description={SEARCH_TERM_TOO_SHORT_HINT}
+            />
+          )}
 
           {view === "no-results" && (
             <EmptyState

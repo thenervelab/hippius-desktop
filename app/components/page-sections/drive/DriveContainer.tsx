@@ -38,6 +38,7 @@ import {
   filterCriteriaAreActive,
   isDriveFolderListView,
   isNestedFolderView,
+  shouldHintSearchTermTooShort,
   shouldUseDriveScopedSearch,
   shouldUseRecursiveSearch,
 } from "@/lib/utils/filesViewMode";
@@ -674,6 +675,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     isRemoteView,
     remoteLabel: remoteUploadLabel,
     isRecentFiles: Boolean(isRecentFiles),
+  });
+  const searchTermTooShort = shouldHintSearchTermTooShort({
+    usesDriveScopedSearch: useRemoteSearch,
+    searchTerm,
+    fileExtension: filterState.fileExtension,
   });
   const { data: remoteSearchResults, isFetching: isRemoteSearching } =
     useDriveScopedSearch({
@@ -1804,6 +1810,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 // not also be sliced by it.
                 displayedData={browsePageRows ?? visibleData}
                 searchTerm={searchTerm}
+                searchTermTooShort={searchTermTooShort}
                 activeFilters={activeFilters}
                 viewMode={viewMode}
                 error={error}

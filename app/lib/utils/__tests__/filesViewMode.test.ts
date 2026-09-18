@@ -3,6 +3,7 @@ import {
   filterCriteriaAreActive,
   isDriveFolderListView,
   isNestedFolderView,
+  shouldHintSearchTermTooShort,
   shouldRunInMemoryFilter,
   shouldUseDriveScopedSearch,
   shouldUseRecursiveSearch,
@@ -96,6 +97,41 @@ describe("shouldUseDriveScopedSearch", () => {
 
   it("never fires on Recent Files, which is not one drive", () => {
     expect(shouldUseDriveScopedSearch({ ...base, isRecentFiles: true })).toBe(false);
+  });
+});
+
+describe("shouldHintSearchTermTooShort", () => {
+  const base = { usesDriveScopedSearch: true, searchTerm: "ab" };
+
+  // The server answers a 1-2 character term with an empty page, so without
+  // the hint a short term reads as "this drive has no such file".
+  it("asks for more characters on a server-searched drive", () => {
+    expect(shouldHintSearchTermTooShort(base)).toBe(true);
+    expect(shouldHintSearchTermTooShort({ ...base, searchTerm: " a " })).toBe(true);
+  });
+
+  it("stops once the term reaches the minimum", () => {
+    expect(shouldHintSearchTermTooShort({ ...base, searchTerm: "abc" })).toBe(false);
+  });
+
+  it("stays quiet with nothing typed", () => {
+    expect(shouldHintSearchTermTooShort({ ...base, searchTerm: "  " })).toBe(false);
+    expect(shouldHintSearchTermTooShort({ ...base, searchTerm: undefined })).toBe(false);
+  });
+
+  // A local search has no minimum: "ab" is a real query there.
+  it("never applies to a drive searched on local disk", () => {
+    expect(
+      shouldHintSearchTermTooShort({ ...base, usesDriveScopedSearch: false }),
+    ).toBe(false);
+  });
+
+  // The search still runs on the extension alone, so an empty list then
+  // means the FILTER matched nothing, which the hint would misreport.
+  it("defers to an extension filter", () => {
+    expect(
+      shouldHintSearchTermTooShort({ ...base, fileExtension: "pdf" }),
+    ).toBe(false);
   });
 });
 
