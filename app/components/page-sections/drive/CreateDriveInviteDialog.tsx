@@ -118,7 +118,14 @@ export default function CreateDriveInviteDialog() {
       onClose={() => setTarget(null)}
       title={`Invite to "${target.folderName}"`}
       icon={<Icons.Link className="size-4 text-white" />}
-      maxWidth="max-w-[460px]"
+      // The canonical decision-dialog recipe (ConfirmationDialog,
+      // DeleteConfirmationDialog): a 585px card with a 405px content column
+      // inside it. FramedDialog's ring + border + card padding eats ~104px a
+      // side on `sm+`, so a narrower card crushes the column, and letting the
+      // column run the card's full width leaves two selects and two stacked
+      // buttons stretched across 585px with nothing in them.
+      maxWidth="max-w-[585px]"
+      contentClassName="sm:w-[405px]"
     >
       <div className="font-geist">
         <InviteTab

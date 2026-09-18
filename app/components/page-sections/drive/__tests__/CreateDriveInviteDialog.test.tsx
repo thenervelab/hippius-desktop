@@ -9,6 +9,9 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import type { ReactNode } from "react";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import CreateDriveInviteDialog from "../CreateDriveInviteDialog";
 import { createDriveInviteDialogAtom } from "@/app/lib/global-atoms/sharesAtoms";
@@ -221,5 +224,33 @@ describe("create invite dialog", () => {
 
     expect(screen.getByText(/join this drive as Viewer/i)).toBeInTheDocument();
     expect(screen.getByText(/Can open and download files/i)).toBeInTheDocument();
+  });
+});
+
+// The dialog's own width, read off the source rather than measured — jsdom
+// has no layout, so the classes are the only thing there is to assert.
+describe("the invite dialog's frame", () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "../CreateDriveInviteDialog.tsx"),
+    "utf8",
+  );
+
+  // A 585px card with a 405px column inside it is the recipe every
+  // decision-shaped dialog in the app uses. FramedDialog's ring, border and
+  // card padding cost ~104px a side on `sm+`, so both halves matter: a
+  // narrower card crushes the column, and a column left to run the card's
+  // full width strands two selects and two stacked buttons across 585px.
+  it("uses the shared decision-dialog card and column widths", () => {
+    expect(source).toContain('maxWidth="max-w-[585px]"');
+    expect(source).toContain('contentClassName="sm:w-[405px]"');
+  });
+
+  it("matches the widths ConfirmationDialog defaults to", () => {
+    const confirmation = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../../../ConfirmationDialog.tsx"),
+      "utf8",
+    );
+    expect(confirmation).toContain('maxWidth = "max-w-[585px]"');
+    expect(confirmation).toContain('contentClassName = "sm:w-[405px]"');
   });
 });
