@@ -27,7 +27,7 @@ The `HIPPIUS_CONSOLE_BASE_URL` runtime override is honored in dev builds and **s
 
 ## Shared drives (cross-account member drives)
 
-An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI dark behind `SHARED_DRIVES_ENABLED = false` (`app/lib/featureFlags.ts`). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
+An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI gated on `SHARED_DRIVES_ENABLED` (`app/lib/featureFlags.ts`), now `true` on every lane. A SECOND gate sits in front of it: `planSupportsSharedDrives` (a DENYLIST — Starter and free are out, an unrecognised plan is in, because hiding a perk somebody bought is worse than a surface the server refuses with an upgrade prompt). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
 
 ### DriveIdentity resolver — the local label is decoupled from the wire identity
 
