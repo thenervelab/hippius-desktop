@@ -10,6 +10,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAtom } from "jotai";
+import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { createDriveInviteDialogAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import {
   createDriveInvite,
   isSharedDrivesNotEntitled,
@@ -48,6 +50,7 @@ const secondaryButtonClass =
 
 export default function CreateDriveInviteDialog() {
   const [target, setTarget] = useAtom(createDriveInviteDialogAtom);
+  const queryClient = useQueryClient();
   const [invite, setInvite] = useState<InviteState>({ kind: "choosing" });
   const [ttlSecs, setTtlSecs] = useState<number>(DEFAULT_INVITE_TTL_SECS);
   // `writer` is what every build before the picker minted, so the default
@@ -87,6 +90,9 @@ export default function CreateDriveInviteDialog() {
       });
       if (labelAtCall !== currentLabelRef.current) return;
       setInvite({ kind: "done", inviteUrl: link.inviteUrl });
+      // The drive is shared from this moment: its row grows the badge and
+      // Manage access as soon as the dialog closes, not on the next launch.
+      void invalidateOwnedDriveSharing(queryClient);
     } catch (err) {
       if (labelAtCall !== currentLabelRef.current) return;
       if (isSharedDrivesUnavailable(err)) {
@@ -97,7 +103,7 @@ export default function CreateDriveInviteDialog() {
         setInvite({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [label, ttlSecs, inviteRole]);
+  }, [label, ttlSecs, inviteRole, queryClient]);
 
   useEffect(() => {
     if (invite.kind !== "done" || autoCopiedRef.current) return;

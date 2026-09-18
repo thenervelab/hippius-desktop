@@ -1,12 +1,8 @@
 // Typed wrappers around the Rust shared-drive IPC commands.
 //
 // The Rust source of truth lives at `src-tauri/src/shared_drives/`.
-// `create_drive_invite`, `list_drive_members`, `remove_drive_member`,
-// `change_drive_member_role`, `list_my_drive_memberships`,
-// `leave_shared_drive`, and `add_shared_drive` are the seven commands; this
-// file is the only place in the FE that talks to
-// them (the `shares.ts` convention), so swapping the wire shape is a
-// one-file change.
+// This file is the only place in the FE that talks to those commands (the
+// `shares.ts` convention), so swapping the wire shape is a one-file change.
 //
 // Feature-off servers: the shared-drive routes are mounted only under
 // `HCFS_FEATURE_SHARED_DRIVES=1`; against a feature-off server the backend
@@ -147,6 +143,35 @@ export async function listDriveInvites(
   label: string,
 ): Promise<DriveInviteInfo[]> {
   return invoke<DriveInviteInfo[]>("list_drive_invites", { label });
+}
+
+/**
+ * What one drive row needs to know about its own sharing, folded in Rust.
+ * See `shared_drives/commands.rs::fold_drive_sharing` for the rule.
+ */
+export interface DriveSharingSummary {
+  label: string;
+  /** People who have joined. */
+  memberCount: number;
+  /** Invite links that can still admit someone. */
+  liveInviteCount: number;
+  /** Every invite the server still lists, expired and revoked included. */
+  totalInviteCount: number;
+}
+
+/**
+ * Sharing state for every OWN drive in `labels`, in one round-trip.
+ *
+ * A drive whose listings both failed is ABSENT from the result rather than
+ * failing the call, and a label that is not an own drive is skipped; the
+ * caller treats absence as "unknown", never as "not shared".
+ */
+export async function listOwnedDriveSharing(
+  labels: readonly string[],
+): Promise<DriveSharingSummary[]> {
+  return invoke<DriveSharingSummary[]>("list_owned_drive_sharing", {
+    labels: [...labels],
+  });
 }
 
 /**

@@ -28,12 +28,14 @@ import { AnimatePresence, motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
 import { useAtom, useSetAtom } from "jotai";
+import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui";
 import { Select } from "@/components/ui/select/Select";
 import { useBreakpoint } from "@/app/lib/hooks";
+import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
@@ -79,6 +81,7 @@ type Tab = "members" | "links";
 
 export default function ShareDrivePanel() {
   const [target, setTarget] = useAtom(shareDriveModalAtom);
+  const queryClient = useQueryClient();
   const { isDesktop, isLargeDesktop } = useBreakpoint();
 
   const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
@@ -146,13 +149,14 @@ export default function ShareDrivePanel() {
       try {
         await revokeDriveInvite(labelAtCall, inviteId);
         toast.success("Link revoked");
+        void invalidateOwnedDriveSharing(queryClient);
         await loadInvites(labelAtCall);
       } catch (err) {
         if (labelAtCall !== currentLabelRef.current) return;
         toast.error(`Could not revoke the link: ${errorMessage(err)}`);
       }
     },
-    [label, loadInvites],
+    [label, loadInvites, queryClient],
   );
 
   // Same lazy rule as members: the tab pays for its own listing.
@@ -180,6 +184,7 @@ export default function ShareDrivePanel() {
       try {
         await removeDriveMember(labelAtCall, memberSs58);
         toast.success("Member removed");
+        void invalidateOwnedDriveSharing(queryClient);
         await loadMembers(labelAtCall);
       } catch (err) {
         if (labelAtCall !== currentLabelRef.current) return;
@@ -190,7 +195,7 @@ export default function ShareDrivePanel() {
         }
       }
     },
-    [label, loadMembers],
+    [label, loadMembers, queryClient],
   );
 
   const changeRole = useCallback(
@@ -202,6 +207,7 @@ export default function ShareDrivePanel() {
         // The new role binds on the member's next request, so there is no
         // propagation delay to caveat.
         toast.success(`Role changed to ${driveRoleLabel(role)}`);
+        void invalidateOwnedDriveSharing(queryClient);
         await loadMembers(labelAtCall);
       } catch (err) {
         if (labelAtCall !== currentLabelRef.current) return;
@@ -215,7 +221,7 @@ export default function ShareDrivePanel() {
         }
       }
     },
-    [label, loadMembers],
+    [label, loadMembers, queryClient],
   );
 
   const onClose = () => setTarget(null);

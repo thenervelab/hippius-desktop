@@ -17,14 +17,13 @@
 //! hide the surface (matching the `subkind` EXPLICITLY — see the variant's
 //! docs) instead of erroring.
 //!
-//! **Invite revocation is deliberately NOT surfaced in v1**: the server's
-//! `DELETE /v1/drive-invites/{token}` takes the PLAINTEXT token, which exists
-//! only in the mint response (the server stores its blake3 hash and exposes
-//! no list-invites endpoint). The desktop deliberately never persists minted
-//! tokens — a stored token is a stored drive-access capability — so after the
-//! mint dialog closes there is nothing an owner could select to revoke.
-//! Owners revoke ACCESS by removing members; unclaimed links die by expiry /
-//! max-uses. A revoke IPC would need a server-side invite listing first.
+//! **Invite revocation goes through the invite id, never the token.** The
+//! desktop deliberately never persists a minted token — a stored token is a
+//! stored drive-access capability — so `list_drive_invites` reports the
+//! server's own rows (id, role, expiry, use count, validity) and
+//! `revoke_drive_invite` kills one by id. Removing a member is the other half
+//! and answers a different question: it revokes someone who already joined,
+//! not a link still circulating.
 //!
 //! **Secret hygiene**: the invite token and the folder-mnemonic entropy are
 //! drive-access capabilities. Neither may be logged, and neither crosses IPC
@@ -38,7 +37,7 @@ use base64::Engine;
 use hcfs_shared::network::{CreateDriveInviteRequest, CreateDriveInviteResponse, DriveMembersResponse, DriveMembershipsResponse};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 /// Bound on every shared-drive HTTP call (the `recent_uploads` precedent —
@@ -826,6 +825,111 @@ pub async fn list_drive_invites(app: tauri::AppHandle, label: String) -> Result<
     Ok(invites)
 }
 
+/// What one drive row needs to know about its own sharing.
+///
+/// Folded HERE rather than in the renderer because the fold encodes a rule —
+/// see [`fold_drive_sharing`] — and because two surfaces read it (the drive
+/// page's folder list and the settings sync manager), which is exactly how
+/// two copies of a rule come to disagree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveSharingSummary {
+    pub label: String,
+    pub member_count: u32,
+    /// Invite links that can still admit someone.
+    pub live_invite_count: u32,
+    /// Every invite the server still lists, expired and revoked included.
+    ///
+    /// The badge keys on this rather than on live links alone: an owner who
+    /// shared a drive last week and whose link has since lapsed still shared
+    /// it, and would not understand a row identical to one they never touched.
+    pub total_invite_count: u32,
+}
+
+/// Fold one drive's two listings into what its row needs.
+///
+/// `None` for either argument means that listing FAILED, which is not the same
+/// as it being empty. A drive whose listings both failed is omitted from the
+/// result entirely: knowing nothing about a drive is not knowing it is
+/// private, and a row rendered "not shared" off a failed request is a
+/// confident wrong answer. One listing succeeding is enough — `/invites` is a
+/// newer route than `/members`, so a server that serves one and not the other
+/// must still describe the half it can.
+///
+/// Pure, so the rule is testable without a server.
+fn fold_drive_sharing(label: &str, member_count: Option<usize>, invites: Option<&[DriveInviteInfo]>) -> Option<DriveSharingSummary> {
+    if member_count.is_none() && invites.is_none() {
+        return None;
+    }
+    Some(DriveSharingSummary {
+        label: label.to_string(),
+        member_count: member_count.unwrap_or(0) as u32,
+        live_invite_count: invites.map_or(0, |i| i.iter().filter(|i| i.valid && !i.revoked).count()) as u32,
+        total_invite_count: invites.map_or(0, <[_]>::len) as u32,
+    })
+}
+
+/// Sharing state for every OWN drive named in `labels`, in one call.
+///
+/// The drive list needs this for each row at once, and there is no bulk
+/// "drives I have shared" endpoint — members and invites are both per drive,
+/// and `/v1/drive-memberships` answers the opposite question. Fanning out from
+/// the renderer meant 2N IPC round-trips whose results had to be reassembled
+/// there; doing it here is one round-trip, concurrent over the network, with
+/// the fold applied once.
+///
+/// A drive that fails entirely is ABSENT from the result rather than failing
+/// the call: one unreachable drive must not blank the badge on eleven others.
+/// A label that is not an own drive is skipped for the same reason — the
+/// caller filters member drives out already, and a stale label mid-refresh
+/// should not error the set.
+#[tauri::command]
+pub async fn list_owned_drive_sharing(app: tauri::AppHandle, labels: Vec<String>) -> Result<Vec<DriveSharingSummary>> {
+    if labels.is_empty() {
+        return Ok(Vec::new());
+    }
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let pool = state.pool()?;
+    let http = state.api_client.clone();
+
+    let summaries = futures_util::future::join_all(labels.iter().map(|label| {
+        let http = http.clone();
+        let ctx = &ctx;
+        async move {
+            let identity = resolve_own_drive(pool, &ctx.account_id, label).await.ok()?;
+            // Both listings are asked independently and neither is allowed to
+            // discard the other's answer.
+            let (members, invites) = futures_util::future::join(
+                http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash),
+                http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash),
+            )
+            .await;
+
+            for err in [members.as_ref().err(), invites.as_ref().err()].into_iter().flatten() {
+                debug!(label = %label, error = %err, "Drive sharing listing failed");
+            }
+            fold_drive_sharing(label, members.ok().map(|m| m.members.len()), invites.as_deref().ok())
+        }
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    // One line for the set rather than one per drive: this runs for every
+    // drive on the account whenever the list refreshes, and a per-drive line
+    // would crowd the support bundle. The count is what answers "did the
+    // badge have data to draw".
+    info!(
+        asked = labels.len(),
+        answered = summaries.len(),
+        shared = summaries.iter().filter(|s| s.member_count > 0 || s.total_invite_count > 0).count(),
+        "Listed owned drive sharing"
+    );
+    Ok(summaries)
+}
+
 /// Revoke one invite for a drive this account owns.
 ///
 /// Until this existed, a minted link could not be killed at all: the desktop
@@ -1226,6 +1330,83 @@ mod tests {
             json["localLabel"],
             serde_json::Value::Null,
             "an unsynced row serializes localLabel as null"
+        );
+    }
+
+    fn invite(valid: bool, revoked: bool) -> DriveInviteInfo {
+        DriveInviteInfo {
+            invite_id: "i".into(),
+            role: "writer".into(),
+            expires_at: String::new(),
+            max_uses: 1,
+            use_count: 0,
+            revoked,
+            valid,
+            created_at: String::new(),
+        }
+    }
+
+    // The fold that decides whether a drive row carries the badge. Each case
+    // is one way the row was wrong before it lived here.
+    #[test]
+    fn fold_counts_members_and_splits_live_from_total_invites() {
+        let invites = [invite(true, false), invite(false, false), invite(false, true)];
+        let s = fold_drive_sharing("team", Some(2), Some(&invites)).expect("answered");
+        assert_eq!(s.label, "team");
+        assert_eq!(s.member_count, 2);
+        assert_eq!(s.live_invite_count, 1, "expired and revoked links do not admit anyone");
+        assert_eq!(s.total_invite_count, 3, "but they still count as having shared the drive");
+    }
+
+    // `/invites` is newer than `/members`: a server carrying only the older
+    // route must still describe the members it can see.
+    #[test]
+    fn fold_keeps_members_when_the_invite_listing_failed() {
+        let s = fold_drive_sharing("team", Some(2), None).expect("answered");
+        assert_eq!(s.member_count, 2);
+        assert_eq!(s.live_invite_count, 0);
+        assert_eq!(s.total_invite_count, 0);
+    }
+
+    #[test]
+    fn fold_keeps_invites_when_the_member_listing_failed() {
+        let invites = [invite(true, false)];
+        let s = fold_drive_sharing("team", None, Some(&invites)).expect("answered");
+        assert_eq!(s.member_count, 0);
+        assert_eq!(s.total_invite_count, 1);
+    }
+
+    // Knowing nothing is not knowing the drive is private: an omitted drive
+    // draws no badge AND no "not shared" claim.
+    #[test]
+    fn fold_omits_a_drive_when_both_listings_failed() {
+        assert_eq!(fold_drive_sharing("team", None, None), None);
+    }
+
+    #[test]
+    fn fold_reports_an_unshared_drive_as_answered_with_zeros() {
+        let s = fold_drive_sharing("team", Some(0), Some(&[])).expect("answered");
+        assert_eq!((s.member_count, s.live_invite_count, s.total_invite_count), (0, 0, 0));
+    }
+
+    // Wire pin: `useOwnedDriveSharing` reads these names and there is no
+    // codegen across IPC to catch a rename.
+    #[test]
+    fn drive_sharing_summary_wire_keys_are_camel_case() {
+        let json = serde_json::to_value(DriveSharingSummary {
+            label: "team".into(),
+            member_count: 1,
+            live_invite_count: 2,
+            total_invite_count: 3,
+        })
+        .unwrap();
+        let keys = json.as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            ["label", "liveInviteCount", "memberCount", "totalInviteCount"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
         );
     }
 }

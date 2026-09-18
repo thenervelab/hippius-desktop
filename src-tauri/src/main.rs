@@ -439,13 +439,13 @@ fn main() {
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
-            // Shared drives (owner invites/members + member add/leave). No
-            // revoke-invite IPC in v1 — see shared_drives::commands docs.
+            // Shared drives (owner invites/members + member add/leave).
             crate::shared_drives::commands::create_drive_invite,
             crate::shared_drives::commands::list_drive_members,
             crate::shared_drives::commands::remove_drive_member,
             crate::shared_drives::commands::change_drive_member_role,
             crate::shared_drives::commands::list_drive_invites,
+            crate::shared_drives::commands::list_owned_drive_sharing,
             crate::shared_drives::commands::revoke_drive_invite,
             crate::shared_drives::commands::list_my_drive_memberships,
             crate::shared_drives::commands::leave_shared_drive,

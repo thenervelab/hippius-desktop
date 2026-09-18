@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -104,7 +105,13 @@ function installClipboard() {
 function renderModal(target: { label: string; folderName: string } | null = { label: "team-docs", folderName: "team-docs" }) {
   const store = createStore();
   store.set(createDriveInviteDialogAtom, target);
-  return render(<Provider store={store}>{(<CreateDriveInviteDialog />) as ReactNode}</Provider>);
+  // The surface invalidates the drive list's sharing query on a mutation,
+  // so it reads the query client.
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <Provider store={store}>{(<CreateDriveInviteDialog />) as ReactNode}</Provider>
+    </QueryClientProvider>,
+  );
 }
 
 beforeEach(() => {
