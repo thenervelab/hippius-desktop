@@ -1271,10 +1271,29 @@ pub struct SharedDriveStats {
     pub updated_at: i64,
 }
 
+/// The payload inside the server's envelope.
+///
+/// `folders` is NOT `#[serde(default)]`: every HCFS response is wrapped in
+/// `NetworkResponse`, so a body parsed at the wrong level carries no
+/// `folders` key at all -- and a default turned that into "this owner shares
+/// nothing", indistinguishable from an empty account and reporting no error.
+/// Without the default, the wrong level fails loudly instead.
 #[derive(Deserialize)]
 struct ListFoldersResult {
-    #[serde(default)]
     folders: Vec<hcfs_shared::network::RemoteFolderInfo>,
+}
+
+/// Read a `/list_folders` body through the envelope every HCFS response
+/// carries. Split out so the unwrapping is testable without a server: it is
+/// the one thing about this endpoint that went wrong.
+fn parse_list_folders(body: &str) -> Result<Vec<hcfs_shared::network::RemoteFolderInfo>> {
+    let parsed: hcfs_shared::network::NetworkResponse<ListFoldersResult> =
+        serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("list-folders response did not parse: {e}")))?;
+    match parsed {
+        hcfs_shared::network::NetworkResponse::Success(result) => Ok(result.folders),
+        hcfs_shared::network::NetworkResponse::Error(err) => Err(AppError::Hcfs(format!("list-folders failed: {} ({})", err.message, err.error))),
+        hcfs_shared::network::NetworkResponse::Conflict(_) => Err(AppError::Hcfs("list-folders answered with a conflict".into())),
+    }
 }
 
 /// `GET /list_folders/{owner}` — the owner's drives, filtered by the server to
@@ -1298,8 +1317,7 @@ async fn http_list_owner_folders(
     if !status.is_success() {
         return Err(classify_error_status(status, &body));
     }
-    let parsed: ListFoldersResult = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("list-folders response did not parse: {e}")))?;
-    Ok(parsed.folders)
+    parse_list_folders(&body)
 }
 
 /// Stats for every drive shared with this account by one of `owners`.
@@ -1340,7 +1358,12 @@ pub async fn list_shared_drive_stats(app: tauri::AppHandle, owners: Vec<String>)
                     })
                     .collect::<Vec<_>>(),
                 Err(e) => {
-                    debug!(owner = %owner, error = %e, "Owner folder listing failed; their drives stay unknown");
+                    // WARN, not debug: the default filter drops debug, and a
+                    // failure here renders as a row with no figures --
+                    // identical on screen to an owner who shares nothing.
+                    // That is the shape that hid this endpoint's envelope
+                    // bug, so it has to reach the log a user can send.
+                    warn!(owner = %owner, error = %e, "Owner folder listing failed; their drives stay unknown");
                     Vec::new()
                 }
             }
@@ -1869,6 +1892,52 @@ mod tests {
                 "half an identity must fail rather than resolve the label"
             );
         }
+    }
+
+    /// The bug: every HCFS response is wrapped in `NetworkResponse`, and this
+    /// body was parsed straight into the result. No `folders` key at the top
+    /// level, a `#[serde(default)]` behind it, and the answer came back as an
+    /// empty list -- which on screen is a shared drive with no size, no file
+    /// count and no date, exactly like an owner who shares nothing. Nothing
+    /// errored and nothing logged above debug.
+    #[test]
+    fn list_folders_is_read_through_the_envelope() {
+        let body = r#"{"Success":{"base_address":"5Owner","folders":[
+            {"label":"team-docs","folder_hash":"abc123","file_count":5,
+             "total_bytes":5890000,"created_at":1,"updated_at":2}
+        ]}}"#;
+        let folders = parse_list_folders(body).expect("envelope must parse");
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].folder_hash, "abc123");
+        assert_eq!(folders[0].file_count, 5);
+        assert_eq!(folders[0].total_bytes, 5_890_000);
+    }
+
+    /// An owner who genuinely shares nothing answers with an empty list, and
+    /// that is a real answer rather than a parse failure.
+    #[test]
+    fn an_owner_with_no_drives_parses_as_empty() {
+        let body = r#"{"Success":{"base_address":"5Owner","folders":[]}}"#;
+        assert!(parse_list_folders(body).expect("must parse").is_empty());
+    }
+
+    /// The shape that used to pass silently. Reading the result level
+    /// directly must now FAIL rather than answer "nothing shared".
+    #[test]
+    fn an_unwrapped_body_is_refused_rather_than_read_as_empty() {
+        let body = r#"{"base_address":"5Owner","folders":[]}"#;
+        assert!(
+            parse_list_folders(body).is_err(),
+            "a body at the wrong level must fail loudly, not look like an empty account"
+        );
+    }
+
+    /// A server error is an error, not an owner without drives.
+    #[test]
+    fn a_server_error_is_not_an_empty_listing() {
+        let body = r#"{"Error":{"error":"unauthorized","message":"nope"}}"#;
+        let err = parse_list_folders(body).expect_err("must not read as empty");
+        assert!(format!("{err}").contains("nope"), "the server's words reach the log");
     }
 
     // The bug this pins: every multi-word field crossed IPC as snake_case
