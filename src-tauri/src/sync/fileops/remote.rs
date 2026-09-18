@@ -843,8 +843,18 @@ pub async fn get_thumbnail(
 
 // ─── Browsable remote folders (grouped listing) ─────────────────────────────
 
-/// Per-request page size for the server's `/browse` walk.
-const BROWSE_PAGE_LIMIT: u32 = 500;
+/// The most rows the server returns for one `/browse` request.
+///
+/// The server does not reject a larger `limit`, it coerces it down to this and
+/// echoes the effective value. Stating the real number here keeps the page the
+/// frontend asked for and the page it receives the same size, which paged mode
+/// depends on: it derives a page's offset from the size it requested.
+const BROWSE_PAGE_LIMIT: u32 = 200;
+
+/// The `limit` to put on the wire for a caller-chosen page size.
+fn effective_browse_limit(requested: Option<u32>) -> u32 {
+    requested.unwrap_or(BROWSE_PAGE_LIMIT).clamp(1, BROWSE_PAGE_LIMIT)
+}
 
 /// Map one `/browse` page onto the shared listing row shape.
 ///
@@ -1153,7 +1163,7 @@ pub async fn list_remote_folder_grouped(
 
     // The FE picks the page size (scroll-driven lazy loading wants small
     // pages); clamp to the server's per-request ceiling either way.
-    let limit = limit.unwrap_or(BROWSE_PAGE_LIMIT).clamp(1, BROWSE_PAGE_LIMIT);
+    let limit = effective_browse_limit(limit);
     let page = browse_remote_page(
         state.inner(),
         &account_id,
@@ -1206,6 +1216,22 @@ mod tests {
         assert!(shared_drive_identity("", "abc123").is_err());
         assert!(shared_drive_identity("5Owner", "").is_err());
         assert!(shared_drive_identity("  ", "  ").is_err());
+    }
+
+    /// The server coerces anything above 200 down to 200. Sending more would
+    /// not fail, it would hand back a shorter page than the caller sized its
+    /// offsets for.
+    #[test]
+    fn browse_limit_never_exceeds_the_server_page_size() {
+        assert_eq!(BROWSE_PAGE_LIMIT, 200);
+
+        assert_eq!(effective_browse_limit(None), 200);
+        assert_eq!(effective_browse_limit(Some(500)), 200);
+        assert_eq!(effective_browse_limit(Some(u32::MAX)), 200);
+
+        assert_eq!(effective_browse_limit(Some(200)), 200);
+        assert_eq!(effective_browse_limit(Some(50)), 50);
+        assert_eq!(effective_browse_limit(Some(0)), 1);
     }
 
     /// The whole point of issuing `/browse` ourselves. `hcfs_client::browse`
