@@ -14,7 +14,6 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import dynamic from "next/dynamic";
 import { Users } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -48,17 +47,12 @@ import {
   saveLastBrowseDirectory,
 } from "@/app/lib/utils/userPreferencesDb";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import {
-  driveRoleLabel,
-  parseDriveRole,
-} from "@/app/lib/shared-drives/roles";
+import { parseDriveRole } from "@/app/lib/shared-drives/roles";
 import {
   getMembershipRowAction,
   getSharedWithMeView,
   type SharedWithMeData,
 } from "./sharedWithMeState";
-
-const OwnerAvatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
 interface SharedWithMeSectionProps {
   /**
