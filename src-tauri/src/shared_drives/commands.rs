@@ -368,21 +368,30 @@ pub async fn http_change_member_role(
 /// server cannot hand back a link, which is exactly why revoke-by-id exists:
 /// it is the only way to kill an invite whose link the caller no longer holds,
 /// and that is every link once the mint dialog has closed.
+///
+/// This type is BOTH the server's response shape and the FE's wire shape, and
+/// the two are spelled differently. `rename` would set the name for
+/// serialization AND deserialization, which is how every multi-word field
+/// reached the renderer as snake_case while the TS read camelCase: the Links
+/// tab rendered "undefined of undefined used" and "Expiry unknown", while
+/// `role`, `valid` and `revoked` -- single words, so untouched by a rename --
+/// looked perfectly fine and hid it. `rename_all` therefore owns the wire
+/// name and each `alias` accepts the server's spelling on the way in.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveInviteInfo {
-    #[serde(rename = "invite_id", alias = "inviteId")]
+    #[serde(alias = "invite_id")]
     pub invite_id: String,
     pub role: String,
-    #[serde(rename = "expires_at", alias = "expiresAt")]
+    #[serde(alias = "expires_at")]
     pub expires_at: String,
-    #[serde(rename = "max_uses", alias = "maxUses")]
+    #[serde(alias = "max_uses")]
     pub max_uses: u32,
-    #[serde(rename = "use_count", alias = "useCount")]
+    #[serde(alias = "use_count")]
     pub use_count: u32,
     pub revoked: bool,
     pub valid: bool,
-    #[serde(rename = "created_at", alias = "createdAt")]
+    #[serde(alias = "created_at")]
     pub created_at: String,
 }
 
@@ -1387,6 +1396,39 @@ mod tests {
     fn fold_reports_an_unshared_drive_as_answered_with_zeros() {
         let s = fold_drive_sharing("team", Some(0), Some(&[])).expect("answered");
         assert_eq!((s.member_count, s.live_invite_count, s.total_invite_count), (0, 0, 0));
+    }
+
+    // The bug this pins: every multi-word field crossed IPC as snake_case
+    // while the renderer read camelCase, so the Links tab showed "undefined
+    // of undefined used" against a perfectly correct role and revoked state.
+    #[test]
+    fn drive_invite_info_reaches_the_frontend_in_camel_case() {
+        let json = serde_json::to_value(invite(true, false)).unwrap();
+        let keys = json.as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            ["createdAt", "expiresAt", "inviteId", "maxUses", "revoked", "role", "useCount", "valid"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "DriveInviteInfo wire keys must stay exactly these camelCase names"
+        );
+    }
+
+    // ...while still reading the server's snake_case on the way in. Both
+    // halves matter: this one type is the response shape AND the wire shape.
+    #[test]
+    fn drive_invite_info_still_parses_the_servers_snake_case() {
+        let parsed: DriveInviteInfo = serde_json::from_str(
+            r#"{"invite_id":"abc","role":"writer","expires_at":"2126-01-01T00:00:00Z",
+                "max_uses":50,"use_count":2,"revoked":false,"valid":true,
+                "created_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .expect("the server's spelling must still deserialize");
+        assert_eq!(parsed.invite_id, "abc");
+        assert_eq!(parsed.use_count, 2);
+        assert_eq!(parsed.max_uses, 50);
+        assert_eq!(parsed.expires_at, "2126-01-01T00:00:00Z");
     }
 
     // Wire pin: `useOwnedDriveSharing` reads these names and there is no
