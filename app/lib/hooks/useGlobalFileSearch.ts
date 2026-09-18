@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { serverSearchTerm } from "@/app/lib/utils/searchTerm";
 
 /**
  * Global (account-wide, cross-folder) file search for the sidebar palette.
@@ -65,18 +66,22 @@ export function useGlobalFileSearch(
     return () => clearTimeout(handle);
   }, [searchTerm, debounceMs]);
 
-  const trimmed = debouncedTerm.trim();
-  const queryEnabled = enabled && !!accountId && trimmed.length > 0;
+  // Null below the server's minimum term length. The server answers a term
+  // that short with an empty page, which would render as "no results" for a
+  // query that was never actually run.
+  const term = serverSearchTerm(debouncedTerm);
+  const queryEnabled = enabled && !!accountId && term !== null;
 
   const { data, isFetching } = useQuery({
     // The trimmed term is part of the key so each distinct query caches
     // separately and a refetch never returns a previous term's results.
-    queryKey: [GLOBAL_FILE_SEARCH_QUERY_KEY, accountId, trimmed, limit],
+    queryKey: [GLOBAL_FILE_SEARCH_QUERY_KEY, accountId, term, limit],
     queryFn: async (): Promise<FormattedUserFile[]> => {
-      if (!accountId) return [];
+      if (!accountId || term === null) return [];
+
       return invoke<FormattedUserFile[]>("search_files", {
         accountId,
-        params: { query: trimmed, limit },
+        params: { query: term, limit },
       });
     },
     enabled: queryEnabled,
@@ -90,9 +95,13 @@ export function useGlobalFileSearch(
 
   // The query hasn't fired yet while the live term is ahead of the debounced
   // one. Gate on the *live* term + `enabled` so clearing the box drops the
-  // loading state immediately rather than after the debounce.
+  // loading state immediately rather than after the debounce. A live term
+  // that is still too short will not fire anything, so it is not "loading".
   const isDebouncing =
-    enabled && !!accountId && searchTerm.trim().length > 0 && searchTerm !== debouncedTerm;
+    enabled &&
+    !!accountId &&
+    serverSearchTerm(searchTerm) !== null &&
+    searchTerm !== debouncedTerm;
 
   return {
     data: queryEnabled ? (data ?? []) : [],
