@@ -366,18 +366,25 @@ pub async fn upload_to_remote_folder(
     source: &Path,
     identity: &DriveIdentity,
 ) -> Result<()> {
-    upload_to_remote_folder_with_progress(state, pool, account_id, label, parent_path, source, identity, None).await
+    let mnemonic = crate::sync::fileops::remote::session_mnemonic(state)?;
+    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
+    upload_to_remote_folder_with_progress(pool, account_id, label, parent_path, source, identity, &folder_phrase, None).await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // one file's worth of context, not a call site's
 pub(crate) async fn upload_to_remote_folder_with_progress(
-    state: &AppState,
     pool: &SqlitePool,
     account_id: &str,
     label: &str,
     parent_path: &str,
     source: &Path,
     identity: &DriveIdentity,
+    // The drive's folder phrase, resolved ONCE by the caller. Deriving it
+    // here meant a key derivation PER FILE, and for a drive shared with this
+    // account that is not synced here that is an Argon2id grant open apiece,
+    // seconds each, so a fifty-file upload spent over a minute re-deriving
+    // the same key.
+    folder_phrase: &zeroize::Zeroizing<String>,
     batch: Option<&UploadBatch>,
 ) -> Result<()> {
     let file_name = source
@@ -386,12 +393,10 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
         .ok_or_else(|| AppError::Validation("File has no usable name".into()))?
         .to_string();
 
-    let mnemonic = crate::sync::fileops::remote::session_mnemonic(state)?;
     // ONE folder phrase for both keys: they must agree, and only the
     // encryption path used to have a member branch.
-    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
-    let encryption_key = crate::sync::fileops::remote::encryption_key_from_phrase(&folder_phrase)?;
-    let signing_key = signing_key_for_folder(&folder_phrase)?;
+    let encryption_key = crate::sync::fileops::remote::encryption_key_from_phrase(folder_phrase)?;
+    let signing_key = signing_key_for_folder(folder_phrase)?;
 
     // The salted hash is over the PLAINTEXT and is what the server uses to
     // recognise the same content again, so it is computed from the source
@@ -540,6 +545,13 @@ pub async fn upload_files_to_remote_folder(
     // been read yet; a file that cannot be stat'd still gets a row, since
     // a missing row is worse than an unknown size.
     let batch = UploadBatch::new(app);
+    // ONCE per upload, not per file: deriving it inside the loop meant a key
+    // derivation for every file, and for an unsynced shared drive that is an
+    // Argon2id grant open apiece.
+    let folder_phrase = {
+        let mnemonic = crate::sync::fileops::remote::session_mnemonic(state.inner())?;
+        crate::sync::fileops::remote::folder_phrase_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
+    };
     for path in &file_paths {
         let source = std::path::Path::new(path);
         let Some(name) = source.file_name().and_then(|n| n.to_str()) else {
@@ -560,7 +572,7 @@ pub async fn upload_files_to_remote_folder(
     let mut failures = Vec::new();
     for path in &file_paths {
         let source = std::path::Path::new(path);
-        let sent = upload_to_remote_folder_with_progress(state.inner(), pool, &account_id, &label, &parent, source, &identity, Some(&batch)).await;
+        let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &parent, source, &identity, &folder_phrase, Some(&batch)).await;
         if let Err(e) = sent {
             tracing::warn!(file = %path, error = %e, "remote upload failed");
             failures.push(RemoteUploadFailure {
@@ -681,6 +693,13 @@ pub async fn upload_folder_to_remote_folder(
     )
     .await?;
     let batch = UploadBatch::new(app);
+    // ONCE per upload, not per file: deriving it inside the loop meant a key
+    // derivation for every file, and for an unsynced shared drive that is an
+    // Argon2id grant open apiece.
+    let folder_phrase = {
+        let mnemonic = crate::sync::fileops::remote::session_mnemonic(state.inner())?;
+        crate::sync::fileops::remote::folder_phrase_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
+    };
 
     // The whole batch is announced before any of it moves, so the widget
     // shows a queue rather than one row replaced per file.
@@ -703,13 +722,13 @@ pub async fn upload_folder_to_remote_folder(
     let mut failures = Vec::new();
     for item in &planned {
         let sent = upload_to_remote_folder_with_progress(
-            state.inner(),
             pool,
             &account_id,
             &label,
             &item.parent,
             &item.source,
             &identity,
+            &folder_phrase,
             Some(&batch),
         )
         .await;

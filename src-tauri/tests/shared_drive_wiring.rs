@@ -602,3 +602,33 @@ fn a_remote_upload_names_its_drive_before_the_storage_gate() {
         );
     }
 }
+
+/// The folder key is derived ONCE per upload, not once per file.
+///
+/// It used to be derived inside the per-file function. For a drive shared
+/// with this account and not synced here that is an Argon2id grant open for
+/// every file, seconds apiece, so a fifty-file upload spent over a minute
+/// doing nothing but re-deriving the same key. Nothing fails when it
+/// regresses; the upload just gets slower, which is why it is pinned.
+#[test]
+fn the_folder_key_is_derived_once_per_upload_not_per_file() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
+
+    let per_file = fn_body(&src, "pub(crate) async fn upload_to_remote_folder_with_progress");
+    assert!(
+        !per_file.contains("folder_phrase_for_label"),
+        "the per-file path must take the phrase, not derive it"
+    );
+
+    for sig in [
+        "pub async fn upload_files_to_remote_folder",
+        "pub async fn upload_folder_to_remote_folder",
+    ] {
+        let body = fn_body(&src, sig);
+        assert_eq!(
+            body.matches("folder_phrase_for_label").count(),
+            1,
+            "{sig} must derive the folder key exactly once"
+        );
+    }
+}
