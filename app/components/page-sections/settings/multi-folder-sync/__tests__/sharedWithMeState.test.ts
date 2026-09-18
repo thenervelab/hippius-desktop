@@ -72,7 +72,8 @@ describe("the Shared with me row's role", () => {
       join(dirname(fileURLToPath(import.meta.url)), "../SharedWithMeSection.tsx"),
       "utf8",
     );
-    expect(source).toContain("driveRoleLabel(parseDriveRole(membership.role))");
+    expect(source).toContain("driveRoleLabel(role)");
+    expect(source).toContain("parseDriveRole(membership.role)");
     expect(source).not.toMatch(/·\s*\{membership\.role\}/);
   });
 });

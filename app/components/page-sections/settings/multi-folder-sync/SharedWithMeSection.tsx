@@ -21,12 +21,17 @@ import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Icons } from "@/components/ui";
+import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
+import ConfirmationDialog from "@/components/ConfirmationDialog";
+import { buildSharedDriveActions } from "./sharedDriveRowActions";
 import { SettingsCard } from "../SettingsCard";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   addSharedDrive,
   isSharedDrivesUnavailable,
+  leaveSharedDriveByIdentity,
   listMyDriveMemberships,
   type DriveMembershipInfo,
 } from "@/app/lib/tauri/sharedDrives";
@@ -65,6 +70,11 @@ interface SharedWithMeSectionProps {
     displayLabel: string;
   }) => void;
   /**
+   * Open the manage-access panel for a drive this account manages. Offered
+   * only on a drive synced here — the manage IPCs resolve a local label.
+   */
+  onManageAccess?: (target: { label: string; folderName: string }) => void;
+  /**
    * Fired after `add_shared_drive` succeeds with the allocated local
    * label — the parent refreshes its drive lists (and may navigate to
    * the new drive).
@@ -72,11 +82,19 @@ interface SharedWithMeSectionProps {
   onDriveAdded?: (label: string) => void;
 }
 
-export function SharedWithMeSection({ onDriveAdded, onOpenDrive }: SharedWithMeSectionProps) {
+export function SharedWithMeSection({
+  onDriveAdded,
+  onOpenDrive,
+  onManageAccess,
+}: SharedWithMeSectionProps) {
   const [data, setData] = useState<SharedWithMeData>({ kind: "idle" });
   // The row whose add_shared_drive call is in flight, keyed by
   // `${ownerSs58}:${folderHash}` (the membership's wire identity).
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  // Leaving is irreversible from this surface, so it goes through the app's
+  // confirm dialog rather than straight off a menu item.
+  const [leaveTarget, setLeaveTarget] = useState<DriveMembershipInfo | null>(null);
+
 
   const load = useCallback(async () => {
     setData((prev) => (prev.kind === "ready" ? prev : { kind: "loading" }));
@@ -93,6 +111,25 @@ export function SharedWithMeSection({ onDriveAdded, onOpenDrive }: SharedWithMeS
       }
     }
   }, []);
+
+  /**
+   * Leave by WIRE identity, not by local label: a drive listed here may never
+   * have been synced to this machine, and the label-keyed command resolves a
+   * `sync_paths` row that does not exist.
+   */
+  const leaveDrive = useCallback(
+    async (membership: DriveMembershipInfo) => {
+      try {
+        await leaveSharedDriveByIdentity(membership.ownerSs58, membership.folderHash);
+        toast.success(`Left "${membership.displayLabel}"`);
+        await load();
+      } catch (err) {
+        if (isSharedDrivesUnavailable(err)) return;
+        toast.error(`Could not leave the drive: ${errorMessage(err)}`);
+      }
+    },
+    [load],
+  );
 
   useEffect(() => {
     if (!SHARED_DRIVES_ENABLED) return;
@@ -148,6 +185,8 @@ export function SharedWithMeSection({ onDriveAdded, onOpenDrive }: SharedWithMeS
         {memberships.map((membership) => {
           const key = `${membership.ownerSs58}:${membership.folderHash}`;
           const action = getMembershipRowAction(membership);
+          const role = parseDriveRole(membership.role);
+          const canManage = role === "manager";
           return (
             <div
               key={key}
@@ -187,57 +226,112 @@ export function SharedWithMeSection({ onDriveAdded, onOpenDrive }: SharedWithMeS
                 onOpenDrive && "cursor-pointer",
               )}
             >
-              <div className="flex min-w-0 items-center gap-2.5">
-                <div className="size-[28px] shrink-0 overflow-hidden rounded-full">
-                  <OwnerAvatar name={membership.ownerSs58} size={28} variant="pixel" />
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-grey-10 dark:text-white" title={membership.displayLabel}>
-                    {membership.displayLabel}
-                  </p>
-                  <p
-                    className="truncate font-mono text-[11px] text-grey-50 dark:text-grey-dark-600"
-                    title={membership.ownerSs58}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* A folder, drawn like every other drive. The owner's
+                      identicon used to sit here, which made a shared drive
+                      look like a person rather than a place for files --
+                      and the owner is already named on the line below. */}
+                  <Icons.Folder className="size-4 flex-shrink-0 text-[#1F50BD]" />
+                  <span
+                    className="truncate font-geist text-[14px] font-medium text-[#0A0A0A] dark:text-white"
+                    title={membership.displayLabel}
                   >
-                    {middleTruncate(membership.ownerSs58, 22)} ·{" "}
+                    {membership.displayLabel}
+                  </span>
+                  {/* The role as a chip, the shape the drive list already
+                      uses for "Shared with N" -- so the two read as one
+                      family rather than a badge beside loose text. */}
+                  <span className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-[#1F50BD]/50 bg-[#1F50BD]/10 px-2 py-0.5 text-[11px] font-medium text-[#1F50BD] dark:border-[#6b93ea]/50 dark:bg-[#6b93ea]/10 dark:text-[#9dbaf2]">
+                    <Users className="size-3" aria-hidden="true" />
                     {/* The wire says reader/writer/manager; people read
-                        Viewer/Editor/Manager. This row printed the wire word
-                        raw, so a shared drive announced itself as "writer". */}
-                    {driveRoleLabel(parseDriveRole(membership.role))}
-                  </p>
+                        Viewer/Editor/Manager. */}
+                    {driveRoleLabel(role)}
+                  </span>
+                  {action.kind === "synced" && (
+                    <span className="flex-shrink-0 whitespace-nowrap text-[11px] font-medium text-[#04c870]">
+                      Synced here
+                    </span>
+                  )}
                 </div>
+                <p
+                  className="ml-6 mt-1 truncate font-geist text-[13px] font-medium text-[#0A0A0A]/40 dark:text-white/40"
+                  title={membership.ownerSs58}
+                >
+                  Shared by {middleTruncate(membership.ownerSs58, 22)}
+                </p>
               </div>
 
-              {/* Deliberate deviation from the phase-2 plan (which sketched
-                  per-row actions here): a synced row gets a status chip and
-                  NOTHING else — the adjacent Local Sync Folders list is the
-                  single management surface (pause/leave/browse), and a
-                  second set of controls here would duplicate its gating. */}
-              {action.kind === "synced" ? (
-                <span className="row-action-area shrink-0 text-xs font-medium text-[#04c870]">
-                  Synced as &quot;{action.localLabel}&quot;
-                </span>
-              ) : (
+              {/* Managing access is a manager's likely next action, so it
+                  gets a control of its own rather than a place in the
+                  overflow -- the treatment an own shared drive's row has. */}
+              {canManage && action.kind === "synced" && onManageAccess && (
                 <Button
-                  variant="defaultStable"
+                  variant="ghost"
                   size="auto"
-                  disabled={busyKey !== null}
-                  loading={busyKey === key}
-                  onClick={() => void syncLocally(membership)}
-                  className={cn(
-                    "row-action-area h-[30px] shrink-0 gap-[7px] rounded-[6px] border px-3 text-[13px] font-normal",
-                    "border-grey-dark-100 bg-[#FEFEFE] text-[#111]",
-                    "hover:bg-[#F5F5F5]",
-                    "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-300 dark:hover:bg-black-500",
-                  )}
+                  onClick={() =>
+                    onManageAccess({
+                      label: action.localLabel,
+                      folderName: membership.displayLabel,
+                    })
+                  }
+                  className="row-action-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-grey-80 px-2.5 text-xs font-medium text-grey-30 transition-colors hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
                 >
-                  {busyKey === key ? "Setting up…" : "Sync locally"}
+                  Manage access
                 </Button>
               )}
+
+              <TableActionMenu
+                dropdownTitle=""
+                items={buildSharedDriveActions({
+                  membership,
+                  role,
+                  isSynced: action.kind === "synced",
+                  busy: busyKey !== null,
+                  onOpen: onOpenDrive
+                    ? () =>
+                        onOpenDrive({
+                          ownerSs58: membership.ownerSs58,
+                          folderHash: membership.folderHash,
+                          displayLabel: membership.displayLabel,
+                        })
+                    : undefined,
+                  onSyncLocally: () => void syncLocally(membership),
+                  onLeave: () => setLeaveTarget(membership),
+                })}
+              >
+                <Button
+                  variant="ghost"
+                  size="auto"
+                  aria-label={`Actions for ${membership.displayLabel}`}
+                  className="row-action-area mt-0.5 h-8 w-8 flex-shrink-0 rounded-md p-0 text-grey-70 transition-colors hover:bg-grey-90 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white"
+                >
+                  <Icons.EllipsisVertical className="size-[18px]" />
+                </Button>
+              </TableActionMenu>
             </div>
           );
         })}
       </div>
+
+      <ConfirmationDialog
+        open={leaveTarget !== null}
+        onClose={() => setLeaveTarget(null)}
+        onBack={() => setLeaveTarget(null)}
+        onConfirm={() => {
+          const target = leaveTarget;
+          setLeaveTarget(null);
+          if (target) void leaveDrive(target);
+        }}
+        heading="Leave shared drive"
+        icon={<Icons.Trash className="size-4 text-white" />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
+        confirmButtonClassName="text-white"
+        button="Leave drive"
+        text={`Leave "${leaveTarget?.displayLabel ?? ""}"?`}
+        helperText="You lose access to its files. Anything already downloaded to this computer stays, and the owner can invite you again."
+      />
     </SettingsCard>
   );
 }

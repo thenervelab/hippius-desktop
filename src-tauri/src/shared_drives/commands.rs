@@ -1136,6 +1136,50 @@ pub async fn list_my_drive_memberships(app: tauri::AppHandle) -> Result<Vec<Driv
 /// local drive is the plain `remove_drive` path — Task 5's revoked-state
 /// "Remove" affordance and Task 6 wire it deliberately rather than this
 /// command guessing that the membership no longer matters.
+/// Leave a shared drive named by its WIRE identity.
+///
+/// The label-keyed [`leave_shared_drive`] resolves a local `sync_paths` row,
+/// which a drive browsed but never synced here does not have — so leaving one
+/// was impossible from the surface that lists it. Membership is server-side
+/// and does not depend on a local copy; this deletes it either way, and
+/// removes the local drive too when one happens to exist.
+#[tauri::command]
+pub async fn leave_shared_drive_by_identity(app: tauri::AppHandle, owner_ss58: String, folder_hash: String) -> Result<()> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+
+    let leave = http_remove_member(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &folder_hash,
+        &ctx.account_id,
+        // ALWAYS named: the server's bare fallback deletes every same-hash
+        // membership this account holds, and folder hashes are label-derived
+        // so two owners' "Documents" drives collide as a matter of course.
+        Some(&owner_ss58),
+    )
+    .await;
+    match leave {
+        Ok(()) => {}
+        // The owner removed us first. The end state is the one asked for.
+        Err(AppError::NotFound(_)) => {
+            info!(owner = %owner_ss58, "Membership already gone server-side");
+        }
+        Err(other) => return Err(other),
+    }
+
+    // A drive that IS synced here still has to go from this device; one that
+    // never was has nothing to remove and must not error for it.
+    if let Some(row) = crate::sync::identity::member_row_for_wire_identity(state.pool()?, &ctx.account_id, &owner_ss58, &folder_hash).await? {
+        crate::sync::lifecycle::remove_drive(app.clone(), row.label.clone()).await?;
+        info!(label = %row.label, "Left shared drive and removed its local copy");
+    } else {
+        info!(owner = %owner_ss58, "Left shared drive that was not synced here");
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn leave_shared_drive(app: tauri::AppHandle, label: String) -> Result<()> {
     let state = app.state::<AppState>();

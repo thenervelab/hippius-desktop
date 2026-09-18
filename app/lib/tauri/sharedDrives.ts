@@ -212,6 +212,21 @@ export async function leaveSharedDrive(label: string): Promise<void> {
 }
 
 /**
+ * Leave a shared drive named by its WIRE identity.
+ *
+ * The label-keyed {@link leaveSharedDrive} resolves a local `sync_paths` row,
+ * which a drive browsed but never synced here does not have. Membership is
+ * server-side and does not depend on a local copy, so this works either way
+ * and removes the local drive too when one exists.
+ */
+export async function leaveSharedDriveByIdentity(
+  ownerSs58: string,
+  folderHash: string,
+): Promise<void> {
+  await invoke<void>("leave_shared_drive_by_identity", { ownerSs58, folderHash });
+}
+
+/**
  * Sync a drive that was shared with this account into `localPath`.
  * Idempotent per wire identity: a re-add repairs the existing local slot,
  * and a healthy install at a different path refuses as `Validation` naming

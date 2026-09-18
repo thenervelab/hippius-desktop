@@ -3,9 +3,42 @@
 // synced-vs-unsynced routing, and the Sync-locally flow (last-browse-dir
 // picker → add_shared_drive → verbatim Validation toast).
 
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
+
+// The overflow menu is Radix-backed and does not open under jsdom. These
+// tests are about what the row OFFERS and what pressing it does, not about
+// Radix, so the shell renders its items as plain buttons.
+vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
+  __esModule: true,
+  default: ({
+    items,
+    children,
+  }: {
+    items: { itemTitle: React.ReactNode; onItemClick?: () => void; disabled?: boolean }[];
+    children: React.ReactNode;
+  }) => (
+    <div>
+      {children}
+      {/* The real menu PORTALS its items out of the row, so a click on one
+          never travels through the row's own open handler. Rendered inline
+          here, they would — `row-action-area` stands in for the portal. */}
+      {items.map((item, i) => (
+        <button
+          key={i}
+          type="button"
+          className="row-action-area"
+          disabled={item.disabled}
+          onClick={() => item.onItemClick?.()}
+        >
+          {item.itemTitle}
+        </button>
+      ))}
+    </div>
+  ),
+}));
 
 import { SharedWithMeSection } from "../SharedWithMeSection";
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
@@ -121,17 +154,20 @@ describe("silent non-rows states", () => {
 });
 
 describe("rows", () => {
-  it("shows an unsynced membership with owner badge, label, readable role and Sync locally", async () => {
+  it("shows an unsynced membership as a folder with its label, role and actions", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([membership()]);
     render(<SharedWithMeSection />);
 
     await screen.findByText("team-docs");
-    expect(screen.getByTestId("avatar")).toHaveAttribute("data-name", OWNER);
+    // The owner's identicon used to sit here, which made a shared drive look
+    // like a person rather than a place for files. The owner is named on the
+    // line below instead.
+    expect(screen.queryByTestId("avatar")).not.toBeInTheDocument();
     // The label people read, never the wire word: this row used to print
     // "writer" straight from the membership.
     expect(screen.getByText(/Editor/)).toBeInTheDocument();
     expect(screen.queryByText(/writer/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Sync locally" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sync to this computer" })).toBeInTheDocument();
   });
 
   it("shows a synced membership's local label with no action button", async () => {
@@ -140,8 +176,10 @@ describe("rows", () => {
     ]);
     render(<SharedWithMeSection />);
 
-    await screen.findByText(/Synced as "team-docs-2"/);
-    expect(screen.queryByRole("button", { name: "Sync locally" })).not.toBeInTheDocument();
+    await screen.findByText(/Synced here/);
+    // Already here: syncing again would either no-op or re-install it at a
+    // new path, and neither is what the word promises.
+    expect(screen.queryByRole("button", { name: "Sync to this computer" })).not.toBeInTheDocument();
   });
 });
 
@@ -155,7 +193,7 @@ describe("sync locally", () => {
     const onDriveAdded = vi.fn();
 
     render(<SharedWithMeSection onDriveAdded={onDriveAdded} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sync locally" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync to this computer" }));
 
     await waitFor(() =>
       expect(addSharedDriveMock).toHaveBeenCalledWith(OWNER, "0123456789abcdef", "/Users/me/Team", "team-docs"),
@@ -165,7 +203,7 @@ describe("sync locally", () => {
     );
     expect(saveLastBrowseDirectoryMock).toHaveBeenCalledWith("/Users/me/Team");
     await waitFor(() => expect(onDriveAdded).toHaveBeenCalledWith("team-docs"));
-    await screen.findByText(/Synced as "team-docs"/);
+    await screen.findByText(/Synced here/);
   });
 
   it("does nothing when the picker is cancelled", async () => {
@@ -173,7 +211,7 @@ describe("sync locally", () => {
     openDialogMock.mockResolvedValue(null);
 
     render(<SharedWithMeSection />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sync locally" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync to this computer" }));
 
     await waitFor(() => expect(openDialogMock).toHaveBeenCalled());
     expect(addSharedDriveMock).not.toHaveBeenCalled();
@@ -186,7 +224,7 @@ describe("sync locally", () => {
     addSharedDriveMock.mockRejectedValue({ kind: "Validation", message });
 
     render(<SharedWithMeSection />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sync locally" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync to this computer" }));
 
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(message));
   });
@@ -210,12 +248,12 @@ describe("opening a shared drive without syncing it", () => {
 
   // The row's own control must not also open the drive behind the dialog it
   // raises — the classic nested-affordance mis-click.
-  it("does not open the drive when Sync locally is pressed", async () => {
+  it("does not open the drive when a menu action is pressed", async () => {
     const onOpenDrive = vi.fn();
     listMyDriveMembershipsMock.mockResolvedValue([membership()]);
     render(<SharedWithMeSection onOpenDrive={onOpenDrive} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /Sync locally/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Sync to this computer/ }));
     expect(onOpenDrive).not.toHaveBeenCalled();
   });
 

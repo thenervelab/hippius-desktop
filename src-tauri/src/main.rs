@@ -449,6 +449,7 @@ fn main() {
             crate::shared_drives::commands::revoke_drive_invite,
             crate::shared_drives::commands::list_my_drive_memberships,
             crate::shared_drives::commands::leave_shared_drive,
+            crate::shared_drives::commands::leave_shared_drive_by_identity,
             crate::shared_drives::commands::add_shared_drive,
             // Shell "Share with Hippius": confirm/cancel the in-app visibility
             // chooser. Registered on all desktop platforms (macOS/Linux socket +

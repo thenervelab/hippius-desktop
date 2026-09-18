@@ -27,6 +27,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **Drives shared with you read like your own drives.** Each row shows a folder
+  icon, its role as a badge, and a menu with Open, Sync to this computer and
+  Leave drive; managers get Manage access on the row itself.
+- **You can leave a shared drive you never synced.** Leaving used to require a
+  local copy of the drive first.
 - **Open a drive somebody shared with you without copying it to this computer.**
   Clicking a drive under "Shared with me" opens it and browses its folders and
   files, the same way a drive you keep only in the cloud does. Syncing it locally

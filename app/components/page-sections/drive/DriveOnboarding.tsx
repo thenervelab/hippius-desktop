@@ -737,6 +737,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             exactly like a freshly added local folder. */}
         <SharedWithMeSection
           onOpenDrive={onOpenSharedDrive}
+          onManageAccess={setShareDriveTarget}
           onDriveAdded={(label) => {
             loadFolders();
             onSyncStarted(label);
