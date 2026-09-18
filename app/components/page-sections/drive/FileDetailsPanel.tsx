@@ -29,6 +29,8 @@ import { revealFile } from "@/lib/utils/revealFile";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
+import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
+import { middleTruncate } from "@/lib/utils/middleTruncate";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -65,6 +67,10 @@ interface PanelBodyProps {
 const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
   const { polkadotAddress } = useWalletAuth();
   const arionCid = arionContentHash(file);
+  // Attribution is only worth showing on a SHARED drive. On a solo drive
+  // every file was uploaded by the reader, so the row would say nothing and
+  // cost a line on every file they open.
+  const { isShared: driveIsShared } = useDriveSharing(file.label);
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -148,6 +154,19 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
             <span>{fileSize}</span>
           </div>
         </PillRow>
+
+        {driveIsShared && file.uploadedBy && !file.isFolder && (
+          // Who put this here. A shared drive has more than one possible
+          // answer, and "it was me" is worth as much as a name -- an ss58 the
+          // reader has to compare against their own is not an answer.
+          <PillRow label="Uploaded by">
+            <div className="break-all">
+              {file.uploadedBy === polkadotAddress
+                ? "You"
+                : middleTruncate(file.uploadedBy, 24)}
+            </div>
+          </PillRow>
+        )}
 
         {file.label && (
           <PillRow label="Sync Folder">

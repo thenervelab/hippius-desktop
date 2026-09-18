@@ -15,14 +15,7 @@ import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
-import {
-  isDriveShared,
-  useOwnedDriveSharing,
-} from "@/app/lib/hooks/useOwnedDriveSharing";
-import { useSharedDriveMembership } from "@/app/lib/hooks/useSharedDriveRoles";
-
-const NO_LABELS: readonly string[] = [];
+import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 
 export default function DriveSharingHeaderMark({
   label,
@@ -34,25 +27,9 @@ export default function DriveSharingHeaderMark({
   displayName?: string | null;
 }) {
   const setShareTarget = useSetAtom(shareDriveModalAtom);
-  const { membership, isSettled } = useSharedDriveMembership(label);
+  const { sharing, canManage } = useDriveSharing(label);
 
-  // A member drive's sharing is described by its role; asking the server for
-  // its members would be the owner's question, not ours -- and the IPC would
-  // refuse the label anyway. So only an OWN drive is looked up, and only once
-  // the membership listing has answered: until then every drive looks own,
-  // and the wait costs nothing because the badge has nothing to draw yet.
-  const ownSharing = useOwnedDriveSharing(
-    !label || !isSettled || membership ? NO_LABELS : [label],
-  );
-
-  if (!SHARED_DRIVES_ENABLED || !label) return null;
-
-  const sharing = driveRowSharing({
-    ownerSs58: membership?.ownerSs58,
-    role: membership?.role,
-    ...ownSharing.get(label),
-  });
-  if (!sharing.isShared) return null;
+  if (!SHARED_DRIVES_ENABLED || !label || !sharing.isShared) return null;
 
   const withMe = sharing.direction === "with-me";
 
@@ -73,7 +50,7 @@ export default function DriveSharingHeaderMark({
 
       {/* Only the owner can manage access. A member sees the badge and their
           role, which is the whole of what the drive means for them here. */}
-      {!withMe && isDriveShared(ownSharing.get(label)) && (
+      {canManage && (
         <Button
           variant="ghost"
           size="auto"

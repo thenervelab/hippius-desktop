@@ -825,6 +825,8 @@ pub(crate) fn append_browse_page(
             file_count: f.file_count,
             uploaded_at: created_at,
             updated_at: created_at,
+            // A folder is not uploaded by anyone; its contents are.
+            uploaded_by: None,
         });
     }
     for f in page_files {
@@ -854,6 +856,10 @@ pub(crate) fn append_browse_page(
             file_count: 0,
             uploaded_at: f.created_at,
             updated_at: f.updated_at,
+            // The server has attributed uploads since the shared-drive work;
+            // an empty string is the same as absent and must not reach the UI
+            // as a blank "uploaded by".
+            uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
         });
     }
 }
@@ -1174,6 +1180,61 @@ mod tests {
             // read the uploader.
             uploaded_by: None,
         }
+    }
+
+    /// The server attributes every upload it can; the desktop dropped the
+    /// field on the floor, so a shared drive could not say who put a file
+    /// there. Folders are never attributed, and an empty string is the
+    /// server's "unattributed", not a blank name to render.
+    #[test]
+    fn browse_page_carries_the_uploader_through() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        let attributed = hcfs_shared::network::RemoteFileEntry {
+            uploaded_by: Some("5Member".to_string()),
+            ..browse_file(Some("theirs.png"), None, 1, 10, 10)
+        };
+        let blank = hcfs_shared::network::RemoteFileEntry {
+            uploaded_by: Some(String::new()),
+            ..browse_file(Some("blank.png"), None, 1, 10, 10)
+        };
+        let unattributed = browse_file(Some("old.png"), None, 1, 10, 10);
+
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![BrowseFolderRow {
+                name: "sub".to_string(),
+                file_count: 1,
+                total_bytes: 1,
+                created_at: Some(10),
+            }],
+            vec![attributed, blank, unattributed],
+        );
+
+        assert_eq!(files[0].uploaded_by.as_deref(), Some("5Member"));
+        assert_eq!(files[1].uploaded_by, None, "an empty ss58 is unattributed, not a blank name");
+        assert_eq!(files[2].uploaded_by, None);
+        assert_eq!(folders[0].uploaded_by, None, "a folder is not uploaded by anyone");
+    }
+
+    /// Wire pin: `FileEntry` is serialized with no `rename_all`, so the FE
+    /// reads snake_case here. There is no codegen across IPC to catch a drift.
+    #[test]
+    fn file_entry_sends_the_uploader_as_snake_case() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            Vec::new(),
+            vec![hcfs_shared::network::RemoteFileEntry {
+                uploaded_by: Some("5Member".to_string()),
+                ..browse_file(Some("a.png"), None, 1, 10, 10)
+            }],
+        );
+        let json = serde_json::to_value(&files[0]).unwrap();
+        assert_eq!(json["uploaded_by"], "5Member");
     }
 
     /// The crux of the bug. The server has been sending `created_at` on folder

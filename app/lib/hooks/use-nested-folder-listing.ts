@@ -12,6 +12,8 @@ interface SyncFileEntry {
   arion_hash?: string;
   arion_cid?: string;
   sync_status?: string;
+  /** SS58 of whoever uploaded this revision, when the server attributes it. */
+  uploaded_by?: string | null;
 }
 
 interface GroupedListing {
@@ -329,6 +331,7 @@ export function useNestedFolderListing({
           // Every row of a browsed remote drive, files included — the
           // `remote://` source only ever reached folder rows.
           remoteDriveLabel: remote ? label || undefined : undefined,
+          uploadedBy: entry.uploaded_by || undefined,
           syncStatus:
             (entry.sync_status as FormattedUserFile["syncStatus"]) ??
             "unknown",

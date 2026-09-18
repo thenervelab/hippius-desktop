@@ -27,6 +27,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
+- **File Details says who uploaded a file in a shared drive.** Opening a file in
+  a drive you share shows the person who put it there, or "You" when it was you.
+  Files on your own private drives are unchanged — there is only one answer there.
 - **A shared drive says so from the inside too.** Opening a shared drive shows
   the badge and, if it is yours, a Manage access button beside the breadcrumb —
   previously the only sign a drive was shared disappeared the moment you opened it.

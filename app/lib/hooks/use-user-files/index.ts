@@ -35,6 +35,15 @@ export type FormattedUserFile = {
   fileHash?: string | number[] | Uint8Array;
   fileDetails?: FileDetail[];
   source?: string;
+  /**
+   * SS58 of whoever uploaded this revision, when the server attributes it.
+   *
+   * Absent for folders, for rows the server has no attribution for, and for
+   * local entries not yet uploaded from here. Worth SHOWING only on a shared
+   * drive, where "who put this here" has more than one possible answer — on a
+   * solo drive it is always the reader, which is noise.
+   */
+  uploadedBy?: string;
   isFolder?: boolean;
   type?: string;
   isErasureCoded: boolean;
