@@ -80,6 +80,9 @@ interface DriveContentProps {
   /** Browsing a remote (server-only) drive — uploads are not supported
    *  there yet, so the empty state renders without an upload CTA. */
   isRemoteView?: boolean;
+  /** The typed term is too short for the server-side search that backs this
+   *  view, so the empty list means "not searched", not "no matches". */
+  searchTermTooShort?: boolean;
   onSyncPathConfigured?: () => void;
   onUploadFile?: () => void;
   onAddFolder?: () => void;
@@ -120,6 +123,7 @@ const DriveContent: FC<DriveContentProps> = ({
   writeRefusal = null,
   isStorageFull = false,
   isRemoteView = false,
+  searchTermTooShort = false,
   onSyncPathConfigured,
   onUploadFile,
   onAddFolder,
@@ -477,6 +481,7 @@ const DriveContent: FC<DriveContentProps> = ({
         <NoMatchingResults
           searchTerm={hasSearchTerm ? searchTerm : undefined}
           hasActiveFilters={hasActiveFilters}
+          searchTermTooShort={searchTermTooShort}
         />
       );
     }

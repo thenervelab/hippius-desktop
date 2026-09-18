@@ -64,6 +64,31 @@ describe("getSidebarSearchView", () => {
     );
   });
 
+  // --- query below the server's minimum term length ---
+  it("asks for more characters instead of claiming there are no results", () => {
+    expect(
+      getSidebarSearchView({ ...base, hasQuery: true, queryTooShort: true }),
+    ).toBe("query-too-short");
+  });
+
+  it("keeps the hint over a stale fetch or stale rows from a longer query", () => {
+    expect(
+      getSidebarSearchView({
+        ...base,
+        hasQuery: true,
+        queryTooShort: true,
+        isFetching: true,
+        resultCount: 4,
+      }),
+    ).toBe("query-too-short");
+  });
+
+  it("does not show the hint once the box is cleared", () => {
+    expect(
+      getSidebarSearchView({ ...base, queryTooShort: true, recentCount: 2 }),
+    ).toBe("recent");
+  });
+
   // The query branch ignores recent-uploads inputs entirely, and the
   // empty-query branch ignores search inputs — guards against a future edit
   // crossing the two source's signals.
