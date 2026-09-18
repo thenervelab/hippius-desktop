@@ -121,13 +121,16 @@ describe("silent non-rows states", () => {
 });
 
 describe("rows", () => {
-  it("shows an unsynced membership with owner badge, label, role and Sync locally", async () => {
+  it("shows an unsynced membership with owner badge, label, readable role and Sync locally", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([membership()]);
     render(<SharedWithMeSection />);
 
     await screen.findByText("team-docs");
     expect(screen.getByTestId("avatar")).toHaveAttribute("data-name", OWNER);
-    expect(screen.getByText(/writer/)).toBeInTheDocument();
+    // The label people read, never the wire word: this row used to print
+    // "writer" straight from the membership.
+    expect(screen.getByText(/Editor/)).toBeInTheDocument();
+    expect(screen.queryByText(/writer/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sync locally" })).toBeInTheDocument();
   });
 
