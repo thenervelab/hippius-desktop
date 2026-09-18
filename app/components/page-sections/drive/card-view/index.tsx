@@ -16,9 +16,11 @@ import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
+  offersShareAction,
   FOLDER_SHARE_DISABLED_TOOLTIP,
   shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
+import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
 import { cn } from "@/lib/utils";
 
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -88,6 +90,8 @@ const CardView: FC<CardViewProps> = ({
   // `useServerCapabilities` (mounted in SyncEventLogger).
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
+  // Which of this listing's rows sit in a drive shared WITH this account.
+  const memberDriveLabels = useMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
@@ -333,9 +337,12 @@ const CardView: FC<CardViewProps> = ({
                           // must be fully uploaded, a folder mints a live
                           // browsable link and shows disabled with a tooltip
                           // until the `folder_shares` capability is confirmed.
+                          // A FOLDER on a drive shared with this account is
+                          // not offered at all -- see `offersShareAction`.
                           ...((file.isFolder ||
                             file.syncStatus === "synced") &&
-                          shareEnabled
+                          shareEnabled &&
+                          offersShareAction(file, memberDriveLabels)
                             ? [
                                 {
                                   icon: <Link2 className="size-4" />,

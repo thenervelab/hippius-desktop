@@ -17,6 +17,77 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
+  shared: invite someone by link, choose what they can do, and manage who has
+  access. Starter plans do not include shared drives, so the option is not shown.
+- **Shared drives show who they belong to and what you can do in them.** A drive
+  someone shared with you is marked in your drive list and says whether you are a
+  Viewer, an Editor or a Manager, instead of looking exactly like your own drives.
+- **Choose what an invite grants.** Inviting someone to a drive now asks whether
+  they join as a Viewer (open and download), an Editor (also upload and delete) or
+  a Manager (also invite and remove people), and says what the link allows before
+  you send it.
+- **The Drive toolbar stays put as you go deeper into folders.** New Folder,
+  upload and the rest sat at the right edge until a long breadcrumb pushed them onto
+  a second line, where they jumped to the left. They hold the right edge either way now.
+- **Uploading and dropping files inside a shared drive works.** Opening a folder
+  inside one lost track of the drive, so uploads quietly went to a folder on this
+  computer instead. Drag and drop works there too.
+- **Manage access shows on a shared drive you manage**, whether or not you have
+  synced it to this computer.
+- **Viewer, Editor and Manager now read as coloured badges**, the same ones the
+  web console uses, so a list of drives can be read for access at a glance.
+- **The Drive breakdown cards no longer list categories nothing is in.** A drive
+  uploaded only from the console showed "Desktop 0", "Mobile 0" and "Other 0"
+  under the bar; those rows are gone.
+- **The file-types card no longer says "(before tracking)".** That caveat is true
+  of where a file was uploaded from, which older files do not record, but a file's
+  type has always been known.
+- **A Manager can manage a shared drive without syncing it first**, and an Editor
+  can upload into one they are only browsing. Both used to need a copy of the
+  drive on this computer.
+- **Drives shared with you show their size, file count and last change**, the
+  same facts your own drives show. A drive whose figures have not arrived yet
+  shows none rather than claiming to be empty.
+- **Drives shared with you read like your own drives.** Each row shows a folder
+  icon, its role as a badge, and a menu with Open, Sync to this computer and
+  Leave drive; managers get Manage access on the row itself.
+- **You can leave a shared drive you never synced.** Leaving used to require a
+  local copy of the drive first.
+- **Open a drive somebody shared with you without copying it to this computer.**
+  Clicking a drive under "Shared with me" opens it and browses its folders and
+  files, the same way a drive you keep only in the cloud does. Syncing it locally
+  is still there when you want a copy on this machine.
+- **The drive list's pager is readable in dark mode.** Its page numbers were
+  white tiles on a dark page.
+- **Your drive list pages once it gets long, so "Shared with me" stays in view.**
+  Drives other people shared with you sit below your own; with a lot of drives
+  they were pushed off the bottom of the page.
+- **Sharing a drive is offered on every plan, and says what it costs.** Picking it
+  on a plan that does not include shared drives opens an upgrade prompt naming Plus,
+  Max and Scale, rather than the option being hidden with no explanation.
+- **A Manager can manage the drive they were made a manager of.** Someone given
+  the Manager role on a drive shared with them can now invite people, change
+  roles and remove members from the desktop app, instead of only from the web
+  console.
+- **A Viewer is no longer offered uploads they cannot make.** On a drive shared
+  with you as a Viewer, the upload buttons are absent rather than failing later
+  as a sync error. Editors and Managers are unaffected.
+- **Changing a role says what it costs before you save it.** Demoting someone now
+  warns that the invite link which admitted them is revoked too, and that
+  demoting a manager revokes every link that manager created.
+- **File Details says who uploaded a file in a shared drive.** Opening a file in
+  a drive you share shows the person who put it there, or "You" when it was you.
+  Files on your own private drives are unchanged — there is only one answer there.
+- **A shared drive says so from the inside too.** Opening a shared drive shows
+  the badge and, if it is yours, a Manage access button beside the breadcrumb —
+  previously the only sign a drive was shared disappeared the moment you opened it.
+- **Change someone's role without removing them.** Each member in the list has a
+  menu offering Change role and Remove from drive; changing a role opens a dialog
+  that says what the new role grants before you save it. Previously the only way
+  to change what someone could do was to remove them and invite them again.
+
+
 - **The Overview shows what is in your Drive.** A card breaks your files down by
   type (images, videos, docs, others), and a tab switches it to show where they
   were uploaded from (desktop, console, mobile), the same picture the web
@@ -89,6 +160,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Sharing a folder as a link is no longer offered on a drive shared with you.**
+  Only a drive's owner can mint a folder link, so the action used to be offered
+  and then refused after you had chosen an expiry. Sharing a single file from
+  such a drive still works.
+- **A drive shared with you as a Viewer no longer offers you upload controls.**
+  New Folder, Folder and File are hidden on a drive you can only read, and a file
+  dropped onto it is refused with a line saying you have Viewer access and should
+  ask whoever shared the drive to make you an Editor — instead of a failed upload.
 - **Files are now shown a page at a time.** Drive and the folders inside it show
   15 rows with a pager underneath and a size control, instead of a list that grows
   as you scroll, and the loading placeholder is the size of the page you are about
@@ -274,6 +353,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Downloading and sharing a file from a drive someone shared with you now
+  works.** Both refused with "no local key material on this device" on a shared
+  drive you are browsing rather than syncing — including for a Viewer, whose only
+  way to use the drive is to open and download from it.
 - **Hovering the Drive breakdown now tells you what a bar is.** The file type and
   upload source charts on Overview showed coloured bars with no way to read one;
   hovering now names the category, its file count and its share, and the rest of

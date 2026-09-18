@@ -74,3 +74,111 @@ describe("resolveFolderMenuPlan", () => {
     });
   });
 });
+
+describe("plan gating", () => {
+  const own = { ownerSs58: undefined };
+
+  // A plan without the perk is refused by the server with
+  // `shared_drives_not_entitled`, so offering the item is a click that can
+  // only end in an upgrade prompt.
+  // Hiding it hid the feature's existence from exactly the people who would
+  // pay for it, and left them no way to discover why other accounts had it.
+  // The mint dialog turns an unentitled plan into a named upgrade prompt.
+  it("still offers Share drive on a plan without shared drives, so the feature is discoverable", () => {
+    const plan = resolveFolderMenuPlan(own, {
+      sharedDrivesEnabled: true,
+      planSupportsSharedDrives: false,
+    });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  it("shows Share drive on a plan that includes them", () => {
+    const plan = resolveFolderMenuPlan(own, {
+      sharedDrivesEnabled: true,
+      planSupportsSharedDrives: true,
+    });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  // A control that appears a moment late is jank; one that appears and then
+  // vanishes reads as a bug.
+  it("permits the item while the plan is still loading", () => {
+    const plan = resolveFolderMenuPlan(own, { sharedDrivesEnabled: true });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  // The flag and the member check both still bind: a generous plan cannot
+  // resurrect the item on a drive the user does not own.
+  it("never shows Share drive on a member drive, whatever the plan", () => {
+    const plan = resolveFolderMenuPlan(
+      { ownerSs58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY" },
+      { sharedDrivesEnabled: true, planSupportsSharedDrives: true },
+    );
+    expect(plan.showShareDrive).toBe(false);
+  });
+
+  it("stays hidden when the feature flag is off, whatever the plan", () => {
+    const plan = resolveFolderMenuPlan(own, {
+      sharedDrivesEnabled: false,
+      planSupportsSharedDrives: true,
+    });
+    expect(plan.showShareDrive).toBe(false);
+  });
+});
+
+// The desktop minted Manager invites it could not then honour: every manage
+// surface was owner-only, so a Manager had to use the console.
+describe("a manager on somebody else's drive", () => {
+  const member = { ownerSs58: "5Owner" };
+
+  it("is offered the mint", () => {
+    const plan = resolveFolderMenuPlan(member, {
+      sharedDrivesEnabled: true,
+      role: "manager",
+    });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  it.each(["reader", "writer"] as const)("is not offered it as a %s", (role) => {
+    const plan = resolveFolderMenuPlan(member, { sharedDrivesEnabled: true, role });
+    expect(plan.showShareDrive).toBe(false);
+  });
+
+  // Until the role arrives a member drive looks role-less; offering the mint
+  // on a guess would show a Viewer a control the server refuses.
+  it("is offered nothing while the role is unknown", () => {
+    const plan = resolveFolderMenuPlan(member, { sharedDrivesEnabled: true });
+    expect(plan.showShareDrive).toBe(false);
+  });
+
+  // A manager invites on the OWNER's drive, against the owner's plan, so
+  // holding them to this account's plan refuses what the server allows.
+  it("is not held to this account's plan", () => {
+    const plan = resolveFolderMenuPlan(member, {
+      sharedDrivesEnabled: true,
+      role: "manager",
+      planSupportsSharedDrives: false,
+    });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  // An owner on a Starter plan still is.
+  it("does not hold an owner to their plan either: the dialog prompts instead", () => {
+    const plan = resolveFolderMenuPlan({}, {
+      sharedDrivesEnabled: true,
+      planSupportsSharedDrives: false,
+    });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  // Member protections key on ownerSs58 alone, never on the role.
+  it("still cannot delete the owner's folder from the server", () => {
+    const plan = resolveFolderMenuPlan(member, {
+      sharedDrivesEnabled: true,
+      role: "manager",
+    });
+    expect(plan.showDeleteFromServer).toBe(false);
+    expect(plan.showExclusions).toBe(false);
+    expect(plan.removeIsLeave).toBe(true);
+  });
+});

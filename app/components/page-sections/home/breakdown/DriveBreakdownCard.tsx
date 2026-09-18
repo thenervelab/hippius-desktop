@@ -9,7 +9,10 @@ import {
   useSourceSummary,
 } from "@/app/lib/hooks/api/useDriveSummaries";
 
-import BreakdownCard, { type BreakdownSlice } from "./BreakdownCard";
+import BreakdownCard, {
+  nonEmptySlices,
+  type BreakdownSlice,
+} from "./BreakdownCard";
 
 /**
  * What is in the drive, two ways, behind one tab control.
@@ -53,9 +56,13 @@ const DriveBreakdownCard: React.FC<{ className?: string }> = ({ className }) => 
         label: "Others",
         count: types.data?.others ?? 0,
         color: "#9A9A9A",
-        // The same caveat the sources card carries on its grey bucket, so the
-        // two tabs explain themselves the same way.
-        note: "(before tracking)",
+        // NO "(before tracking)" note here, unlike the sources card. There it
+        // is true: a file uploaded before the client recorded which app sent
+        // it genuinely has no known source. A file's TYPE is read from the
+        // file itself and has always been known, so "Others" is audio,
+        // archives, code and the server's catch-all, not files that predate
+        // anything. Carrying the caveat across made the card explain a
+        // limitation it does not have.
       },
     ],
     [types.data],
@@ -90,7 +97,11 @@ const DriveBreakdownCard: React.FC<{ className?: string }> = ({ className }) => 
           <MonitorSmartphone className="size-[14px]" />
         )
       }
-      slices={showingTypes ? typeSlices : sourceSlices}
+      // Categories nothing landed in are dropped rather than listed as
+      // zeroes: a drive uploaded only from the console showed "Desktop 0",
+      // "Mobile 0" and "Other 0" under the bar, which reads as a fact about
+      // the account rather than as an absent category.
+      slices={nonEmptySlices(showingTypes ? typeSlices : sourceSlices)}
       isLoading={active.isLoading}
       isError={active.isError}
       emptyText={

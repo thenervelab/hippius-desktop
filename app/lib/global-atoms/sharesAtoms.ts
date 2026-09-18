@@ -132,6 +132,30 @@ export const finderShareAtom = atom<FinderShareState | null>(null);
 export type ShareDriveModalTarget = {
   label: string;
   folderName: string;
+  /**
+   * The drive's WIRE identity, when it is one shared with this account that
+   * is not synced here.
+   *
+   * A manager may hold a drive they never synced. The manage IPCs resolve a
+   * local `sync_paths` row such a drive does not have, and the lenient
+   * fallback then answers with THIS account's namespace — managing the wrong
+   * drive rather than failing. Naming the identity is what addresses theirs.
+   * Absent for an own drive, where the label resolves.
+   */
+  ownerSs58?: string;
+  folderHash?: string;
 };
 
 export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);
+
+/**
+ * The drive whose "create invite link" dialog is open.
+ *
+ * Separate from the panel so minting keeps its own focused surface. The panel
+ * is for managing what already exists -- who is in the drive, which links are
+ * live -- and a mint is a short, decision-shaped flow that ends in a link to
+ * copy. Putting it in the panel made a list surface carry a wizard.
+ */
+export const createDriveInviteDialogAtom = atom<ShareDriveModalTarget | null>(
+  null,
+);

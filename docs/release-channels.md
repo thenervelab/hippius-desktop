@@ -153,6 +153,22 @@ The push to `main` then:
 Before announcing, confirm an already-installed copy is actually offered the
 update. That is the one check that would catch a signing-key mistake.
 
+### Then open the next version on `staging`
+
+Once `main` carries `0.6.3`, bump `staging` to `0.6.4-dev.1` — the next
+version's dev line, not the released one's.
+
+This is easy to forget and its symptom points somewhere else. `staging` keeps
+whatever `-dev.N` it had, and semver ranks a prerelease BELOW its release:
+`0.6.3-dev.1 < 0.6.3`. So every staging build is permanently "out of date",
+offers the production release as an upgrade on each launch, and anyone running
+one is prompted to downgrade out of the lane they are testing. Nothing looks
+broken — the updater is working exactly as designed — so it reads as an updater
+bug rather than a stale version file.
+
+The same three files plus the `Cargo.lock` entry, exactly as anywhere else.
+`Info.plist` stays untouched.
+
 ## One updater key for every lane
 
 Every lane signs with `TAURI_SIGNING_PRIVATE_KEY`, and `tauri.conf.json` carries

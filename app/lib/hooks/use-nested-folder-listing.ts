@@ -12,6 +12,8 @@ interface SyncFileEntry {
   arion_hash?: string;
   arion_cid?: string;
   sync_status?: string;
+  /** SS58 of whoever uploaded this revision, when the server attributes it. */
+  uploaded_by?: string | null;
 }
 
 interface GroupedListing {
@@ -76,6 +78,14 @@ interface UseNestedFolderListingOptions {
    * so the existing download/preview/rename gates route them correctly.
    */
   remote?: boolean;
+  /**
+   * REMOTE mode, for a drive shared with this account that is NOT synced
+   * here: its wire identity, since there is no local row to resolve a label
+   * against. Listing needs no folder key — `/browse` returns names and paths
+   * in plaintext and authorises any member of the named drive; the key is
+   * only wanted to open a file's contents.
+   */
+  sharedDrive?: { ownerSs58: string; folderHash: string } | null;
   /**
    * PAGED mode: which page to show, 1-based.
    *
@@ -166,6 +176,7 @@ export function useNestedFolderListing({
   refreshKey,
   enabled,
   remote = false,
+  sharedDrive = null,
   page,
   pageSize,
   sortBy,
@@ -242,7 +253,17 @@ export function useNestedFolderListing({
   // `lastLoadedKeyRef` to decide whether the data we hold matches the
   // currently-requested folder.
   // Remote drives have no local sync path — their root key is the label.
-  const rootKey = remote ? (label ? `${REMOTE_SOURCE_PREFIX}${label}` : null) : syncPath || null;
+  // A shared drive's wire identity is part of its root key, not just its
+  // label: two owners' drives can carry the same display name, and keying on
+  // the label alone would serve one drive's rows under the other's name.
+  const sharedKeyPart = sharedDrive
+    ? `::${sharedDrive.ownerSs58}:${sharedDrive.folderHash}`
+    : "";
+  const rootKey = remote
+    ? label
+      ? `${REMOTE_SOURCE_PREFIX}${label}${sharedKeyPart}`
+      : null
+    : syncPath || null;
 
   // The page is part of the key ONLY in paged remote mode: that is the one
   // case where a different page is a different request. A local listing
@@ -329,6 +350,7 @@ export function useNestedFolderListing({
           // Every row of a browsed remote drive, files included — the
           // `remote://` source only ever reached folder rows.
           remoteDriveLabel: remote ? label || undefined : undefined,
+          uploadedBy: entry.uploaded_by || undefined,
           syncStatus:
             (entry.sync_status as FormattedUserFile["syncStatus"]) ??
             "unknown",
@@ -400,6 +422,8 @@ export function useNestedFolderListing({
               limit: rowsPerPage,
               sortBy: sortBy ?? null,
               sortOrder: sortDir ?? null,
+              ownerSs58: sharedDrive?.ownerSs58 ?? null,
+              folderHash: sharedDrive?.folderHash ?? null,
             },
           );
           if (!stillCurrent()) return;
@@ -486,6 +510,10 @@ export function useNestedFolderListing({
     remote,
     rootKey,
     mapEntries,
+    // Encoded in `rootKey`, but named so the effect re-runs when the drive
+    // being browsed changes without its display label changing.
+    sharedDrive?.ownerSs58,
+    sharedDrive?.folderHash,
     // A different page is a different request, so it has to re-run the
     // effect. `pageKeyPart` alone, because it already encodes the page AND
     // the size for the one mode that re-fetches, and is the empty string in
@@ -530,6 +558,8 @@ export function useNestedFolderListing({
             subfolder: subfolder || "",
             offset,
             limit: REMOTE_PAGE_SIZE,
+            ownerSs58: sharedDrive?.ownerSs58 ?? null,
+            folderHash: sharedDrive?.folderHash ?? null,
           },
         );
         if (currentKeyRef.current !== pageKey || fetchGenRef.current !== gen) return;

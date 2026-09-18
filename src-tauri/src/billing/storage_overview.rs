@@ -81,6 +81,14 @@ const FREE_TIER_FALLBACK_GB: u64 = 10;
 pub struct PlanInfo {
     /// Human plan name (e.g. "Pro"); may be empty if the API omits it.
     pub name: String,
+    /// The plan's CODE (`free` | `solo` | `duo` | `max` | `scale`), which is
+    /// what an entitlement decision keys on. Empty when the rail did not say
+    /// — the legacy Stripe subscription has no code at all.
+    ///
+    /// Distinct from [`Self::name`] on purpose: `name` is a marketing label
+    /// that changes without a release, so a feature gate written against it
+    /// silently stops matching. Shared drives' gate reads this.
+    pub code: String,
     /// Price per billing interval, in the plan's currency unit.
     pub amount: f64,
     /// Billing interval as the API reports it (e.g. "month", "year").
@@ -578,6 +586,7 @@ fn plan_from_drive_subscription(sub: &serde_json::Value, plans: &serde_json::Val
 
     Some(PlanInfo {
         name,
+        code: code.to_string(),
         amount,
         interval: "month".into(),
         storage_bytes,
@@ -600,6 +609,10 @@ fn plan_from_subscription(active: &serde_json::Value) -> Option<PlanInfo> {
     let storage_gb = capacity_gb_for_credits(credits_per_billing);
     Some(PlanInfo {
         name: sub.get("plan_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        // The legacy Stripe storage subscription predates plan codes. Empty
+        // means "unknown", which entitlement treats as permitted rather than
+        // refused — see `planEntitlement.ts`.
+        code: String::new(),
         amount: sub.get("amount").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
         interval: sub.get("interval").and_then(|v| v.as_str()).unwrap_or("month").to_string(),
         storage_bytes: storage_gb.saturating_mul(BYTES_PER_GB),
@@ -722,8 +735,20 @@ pub async fn get_storage_overview(
 mod tests {
     use super::*;
 
+    /// The shared-drives gate keys on the plan CODE, and there is no codegen
+    /// across IPC to catch it going missing. A gate written against `name`
+    /// silently stops matching when marketing renames a tier, which is the
+    /// bug this field exists to end.
+    #[test]
+    fn plan_info_sends_the_code_as_well_as_the_name() {
+        let json = serde_json::to_value(pro_plan(100)).unwrap();
+        assert_eq!(json["code"], "max", "the plan code must reach the frontend");
+        assert!(json.get("name").is_some(), "the display name stays, for the chip");
+    }
+
     fn pro_plan(gb: u64) -> PlanInfo {
         PlanInfo {
+            code: "max".into(),
             name: "Pro".into(),
             amount: 5.0,
             interval: "month".into(),
@@ -737,6 +762,7 @@ mod tests {
 
     fn plan_funded(by: &str, amount: f64) -> PlanInfo {
         PlanInfo {
+            code: "max".into(),
             funding: Some(by.into()),
             amount,
             ..pro_plan(100)

@@ -47,8 +47,14 @@ describe("the New Folder dialog", () => {
   });
 
   // Rust validates the name; a second copy of the rules here would drift.
+  //
+  // The pattern names the CHECKS, not the characters. It used to be a bare
+  // `/\.\.|.../`, which matched any two dots anywhere and so flagged an
+  // ordinary spread (`...args`) as path-traversal validation.
   it("leaves name validation to the backend", () => {
     expect(dialog).toContain("errorMessage(err)");
-    expect(dialog).not.toMatch(/\.\.|includes\("\/"\)/);
+    expect(dialog).not.toMatch(/includes\(\s*["'`]\.\.["'`]\s*\)/);
+    expect(dialog).not.toMatch(/includes\(\s*["'`]\/["'`]\s*\)/);
+    expect(dialog).not.toMatch(/startsWith\(\s*["'`]\.["'`]\s*\)/);
   });
 });

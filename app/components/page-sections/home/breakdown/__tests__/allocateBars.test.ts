@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allocateBars, type BreakdownSlice } from "../BreakdownCard";
+import { allocateBars, type BreakdownSlice, nonEmptySlices } from "../BreakdownCard";
 
 const slice = (key: string, count: number): BreakdownSlice => ({
   key,
@@ -74,5 +74,44 @@ describe("allocateBars", () => {
   it("gives the larger category more bars", () => {
     const bars = allocateBars([slice("big", 90), slice("small", 10)]);
     expect(bars[0]).toBeGreaterThan(bars[1]);
+  });
+});
+
+// A zero slice draws no bar, but it still took a legend entry: a drive
+// uploaded only from the console listed "Desktop 0", "Mobile 0" and
+// "Other 0" beneath the bar. Those read as facts about the account rather
+// than as absent categories.
+describe("nonEmptySlices", () => {
+  const slice = (key: string, count: number) => ({
+    key,
+    label: key,
+    count,
+    color: "#000",
+  });
+
+  it("drops the categories nothing landed in", () => {
+    const kept = nonEmptySlices([
+      slice("console", 12),
+      slice("desktop", 0),
+      slice("mobile", 0),
+    ]);
+    expect(kept.map((s) => s.key)).toEqual(["console"]);
+  });
+
+  it("keeps every category that has something in it", () => {
+    const all = [slice("a", 1), slice("b", 2), slice("c", 3)];
+    expect(nonEmptySlices(all)).toHaveLength(3);
+  });
+
+  // The card renders its empty state off the total, which is zero either
+  // way, so nothing has to special-case an empty array.
+  it("returns nothing when every category is empty", () => {
+    expect(nonEmptySlices([slice("a", 0), slice("b", 0)])).toEqual([]);
+  });
+
+  // A negative count would be server nonsense; it is not a category with
+  // something in it.
+  it("treats a negative count as empty", () => {
+    expect(nonEmptySlices([slice("a", -3), slice("b", 1)]).map((s) => s.key)).toEqual(["b"]);
   });
 });
