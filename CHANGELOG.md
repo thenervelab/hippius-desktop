@@ -27,9 +27,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   they join as a Viewer (open and download), an Editor (also upload and delete) or
   a Manager (also invite and remove people), and says what the link allows before
   you send it.
-- **Change someone's role without removing them.** The members list can move a
-  person between Viewer, Editor and Manager in place — previously the only way to
-  change what someone could do was to remove them and invite them again.
+- **Change someone's role without removing them.** Each member in the list has a
+  menu offering Change role and Remove from drive; changing a role opens a dialog
+  that says what the new role grants before you save it. Previously the only way
+  to change what someone could do was to remove them and invite them again.
 
 
 - **The Overview shows what is in your Drive.** A card breaks your files down by

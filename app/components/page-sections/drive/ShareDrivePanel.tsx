@@ -29,10 +29,13 @@ import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
 import { useAtom, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, X } from "lucide-react";
+import { AlertCircle, UserRoundPen, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui";
+import { Button, Icons } from "@/components/ui";
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import ConfirmationDialog from "@/components/ConfirmationDialog";
+import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import { Select } from "@/components/ui/select/Select";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
@@ -58,6 +61,7 @@ import {
 } from "@/app/lib/shared-drives/inviteRowView";
 import {
   DRIVE_ROLES,
+  driveRoleDescription,
   driveRoleLabel,
   parseDriveRole,
   type DriveRole,
@@ -506,7 +510,7 @@ function MembersTab({
   return (
     <div>
       <div className="mb-3">
-        <InviteButton onClick={onCreateInvite} />
+        <InviteButton onClick={onCreateInvite} hasMembers />
       </div>
       <div className="max-h-[320px] overflow-y-auto">
         {members.map((member) => (
@@ -522,8 +526,21 @@ function MembersTab({
   );
 }
 
-/** The one way into the mint flow, which is a dialog rather than a tab. */
-function InviteButton({ onClick }: { onClick: () => void }) {
+/**
+ * The one way into the mint flow, which is a dialog rather than a tab.
+ *
+ * The label follows the drive's state. "Create invite link" is right for a
+ * drive nobody has joined -- it names the artefact, which is the thing that
+ * does not exist yet. Once people are in, the artefact is not the point any
+ * more and the same words read as though the earlier link had failed.
+ */
+function InviteButton({
+  onClick,
+  hasMembers = false,
+}: {
+  onClick: () => void;
+  hasMembers?: boolean;
+}) {
   return (
     <Button
       type="button"
@@ -532,8 +549,92 @@ function InviteButton({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       className="h-[34px] w-full rounded-[8px] text-[13px] font-medium"
     >
-      Create invite link
+      {hasMembers ? "Invite more people" : "Create invite link"}
     </Button>
+  );
+}
+
+/**
+ * Changing a member's role, as a dialog.
+ *
+ * The role used to be an inline `Select` on the row, which committed on
+ * selection: a mis-click silently changed what somebody could do to the
+ * drive, with only a toast to say so. A role is a decision, so it gets the
+ * app's decision surface -- pick, read what it grants, press Save -- and the
+ * row keeps a three-dot menu like every other row in the app.
+ */
+function ChangeRoleDialog({
+  member,
+  onClose,
+  onConfirm,
+}: {
+  member: DriveMemberInfo;
+  onClose: () => void;
+  onConfirm: (role: DriveRole) => void;
+}) {
+  const current = parseDriveRole(member.role);
+  const [role, setRole] = useState<DriveRole>(current);
+
+  return (
+    <FramedDialog
+      open
+      onClose={onClose}
+      title="Change role"
+      icon={<Users className="size-4 text-white" />}
+      maxWidth="max-w-[585px]"
+      contentClassName="sm:w-[405px]"
+    >
+      <div className="font-geist">
+        <p className="mb-5 break-all text-center font-mono text-xs text-grey-50 dark:text-grey-dark-600">
+          {member.memberSs58}
+        </p>
+
+        <div className="mb-6 flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+            They join as
+          </span>
+          <Select
+            ariaLabel="Member role"
+            value={role}
+            onValueChange={(value) => setRole(value as DriveRole)}
+            options={DRIVE_ROLES.map((r) => ({
+              label: driveRoleLabel(r),
+              value: r,
+            }))}
+          />
+          <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
+            {driveRoleDescription(role)}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <Button
+            type="button"
+            variant="primary"
+            size="auto"
+            // Saving the role somebody already has is a round-trip that
+            // changes nothing, so the button says there is nothing to do.
+            disabled={role === current}
+            onClick={() => {
+              onConfirm(role);
+              onClose();
+            }}
+            className="h-[38px] w-full rounded-[8px] text-[14px] font-medium leading-[1.4] tracking-[-0.28px]"
+          >
+            Save role
+          </Button>
+          <Button
+            type="button"
+            variant="defaultStable"
+            size="auto"
+            onClick={onClose}
+            className="h-[38px] w-full rounded-[8px] border border-grey-80 text-[14px] font-medium leading-[1.4] tracking-[-0.28px] text-grey-10 dark:border-white/10 dark:text-white"
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </FramedDialog>
   );
 }
 
@@ -546,89 +647,92 @@ function MemberRow({
   onRemove: (memberSs58: string) => void;
   onChangeRole: (memberSs58: string, role: DriveRole) => void;
 }) {
-  // Two-step inline confirm: the first click arms the row, the second
-  // actually removes — the SharesPageClient treatment, without a nested
-  // dialog inside a dialog.
-  const [confirming, setConfirming] = useState(false);
+  // Both destructive-ish actions are dialogs rather than inline controls.
+  // The row is 360px wide in a panel; an inline two-step confirm and a role
+  // select were competing for the same few pixels as the address they act on.
+  const [dialog, setDialog] = useState<"none" | "role" | "remove">("none");
   const joined = formatJoinedDate(member.createdAt);
   const role = parseDriveRole(member.role);
 
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div className="size-[28px] shrink-0 overflow-hidden rounded-full">
-          <Avatar name={member.memberSs58} size={28} variant="pixel" />
+    <>
+      <div className="flex items-center justify-between gap-2 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="size-[28px] shrink-0 overflow-hidden rounded-full">
+            <Avatar name={member.memberSs58} size={28} variant="pixel" />
+          </div>
+          <div className="min-w-0">
+            <p
+              className="truncate font-mono text-xs text-grey-10 dark:text-white"
+              title={member.memberSs58}
+            >
+              {middleTruncate(member.memberSs58, 22)}
+            </p>
+            <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
+              {/* The wire says reader/writer/manager; people read Viewer/
+                  Editor/Manager, and an unknown role degrades to Viewer
+                  rather than reading as management. */}
+              {driveRoleLabel(role)}
+              {joined ? ` · Joined ${joined}` : ""}
+            </p>
+          </div>
         </div>
-        <div className="min-w-0">
-          <p className="truncate font-mono text-xs text-grey-10 dark:text-white" title={member.memberSs58}>
-            {middleTruncate(member.memberSs58, 22)}
-          </p>
-          <p className="text-[11px] text-grey-50 dark:text-grey-dark-600">
-            {/* The wire says reader/writer/manager; people read Viewer/
-                Editor/Manager, and an unknown role degrades to Viewer
-                rather than reading as management. */}
-            {driveRoleLabel(role)}
-            {joined ? ` · Joined ${joined}` : ""}
-          </p>
-        </div>
+
+        {/* The same overflow menu every other row in the app carries, so a
+            member row is operated the way a drive row is. */}
+        <TableActionMenu
+          dropdownTitle=""
+          items={[
+            {
+              icon: <UserRoundPen className="size-4" />,
+              itemTitle: "Change role",
+              onItemClick: () => setDialog("role"),
+            },
+            {
+              icon: <Icons.Trash className="size-4" />,
+              itemTitle: "Remove from drive",
+              variant: "destructive",
+              onItemClick: () => setDialog("remove"),
+            },
+          ]}
+        >
+          <Button
+            variant="ghost"
+            size="auto"
+            aria-label={`Actions for ${member.memberSs58}`}
+            className="h-7 w-7 shrink-0 rounded-md p-0 text-grey-70 transition-colors hover:bg-grey-90 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white"
+          >
+            <Icons.EllipsisVertical className="size-[18px]" />
+          </Button>
+        </TableActionMenu>
       </div>
 
-      {!confirming && (
-        // The app's own Select, not a bare `<select>`: the native control
-        // renders with the platform's chrome, which in a dark panel reads as
-        // a foreign element rather than part of the row. `minimal` is the
-        // variant built for inline use -- no scroll buttons, no outer shadow.
-        <div className="w-[116px] shrink-0">
-          <Select
-            ariaLabel={`Role for ${member.memberSs58}`}
-            minimal
-            value={role}
-            onValueChange={(value) =>
-              onChangeRole(member.memberSs58, value as DriveRole)
-            }
-            options={DRIVE_ROLES.map((r) => ({
-              label: driveRoleLabel(r),
-              value: r,
-            }))}
-            triggerClassName="h-7 rounded-md border border-grey-80 px-2 text-xs font-medium dark:border-white/10"
-            valueClassName="text-xs font-medium text-grey-30 dark:text-grey-dark-600"
-          />
-        </div>
+      {dialog === "role" && (
+        <ChangeRoleDialog
+          member={member}
+          onClose={() => setDialog("none")}
+          onConfirm={(next) => onChangeRole(member.memberSs58, next)}
+        />
       )}
 
-      {confirming ? (
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="ghost"
-            size="auto"
-            onClick={() => {
-              setConfirming(false);
-              onRemove(member.memberSs58);
-            }}
-            className="h-7 rounded-md border border-error-50/40 px-2 text-xs font-medium text-error-50 hover:bg-error-50/10"
-          >
-            Confirm remove
-          </Button>
-          <Button
-            variant="ghost"
-            size="auto"
-            onClick={() => setConfirming(false)}
-            className="h-7 rounded-md px-2 text-xs font-medium text-grey-50 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:bg-white/10"
-          >
-            Cancel
-          </Button>
-        </div>
-      ) : (
-        <Button
-          variant="ghost"
-          size="auto"
-          onClick={() => setConfirming(true)}
-          className="h-7 shrink-0 rounded-md border border-grey-80 px-2 text-xs font-medium text-grey-30 hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
-        >
-          Remove
-        </Button>
-      )}
-    </div>
+      <ConfirmationDialog
+        open={dialog === "remove"}
+        onClose={() => setDialog("none")}
+        onBack={() => setDialog("none")}
+        onConfirm={() => {
+          setDialog("none");
+          onRemove(member.memberSs58);
+        }}
+        heading="Remove from drive"
+        icon={<Icons.Trash className="size-4 text-white" />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
+        confirmButtonClassName="text-white"
+        button="Remove"
+        text={`Remove this member from "${member.memberSs58.slice(0, 8)}…"?`}
+        helperText="They lose access on their next request. Files already downloaded to their device stay there, and any invite link still circulating keeps working — revoke it in the Links tab."
+      />
+    </>
   );
 }
 

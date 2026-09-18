@@ -4,6 +4,7 @@
 // terminals; the members tab's loading / rows / empty / unavailable
 // views and the two-step remove.
 
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
@@ -34,6 +35,30 @@ vi.mock("@/app/lib/hooks", async (importOriginal) => {
 });
 
 const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
+// The overflow menu is Radix-backed and does not open under jsdom's pointer
+// emulation. These tests are about what the row DOES with its two actions,
+// not about Radix, so the shell renders its items as plain buttons and the
+// behaviour underneath is exercised for real.
+vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
+  __esModule: true,
+  default: ({
+    items,
+    children,
+  }: {
+    items: { itemTitle: React.ReactNode; onItemClick?: () => void }[];
+    children: React.ReactNode;
+  }) => (
+    <div>
+      {children}
+      {items.map((item, i) => (
+        <button key={i} type="button" onClick={() => item.onItemClick?.()}>
+          {item.itemTitle}
+        </button>
+      ))}
+    </div>
+  ),
+}));
+
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
     return flagState.sharedDrivesEnabled;
@@ -110,10 +135,20 @@ beforeEach(() => {
 
 
 
-/** Drive the app's Select: open by its aria-label, then click the option. */
-function chooseMemberRole(memberSs58: string, optionLabel: string) {
-  fireEvent.click(screen.getByLabelText(`Role for ${memberSs58}`));
+/** Open a member row's overflow menu and pick one of its two items. */
+function openMemberMenu(_memberSs58: string, item: "Change role" | "Remove from drive") {
+  fireEvent.click(screen.getByRole("button", { name: item }));
+}
+
+/**
+ * Drive the Change role dialog through to Save. The role commits on Save,
+ * never on selection — picking is not deciding.
+ */
+function changeMemberRoleTo(memberSs58: string, optionLabel: string) {
+  openMemberMenu(memberSs58, "Change role");
+  fireEvent.click(screen.getByLabelText("Member role"));
   fireEvent.click(screen.getByText(optionLabel));
+  fireEvent.click(screen.getByRole("button", { name: "Save role" }));
 }
 
 describe("flag gating", () => {
@@ -153,21 +188,57 @@ describe("members tab", () => {
     expect(listDriveMembersMock).toHaveBeenCalledWith("team-docs");
   });
 
-  it("offers every role in the picker, selecting the member's current one", async () => {
+  it("offers every role in the dialog, starting on the one the member has", async () => {
     listDriveMembersMock.mockResolvedValue([
       { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
     ]);
 
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    // The trigger shows the current role; opening it lists all three.
-    const trigger = await screen.findByLabelText(`Role for ${MEMBER}`);
+    await screen.findByRole("button", { name: "Change role" });
+    openMemberMenu(MEMBER, "Change role");
+
+    const trigger = await screen.findByLabelText("Member role");
     expect(trigger).toHaveTextContent("Editor");
 
     fireEvent.click(trigger);
     for (const label of ["Viewer", "Editor", "Manager"]) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
+  });
+
+  // Picking a role used to commit it. A mis-click then changed what somebody
+  // could do to the drive, with a toast as the only notice.
+  it("does not change the role until Save is pressed", async () => {
+    listDriveMembersMock.mockResolvedValue([
+      { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
+    ]);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Members" }));
+    await screen.findByRole("button", { name: "Change role" });
+    openMemberMenu(MEMBER, "Change role");
+
+    fireEvent.click(await screen.findByLabelText("Member role"));
+    fireEvent.click(screen.getByText("Manager"));
+    expect(changeDriveMemberRoleMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save role" }));
+    await waitFor(() => expect(changeDriveMemberRoleMock).toHaveBeenCalled());
+  });
+
+  // Saving the role somebody already has is a round-trip that changes nothing.
+  it("offers no Save until a different role is picked", async () => {
+    listDriveMembersMock.mockResolvedValue([
+      { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
+    ]);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Members" }));
+    await screen.findByRole("button", { name: "Change role" });
+    openMemberMenu(MEMBER, "Change role");
+
+    expect(await screen.findByRole("button", { name: "Save role" })).toBeDisabled();
   });
 
   it("changes a role and refetches, so the row reflects the server", async () => {
@@ -178,8 +249,8 @@ describe("members tab", () => {
 
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByLabelText(`Role for ${MEMBER}`);
-    chooseMemberRole(MEMBER, "Manager");
+    await screen.findByRole("button", { name: "Change role" });
+    changeMemberRoleTo(MEMBER, "Manager");
 
     await waitFor(() =>
       expect(changeDriveMemberRoleMock).toHaveBeenCalledWith(
@@ -207,33 +278,14 @@ describe("members tab", () => {
 
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByLabelText(`Role for ${MEMBER}`);
-    chooseMemberRole(MEMBER, "Viewer");
+    await screen.findByRole("button", { name: "Change role" });
+    changeMemberRoleTo(MEMBER, "Viewer");
 
     await waitFor(() =>
       expect(toastErrorMock).toHaveBeenCalledWith(
         expect.stringContaining("You cannot change your own role"),
       ),
     );
-  });
-
-  it("hides the role picker while a removal is being confirmed", async () => {
-    listDriveMembersMock.mockResolvedValue([
-      { memberSs58: MEMBER, role: "reader", createdAt: "2026-08-20T00:00:00Z" },
-    ]);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
-
-    // Two destructive-ish controls side by side invite a mis-click on the one
-    // the user was not looking at.
-    expect(
-      screen.queryByLabelText(`Role for ${MEMBER}`),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Confirm remove" }),
-    ).toBeInTheDocument();
   });
 
   it("shows the empty state when nobody joined yet", async () => {
@@ -252,7 +304,7 @@ describe("members tab", () => {
     await screen.findByText(/aren't available on your server yet/);
   });
 
-  it("removes a member only after the inline confirm, then refetches", async () => {
+  it("removes a member only after the confirm dialog, then refetches", async () => {
     const member = {
       memberSs58: "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
       role: "writer",
@@ -263,13 +315,13 @@ describe("members tab", () => {
 
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    const removeButton = await screen.findByRole("button", { name: "Remove" });
+    await screen.findByRole("button", { name: "Remove from drive" });
 
-    // First click arms; nothing is removed yet.
-    fireEvent.click(removeButton);
+    // Picking the menu item only opens the confirm; nothing is removed yet.
+    openMemberMenu(member.memberSs58, "Remove from drive");
     expect(removeDriveMemberMock).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Confirm remove" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
     await waitFor(() =>
       expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", member.memberSs58),
     );
