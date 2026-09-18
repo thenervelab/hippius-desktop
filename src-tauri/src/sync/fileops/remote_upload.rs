@@ -214,8 +214,10 @@ struct SealRequest<'a> {
     ciphertext_path: &'a Path,
     encryption_key: &'a [u8; 32],
     signing_key: &'a SigningKey,
-    account_id: &'a str,
-    label: &'a str,
+    /// The drive this file is being written INTO, resolved once by the
+    /// caller. The manifest names the namespace the file lands in, which for
+    /// a drive shared with this account is the OWNER's -- not the caller's.
+    identity: &'a DriveIdentity,
     size_bytes: u64,
     path_hash: [u8; 32],
     salted_hash: [u8; 32],
@@ -234,8 +236,15 @@ fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
     let signature = req.signing_key.sign(Manifest::generate_text(&ciphertext_hash).as_bytes());
 
     Ok(Manifest {
-        ss58_address: req.account_id.to_string(),
-        folder_hash: hcfs_client::drive::keys::folder_hash(req.label),
+        // The WIRE identity, never the caller's account or the local label.
+        // Both were wrong for a member drive in the same way: a file uploaded
+        // into a drive somebody shared landed in the uploader's OWN namespace
+        // under a hash derived from their local name for it, and the server
+        // accepted it because it is a perfectly valid file -- just not in the
+        // drive they were looking at. This is land mine 3 from the
+        // shared-drive rules, in a manifest assembled by hand.
+        ss58_address: req.identity.wire_ss58.clone(),
+        folder_hash: req.identity.wire_folder_hash.clone(),
         ciphertext_hash,
         size_bytes: req.size_bytes,
         timestamp: chrono::Utc::now().timestamp(),
@@ -387,7 +396,11 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
     // The salted hash is over the PLAINTEXT and is what the server uses to
     // recognise the same content again, so it is computed from the source
     // file, never from the ciphertext.
-    let (salted_hash, size_bytes) = hcfs_client::crypto::compute_salted_hash_file(source, account_id)
+    // Salted with the namespace the file LANDS in, matching the manifest: the
+    // server recognises identical content by this, so salting with the
+    // uploader's account on somebody else's drive would never match the
+    // drive's own files.
+    let (salted_hash, size_bytes) = hcfs_client::crypto::compute_salted_hash_file(source, &identity.wire_ss58)
         .map_err(|e| AppError::Crypto(format!("Failed to hash {}: {e}", source.display())))?;
 
     let relative_path = wire_relative_path(parent_path, &file_name);
@@ -424,8 +437,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
         ciphertext_path: &ciphertext_path,
         encryption_key: &encryption_key,
         signing_key: &signing_key,
-        account_id,
-        label,
+        identity,
         size_bytes,
         path_hash,
         salted_hash,

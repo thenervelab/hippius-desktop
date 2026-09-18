@@ -114,9 +114,13 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
     let new_encrypted_path = hcfs_client::crypto::encrypt_small(new_relative.as_bytes(), &encryption_key)
         .map_err(|e| AppError::Crypto(format!("Failed to seal the new path: {e}")))?;
 
-    let folder_hash = hcfs_client::drive::keys::folder_hash(label);
+    // The WIRE hash, not one derived from the local label: a member's local
+    // name for a drive cannot derive the owner's folder hash, so a rename on
+    // a drive shared with this account addressed a folder in the caller's own
+    // namespace instead. Land mine 3 from the shared-drive rules.
+    let folder_hash = identity.wire_folder_hash.clone();
     let client = super::remote::build_client(pool, account_id, identity).await?;
-    let base_revision_id = current_revision_id(&client, account_id, &folder_hash, &old_path_hash).await?;
+    let base_revision_id = current_revision_id(&client, &identity.wire_ss58, &folder_hash, &old_path_hash).await?;
 
     let renames = vec![SingleRename {
         old_path_hash,
@@ -417,16 +421,20 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
     let old_prefix = wire_relative_path(parent_path, old_name);
     let new_prefix = wire_relative_path(parent_path, new_name);
 
-    let folder_hash = hcfs_client::drive::keys::folder_hash(label);
+    // The WIRE hash, not one derived from the local label: a member's local
+    // name for a drive cannot derive the owner's folder hash, so a rename on
+    // a drive shared with this account addressed a folder in the caller's own
+    // namespace instead. Land mine 3 from the shared-drive rules.
+    let folder_hash = identity.wire_folder_hash.clone();
     let client = super::remote::build_client(pool, account_id, identity).await?;
 
     // The destination has to be free before anything moves.
-    let (sibling_folders, sibling_files) = browse_directory(&client, account_id, &folder_hash, parent_path).await?;
+    let (sibling_folders, sibling_files) = browse_directory(&client, &identity.wire_ss58, &folder_hash, parent_path).await?;
     let sibling_folder_paths: Vec<String> = sibling_folders.iter().map(|n| wire_relative_path(parent_path, n)).collect();
     let sibling_file_paths: Vec<String> = sibling_files.iter().filter_map(|f| f.relative_path.clone()).collect();
     assert_destination_available(&sibling_folder_paths, &sibling_file_paths, &old_prefix, &new_prefix)?;
 
-    let tree = collect_folder_tree(&client, account_id, &folder_hash, &old_prefix, &encryption_key).await?;
+    let tree = collect_folder_tree(&client, &identity.wire_ss58, &folder_hash, &old_prefix, &encryption_key).await?;
     let plan = plan_folder_rename(&tree, &old_prefix, &new_prefix)?;
 
     let mut moved = 0usize;
