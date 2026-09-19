@@ -10,6 +10,7 @@ pub mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+pub mod chat;
 pub mod cli;
 pub mod console_access;
 pub mod crypto;

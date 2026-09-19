@@ -91,6 +91,9 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "json",
     "stream",
     "rustls",
+    # OAuth token/revocation endpoints take `application/x-www-form-urlencoded`
+    # (chat sign-in). `serde_urlencoded` was already in the graph.
+    "form",
 ] }
 ed25519-dalek = "2.2"
 zip = { version = "4.2.0", default-features = false, features = ["deflate", "aes-crypto"] }
@@ -122,6 +125,8 @@ globset = "0.4"
 tauri-plugin-fs = "2"
 notify = "6.1"
 tauri-plugin-dialog = "2.6.0"
+# OS notifications for team chat messages (preference-gated in `chat::notify`).
+tauri-plugin-notification = "2"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 rand = "0.8"
 tauri-plugin-process = "2"
