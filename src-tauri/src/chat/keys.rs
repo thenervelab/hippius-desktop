@@ -33,6 +33,31 @@
 //! that form; [`canonical_mnemonic`] re-applies the rule defensively so a
 //! copy that picked up a trailing newline or a double space still lands on
 //! the same key as the console.
+//!
+//! ## Known-answer vectors (the contract, from the console's `KEYS.md` §6)
+//!
+//! Mnemonic → key, lower-case hex. Vectors 1 and 3 are BIP-39 test
+//! sentences; vector 2 has an invalid checksum on purpose — derivation does
+//! not validate the phrase. `matches_console_known_answer_vectors` asserts
+//! all three; the console's `keys.test.ts` asserts the same values, so a
+//! change on either side fails a test before it forks secret storage.
+//!
+//! ```text
+//! 1. "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+//!    28d1f8d8dd187fc10d89f4be00cde682049b0b60b234b070d02775454168b235
+//! 2. "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
+//!    0574e00d1a7803573e3ca5bed4d7cb4115b1de94c8019006c32d5fc1d0e1c078
+//! 3. "legal winner thank year wave sausage worth useful legal winner thank yellow"
+//!    5826f15b60ebb22aba735b6003eaef32d13eda1085c3fff213088b6a5b99744f
+//! ```
+//!
+//! Reproduce vector 1 independently of both code bases:
+//! `openssl kdf -keylen 32 -kdfopt digest:SHA256 -kdfopt key:"<mnemonic>"
+//! -kdfopt salt:hippius-chat-4s-v1 -kdfopt info:matrix-secret-storage HKDF`.
+//!
+//! The console's `crypto/secret-storage-keys.ts` and `constants.ts` carry
+//! the same id ([`CHAT_4S_KEY_ID`]) and display name ([`CHAT_4S_KEY_NAME`])
+//! under which the key is published in account data.
 
 use hkdf::Hkdf;
 use sha2::Sha256;

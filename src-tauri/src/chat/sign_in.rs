@@ -1,18 +1,37 @@
 //! OIDC sign-in bridge for team chat (MSC3861 / OAuth 2.0 authorization
 //! code with PKCE against the homeserver's authentication service).
 //!
-//! ## Why a loopback redirect
+//! ## Why a loopback redirect, not a `hippius://chat/callback` deep link
 //!
-//! The authentication service (matrix-authentication-service, "MAS") rejects
-//! custom-scheme redirect URIs of the `scheme://host/path` form the app's
-//! existing deep link uses (`hippiusapp://…` → `invalid_redirect_uri`,
-//! "not using a valid domain"). It accepts, for a `native` client, the RFC
-//! 8252 loopback form `http://127.0.0.1/chat/callback`, and — as the RFC
-//! requires — matches it **ignoring the port**. So sign-in binds an
-//! ephemeral port on `127.0.0.1`, registers the port-less URI once per
-//! issuer, and passes `http://127.0.0.1:<port>/chat/callback` at authorize
-//! time. No new URL scheme, no change to the deep-link plugin, and the
-//! browser's redirect lands in this process without going through the OS.
+//! The authentication service (matrix-authentication-service, "MAS") gates
+//! dynamic registration twice, and a `scheme://host/path` custom-scheme
+//! redirect fails both:
+//!
+//! 1. The registration handler runs every redirect URI's host through the
+//!    Public Suffix List and refuses a host that *is* a suffix
+//!    (`crates/handlers/src/oauth2/registration.rs`, `host_is_public_suffix`,
+//!    error "`{host}` is a public suffix, not a valid domain"). `.chat` is a
+//!    registered gTLD, so `hippius://chat/callback` has host `chat` and is
+//!    rejected before the policy even runs.
+//! 2. The default client-registration policy
+//!    (`policies/client_registration/client_registration.rego`,
+//!    `valid_native_redirector`) accepts, for `application_type: native`,
+//!    exactly two shapes: `http://` with host `localhost` / `127.0.0.1` /
+//!    `[::1]`, or a custom scheme with **no authority** whose scheme is a
+//!    reverse-DNS name strictly under `client_uri`'s host (`com.hippius.x:/…`
+//!    for `https://hippius.com/`). `hippius://…` has an authority and is not
+//!    reverse-DNS.
+//!
+//! The RFC 8252 loopback form is the one that needs no OS-level scheme
+//! registration, no change to the deep-link plugin, and — as the RFC
+//! requires and MAS implements (`LOCAL_HOSTS` in
+//! `crates/data-model/src/oauth2/client.rs`) — is matched **ignoring the
+//! port**. So sign-in binds an ephemeral port on `127.0.0.1`, registers the
+//! port-less [`REGISTERED_REDIRECT_URI`] once per issuer, and passes
+//! `http://127.0.0.1:<port>/chat/callback` at authorize time. The browser's
+//! redirect lands in this process without going through the OS. The test
+//! `registered_redirect_uri_is_a_shape_mas_accepts_for_native_clients` pins
+//! the shape against those two rules.
 //!
 //! ## Why the system browser
 //!
@@ -817,6 +836,36 @@ mod tests {
         );
         let v = new_code_verifier();
         assert!(v.len() >= 43 && v.len() <= 128);
+    }
+
+    /// The registered redirect URI must satisfy both of MAS's native-client
+    /// rules (module docs, "Why a loopback redirect"): an `http` scheme with
+    /// a loopback host, no port (RFC 8252 §7.3 — the port is matched
+    /// loosely), no fragment, and a host that is not a public suffix. The
+    /// per-flow URI differs only by the port. A `hippius://chat/callback`
+    /// deep link — the shape one would reach for first — fails: `chat` is a
+    /// gTLD and the URI has an authority.
+    #[test]
+    fn registered_redirect_uri_is_a_shape_mas_accepts_for_native_clients() {
+        const MAS_LOOPBACK_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]"];
+        let registered = reqwest::Url::parse(REGISTERED_REDIRECT_URI).unwrap();
+        assert_eq!(registered.scheme(), "http");
+        assert!(MAS_LOOPBACK_HOSTS.contains(&registered.host_str().unwrap()));
+        assert_eq!(registered.port(), None, "registered port-less; MAS matches loopback ignoring the port");
+        assert_eq!(registered.path(), CALLBACK_PATH);
+        assert!(registered.fragment().is_none());
+
+        // The per-flow URI `begin` builds is the registered one plus a port.
+        let per_flow = reqwest::Url::parse(&format!("http://127.0.0.1:54321{CALLBACK_PATH}")).unwrap();
+        let mut stripped = per_flow.clone();
+        stripped.set_port(None).unwrap();
+        assert_eq!(stripped, registered);
+
+        // And the deep-link shape is NOT loopback: it carries an authority
+        // (`chat`) — which is also a public suffix — so MAS refuses it.
+        let deep_link = reqwest::Url::parse("hippius://chat/callback").unwrap();
+        assert_eq!(deep_link.host_str(), Some("chat"));
+        assert!(!MAS_LOOPBACK_HOSTS.contains(&deep_link.host_str().unwrap()));
     }
 
     #[test]
