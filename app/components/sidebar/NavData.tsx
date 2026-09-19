@@ -1,5 +1,5 @@
 import { Icons } from "@/components/ui";
-import { Share2Icon } from "lucide-react";
+import { MessagesSquare, Share2Icon } from "lucide-react";
 import Support from "../ui/icons/Support";
 import {
   WALLET_FEATURE_ENABLED,
@@ -28,9 +28,11 @@ export interface NavItemData {
   // item. `"shares"` hides the entry until the connected hcfs-server
   // advertises `shares: true` (see `shareFeatureEnabledAtom`); `"wallet"`
   // hides it while `WALLET_FEATURE_ENABLED` is off; `"referrals"` hides it
-  // while `REFERRALS_FEATURE_ENABLED` is off. Adding a new gate is one
-  // entry here plus one branch in `filterNavSections`.
-  featureFlag?: "shares" | "wallet" | "referrals";
+  // while `REFERRALS_FEATURE_ENABLED` is off; `"chat"` hides it until Rust's
+  // `chat_get_config` reports `enabled: true` (see `chatEnabledAtom`).
+  // Adding a new gate is one entry here plus one branch in
+  // `filterNavSections`.
+  featureFlag?: "shares" | "wallet" | "referrals" | "chat";
 }
 
 export interface NavSection {
@@ -59,6 +61,12 @@ export const navSections: NavSection[] = [
         label: "Drive",
         path: "/files",
         icon: <Icons.Category className={ICON_CLASS} />,
+      },
+      {
+        label: "Chat",
+        path: "/chat",
+        icon: <MessagesSquare className={ICON_CLASS} strokeWidth={1.5} />,
+        featureFlag: "chat",
       },
       // The "Confidential Computing" group and its single Virtual Machines
       // child were removed here on 2026-09-08: the term is going from the
@@ -116,9 +124,11 @@ export const navSections: NavSection[] = [
  * Resolve which nav sections/items are visible for the current gates.
  *
  * Pure so the gating rules are unit-testable: `shares` is a runtime server
- * capability (passed in by the sidebar from `shareFeatureEnabledAtom`),
- * while `wallet` and `referrals` are the build-time `WALLET_FEATURE_ENABLED`
- * / `REFERRALS_FEATURE_ENABLED` flags (defaulted here so callers don't
+ * capability (passed in by the sidebar from `shareFeatureEnabledAtom`) and
+ * `chat` is the runtime answer of Rust's `chat_get_config` (from
+ * `chatEnabledAtom`; defaults to hidden until known), while `wallet` and
+ * `referrals` are the build-time `WALLET_FEATURE_ENABLED` /
+ * `REFERRALS_FEATURE_ENABLED` flags (defaulted here so callers don't
  * re-import them). Sections whose items are all filtered out are dropped
  * entirely so no orphaned heading renders.
  */
@@ -126,6 +136,7 @@ export function filterNavSections(
   sections: NavSection[],
   gates: {
     shareEnabled: boolean;
+    chatEnabled?: boolean;
     walletEnabled?: boolean;
     referralsEnabled?: boolean;
   },
@@ -140,6 +151,7 @@ export function filterNavSections(
         if (item.featureFlag === "shares") return gates.shareEnabled;
         if (item.featureFlag === "wallet") return walletEnabled;
         if (item.featureFlag === "referrals") return referralsEnabled;
+        if (item.featureFlag === "chat") return gates.chatEnabled === true;
         return true;
       }),
     }))

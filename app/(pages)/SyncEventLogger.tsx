@@ -5,6 +5,7 @@ import { useSyncSnapshotListener } from "@/lib/hooks/useSyncSnapshot";
 import { useRemoteUploadFeedListener } from "@/app/lib/remote-upload/useRemoteUploadFeed";
 import { useDriveStatuses } from "@/lib/hooks/useDriveStatuses";
 import { useServerCapabilities } from "@/lib/hooks/useServerCapabilities";
+import { useChatConfig } from "@/lib/hooks/useChatConfig";
 import { useUploadProcessing } from "@/lib/hooks/useUploadProcessing";
 import { useCreditsExhausted } from "@/lib/hooks/useCreditsExhausted";
 import { useMetadataStale } from "@/lib/hooks/useMetadataStale";
@@ -45,5 +46,8 @@ export default function SyncEventLogger() {
   // can gate themselves on `shares: true` without each surface fetching
   // separately. Cleared automatically on logout.
   useServerCapabilities();
+  // Caches `chatConfigAtom` once per process so the sidebar "Chat" entry
+  // and the `/chat` route gate on the same Rust-decided answer.
+  useChatConfig();
   return null;
 }
