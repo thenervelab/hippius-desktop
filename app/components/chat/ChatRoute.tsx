@@ -5,7 +5,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import { chatConfigAtom } from "@/app/lib/global-atoms/chatAtoms";
-import { ChatProvider, useChat } from "@/components/chat/ChatProvider";
+import { useChat } from "@/components/chat/ChatProvider";
 import ChatSignedOut from "@/components/chat/ChatSignedOut";
 import ChatShell from "@/components/chat/ChatShell";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,11 @@ import { Button } from "@/components/ui/button";
  * flash to the overview on every cold load would be wrong); once known
  * and disabled the route is client-side replaced with the overview, like
  * `FeatureDisabledRedirect` does for build-time flags.
+ *
+ * The chat client itself is not started here: `ChatHost` in the protected
+ * layout owns the `ChatProvider` for the whole signed-in session (so
+ * notifications and the unread badge work off this page); this route only
+ * reads its context.
  */
 export default function ChatRoute() {
   const config = useAtomValue(chatConfigAtom);
@@ -28,11 +33,9 @@ export default function ChatRoute() {
 
   if (!enabled) return null;
   return (
-    <ChatProvider>
-      <div className="flex h-full min-h-0 w-full flex-1 flex-col">
-        <ChatBody />
-      </div>
-    </ChatProvider>
+    <div className="flex h-full min-h-0 w-full flex-1 flex-col">
+      <ChatBody />
+    </div>
   );
 }
 
@@ -55,21 +58,27 @@ function ChatBody() {
       return <ChatSignedOut onSignIn={signIn} />;
 
     case "signing-in":
-      return <ChatSignedOut onSignIn={signIn} signingIn onCancel={cancelSignIn} />;
+      return (
+        <ChatSignedOut onSignIn={signIn} signingIn onCancel={cancelSignIn} />
+      );
 
     case "unavailable":
       // The keyring could not be read. Not a sign-in problem: offering the
       // button here would fail again at the keyring write.
-      return (
-        <Unavailable message={connection.message} onRetry={retry} />
-      );
+      return <Unavailable message={connection.message} onRetry={retry} />;
 
     case "error":
       if (!connection.session) {
-        return <ChatSignedOut onSignIn={signIn} errorMessage={connection.message} />;
+        return (
+          <ChatSignedOut onSignIn={signIn} errorMessage={connection.message} />
+        );
       }
       return (
-        <Unavailable message={connection.message} onRetry={retry} onSignOut={signOut} />
+        <Unavailable
+          message={connection.message}
+          onRetry={retry}
+          onSignOut={signOut}
+        />
       );
 
     case "ready":
@@ -92,12 +101,19 @@ function Unavailable({
         <h2 className="text-lg font-medium text-grey-10 dark:text-grey-light-100">
           Chat is unavailable
         </h2>
-        <p role="alert" className="mt-2 text-sm text-grey-60 dark:text-grey-dark-700">
+        <p
+          role="alert"
+          className="mt-2 text-sm text-grey-60 dark:text-grey-dark-700"
+        >
           {message}
         </p>
         <div className="mt-6 flex gap-3">
           {onSignOut ? (
-            <Button variant="defaultStable" size="sm" onClick={() => void onSignOut()}>
+            <Button
+              variant="defaultStable"
+              size="sm"
+              onClick={() => void onSignOut()}
+            >
               Sign out of chat
             </Button>
           ) : null}

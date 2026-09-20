@@ -195,6 +195,21 @@ export function totalUnread(buckets: RoomBuckets): { unread: number; highlight: 
   return { unread, highlight };
 }
 
+/**
+ * The number on the dock badge and in the window title: every unread DM
+ * message plus the mentions in channels, muted rooms excluded. It is the
+ * same set of messages the desktop notifies for (Rust's `decide_notify`:
+ * DMs always, channels only on a mention), so the badge never counts a
+ * message the app did not consider worth interrupting for — Slack's
+ * badge rule. Plain channel unreads stay a sidebar dot.
+ */
+export function attentionCount(buckets: RoomBuckets): number {
+  let count = 0;
+  for (const room of buckets.dms) if (!room.muted) count += room.unread;
+  for (const room of buckets.channels) if (!room.muted) count += room.highlight;
+  return count;
+}
+
 /** Slack-style display: `#general` for channels, the person's name for DMs. */
 export function roomLabel(summary: Pick<RoomSummary, "kind" | "name">): string {
   return summary.kind === "dm" ? summary.name : `#${summary.name.replace(/^#/, "")}`;

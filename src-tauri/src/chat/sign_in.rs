@@ -115,6 +115,12 @@ pub struct AuthMetadata {
 pub struct ChatState {
     http: reqwest::Client,
     pending: Mutex<HashMap<String, PendingSignIn>>,
+    /// Last unread count the webview reported (`chat_set_unread_badge`).
+    /// The dock badge and the window title are derived from it in
+    /// `notify`; kept here so a second window (the tray popover) can seed
+    /// its own mirror from `chat_get_unread_count` instead of waiting for
+    /// the next change event.
+    pub unread: std::sync::atomic::AtomicU32,
 }
 
 impl Default for ChatState {
@@ -128,6 +134,7 @@ impl ChatState {
         Self {
             http: reqwest::Client::builder().timeout(HTTP_TIMEOUT).build().expect("chat HTTP client"),
             pending: Mutex::new(HashMap::new()),
+            unread: std::sync::atomic::AtomicU32::new(0),
         }
     }
 }

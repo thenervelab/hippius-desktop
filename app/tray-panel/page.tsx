@@ -25,6 +25,7 @@ import Search from "@/app/components/ui/icons/Search";
 import Command from "@/app/components/ui/icons/Command";
 import ArrowRight from "@/app/components/ui/icons/ArrowRight";
 import Notification from "@/app/components/ui/icons/Notification";
+import { MessagesSquare } from "lucide-react";
 import BoxSimple from "@/app/components/ui/icons/BoxSimple";
 
 // Same identicon the sidebar/ProfileCard uses; client-only (no SSR).
@@ -53,7 +54,16 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  * field mirrors the sidebar's search styling.
  */
 export default function TrayPanelPage() {
-  const { menu, feed, snapshot, blockNumber, isConnected, unreadCount, loading } = useTrayPanelData();
+  const {
+    menu,
+    feed,
+    snapshot,
+    blockNumber,
+    isConnected,
+    unreadCount,
+    chatUnread,
+    loading,
+  } = useTrayPanelData();
   // Date-bucketed for the headed list (Today / Yesterday / This Week / …).
   // Live uploading/failed rows carry createdAt=now, so they lead "Today".
   const groups = groupUploadFeed(feed);
@@ -99,72 +109,84 @@ export default function TrayPanelPage() {
     // Linux/Windows the card is opaque with a hairline border instead (see
     // `cardSurface`). The card's 16px corners line up with the window radius.
     <div className="tray-panel-shell flex h-screen w-screen">
-      <div className={`tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] ${cardSurface} font-geist text-black dark:text-white`}>
-        <Header credits={menu?.credits ?? null} unreadCount={unreadCount} />
+      <div
+        className={`tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] ${cardSurface} font-geist text-black dark:text-white`}
+      >
+        <Header
+          credits={menu?.credits ?? null}
+          unreadCount={unreadCount}
+          chatUnread={chatUnread}
+        />
         <SearchBar />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-2">
-        <h2 className="py-2 font-geist text-[16px] font-medium leading-8 text-grey-10 dark:text-white">Your Uploads</h2>
+          <h2 className="py-2 font-geist text-[16px] font-medium leading-8 text-grey-10 dark:text-white">
+            Your Uploads
+          </h2>
 
-        {/* Live sync-progress summary (percent + status + synced/remaining),
+          {/* Live sync-progress summary (percent + status + synced/remaining),
             mirroring the sidebar sync widget. Renders only while a session is
             active or just finished; getTraySyncSummary returns null when idle. */}
-        <SyncSummary snapshot={snapshot} />
+          <SyncSummary snapshot={snapshot} />
 
-        {feed.length === 0 && loading ? (
-          // First load (no data yet): skeleton placeholders instead of the
-          // empty state, so a fresh open doesn't flash "No files yet" before the
-          // first fetch resolves. The empty state is shown only once loading
-          // settles with a genuinely empty feed (below).
-          <UploadRowsSkeleton />
-        ) : feed.length === 0 ? (
-          // Empty state: a single simple rounded card (no graphsheet / guide
-          // lines / corner textures) with copy + the Upload CTA that opens the
-          // Drive page.
-          <div className="flex flex-1 items-center justify-center py-2">
-            {/* Explicit rgba fills/borders, not the arbitrary opacity-modifier
+          {feed.length === 0 && loading ? (
+            // First load (no data yet): skeleton placeholders instead of the
+            // empty state, so a fresh open doesn't flash "No files yet" before the
+            // first fetch resolves. The empty state is shown only once loading
+            // settles with a genuinely empty feed (below).
+            <UploadRowsSkeleton />
+          ) : feed.length === 0 ? (
+            // Empty state: a single simple rounded card (no graphsheet / guide
+            // lines / corner textures) with copy + the Upload CTA that opens the
+            // Drive page.
+            <div className="flex flex-1 items-center justify-center py-2">
+              {/* Explicit rgba fills/borders, not the arbitrary opacity-modifier
                 form (border-black/[0.08] etc.), which didn't render in light
                 mode here — same fix applied to the footer and credits pill. */}
-            <div className="flex w-full flex-col gap-4 rounded-2xl border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-5 shadow-sm dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
-              <div className="flex flex-col gap-1.5">
-                <h3 className="font-geist text-[18px] font-medium leading-6 tracking-[-0.54px] text-grey-10 dark:text-white">
-                  No files yet
-                </h3>
-                <p className="font-geist text-[14px] leading-5 text-black/50 dark:text-white/50">
-                  Start by uploading a file to see it here.
-                </p>
+              <div className="flex w-full flex-col gap-4 rounded-2xl border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-5 shadow-sm dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
+                <div className="flex flex-col gap-1.5">
+                  <h3 className="font-geist text-[18px] font-medium leading-6 tracking-[-0.54px] text-grey-10 dark:text-white">
+                    No files yet
+                  </h3>
+                  <p className="font-geist text-[14px] leading-5 text-black/50 dark:text-white/50">
+                    Start by uploading a file to see it here.
+                  </p>
+                </div>
+                <Button
+                  variant="primary"
+                  size="auto"
+                  onClick={() => void openMainFiles()}
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl text-[15px] font-medium"
+                >
+                  <Upload className="size-4" />
+                  Upload a File
+                </Button>
               </div>
-              <Button
-                variant="primary"
-                size="auto"
-                onClick={() => void openMainFiles()}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl text-[15px] font-medium"
-              >
-                <Upload className="size-4" />
-                Upload a File
-              </Button>
             </div>
-          </div>
-        ) : (
-          // Date-grouped sections. `mergeUploadFeed` order (uploading → failed
-          // → completed) is preserved within each bucket, so active rows lead
-          // the "Today" group.
-          groups.map((group) => (
-            <section key={group.label} className="mb-1">
-              <h3 className="mb-1 mt-3 font-mono text-[14px] font-medium uppercase leading-5 tracking-[-0.28px] text-grey-70">
-                {group.label}
-              </h3>
-              <ul>
-                {group.items.map((item) => (
-                  <UploadRowItem key={uploadRowKey(item)} item={item} />
-                ))}
-              </ul>
-            </section>
-          ))
-        )}
-      </div>
+          ) : (
+            // Date-grouped sections. `mergeUploadFeed` order (uploading → failed
+            // → completed) is preserved within each bucket, so active rows lead
+            // the "Today" group.
+            groups.map((group) => (
+              <section key={group.label} className="mb-1">
+                <h3 className="mb-1 mt-3 font-mono text-[14px] font-medium uppercase leading-5 tracking-[-0.28px] text-grey-70">
+                  {group.label}
+                </h3>
+                <ul>
+                  {group.items.map((item) => (
+                    <UploadRowItem key={uploadRowKey(item)} item={item} />
+                  ))}
+                </ul>
+              </section>
+            ))
+          )}
+        </div>
 
-        <Footer address={menu?.substrateAddress ?? null} blockNumber={blockNumber} isConnected={isConnected} />
+        <Footer
+          address={menu?.substrateAddress ?? null}
+          blockNumber={blockNumber}
+          isConnected={isConnected}
+        />
       </div>
     </div>
   );
@@ -173,8 +195,19 @@ export default function TrayPanelPage() {
 /** Top bar: brand mark (left) and a single pill holding credits + a divider +
  *  the notification bell (right) — matching the Figma header. The bell mirrors
  *  the top-bar bell: it shows the live unread count and, on click, focuses the
- *  main window and opens its existing notifications dropdown. */
-function Header({ credits, unreadCount }: { credits: number | null; unreadCount: number }) {
+ *  main window and opens its existing notifications dropdown. While chat has
+ *  unread DMs/mentions (the dock-badge number), a chat button with that count
+ *  sits before the bell and opens the main window's chat page; it is absent at
+ *  zero so a user without chat sees the header unchanged. */
+function Header({
+  credits,
+  unreadCount,
+  chatUnread,
+}: {
+  credits: number | null;
+  unreadCount: number;
+  chatUnread: number;
+}) {
   return (
     <header className="flex items-center justify-between px-5 pt-5">
       {/* The Hippius mark shown directly (its own blue + white outline), with
@@ -190,14 +223,40 @@ function Header({ credits, unreadCount }: { credits: number | null; unreadCount:
             CREDITS
           </span>
           <span className="truncate font-mono text-[12px] font-medium uppercase leading-5 tracking-[-0.24px] text-black dark:text-white">
-            {credits === null ? "—" : credits.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            {credits === null
+              ? "—"
+              : credits.toLocaleString(undefined, { maximumFractionDigits: 2 })}
           </span>
         </div>
         <div className="h-6 w-px shrink-0 rounded-2xl bg-[#606060] opacity-40" />
+        {chatUnread > 0 && (
+          <button
+            type="button"
+            onClick={() => void openMainChat()}
+            aria-label={`Chat, ${chatUnread} unread`}
+            className="relative flex h-9 w-9 items-center justify-center rounded-lg text-black transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/10"
+          >
+            <MessagesSquare className="size-[14px] shrink-0 opacity-40" />
+            <span
+              data-testid="tray-chat-unread-count"
+              className={`absolute -right-0.5 -top-0.5 flex items-center justify-center rounded-full bg-primary-50 font-medium leading-none text-white ${
+                chatUnread < 10
+                  ? "h-4 min-w-4 text-[10px]"
+                  : "h-3 min-w-3 px-[3px] text-[7px]"
+              }`}
+            >
+              {chatUnread > 99 ? "99+" : chatUnread}
+            </span>
+          </button>
+        )}
         <button
           type="button"
           onClick={() => void openMainNotifications()}
-          aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"}
+          aria-label={
+            unreadCount > 0
+              ? `Notifications, ${unreadCount} unread`
+              : "Notifications"
+          }
           className="relative flex h-9 w-9 items-center justify-center rounded-lg text-black transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/10"
         >
           <Notification className="size-[14px] shrink-0 opacity-40" />
@@ -235,7 +294,9 @@ function SearchBar() {
       >
         <span className="flex min-w-0 items-center gap-2 text-black/30 dark:text-white/30">
           <Search className="size-[18px] shrink-0" />
-          <span className="truncate font-geist text-[16px] font-medium leading-5">Search Files</span>
+          <span className="truncate font-geist text-[16px] font-medium leading-5">
+            Search Files
+          </span>
         </span>
         <span className="flex shrink-0 items-center gap-1 font-geist text-[14px] font-medium text-black/30 dark:text-white/30">
           <Command className="size-[14px]" strokeWidth={1.5} />
@@ -281,13 +342,17 @@ function SyncSummary({ snapshot }: { snapshot: SyncSnapshot }) {
               <ProgressRing value={summary.percent} />
             </span>
           )}
-          <span className={`font-geist text-[14px] font-semibold leading-none ${accent}`}>
+          <span
+            className={`font-geist text-[14px] font-semibold leading-none ${accent}`}
+          >
             {summary.percent}%
           </span>
         </div>
         <span
           className={`font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px] ${
-            summary.tone === "completed" ? "text-grey-70 dark:text-white/50" : accent
+            summary.tone === "completed"
+              ? "text-grey-70 dark:text-white/50"
+              : accent
           }`}
         >
           {summary.statusLabel}
@@ -336,7 +401,7 @@ function UploadRowsSkeleton() {
 
 function UploadRowItem({ item }: { item: UploadFeedItem }) {
   const rawName = item.actualFileName || item.name;
-  const ext = rawName.includes(".") ? rawName.split(".").pop() ?? null : null;
+  const ext = rawName.includes(".") ? (rawName.split(".").pop() ?? null) : null;
   const fileType = getFileTypeFromExtension(ext);
   const { icon: Icon, color } = getFileIcon(fileType ?? undefined, false);
 
@@ -352,7 +417,9 @@ function UploadRowItem({ item }: { item: UploadFeedItem }) {
       {/* Icon column is as tall as the filename's line box and centers the
           icon within it, so the icon lines up with the filename row (not the
           very top of the list item). */}
-      <span className={`flex h-5 w-4 shrink-0 items-center justify-center ${color}`}>
+      <span
+        className={`flex h-5 w-4 shrink-0 items-center justify-center ${color}`}
+      >
         <Icon className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
@@ -366,7 +433,10 @@ function UploadRowItem({ item }: { item: UploadFeedItem }) {
               {uploadedText}
             </span>
           ) : (
-            <StatusLabel status={item.feedStatus} progress={item.progressPercent} />
+            <StatusLabel
+              status={item.feedStatus}
+              progress={item.progressPercent}
+            />
           )}
         </div>
       </div>
@@ -424,9 +494,33 @@ function ProgressRing({ value }: { value: number }) {
   const clamped = Math.max(0, Math.min(100, value));
   const offset = circumference * (1 - clamped / 100);
   return (
-    <svg width="12" height="12" viewBox="0 0 12 12" className="-rotate-90 shrink-0" aria-hidden="true">
-      <circle cx="6" cy="6" r={radius} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
-      <circle cx="6" cy="6" r={radius} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} />
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      className="-rotate-90 shrink-0"
+      aria-hidden="true"
+    >
+      <circle
+        cx="6"
+        cy="6"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeOpacity="0.25"
+        strokeWidth="2"
+      />
+      <circle
+        cx="6"
+        cy="6"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+      />
     </svg>
   );
 }
@@ -435,8 +529,15 @@ function ProgressRing({ value }: { value: number }) {
  *  current backend feed only emits "uploaded"/"deleted"; the other states
  *  (pending/failed/uploading + a time-left ring) are styled for when richer
  *  per-file progress is wired in. */
-function StatusLabel({ status, progress }: { status: string; progress?: number | null }) {
-  const base = "shrink-0 font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px]";
+function StatusLabel({
+  status,
+  progress,
+}: {
+  status: string;
+  progress?: number | null;
+}) {
+  const base =
+    "shrink-0 font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px]";
 
   // Uploading: brand-blue progress ring + live percent (falls back to the
   // "UPLOADING" word before the first percent arrives).
@@ -444,7 +545,9 @@ function StatusLabel({ status, progress }: { status: string; progress?: number |
     return (
       <span className={`flex items-center gap-1.5 text-[#3167DD] ${base}`}>
         <ProgressRing value={progress ?? 0} />
-        {typeof progress === "number" ? `${Math.round(progress)}%` : "UPLOADING"}
+        {typeof progress === "number"
+          ? `${Math.round(progress)}%`
+          : "UPLOADING"}
       </span>
     );
   }
@@ -454,9 +557,15 @@ function StatusLabel({ status, progress }: { status: string; progress?: number |
     uploaded: { label: "UPLOADED", className: "text-[#04C870]" },
     pending: { label: "PENDING", className: "text-[#FEB101]" },
     failed: { label: "FAILED", className: "text-[#FF6D61]" },
-    deleted: { label: "DELETED", className: "text-black/40 dark:text-white/40" },
+    deleted: {
+      label: "DELETED",
+      className: "text-black/40 dark:text-white/40",
+    },
   };
-  const entry = map[status] ?? { label: status.toUpperCase(), className: "text-black/40 dark:text-white/40" };
+  const entry = map[status] ?? {
+    label: status.toUpperCase(),
+    className: "text-black/40 dark:text-white/40",
+  };
   return <span className={`${base} ${entry.className}`}>{entry.label}</span>;
 }
 
@@ -465,7 +574,15 @@ function StatusLabel({ status, progress }: { status: string; progress?: number |
  *  (identicon + short
  *  address + live chain block) on the left and the official `Button` CTA on the
  *  right. The identicon, address and block typography all match ProfileCard. */
-function Footer({ address, blockNumber, isConnected }: { address: string | null; blockNumber: number | null; isConnected: boolean }) {
+function Footer({
+  address,
+  blockNumber,
+  isConnected,
+}: {
+  address: string | null;
+  blockNumber: number | null;
+  isConnected: boolean;
+}) {
   // Click-to-copy the full address, like the sidebar's ProfileCard. The panel
   // has no Toaster (it's provider-free), so feedback is a brief inline "Copied!"
   // swapped in for the block-number line.
@@ -478,7 +595,9 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1200);
       })
-      .catch((error) => console.error("[TrayPanel] Failed to copy address:", error));
+      .catch((error) =>
+        console.error("[TrayPanel] Failed to copy address:", error),
+      );
   };
 
   return (
@@ -500,14 +619,21 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
           className="flex min-w-0 items-center gap-2.5 rounded-xl transition-colors hover:opacity-80"
         >
           <span className="size-8 shrink-0 overflow-hidden rounded-full">
-            <Avatar colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]} name={address ?? "hippius"} size={32} variant="pixel" />
+            <Avatar
+              colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
+              name={address ?? "hippius"}
+              size={32}
+              variant="pixel"
+            />
           </span>
           <div className="flex min-w-0 flex-col items-start gap-0.5">
             <span className="truncate font-inter text-[14px] font-medium leading-none tracking-[-0.4px] text-black dark:text-white">
               {shortenAddress(address)}
             </span>
             {copied ? (
-              <span className="font-geist text-[10px] font-medium leading-[14px] tracking-[-0.2px] text-[#04C870]">Copied!</span>
+              <span className="font-geist text-[10px] font-medium leading-[14px] tracking-[-0.2px] text-[#04C870]">
+                Copied!
+              </span>
             ) : (
               <span className="flex items-center gap-1">
                 <BoxSimple className="size-[13px] shrink-0 text-black/60 dark:text-white/60" />
@@ -568,6 +694,18 @@ async function openMainNotifications() {
   }
 }
 
+/** Focus the main window and navigate it to the chat page — routing happens in
+ *  the main window (`TrayNavigationListener`), never in this popover webview. */
+async function openMainChat() {
+  try {
+    await revealMain();
+    await emit("hippius:tray-open-chat", {});
+    await invoke("hide_tray_panel");
+  } catch (error) {
+    console.error("[TrayPanel] Failed to open chat:", error);
+  }
+}
+
 /**
  * Focus the main window and focus its sidebar search input (the same field the
  * main window's Ctrl/Cmd+F shortcut targets). Done via an event rather than a
@@ -613,7 +751,9 @@ async function revealMain() {
  *  suffix, but do NOT length-truncate — CSS `truncate` ellipsizes based on the
  *  row's actual available width, so names use the full row before clipping. */
 function displayFileName(rawName: string): string {
-  return rawName.endsWith(DIRECTORY_SUFFIX) ? rawName.slice(0, -DIRECTORY_SUFFIX.length) : rawName;
+  return rawName.endsWith(DIRECTORY_SUFFIX)
+    ? rawName.slice(0, -DIRECTORY_SUFFIX.length)
+    : rawName;
 }
 
 /** `5cRyFw…Quus`-style short form of a substrate address. */

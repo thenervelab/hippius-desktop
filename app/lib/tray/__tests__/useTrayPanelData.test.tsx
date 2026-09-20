@@ -16,6 +16,8 @@ let menuResult: {
   sessionReady: boolean;
 };
 
+let chatUnreadSeed = 0;
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
     switch (cmd) {
@@ -27,14 +29,25 @@ vi.mock("@tauri-apps/api/core", () => ({
         return Promise.resolve([]);
       case "get_unread_count":
         return Promise.resolve(0);
+      case "chat_get_unread_count":
+        return Promise.resolve(chatUnreadSeed);
       default:
         return Promise.resolve(undefined);
     }
   }),
 }));
 
+// Backend event handlers by name, so a test can deliver a broadcast.
+const eventHandlers = new Map<string, (event: { payload: unknown }) => void>();
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+  listen: vi.fn(
+    (name: string, handler: (event: { payload: unknown }) => void) => {
+      eventHandlers.set(name, handler);
+      return Promise.resolve(() => {
+        eventHandlers.delete(name);
+      });
+    },
+  ),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -79,5 +92,35 @@ describe("useTrayPanelData loading gate (F-3)", () => {
     const { result } = renderHook(() => useTrayPanelData());
 
     await waitFor(() => expect(result.current.loading).toBe(false));
+  });
+});
+
+// The popover is a separate webview: it seeds the chat count from Rust's
+// remembered value (a message that arrived before this window listened would
+// otherwise be missed) and then follows the cross-window broadcast — the same
+// number Rust puts on the dock badge and in the window title.
+describe("useTrayPanelData chat unread", () => {
+  beforeEach(() => {
+    eventHandlers.clear();
+    chatUnreadSeed = 4;
+    menuResult = {
+      loggedIn: true,
+      credits: 5,
+      substrateAddress: "5EZi38SomeAddrLvJs",
+      sessionReady: true,
+    };
+  });
+
+  it("seeds from chat_get_unread_count and follows chat_unread_changed", async () => {
+    const { result } = renderHook(() => useTrayPanelData());
+    await waitFor(() => expect(result.current.chatUnread).toBe(4));
+
+    await waitFor(() =>
+      expect(eventHandlers.has("chat_unread_changed")).toBe(true),
+    );
+    act(() => {
+      eventHandlers.get("chat_unread_changed")?.({ payload: { count: 0 } });
+    });
+    expect(result.current.chatUnread).toBe(0);
   });
 });

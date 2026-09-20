@@ -338,6 +338,7 @@ fn main() {
             chat::sign_in::chat_sign_out,
             chat::notify::chat_notify_message,
             chat::notify::chat_set_unread_badge,
+            chat::notify::chat_get_unread_count,
             chat::notify::chat_get_notifications_enabled,
             chat::notify::chat_set_notifications_enabled,
             chat::attachments::chat_save_attachment,

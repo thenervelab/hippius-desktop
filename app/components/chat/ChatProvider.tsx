@@ -101,7 +101,11 @@ export type ChatEncryption =
       restoredKeys: number;
     }
   | { kind: "foreign-key"; keyId: string; keyName?: string; canAdopt: boolean }
-  | { kind: "cross-signing-blocked"; accountManagementUrl?: string; detail: string }
+  | {
+      kind: "cross-signing-blocked";
+      accountManagementUrl?: string;
+      detail: string;
+    }
   | { kind: "error"; message: string };
 
 /**
@@ -127,7 +131,9 @@ export function optionsForRepair(repair: EncryptionRepair): BootstrapOptions {
   }
 }
 
-export function encryptionFromOutcome(outcome: BootstrapOutcome): ChatEncryption {
+export function encryptionFromOutcome(
+  outcome: BootstrapOutcome,
+): ChatEncryption {
   switch (outcome.status) {
     case "ready":
       return {
@@ -203,9 +209,30 @@ export function useChat(): ChatContextValue {
   return value;
 }
 
-export function ChatProvider({ children }: { children: ReactNode }) {
-  const [connection, setConnection] = useState<ChatConnection>({ kind: "booting" });
-  const [encryption, setEncryption] = useState<ChatEncryption>({ kind: "unknown" });
+/**
+ * Owns the Matrix client for the whole signed-in app. Mounted once in the
+ * protected layout (`ChatHost`), not per route, so the client keeps
+ * syncing while the user is on Files or Wallet — that is what makes
+ * notifications and the unread badge work off the chat page.
+ *
+ * `active` is the Rust feature gate (`chat_get_config().enabled`). While
+ * false nothing boots and the connection stays `booting`; the tree shape is
+ * the same either way so the gate landing after first paint never remounts
+ * the app under it.
+ */
+export function ChatProvider({
+  children,
+  active = true,
+}: {
+  children: ReactNode;
+  active?: boolean;
+}) {
+  const [connection, setConnection] = useState<ChatConnection>({
+    kind: "booting",
+  });
+  const [encryption, setEncryption] = useState<ChatEncryption>({
+    kind: "unknown",
+  });
   const [syncState, setSyncState] = useState<SyncState | null>(null);
   // Bumped by `retry()` and by a completed sign-in: re-runs the boot effect,
   // which tears down whatever the previous attempt left behind.
@@ -221,6 +248,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setConnection({ kind: "booting" });
     setEncryption({ kind: "unknown" });
     setSyncState(null);
+    if (!active) return;
 
     const stopStarted = () => {
       if (started) {
@@ -258,7 +286,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           onSessionExpired: () => {
             setConnection({
               kind: "error",
-              message: "Your chat session has expired. Sign in again to continue.",
+              message:
+                "Your chat session has expired. Sign in again to continue.",
               session,
             });
           },
@@ -280,7 +309,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         stopStarted();
         setConnection({
           kind: "error",
-          message: error instanceof Error ? error.message : "Could not connect to the chat server.",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not connect to the chat server.",
           session,
         });
       }
@@ -290,7 +322,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       stopStarted();
     };
-  }, [bootAttempt]);
+  }, [bootAttempt, active]);
 
   const retry = useCallback(() => setBootAttempt((n) => n + 1), []);
 
@@ -298,11 +330,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // One bootstrap at a time: the automatic check and a user-triggered
   // repair can land within one tick.
   const bootstrapInFlight = useRef(false);
+  // A bootstrap outlives the provider when chat is signed out (or the user
+  // logs out) mid-run; its result must not be written into a gone component.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const runBootstrap = useCallback(async (options: BootstrapOptions = {}) => {
     const handle = handleRef.current;
     if (!handle) return;
     if (bootstrapInFlight.current) {
-      console.info("[chat/crypto] bootstrap already running; ignoring a second request");
+      console.info(
+        "[chat/crypto] bootstrap already running; ignoring a second request",
+      );
       return;
     }
     bootstrapInFlight.current = true;
@@ -328,12 +371,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         { key, keyId: material.keyId, keyName: material.keyName },
         { accountManagementUrl, ...options },
       );
-      console.info(`[chat/crypto] bootstrap outcome: ${describeOutcome(outcome)}`);
-      setEncryption(encryptionFromOutcome(outcome));
+      console.info(
+        `[chat/crypto] bootstrap outcome: ${describeOutcome(outcome)}`,
+      );
+      if (mounted.current) setEncryption(encryptionFromOutcome(outcome));
     } catch (error) {
       const message = errorMessage(error) || "Encryption setup failed.";
       console.info(`[chat/crypto] bootstrap failed: ${message}`);
-      setEncryption({ kind: "error", message });
+      if (mounted.current) setEncryption({ kind: "error", message });
     } finally {
       key?.fill(0);
       bootstrapInFlight.current = false;
@@ -354,7 +399,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         needs = await encryptionNeedsBootstrap(connection.handle.client);
       } catch (error) {
         if (cancelled) return;
-        const message = errorMessage(error) || "Could not read the encryption state.";
+        const message =
+          errorMessage(error) || "Could not read the encryption state.";
         console.info(`[chat/crypto] check failed: ${message}`);
         setEncryption({ kind: "error", message });
         return;
@@ -364,7 +410,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         console.info(
           "[chat/crypto] check: this device is set up (cross-signing, secret storage, backup, device signed); nothing to do",
         );
-        setEncryption({ kind: "ready", warnings: [], backup: null, restoredKeys: 0 });
+        setEncryption({
+          kind: "ready",
+          warnings: [],
+          backup: null,
+          restoredKeys: 0,
+        });
         return;
       }
       console.info("[chat/crypto] check: setup needed; bootstrapping now");
@@ -429,7 +480,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     const session =
-      connection.kind === "ready" || connection.kind === "connecting" || connection.kind === "error"
+      connection.kind === "ready" ||
+      connection.kind === "connecting" ||
+      connection.kind === "error"
         ? connection.session
         : null;
     const handle = handleRef.current;

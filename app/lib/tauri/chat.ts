@@ -9,6 +9,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import type { IncomingMessage } from "@/lib/chat/notifications";
+
 /** `chat::config::ChatConfig` — decided in Rust; the frontend keeps no copy. */
 export interface ChatConfig {
   enabled: boolean;
@@ -123,6 +125,58 @@ export function isChatKeyringUnavailable(error: unknown): boolean {
       ? error
       : String((error as { message?: unknown } | null | undefined)?.message ?? "");
   return /credential store is unavailable/i.test(message);
+}
+
+// ---------------------------------------------------------------------------
+// Notifications and the unread badge (`chat::notify`)
+
+/**
+ * Rust's `chat::notify::IncomingMessage`. Built by the pure
+ * `app/lib/chat/notifications.ts::classifyIncoming`; only Matrix facts,
+ * the decision to notify is Rust's.
+ */
+export type { IncomingMessage };
+
+/** Rust's `chat::notify::NotifyOutcome` (snake_case on the wire). */
+export type NotifyOutcome = "shown" | "preference_disabled" | "not_mention_or_direct" | "room_visible";
+
+/** Event Rust broadcasts to every window when the unread count changes. */
+export const CHAT_UNREAD_CHANGED_EVENT = "chat_unread_changed";
+
+export interface ChatUnreadChanged {
+  count: number;
+}
+
+/**
+ * Hand an incoming message to Rust, which applies the desktop policy
+ * (preference, mentions/DMs, room on screen + window focused) and shows
+ * the OS notification. Returns what it decided, for logging.
+ */
+export function chatNotifyMessage(message: IncomingMessage): Promise<NotifyOutcome> {
+  return invoke<NotifyOutcome>("chat_notify_message", { message });
+}
+
+/**
+ * Report the attention count (`attentionCount` in `app/lib/chat/rooms.ts`).
+ * Rust sets the dock/taskbar badge and the `(N) Hippius` window title and
+ * broadcasts `CHAT_UNREAD_CHANGED_EVENT`.
+ */
+export function chatSetUnreadBadge(count: number): Promise<void> {
+  return invoke<void>("chat_set_unread_badge", { count });
+}
+
+/** The last count reported through `chatSetUnreadBadge` (tray popover seed). */
+export function chatGetUnreadCount(): Promise<number> {
+  return invoke<number>("chat_get_unread_count");
+}
+
+/** The account's "Chat" notification preference (Settings → Notifications). */
+export function chatGetNotificationsEnabled(): Promise<boolean> {
+  return invoke<boolean>("chat_get_notifications_enabled");
+}
+
+export function chatSetNotificationsEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("chat_set_notifications_enabled", { enabled });
 }
 
 /**

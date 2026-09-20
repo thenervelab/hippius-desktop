@@ -14,7 +14,20 @@
 //!
 //! The badge uses the taskbar/dock badge count of the main window (macOS
 //! dock, Linux launchers that honour `com.canonical.Unity.LauncherEntry`);
-//! Windows has no count badge and the call is a logged no-op there.
+//! Windows has no count badge and the call is a logged no-op there. The
+//! same count is mirrored into the main window's title (`(3) Hippius`), the
+//! one place every platform's taskbar/switcher shows, and broadcast as
+//! [`CHAT_UNREAD_CHANGED_EVENT`] for the tray popover.
+//!
+//! What counts as notification-worthy is decided here, not in the webview:
+//! the webview only reports the Matrix facts (the server's push rules said
+//! notify, whether that was a highlight/mention, whether the room is a
+//! direct message) and [`decide_notify`] applies the desktop rule — Slack's
+//! default — **mentions in channels, every message in a DM**, unless the
+//! account's "Chat" preference is off or the user is already looking at the
+//! room.
+
+use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -32,14 +45,35 @@ pub const CHAT_PREFERENCE_ID: &str = "chat";
 /// unread total changes, so any surface can mirror the badge.
 pub const CHAT_UNREAD_CHANGED_EVENT: &str = "chat_unread_changed";
 
+/// The main window's title as configured in `tauri.conf.json`
+/// (`app.windows[0].title`). Pinned against the config file in tests so a
+/// rename there cannot leave the unread-count title stale.
+pub const APP_WINDOW_TITLE: &str = "Hippius";
+
+/// Label of the main window (`tauri.conf.json` `app.windows[0].label`).
+const MAIN_WINDOW_LABEL: &str = "main";
+
+/// The window title for an unread count: `Hippius` at zero, `(N) Hippius`
+/// otherwise — the convention Slack, Discord and Element desktop share, so
+/// the count is read the same way in every taskbar and window switcher.
+pub fn window_title(unread: u32) -> String {
+    if unread == 0 {
+        APP_WINDOW_TITLE.to_string()
+    } else {
+        format!("({unread}) {APP_WINDOW_TITLE}")
+    }
+}
+
 /// Longest body we forward to the OS notification centre. Messages are
 /// end-to-end encrypted; the notification centre's own store is not, so
 /// only a preview leaves the app.
 pub const NOTIFICATION_BODY_PREVIEW_CHARS: usize = 140;
 
-/// One incoming message the webview considers notification-worthy (it has
-/// already excluded the user's own messages and rooms with notifications
-/// muted in the account's push rules).
+/// One incoming message the webview reports. The webview has already
+/// applied the Matrix-side facts only it can know — not our own message,
+/// not a local echo, not history catching up, and the account's push rules
+/// (which know muted rooms and keywords) said *notify*. Whether the user is
+/// told is decided here.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IncomingMessage {
@@ -47,9 +81,14 @@ pub struct IncomingMessage {
     pub room_name: String,
     pub sender_name: String,
     pub body: String,
-    /// Direct message (1:1) rather than a channel; changes the title.
+    /// Direct message (1:1) rather than a channel; changes the title and
+    /// makes every message notification-worthy.
     #[serde(default)]
     pub is_direct: bool,
+    /// The push rules flagged it as a highlight: a mention of the user (or
+    /// one of their keywords). A channel message notifies only when set.
+    #[serde(default)]
+    pub is_mention: bool,
     /// The user currently has this room open in the app.
     #[serde(default)]
     pub room_is_open: bool,
@@ -68,16 +107,23 @@ pub struct UnreadChanged {
 pub enum NotifyOutcome {
     Shown,
     PreferenceDisabled,
+    /// A channel message that mentions nobody: unread, but not interrupting.
+    NotMentionOrDirect,
     RoomVisible,
 }
 
-/// Pure policy: notify unless the preference is off, or the user is
-/// already looking at the room (window focused AND that room open).
-pub fn decide_notify(preference_enabled: bool, window_focused: bool, room_is_open: bool) -> NotifyOutcome {
+/// Pure policy, in order: the preference is off → nothing; a channel
+/// message without a mention → nothing (a DM always qualifies); the user is
+/// already looking at the room (window focused AND that room open) →
+/// nothing; otherwise notify.
+pub fn decide_notify(preference_enabled: bool, message: &IncomingMessage, window_focused: bool) -> NotifyOutcome {
     if !preference_enabled {
         return NotifyOutcome::PreferenceDisabled;
     }
-    if window_focused && room_is_open {
+    if !(message.is_direct || message.is_mention) {
+        return NotifyOutcome::NotMentionOrDirect;
+    }
+    if window_focused && message.room_is_open {
         return NotifyOutcome::RoomVisible;
     }
     NotifyOutcome::Shown
@@ -146,7 +192,9 @@ pub async fn chat_set_notifications_enabled(state: tauri::State<'_, AppState>, e
 }
 
 fn main_window_focused(app: &AppHandle) -> bool {
-    app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
+    app.get_webview_window(MAIN_WINDOW_LABEL)
+        .and_then(|w| w.is_focused().ok())
+        .unwrap_or(false)
 }
 
 /// Show an OS notification for a chat message, subject to policy.
@@ -154,7 +202,7 @@ fn main_window_focused(app: &AppHandle) -> bool {
 pub async fn chat_notify_message(app: AppHandle, state: tauri::State<'_, AppState>, message: IncomingMessage) -> Result<NotifyOutcome> {
     let owner = state.current_account_id()?;
     let enabled = chat_preference_enabled(state.pool()?, &owner).await?;
-    let outcome = decide_notify(enabled, main_window_focused(&app), message.room_is_open);
+    let outcome = decide_notify(enabled, &message, main_window_focused(&app));
     if outcome != NotifyOutcome::Shown {
         debug!(?outcome, room = %message.room_id, "chat: notification suppressed");
         return Ok(outcome);
@@ -169,36 +217,55 @@ pub async fn chat_notify_message(app: AppHandle, state: tauri::State<'_, AppStat
     Ok(NotifyOutcome::Shown)
 }
 
-/// Set the dock/taskbar unread badge and broadcast the count.
-#[tauri::command]
-pub async fn chat_set_unread_badge(app: AppHandle, count: u32) -> Result<()> {
-    if let Some(win) = app.get_webview_window("main") {
+/// The one writer of every unread surface: dock/taskbar badge, main window
+/// title, the remembered count, and the cross-window broadcast. Called by
+/// the webview through [`chat_set_unread_badge`] and by logout through
+/// [`clear_unread_badge`], so a signed-out app never keeps a stale `(3)`.
+pub fn apply_unread_badge(app: &AppHandle, count: u32) {
+    let state = app.state::<AppState>();
+    let previous = state.chat.unread.swap(count, Ordering::SeqCst);
+    if let Some(win) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let value = if count == 0 { None } else { Some(i64::from(count)) };
         if let Err(e) = win.set_badge_count(value) {
             // Windows: unsupported by design. Log once per change at debug.
             debug!(error = %e, count, "chat: badge count not supported on this platform");
         }
+        if let Err(e) = win.set_title(&window_title(count)) {
+            warn!(error = %e, count, "chat: failed to set the window title");
+        }
     }
-    if let Err(e) = app.emit(CHAT_UNREAD_CHANGED_EVENT, UnreadChanged { count }) {
-        warn!(error = %e, "chat: failed to broadcast unread count");
+    if previous != count {
+        if let Err(e) = app.emit(CHAT_UNREAD_CHANGED_EVENT, UnreadChanged { count }) {
+            warn!(error = %e, "chat: failed to broadcast unread count");
+        }
     }
+}
+
+/// Reset every unread surface to zero. Logout calls this: the Matrix client
+/// stops with the webview's provider, but the dock badge and window title
+/// are OS state that nobody else would clear.
+pub fn clear_unread_badge(app: &AppHandle) {
+    apply_unread_badge(app, 0);
+}
+
+/// Set the dock/taskbar unread badge + window title and broadcast the count.
+#[tauri::command]
+pub async fn chat_set_unread_badge(app: AppHandle, count: u32) -> Result<()> {
+    apply_unread_badge(&app, count);
     Ok(())
+}
+
+/// The last count set through [`chat_set_unread_badge`]. The tray popover
+/// (a separate webview) seeds its mirror from this and then follows
+/// [`CHAT_UNREAD_CHANGED_EVENT`].
+#[tauri::command]
+pub async fn chat_get_unread_count(state: tauri::State<'_, AppState>) -> Result<u32> {
+    Ok(state.chat.unread.load(Ordering::SeqCst))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn policy_table() {
-        assert_eq!(decide_notify(false, false, false), NotifyOutcome::PreferenceDisabled);
-        assert_eq!(decide_notify(false, true, true), NotifyOutcome::PreferenceDisabled);
-        assert_eq!(decide_notify(true, true, true), NotifyOutcome::RoomVisible);
-        // Room open but window in the background: the user is not looking.
-        assert_eq!(decide_notify(true, false, true), NotifyOutcome::Shown);
-        // Window focused but a different room open.
-        assert_eq!(decide_notify(true, true, false), NotifyOutcome::Shown);
-    }
 
     fn msg(body: &str, is_direct: bool) -> IncomingMessage {
         IncomingMessage {
@@ -207,8 +274,70 @@ mod tests {
             sender_name: "Alice".into(),
             body: body.into(),
             is_direct,
+            is_mention: false,
             room_is_open: false,
         }
+    }
+
+    fn with(mut m: IncomingMessage, is_mention: bool, room_is_open: bool) -> IncomingMessage {
+        m.is_mention = is_mention;
+        m.room_is_open = room_is_open;
+        m
+    }
+
+    #[test]
+    fn preference_off_wins_over_everything() {
+        assert_eq!(
+            decide_notify(false, &with(msg("hi", true), true, false), false),
+            NotifyOutcome::PreferenceDisabled
+        );
+        assert_eq!(
+            decide_notify(false, &with(msg("hi", false), false, true), true),
+            NotifyOutcome::PreferenceDisabled
+        );
+    }
+
+    // Slack's default: a channel message notifies only when it mentions the
+    // user; a DM always does. Neither the focus state nor the open room
+    // rescues a plain channel message.
+    #[test]
+    fn channel_messages_notify_only_on_mention_dms_always() {
+        assert_eq!(decide_notify(true, &msg("hi", false), false), NotifyOutcome::NotMentionOrDirect);
+        assert_eq!(decide_notify(true, &with(msg("hi", false), true, false), false), NotifyOutcome::Shown);
+        assert_eq!(decide_notify(true, &msg("hi", true), false), NotifyOutcome::Shown);
+        assert_eq!(decide_notify(true, &with(msg("hi", true), true, false), false), NotifyOutcome::Shown);
+    }
+
+    #[test]
+    fn visible_room_suppresses_only_when_window_is_focused() {
+        // Focused AND that room open: the user is reading it.
+        assert_eq!(decide_notify(true, &with(msg("hi", true), false, true), true), NotifyOutcome::RoomVisible);
+        // Room open but window in the background: the user is not looking.
+        assert_eq!(decide_notify(true, &with(msg("hi", true), false, true), false), NotifyOutcome::Shown);
+        // Window focused but a different room open.
+        assert_eq!(decide_notify(true, &with(msg("hi", true), false, false), true), NotifyOutcome::Shown);
+    }
+
+    #[test]
+    fn window_title_carries_the_count_and_resets_at_zero() {
+        assert_eq!(window_title(0), "Hippius");
+        assert_eq!(window_title(1), "(1) Hippius");
+        assert_eq!(window_title(42), "(42) Hippius");
+    }
+
+    // A rename in tauri.conf.json must reach the unread title too, or the
+    // first message would swap the app's name in the taskbar.
+    #[test]
+    fn window_title_matches_tauri_conf() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let main = conf["app"]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            // The main window carries no explicit label: Tauri defaults it to "main".
+            .find(|w| w.get("label").map_or(true, |l| l == MAIN_WINDOW_LABEL))
+            .expect("main window in tauri.conf.json");
+        assert_eq!(main["title"].as_str().unwrap(), APP_WINDOW_TITLE);
     }
 
     #[test]
@@ -258,10 +387,12 @@ mod tests {
 
     #[test]
     fn incoming_message_wire_shape_is_camel_case() {
-        let m: IncomingMessage =
-            serde_json::from_str(r##"{"roomId":"!r:h","roomName":"#g","senderName":"A","body":"b","isDirect":true,"roomIsOpen":true}"##).unwrap();
-        assert!(m.is_direct && m.room_is_open);
+        let m: IncomingMessage = serde_json::from_str(
+            r##"{"roomId":"!r:h","roomName":"#g","senderName":"A","body":"b","isDirect":true,"isMention":true,"roomIsOpen":true}"##,
+        )
+        .unwrap();
+        assert!(m.is_direct && m.is_mention && m.room_is_open);
         let m: IncomingMessage = serde_json::from_str(r##"{"roomId":"!r:h","roomName":"#g","senderName":"A","body":"b"}"##).unwrap();
-        assert!(!m.is_direct && !m.room_is_open);
+        assert!(!m.is_direct && !m.is_mention && !m.room_is_open);
     }
 }

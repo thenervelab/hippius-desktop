@@ -76,9 +76,9 @@ function Probe() {
   );
 }
 
-function mount() {
+function mount(active?: boolean) {
   return render(
-    <ChatProvider>
+    <ChatProvider active={active}>
       <Probe />
     </ChatProvider>,
   );
@@ -115,6 +115,28 @@ afterEach(() => {
 });
 
 describe("ChatProvider boot", () => {
+  // The provider is mounted for the whole signed-in app (`ChatHost`) and
+  // gated by Rust's config through `active`: while the gate is off nothing
+  // touches the keyring or the network; when it turns on, boot runs.
+  it("does nothing while inactive, then boots when the gate opens", async () => {
+    tauri.onInvoke("chat_get_session", () => SESSION);
+    const { rerender } = mount(false);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("connection")).toHaveTextContent("booting");
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("chat_get_session");
+    expect(clientMock.startChatClient).not.toHaveBeenCalled();
+
+    rerender(
+      <ChatProvider active>
+        <Probe />
+      </ChatProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("connection")).toHaveTextContent("ready"));
+    expect(clientMock.startChatClient).toHaveBeenCalledTimes(1);
+  });
+
   it("with no stored session: signed-out, and nothing is started", async () => {
     tauri.onInvoke("chat_get_session", () => null);
     mount();

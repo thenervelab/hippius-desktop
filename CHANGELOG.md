@@ -23,6 +23,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   message history here too. Read and write in channels, direct messages and
   threads; react, reply, edit and delete; share images and files, and save
   what others send you straight to disk. Available on staging builds first.
+- **Chat keeps you posted while you work elsewhere in the app.** A direct
+  message or a mention in a channel shows a system notification (turn it off
+  under Settings → Notifications → Chat), and the number of unread DMs and
+  mentions appears on the app's dock/taskbar icon, in the window title and in
+  the tray popover — even when you are not on the chat page.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.

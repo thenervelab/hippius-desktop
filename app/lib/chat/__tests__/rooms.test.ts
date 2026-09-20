@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MatrixClient, Room } from "matrix-js-sdk";
 
 import {
+  attentionCount,
   directRoomMap,
   isValidUserId,
   normaliseUserId,
@@ -101,6 +102,27 @@ describe("summariseRooms", () => {
     ];
     const buckets = summariseRooms(fakeClient(rooms, {}, ["!b"]));
     expect(totalUnread(buckets)).toEqual({ unread: 2, highlight: 1 });
+  });
+
+  // The badge counts what the app notifies for: every DM message, only the
+  // mentions in channels, nothing from a muted room.
+  it("badges DM unreads plus channel mentions, skipping muted rooms", () => {
+    const rooms = [
+      fakeRoom({ id: "!general", name: "general", unread: 12, highlight: 2 }),
+      fakeRoom({ id: "!muted", name: "muted", unread: 5, highlight: 5 }),
+      fakeRoom({
+        id: "!dm-bob",
+        name: "bob",
+        named: false,
+        members: ["@me:hippius.com", "@bob:hippius.com"],
+        unread: 3,
+        highlight: 0,
+      }),
+      fakeRoom({ id: "!invite", name: "Invited", membership: "invite", unread: 9, highlight: 9 }),
+    ];
+    const buckets = summariseRooms(fakeClient(rooms, {}, ["!muted"]));
+    expect(attentionCount(buckets)).toBe(5);
+    expect(attentionCount({ channels: [], dms: [], invites: [] })).toBe(0);
   });
 
   it("reads m.direct into a room -> user map", () => {
