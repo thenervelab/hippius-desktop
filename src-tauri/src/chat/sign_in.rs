@@ -196,6 +196,17 @@ impl CancelSignIn {
 /// The error [`complete`] returns for a cancelled flow.
 pub const SIGN_IN_CANCELLED: &str = "chat: sign-in was cancelled";
 
+/// The error [`chat_refresh_tokens`] returns when no refresh can ever
+/// succeed again for the stored session: the issuer rejected the refresh
+/// token (`invalid_grant` — revoked, rotated elsewhere, or expired) or the
+/// session never had one. Rust has already deleted the session when it
+/// returns this. The webview's token refresher maps exactly this message
+/// to the SDK's logout outcome (`app/lib/tauri/chat.ts::isChatSessionExpired`);
+/// every other refresh error — the issuer unreachable, the keyring locked —
+/// is transient and is retried by the SDK. Keep the wording in step with
+/// the frontend matcher.
+pub const SESSION_EXPIRED: &str = "chat: session expired; sign in again";
+
 /// What [`chat_begin_sign_in`] hands the frontend.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -847,10 +858,7 @@ pub async fn chat_refresh_tokens(state: tauri::State<'_, AppState>) -> Result<Re
     else {
         return Err(AppError::Auth("chat: not signed in".into()));
     };
-    let refresh_token = session
-        .refresh_token
-        .clone()
-        .ok_or_else(|| AppError::Auth("chat: session has no refresh token; sign in again".into()))?;
+    let refresh_token = session.refresh_token.clone().ok_or_else(|| AppError::Auth(SESSION_EXPIRED.into()))?;
     let metadata = fetch_auth_metadata(&state.chat.http, &session.base_url).await?;
     let tokens = match refresh_grant(&state.chat.http, &metadata.token_endpoint, &session.client_id, &refresh_token).await {
         Ok(t) => t,
@@ -861,7 +869,7 @@ pub async fn chat_refresh_tokens(state: tauri::State<'_, AppState>) -> Result<Re
             warn!(%description, "chat: refresh token rejected, clearing session");
             let clear_id = account_id.clone();
             let _ = tokio::task::spawn_blocking(move || session::delete_session(&clear_id)).await;
-            return Err(AppError::Auth("chat: session expired; sign in again".into()));
+            return Err(AppError::Auth(SESSION_EXPIRED.into()));
         }
         Err(e) => return Err(e.into()),
     };

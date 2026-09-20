@@ -1,4 +1,4 @@
-import { MatrixError } from "matrix-js-sdk";
+import { MatrixError, TokenRefreshLogoutError } from "matrix-js-sdk";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,6 +6,7 @@ import {
   buildSlidingSyncLists,
   initialSyncError,
   isStoreAccountMismatch,
+  refreshErrorForSdk,
 } from "@/app/lib/chat/client";
 import type { ChatSession } from "@/app/lib/tauri/chat";
 
@@ -44,6 +45,41 @@ describe("applyRefreshedTokens", () => {
     expect(next.refreshToken).toBe("old-refresh");
     expect(next.expiresAt).toBeUndefined();
     expect(next.userId).toBe(session.userId);
+  });
+});
+
+// The SDK logs the session out only for a `TokenRefreshLogoutError` (or
+// `MatrixError`) thrown by the refresh function; every other rejection is
+// retried with backoff. Rust's "session expired" (invalid_grant, session
+// already deleted) must become the former or the client retries a dead
+// token forever with no sign-in offered; a transient error must not, or a
+// network blip during refresh would sign the user out.
+describe("refreshErrorForSdk", () => {
+  const expired = {
+    kind: "Auth",
+    message: "chat: session expired; sign in again",
+  };
+
+  it("turns Rust's expired-session error into the SDK's logout error", () => {
+    const mapped = refreshErrorForSdk(expired);
+    expect(mapped).toBeInstanceOf(TokenRefreshLogoutError);
+    expect((mapped as Error).message).toBe(expired.message);
+  });
+
+  it("leaves transient refresh failures for the SDK to retry", () => {
+    const unreachable = {
+      kind: "Auth",
+      message:
+        "chat: homeserver does not advertise OIDC auth metadata (https://chat.hippius.com/_matrix/client/v1/auth_metadata: connection refused)",
+    };
+    const keyring = {
+      kind: "Auth",
+      message: "the OS credential store is unavailable: locked",
+    };
+    const http = { kind: "Http", message: "error sending request" };
+    for (const error of [unreachable, keyring, http, new Error("disposed")]) {
+      expect(refreshErrorForSdk(error)).toBe(error);
+    }
   });
 });
 

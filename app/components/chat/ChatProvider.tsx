@@ -284,6 +284,13 @@ export function ChatProvider({
         const handle = await startChatClient(session, {
           onSyncState: (state) => setSyncState(state),
           onSessionExpired: () => {
+            // The SDK reached this through the token refresher: Rust said
+            // the refresh token is dead and has already forgotten the
+            // session. Nothing this client sends can succeed any more, so
+            // stop it rather than let it retry behind the error screen;
+            // `retry()` finds no session and lands on sign-in.
+            if (cancelled) return;
+            stopStarted();
             setConnection({
               kind: "error",
               message:

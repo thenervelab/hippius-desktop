@@ -525,3 +525,27 @@ fn cancel_command_reaches_a_flow_inside_complete() {
         "a running flow is cancelled"
     );
 }
+
+/// The webview matches the refresh error's wording to decide between the
+/// SDK's logout and a retry (`app/lib/tauri/chat.ts::isChatSessionExpired`
+/// and its test). Both sides must agree on the string, and Rust must use
+/// it for the terminal case only: `chat_refresh_tokens` maps
+/// `invalid_grant` and a missing refresh token to it and nothing else.
+#[test]
+fn session_expired_wording_matches_the_frontend_matcher() {
+    use tauri_project_lib::chat::sign_in::SESSION_EXPIRED;
+    assert_eq!(SESSION_EXPIRED, "chat: session expired; sign in again");
+
+    const SIGN_IN_RS: &str = include_str!("../src/chat/sign_in.rs");
+    let start = SIGN_IN_RS.find("pub async fn chat_refresh_tokens").expect("command exists");
+    let body = &SIGN_IN_RS[start..];
+    let end = body.find("\n#[tauri::command]").unwrap_or(body.len());
+    let body = &body[..end];
+    assert_eq!(
+        body.matches("AppError::Auth(SESSION_EXPIRED.into())").count(),
+        2,
+        "missing refresh token + invalid_grant"
+    );
+    assert!(body.contains("if error == \"invalid_grant\""), "only invalid_grant is terminal");
+    assert!(!body.contains("AppError::Auth(\"chat: session expired"), "no inline copy of the wording");
+}

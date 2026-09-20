@@ -24,6 +24,7 @@ import {
   MatrixError,
   SyncState,
   type SyncStateData,
+  TokenRefreshLogoutError,
 } from "matrix-js-sdk";
 import { type MSC3575List, SlidingSync } from "matrix-js-sdk/lib/sliding-sync";
 
@@ -42,6 +43,7 @@ import {
   type ChatSession,
   chatRefreshTokens,
   chatSignOut,
+  isChatSessionExpired,
   type RefreshedTokens,
 } from "@/app/lib/tauri/chat";
 
@@ -175,6 +177,26 @@ export function applyRefreshedTokens(session: ChatSession, tokens: RefreshedToke
   };
 }
 
+/**
+ * What the SDK's token refresher must be thrown when Rust's refresh fails.
+ *
+ * The SDK reads the refresh function's rejection as a verdict: a
+ * `TokenRefreshLogoutError` (or `MatrixError`) means the session is gone —
+ * it stops, emits `HttpApiEvent.SessionLoggedOut` and the UI offers a fresh
+ * sign-in; anything else is a transient failure it retries with backoff.
+ * Rust reports a dead refresh token (`invalid_grant`, session already
+ * deleted) as a plain IPC error, which the SDK would otherwise retry
+ * forever — every request failing with an unknown token, no sign-in
+ * offered. Only that one error becomes a logout; a Rust HTTP error or a
+ * locked keyring stays transient.
+ */
+export function refreshErrorForSdk(error: unknown): unknown {
+  if (!isChatSessionExpired(error)) return error;
+  return new TokenRefreshLogoutError(
+    error instanceof Error ? error : new Error(String((error as { message?: unknown })?.message ?? error)),
+  );
+}
+
 /** Test seam: the SDK's refresh callback shape, satisfied by Rust. */
 export type TokenRefreshFunction = (
   refreshToken: string,
@@ -243,15 +265,20 @@ export async function startChatClient(
   // same previous refresh) and persists the result before answering.
   const tokenRefreshFunction: TokenRefreshFunction = () => {
     if (disposed) return Promise.reject(new Error("Chat client disposed"));
-    const request = chatRefreshTokens().then((tokens) => {
-      current = applyRefreshedTokens(current, tokens);
-      if (!disposed) callbacks.onSessionUpdated?.(current);
-      return {
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiry: tokens.expiresAt !== undefined ? new Date(tokens.expiresAt) : undefined,
-      };
-    });
+    const request = chatRefreshTokens().then(
+      (tokens) => {
+        current = applyRefreshedTokens(current, tokens);
+        if (!disposed) callbacks.onSessionUpdated?.(current);
+        return {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiry: tokens.expiresAt !== undefined ? new Date(tokens.expiresAt) : undefined,
+        };
+      },
+      (error: unknown) => {
+        throw refreshErrorForSdk(error);
+      },
+    );
     const settled: Promise<void> = request.then(
       () => undefined,
       () => undefined,

@@ -191,6 +191,40 @@ describe("ChatProvider boot", () => {
     expect(screen.getByTestId("message")).toHaveTextContent(/reach the chat server/);
     expect(clientMock.stopChatClient).toHaveBeenCalledTimes(1);
   });
+
+  it("when the session expires mid-run: the client is stopped, an error keeps the session, and retry lands on sign-in", async () => {
+    let stored: ChatSession | null = SESSION;
+    tauri.onInvoke("chat_get_session", () => stored);
+    let expire: (() => void) | null = null;
+    clientMock.startChatClient.mockImplementation(
+      async (session: ChatSession, callbacks: { onSessionExpired?: () => void }) => {
+        expire = callbacks.onSessionExpired ?? null;
+        return {
+          client: makeClient(world),
+          slidingSync: {},
+          ready: Promise.resolve(),
+          getSession: () => session,
+          dispose: async () => undefined,
+        };
+      },
+    );
+    mount();
+    await waitFor(() => expect(screen.getByTestId("connection")).toHaveTextContent("ready"));
+    expect(expire).not.toBeNull();
+
+    // Rust deletes the session before the refresher reports it dead.
+    stored = null;
+    act(() => expire!());
+    await waitFor(() => expect(screen.getByTestId("connection")).toHaveTextContent("error"));
+    expect(screen.getByTestId("message")).toHaveTextContent(/session has expired/);
+    expect(screen.getByTestId("has-session")).toHaveTextContent("true");
+    expect(clientMock.stopChatClient).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("retry"));
+    await waitFor(() => expect(screen.getByTestId("connection")).toHaveTextContent("signed-out"));
+    // The effect cleanup must not stop the already-stopped client twice.
+    expect(clientMock.stopChatClient).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("ChatProvider encryption bootstrap", () => {
