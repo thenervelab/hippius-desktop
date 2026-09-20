@@ -112,6 +112,39 @@ pub async fn chat_preference_enabled(pool: &sqlx::SqlitePool, owner: &str) -> Re
     Ok(row.is_none_or(|(e,)| e != 0))
 }
 
+/// Write the account's "Chat" notification category. Upserts the row with
+/// the same label/description the preferences page seeds, so a toggle from
+/// the chat Preferences and one from Settings → Notifications land on the
+/// same `(owner, "chat")` row — there is exactly one switch.
+pub async fn set_chat_preference_enabled(pool: &sqlx::SqlitePool, owner: &str, enabled: bool) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO notification_preferences (owner, id, label, description, enabled) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(owner, id) DO UPDATE SET enabled = excluded.enabled",
+    )
+    .bind(owner)
+    .bind(CHAT_PREFERENCE_ID)
+    .bind("Chat")
+    .bind("Desktop notifications for new team chat messages and mentions")
+    .bind(i32::from(enabled))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The chat Preferences dialog's notifications switch (read).
+#[tauri::command]
+pub async fn chat_get_notifications_enabled(state: tauri::State<'_, AppState>) -> Result<bool> {
+    let owner = state.current_account_id()?;
+    chat_preference_enabled(state.pool()?, &owner).await
+}
+
+/// The chat Preferences dialog's notifications switch (write).
+#[tauri::command]
+pub async fn chat_set_notifications_enabled(state: tauri::State<'_, AppState>, enabled: bool) -> Result<()> {
+    let owner = state.current_account_id()?;
+    set_chat_preference_enabled(state.pool()?, &owner, enabled).await
+}
+
 fn main_window_focused(app: &AppHandle) -> bool {
     app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
 }
@@ -201,6 +234,26 @@ mod tests {
         assert!(!chat_preference_enabled(&pool, "5Fowner").await.unwrap());
         // Another account's toggle does not leak.
         assert!(chat_preference_enabled(&pool, "5Fother").await.unwrap());
+    }
+
+    // The Preferences switch and the Settings → Notifications page must be
+    // the same row: writing through the chat setter is read back by the
+    // notification gate, flips both ways, and stays per-account.
+    #[tokio::test]
+    async fn set_preference_round_trips_and_is_account_scoped() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::utils::schema::ensure_table_schema(&pool).await.unwrap();
+        set_chat_preference_enabled(&pool, "5Fowner", false).await.unwrap();
+        assert!(!chat_preference_enabled(&pool, "5Fowner").await.unwrap());
+        assert!(chat_preference_enabled(&pool, "5Fother").await.unwrap());
+        // Upsert, not insert: a second write flips the same row.
+        set_chat_preference_enabled(&pool, "5Fowner", true).await.unwrap();
+        assert!(chat_preference_enabled(&pool, "5Fowner").await.unwrap());
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM notification_preferences WHERE owner = '5Fowner' AND id = 'chat'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

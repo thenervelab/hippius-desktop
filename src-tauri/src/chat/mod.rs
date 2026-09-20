@@ -16,6 +16,10 @@
 //!   scoped to the active Hippius account, never in a webview store.
 //! - [`sign_in`]: the OIDC authorization-code + PKCE bridge with the RFC
 //!   8252 loopback redirect, token refresh and sign-out.
+//! - [`backend`]: the Hippius-backend proxy calls that need the desktop's
+//!   API token — GIF search (and the CDN download of a picked GIF, so it goes
+//!   out as an encrypted attachment) and workspace invite links — with every
+//!   status the UI branches on mapped to a typed outcome here.
 //! - [`attachments`]: writing a decrypted attachment to the path the user
 //!   chose (atomic, no silent overwrite); the download and decryption stay
 //!   in the webview with the Matrix client that holds the keys.
@@ -24,6 +28,7 @@
 //! `notifications` / `tray` modules (see `notify`).
 
 pub mod attachments;
+pub mod backend;
 pub mod config;
 pub mod keys;
 pub mod notify;
