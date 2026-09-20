@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { chatConfigAtom } from "@/app/lib/global-atoms/chatAtoms";
 import { ChatProvider, useChat } from "@/components/chat/ChatProvider";
 import ChatSignedOut from "@/components/chat/ChatSignedOut";
-import ChatStatus from "@/components/chat/ChatStatus";
+import ChatShell from "@/components/chat/ChatShell";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -73,7 +73,7 @@ function ChatBody() {
       );
 
     case "ready":
-      return <ChatStatus />;
+      return <ChatShell client={connection.handle.client} />;
   }
 }
 

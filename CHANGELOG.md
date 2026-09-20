@@ -20,7 +20,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Team chat: end-to-end encrypted channels and direct messages with your
   Hippius account, in the app.** Sign in with your Hippius account (no password
   to remember), and the same recovery key the web console uses unlocks your
-  message history here too. Available on staging builds first.
+  message history here too. Read and write in channels, direct messages and
+  threads; react, reply, edit and delete; share images and files, and save
+  what others send you straight to disk. Available on staging builds first.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.

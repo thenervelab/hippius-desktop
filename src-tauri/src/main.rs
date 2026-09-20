@@ -338,6 +338,7 @@ fn main() {
             chat::sign_in::chat_sign_out,
             chat::notify::chat_notify_message,
             chat::notify::chat_set_unread_badge,
+            chat::attachments::chat_save_attachment,
             // Sync control (hcfs-client)
             initialize_sync,
             add_local_sync_folder,

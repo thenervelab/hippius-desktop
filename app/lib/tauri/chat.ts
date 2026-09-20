@@ -124,3 +124,33 @@ export function isChatKeyringUnavailable(error: unknown): boolean {
       : String((error as { message?: unknown } | null | undefined)?.message ?? "");
   return /credential store is unavailable/i.test(message);
 }
+
+/**
+ * Header the attachment save command reads its destination from. The body
+ * of that invoke is the raw file bytes (an `ArrayBuffer`, not JSON), which
+ * leaves no room for other arguments; Tauri forwards custom headers.
+ */
+export const CHAT_SAVE_DESTINATION_HEADER = "x-destination";
+
+/**
+ * Header values must be ASCII-safe; a filename such as `résumé.pdf` is not.
+ * Rust decodes only `%XX` sequences, so this must encode `%` itself too —
+ * `encodeURIComponent` does, and keeps `/` out of the way by encoding it as
+ * well, which the decoder restores.
+ */
+export function encodeSaveDestination(path: string): string {
+  return encodeURIComponent(path);
+}
+
+/**
+ * Write a decrypted attachment to the path the user picked in the native
+ * save dialog. The dialog itself is UI and lives with the caller; the
+ * write (absolute path only, atomic temp+rename, no silent overwrite) is
+ * Rust's — `chat::attachments::chat_save_attachment`.
+ */
+export function chatSaveAttachment(destination: string, bytes: ArrayBuffer | Uint8Array): Promise<void> {
+  const body = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  return invoke<void>("chat_save_attachment", body, {
+    headers: { [CHAT_SAVE_DESTINATION_HEADER]: encodeSaveDestination(destination) },
+  });
+}

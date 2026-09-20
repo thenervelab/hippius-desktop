@@ -16,10 +16,14 @@
 //!   scoped to the active Hippius account, never in a webview store.
 //! - [`sign_in`]: the OIDC authorization-code + PKCE bridge with the RFC
 //!   8252 loopback redirect, token refresh and sign-out.
+//! - [`attachments`]: writing a decrypted attachment to the path the user
+//!   chose (atomic, no silent overwrite); the download and decryption stay
+//!   in the webview with the Matrix client that holds the keys.
 //!
 //! Notifications and the unread badge are wired through the existing
 //! `notifications` / `tray` modules (see `notify`).
 
+pub mod attachments;
 pub mod config;
 pub mod keys;
 pub mod notify;
