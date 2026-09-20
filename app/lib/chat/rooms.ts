@@ -347,6 +347,20 @@ export function eventPermalink(roomId: string, eventId: string): string {
   return `https://matrix.to/#/${encodeURIComponent(roomId)}/${encodeURIComponent(eventId)}`;
 }
 
+/**
+ * The joined room a permalink names, by id or by alias (canonical or
+ * alternative), or `null` when this account is not in it. Permalinks copied
+ * from the sidebar use the canonical alias when the room has one.
+ */
+export function findRoomByIdOrAlias(client: MatrixClient, idOrAlias: string): Room | null {
+  if (idOrAlias.startsWith("!")) return client.getRoom(idOrAlias);
+  if (!idOrAlias.startsWith("#")) return null;
+  return (
+    client.getRooms().find((room) => room.getCanonicalAlias() === idOrAlias || room.getAltAliases().includes(idOrAlias)) ??
+    null
+  );
+}
+
 /** Who can be picked for a DM or a mention: everyone we share a room with. */
 export interface KnownUser {
   userId: string;

@@ -8,14 +8,21 @@ import { toast } from "sonner";
 
 import AttachmentView from "@/components/chat/AttachmentView";
 import ChatMenu, { type ChatMenuItem } from "@/components/chat/ChatMenu";
-import { type ComposerTarget, editingTargetAtom, jumpToEventAtom, replyTargetAtom, rightPanelAtom } from "@/components/chat/chat-ui-atoms";
+import {
+  type ComposerTarget,
+  editingTargetAtom,
+  jumpToEventAtom,
+  replyTargetAtom,
+  rightPanelAtom,
+  selectedRoomIdAtom,
+} from "@/components/chat/chat-ui-atoms";
 import EmojiPicker from "@/components/chat/EmojiPicker";
 import MessageBody from "@/components/chat/MessageBody";
 import Reactions from "@/components/chat/Reactions";
 import UserAvatar from "@/components/chat/UserAvatar";
 import CustomTooltip from "@/components/chat/ChatTooltip";
 import { cancelSend, deleteMessage, retrySend, toggleReaction } from "@/lib/chat/actions";
-import { eventPermalink } from "@/lib/chat/rooms";
+import { eventPermalink, findRoomByIdOrAlias } from "@/lib/chat/rooms";
 import { eventPreview } from "@/lib/chat/threads";
 import { attachmentCaption, attachmentOf, canEdit, canRedact, formatTime, messageBody, reactionsFor, readersOf, sendStateOf } from "@/lib/chat/timeline";
 import { cn } from "@/lib/utils";
@@ -60,6 +67,21 @@ function MessageRowInner({ client, room, event, groupStart, tick, highlighted, t
   const setEditing = () => setEditingTarget(target());
   const setReplyTo = () => setReplyTarget(target());
   const setJump = useSetAtom(jumpToEventAtom);
+  const setSelectedRoom = useSetAtom(selectedRoomIdAtom);
+  // A permalink names its room by id or alias, and may point into another
+  // room than the one it was pasted in: resolve it and switch there first,
+  // or the jump waits on a timeline that is not open. A room this account
+  // is not in is left alone.
+  const openRoomLink = (idOrAlias: string): string | null => {
+    const target = idOrAlias === room.roomId ? room : findRoomByIdOrAlias(client, idOrAlias);
+    if (!target) return null;
+    if (target.roomId !== room.roomId) setSelectedRoom(target.roomId);
+    return target.roomId;
+  };
+  const openEventLink = (idOrAlias: string, eventId: string) => {
+    const roomId = openRoomLink(idOrAlias);
+    if (roomId) setJump({ roomId, eventId });
+  };
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -180,7 +202,8 @@ function MessageRowInner({ client, room, event, groupStart, tick, highlighted, t
               body={body}
               senderName={senderName}
               onMentionClick={(userId) => setRightPanel({ kind: "member", roomId: room.roomId, userId })}
-              onEventLinkClick={(roomId, eventId) => setJump({ roomId, eventId })}
+              onEventLinkClick={openEventLink}
+              onRoomLinkClick={openRoomLink}
             />
             {body.edited ? <span className="ml-1 text-[11px] text-grey-60 dark:text-grey-dark-700">(edited)</span> : null}
           </div>

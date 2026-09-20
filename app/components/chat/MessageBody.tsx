@@ -4,6 +4,7 @@ import { type MouseEvent, useMemo } from "react";
 
 import { isEmojiOnly } from "@/lib/chat/emoji";
 import { plainTextToHtml, sanitizeHtml } from "@/lib/chat/html";
+import { parseMatrixToLink } from "@/lib/chat/links";
 import type { MessageBody as Body } from "@/lib/chat/timeline";
 import { cn } from "@/lib/utils";
 
@@ -12,13 +13,12 @@ interface MessageBodyProps {
   senderName: string;
   /** Called when a `matrix.to` user link is clicked, with the user id. */
   onMentionClick?: (userId: string) => void;
-  /** Called when an in-app permalink (same room) is clicked, with the event id. */
+  /** Called when a message permalink is clicked, with the room (id or alias) and event id. */
   onEventLinkClick?: (roomId: string, eventId: string) => void;
+  /** Called when a room permalink (no event) is clicked, with the room id or alias. */
+  onRoomLinkClick?: (roomId: string) => void;
   className?: string;
 }
-
-const MATRIX_TO_USER = /^https:\/\/matrix\.to\/#\/(@[^/?]+)/i;
-const MATRIX_TO_EVENT = /^https:\/\/matrix\.to\/#\/([!#][^/?]+)\/(\$[^/?]+)/i;
 
 /**
  * Prose classes for message HTML: tight paragraphs, inline code, quotes,
@@ -42,7 +42,7 @@ export const messageProseClassName = cn(
 );
 
 /** Message content as safe HTML, with mention / permalink click routing. */
-export default function MessageBody({ body, senderName, onMentionClick, onEventLinkClick, className }: MessageBodyProps) {
+export default function MessageBody({ body, senderName, onMentionClick, onEventLinkClick, onRoomLinkClick, className }: MessageBodyProps) {
   const html = useMemo(() => {
     if (body.redacted || body.decryptionFailed) return "";
     const source = body.formatted ? sanitizeHtml(body.formatted) : plainTextToHtml(body.text);
@@ -62,20 +62,26 @@ export default function MessageBody({ body, senderName, onMentionClick, onEventL
 
   const big = !body.formatted && isEmojiOnly(body.text);
 
+  // matrix.to links are the app's own navigation, never the webview's: the
+  // sanitiser gives them no `target="_blank"`, so letting the default action
+  // run would navigate the app window itself to matrix.to. Percent-encoded
+  // and raw forms are decoded by `parseMatrixToLink` before routing.
   const onClick = (event: MouseEvent<HTMLDivElement>) => {
     const anchor = (event.target as HTMLElement).closest("a");
     if (!anchor) return;
-    const href = anchor.getAttribute("href") ?? "";
-    const user = MATRIX_TO_USER.exec(href);
-    if (user && onMentionClick) {
-      event.preventDefault();
-      onMentionClick(decodeURIComponent(user[1]));
-      return;
-    }
-    const ev = MATRIX_TO_EVENT.exec(href);
-    if (ev && onEventLinkClick) {
-      event.preventDefault();
-      onEventLinkClick(decodeURIComponent(ev[1]), decodeURIComponent(ev[2]));
+    const link = parseMatrixToLink(anchor.getAttribute("href") ?? "");
+    if (!link) return;
+    event.preventDefault();
+    switch (link.kind) {
+      case "user":
+        onMentionClick?.(link.userId);
+        return;
+      case "event":
+        onEventLinkClick?.(link.roomId, link.eventId);
+        return;
+      case "room":
+        onRoomLinkClick?.(link.roomId);
+        return;
     }
   };
 
