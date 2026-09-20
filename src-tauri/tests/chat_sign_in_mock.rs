@@ -497,6 +497,18 @@ fn cancel_command_reaches_a_flow_inside_complete() {
         .expect("cancel follows")
         + complete_start;
     let complete_body = &SIGN_IN_RS[complete_start..complete_end];
+    // The flow moves from `pending` to `running` while the `pending` guard
+    // is held: there is no instant at which a cancel finds it in neither
+    // map. Pinned as "pending locked, removed, running inserted, all
+    // inside one block that ends before the flow is awaited".
+    let pending_locked = complete_body
+        .find("let mut waiting = state.chat.pending.lock().await;")
+        .expect("pending locked");
+    let taken = complete_body[pending_locked..]
+        .find("waiting\n            .remove(&flow_id)")
+        .or_else(|| complete_body[pending_locked..].find("waiting.remove(&flow_id)"))
+        .expect("flow taken from pending")
+        + pending_locked;
     let registered = complete_body
         .find("running.lock().await.insert(flow_id.clone(), cancel)")
         .expect("handle registered");
@@ -508,9 +520,16 @@ fn cancel_command_reaches_a_flow_inside_complete() {
         .expect("handle re-checked");
     let stored = complete_body.find("session::save_session").expect("session stored");
     assert!(
-        registered < awaited && awaited < checked && checked < stored,
-        "register, wait, re-check, then store"
+        pending_locked < taken && taken < registered && registered < awaited && awaited < checked && checked < stored,
+        "lock pending, take, register, wait, re-check, then store"
     );
+    // The `pending` guard must still be alive at the insert: the block that
+    // owns it closes (`pending\n    };`) only after the insert.
+    let guard_block_end = complete_body[pending_locked..]
+        .find("\n        pending\n    };")
+        .expect("the guard's block returns the flow")
+        + pending_locked;
+    assert!(registered < guard_block_end, "the pending guard is held across the running insert");
     assert!(
         complete_body.contains("Ok(_) if !not_cancelled => return Err"),
         "a late cancel must not be stored"
@@ -519,9 +538,17 @@ fn cancel_command_reaches_a_flow_inside_complete() {
     let cancel_body = &SIGN_IN_RS[complete_end..];
     let cancel_end = cancel_body.find("pub async fn chat_refresh_tokens").unwrap_or(cancel_body.len());
     let cancel_body = &cancel_body[..cancel_end];
-    assert!(cancel_body.contains("pending.lock().await.remove(&flow_id)"), "a waiting flow is dropped");
+    // Same lock order (pending, then running), both held together.
+    let cancel_pending = cancel_body
+        .find("let mut waiting = state.chat.pending.lock().await;")
+        .expect("cancel locks pending");
+    let cancel_running = cancel_body
+        .find("let mut running = state.chat.running.lock().await;")
+        .expect("cancel locks running");
+    assert!(cancel_pending < cancel_running, "cancel takes pending before running");
+    assert!(cancel_body.contains("waiting.remove(&flow_id)"), "a waiting flow is dropped");
     assert!(
-        cancel_body.contains("running.lock().await.remove(&flow_id)") && cancel_body.contains("cancel.cancel()"),
+        cancel_body.contains("running.remove(&flow_id)") && cancel_body.contains("cancel.cancel()"),
         "a running flow is cancelled"
     );
 }

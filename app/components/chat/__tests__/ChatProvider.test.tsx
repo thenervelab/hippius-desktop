@@ -364,6 +364,52 @@ describe("ChatProvider sign-in / sign-out", () => {
     expect(screen.getByTestId("connection")).toHaveTextContent("signed-out");
   });
 
+  // `chat_begin_sign_in` runs discovery, metadata and client registration
+  // over the network before it hands back a flow id. A Cancel click in that
+  // window used to be lost: the ref it cleared was still empty, so when
+  // begin answered the browser opened anyway and the completed sign-in was
+  // taken as live, contradicting the signed-out screen the user was seeing.
+  it("cancel before Rust has answered begin: the flow is aborted in Rust when it arrives, and the browser never opens", async () => {
+    tauri.onInvoke("chat_get_session", () => null);
+    let begun: (flow: { flowId: string; authorizeUrl: string }) => void = () => undefined;
+    tauri.onInvoke(
+      "chat_begin_sign_in",
+      () =>
+        new Promise<{ flowId: string; authorizeUrl: string }>((resolve) => {
+          begun = resolve;
+        }),
+    );
+    tauri.onInvoke("chat_complete_sign_in", () => {
+      throw new Error("must not be waited on for a cancelled attempt");
+    });
+    tauri.onInvoke("chat_cancel_sign_in", () => undefined);
+
+    mount();
+    await waitFor(() => expect(screen.getByTestId("connection")).toHaveTextContent("signed-out"));
+    fireEvent.click(screen.getByText("sign-in"));
+    await waitFor(() => expect(screen.getByTestId("connection")).toHaveTextContent("signing-in"));
+
+    fireEvent.click(screen.getByText("cancel"));
+    await waitFor(() => expect(screen.getByTestId("connection")).toHaveTextContent("signed-out"));
+    // Nothing to abort yet: no flow id exists.
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("chat_cancel_sign_in", expect.anything());
+
+    await act(async () => begun({ flowId: "flow-late", authorizeUrl: "https://x/" }));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("chat_cancel_sign_in", { flowId: "flow-late" }),
+    );
+    expect(openExternalLink).not.toHaveBeenCalled();
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("chat_complete_sign_in", expect.anything());
+    expect(screen.getByTestId("connection")).toHaveTextContent("signed-out");
+
+    // A new sign-in is possible right away: the cancelled attempt does not
+    // hold the "already signing in" guard.
+    tauri.onInvoke("chat_begin_sign_in", () => ({ flowId: "flow-next", authorizeUrl: "https://y/" }));
+    tauri.onInvoke("chat_complete_sign_in", () => new Promise<ChatSession>(() => undefined));
+    fireEvent.click(screen.getByText("sign-in"));
+    await waitFor(() => expect(openExternalLink).toHaveBeenCalledWith("https://y/"));
+  });
+
   it("a failed sign-in start surfaces as a session-less error (sign-in offered again with the reason)", async () => {
     tauri.onInvoke("chat_get_session", () => null);
     tauri.onInvoke("chat_begin_sign_in", () => {

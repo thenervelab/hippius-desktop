@@ -181,6 +181,15 @@ function describeOutcome(outcome: BootstrapOutcome): string {
   }
 }
 
+/** Tell Rust to drop or abort a sign-in flow; a failure is only logged. */
+async function abortFlowInRust(flowId: string): Promise<void> {
+  try {
+    await chatCancelSignIn(flowId);
+  } catch (error) {
+    console.warn(`[chat] cancel sign-in: ${errorMessage(error)}`);
+  }
+}
+
 export interface ChatContextValue {
   connection: ChatConnection;
   encryption: ChatEncryption;
@@ -238,7 +247,16 @@ export function ChatProvider({
   // which tears down whatever the previous attempt left behind.
   const [bootAttempt, setBootAttempt] = useState(0);
   const handleRef = useRef<ChatClientHandle | null>(null);
-  const signInFlowRef = useRef<string | null>(null);
+  /**
+   * The sign-in in progress, one object per attempt so a continuation can
+   * tell (by identity) whether it still owns the UI; `flowId` is Rust's
+   * handle once `chat_begin_sign_in` has answered. Cancel must work before
+   * that answer too — begin runs discovery, metadata and client
+   * registration over the network — so a cancel clears the attempt, not a
+   * flow id: a flow id that arrives for a cancelled attempt is aborted in
+   * Rust straight away, and the browser is never opened for it.
+   */
+  const signInRef = useRef<{ flowId: string | null } | null>(null);
 
   // -- boot: session -> client ------------------------------------------
   useEffect(() => {
@@ -446,24 +464,31 @@ export function ChatProvider({
 
   // -- sign in / out -----------------------------------------------------
   const signIn = useCallback(async () => {
-    if (signInFlowRef.current) return;
+    if (signInRef.current) return;
+    const current = { flowId: null as string | null };
+    signInRef.current = current;
+    const live = () => signInRef.current === current;
     setConnection({ kind: "signing-in" });
-    let flowId: string | null = null;
     try {
       const begun = await chatBeginSignIn();
-      flowId = begun.flowId;
-      signInFlowRef.current = flowId;
+      if (!live()) {
+        // Cancelled while Rust was still preparing the flow: it exists in
+        // Rust now, so abort it there, and never open the browser for it.
+        void abortFlowInRust(begun.flowId);
+        return;
+      }
+      current.flowId = begun.flowId;
       await openExternalLink(begun.authorizeUrl);
       // Blocks until the browser comes back (or the Rust-side timeout).
       // Rust persisted the session before answering, so the boot effect
       // finds it in the keyring.
-      await chatCompleteSignIn(flowId);
-      if (signInFlowRef.current !== flowId) return; // cancelled meanwhile
-      signInFlowRef.current = null;
+      await chatCompleteSignIn(begun.flowId);
+      if (!live()) return; // cancelled meanwhile
+      signInRef.current = null;
       setBootAttempt((n) => n + 1);
     } catch (error) {
-      if (signInFlowRef.current !== flowId) return; // cancelled meanwhile
-      signInFlowRef.current = null;
+      if (!live()) return; // cancelled meanwhile
+      signInRef.current = null;
       setConnection({
         kind: "error",
         message: errorMessage(error) || "Could not start sign-in.",
@@ -473,16 +498,12 @@ export function ChatProvider({
   }, []);
 
   const cancelSignIn = useCallback(async () => {
-    const flowId = signInFlowRef.current;
-    signInFlowRef.current = null;
+    const inFlight = signInRef.current;
+    signInRef.current = null;
     setConnection({ kind: "signed-out" });
-    if (flowId) {
-      try {
-        await chatCancelSignIn(flowId);
-      } catch (error) {
-        console.warn(`[chat] cancel sign-in: ${errorMessage(error)}`);
-      }
-    }
+    if (inFlight?.flowId) await abortFlowInRust(inFlight.flowId);
+    // With no flow id yet, `signIn` aborts the flow itself when begin
+    // answers: it sees the attempt is no longer live.
   }, []);
 
   const signOut = useCallback(async () => {

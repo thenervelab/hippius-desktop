@@ -123,6 +123,12 @@ pub struct ChatState {
     /// Without it a cancel only reached flows nobody was waiting on yet,
     /// and a sign-in the user had backed out of could still be persisted
     /// when the browser came back later.
+    ///
+    /// Lock order: `pending` before `running`, always. A flow moves from
+    /// `pending` to `running` under the `pending` guard, so there is no
+    /// instant at which it is in neither map — a cancel that took both
+    /// locks in the same order either finds the flow or arrives after it
+    /// is registered, never in between.
     running: Mutex<HashMap<String, CancelSignIn>>,
     /// Last unread count the webview reported (`chat_set_unread_badge`).
     /// The dock badge and the window title are derived from it in
@@ -794,18 +800,24 @@ pub async fn chat_begin_sign_in(state: tauri::State<'_, AppState>) -> Result<Beg
 #[tauri::command]
 pub async fn chat_complete_sign_in(state: tauri::State<'_, AppState>, flow_id: String) -> Result<ChatSession> {
     let account_id = state.current_account_id()?;
-    let mut pending = state
-        .chat
-        .pending
-        .lock()
-        .await
-        .remove(&flow_id)
-        .ok_or_else(|| AppError::Auth("chat: unknown or expired sign-in flow".into()))?;
+    let pending = {
+        // Move the flow from `pending` to `running` under the `pending`
+        // guard (lock order: pending, then running — same as the cancel
+        // command). Releasing `pending` before the insert left a window in
+        // which `chat_cancel_sign_in` found the flow in neither map and
+        // returned as a no-op while this command went on to complete and
+        // store the session.
+        let mut waiting = state.chat.pending.lock().await;
+        let mut pending = waiting
+            .remove(&flow_id)
+            .ok_or_else(|| AppError::Auth("chat: unknown or expired sign-in flow".into()))?;
+        // Reachable by `chat_cancel_sign_in` for as long as we are in here.
+        if let Some(cancel) = pending.cancel_handle() {
+            state.chat.running.lock().await.insert(flow_id.clone(), cancel);
+        }
+        pending
+    };
     let issuer = pending.metadata.issuer.clone();
-    // Reachable by `chat_cancel_sign_in` for as long as we are in here.
-    if let Some(cancel) = pending.cancel_handle() {
-        state.chat.running.lock().await.insert(flow_id.clone(), cancel);
-    }
     let result = complete(&state.chat.http, pending, CALLBACK_TIMEOUT).await;
     // A cancel that landed after `complete` produced a session but before
     // this line has already removed the handle: the session is not stored.
@@ -838,9 +850,15 @@ pub async fn chat_complete_sign_in(state: tauri::State<'_, AppState>, flow_id: S
 /// back later.
 #[tauri::command]
 pub async fn chat_cancel_sign_in(state: tauri::State<'_, AppState>, flow_id: String) -> Result<()> {
-    state.chat.pending.lock().await.remove(&flow_id);
-    if let Some(cancel) = state.chat.running.lock().await.remove(&flow_id) {
+    // Lock order: pending, then running, held together — the flow is in
+    // exactly one of the two maps at any instant (see `ChatState::running`).
+    let mut waiting = state.chat.pending.lock().await;
+    let mut running = state.chat.running.lock().await;
+    let dropped = waiting.remove(&flow_id).is_some();
+    if let Some(cancel) = running.remove(&flow_id) {
         cancel.cancel();
+    } else if !dropped {
+        debug!(%flow_id, "chat: cancel for a flow that is not pending or running");
     }
     Ok(())
 }
