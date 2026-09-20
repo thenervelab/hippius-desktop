@@ -90,7 +90,7 @@ export default function ThreadPanel({ client, room, summary, rootEventId }: Thre
           <p className="px-4 py-10 text-center text-sm text-grey-60 dark:text-grey-dark-700">This message is no longer available.</p>
         ) : null}
         {!root && loading ? <ThreadSkeleton /> : null}
-        {root ? <MessageRow client={client} room={room} event={root} groupStart tick={tick} inThread /> : null}
+        {root ? <MessageRow client={client} room={room} event={root} groupStart tick={tick} threadRootId={rootEventId} /> : null}
         {root ? (
           <div className="my-2 flex items-center gap-2 px-4" role="separator">
             <span className="text-xs text-grey-60 dark:text-grey-dark-700">
@@ -110,7 +110,7 @@ export default function ThreadPanel({ client, room, summary, rootEventId }: Thre
         {replies.map((event, index) => {
           const prev = index === 0 ? null : replies[index - 1];
           const groupStart = !prev || prev.getSender() !== event.getSender() || event.getTs() - prev.getTs() > GROUP_WINDOW_MS;
-          return <MessageRow key={event.getId() ?? `${index}`} client={client} room={room} event={event} groupStart={groupStart} tick={tick} inThread />;
+          return <MessageRow key={event.getId() ?? `${index}`} client={client} room={room} event={event} groupStart={groupStart} tick={tick} threadRootId={rootEventId} />;
         })}
       </div>
 

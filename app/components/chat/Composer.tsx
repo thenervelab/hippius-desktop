@@ -17,7 +17,7 @@ import { type MatrixClient, type MatrixEvent, MsgType, type Room } from "matrix-
 import { Bold, Code, Italic, Paperclip, Pencil, Reply, SendHorizontal, Smile, Strikethrough, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { chatServerNameAtom, editingEventIdAtom, replyToEventIdAtom, selectedRoomIdAtom } from "@/components/chat/chat-ui-atoms";
+import { type ComposerScope, chatServerNameAtom, editingTargetAtom, replyTargetAtom, selectedRoomIdAtom, targetEventIdFor } from "@/components/chat/chat-ui-atoms";
 import EmojiPicker from "@/components/chat/EmojiPicker";
 import UploadList, { type UploadItem } from "@/components/chat/UploadList";
 import UserAvatar from "@/components/chat/UserAvatar";
@@ -82,15 +82,23 @@ export default function Composer({ client, room, threadRootId = null, events, pl
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const [editingId, setEditingId] = useAtom(editingEventIdAtom);
-  const [replyToId, setReplyToId] = useAtom(replyToEventIdAtom);
+  const [editingTarget, setEditingTarget] = useAtom(editingTargetAtom);
+  const [replyTarget, setReplyTarget] = useAtom(replyTargetAtom);
   const setSelectedRoomId = useSetAtom(selectedRoomIdAtom);
   const serverName = useAtomValue(chatServerNameAtom);
   const typing = useMemo(() => new TypingNotifier(client, room.roomId), [client, room.roomId]);
 
+  // Only targets minted for this composer (room + thread) are acted on. The
+  // main composer and a thread panel's composer are both mounted for the
+  // same room, and the thread's root event sits in both timelines: an edit
+  // begun in the thread panel must never become the main composer's edit.
+  const scope: ComposerScope = useMemo(() => ({ roomId: room.roomId, threadRootId }), [room.roomId, threadRootId]);
+  const editingId = targetEventIdFor(editingTarget, scope);
+  const replyToId = targetEventIdFor(replyTarget, scope);
   const editing = editingId ? events.find((e) => e.getId() === editingId) ?? null : null;
   const replyTo = replyToId ? events.find((e) => e.getId() === replyToId) ?? room.findEventById(replyToId) ?? null : null;
-  const isThisScope = (event: MatrixEvent | null) => !!event && (event.threadRootId ?? null) === threadRootId;
+  const setEditingId = (eventId: string | null) => setEditingTarget(eventId ? { ...scope, eventId } : null);
+  const setReplyToId = (eventId: string | null) => setReplyTarget(eventId ? { ...scope, eventId } : null);
 
   // Restore draft on room / thread switch; drop stale edit state.
   useEffect(() => {
@@ -103,7 +111,7 @@ export default function Composer({ client, room, threadRootId = null, events, pl
 
   // Load the message into the box when an edit begins in this scope.
   useEffect(() => {
-    if (editing && isThisScope(editing)) {
+    if (editing) {
       setText(editableSource(editing));
       textareaRef.current?.focus();
     }
@@ -111,7 +119,7 @@ export default function Composer({ client, room, threadRootId = null, events, pl
   }, [editingId]);
 
   useEffect(() => {
-    if (replyTo && isThisScope(replyTo)) textareaRef.current?.focus();
+    if (replyTo) textareaRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replyToId]);
 
@@ -405,7 +413,7 @@ export default function Composer({ client, room, threadRootId = null, events, pl
   };
 
   const canSend = text.trim().length > 0 && !sending;
-  const activeBanner = editing && isThisScope(editing) ? "edit" : replyTo && isThisScope(replyTo) ? "reply" : null;
+  const activeBanner = editing ? "edit" : replyTo ? "reply" : null;
 
   return (
     <div

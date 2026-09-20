@@ -1,19 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { MatrixClient, Room } from "matrix-js-sdk";
+import { Provider, createStore } from "jotai";
+import type { MatrixClient, MatrixEvent, Room } from "matrix-js-sdk";
 
 // What the composer hands to the SDK layer. The real functions need a live
 // client; the placeholder rule is the one desktop-only rule under test.
 const sendText = vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined);
+const editText = vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined);
 vi.mock("@/lib/chat/compose", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/chat/compose")>();
-  return { ...actual, sendText: (...args: unknown[]) => sendText(...args) };
+  return {
+    ...actual,
+    sendText: (...args: unknown[]) => sendText(...args),
+    editText: (...args: unknown[]) => editText(...args),
+  };
 });
 vi.mock("@/components/chat/UserAvatar", () => ({ default: () => <span data-testid="avatar" /> }));
 const toast = { success: vi.fn(), error: vi.fn() };
 vi.mock("sonner", () => ({ toast }));
 
 const { default: Composer, GIF_UNAVAILABLE_MESSAGE } = await import("@/components/chat/Composer");
+const { editingTargetAtom } = await import("@/components/chat/chat-ui-atoms");
 
 const client = {
   getUserId: () => "@me:hippius.com",
@@ -35,6 +42,7 @@ function type(value: string) {
 
 beforeEach(() => {
   sendText.mockClear();
+  editText.mockClear();
   toast.error.mockReset();
   window.localStorage.clear();
 });
@@ -55,5 +63,73 @@ describe("Composer slash commands on desktop", () => {
     await waitFor(() => expect(sendText).toHaveBeenCalledTimes(1));
     expect(sendText.mock.calls[0]?.[2]).toBe("hello");
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+/** A thread's root message as the SDK exposes it: `threadRootId` is its own id. */
+function threadRoot(id: string): MatrixEvent {
+  return {
+    getId: () => id,
+    getSender: () => "@me:hippius.com",
+    getContent: () => ({ msgtype: "m.text", body: "original root text" }),
+    threadRootId: id,
+    isThreadRoot: true,
+  } as unknown as MatrixEvent;
+}
+
+describe("Composer edit scope", () => {
+  // The room's main composer and a thread panel's composer are mounted at
+  // once, and the thread root sits in both timelines. An edit begun in the
+  // thread panel used to be picked up by the main composer as well, whose
+  // next send replaced the root message instead of posting a new one.
+  it("an edit begun in a thread panel never turns the main composer's send into an edit", async () => {
+    const root = threadRoot("$root");
+    const store = createStore();
+    store.set(editingTargetAtom, { roomId: room.roomId, threadRootId: "$root", eventId: "$root" });
+    render(
+      <Provider store={store}>
+        <Composer client={client} room={room} events={[root]} placeholder="Message #general" />
+      </Provider>,
+    );
+    // Not in edit mode: no banner, the box is empty rather than the root's text.
+    expect(screen.queryByText("Editing message")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    type("a brand new message");
+    await waitFor(() => expect(sendText).toHaveBeenCalledTimes(1));
+    expect(sendText.mock.calls[0]?.[2]).toBe("a brand new message");
+    expect(editText).not.toHaveBeenCalled();
+    // The thread panel's edit is still pending for its own composer.
+    expect(store.get(editingTargetAtom)).toEqual({ roomId: room.roomId, threadRootId: "$root", eventId: "$root" });
+  });
+
+  it("the composer the edit was begun in does edit", async () => {
+    const root = threadRoot("$root");
+    const store = createStore();
+    store.set(editingTargetAtom, { roomId: room.roomId, threadRootId: "$root", eventId: "$root" });
+    render(
+      <Provider store={store}>
+        <Composer client={client} room={room} threadRootId="$root" events={[root]} placeholder="Reply in thread" />
+      </Provider>,
+    );
+    expect(screen.getByText("Editing message")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("original root text");
+    type("corrected root text");
+    await waitFor(() => expect(editText).toHaveBeenCalledTimes(1));
+    expect(editText.mock.calls[0]?.[2]).toBe(root);
+    expect(editText.mock.calls[0]?.[3]).toBe("corrected root text");
+    expect(sendText).not.toHaveBeenCalled();
+    expect(store.get(editingTargetAtom)).toBeNull();
+  });
+
+  it("an edit target from another room is ignored", () => {
+    const store = createStore();
+    store.set(editingTargetAtom, { roomId: "!other:hippius.com", threadRootId: null, eventId: "$root" });
+    render(
+      <Provider store={store}>
+        <Composer client={client} room={room} events={[threadRoot("$root")]} placeholder="Message #general" />
+      </Provider>,
+    );
+    expect(screen.queryByText("Editing message")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("");
   });
 });

@@ -27,10 +27,35 @@ export const sidebarDrawerOpenAtom = atom(false);
 export const newMessageOpenAtom = atom(false);
 /** Event to scroll to and flash once the timeline has it (switches room if needed). */
 export const jumpToEventAtom = atom<{ roomId: string; eventId: string } | null>(null);
-/** Event currently being edited in the composer (main timeline or thread). */
-export const editingEventIdAtom = atom<string | null>(null);
-/** Event being replied to (quote-reply outside a thread). */
-export const replyToEventIdAtom = atom<string | null>(null);
+/**
+ * Which composer a message action belongs to: a room's main composer
+ * (`threadRootId: null`) or the composer of one thread panel. A room can
+ * show both at once, so edit / reply state is keyed by scope and each
+ * composer only acts on a target minted for its own scope. Before this, a
+ * single event id was shared: an edit started on a thread's root from the
+ * thread panel was picked up by the main composer too, whose next send
+ * silently replaced that root message instead of posting a new one.
+ */
+export interface ComposerScope {
+  roomId: string;
+  threadRootId: string | null;
+}
+
+/** An event a composer is editing or replying to, with the composer it was chosen from. */
+export interface ComposerTarget extends ComposerScope {
+  eventId: string;
+}
+
+/** `target.eventId` when `target` was minted for `scope`; otherwise `null`. */
+export function targetEventIdFor(target: ComposerTarget | null, scope: ComposerScope): string | null {
+  if (!target) return null;
+  return target.roomId === scope.roomId && target.threadRootId === scope.threadRootId ? target.eventId : null;
+}
+
+/** Event currently being edited, scoped to the composer the edit began in. */
+export const editingTargetAtom = atom<ComposerTarget | null>(null);
+/** Event being replied to (quote-reply), scoped to the composer the reply began in. */
+export const replyTargetAtom = atom<ComposerTarget | null>(null);
 
 /**
  * Whether animated images play without hovering. Presentation only, so it
