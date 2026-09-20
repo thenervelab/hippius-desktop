@@ -4,7 +4,7 @@ import { type MouseEvent, useMemo } from "react";
 
 import { isEmojiOnly } from "@/lib/chat/emoji";
 import { plainTextToHtml, sanitizeHtml } from "@/lib/chat/html";
-import { parseMatrixToLink } from "@/lib/chat/links";
+import { parseMatrixLink } from "@/lib/chat/links";
 import type { MessageBody as Body } from "@/lib/chat/timeline";
 import { cn } from "@/lib/utils";
 
@@ -62,14 +62,15 @@ export default function MessageBody({ body, senderName, onMentionClick, onEventL
 
   const big = !body.formatted && isEmojiOnly(body.text);
 
-  // matrix.to links are the app's own navigation, never the webview's: the
-  // sanitiser gives them no `target="_blank"`, so letting the default action
-  // run would navigate the app window itself to matrix.to. Percent-encoded
-  // and raw forms are decoded by `parseMatrixToLink` before routing.
+  // matrix.to links and `matrix:` URIs are the app's own navigation, never
+  // the webview's: the sanitiser gives them no `target="_blank"`, so letting
+  // the default action run would navigate the app window itself to them.
+  // Percent-encoded and raw forms are decoded by `parseMatrixLink` before
+  // routing.
   const onClick = (event: MouseEvent<HTMLDivElement>) => {
     const anchor = (event.target as HTMLElement).closest("a");
     if (!anchor) return;
-    const link = parseMatrixToLink(anchor.getAttribute("href") ?? "");
+    const link = parseMatrixLink(anchor.getAttribute("href") ?? "");
     if (!link) return;
     event.preventDefault();
     switch (link.kind) {

@@ -144,4 +144,21 @@ describe("MessageRow matrix.to links", () => {
     expect(store.get(jumpToEventAtom)).toBeNull();
     expect(store.get(selectedRoomIdAtom)).toBeNull();
   });
+
+  // The sanitiser keeps `matrix:` hrefs as internal navigation (no
+  // target="_blank"); left unrouted, the default action would navigate the
+  // app window to the URI.
+  it("routes a matrix: URI permalink like its matrix.to form, with the default prevented", () => {
+    const { store, defaultPrevented } = renderLink(
+      `matrix:roomid/${encodeURIComponent(room.roomId.slice(1))}/e/target?via=hippius.com`,
+    );
+    expect(defaultPrevented).toBe(true);
+    expect(store.get(jumpToEventAtom)).toEqual({ roomId: room.roomId, eventId: "$target" });
+  });
+
+  it("routes a matrix: URI mention to the member panel, with the default prevented", () => {
+    const { store, defaultPrevented } = renderLink("matrix:u/ada%3Ahippius.com");
+    expect(defaultPrevented).toBe(true);
+    expect(store.get(rightPanelAtom)).toEqual({ kind: "member", roomId: room.roomId, userId: "@ada:hippius.com" });
+  });
 });

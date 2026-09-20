@@ -52,3 +52,56 @@ export function parseMatrixToLink(href: string): MatrixToLink | null {
   }
   return null;
 }
+
+const MATRIX_URI_PREFIX = /^matrix:(?:\/\/[^/]*\/)?(.+)$/i;
+
+/** MSC2312 path types → the sigil the id is written with elsewhere. */
+const MATRIX_URI_SIGILS: Record<string, string> = { u: "@", r: "#", roomid: "!", e: "$" };
+
+/**
+ * Parse a `matrix:` URI (MSC2312: `matrix:u/bob:server`,
+ * `matrix:r/general:server`, `matrix:roomid/abc:server/e/evt`), or `null`
+ * when it is not one this app can act on. The sanitiser lets these hrefs
+ * through as internal navigation (no `target="_blank"`), so they must be
+ * routed like `matrix.to` links or the webview navigates the app window to
+ * them. Ids are percent-decoded; the query (`?via=…`, `?action=…`) is ignored.
+ */
+export function parseMatrixUri(href: string): MatrixToLink | null {
+  const match = MATRIX_URI_PREFIX.exec(href.trim());
+  if (!match) return null;
+  const path = match[1].split("?")[0];
+  const segments: string[] = [];
+  for (const raw of path.split("/")) {
+    if (raw === "") continue;
+    try {
+      segments.push(decodeURIComponent(raw));
+    } catch {
+      return null;
+    }
+  }
+  // Pairs of (type, id); sigils are implied by the type in this form.
+  if (segments.length !== 2 && segments.length !== 4) return null;
+  const sigil = (type: string, id: string): string | null => {
+    const s = MATRIX_URI_SIGILS[type.toLowerCase()];
+    return s && id ? `${s}${id}` : null;
+  };
+  const first = sigil(segments[0], segments[1]);
+  if (!first) return null;
+  if (segments.length === 2) {
+    if (first.startsWith("@")) return { kind: "user", userId: first };
+    if (first.startsWith("$")) return null;
+    return { kind: "room", roomId: first };
+  }
+  if (first.startsWith("@") || first.startsWith("$")) return null;
+  const second = sigil(segments[2], segments[3]);
+  return second?.startsWith("$") ? { kind: "event", roomId: first, eventId: second } : null;
+}
+
+/**
+ * Whatever internal-navigation link an anchor carries — `matrix.to` or a
+ * `matrix:` URI — or `null` for anything else (an ordinary web link, which
+ * keeps its default action).
+ */
+export function parseMatrixLink(href: string): MatrixToLink | null {
+  return parseMatrixToLink(href) ?? parseMatrixUri(href);
+}
