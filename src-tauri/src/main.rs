@@ -15,6 +15,7 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+pub mod chat;
 mod cli;
 pub mod console_access;
 pub mod crypto;
@@ -293,6 +294,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             info!("Another instance attempted to start with argv: {:?}", argv);
@@ -324,6 +326,28 @@ fn main() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
+            // Team chat (Rust half: gate, OIDC bridge, keyring session, 4S key, native surfaces)
+            chat::config::chat_get_config,
+            chat::keys::chat_derive_secret_storage_key,
+            chat::session::chat_get_session,
+            chat::session::chat_clear_session,
+            chat::sign_in::chat_begin_sign_in,
+            chat::sign_in::chat_complete_sign_in,
+            chat::sign_in::chat_cancel_sign_in,
+            chat::sign_in::chat_refresh_tokens,
+            chat::sign_in::chat_sign_out,
+            chat::notify::chat_notify_message,
+            chat::notify::chat_set_unread_badge,
+            chat::notify::chat_get_unread_count,
+            chat::notify::chat_get_notifications_enabled,
+            chat::notify::chat_set_notifications_enabled,
+            chat::attachments::chat_save_attachment,
+            chat::backend::chat_gifs_search,
+            chat::backend::chat_gifs_featured,
+            chat::backend::chat_gif_download,
+            chat::backend::chat_create_workspace_invite,
+            chat::backend::chat_accept_workspace_invite,
+            chat::backend::chat_preview_workspace_invite,
             // Sync control (hcfs-client)
             initialize_sync,
             add_local_sync_folder,
