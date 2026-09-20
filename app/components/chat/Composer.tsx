@@ -69,13 +69,13 @@ const TOOL_BUTTON =
  * Slack-style composer: Enter sends, Shift+Enter breaks, Esc cancels an
  * edit or reply, ↑ on an empty box edits your last message. Autocomplete
  * for `@`, `:` and `/`; formatting buttons wrap the selection in markdown;
- * files arrive by button, paste or drop; drafts persist per room.
+ * files arrive by button, paste or drop; drafts persist per room, per user.
  */
 export default function Composer({ client, room, threadRootId = null, events, placeholder, autoFocus }: ComposerProps) {
   const me = client.getUserId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState(() => loadDraft(room.roomId, threadRootId));
+  const [text, setText] = useState(() => loadDraft(me, room.roomId, threadRootId));
   const [mentions, setMentions] = useState<MentionTarget[]>([]);
   const [sending, setSending] = useState(false);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
@@ -102,10 +102,10 @@ export default function Composer({ client, room, threadRootId = null, events, pl
 
   // Restore draft on room / thread switch; drop stale edit state.
   useEffect(() => {
-    setText(loadDraft(room.roomId, threadRootId));
+    setText(loadDraft(me, room.roomId, threadRootId));
     setMentions([]);
     setTrigger(null);
-  }, [room.roomId, threadRootId]);
+  }, [me, room.roomId, threadRootId]);
 
   useEffect(() => () => typing.stop(), [typing]);
 
@@ -133,7 +133,7 @@ export default function Composer({ client, room, threadRootId = null, events, pl
 
   const updateText = (next: string, caret?: number) => {
     setText(next);
-    if (!editing) saveDraft(room.roomId, threadRootId, next);
+    if (!editing) saveDraft(me, room.roomId, threadRootId, next);
     if (next.trim()) typing.typing();
     else typing.stop();
     const at = caret ?? textareaRef.current?.selectionStart ?? next.length;
@@ -182,7 +182,7 @@ export default function Composer({ client, room, threadRootId = null, events, pl
   const cancelEditOrReply = () => {
     if (editing) {
       setEditingId(null);
-      setText(loadDraft(room.roomId, threadRootId));
+      setText(loadDraft(me, room.roomId, threadRootId));
     } else if (replyTo) {
       setReplyToId(null);
     }
@@ -255,7 +255,7 @@ export default function Composer({ client, room, threadRootId = null, events, pl
       if (editing) {
         if (source !== editableSource(editing)) await editText(client, room, editing, source, liveMentions);
         setEditingId(null);
-        setText(loadDraft(room.roomId, threadRootId));
+        setText(loadDraft(me, room.roomId, threadRootId));
       } else {
         const parsed = threadRootId ? { kind: "text" as const, text: source } : parseInput(source);
         if (parsed.kind === "unknown-command") {
@@ -269,7 +269,7 @@ export default function Composer({ client, room, threadRootId = null, events, pl
         }
         setReplyToId(null);
         setText("");
-        saveDraft(room.roomId, threadRootId, "");
+        saveDraft(me, room.roomId, threadRootId, "");
       }
       setMentions([]);
       setTrigger(null);

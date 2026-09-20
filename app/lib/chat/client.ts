@@ -27,6 +27,7 @@ import {
 } from "matrix-js-sdk";
 import { type MSC3575List, SlidingSync } from "matrix-js-sdk/lib/sliding-sync";
 
+import { clearDrafts } from "@/app/lib/chat/compose";
 import {
   chatCryptoCallbacks,
   clearSecretStorageKey,
@@ -421,6 +422,7 @@ export async function signOutChat(
     }
   }
   clearSecretStorageKey();
+  clearDrafts(ending?.userId ?? null);
   if (ending) await deleteChatStores(await chatStoreNamesFor(ending));
   await deleteOtherChatStores(ending?.userId ?? null, null);
   await chatSignOut();
