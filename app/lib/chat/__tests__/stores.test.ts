@@ -7,11 +7,14 @@ import {
   CHAT_STORE_PREFIX,
   chatStoreNames,
   chatStoreNamesFor,
+  chatUserScope,
   deleteOtherChatStores,
   isChatStoreDatabase,
+  isInChatUserScope,
   legacyChatStoreNames,
   SYNC_STORE_DATABASE_PREFIX,
   syncStoreDatabase,
+  userScopedChatStoreNames,
 } from "@/app/lib/chat/stores";
 
 /**
@@ -37,8 +40,13 @@ async function databaseTheSdkOpensFor(dbName: string): Promise<string> {
 }
 
 const USER = "@dubs:hippius.com";
+const OTHER_USER = "@other:hippius.com";
 const OLD_DEVICE = "3G0yuJNTvy";
 const NEW_DEVICE = "5FlfZDBbpL";
+// `sha256sum <<< "@dubs:hippius.com"` (no newline).
+const USER_DIGEST = "02424a1d1752c6805919059edf9f3deb438b1c0e6ac4cf9c86c6343a70e0695e";
+// `sha256sum <<< "@dubs:hippius.com:5FlfZDBbpL"` (no newline).
+const NEW_DEVICE_DIGEST = "822136ced44848350f711794c1138cccb775899f6e4af40df31c1c2e0b022f2b";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -66,8 +74,7 @@ describe("chatStoreNames", () => {
   it("is deterministic and carries sha256(userId:deviceId) under the chat prefix", async () => {
     const names = await chatStoreNames(USER, NEW_DEVICE);
     expect(await chatStoreNames(USER, NEW_DEVICE)).toEqual(names);
-    // `sha256sum <<< "@dubs:hippius.com:5FlfZDBbpL"` (no newline).
-    const digest = "822136ced44848350f711794c1138cccb775899f6e4af40df31c1c2e0b022f2b";
+    const digest = NEW_DEVICE_DIGEST;
     expect(names.syncStore).toBe(`${CHAT_STORE_PREFIX}${digest}:sync`);
     expect(names.cryptoPrefix).toBe(`${CHAT_STORE_PREFIX}${digest}:crypto`);
     expect(names.databases).toEqual([
@@ -103,18 +110,70 @@ describe("chatStoreNames", () => {
   });
 });
 
+describe("userScopedChatStoreNames", () => {
+  // Frozen so a change to either digest is a visible break: an existing
+  // session would otherwise open fresh stores and lose its crypto state.
+  it("places the console's device digest inside a per-user scope", async () => {
+    const names = await userScopedChatStoreNames(USER, NEW_DEVICE);
+    const scope = await chatUserScope(USER);
+    expect(scope).toBe(`${CHAT_STORE_PREFIX}${USER_DIGEST}:`);
+    expect(names.syncStore).toBe(`${scope}${NEW_DEVICE_DIGEST}:sync`);
+    expect(names.cryptoPrefix).toBe(`${scope}${NEW_DEVICE_DIGEST}:crypto`);
+    expect(names.databases).toEqual([
+      `matrix-js-sdk:${names.syncStore}`,
+      `${names.cryptoPrefix}::matrix-sdk-crypto`,
+      `${names.cryptoPrefix}::matrix-sdk-crypto-meta`,
+    ]);
+    for (const name of names.databases) {
+      expect(isChatStoreDatabase(name)).toBe(true);
+      expect(isInChatUserScope(name, scope)).toBe(true);
+      expect(name).not.toContain("dubs");
+      expect(name).not.toContain(NEW_DEVICE);
+    }
+  });
+
+  it("two devices of one user share the scope; two users never do", async () => {
+    const scope = await chatUserScope(USER);
+    for (const name of (await userScopedChatStoreNames(USER, OLD_DEVICE)).databases) {
+      expect(isInChatUserScope(name, scope)).toBe(true);
+    }
+    for (const name of (await userScopedChatStoreNames(OTHER_USER, NEW_DEVICE)).databases) {
+      expect(isInChatUserScope(name, scope)).toBe(false);
+    }
+    // The unscoped `device` layout is attributable to nobody.
+    for (const name of (await chatStoreNames(USER, NEW_DEVICE)).databases) {
+      expect(isInChatUserScope(name, scope)).toBe(false);
+    }
+  });
+
+  it("does not collide with the device layout of the same device", async () => {
+    const scoped = await userScopedChatStoreNames(USER, NEW_DEVICE);
+    const unscoped = await chatStoreNames(USER, NEW_DEVICE);
+    expect(scoped.databases.filter((n) => unscoped.databases.includes(n))).toEqual([]);
+  });
+});
+
 describe("chatStoreNamesFor", () => {
   const base = { userId: USER, deviceId: NEW_DEVICE };
 
-  it("gives a session recorded under the device layout its device-scoped stores", async () => {
+  it("gives a new session (user-device layout) its user-scoped stores", async () => {
+    expect(await chatStoreNamesFor({ ...base, storeLayout: "user-device" })).toEqual(
+      await userScopedChatStoreNames(USER, NEW_DEVICE),
+    );
+  });
+
+  // A session recorded before the scope existed keeps the console's names:
+  // renaming would open a fresh crypto store for a device whose keys are
+  // already published, and lose every message it could decrypt.
+  it("gives a session recorded under the device layout its unscoped device stores", async () => {
     expect(await chatStoreNamesFor({ ...base, storeLayout: "device" })).toEqual(
       await chatStoreNames(USER, NEW_DEVICE),
     );
   });
 
-  // Rust always records `"device"`; a session missing it must not be
-  // guessed into device-scoped names, or the boot sweep would delete the
-  // stores it actually owns as "another device's".
+  // A session missing the layout must not be guessed into device-scoped
+  // names, or the boot sweep would delete the stores it actually owns as
+  // "another device's".
   it("gives a session with no recorded layout the legacy stores", async () => {
     const names = await chatStoreNamesFor(base);
     expect(names).toEqual(legacyChatStoreNames());
@@ -125,7 +184,7 @@ describe("chatStoreNamesFor", () => {
     const idb = makeFakeIndexedDB([...CHAT_LEGACY_STORE_DATABASES], { listable: false });
     vi.stubGlobal("indexedDB", idb);
 
-    expect(await deleteOtherChatStores(await chatStoreNamesFor(base))).toEqual([]);
+    expect(await deleteOtherChatStores(USER, await chatStoreNamesFor(base))).toEqual([]);
     expect(idb.deleted).toEqual([]);
   });
 });
@@ -150,9 +209,9 @@ describe("isChatStoreDatabase", () => {
 });
 
 describe("deleteOtherChatStores", () => {
-  it("deletes the legacy stores and every other device's stores, keeps this device's and unrelated databases", async () => {
-    const mine = await chatStoreNames(USER, NEW_DEVICE);
-    const previous = await chatStoreNames(USER, OLD_DEVICE);
+  it("deletes the legacy stores and every other device of THIS user, keeps this device's and unrelated databases", async () => {
+    const mine = await userScopedChatStoreNames(USER, NEW_DEVICE);
+    const previous = await userScopedChatStoreNames(USER, OLD_DEVICE);
     const idb = makeFakeIndexedDB([
       ...mine.databases,
       ...previous.databases,
@@ -161,7 +220,7 @@ describe("deleteOtherChatStores", () => {
     ]);
     vi.stubGlobal("indexedDB", idb);
 
-    const deleted = await deleteOtherChatStores(mine);
+    const deleted = await deleteOtherChatStores(USER, mine);
 
     expect(new Set(deleted)).toEqual(
       new Set([...previous.databases, ...CHAT_LEGACY_STORE_DATABASES]),
@@ -170,14 +229,58 @@ describe("deleteOtherChatStores", () => {
     expect(new Set(remaining)).toEqual(new Set([...mine.databases, "unrelated-app-db"]));
   });
 
-  it("with nothing to keep, deletes every chat store (sign-out with no known device)", async () => {
-    const a = await chatStoreNames(USER, OLD_DEVICE);
-    const b = await chatStoreNames(USER, NEW_DEVICE);
+  // The webview profile is shared by every Hippius account on the machine
+  // and the keyring keeps one chat session per account. Account B's boot
+  // sweep used to delete account A's crypto store — and with it A's
+  // decryptable history — because nothing in the old name said whose it was.
+  it("never deletes another user's stores, on boot or at sign-out", async () => {
+    const mine = await userScopedChatStoreNames(USER, NEW_DEVICE);
+    const otherAccount = await userScopedChatStoreNames(OTHER_USER, "OTHERDEV");
+    const idb = makeFakeIndexedDB([...mine.databases, ...otherAccount.databases]);
+    vi.stubGlobal("indexedDB", idb);
+
+    expect(await deleteOtherChatStores(USER, mine)).toEqual([]);
+    expect(new Set(await deleteOtherChatStores(USER, null))).toEqual(new Set(mine.databases));
+    expect(new Set(idb.names)).toEqual(new Set(otherAccount.databases));
+  });
+
+  // A `device`-layout store is an opaque digest: it may be this user's
+  // earlier device or another account's only device, and the two cannot be
+  // told apart without opening it. Left alone.
+  it("leaves unscoped device-layout stores where they are", async () => {
+    const mine = await userScopedChatStoreNames(USER, NEW_DEVICE);
+    const unscoped = await chatStoreNames(USER, OLD_DEVICE);
+    const unscopedOther = await chatStoreNames(OTHER_USER, "OTHERDEV");
+    const idb = makeFakeIndexedDB([
+      ...mine.databases,
+      ...unscoped.databases,
+      ...unscopedOther.databases,
+    ]);
+    vi.stubGlobal("indexedDB", idb);
+
+    expect(await deleteOtherChatStores(USER, mine)).toEqual([]);
+    expect(idb.deleted).toEqual([]);
+  });
+
+  it("with nothing to keep, deletes every store of the user (sign-out with no known device)", async () => {
+    const a = await userScopedChatStoreNames(USER, OLD_DEVICE);
+    const b = await userScopedChatStoreNames(USER, NEW_DEVICE);
     const idb = makeFakeIndexedDB([...a.databases, ...b.databases, "unrelated-app-db"]);
     vi.stubGlobal("indexedDB", idb);
 
-    await deleteOtherChatStores(null);
+    await deleteOtherChatStores(USER, null);
 
     expect([...idb.names]).toEqual(["unrelated-app-db"]);
+  });
+
+  it("with no user at all, deletes only the legacy console names", async () => {
+    const a = await userScopedChatStoreNames(USER, OLD_DEVICE);
+    const idb = makeFakeIndexedDB([...a.databases, ...CHAT_LEGACY_STORE_DATABASES]);
+    vi.stubGlobal("indexedDB", idb);
+
+    expect(new Set(await deleteOtherChatStores(null, null))).toEqual(
+      new Set(CHAT_LEGACY_STORE_DATABASES),
+    );
+    expect(new Set(idb.names)).toEqual(new Set(a.databases));
   });
 });

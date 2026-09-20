@@ -267,6 +267,9 @@ async fn full_sign_in_round_trip_through_loopback() {
     assert_eq!(session.access_token, format!("mat_{device_id}"));
     assert_eq!(session.refresh_token.as_deref(), Some("mar_1"));
     assert!(session.expires_at.is_some());
+    // A new sign-in always records the user-scoped store layout: the
+    // webview's stale-store sweep is confined to this Matrix user by it.
+    assert_eq!(session.store_layout, tauri_project_lib::chat::session::ChatStoreLayout::UserDevice);
 
     let st = issuer.lock().unwrap();
     let exchange = &st.exchanges[0];

@@ -262,11 +262,14 @@ export async function startChatClient(
     return request;
   };
 
-  // Whatever store is not this device's is deleted before anything opens:
-  // a device-scoped store left behind by an earlier device whose sign-out
-  // never ran, or the console's legacy names. Such a store is never opened.
+  // Whatever store of THIS user is not this device's is deleted before
+  // anything opens: a store left behind by an earlier device of the same
+  // account whose sign-out never ran, or the console's legacy names. Such a
+  // store is never opened. Scoped to the user on purpose: another Hippius
+  // account's chat session lives on in the keyring across an account
+  // switch, and its crypto store must survive with it.
   const names = await chatStoreNamesFor(session);
-  const swept = await deleteOtherChatStores(names);
+  const swept = await deleteOtherChatStores(session.userId, names);
   if (swept.length > 0) {
     console.info(
       `[chat] removed ${swept.length} store(s) of other devices before opening ${session.deviceId}'s`,
@@ -395,9 +398,11 @@ export function stopChatClient(handle: ChatClientHandle): void {
  * tokens to revoke are read by Rust from the keyring, which a refresh
  * always updates first.
  *
- * The device's stores are gone before this resolves, and before the
- * session record is cleared: the next sign-in creates a new device, and
- * that device must never find this one's crypto store under any name.
+ * The device's stores — and any stale store of the same user — are gone
+ * before this resolves, and before the session record is cleared: the next
+ * sign-in creates a new device, and that device must never find this one's
+ * crypto store under any name. Other users' stores are not touched: they
+ * belong to sessions the keyring still holds for other Hippius accounts.
  */
 export async function signOutChat(
   handle: ChatClientHandle | null,
@@ -417,6 +422,6 @@ export async function signOutChat(
   }
   clearSecretStorageKey();
   if (ending) await deleteChatStores(await chatStoreNamesFor(ending));
-  await deleteOtherChatStores(null);
+  await deleteOtherChatStores(ending?.userId ?? null, null);
   await chatSignOut();
 }

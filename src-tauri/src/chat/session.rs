@@ -47,13 +47,24 @@ fn keychain_disabled() -> bool {
     std::env::var_os(DISABLE_ENV_VAR).is_some_and(|v| !v.is_empty())
 }
 
-/// How the sync/crypto IndexedDB stores are named. `device` is the only
-/// layout the desktop ever writes; the field exists because the ported
-/// `stores.ts` keys its naming decision on it, exactly as the console does.
+/// How the sync/crypto IndexedDB stores are named. The ported `stores.ts`
+/// keys its naming decision on it, exactly as the console does, so a store
+/// is only ever opened under the layout it was created with.
+///
+/// `user-device` is the only layout a new sign-in writes. Its store names
+/// carry a per-Matrix-user scope, so the boot-time sweep of stale stores
+/// can be confined to the signed-in user and never reaches the stores of
+/// another Hippius account signed in on the same machine (the keyring
+/// holds one chat session per account, and the webview profile is shared).
+/// `device` — the console's layout, an opaque digest over user and device —
+/// stays for sessions recorded before the scope existed: their stores keep
+/// their names, which is what keeps their crypto stores (and with them the
+/// account's decryptable history) alive across the upgrade.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ChatStoreLayout {
     Device,
+    UserDevice,
 }
 
 /// One signed-in Matrix device. Field names are the console's `ChatSession`
@@ -297,5 +308,23 @@ mod tests {
         let s: ChatSession = serde_json::from_str(raw).unwrap();
         assert_eq!(s.store_layout, ChatStoreLayout::Device);
         assert!(s.refresh_token.is_none());
+    }
+
+    /// The layout is a wire contract with `stores.ts`, which dispatches on
+    /// the exact string: `user-device` is the scoped layout new sign-ins
+    /// record, and a `device` record written before the scope existed must
+    /// still read back as `Device` so its stores keep their names.
+    #[test]
+    fn store_layouts_round_trip_under_their_wire_names() {
+        let mut scoped = sample("alice");
+        scoped.store_layout = ChatStoreLayout::UserDevice;
+        let json = serde_json::to_value(&scoped).unwrap();
+        assert_eq!(json["storeLayout"], "user-device");
+        let back: ChatSession = serde_json::from_value(json).unwrap();
+        assert_eq!(back.store_layout, ChatStoreLayout::UserDevice);
+
+        let raw = r#"{"baseUrl":"b","issuer":"i","clientId":"c","userId":"@u:hippius.com","deviceId":"D","accessToken":"t","storeLayout":"device"}"#;
+        let s: ChatSession = serde_json::from_str(raw).unwrap();
+        assert_eq!(s.store_layout, ChatStoreLayout::Device);
     }
 }

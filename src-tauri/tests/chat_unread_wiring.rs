@@ -14,7 +14,9 @@ const LOGOUT_RS: &str = include_str!("../src/auth/logout.rs");
 fn logout_full_clears_the_chat_unread_badge_after_auth_clear() {
     let body_start = LOGOUT_RS.find("pub async fn logout_full").expect("logout_full exists");
     let body = &LOGOUT_RS[body_start..];
-    let auth_clear = body.find("auth_logout_internal(&state, &account_id).await?;").expect("logout_full clears auth");
+    let auth_clear = body
+        .find("auth_logout_internal(&state, &account_id).await?;")
+        .expect("logout_full clears auth");
     let badge = body
         .find("crate::chat::notify::clear_unread_badge(&app);")
         .expect("logout_full must reset the chat unread badge + window title");

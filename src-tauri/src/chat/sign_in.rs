@@ -595,7 +595,7 @@ pub fn build_session(
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_at: tokens.expires_in.map(|s| now_ms() + s * 1000),
-        store_layout: ChatStoreLayout::Device,
+        store_layout: ChatStoreLayout::UserDevice,
     })
 }
 

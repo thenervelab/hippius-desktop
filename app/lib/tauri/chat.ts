@@ -24,12 +24,15 @@ export interface ChatConfig {
 }
 
 /**
- * Where a session's device keeps its SDK stores. Rust only ever mints
- * `"device"`; the field stays optional so a store-name decision made on a
- * session missing it (never expected) falls back to the legacy layout
- * instead of opening another device's store.
+ * Where a session's device keeps its SDK stores (`chat::session::ChatStoreLayout`).
+ * New sign-ins record `"user-device"`, whose store names carry a per-user
+ * scope the stale-store sweep is confined to; `"device"` is the console's
+ * unscoped layout, kept for sessions recorded before the scope existed so
+ * their stores keep their names. The field stays optional so a store-name
+ * decision made on a session missing it (never expected) falls back to the
+ * legacy layout instead of opening another device's store.
  */
-export type ChatStoreLayout = "device";
+export type ChatStoreLayout = "device" | "user-device";
 
 /** `chat::session::ChatSession` — same wire shape as the console's session. */
 export interface ChatSession {

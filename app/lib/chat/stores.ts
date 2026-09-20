@@ -7,13 +7,23 @@
  * match the account in the constructor". Every chat sign-in mints a new
  * device, so a store name that does not include the device is a store two
  * devices will eventually share. Here the name is derived from both, and
- * whatever store is not the current device's is deleted before the client
- * opens anything.
+ * whatever store of the SAME user is not the current device's is deleted
+ * before the client opens anything.
  *
- * Ported from the web console's `lib/chat/stores.ts`; the store layout is
- * the same on purpose (a session record from either client names its
- * stores the same way), with the digest computed through WebCrypto instead
- * of a hashing dependency the desktop does not otherwise carry.
+ * Two layouts, chosen by the session's `storeLayout` (minted in Rust):
+ *
+ * - `user-device` (every new sign-in): `hippius-chat:<sha256(user)>:<sha256(user:device)>`.
+ *   The first digest is a per-user scope. The webview profile is shared by
+ *   every Hippius account on the machine and the keyring keeps one chat
+ *   session per account, so the sweep must be able to tell "an earlier
+ *   device of this user" from "another account's device": it only ever
+ *   deletes inside the signed-in user's scope.
+ * - `device` (sessions recorded before the scope existed; the console's
+ *   layout): `hippius-chat:<sha256(user:device)>`. Opaque — nothing in the
+ *   name says whose it is — so such a store is opened when it is the
+ *   session's own and otherwise left alone, never swept. Deleting it blind
+ *   is exactly how another account's crypto store (and with it that
+ *   account's decryptable history) used to be lost on an account switch.
  *
  * Framework-agnostic; nothing here imports React or the SDK.
  */
@@ -81,32 +91,71 @@ function bytesToHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+async function sha256Hex(input: string): Promise<string> {
+  return bytesToHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)));
+}
+
 /**
- * The store names for one device of one account. Deterministic: the same
- * session always opens the same stores; a different device (or a different
- * account) never opens these. The ids are hashed so the database list does
- * not spell out who is signed in. Same digest as the console
- * (`sha256("<userId>:<deviceId>")`, hex).
+ * The per-user scope every `user-device` store name of `userId` starts
+ * with. The user id is hashed so the database list does not spell out who
+ * is signed in. Ends with the separator so a scope is never a prefix of
+ * another scope.
+ */
+export async function chatUserScope(userId: string): Promise<string> {
+  return `${CHAT_STORE_PREFIX}${await sha256Hex(userId)}:`;
+}
+
+/**
+ * The `device`-layout store names for one device of one account — the
+ * console's layout, an opaque `sha256("<userId>:<deviceId>")` under the chat
+ * prefix. Deterministic: the same session always opens the same stores; a
+ * different device (or a different account) never opens these. Only
+ * sessions recorded under that layout resolve here; nothing new is created
+ * under it.
  */
 export async function chatStoreNames(userId: string, deviceId: string): Promise<ChatStoreNames> {
-  const digest = bytesToHex(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${userId}:${deviceId}`)),
-  );
-  const scope = `${CHAT_STORE_PREFIX}${digest}`;
+  const scope = `${CHAT_STORE_PREFIX}${await sha256Hex(`${userId}:${deviceId}`)}`;
+  return storeNames(`${scope}:sync`, `${scope}:crypto`);
+}
+
+/**
+ * The `user-device`-layout store names: the same device digest as
+ * `chatStoreNames`, placed inside the user's scope so the sweep can
+ * attribute the store to its user without opening it.
+ */
+export async function userScopedChatStoreNames(
+  userId: string,
+  deviceId: string,
+): Promise<ChatStoreNames> {
+  const scope = `${await chatUserScope(userId)}${await sha256Hex(`${userId}:${deviceId}`)}`;
   return storeNames(`${scope}:sync`, `${scope}:crypto`);
 }
 
 /**
  * The stores a signed-in session's device owns, per its recorded layout.
- * Rust always records `"device"`; a session without it (never expected)
- * resolves to the legacy names rather than guessing at device-scoped ones.
+ * A session without one (never expected) resolves to the legacy names
+ * rather than guessing at device-scoped ones.
  */
 export function chatStoreNamesFor(
   session: Pick<ChatSession, "userId" | "deviceId" | "storeLayout">,
 ): Promise<ChatStoreNames> {
-  return session.storeLayout === "device"
-    ? chatStoreNames(session.userId, session.deviceId)
-    : Promise.resolve(legacyChatStoreNames());
+  switch (session.storeLayout) {
+    case "user-device":
+      return userScopedChatStoreNames(session.userId, session.deviceId);
+    case "device":
+      return chatStoreNames(session.userId, session.deviceId);
+    default:
+      return Promise.resolve(legacyChatStoreNames());
+  }
+}
+
+/**
+ * Whether a database, as `indexedDB.databases()` reports it, is a
+ * `user-device` store inside `scope` (from `chatUserScope`). The sync
+ * database carries the scope behind the SDK's own prefix.
+ */
+export function isInChatUserScope(name: string, scope: string): boolean {
+  return name.startsWith(scope) || name.startsWith(syncStoreDatabase(scope));
 }
 
 /**
@@ -169,15 +218,32 @@ export async function deleteChatStores(names: ChatStoreNames): Promise<void> {
 }
 
 /**
- * Delete every chat store that is not `keep`'s: any device-scoped store
- * left by an earlier device (a sign-in whose sign-out never ran, a window
- * closed mid-sign-out) and the legacy names. Called before a client opens
- * its stores, so a stale store is never opened, and at sign-out with
- * `keep = null`, which deletes them all. Returns what was deleted.
+ * Delete every chat store of `userId` that is not `keep`'s — a store left by
+ * an earlier device of that user (a session the issuer expired, a sign-in
+ * whose sign-out never ran) — plus the legacy console names, which no
+ * desktop device ever owns. Called before a client opens its stores, so a
+ * stale store is never opened, and at sign-out with `keep = null`, which
+ * deletes every store of that user. Returns what was deleted.
+ *
+ * Only `user-device` stores inside the user's scope are candidates: a
+ * store of another Matrix user — another Hippius account signed in on this
+ * machine, whose session the keyring still holds — is not this user's to
+ * delete, and an unscoped `device`-layout store cannot be attributed to
+ * anyone, so it is left where it is. With no `userId` (a sign-out from a
+ * state with no session record) nothing but the legacy names goes.
  */
-export async function deleteOtherChatStores(keep: ChatStoreNames | null): Promise<string[]> {
+export async function deleteOtherChatStores(
+  userId: string | null,
+  keep: ChatStoreNames | null,
+): Promise<string[]> {
+  const scope = userId === null ? null : await chatUserScope(userId);
   const keepSet = new Set(keep?.databases ?? []);
-  const doomed = (await listChatStoreDatabases()).filter((name) => !keepSet.has(name));
+  const doomed = (await listChatStoreDatabases()).filter(
+    (name) =>
+      !keepSet.has(name) &&
+      (CHAT_LEGACY_STORE_DATABASES.includes(name) ||
+        (scope !== null && isInChatUserScope(name, scope))),
+  );
   await Promise.all(doomed.map(deleteDatabase));
   return doomed;
 }
