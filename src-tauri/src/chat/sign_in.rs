@@ -114,7 +114,16 @@ pub struct AuthMetadata {
 /// Per-process chat state held on [`AppState`].
 pub struct ChatState {
     http: reqwest::Client,
+    /// Flows that have handed out their authorize URL and wait for
+    /// `chat_complete_sign_in` to pick them up.
     pending: Mutex<HashMap<String, PendingSignIn>>,
+    /// Flows currently inside `chat_complete_sign_in`, by flow id. A
+    /// `chat_cancel_sign_in` for one of these fires its handle, which
+    /// ends the wait — or the token exchange — before anything is stored.
+    /// Without it a cancel only reached flows nobody was waiting on yet,
+    /// and a sign-in the user had backed out of could still be persisted
+    /// when the browser came back later.
+    running: Mutex<HashMap<String, CancelSignIn>>,
     /// Last unread count the webview reported (`chat_set_unread_badge`).
     /// The dock badge and the window title are derived from it in
     /// `notify`; kept here so a second window (the tray popover) can seed
@@ -134,6 +143,7 @@ impl ChatState {
         Self {
             http: reqwest::Client::builder().timeout(HTTP_TIMEOUT).build().expect("chat HTTP client"),
             pending: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashMap::new()),
             unread: std::sync::atomic::AtomicU32::new(0),
         }
     }
@@ -150,6 +160,21 @@ pub struct PendingSignIn {
     code_verifier: Zeroizing<String>,
     code_rx: oneshot::Receiver<std::result::Result<String, String>>,
     listener_task: tokio::task::JoinHandle<()>,
+    /// Fired by [`CancelSignIn::cancel`]; [`complete`] returns as soon as it does.
+    cancel_rx: oneshot::Receiver<()>,
+    /// The matching sender, until [`PendingSignIn::cancel_handle`] takes it.
+    cancel_tx: Option<oneshot::Sender<()>>,
+}
+
+impl PendingSignIn {
+    /// The handle that cancels this flow from outside [`complete`]. Once
+    /// taken, the flow can be cancelled at any point — waiting for the
+    /// browser, exchanging the code, confirming identity — and `complete`
+    /// returns the cancelled error instead of a session. Returns `None`
+    /// once the handle has been taken.
+    pub fn cancel_handle(&mut self) -> Option<CancelSignIn> {
+        self.cancel_tx.take().map(CancelSignIn)
+    }
 }
 
 impl Drop for PendingSignIn {
@@ -158,6 +183,18 @@ impl Drop for PendingSignIn {
         self.listener_task.abort();
     }
 }
+
+/// Cancels one sign-in flow, wherever it is (see [`PendingSignIn::cancel_handle`]).
+pub struct CancelSignIn(oneshot::Sender<()>);
+
+impl CancelSignIn {
+    pub fn cancel(self) {
+        let _ = self.0.send(());
+    }
+}
+
+/// The error [`complete`] returns for a cancelled flow.
+pub const SIGN_IN_CANCELLED: &str = "chat: sign-in was cancelled";
 
 /// What [`chat_begin_sign_in`] hands the frontend.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -629,6 +666,7 @@ pub async fn begin(params: BeginParams<'_>) -> Result<(BeginSignIn, PendingSignI
     let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
     let url = authorize_url(&metadata, &client_id, &redirect_uri, &device_id, &state, &code_verifier)?;
     let flow_id = new_state();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
     info!(port, device_id = %device_id, "chat: sign-in flow started");
     Ok((
         BeginSignIn { flow_id, authorize_url: url },
@@ -641,33 +679,53 @@ pub async fn begin(params: BeginParams<'_>) -> Result<(BeginSignIn, PendingSignI
             code_verifier,
             code_rx,
             listener_task,
+            cancel_rx,
+            cancel_tx: Some(cancel_tx),
         },
     ))
 }
 
 /// Wait for the browser leg, exchange the code, confirm identity.
+///
+/// Returns [`SIGN_IN_CANCELLED`] as soon as the flow's [`CancelSignIn`]
+/// fires, at whichever step it is; nothing is stored here, so a cancelled
+/// flow leaves no session behind. A code already exchanged when the cancel
+/// lands mints tokens that are dropped unused — never persisted.
 pub async fn complete(http: &reqwest::Client, pending: PendingSignIn, timeout: Duration) -> Result<ChatSession> {
     // Destructure by hand: `PendingSignIn` has a `Drop` impl, so the
-    // receiver is taken out through a mutable borrow.
+    // receivers are taken out through a mutable borrow.
     let mut pending = pending;
     let rx = std::mem::replace(&mut pending.code_rx, oneshot::channel().1);
-    let outcome = tokio::time::timeout(timeout, rx)
-        .await
-        .map_err(|_| AppError::Auth("chat: sign-in timed out waiting for the browser".into()))?
-        .map_err(|_| AppError::Auth("chat: sign-in was cancelled".into()))?;
-    let code = outcome.map_err(|msg| AppError::Auth(format!("chat: sign-in refused: {msg}")))?;
+    let cancel_rx = std::mem::replace(&mut pending.cancel_rx, oneshot::channel().1);
+    // A handle nobody took must stay alive, or its dropped sender would
+    // read as a cancel.
+    let _unclaimed_cancel = pending.cancel_tx.take();
 
-    let tokens = exchange_code(
-        http,
-        &pending.metadata,
-        &pending.client_id,
-        &pending.redirect_uri,
-        &code,
-        &pending.code_verifier,
-    )
-    .await?;
-    let me = whoami(http, &pending.base_url, &tokens.access_token).await?;
-    build_session(&pending.base_url, &pending.metadata, &pending.client_id, &pending.device_id, me, tokens)
+    let flow = async {
+        let outcome = tokio::time::timeout(timeout, rx)
+            .await
+            .map_err(|_| AppError::Auth("chat: sign-in timed out waiting for the browser".into()))?
+            .map_err(|_| AppError::Auth(SIGN_IN_CANCELLED.into()))?;
+        let code = outcome.map_err(|msg| AppError::Auth(format!("chat: sign-in refused: {msg}")))?;
+
+        let tokens = exchange_code(
+            http,
+            &pending.metadata,
+            &pending.client_id,
+            &pending.redirect_uri,
+            &code,
+            &pending.code_verifier,
+        )
+        .await?;
+        let me = whoami(http, &pending.base_url, &tokens.access_token).await?;
+        build_session(&pending.base_url, &pending.metadata, &pending.client_id, &pending.device_id, me, tokens)
+    };
+    tokio::select! {
+        biased;
+        // Both a fired and a dropped handle mean the flow is over.
+        _ = cancel_rx => Err(AppError::Auth(SIGN_IN_CANCELLED.into())),
+        result = flow => result,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -725,7 +783,7 @@ pub async fn chat_begin_sign_in(state: tauri::State<'_, AppState>) -> Result<Beg
 #[tauri::command]
 pub async fn chat_complete_sign_in(state: tauri::State<'_, AppState>, flow_id: String) -> Result<ChatSession> {
     let account_id = state.current_account_id()?;
-    let pending = state
+    let mut pending = state
         .chat
         .pending
         .lock()
@@ -733,7 +791,16 @@ pub async fn chat_complete_sign_in(state: tauri::State<'_, AppState>, flow_id: S
         .remove(&flow_id)
         .ok_or_else(|| AppError::Auth("chat: unknown or expired sign-in flow".into()))?;
     let issuer = pending.metadata.issuer.clone();
-    let session = match complete(&state.chat.http, pending, CALLBACK_TIMEOUT).await {
+    // Reachable by `chat_cancel_sign_in` for as long as we are in here.
+    if let Some(cancel) = pending.cancel_handle() {
+        state.chat.running.lock().await.insert(flow_id.clone(), cancel);
+    }
+    let result = complete(&state.chat.http, pending, CALLBACK_TIMEOUT).await;
+    // A cancel that landed after `complete` produced a session but before
+    // this line has already removed the handle: the session is not stored.
+    let not_cancelled = state.chat.running.lock().await.remove(&flow_id).is_some();
+    let session = match result {
+        Ok(_) if !not_cancelled => return Err(AppError::Auth(SIGN_IN_CANCELLED.into())),
         Ok(s) => s,
         Err(AppError::Auth(msg)) if msg.contains("invalid_client") => {
             // The cached registration no longer exists on the issuer;
@@ -753,10 +820,17 @@ pub async fn chat_complete_sign_in(state: tauri::State<'_, AppState>, flow_id: S
     Ok(session)
 }
 
-/// Abandon a flow the user backed out of; frees the loopback port.
+/// Abandon a flow the user backed out of. A flow nobody has started
+/// completing is dropped (which frees its loopback port); one inside
+/// `chat_complete_sign_in` is cancelled there — that command returns
+/// [`SIGN_IN_CANCELLED`] and stores nothing, even if the browser comes
+/// back later.
 #[tauri::command]
 pub async fn chat_cancel_sign_in(state: tauri::State<'_, AppState>, flow_id: String) -> Result<()> {
     state.chat.pending.lock().await.remove(&flow_id);
+    if let Some(cancel) = state.chat.running.lock().await.remove(&flow_id) {
+        cancel.cancel();
+    }
     Ok(())
 }
 
