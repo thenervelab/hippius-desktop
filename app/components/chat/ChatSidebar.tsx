@@ -9,9 +9,10 @@ import { toast } from "sonner";
 import { newMessageOpenAtom, rightPanelAtom, selectedRoomIdAtom, sidebarDrawerOpenAtom } from "@/components/chat/chat-ui-atoms";
 import { useClientTick } from "@/components/chat/hooks/useClientTick";
 import { usePresence } from "@/components/chat/hooks/usePresence";
-import { useRoomList } from "@/components/chat/hooks/useRoomList";
+import type { WorkspacesState } from "@/components/chat/hooks/useWorkspaces";
 import RoomListItem from "@/components/chat/RoomListItem";
 import SidebarSection from "@/components/chat/SidebarSection";
+import WorkspaceAvatar from "@/components/chat/workspaces/WorkspaceAvatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -26,6 +27,8 @@ import { cn } from "@/lib/utils";
 
 interface ChatSidebarProps {
   client: MatrixClient;
+  /** Shared with the rail and the shell; see `useWorkspaces`. */
+  workspaces: WorkspacesState;
   className?: string;
 }
 
@@ -39,16 +42,15 @@ export function filterRooms<T extends Pick<RoomSummary, "name">>(rooms: T[], fil
 }
 
 /**
- * Left column: who is signed in, a filter box, then Invitations, Channels,
- * Direct messages and Threads. Every row opens a room; right-click opens
- * the room menu: mute, mark read, copy link, leave.
- *
- * Deliberately flatter than the console's sidebar: no workspace rail,
- * categories or channel creation — the desktop joins what the account
- * already belongs to, and those are managed from the console.
+ * Left column: the active workspace's header, a filter box, then
+ * Invitations, the workspace's Channels, Other channels (outside any
+ * workspace we are in), Direct messages (the account's, shared across
+ * workspaces) and Threads. Every row opens a room; right-click opens the
+ * room menu: mute, mark read, copy link, leave. Mirrors the console's
+ * `ChatSidebar`.
  */
-export default function ChatSidebar({ client, className }: ChatSidebarProps) {
-  const { channels, dms, invites } = useRoomList(client);
+export default function ChatSidebar({ client, workspaces, className }: ChatSidebarProps) {
+  const { active, channels, orphans, dms, roomInvites: invites } = workspaces;
   const [selectedRoomId, setSelectedRoomId] = useAtom(selectedRoomIdAtom);
   const setRightPanel = useSetAtom(rightPanelAtom);
   const setDrawerOpen = useSetAtom(sidebarDrawerOpenAtom);
@@ -61,10 +63,14 @@ export default function ChatSidebar({ client, className }: ChatSidebarProps) {
   const presenceOf = usePresence(client, [myUserId, ...dmUserIds]);
 
   const threadTick = useClientTick(client, THREAD_EVENTS);
+  const visibleRoomIds = useMemo(() => new Set([...channels, ...orphans, ...dms].map((r) => r.id)), [channels, orphans, dms]);
   const threads = useMemo(
-    () => participatingThreads(client, true).slice(0, 20),
+    () =>
+      participatingThreads(client, true)
+        .filter((t) => visibleRoomIds.has(t.roomId))
+        .slice(0, 20),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [client, threadTick],
+    [client, threadTick, visibleRoomIds],
   );
 
   const [menu, setMenu] = useState<{ roomId: string; point: { x: number; y: number } } | null>(null);
@@ -82,7 +88,7 @@ export default function ChatSidebar({ client, className }: ChatSidebarProps) {
   const openContextMenu = useCallback((roomId: string, point: { x: number; y: number }) => setMenu({ roomId, point }), []);
 
   const menuRoom = menu ? client.getRoom(menu.roomId) : null;
-  const menuSummary = menu ? [...channels, ...dms].find((r) => r.id === menu.roomId) : undefined;
+  const menuSummary = menu ? [...channels, ...orphans, ...dms].find((r) => r.id === menu.roomId) : undefined;
 
   const respondToInvite = async (roomId: string, accept: boolean) => {
     setPendingInvite(roomId);
@@ -112,9 +118,10 @@ export default function ChatSidebar({ client, className }: ChatSidebarProps) {
   };
 
   const visibleChannels = filterRooms(channels, filter);
+  const visibleOrphans = filterRooms(orphans, filter);
   const visibleDms = filterRooms(dms, filter);
   const unreadThreadCount = threads.reduce((sum, t) => sum + t.unread, 0);
-  const unread = [...channels, ...dms].reduce((n, r) => n + (r.muted ? 0 : r.unread), 0);
+  const unread = [...channels, ...orphans, ...dms].reduce((n, r) => n + (r.muted ? 0 : r.unread), 0);
 
   const roomRow = (room: RoomSummary) => (
     <RoomListItem
@@ -136,11 +143,18 @@ export default function ChatSidebar({ client, className }: ChatSidebarProps) {
         className,
       )}
     >
+      {/* Workspace header: the active workspace's mark and name; the
+          account's own controls sit on the right. */}
       <div className="flex h-12 items-center gap-1 border-b border-grey-80 px-2 dark:border-black-300">
-        <span className="min-w-0 flex-1 px-1">
-          <span className="block truncate text-sm font-semibold leading-tight text-grey-10 dark:text-grey-light-100">Team chat</span>
-          <span className="block truncate text-[11px] leading-tight text-grey-60 dark:text-grey-dark-700">
-            {myProfile?.displayName ?? myUserId}
+        <span className="flex min-w-0 flex-1 items-center gap-2 px-1" data-testid="chat-workspace-header">
+          {active ? <WorkspaceAvatar client={client} name={active.name} avatarMxc={active.avatarMxc} size={24} /> : null}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold leading-tight text-grey-10 dark:text-grey-light-100">
+              {active?.name ?? "Hippius"}
+            </span>
+            <span className="block truncate text-[11px] leading-tight text-grey-60 dark:text-grey-dark-700">
+              {myProfile?.displayName ?? myUserId}
+            </span>
           </span>
         </span>
         <Button
@@ -207,7 +221,9 @@ export default function ChatSidebar({ client, className }: ChatSidebarProps) {
         ) : null}
 
         <SidebarSection id="channels" title="Channels" collapsedBadge={channels.reduce((n, r) => n + (r.muted ? 0 : r.highlight), 0)}>
-          {channels.length === 0 ? (
+          {!active ? (
+            <p className="px-2 py-1 text-xs text-grey-60 dark:text-grey-dark-700">Create or join a workspace to get channels.</p>
+          ) : channels.length === 0 ? (
             <p className="px-2 py-1 text-xs text-grey-60 dark:text-grey-dark-700">No channels yet. Channels you are invited to appear here.</p>
           ) : visibleChannels.length === 0 ? (
             <p className="px-2 py-1 text-xs text-grey-60 dark:text-grey-dark-700">No channel matches.</p>
@@ -215,6 +231,14 @@ export default function ChatSidebar({ client, className }: ChatSidebarProps) {
             visibleChannels.map(roomRow)
           )}
         </SidebarSection>
+
+        {/* Channels that belong to no workspace we are in (created before
+            workspaces existed, or whose Space we left). Kept reachable. */}
+        {visibleOrphans.length > 0 ? (
+          <SidebarSection id="other-channels" title="Other channels" collapsedBadge={orphans.reduce((n, r) => n + (r.muted ? 0 : r.highlight), 0)}>
+            {visibleOrphans.map(roomRow)}
+          </SidebarSection>
+        ) : null}
 
         <SidebarSection
           id="dms"

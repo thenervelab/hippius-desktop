@@ -28,6 +28,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   under Settings → Notifications → Chat), and the number of unread DMs and
   mentions appears on the app's dock/taskbar icon, in the window title and in
   the tray popover — even when you are not on the chat page.
+- **Chat workspaces, like the web console.** A rail on the left lists the
+  workspaces you belong to with their unread counts; create one, join the
+  Hippius community, or paste an invite link to join a team. The channel list
+  follows the workspace you pick, and the app reopens where you left off in
+  each.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.

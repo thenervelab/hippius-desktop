@@ -21,6 +21,16 @@ export type RightPanelState =
 
 export const selectedRoomIdAtom = atom<string | null>(null);
 export const rightPanelAtom = atom<RightPanelState>(null);
+
+/**
+ * The workspace (Space) the sidebar is scoped to. `null` until resolved from
+ * the remembered value / the first joined Space, or when there is none
+ * (onboarding). `useWorkspaces` owns the reconciliation and persistence.
+ */
+export const activeWorkspaceIdAtom = atom<string | null>(null);
+export const createWorkspaceOpenAtom = atom(false);
+export const joinWorkspaceOpenAtom = atom(false);
+
 /** Sidebar drawer when the window is too narrow for a static column. */
 export const sidebarDrawerOpenAtom = atom(false);
 /** The "New message" (start a DM) dialog. */
@@ -70,3 +80,11 @@ export const autoplayGifsAtom = atomWithStorage<boolean>("hippius.chat.autoplayG
  * that build user ids must treat that as "not ready", never as a domain.
  */
 export const chatServerNameAtom = atom((get) => get(chatConfigAtom)?.serverName ?? "");
+
+/**
+ * The public community Space's alias (`#hippius:hippius.com`), decided by
+ * Rust. Empty before the config lands: `spaces.ts` then marks no workspace
+ * as the community and `joinCommunity` has nothing to join, which the UI
+ * treats as "not ready" (the config is loaded before chat renders anyway).
+ */
+export const chatCommunitySpaceAliasAtom = atom((get) => get(chatConfigAtom)?.communitySpaceAlias ?? "");
