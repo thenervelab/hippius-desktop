@@ -14,7 +14,10 @@
 //!   and a `code_verifier` whose S256 hash equals the advertised challenge;
 //! - a server that binds the token to a different device than requested is
 //!   rejected (the crypto stores are keyed by device id);
-//! - `invalid_grant` on refresh is surfaced as a typed OAuth error.
+//! - `invalid_grant` on refresh is surfaced as a typed OAuth error;
+//! - a cancel ends `complete` wherever the flow is — waiting for the
+//!   browser or mid-exchange — without a session, so the user's "Cancel"
+//!   is not only a UI state while Rust goes on to persist the sign-in.
 //!
 //! No Tauri `AppHandle`, no keyring, no live server.
 
@@ -31,8 +34,8 @@ use axum::{
 };
 use serde::Deserialize;
 use tauri_project_lib::chat::sign_in::{
-    self, AuthMetadata, BeginParams, REGISTERED_REDIRECT_URI, TokenError, code_challenge, discover_base_url, fetch_auth_metadata, refresh_grant,
-    register_client,
+    self, AuthMetadata, BeginParams, REGISTERED_REDIRECT_URI, SIGN_IN_CANCELLED, TokenError, code_challenge, discover_base_url, fetch_auth_metadata,
+    refresh_grant, register_client,
 };
 use tokio::net::TcpListener;
 
@@ -48,6 +51,8 @@ struct Issuer {
     /// Device id `/whoami` reports; `None` echoes the scope's device.
     whoami_device_override: Option<String>,
     refresh_valid: bool,
+    /// Latency added to the token endpoint (a slow issuer during the exchange).
+    token_delay: Option<Duration>,
 }
 
 type Shared = Arc<Mutex<Issuer>>;
@@ -121,8 +126,15 @@ async fn authorize(State(s): State<Shared>, Query(q): Query<AuthorizeQuery>) -> 
 }
 
 async fn token(State(s): State<Shared>, Form(form): Form<HashMap<String, String>>) -> impl IntoResponse {
+    let delay = {
+        let mut st = s.lock().unwrap();
+        st.exchanges.push(form.clone());
+        st.token_delay
+    };
+    if let Some(delay) = delay {
+        tokio::time::sleep(delay).await;
+    }
     let mut st = s.lock().unwrap();
-    st.exchanges.push(form.clone());
     match form.get("grant_type").map(String::as_str) {
         Some("authorization_code") => {
             let Some((client_id, redirect_uri, challenge)) = st.codes.remove(form.get("code").map_or("", String::as_str)) else {
@@ -382,4 +394,185 @@ async fn discovery_falls_back_when_well_known_is_absent() {
         discover_base_url(&http, &base).await,
         tauri_project_lib::chat::config::CHAT_FALLBACK_BASE_URL
     );
+}
+
+#[tokio::test]
+async fn cancel_while_waiting_for_the_browser_ends_complete_at_once() {
+    let (base, _issuer) = spawn_issuer().await;
+    let http = reqwest::Client::new();
+    let metadata = fetch_auth_metadata(&http, &base).await.unwrap();
+    let (_begun, mut pending) = sign_in::begin(BeginParams {
+        http: &http,
+        base_url: base,
+        metadata,
+        client_id: "CLIENT1".into(),
+    })
+    .await
+    .unwrap();
+    let redirect = pending.redirect_uri.clone();
+    let cancel = pending.cancel_handle().expect("first take");
+    assert!(pending.cancel_handle().is_none(), "the handle is handed out once");
+
+    // The command's shape: `complete` waits (minutes, in production) while
+    // the cancel arrives from another task.
+    let waiting = tokio::spawn(async move { sign_in::complete(&http, pending, Duration::from_secs(30)).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let started = std::time::Instant::now();
+    cancel.cancel();
+    let err = waiting.await.unwrap().unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(2), "cancel must not wait for the timeout");
+    assert!(err.to_string().contains(SIGN_IN_CANCELLED), "{err}");
+    // The flow is gone with its listener: a late browser callback finds no port.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(reqwest::Client::new().get(redirect).timeout(Duration::from_secs(1)).send().await.is_err());
+}
+
+#[tokio::test]
+async fn cancel_during_the_code_exchange_yields_no_session() {
+    let (base, issuer) = spawn_issuer().await;
+    // The browser comes back, then the issuer is slow to exchange the code.
+    issuer.lock().unwrap().token_delay = Some(Duration::from_secs(3));
+    let http = reqwest::Client::new();
+    let metadata = fetch_auth_metadata(&http, &base).await.unwrap();
+    let client_id = register_client(&http, &metadata).await.unwrap();
+    let (begun, mut pending) = sign_in::begin(BeginParams {
+        http: &http,
+        base_url: base,
+        metadata,
+        client_id,
+    })
+    .await
+    .unwrap();
+    let cancel = pending.cancel_handle().unwrap();
+    let b = browser();
+    tokio::spawn(async move {
+        let _ = b.get(begun.authorize_url).send().await;
+    });
+    let waiting = tokio::spawn(async move { sign_in::complete(&http, pending, Duration::from_secs(30)).await });
+    // Let the callback land and the exchange start.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(issuer.lock().unwrap().exchanges.len(), 1, "the exchange must be in flight");
+    let started = std::time::Instant::now();
+    cancel.cancel();
+    let err = waiting.await.unwrap().unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(2), "cancel must not wait for the issuer");
+    assert!(err.to_string().contains(SIGN_IN_CANCELLED), "{err}");
+}
+
+#[tokio::test]
+async fn a_cancel_handle_nobody_took_does_not_cancel() {
+    let (base, _issuer) = spawn_issuer().await;
+    let http = reqwest::Client::new();
+    let metadata = fetch_auth_metadata(&http, &base).await.unwrap();
+    let client_id = register_client(&http, &metadata).await.unwrap();
+    let (begun, pending) = sign_in::begin(BeginParams {
+        http: &http,
+        base_url: base,
+        metadata,
+        client_id,
+    })
+    .await
+    .unwrap();
+    let b = browser();
+    tokio::spawn(async move {
+        let _ = b.get(begun.authorize_url).send().await;
+    });
+    // Same as the round trip: the untaken handle must not read as a cancel.
+    let session = sign_in::complete(&http, pending, Duration::from_secs(10)).await.unwrap();
+    assert_eq!(session.user_id, "@alice:hippius.com");
+}
+
+/// The commands need a Tauri `State`, so their wiring is pinned in source:
+/// `chat_complete_sign_in` must register the flow's cancel handle before
+/// waiting and must not store a session once the handle is gone, and
+/// `chat_cancel_sign_in` must fire it. The behaviour of `complete` under a
+/// cancel is covered above; this is the part that turns the UI's "Cancel"
+/// into that cancel.
+#[test]
+fn cancel_command_reaches_a_flow_inside_complete() {
+    const SIGN_IN_RS: &str = include_str!("../src/chat/sign_in.rs");
+    let complete_start = SIGN_IN_RS.find("pub async fn chat_complete_sign_in").expect("command exists");
+    let complete_end = SIGN_IN_RS[complete_start..]
+        .find("pub async fn chat_cancel_sign_in")
+        .expect("cancel follows")
+        + complete_start;
+    let complete_body = &SIGN_IN_RS[complete_start..complete_end];
+    // The flow moves from `pending` to `running` while the `pending` guard
+    // is held: there is no instant at which a cancel finds it in neither
+    // map. Pinned as "pending locked, removed, running inserted, all
+    // inside one block that ends before the flow is awaited".
+    let pending_locked = complete_body
+        .find("let mut waiting = state.chat.pending.lock().await;")
+        .expect("pending locked");
+    let taken = complete_body[pending_locked..]
+        .find("waiting\n            .remove(&flow_id)")
+        .or_else(|| complete_body[pending_locked..].find("waiting.remove(&flow_id)"))
+        .expect("flow taken from pending")
+        + pending_locked;
+    let registered = complete_body
+        .find("running.lock().await.insert(flow_id.clone(), cancel)")
+        .expect("handle registered");
+    let awaited = complete_body
+        .find("complete(&state.chat.http, pending, CALLBACK_TIMEOUT).await")
+        .expect("flow awaited");
+    let checked = complete_body
+        .find("running.lock().await.remove(&flow_id).is_some()")
+        .expect("handle re-checked");
+    let stored = complete_body.find("session::save_session").expect("session stored");
+    assert!(
+        pending_locked < taken && taken < registered && registered < awaited && awaited < checked && checked < stored,
+        "lock pending, take, register, wait, re-check, then store"
+    );
+    // The `pending` guard must still be alive at the insert: the block that
+    // owns it closes (`pending\n    };`) only after the insert.
+    let guard_block_end = complete_body[pending_locked..]
+        .find("\n        pending\n    };")
+        .expect("the guard's block returns the flow")
+        + pending_locked;
+    assert!(registered < guard_block_end, "the pending guard is held across the running insert");
+    assert!(
+        complete_body.contains("Ok(_) if !not_cancelled => return Err"),
+        "a late cancel must not be stored"
+    );
+
+    let cancel_body = &SIGN_IN_RS[complete_end..];
+    let cancel_end = cancel_body.find("pub async fn chat_refresh_tokens").unwrap_or(cancel_body.len());
+    let cancel_body = &cancel_body[..cancel_end];
+    // Same lock order (pending, then running), both held together.
+    let cancel_pending = cancel_body
+        .find("let mut waiting = state.chat.pending.lock().await;")
+        .expect("cancel locks pending");
+    let cancel_running = cancel_body
+        .find("let mut running = state.chat.running.lock().await;")
+        .expect("cancel locks running");
+    assert!(cancel_pending < cancel_running, "cancel takes pending before running");
+    assert!(cancel_body.contains("waiting.remove(&flow_id)"), "a waiting flow is dropped");
+    assert!(
+        cancel_body.contains("running.remove(&flow_id)") && cancel_body.contains("cancel.cancel()"),
+        "a running flow is cancelled"
+    );
+}
+
+/// The webview matches the refresh error's wording to decide between the
+/// SDK's logout and a retry (`app/lib/tauri/chat.ts::isChatSessionExpired`
+/// and its test). Both sides must agree on the string, and Rust must use
+/// it for the terminal case only: `chat_refresh_tokens` maps
+/// `invalid_grant` and a missing refresh token to it and nothing else.
+#[test]
+fn session_expired_wording_matches_the_frontend_matcher() {
+    use tauri_project_lib::chat::sign_in::SESSION_EXPIRED;
+    assert_eq!(SESSION_EXPIRED, "chat: session expired; sign in again");
+
+    const SIGN_IN_RS: &str = include_str!("../src/chat/sign_in.rs");
+    let start = SIGN_IN_RS.find("pub async fn chat_refresh_tokens").expect("command exists");
+    let body = &SIGN_IN_RS[start..];
+    let end = body.find("\n#[tauri::command]").unwrap_or(body.len());
+    let body = &body[..end];
+    assert_eq!(
+        body.matches("AppError::Auth(SESSION_EXPIRED.into())").count(),
+        2,
+        "missing refresh token + invalid_grant"
+    );
+    assert!(body.contains("if error == \"invalid_grant\""), "only invalid_grant is terminal");
+    assert!(!body.contains("AppError::Auth(\"chat: session expired"), "no inline copy of the wording");
 }

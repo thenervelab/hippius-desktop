@@ -8,6 +8,7 @@ import {
   chatSetUnreadBadge,
   encodeSaveDestination,
   isChatKeyringUnavailable,
+  isChatSessionExpired,
 } from "@/app/lib/tauri/chat";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -45,6 +46,38 @@ describe("isChatKeyringUnavailable", () => {
     ).toBe(false);
     expect(isChatKeyringUnavailable(null)).toBe(false);
     expect(isChatKeyringUnavailable(undefined)).toBe(false);
+  });
+});
+
+// Rust's `chat::sign_in::SESSION_EXPIRED` is the one refresh error that
+// means "sign in again"; the token refresher turns exactly it into the SDK's
+// logout. The wording is pinned on the Rust side too.
+describe("isChatSessionExpired", () => {
+  it("recognises the Rust wording in the wire error shape", () => {
+    expect(
+      isChatSessionExpired({
+        kind: "Auth",
+        message: "chat: session expired; sign in again",
+      }),
+    ).toBe(true);
+    expect(isChatSessionExpired("chat: session expired; sign in again")).toBe(true);
+  });
+
+  it("does not match transient refresh failures or other auth errors", () => {
+    expect(
+      isChatSessionExpired({
+        kind: "Auth",
+        message: "the OS credential store is unavailable: locked",
+      }),
+    ).toBe(false);
+    expect(
+      isChatSessionExpired({
+        kind: "Auth",
+        message: "chat: homeserver does not advertise OIDC auth metadata (x)",
+      }),
+    ).toBe(false);
+    expect(isChatSessionExpired({ kind: "Http", message: "timed out" })).toBe(false);
+    expect(isChatSessionExpired(null)).toBe(false);
   });
 });
 

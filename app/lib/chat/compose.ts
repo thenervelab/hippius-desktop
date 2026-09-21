@@ -1,6 +1,6 @@
 /**
  * Composer back end: send / edit / reply text, upload attachments (encrypting
- * for encrypted rooms), slash commands, typing notices, and per-room drafts.
+ * for encrypted rooms), slash commands, typing notices, and per-user, per-room drafts.
  */
 
 import {
@@ -230,23 +230,55 @@ export class TypingNotifier {
 
 const DRAFT_PREFIX = "hippius.chat.draft:";
 
-export function draftKey(roomId: string, threadRootId?: string | null): string {
-  return `${DRAFT_PREFIX}${roomId}${threadRootId ? `#${threadRootId}` : ""}`;
+/**
+ * Drafts are keyed by the Matrix user as well as the room, because the
+ * webview outlives an account switch: `sessionStorage` is shared by every
+ * chat session of the app's lifetime, and two accounts can be members of
+ * the same room (a community channel), so a room-only key handed one
+ * account's unsent text to the next one to sign in. The user id is hashed
+ * only in the sense that it is opaque to a reader; it is the key, not a
+ * secret. A composer with no user id (never expected) keeps no draft.
+ */
+export function draftKey(userId: string, roomId: string, threadRootId?: string | null): string {
+  return `${DRAFT_PREFIX}${userId}:${roomId}${threadRootId ? `#${threadRootId}` : ""}`;
 }
 
-export function loadDraft(roomId: string, threadRootId?: string | null): string {
+export function loadDraft(userId: string | null, roomId: string, threadRootId?: string | null): string {
+  if (!userId) return "";
   try {
-    return sessionStorage.getItem(draftKey(roomId, threadRootId)) ?? "";
+    return sessionStorage.getItem(draftKey(userId, roomId, threadRootId)) ?? "";
   } catch {
     return "";
   }
 }
 
-export function saveDraft(roomId: string, threadRootId: string | null | undefined, text: string): void {
+export function saveDraft(userId: string | null, roomId: string, threadRootId: string | null | undefined, text: string): void {
+  if (!userId) return;
   try {
-    const key = draftKey(roomId, threadRootId);
+    const key = draftKey(userId, roomId, threadRootId);
     if (text.trim()) sessionStorage.setItem(key, text);
     else sessionStorage.removeItem(key);
+  } catch {
+    // storage unavailable
+  }
+}
+
+/**
+ * Drop every draft `userId` left, in every room and thread. Called when
+ * that user signs out of chat, so their unsent text does not wait in the
+ * webview for whoever signs in next. Drafts of other users are kept: they
+ * are what a user who signs back in expects to find.
+ */
+export function clearDrafts(userId: string | null): void {
+  if (!userId) return;
+  const prefix = `${DRAFT_PREFIX}${userId}:`;
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < sessionStorage.length; i += 1) {
+      const key = sessionStorage.key(i);
+      if (key?.startsWith(prefix)) stale.push(key);
+    }
+    for (const key of stale) sessionStorage.removeItem(key);
   } catch {
     // storage unavailable
   }

@@ -130,6 +130,22 @@ export function isChatKeyringUnavailable(error: unknown): boolean {
   return /credential store is unavailable/i.test(message);
 }
 
+/**
+ * Whether a `chat_refresh_tokens` rejection means the stored session is
+ * dead for good — the issuer rejected the refresh token, or there was none.
+ * Rust (`chat::sign_in::SESSION_EXPIRED`) uses this exact wording for that
+ * case only and has already deleted the session by then; any other refresh
+ * error (issuer unreachable, keyring locked) is transient and must not be
+ * read this way, or a network blip would sign the user out of chat.
+ */
+export function isChatSessionExpired(error: unknown): boolean {
+  const message =
+    typeof error === "string"
+      ? error
+      : String((error as { message?: unknown } | null | undefined)?.message ?? "");
+  return /^chat: session expired/i.test(message);
+}
+
 // ---------------------------------------------------------------------------
 // Notifications and the unread badge (`chat::notify`)
 

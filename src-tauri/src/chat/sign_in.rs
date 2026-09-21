@@ -114,7 +114,22 @@ pub struct AuthMetadata {
 /// Per-process chat state held on [`AppState`].
 pub struct ChatState {
     http: reqwest::Client,
+    /// Flows that have handed out their authorize URL and wait for
+    /// `chat_complete_sign_in` to pick them up.
     pending: Mutex<HashMap<String, PendingSignIn>>,
+    /// Flows currently inside `chat_complete_sign_in`, by flow id. A
+    /// `chat_cancel_sign_in` for one of these fires its handle, which
+    /// ends the wait — or the token exchange — before anything is stored.
+    /// Without it a cancel only reached flows nobody was waiting on yet,
+    /// and a sign-in the user had backed out of could still be persisted
+    /// when the browser came back later.
+    ///
+    /// Lock order: `pending` before `running`, always. A flow moves from
+    /// `pending` to `running` under the `pending` guard, so there is no
+    /// instant at which it is in neither map — a cancel that took both
+    /// locks in the same order either finds the flow or arrives after it
+    /// is registered, never in between.
+    running: Mutex<HashMap<String, CancelSignIn>>,
     /// Last unread count the webview reported (`chat_set_unread_badge`).
     /// The dock badge and the window title are derived from it in
     /// `notify`; kept here so a second window (the tray popover) can seed
@@ -134,6 +149,7 @@ impl ChatState {
         Self {
             http: reqwest::Client::builder().timeout(HTTP_TIMEOUT).build().expect("chat HTTP client"),
             pending: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashMap::new()),
             unread: std::sync::atomic::AtomicU32::new(0),
         }
     }
@@ -150,6 +166,21 @@ pub struct PendingSignIn {
     code_verifier: Zeroizing<String>,
     code_rx: oneshot::Receiver<std::result::Result<String, String>>,
     listener_task: tokio::task::JoinHandle<()>,
+    /// Fired by [`CancelSignIn::cancel`]; [`complete`] returns as soon as it does.
+    cancel_rx: oneshot::Receiver<()>,
+    /// The matching sender, until [`PendingSignIn::cancel_handle`] takes it.
+    cancel_tx: Option<oneshot::Sender<()>>,
+}
+
+impl PendingSignIn {
+    /// The handle that cancels this flow from outside [`complete`]. Once
+    /// taken, the flow can be cancelled at any point — waiting for the
+    /// browser, exchanging the code, confirming identity — and `complete`
+    /// returns the cancelled error instead of a session. Returns `None`
+    /// once the handle has been taken.
+    pub fn cancel_handle(&mut self) -> Option<CancelSignIn> {
+        self.cancel_tx.take().map(CancelSignIn)
+    }
 }
 
 impl Drop for PendingSignIn {
@@ -158,6 +189,29 @@ impl Drop for PendingSignIn {
         self.listener_task.abort();
     }
 }
+
+/// Cancels one sign-in flow, wherever it is (see [`PendingSignIn::cancel_handle`]).
+pub struct CancelSignIn(oneshot::Sender<()>);
+
+impl CancelSignIn {
+    pub fn cancel(self) {
+        let _ = self.0.send(());
+    }
+}
+
+/// The error [`complete`] returns for a cancelled flow.
+pub const SIGN_IN_CANCELLED: &str = "chat: sign-in was cancelled";
+
+/// The error [`chat_refresh_tokens`] returns when no refresh can ever
+/// succeed again for the stored session: the issuer rejected the refresh
+/// token (`invalid_grant` — revoked, rotated elsewhere, or expired) or the
+/// session never had one. Rust has already deleted the session when it
+/// returns this. The webview's token refresher maps exactly this message
+/// to the SDK's logout outcome (`app/lib/tauri/chat.ts::isChatSessionExpired`);
+/// every other refresh error — the issuer unreachable, the keyring locked —
+/// is transient and is retried by the SDK. Keep the wording in step with
+/// the frontend matcher.
+pub const SESSION_EXPIRED: &str = "chat: session expired; sign in again";
 
 /// What [`chat_begin_sign_in`] hands the frontend.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -629,6 +683,7 @@ pub async fn begin(params: BeginParams<'_>) -> Result<(BeginSignIn, PendingSignI
     let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
     let url = authorize_url(&metadata, &client_id, &redirect_uri, &device_id, &state, &code_verifier)?;
     let flow_id = new_state();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
     info!(port, device_id = %device_id, "chat: sign-in flow started");
     Ok((
         BeginSignIn { flow_id, authorize_url: url },
@@ -641,33 +696,53 @@ pub async fn begin(params: BeginParams<'_>) -> Result<(BeginSignIn, PendingSignI
             code_verifier,
             code_rx,
             listener_task,
+            cancel_rx,
+            cancel_tx: Some(cancel_tx),
         },
     ))
 }
 
 /// Wait for the browser leg, exchange the code, confirm identity.
+///
+/// Returns [`SIGN_IN_CANCELLED`] as soon as the flow's [`CancelSignIn`]
+/// fires, at whichever step it is; nothing is stored here, so a cancelled
+/// flow leaves no session behind. A code already exchanged when the cancel
+/// lands mints tokens that are dropped unused — never persisted.
 pub async fn complete(http: &reqwest::Client, pending: PendingSignIn, timeout: Duration) -> Result<ChatSession> {
     // Destructure by hand: `PendingSignIn` has a `Drop` impl, so the
-    // receiver is taken out through a mutable borrow.
+    // receivers are taken out through a mutable borrow.
     let mut pending = pending;
     let rx = std::mem::replace(&mut pending.code_rx, oneshot::channel().1);
-    let outcome = tokio::time::timeout(timeout, rx)
-        .await
-        .map_err(|_| AppError::Auth("chat: sign-in timed out waiting for the browser".into()))?
-        .map_err(|_| AppError::Auth("chat: sign-in was cancelled".into()))?;
-    let code = outcome.map_err(|msg| AppError::Auth(format!("chat: sign-in refused: {msg}")))?;
+    let cancel_rx = std::mem::replace(&mut pending.cancel_rx, oneshot::channel().1);
+    // A handle nobody took must stay alive, or its dropped sender would
+    // read as a cancel.
+    let _unclaimed_cancel = pending.cancel_tx.take();
 
-    let tokens = exchange_code(
-        http,
-        &pending.metadata,
-        &pending.client_id,
-        &pending.redirect_uri,
-        &code,
-        &pending.code_verifier,
-    )
-    .await?;
-    let me = whoami(http, &pending.base_url, &tokens.access_token).await?;
-    build_session(&pending.base_url, &pending.metadata, &pending.client_id, &pending.device_id, me, tokens)
+    let flow = async {
+        let outcome = tokio::time::timeout(timeout, rx)
+            .await
+            .map_err(|_| AppError::Auth("chat: sign-in timed out waiting for the browser".into()))?
+            .map_err(|_| AppError::Auth(SIGN_IN_CANCELLED.into()))?;
+        let code = outcome.map_err(|msg| AppError::Auth(format!("chat: sign-in refused: {msg}")))?;
+
+        let tokens = exchange_code(
+            http,
+            &pending.metadata,
+            &pending.client_id,
+            &pending.redirect_uri,
+            &code,
+            &pending.code_verifier,
+        )
+        .await?;
+        let me = whoami(http, &pending.base_url, &tokens.access_token).await?;
+        build_session(&pending.base_url, &pending.metadata, &pending.client_id, &pending.device_id, me, tokens)
+    };
+    tokio::select! {
+        biased;
+        // Both a fired and a dropped handle mean the flow is over.
+        _ = cancel_rx => Err(AppError::Auth(SIGN_IN_CANCELLED.into())),
+        result = flow => result,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -725,15 +800,30 @@ pub async fn chat_begin_sign_in(state: tauri::State<'_, AppState>) -> Result<Beg
 #[tauri::command]
 pub async fn chat_complete_sign_in(state: tauri::State<'_, AppState>, flow_id: String) -> Result<ChatSession> {
     let account_id = state.current_account_id()?;
-    let pending = state
-        .chat
-        .pending
-        .lock()
-        .await
-        .remove(&flow_id)
-        .ok_or_else(|| AppError::Auth("chat: unknown or expired sign-in flow".into()))?;
+    let pending = {
+        // Move the flow from `pending` to `running` under the `pending`
+        // guard (lock order: pending, then running — same as the cancel
+        // command). Releasing `pending` before the insert left a window in
+        // which `chat_cancel_sign_in` found the flow in neither map and
+        // returned as a no-op while this command went on to complete and
+        // store the session.
+        let mut waiting = state.chat.pending.lock().await;
+        let mut pending = waiting
+            .remove(&flow_id)
+            .ok_or_else(|| AppError::Auth("chat: unknown or expired sign-in flow".into()))?;
+        // Reachable by `chat_cancel_sign_in` for as long as we are in here.
+        if let Some(cancel) = pending.cancel_handle() {
+            state.chat.running.lock().await.insert(flow_id.clone(), cancel);
+        }
+        pending
+    };
     let issuer = pending.metadata.issuer.clone();
-    let session = match complete(&state.chat.http, pending, CALLBACK_TIMEOUT).await {
+    let result = complete(&state.chat.http, pending, CALLBACK_TIMEOUT).await;
+    // A cancel that landed after `complete` produced a session but before
+    // this line has already removed the handle: the session is not stored.
+    let not_cancelled = state.chat.running.lock().await.remove(&flow_id).is_some();
+    let session = match result {
+        Ok(_) if !not_cancelled => return Err(AppError::Auth(SIGN_IN_CANCELLED.into())),
         Ok(s) => s,
         Err(AppError::Auth(msg)) if msg.contains("invalid_client") => {
             // The cached registration no longer exists on the issuer;
@@ -753,10 +843,23 @@ pub async fn chat_complete_sign_in(state: tauri::State<'_, AppState>, flow_id: S
     Ok(session)
 }
 
-/// Abandon a flow the user backed out of; frees the loopback port.
+/// Abandon a flow the user backed out of. A flow nobody has started
+/// completing is dropped (which frees its loopback port); one inside
+/// `chat_complete_sign_in` is cancelled there — that command returns
+/// [`SIGN_IN_CANCELLED`] and stores nothing, even if the browser comes
+/// back later.
 #[tauri::command]
 pub async fn chat_cancel_sign_in(state: tauri::State<'_, AppState>, flow_id: String) -> Result<()> {
-    state.chat.pending.lock().await.remove(&flow_id);
+    // Lock order: pending, then running, held together — the flow is in
+    // exactly one of the two maps at any instant (see `ChatState::running`).
+    let mut waiting = state.chat.pending.lock().await;
+    let mut running = state.chat.running.lock().await;
+    let dropped = waiting.remove(&flow_id).is_some();
+    if let Some(cancel) = running.remove(&flow_id) {
+        cancel.cancel();
+    } else if !dropped {
+        debug!(%flow_id, "chat: cancel for a flow that is not pending or running");
+    }
     Ok(())
 }
 
@@ -773,10 +876,7 @@ pub async fn chat_refresh_tokens(state: tauri::State<'_, AppState>) -> Result<Re
     else {
         return Err(AppError::Auth("chat: not signed in".into()));
     };
-    let refresh_token = session
-        .refresh_token
-        .clone()
-        .ok_or_else(|| AppError::Auth("chat: session has no refresh token; sign in again".into()))?;
+    let refresh_token = session.refresh_token.clone().ok_or_else(|| AppError::Auth(SESSION_EXPIRED.into()))?;
     let metadata = fetch_auth_metadata(&state.chat.http, &session.base_url).await?;
     let tokens = match refresh_grant(&state.chat.http, &metadata.token_endpoint, &session.client_id, &refresh_token).await {
         Ok(t) => t,
@@ -787,7 +887,7 @@ pub async fn chat_refresh_tokens(state: tauri::State<'_, AppState>) -> Result<Re
             warn!(%description, "chat: refresh token rejected, clearing session");
             let clear_id = account_id.clone();
             let _ = tokio::task::spawn_blocking(move || session::delete_session(&clear_id)).await;
-            return Err(AppError::Auth("chat: session expired; sign in again".into()));
+            return Err(AppError::Auth(SESSION_EXPIRED.into()));
         }
         Err(e) => return Err(e.into()),
     };

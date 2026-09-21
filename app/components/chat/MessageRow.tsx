@@ -8,14 +8,21 @@ import { toast } from "sonner";
 
 import AttachmentView from "@/components/chat/AttachmentView";
 import ChatMenu, { type ChatMenuItem } from "@/components/chat/ChatMenu";
-import { editingEventIdAtom, jumpToEventAtom, replyToEventIdAtom, rightPanelAtom } from "@/components/chat/chat-ui-atoms";
+import {
+  type ComposerTarget,
+  editingTargetAtom,
+  jumpToEventAtom,
+  replyTargetAtom,
+  rightPanelAtom,
+  selectedRoomIdAtom,
+} from "@/components/chat/chat-ui-atoms";
 import EmojiPicker from "@/components/chat/EmojiPicker";
 import MessageBody from "@/components/chat/MessageBody";
 import Reactions from "@/components/chat/Reactions";
 import UserAvatar from "@/components/chat/UserAvatar";
 import CustomTooltip from "@/components/chat/ChatTooltip";
 import { cancelSend, deleteMessage, retrySend, toggleReaction } from "@/lib/chat/actions";
-import { eventPermalink } from "@/lib/chat/rooms";
+import { eventPermalink, findRoomByIdOrAlias } from "@/lib/chat/rooms";
 import { eventPreview } from "@/lib/chat/threads";
 import { attachmentCaption, attachmentOf, canEdit, canRedact, formatTime, messageBody, reactionsFor, readersOf, sendStateOf } from "@/lib/chat/timeline";
 import { cn } from "@/lib/utils";
@@ -29,8 +36,12 @@ interface MessageRowProps {
   tick: number;
   /** Highlighted after a permalink jump. */
   highlighted?: boolean;
-  /** Thread panel rows hide the "reply in thread" affordances. */
-  inThread?: boolean;
+  /**
+   * Root of the thread this row is shown in, when rendered by the thread
+   * panel. Thread rows hide the "reply in thread" affordances, and their
+   * edit / reply actions target the thread's composer, never the room's.
+   */
+  threadRootId?: string | null;
   /** Quoted reply target (Slack-style "replying to") shown above the body. */
   replyTo?: MatrixEvent | null;
 }
@@ -38,16 +49,39 @@ interface MessageRowProps {
 const HOVER_BUTTON =
   "inline-flex size-7 items-center justify-center rounded-md text-grey-60 hover:bg-grey-90 hover:text-grey-10 dark:text-grey-dark-700 dark:hover:bg-black-500 dark:hover:text-grey-light-100";
 
-function MessageRowInner({ client, room, event, groupStart, tick, highlighted, inThread, replyTo }: MessageRowProps) {
+function MessageRowInner({ client, room, event, groupStart, tick, highlighted, threadRootId = null, replyTo }: MessageRowProps) {
+  const inThread = threadRootId !== null;
   const me = client.getUserId();
   const sender = event.getSender() ?? "";
   const member = room.getMember(sender);
   const senderName = member?.name ?? sender;
   const isMine = sender === me;
   const setRightPanel = useSetAtom(rightPanelAtom);
-  const setEditing = useSetAtom(editingEventIdAtom);
-  const setReplyTo = useSetAtom(replyToEventIdAtom);
+  const setEditingTarget = useSetAtom(editingTargetAtom);
+  const setReplyTarget = useSetAtom(replyTargetAtom);
+  // The composer this row's actions belong to (see `ComposerScope`).
+  const target = (): ComposerTarget | null => {
+    const eventId = event.getId();
+    return eventId ? { roomId: room.roomId, threadRootId, eventId } : null;
+  };
+  const setEditing = () => setEditingTarget(target());
+  const setReplyTo = () => setReplyTarget(target());
   const setJump = useSetAtom(jumpToEventAtom);
+  const setSelectedRoom = useSetAtom(selectedRoomIdAtom);
+  // A permalink names its room by id or alias, and may point into another
+  // room than the one it was pasted in: resolve it and switch there first,
+  // or the jump waits on a timeline that is not open. A room this account
+  // is not in is left alone.
+  const openRoomLink = (idOrAlias: string): string | null => {
+    const target = idOrAlias === room.roomId ? room : findRoomByIdOrAlias(client, idOrAlias);
+    if (!target) return null;
+    if (target.roomId !== room.roomId) setSelectedRoom(target.roomId);
+    return target.roomId;
+  };
+  const openEventLink = (idOrAlias: string, eventId: string) => {
+    const roomId = openRoomLink(idOrAlias);
+    if (roomId) setJump({ roomId, eventId });
+  };
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -95,10 +129,10 @@ function MessageRowInner({ client, room, event, groupStart, tick, highlighted, i
 
   const menuItems: (ChatMenuItem | "separator")[] = [
     ...(!inThread ? [{ key: "thread", label: threadReplies ? "Open thread" : "Reply in thread", icon: MessageSquare, onSelect: openThread }] : []),
-    { key: "reply", label: "Reply", icon: Reply, onSelect: () => setReplyTo(event.getId() ?? null) },
+    { key: "reply", label: "Reply", icon: Reply, onSelect: setReplyTo },
     { key: "copy-link", label: "Copy link", icon: Link2, onSelect: () => void copyLink() },
     { key: "copy-text", label: "Copy text", icon: Copy, onSelect: () => void copyText(), disabled: !body.text },
-    ...(canEdit(client, event) ? [{ key: "edit", label: "Edit message", icon: Pencil, shortcut: "↑", onSelect: () => setEditing(event.getId() ?? null) }] : []),
+    ...(canEdit(client, event) ? [{ key: "edit", label: "Edit message", icon: Pencil, shortcut: "↑", onSelect: setEditing }] : []),
     ...(canRedact(client, room, event) && !body.redacted
       ? ["separator" as const, { key: "delete", label: "Delete message", icon: Trash2, destructive: true, onSelect: () => setConfirmDelete(true) }]
       : []),
@@ -168,7 +202,8 @@ function MessageRowInner({ client, room, event, groupStart, tick, highlighted, i
               body={body}
               senderName={senderName}
               onMentionClick={(userId) => setRightPanel({ kind: "member", roomId: room.roomId, userId })}
-              onEventLinkClick={(roomId, eventId) => setJump({ roomId, eventId })}
+              onEventLinkClick={openEventLink}
+              onRoomLinkClick={openRoomLink}
             />
             {body.edited ? <span className="ml-1 text-[11px] text-grey-60 dark:text-grey-dark-700">(edited)</span> : null}
           </div>
@@ -247,12 +282,12 @@ function MessageRowInner({ client, room, event, groupStart, tick, highlighted, i
               <MessageSquare className="size-4" aria-hidden />
             </button>
           ) : (
-            <button type="button" className={HOVER_BUTTON} aria-label="Reply" onClick={() => setReplyTo(event.getId() ?? null)}>
+            <button type="button" className={HOVER_BUTTON} aria-label="Reply" onClick={setReplyTo}>
               <Reply className="size-4" aria-hidden />
             </button>
           )}
           {canEdit(client, event) ? (
-            <button type="button" className={HOVER_BUTTON} aria-label="Edit message" onClick={() => setEditing(event.getId() ?? null)}>
+            <button type="button" className={HOVER_BUTTON} aria-label="Edit message" onClick={setEditing}>
               <Pencil className="size-4" aria-hidden />
             </button>
           ) : null}

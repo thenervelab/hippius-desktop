@@ -234,10 +234,10 @@ pub fn apply_unread_badge(app: &AppHandle, count: u32) {
             warn!(error = %e, count, "chat: failed to set the window title");
         }
     }
-    if previous != count {
-        if let Err(e) = app.emit(CHAT_UNREAD_CHANGED_EVENT, UnreadChanged { count }) {
-            warn!(error = %e, "chat: failed to broadcast unread count");
-        }
+    if previous != count
+        && let Err(e) = app.emit(CHAT_UNREAD_CHANGED_EVENT, UnreadChanged { count })
+    {
+        warn!(error = %e, "chat: failed to broadcast unread count");
     }
 }
 
@@ -335,7 +335,7 @@ mod tests {
             .unwrap()
             .iter()
             // The main window carries no explicit label: Tauri defaults it to "main".
-            .find(|w| w.get("label").map_or(true, |l| l == MAIN_WINDOW_LABEL))
+            .find(|w| w.get("label").is_none_or(|l| l == MAIN_WINDOW_LABEL))
             .expect("main window in tauri.conf.json");
         assert_eq!(main["title"].as_str().unwrap(), APP_WINDOW_TITLE);
     }
