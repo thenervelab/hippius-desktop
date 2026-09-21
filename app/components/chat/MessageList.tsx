@@ -45,7 +45,16 @@ export default function MessageList({ client, room, summary, searchQuery, timeli
   const { items, events, loadOlder, canLoadOlder, loadingOlder } = timeline;
   const rowTick = useClientTick(client, ROW_EVENTS);
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const [atBottom, setAtBottom] = useState(true);
+  const [atBottom, setAtBottomState] = useState(true);
+  // The layout effect below runs on every timeline tick (decryption,
+  // receipts, typing), so it must read the *current* position, never a value
+  // captured by an earlier render — a stale `true` yanked readers back down
+  // the instant they started scrolling up.
+  const atBottomRef = useRef(true);
+  const setAtBottom = useCallback((value: boolean) => {
+    atBottomRef.current = value;
+    setAtBottomState(value);
+  }, []);
   const [newBelow, setNewBelow] = useState(0);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [jump, setJump] = useAtom(jumpToEventAtom);
@@ -73,7 +82,10 @@ export default function MessageList({ client, room, summary, searchQuery, timeli
     });
   }, [items, searchQuery, room]);
 
-  // Keep the viewport anchored when pages are prepended.
+  // Keep the viewport anchored when pages are prepended, and pinned to the
+  // bottom only while the reader is there. Re-renders that do not change the
+  // list (ticks) must not touch scrollTop at all.
+  const lastLayoutKey = useRef<string>("");
   useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
@@ -83,8 +95,32 @@ export default function MessageList({ client, room, summary, searchQuery, timeli
       prevScroll.current = null;
       return;
     }
-    if (atBottom) el.scrollTop = el.scrollHeight;
-  }, [visibleItems, atBottom]);
+    const last = visibleItems.length ? visibleItems[visibleItems.length - 1].key : "";
+    const key = `${room.roomId}|${visibleItems.length}|${last}`;
+    if (key === lastLayoutKey.current) return;
+    lastLayoutKey.current = key;
+    if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [visibleItems, room.roomId]);
+
+  // Growth of content below the fold (images decoding, embeds) while pinned.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const inner = el.firstElementChild;
+    if (!inner) return;
+    const ro = new ResizeObserver(() => {
+      if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [room.roomId]);
+
+  // A new room starts at the bottom.
+  useEffect(() => {
+    setAtBottom(true);
+    setNewBelow(0);
+    lastLayoutKey.current = "";
+  }, [room.roomId, setAtBottom]);
 
   // Count messages that arrived while scrolled up.
   useEffect(() => {
@@ -124,7 +160,7 @@ export default function MessageList({ client, room, summary, searchQuery, timeli
       const el = event.currentTarget;
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       const nowAtBottom = distance < BOTTOM_THRESHOLD;
-      if (nowAtBottom !== atBottom) setAtBottom(nowAtBottom);
+      if (nowAtBottom !== atBottomRef.current) setAtBottom(nowAtBottom);
       if (el.scrollTop < TOP_THRESHOLD && canLoadOlder && !loadingOlder) {
         prevScroll.current = { height: el.scrollHeight, top: el.scrollTop };
         void loadOlder().then((more) => {
@@ -132,7 +168,7 @@ export default function MessageList({ client, room, summary, searchQuery, timeli
         });
       }
     },
-    [atBottom, canLoadOlder, loadingOlder, loadOlder],
+    [setAtBottom, canLoadOlder, loadingOlder, loadOlder],
   );
 
   const scrollToBottom = () => {
@@ -186,6 +222,7 @@ export default function MessageList({ client, room, summary, searchQuery, timeli
         aria-relevant="additions"
         aria-label={`Messages in ${summary.name}`}
       >
+        <div>
         {!canLoadOlder && !searchQuery ? <RoomIntro summary={summary} /> : null}
         {loadingOlder ? (
           <div className="flex justify-center py-3" aria-label="Loading older messages">
@@ -240,6 +277,7 @@ export default function MessageList({ client, room, summary, searchQuery, timeli
           }
         })}
         <TypingLine room={room} client={client} />
+        </div>
       </div>
 
       {!atBottom ? (
