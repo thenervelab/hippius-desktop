@@ -9,7 +9,9 @@ import { rightPanelAtom, selectedRoomIdAtom, sidebarDrawerOpenAtom } from "@/com
 import { useChat } from "@/components/chat/ChatProvider";
 import ChatSidebar from "@/components/chat/ChatSidebar";
 import EncryptionBanner from "@/components/chat/EncryptionBanner";
+import CreateChannelDialog from "@/components/chat/CreateChannelDialog";
 import { useWorkspaces } from "@/components/chat/hooks/useWorkspaces";
+import MoveChannelDialog from "@/components/chat/MoveChannelDialog";
 import NewMessageDialog from "@/components/chat/NewMessageDialog";
 import RightPanelContent from "@/components/chat/RightPanel";
 import RoomView from "@/components/chat/RoomView";
@@ -205,6 +207,8 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
       </div>
 
       <NewMessageDialog client={client} />
+      <CreateChannelDialog client={client} workspaces={workspaces} />
+      <MoveChannelDialog client={client} workspaces={workspaces} />
       <CreateWorkspaceDialog client={client} workspaces={workspaces} />
       <JoinWorkspaceDialog client={client} workspaces={workspaces} />
     </div>

@@ -35,6 +35,11 @@ export const joinWorkspaceOpenAtom = atom(false);
 export const sidebarDrawerOpenAtom = atom(false);
 /** The "New message" (start a DM) dialog. */
 export const newMessageOpenAtom = atom(false);
+export const createChannelOpenAtom = atom(false);
+/** Category preselected in the "New channel" dialog (the one whose "+" was clicked); null = uncategorised. */
+export const createChannelCategoryAtom = atom<string | null>(null);
+/** "Move to…" dialog: the channel being moved, or null when closed. */
+export const moveChannelAtom = atom<string | null>(null);
 /** Event to scroll to and flash once the timeline has it (switches room if needed). */
 export const jumpToEventAtom = atom<{ roomId: string; eventId: string } | null>(null);
 /**
