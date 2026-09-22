@@ -416,9 +416,23 @@ mod tests {
             FileFailureKindPayload::Other {
                 message: "disk full".to_string(),
             },
+            // The strongest case in this list: hcfs QUARANTINES an
+            // undecryptable file after two attempts on the same revision and
+            // stops fetching it. An amber "Retrying" badge would sit there
+            // forever on a file nothing is retrying. `is_transient` gets this
+            // right today only via its `_ => false` fallback, so pin it —
+            // adding the variant to the true-arm is an easy mistake to make
+            // when the copy reads like the other terminal kinds.
+            FileFailureKindPayload::Undecryptable,
         ] {
             assert!(!kind.is_transient(), "{kind:?} must not be presented as self-resolving");
         }
+
+        assert!(
+            !is_transient_reason(&FileFailureKindPayload::Undecryptable.display_reason()),
+            "the authored copy must not round-trip as transient either — \
+             `fixup_stalled_completion` dispatches on the STRING"
+        );
     }
 
     #[test]
