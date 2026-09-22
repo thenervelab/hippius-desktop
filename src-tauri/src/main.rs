@@ -341,6 +341,8 @@ fn main() {
             chat::notify::chat_get_unread_count,
             chat::notify::chat_get_notifications_enabled,
             chat::notify::chat_set_notifications_enabled,
+            chat::notify::chat_get_sound_enabled,
+            chat::notify::chat_set_sound_enabled,
             chat::attachments::chat_save_attachment,
             chat::backend::chat_gifs_search,
             chat::backend::chat_gifs_featured,

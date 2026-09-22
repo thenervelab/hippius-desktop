@@ -159,6 +159,17 @@ export type { IncomingMessage };
 /** Rust's `chat::notify::NotifyOutcome` (snake_case on the wire). */
 export type NotifyOutcome = "shown" | "preference_disabled" | "not_mention_or_direct" | "room_visible";
 
+/**
+ * Rust's `chat::notify::NotifyResult`: why the OS notification was or was
+ * not shown, and whether to play the chime. `playSound` is decided in Rust
+ * (shown AND the sound preference is on), so the webview only synthesises
+ * the tone — it never re-derives the gate.
+ */
+export interface NotifyResult {
+  outcome: NotifyOutcome;
+  playSound: boolean;
+}
+
 /** Event Rust broadcasts to every window when the unread count changes. */
 export const CHAT_UNREAD_CHANGED_EVENT = "chat_unread_changed";
 
@@ -169,10 +180,11 @@ export interface ChatUnreadChanged {
 /**
  * Hand an incoming message to Rust, which applies the desktop policy
  * (preference, mentions/DMs, room on screen + window focused) and shows
- * the OS notification. Returns what it decided, for logging.
+ * the OS notification. Returns what it decided and whether to play the
+ * chime.
  */
-export function chatNotifyMessage(message: IncomingMessage): Promise<NotifyOutcome> {
-  return invoke<NotifyOutcome>("chat_notify_message", { message });
+export function chatNotifyMessage(message: IncomingMessage): Promise<NotifyResult> {
+  return invoke<NotifyResult>("chat_notify_message", { message });
 }
 
 /**
@@ -196,6 +208,15 @@ export function chatGetNotificationsEnabled(): Promise<boolean> {
 
 export function chatSetNotificationsEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("chat_set_notifications_enabled", { enabled });
+}
+
+/** The account's chat notification chime switch (default on; Rust-owned). */
+export function chatGetSoundEnabled(): Promise<boolean> {
+  return invoke<boolean>("chat_get_sound_enabled");
+}
+
+export function chatSetSoundEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>("chat_set_sound_enabled", { enabled });
 }
 
 // ---------------------------------------------------------------------------

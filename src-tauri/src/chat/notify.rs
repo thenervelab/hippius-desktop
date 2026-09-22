@@ -41,6 +41,18 @@ use crate::error::{AppError, Result};
 /// `notifications::crud::DEFAULT_PREFERENCES`).
 pub const CHAT_PREFERENCE_ID: &str = "chat";
 
+/// Preference row id for the notification chime. A second row rather than
+/// a column: the Settings → Notifications page lists every row for the
+/// account, so the switch shows up there next to "Chat" for free, and the
+/// chat Preferences dialog toggles the same `(owner, "chat_sound")` row.
+pub const CHAT_SOUND_PREFERENCE_ID: &str = "chat_sound";
+
+/// Seed labels for the two chat rows — one place, so the upsert in
+/// [`set_preference`] and `notifications::crud::DEFAULT_PREFERENCES` cannot
+/// drift apart (pinned by a test there).
+pub const CHAT_PREFERENCE_SEED: (&str, &str) = ("Chat", "Desktop notifications for new team chat messages and mentions");
+pub const CHAT_SOUND_PREFERENCE_SEED: (&str, &str) = ("Chat sound", "Play a short chime with chat notifications");
+
 /// Event the frontend (main window and tray popover) receives whenever the
 /// unread total changes, so any surface can mirror the badge.
 pub const CHAT_UNREAD_CHANGED_EVENT: &str = "chat_unread_changed";
@@ -112,6 +124,17 @@ pub enum NotifyOutcome {
     RoomVisible,
 }
 
+/// What [`chat_notify_message`] hands back: why the OS notification was or
+/// was not shown, and whether the webview should play the chime. The sound
+/// is decided here so it can never fire for a message the notification
+/// policy suppressed.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotifyResult {
+    pub outcome: NotifyOutcome,
+    pub play_sound: bool,
+}
+
 /// Pure policy, in order: the preference is off → nothing; a channel
 /// message without a mention → nothing (a DM always qualifies); the user is
 /// already looking at the room (window focused AND that room open) →
@@ -127,6 +150,13 @@ pub fn decide_notify(preference_enabled: bool, message: &IncomingMessage, window
         return NotifyOutcome::RoomVisible;
     }
     NotifyOutcome::Shown
+}
+
+/// The chime plays exactly when the notification was shown AND the sound
+/// preference is on — the same gate as the OS notification, narrowed by one
+/// more switch. A suppressed message is silent whatever the sound setting.
+pub fn decide_sound(outcome: NotifyOutcome, sound_enabled: bool) -> bool {
+    sound_enabled && outcome == NotifyOutcome::Shown
 }
 
 /// Title + body for the OS notification. A DM is "Sender"; a channel is
@@ -146,35 +176,55 @@ pub fn render_notification(msg: &IncomingMessage) -> (String, String) {
     (title, body)
 }
 
-/// Whether the account's "Chat" notification category is on. Absent rows
-/// count as enabled — the seed runs on the preferences page, which the
-/// user may never have opened, and the default there is enabled.
-pub async fn chat_preference_enabled(pool: &sqlx::SqlitePool, owner: &str) -> Result<bool> {
+/// Whether a chat notification row is on. Absent rows count as enabled —
+/// the seed runs on the preferences page, which the user may never have
+/// opened, and the default there is enabled.
+async fn preference_enabled(pool: &sqlx::SqlitePool, owner: &str, id: &str) -> Result<bool> {
     let row: Option<(i32,)> = sqlx::query_as("SELECT enabled FROM notification_preferences WHERE owner = ? AND id = ?")
         .bind(owner)
-        .bind(CHAT_PREFERENCE_ID)
+        .bind(id)
         .fetch_optional(pool)
         .await?;
     Ok(row.is_none_or(|(e,)| e != 0))
 }
 
-/// Write the account's "Chat" notification category. Upserts the row with
-/// the same label/description the preferences page seeds, so a toggle from
-/// the chat Preferences and one from Settings → Notifications land on the
-/// same `(owner, "chat")` row — there is exactly one switch.
-pub async fn set_chat_preference_enabled(pool: &sqlx::SqlitePool, owner: &str, enabled: bool) -> Result<()> {
+/// Write a chat notification row. Upserts it with the same label and
+/// description the preferences page seeds, so a toggle from the chat
+/// Preferences and one from Settings → Notifications land on the same
+/// `(owner, id)` row — there is exactly one switch per category.
+async fn set_preference(pool: &sqlx::SqlitePool, owner: &str, id: &str, seed: (&str, &str), enabled: bool) -> Result<()> {
     sqlx::query(
         "INSERT INTO notification_preferences (owner, id, label, description, enabled) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(owner, id) DO UPDATE SET enabled = excluded.enabled",
     )
     .bind(owner)
-    .bind(CHAT_PREFERENCE_ID)
-    .bind("Chat")
-    .bind("Desktop notifications for new team chat messages and mentions")
+    .bind(id)
+    .bind(seed.0)
+    .bind(seed.1)
     .bind(i32::from(enabled))
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Whether the account's "Chat" notification category is on.
+pub async fn chat_preference_enabled(pool: &sqlx::SqlitePool, owner: &str) -> Result<bool> {
+    preference_enabled(pool, owner, CHAT_PREFERENCE_ID).await
+}
+
+/// Write the account's "Chat" notification category.
+pub async fn set_chat_preference_enabled(pool: &sqlx::SqlitePool, owner: &str, enabled: bool) -> Result<()> {
+    set_preference(pool, owner, CHAT_PREFERENCE_ID, CHAT_PREFERENCE_SEED, enabled).await
+}
+
+/// Whether the account plays the chat notification chime (default on).
+pub async fn chat_sound_enabled(pool: &sqlx::SqlitePool, owner: &str) -> Result<bool> {
+    preference_enabled(pool, owner, CHAT_SOUND_PREFERENCE_ID).await
+}
+
+/// Write the account's chat notification chime switch.
+pub async fn set_chat_sound_enabled(pool: &sqlx::SqlitePool, owner: &str, enabled: bool) -> Result<()> {
+    set_preference(pool, owner, CHAT_SOUND_PREFERENCE_ID, CHAT_SOUND_PREFERENCE_SEED, enabled).await
 }
 
 /// The chat Preferences dialog's notifications switch (read).
@@ -191,21 +241,38 @@ pub async fn chat_set_notifications_enabled(state: tauri::State<'_, AppState>, e
     set_chat_preference_enabled(state.pool()?, &owner, enabled).await
 }
 
+/// The chat Preferences dialog's sound switch (read).
+#[tauri::command]
+pub async fn chat_get_sound_enabled(state: tauri::State<'_, AppState>) -> Result<bool> {
+    let owner = state.current_account_id()?;
+    chat_sound_enabled(state.pool()?, &owner).await
+}
+
+/// The chat Preferences dialog's sound switch (write).
+#[tauri::command]
+pub async fn chat_set_sound_enabled(state: tauri::State<'_, AppState>, enabled: bool) -> Result<()> {
+    let owner = state.current_account_id()?;
+    set_chat_sound_enabled(state.pool()?, &owner, enabled).await
+}
+
 fn main_window_focused(app: &AppHandle) -> bool {
     app.get_webview_window(MAIN_WINDOW_LABEL)
         .and_then(|w| w.is_focused().ok())
         .unwrap_or(false)
 }
 
-/// Show an OS notification for a chat message, subject to policy.
+/// Show an OS notification for a chat message, subject to policy, and tell
+/// the webview whether to play the chime (the sound itself is synthesised
+/// in the webview's audio context; Rust owns the decision).
 #[tauri::command]
-pub async fn chat_notify_message(app: AppHandle, state: tauri::State<'_, AppState>, message: IncomingMessage) -> Result<NotifyOutcome> {
+pub async fn chat_notify_message(app: AppHandle, state: tauri::State<'_, AppState>, message: IncomingMessage) -> Result<NotifyResult> {
     let owner = state.current_account_id()?;
-    let enabled = chat_preference_enabled(state.pool()?, &owner).await?;
+    let pool = state.pool()?;
+    let enabled = chat_preference_enabled(pool, &owner).await?;
     let outcome = decide_notify(enabled, &message, main_window_focused(&app));
     if outcome != NotifyOutcome::Shown {
         debug!(?outcome, room = %message.room_id, "chat: notification suppressed");
-        return Ok(outcome);
+        return Ok(NotifyResult { outcome, play_sound: false });
     }
     let (title, body) = render_notification(&message);
     app.notification()
@@ -214,7 +281,8 @@ pub async fn chat_notify_message(app: AppHandle, state: tauri::State<'_, AppStat
         .body(body)
         .show()
         .map_err(|e| AppError::Other(format!("chat: OS notification failed: {e}")))?;
-    Ok(NotifyOutcome::Shown)
+    let play_sound = decide_sound(outcome, chat_sound_enabled(pool, &owner).await?);
+    Ok(NotifyResult { outcome, play_sound })
 }
 
 /// The one writer of every unread surface: dock/taskbar badge, main window
@@ -383,6 +451,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    // The chime is a narrowing of the notification gate: it plays only for
+    // a message that was actually shown, and only while the switch is on.
+    #[test]
+    fn sound_plays_only_for_shown_and_enabled() {
+        assert!(decide_sound(NotifyOutcome::Shown, true));
+        assert!(!decide_sound(NotifyOutcome::Shown, false));
+        for suppressed in [
+            NotifyOutcome::PreferenceDisabled,
+            NotifyOutcome::NotMentionOrDirect,
+            NotifyOutcome::RoomVisible,
+        ] {
+            assert!(!decide_sound(suppressed, true), "{suppressed:?} must be silent");
+        }
+    }
+
+    // Default on, toggles per account, and never disturbs the "chat" row it
+    // sits next to (turning the sound off must not turn notifications off).
+    #[tokio::test]
+    async fn sound_preference_defaults_on_and_is_independent_of_chat_row() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::utils::schema::ensure_table_schema(&pool).await.unwrap();
+        assert!(chat_sound_enabled(&pool, "5Fowner").await.unwrap());
+        set_chat_sound_enabled(&pool, "5Fowner", false).await.unwrap();
+        assert!(!chat_sound_enabled(&pool, "5Fowner").await.unwrap());
+        assert!(chat_preference_enabled(&pool, "5Fowner").await.unwrap());
+        assert!(chat_sound_enabled(&pool, "5Fother").await.unwrap());
+        set_chat_sound_enabled(&pool, "5Fowner", true).await.unwrap();
+        assert!(chat_sound_enabled(&pool, "5Fowner").await.unwrap());
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM notification_preferences WHERE owner = '5Fowner' AND id = 'chat_sound'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn notify_result_wire_shape_is_camel_case() {
+        let json = serde_json::to_value(NotifyResult {
+            outcome: NotifyOutcome::Shown,
+            play_sound: true,
+        })
+        .unwrap();
+        assert_eq!(json, serde_json::json!({ "outcome": "shown", "playSound": true }));
     }
 
     #[test]

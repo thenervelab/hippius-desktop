@@ -39,7 +39,7 @@ const notifyCalls = () => tauri.core.invoke.mock.calls.filter(([cmd]) => cmd ===
 
 beforeEach(() => {
   tauri.reset();
-  tauri.onInvoke("chat_notify_message", () => "shown");
+  tauri.onInvoke("chat_notify_message", () => ({ outcome: "shown", playSound: false }));
   classify.mockReset();
   classify.mockReturnValue(REPORT);
 });

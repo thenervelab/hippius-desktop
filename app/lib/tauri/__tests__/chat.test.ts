@@ -4,10 +4,12 @@ import {
   chatAcceptWorkspaceInvite,
   chatCreateWorkspaceInvite,
   chatGetNotificationsEnabled,
+  chatGetSoundEnabled,
   chatGetUnreadCount,
   chatNotifyMessage,
   chatPreviewWorkspaceInvite,
   chatSetNotificationsEnabled,
+  chatSetSoundEnabled,
   chatSetUnreadBadge,
   encodeSaveDestination,
   isChatKeyringUnavailable,
@@ -107,7 +109,7 @@ describe("notification and badge wrappers", () => {
   it("invoke the Rust commands with the parameter names Rust expects", async () => {
     const invoke = vi.mocked((await import("@tauri-apps/api/core")).invoke);
     invoke.mockReset();
-    invoke.mockResolvedValueOnce("not_mention_or_direct");
+    invoke.mockResolvedValueOnce({ outcome: "not_mention_or_direct", playSound: false });
     const message = {
       roomId: "!g",
       roomName: "#general",
@@ -117,9 +119,10 @@ describe("notification and badge wrappers", () => {
       isMention: false,
       roomIsOpen: false,
     };
-    await expect(chatNotifyMessage(message)).resolves.toBe(
-      "not_mention_or_direct",
-    );
+    await expect(chatNotifyMessage(message)).resolves.toEqual({
+      outcome: "not_mention_or_direct",
+      playSound: false,
+    });
     expect(invoke).toHaveBeenLastCalledWith("chat_notify_message", { message });
 
     invoke.mockResolvedValueOnce(undefined);
@@ -141,6 +144,16 @@ describe("notification and badge wrappers", () => {
     invoke.mockResolvedValueOnce(false);
     await expect(chatGetNotificationsEnabled()).resolves.toBe(false);
     expect(invoke).toHaveBeenLastCalledWith("chat_get_notifications_enabled");
+
+    invoke.mockResolvedValueOnce(undefined);
+    await chatSetSoundEnabled(false);
+    expect(invoke).toHaveBeenLastCalledWith("chat_set_sound_enabled", {
+      enabled: false,
+    });
+
+    invoke.mockResolvedValueOnce(true);
+    await expect(chatGetSoundEnabled()).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith("chat_get_sound_enabled");
   });
 });
 

@@ -635,7 +635,16 @@ const DEFAULT_PREFERENCES: &[(&str, &str, &str)] = &[
         "Files",
         "Notifications for file operations including sync completion and failures",
     ),
-    ("chat", "Chat", "Desktop notifications for new team chat messages and mentions"),
+    (
+        crate::chat::notify::CHAT_PREFERENCE_ID,
+        crate::chat::notify::CHAT_PREFERENCE_SEED.0,
+        crate::chat::notify::CHAT_PREFERENCE_SEED.1,
+    ),
+    (
+        crate::chat::notify::CHAT_SOUND_PREFERENCE_ID,
+        crate::chat::notify::CHAT_SOUND_PREFERENCE_SEED.0,
+        crate::chat::notify::CHAT_SOUND_PREFERENCE_SEED.1,
+    ),
 ];
 
 /// Seed the default preference rows for `owner` if absent.
@@ -807,6 +816,23 @@ mod tests {
         assert!(!a_enabled.iter().any(|l| l == "Credits"), "A's enabled set must exclude Credits");
         let b_enabled = enabled_types_inner(&pool, "addrB").await.unwrap();
         assert!(b_enabled.iter().any(|l| l == "Credits"), "B's enabled set must include Credits");
+    }
+
+    // Settings → Notifications and the chat Preferences dialog share the two
+    // chat rows: the page seeds them enabled, and a toggle written through
+    // the chat setter is what the page reads back.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chat_rows_are_seeded_and_shared_with_the_chat_setters() {
+        use crate::chat::notify::{CHAT_PREFERENCE_ID, CHAT_SOUND_PREFERENCE_ID, set_chat_sound_enabled};
+        let (_dir, pool) = fresh_pool().await;
+        let prefs = get_preferences_inner(&pool, "addrA").await.unwrap();
+        for id in [CHAT_PREFERENCE_ID, CHAT_SOUND_PREFERENCE_ID] {
+            assert!(prefs.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("{id} row")).enabled);
+        }
+        set_chat_sound_enabled(&pool, "addrA", false).await.unwrap();
+        let prefs = get_preferences_inner(&pool, "addrA").await.unwrap();
+        assert!(!prefs.iter().find(|p| p.id == CHAT_SOUND_PREFERENCE_ID).unwrap().enabled);
+        assert!(prefs.iter().find(|p| p.id == CHAT_PREFERENCE_ID).unwrap().enabled);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
