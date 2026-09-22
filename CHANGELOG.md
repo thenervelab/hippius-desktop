@@ -33,6 +33,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Hippius community, or paste an invite link to join a team. The channel list
   follows the workspace you pick, and the app reopens where you left off in
   each.
+- **Chat channels can be grouped into categories.** Workspace admins can
+  create categories, create a channel straight into one, and move channels
+  between them; fold a category to tuck its channels away — unread counts
+  roll up onto the folded header so nothing gets missed.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.
