@@ -49,6 +49,8 @@ export const workspaceSettingsAtom = atom<WorkspaceSettingsTab | null>(null);
 export const sidebarDrawerOpenAtom = atom(false);
 /** The "New message" (start a DM) dialog. */
 export const newMessageOpenAtom = atom(false);
+/** The ⌘/Ctrl+K "Jump to" palette. */
+export const commandPaletteOpenAtom = atom(false);
 export const createChannelOpenAtom = atom(false);
 /** Category preselected in the "New channel" dialog (the one whose "+" was clicked); null = uncategorised. */
 export const createChannelCategoryAtom = atom<string | null>(null);

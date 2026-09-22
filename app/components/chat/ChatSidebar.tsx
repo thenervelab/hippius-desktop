@@ -30,6 +30,7 @@ import { toast } from "sonner";
 
 import {
   chatSettingsOpenAtom,
+  commandPaletteOpenAtom,
   createChannelCategoryAtom,
   createChannelOpenAtom,
   invitePeopleOpenAtom,
@@ -73,6 +74,7 @@ import type {
 } from "@/lib/chat/spaces";
 import { participatingThreads } from "@/lib/chat/threads";
 import { cn } from "@/lib/utils";
+import { isMacPlatform } from "@/lib/utils/isMacPlatform";
 
 interface ChatSidebarProps {
   client: MatrixClient;
@@ -167,6 +169,7 @@ export default function ChatSidebar({
   const setRightPanel = useSetAtom(rightPanelAtom);
   const setDrawerOpen = useSetAtom(sidebarDrawerOpenAtom);
   const setNewMessageOpen = useSetAtom(newMessageOpenAtom);
+  const setPaletteOpen = useSetAtom(commandPaletteOpenAtom);
   const setCreateChannelOpen = useSetAtom(createChannelOpenAtom);
   const setCreateChannelCategory = useSetAtom(createChannelCategoryAtom);
   const setMoveChannel = useSetAtom(moveChannelAtom);
@@ -477,8 +480,8 @@ export default function ChatSidebar({
         </Button>
       </div>
 
-      <div className="px-3 py-2">
-        <label className="flex h-8 w-full items-center gap-2 rounded-md border border-grey-80 bg-white px-2 text-xs text-grey-60 transition-colors focus-within:ring-2 focus-within:ring-primary-50 hover:border-grey-70 dark:border-black-300 dark:bg-black-300 dark:text-grey-dark-700 dark:hover:border-grey-dark-500 dark:focus-within:ring-primary-40">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-grey-80 bg-white px-2 text-xs text-grey-60 transition-colors focus-within:ring-2 focus-within:ring-primary-50 hover:border-grey-70 dark:border-black-300 dark:bg-black-300 dark:text-grey-dark-700 dark:hover:border-grey-dark-500 dark:focus-within:ring-primary-40">
           <Search className="size-3.5 shrink-0" aria-hidden />
           <input
             type="search"
@@ -489,6 +492,17 @@ export default function ChatSidebar({
             className="min-w-0 flex-1 bg-transparent text-xs text-grey-10 outline-none placeholder:text-grey-60 dark:text-grey-light-100 dark:placeholder:text-grey-dark-700"
           />
         </label>
+        {/* Jump anywhere (rooms across workspaces, people, actions) -> command palette */}
+        <button
+          type="button"
+          onClick={() => setPaletteOpen(true)}
+          aria-label="Jump to a channel or person"
+          aria-keyshortcuts="Meta+K Control+K"
+          title="Jump to…"
+          className="flex h-8 shrink-0 items-center rounded-md border border-grey-80 bg-white px-1.5 font-sans text-[10px] text-grey-60 outline-none transition-colors hover:border-grey-70 hover:text-grey-10 focus-visible:ring-2 focus-visible:ring-primary-50 dark:border-black-300 dark:bg-black-300 dark:text-grey-dark-700 dark:hover:border-grey-dark-500 dark:hover:text-grey-light-100 dark:focus-visible:ring-primary-40"
+        >
+          <kbd>{isMacPlatform() ? "⌘K" : "Ctrl K"}</kbd>
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">

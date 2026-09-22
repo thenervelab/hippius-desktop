@@ -67,7 +67,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   is sent as a regular encrypted attachment, so nothing about your search
   leaves the room, and it shows in the conversation immediately while it
   uploads. On deployments where GIFs are not enabled the button says so.
-- **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
+- **Jump anywhere in chat from the keyboard.** ⌘K (Ctrl+K on Windows and
+  Linux) opens a "Jump to" box that finds any channel or person across all
+  your workspaces, with your recent rooms on top, and can start a new channel
+  or message. ⌘1–9 switch workspaces, Alt+↑/↓ step through your rooms
+  (Alt+Shift+↑/↓ through the unread ones) and Esc closes the side panel. Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.
 - **Shared drives show who they belong to and what you can do in them.** A drive

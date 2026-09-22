@@ -5,12 +5,20 @@ import { useAtom } from "jotai";
 import { type MatrixClient, SyncState } from "matrix-js-sdk";
 import { WifiOff } from "lucide-react";
 
-import { rightPanelAtom, selectedRoomIdAtom, sidebarDrawerOpenAtom } from "@/components/chat/chat-ui-atoms";
+import {
+  rightPanelAtom,
+  selectedRoomIdAtom,
+  sidebarDrawerOpenAtom,
+} from "@/components/chat/chat-ui-atoms";
 import { useChat } from "@/components/chat/ChatProvider";
 import ChatSettingsDialog from "@/components/chat/ChatSettingsDialog";
 import ChatSidebar from "@/components/chat/ChatSidebar";
+import CommandPalette, {
+  rememberRecentRoom,
+} from "@/components/chat/CommandPalette";
 import EncryptionBanner from "@/components/chat/EncryptionBanner";
 import CreateChannelDialog from "@/components/chat/CreateChannelDialog";
+import { useChatShortcuts } from "@/components/chat/hooks/useChatShortcuts";
 import { useWorkspaces } from "@/components/chat/hooks/useWorkspaces";
 import MoveChannelDialog from "@/components/chat/MoveChannelDialog";
 import NewMessageDialog from "@/components/chat/NewMessageDialog";
@@ -26,6 +34,7 @@ import WorkspaceSettingsDialog from "@/components/chat/workspaces/WorkspaceSetti
 import NoEntriesFound from "@/components/ui/NoEntriesFound";
 import { subscribeToRoom } from "@/lib/chat/client";
 import { LG_MEDIA_QUERY, useMediaQuery } from "@/lib/hooks/useMediaQuery";
+import { isMacPlatform } from "@/lib/utils/isMacPlatform";
 
 /**
  * The connected chat surface: workspace rail, sidebar, room view, optional
@@ -34,7 +43,13 @@ import { LG_MEDIA_QUERY, useMediaQuery } from "@/lib/hooks/useMediaQuery";
  * console's `ChatShell`.
  */
 export default function ChatShell({ client }: { client: MatrixClient }) {
-  const { connection, encryption, syncState, unlockEncryption, repairEncryption } = useChat();
+  const {
+    connection,
+    encryption,
+    syncState,
+    unlockEncryption,
+    repairEncryption,
+  } = useChat();
   const [selectedRoomId, setSelectedRoomId] = useAtom(selectedRoomIdAtom);
   const [rightPanel, setRightPanel] = useAtom(rightPanelAtom);
   const [drawerOpen, setDrawerOpen] = useAtom(sidebarDrawerOpenAtom);
@@ -46,13 +61,31 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
   // when its content is display:none.
   const wide = useMediaQuery(LG_MEDIA_QUERY);
   const workspaces = useWorkspaces(client);
-  const { workspaces: workspaceList, invites: spaceInvites, badges, byWorkspace, active, activeWorkspaceId, channels, dms, orphans } = workspaces;
+  const {
+    workspaces: workspaceList,
+    invites: spaceInvites,
+    badges,
+    byWorkspace,
+    active,
+    activeWorkspaceId,
+    channels,
+    dms,
+    orphans,
+  } = workspaces;
+  const shortcutRooms = useMemo(
+    () => ({ ordered: [...channels, ...dms] }),
+    [channels, dms],
+  );
 
   // Slack remembers where you were in each workspace; switching back lands
   // you there rather than on #general again.
   const lastRoomByWorkspace = useRef(new Map<string, string>());
   useEffect(() => {
-    if (activeWorkspaceId && selectedRoomId && channels.some((c) => c.id === selectedRoomId)) {
+    if (
+      activeWorkspaceId &&
+      selectedRoomId &&
+      channels.some((c) => c.id === selectedRoomId)
+    ) {
       lastRoomByWorkspace.current.set(activeWorkspaceId, selectedRoomId);
     }
   }, [activeWorkspaceId, selectedRoomId, channels]);
@@ -67,20 +100,51 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
       setSelectedRoomId(next?.id ?? null);
       setRightPanel(null);
     },
-    [activeWorkspaceId, byWorkspace, setRightPanel, setSelectedRoomId, workspaces],
+    [
+      activeWorkspaceId,
+      byWorkspace,
+      setRightPanel,
+      setSelectedRoomId,
+      workspaces,
+    ],
   );
 
-  // A room opened from outside the sidebar (notification, thread link)
+  const workspaceIds = useMemo(
+    () => workspaceList.map((w) => w.id),
+    [workspaceList],
+  );
+  const shortcutWorkspaces = useMemo(
+    () => ({ ids: workspaceIds, onSelect: selectWorkspace }),
+    [workspaceIds, selectWorkspace],
+  );
+  useChatShortcuts(shortcutRooms, shortcutWorkspaces);
+
+  // A room opened from outside the sidebar (palette, notification, thread link)
   // may belong to another workspace: follow it there.
   useEffect(() => {
-    if (!selectedRoomId || channels.some((c) => c.id === selectedRoomId) || dms.some((d) => d.id === selectedRoomId)) return;
+    if (
+      !selectedRoomId ||
+      channels.some((c) => c.id === selectedRoomId) ||
+      dms.some((d) => d.id === selectedRoomId)
+    )
+      return;
     for (const [spaceId, rooms] of byWorkspace) {
-      if (spaceId !== activeWorkspaceId && rooms.some((r) => r.id === selectedRoomId)) {
+      if (
+        spaceId !== activeWorkspaceId &&
+        rooms.some((r) => r.id === selectedRoomId)
+      ) {
         workspaces.setActiveWorkspaceId(spaceId);
         return;
       }
     }
-  }, [selectedRoomId, channels, dms, byWorkspace, activeWorkspaceId, workspaces]);
+  }, [
+    selectedRoomId,
+    channels,
+    dms,
+    byWorkspace,
+    activeWorkspaceId,
+    workspaces,
+  ]);
 
   // Default to the first channel (Slack opens #general) once rooms exist.
   // With no workspace at all the onboarding pane takes the stage instead,
@@ -95,6 +159,7 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
   useEffect(() => {
     if (connection.kind !== "ready") return;
     subscribeToRoom(connection.handle, selectedRoomId);
+    if (selectedRoomId) rememberRecentRoom(selectedRoomId);
   }, [connection, selectedRoomId]);
 
   // Announce ourselves online once syncing (presence is polled, see presence.ts).
@@ -109,7 +174,8 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
     if (wide) setDrawerOpen(false);
   }, [wide, setDrawerOpen]);
 
-  const offline = syncState === SyncState.Error || syncState === SyncState.Reconnecting;
+  const offline =
+    syncState === SyncState.Error || syncState === SyncState.Reconnecting;
   const hasRooms = channels.length + dms.length + orphans.length > 0;
 
   const rail = useMemo(
@@ -123,7 +189,14 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
         onSelect={selectWorkspace}
       />
     ),
-    [activeWorkspaceId, badges, client, selectWorkspace, spaceInvites, workspaceList],
+    [
+      activeWorkspaceId,
+      badges,
+      client,
+      selectWorkspace,
+      spaceInvites,
+      workspaceList,
+    ],
   );
 
   return (
@@ -133,13 +206,22 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
           role="status"
           className="flex items-center gap-2 border-b border-warning-50/40 bg-warning-50/10 px-4 py-1.5 text-xs text-grey-10 dark:border-warning-50/50 dark:bg-warning-50/20 dark:text-grey-light-100"
         >
-          <WifiOff className="size-3.5 shrink-0 text-warning-50 dark:text-warning-50" aria-hidden />
+          <WifiOff
+            className="size-3.5 shrink-0 text-warning-50 dark:text-warning-50"
+            aria-hidden
+          />
           <span className="flex-1">
-            {syncState === SyncState.Reconnecting ? "Reconnecting…" : "You’re offline. Messages will send when the connection is back."}
+            {syncState === SyncState.Reconnecting
+              ? "Reconnecting…"
+              : "You’re offline. Messages will send when the connection is back."}
           </span>
         </div>
       ) : null}
-      <EncryptionBanner encryption={encryption} onUnlock={unlockEncryption} onRepair={repairEncryption} />
+      <EncryptionBanner
+        encryption={encryption}
+        onUnlock={unlockEncryption}
+        onRepair={repairEncryption}
+      />
 
       <div className="flex min-h-0 flex-1">
         {wide ? (
@@ -148,16 +230,28 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
             <ChatSidebar client={client} workspaces={workspaces} />
           </>
         ) : (
-          <SidePanel side="left" open={drawerOpen} onClose={() => setDrawerOpen(false)} title="Navigation">
+          <SidePanel
+            side="left"
+            open={drawerOpen}
+            onClose={() => setDrawerOpen(false)}
+            title="Navigation"
+          >
             <div className="flex h-full min-h-0">
               {rail}
               {/* The rail is fixed-width; the sidebar takes what is left, not the whole drawer. */}
-              <ChatSidebar client={client} workspaces={workspaces} className="w-auto min-w-0 flex-1 shrink border-r-0" />
+              <ChatSidebar
+                client={client}
+                workspaces={workspaces}
+                className="w-auto min-w-0 flex-1 shrink border-r-0"
+              />
             </div>
           </SidePanel>
         )}
 
-        <main className="flex min-w-0 flex-1 flex-col" aria-label="Conversation">
+        <main
+          className="flex min-w-0 flex-1 flex-col"
+          aria-label="Conversation"
+        >
           {workspaceList.length === 0 && !selectedRoomId ? (
             // Nobody belongs to anything at account creation; the chat opens
             // on the choice. A DM or orphan channel still opens if selected.
@@ -167,25 +261,41 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
               // On a wide layout the sidebar is already next to this pane. On
               // a narrow one it lives in a drawer whose only opener is a room
               // header, and no room is open: offer the drawer from here.
-              onOpenConversations={!wide && hasRooms ? () => setDrawerOpen(true) : undefined}
+              onOpenConversations={
+                !wide && hasRooms ? () => setDrawerOpen(true) : undefined
+              }
             />
           ) : selectedRoomId ? (
-            <RoomView key={selectedRoomId} client={client} roomId={selectedRoomId} />
+            <RoomView
+              key={selectedRoomId}
+              client={client}
+              roomId={selectedRoomId}
+            />
           ) : !wide ? (
             // Narrow, nothing open: the only way into the drawer is a room
             // header's menu button, which does not exist yet. Show the
             // navigation itself as the page.
             <div className="flex min-h-0 flex-1">
               {rail}
-              <ChatSidebar client={client} workspaces={workspaces} className="w-auto min-w-0 flex-1 shrink border-r-0" />
+              <ChatSidebar
+                client={client}
+                workspaces={workspaces}
+                className="w-auto min-w-0 flex-1 shrink border-r-0"
+              />
             </div>
           ) : (
             <div className="flex flex-1 items-center justify-center p-6">
               <NoEntriesFound
-                title={hasRooms ? "Pick a conversation" : active ? "No channels yet" : "No conversations yet"}
+                title={
+                  hasRooms
+                    ? "Pick a conversation"
+                    : active
+                      ? "No channels yet"
+                      : "No conversations yet"
+                }
                 description={
                   hasRooms
-                    ? "Choose a channel or a person from the sidebar."
+                    ? `Choose a channel or a person from the sidebar, or press ${isMacPlatform() ? "⌘K" : "Ctrl+K"} to jump.`
                     : active
                       ? `Create a channel in ${active.name} or start a direct message.`
                       : "Create a channel or start a direct message to get going."
@@ -198,18 +308,27 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
 
         {wide ? (
           rightPanel ? (
-            <aside className="flex w-[360px] shrink-0 flex-col border-l border-grey-80 dark:border-black-300" aria-label="Details">
+            <aside
+              className="flex w-[360px] shrink-0 flex-col border-l border-grey-80 dark:border-black-300"
+              aria-label="Details"
+            >
               <RightPanelContent client={client} />
             </aside>
           ) : null
         ) : (
-          <SidePanel side="right" open={Boolean(rightPanel)} onClose={() => setRightPanel(null)} title="Details">
+          <SidePanel
+            side="right"
+            open={Boolean(rightPanel)}
+            onClose={() => setRightPanel(null)}
+            title="Details"
+          >
             <RightPanelContent client={client} />
           </SidePanel>
         )}
       </div>
 
       <NewMessageDialog client={client} />
+      <CommandPalette client={client} />
       <ChatSettingsDialog client={client} />
       <CreateChannelDialog client={client} workspaces={workspaces} />
       <MoveChannelDialog client={client} workspaces={workspaces} />
