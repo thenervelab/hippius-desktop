@@ -18,6 +18,24 @@ import { useStartCapture } from "@/app/lib/capture/useStartCapture";
 import type { CaptureMode } from "@/app/lib/tauri/capture";
 import { SECONDARY_PILL_CLASSES } from "@/app/components/page-sections/drive/uploadActions";
 
+// Explicit colours, as every menu in the app sets them: the shared
+// DropdownMenuContent's base is `bg-popover`, a token this theme does not
+// define, so an unstyled menu has no background at all and its items sit
+// unreadable over whatever is behind it — invisible in dark mode.
+const CONTENT_CLASSES = cn(
+  "min-w-[13rem] rounded-lg p-1.5",
+  "bg-white border border-grey-80",
+  "dark:bg-black-500 dark:border-black-300",
+  "shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.3)]",
+);
+const ITEM_CLASSES = cn(
+  "flex items-center gap-2.5 rounded-md px-1.5 py-1.5",
+  "font-geist text-[14px] font-medium tracking-[-0.4px]",
+  "text-[#52525C] hover:bg-grey-90 hover:text-grey-10",
+  "dark:text-grey-dark-200 dark:hover:bg-white/5 dark:hover:text-grey-light-100",
+);
+const SEPARATOR_CLASSES = "my-1 h-px bg-grey-80 dark:bg-black-300";
+
 const ITEMS: { mode: CaptureMode; label: string; icon: typeof Scan }[] = [
   { mode: "area", label: "Capture area", icon: Scan },
   { mode: "window", label: "Capture window", icon: AppWindow },
@@ -51,15 +69,18 @@ export default function CaptureMenu({ className }: { className?: string }) {
           Capture
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" aria-label="Capture">
+      <DropdownMenuContent align="end" aria-label="Capture" className={CONTENT_CLASSES}>
         {ITEMS.map(({ mode, label, icon: Icon }) => (
-          <DropdownMenuItem key={mode} onSelect={() => void startCapture(mode)}>
+          <DropdownMenuItem key={mode} className={ITEM_CLASSES} onSelect={() => void startCapture(mode)}>
             <Icon className="size-4" />
             {label}
           </DropdownMenuItem>
         ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => setDialog({ kind: "destination", resumeMode: null })}>
+        <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
+        <DropdownMenuItem
+          className={ITEM_CLASSES}
+          onSelect={() => setDialog({ kind: "destination", resumeMode: null })}
+        >
           <Settings2 className="size-4" />
           Change capture drive…
         </DropdownMenuItem>

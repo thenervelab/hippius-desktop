@@ -31,7 +31,7 @@ const Home: React.FC = () => {
           {/* No plan card up here: the Storage and Plan cards immediately
               below already carry the plan, the usage and Manage/Upgrade,
               with the room to show them properly. */}
-          <PageHeader showPlanCard={false} />
+          <PageHeader showPlanCard={false} showCapture />
           <div className="mt-3">
             {/* Above the pair, not inside either one: it is about both
                 of them, and it is the only thing on the page worth

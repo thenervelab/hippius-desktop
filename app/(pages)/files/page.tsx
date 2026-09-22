@@ -1,5 +1,6 @@
 "use client";
 
+import CaptureMenu from "@/components/capture/CaptureMenu";
 import { Drive } from "@/components/page-sections";
 import { FC, useEffect } from "react";
 import PageHeader from "@/components/ui/page-header";
@@ -75,7 +76,14 @@ const FilesPage: FC = () => {
           // `actions` renders at every width and in the cards view.
           //
           // Only on the folder list: see `showPlanCard`.
-          showPlanCard ? <PlanSummaryCard /> : null
+          // Capture sits beside it on the folder list; inside a drive it is
+          // in that drive's toolbar instead, so it never appears twice.
+          showPlanCard ? (
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <CaptureMenu />
+              <PlanSummaryCard />
+            </div>
+          ) : null
         }
       />
       <Drive />

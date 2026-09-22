@@ -27,4 +27,8 @@ Screenshots of an area, a window or a whole display, filed in `<drive>/Captures`
 - **Events are listened for by string literal** (`listen("capture_delivered", …)`) and `capture/commands.rs` is in the IPC contract test's registry list, so a renamed event fails CI.
 - **The destination is per account** (`capture_destination_v1:<account_key>` in `user_preferences`, a single namespace across accounts); own drives only for now, via `SyncFolderSelect`.
 
-The Capture menu is not gated on the open drive's role: a capture goes to the capture drive, not the drive on screen.
+## Where Capture is offered
+
+Inside a drive (the Drive toolbar), on the drive folder list (the Files page's `actions`, in the `showPlanCard` branch so it never appears twice), on Overview (the shared home `PageHeader`, opt-in via `showCapture` because that header is also Billing's, Wallet's, Referrals' and Plans'), and the tray. Not gated on the open drive's role: a capture goes to the capture drive, not the drive on screen. Pinned by `CaptureMenu.test.tsx` and `planCardWiring.test.ts`.
+
+**`CaptureMenu` styles its own `DropdownMenuContent`** (background, border, item text, both themes). The shared primitive's base is `bg-popover`, a token this theme does not define, so an unstyled menu has NO background and its items are invisible in dark mode — which is how it first shipped.
