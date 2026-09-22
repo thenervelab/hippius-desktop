@@ -2178,6 +2178,9 @@ mod tests {
             folder_hash: "abcdef0123456789".to_string(),
             path_prefix: path_prefix.to_string(),
             display_name: "Photos".to_string(),
+            // New upstream field (hcfs #457/#458 sealed invite tokens); the
+            // listing-resolution tests do not exercise it.
+            owner_wrap: None,
             created_at: Utc::now(),
             expires_at: None,
             revoked_at: None,

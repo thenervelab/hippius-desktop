@@ -15,6 +15,10 @@ export type FileFailureKind =
   | "changedWhileUploading"
   /** Local file vanished between plan and open (ENOENT). Next cycle drops it. */
   | "gone"
+  /** The bytes arrived but will not decrypt under this device's key. The ONLY
+   *  kind here that does not resolve itself: hcfs quarantines the file after
+   *  two attempts on the same revision and stops fetching it. */
+  | "undecryptable"
   | "other";
 
 export interface FileFailureRecord {

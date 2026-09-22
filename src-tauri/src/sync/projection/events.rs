@@ -416,9 +416,23 @@ mod tests {
             FileFailureKindPayload::Other {
                 message: "disk full".to_string(),
             },
+            // The strongest case in this list: hcfs QUARANTINES an
+            // undecryptable file after two attempts on the same revision and
+            // stops fetching it. An amber "Retrying" badge would sit there
+            // forever on a file nothing is retrying. `is_transient` gets this
+            // right today only via its `_ => false` fallback, so pin it —
+            // adding the variant to the true-arm is an easy mistake to make
+            // when the copy reads like the other terminal kinds.
+            FileFailureKindPayload::Undecryptable,
         ] {
             assert!(!kind.is_transient(), "{kind:?} must not be presented as self-resolving");
         }
+
+        assert!(
+            !is_transient_reason(&FileFailureKindPayload::Undecryptable.display_reason()),
+            "the authored copy must not round-trip as transient either — \
+             `fixup_stalled_completion` dispatches on the STRING"
+        );
     }
 
     #[test]
@@ -462,6 +476,42 @@ mod tests {
                 payload.display_reason()
             );
         }
+    }
+
+    /// `Decryption` arrived with the hcfs bump to 02191cc, for the same
+    /// structural reason `QuotaDenied` did: `FileFailureKind` is
+    /// `#[non_exhaustive]`, so the desktop compiled unchanged and the new
+    /// variant fell into the wildcard. This time the wildcard is hardened, so
+    /// the cost was not a debug string — it was the generic "Sync failed.
+    /// Please try again." on the ONE failure class that never resolves by
+    /// trying again. hcfs quarantines the file after two attempts on the same
+    /// revision and stops fetching it, so that copy tells a user to wait for
+    /// something that will not happen.
+    #[test]
+    fn upstream_decryption_gets_its_own_copy_not_the_generic_retry_line() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+
+        let kind = K::Decryption {
+            error: "Chunk 0 decryption failed: aead::Error".to_string(),
+        };
+        let payload = FileFailureKindPayload::from(&kind);
+
+        assert!(
+            matches!(payload, FileFailureKindPayload::Undecryptable),
+            "Decryption must map to its own payload, not the wildcard; got {payload:?}"
+        );
+
+        let reason = payload.display_reason();
+        assert_eq!(reason, "Can't be decrypted on this device — needs to be re-uploaded or removed.",);
+        assert!(
+            !reason.contains("retry") && !reason.contains("try again"),
+            "this failure does NOT resolve itself — promising a retry sends \
+             the user to wait on a file hcfs has already given up on: {reason}"
+        );
+        assert!(
+            !reason.contains("aead") && !reason.contains("Chunk"),
+            "the upstream crypto detail must not reach the user: {reason}"
+        );
     }
 
     #[test]
@@ -1063,6 +1113,16 @@ pub enum FileFailureKindPayload {
     /// [`Self::ServerError`] / [`Self::Other`] — those are a missing *server*
     /// object, not a missing local file (H-080 / H-078).
     Gone,
+    /// The bytes arrived intact but would not decrypt under this drive's
+    /// key. Terminal for that remote revision: the same ciphertext and the
+    /// same key fail identically every time, so unlike every other variant
+    /// here it does NOT resolve itself by retrying.
+    ///
+    /// Carved out of [`Self::Other`] because the generic "will retry" and
+    /// "please try again" copy is actively wrong for it — hcfs quarantines
+    /// the file after two attempts and stops trying, so a user told to wait
+    /// would wait forever. This is the one failure class that needs a person.
+    Undecryptable,
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
     Other { message: String },
@@ -1101,6 +1161,14 @@ const SESSION_LIMIT_DISPLAY_REASON: &str = "Too many uploads in progress — wil
 /// User-facing copy for a local file that vanished between plan and open.
 /// The next cycle's plan will not include it. Do not blame the connection.
 const GONE_DISPLAY_REASON: &str = "File disappeared before upload — will retry.";
+
+/// User-facing copy for a ciphertext this device's key cannot open.
+///
+/// Deliberately does NOT say "will retry": hcfs quarantines the file after
+/// two failed attempts on the same revision and stops fetching it, so the
+/// retry copy every other reason uses would promise something that will
+/// never happen. Must stay word-identical to the FE's `undecryptable` case.
+const UNDECRYPTABLE_DISPLAY_REASON: &str = "Can't be decrypted on this device — needs to be re-uploaded or removed.";
 
 /// Whether a snapshot row's authored `error` reason describes a self-resolving
 /// failure (see [`FileFailureKindPayload::is_transient`]).
@@ -1262,6 +1330,7 @@ impl FileFailureKindPayload {
             Self::ServerError { status } => format!("Server error ({status}). Please try again."),
             Self::Network => NETWORK_DISPLAY_REASON.to_string(),
             Self::Gone => GONE_DISPLAY_REASON.to_string(),
+            Self::Undecryptable => UNDECRYPTABLE_DISPLAY_REASON.to_string(),
             // `Other` already carries upstream display text; fall back to a
             // generic line when it's empty/whitespace so the row never shows a
             // blank reason. Network-shaped leftovers (reqwest Display, nested
@@ -1323,6 +1392,10 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // on its own, not a side effect of a dependency bump.
             K::QuotaDenied { .. } => Self::ServerError { status: 402 },
             K::Network => Self::Network,
+            // The transfer succeeded and the ciphertext would not open. hcfs
+            // gives it one free retry and then quarantines it, so the honest
+            // copy says a person has to act — not "will retry".
+            K::Decryption { .. } => Self::Undecryptable,
             // Carve the mid-upload-modification case out of the upstream
             // catch-all before it reaches `Other` — it is self-resolving and
             // must not be presented as a crypto fault. See

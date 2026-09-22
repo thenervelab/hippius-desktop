@@ -20,6 +20,7 @@ import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import NameCell from "./NameCell";
+import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 
 // `next/link` reaches for the router context; replacing it with a plain
 // `<a>` keeps the icon rendering pure and avoids dragging the App Router
@@ -67,9 +68,30 @@ vi.mock("@/app/lib/hooks/useFileLiveProgress", () => ({
 // retry mutation. Stub both so the badge-contract test stays hermetic (no
 // QueryClient needed) — the failure→message mapping is covered by its own unit
 // test, and the persist/retry path by the Rust tests.
+// `failureOverride` lets a test drive the COMPOSED badge — tooltip, role and
+// aria-label are assembled in NameCell from the failure record, so stubbing
+// the hook to `null` for every test leaves that composition untested. That is
+// how the retry affordance came to be offered on a kind that cannot be
+// retried.
+let failureOverride: FileFailureRecord | null = null;
+function makeFailure(kind: FileFailureRecord["kind"]): FileFailureRecord {
+  return {
+    label: "drive",
+    relativePath: "a/b.txt",
+    fileName: "b.txt",
+    kind,
+    message: null,
+    httpStatus: null,
+    balanceCents: null,
+    requiredCents: null,
+    failureCount: 1,
+    lastFailedAt: 0,
+  };
+}
+const retryMutate = vi.fn();
 vi.mock("@/app/lib/hooks/useFileFailure", () => ({
-  useFileFailure: () => null,
-  useRetryFailure: () => ({ retryFile: { mutate: () => {}, isPending: false } }),
+  useFileFailure: () => failureOverride,
+  useRetryFailure: () => ({ retryFile: { mutate: retryMutate, isPending: false } }),
 }));
 
 // Stub the file-type icon to a no-op so we don't pull in the full
@@ -110,6 +132,36 @@ const baseProps = {
 };
 
 describe("NameCell sync-status badge", () => {
+  it("offers retry on an ordinary failure", () => {
+    // The control for the test below: the affordance is real and must stay
+    // real for every kind a retry can actually fix.
+    failureOverride = makeFailure("serverError");
+    render(<NameCell {...baseProps} syncStatus="failed" />);
+    const badge = screen.getByTestId("sync-status-failed");
+    expect(badge).toHaveAttribute("role", "button");
+    expect(badge).toHaveAttribute("aria-label", "Upload failed — click to retry");
+    failureOverride = null;
+  });
+
+  it("never offers retry on a file hcfs has quarantined", () => {
+    // hcfs stops fetching an undecryptable file after two attempts on the
+    // same revision, and `sp_retry_file` cannot reach that quarantine — the
+    // badge would clear, the next cycle would skip the file, and the
+    // re-emitted failure would bring it straight back. Offering the button
+    // also contradicts the very copy the same tooltip is showing.
+    failureOverride = makeFailure("undecryptable");
+    render(<NameCell {...baseProps} syncStatus="failed" />);
+    const badge = screen.getByTestId("sync-status-failed");
+
+    expect(badge).toHaveAttribute("aria-label", "Upload failed");
+    expect(badge).not.toHaveAttribute("role", "button");
+    expect(badge.className).not.toContain("cursor-pointer");
+
+    badge.click();
+    expect(retryMutate).not.toHaveBeenCalled();
+    failureOverride = null;
+  });
+
   it("renders the red 'Failed' pill with the 'Upload failed' label when syncStatus is 'failed'", () => {
     render(<NameCell {...baseProps} syncStatus="failed" />);
 

@@ -1307,6 +1307,12 @@ mod tests {
     /// directory without moving its scope entry fails here too.
     #[test]
     fn webview_served_cache_roots_are_inside_the_asset_protocol_scope() {
+        // Reads `$HOME` (via `dirs::home_dir()` inside the cache-root
+        // helpers), and other tests in this binary swap `$HOME` to a tempdir
+        // under `HOME_LOCK`. Without taking the lock this races them and
+        // fails intermittently in a full `cargo test` run while passing when
+        // filtered to itself.
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let conf = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json")).expect("read tauri.conf.json");
         let conf: serde_json::Value = serde_json::from_str(&conf).expect("parse tauri.conf.json");
 
@@ -1340,6 +1346,10 @@ mod tests {
             size_bytes: size,
             revision_seq: 1,
             revision_id: [0u8; 32],
+            // New upstream fields (hcfs #455 names beside the ss58); the browse
+            // page mapper under test does not read them.
+            uploaded_by_name: None,
+            uploaded_by_email: None,
             encrypted_path: Vec::new(),
             file_name: name.map(str::to_string),
             relative_path: rel_path.map(str::to_string),

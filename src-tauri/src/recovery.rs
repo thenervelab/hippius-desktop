@@ -619,7 +619,15 @@ async fn install_recovered_mnemonic(account_id: &str, mnemonic: &str, password: 
     let mnemonic_owned = Zeroizing::new(mnemonic.to_string());
     let password_owned = Zeroizing::new(password.to_string());
     tokio::task::spawn_blocking(move || {
-        hcfs_client::auth::save_encrypted_mnemonic(&path, &mnemonic_owned, &password_owned).map_err(|e| e.to_string())
+        let outcome = hcfs_client::auth::save_encrypted_mnemonic(&path, &mnemonic_owned, &password_owned).map_err(|e| e.to_string());
+        // This function is the rotation path (`change_recovery_password`
+        // reaches it via step 7), so the `.bak` upstream leaves behind holds
+        // the master sealed under the password the user just replaced.
+        // Retire it on success only — see `retire_key_backup`.
+        if outcome.is_ok() {
+            crate::sync::mnemonic::retire_key_backup(&path);
+        }
+        outcome
     })
     .await
     .map_err(|e| AppError::Other(format!("join error: {e}")))?
