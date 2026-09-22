@@ -38,6 +38,11 @@ export type ChatSettingsTab = "account" | "notifications" | "encryption" | "devi
 /** The Preferences dialog: the section to open on, or `false` when closed. */
 export const chatSettingsOpenAtom = atom<ChatSettingsTab | false>(false);
 
+/** Sections of the workspace settings dialog. */
+export type WorkspaceSettingsTab = "general" | "members" | "channels" | "danger";
+/** The active workspace's settings dialog: the section to open on, or `null` when closed. */
+export const workspaceSettingsAtom = atom<WorkspaceSettingsTab | null>(null);
+
 /** Sidebar drawer when the window is too narrow for a static column. */
 export const sidebarDrawerOpenAtom = atom(false);
 /** The "New message" (start a DM) dialog. */

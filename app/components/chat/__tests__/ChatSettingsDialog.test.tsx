@@ -35,9 +35,9 @@ vi.mock("@/components/chat/EncryptionDiagnostics", () => ({ default: () => null 
 
 const prefs = {
   getNotifications: vi.fn(async () => true),
-  setNotifications: vi.fn(async () => undefined),
+  setNotifications: vi.fn<(enabled: boolean) => Promise<void>>(async () => undefined),
   getSound: vi.fn(async () => true),
-  setSound: vi.fn(async () => undefined),
+  setSound: vi.fn<(enabled: boolean) => Promise<void>>(async () => undefined),
 };
 vi.mock("@/lib/tauri/chat", () => ({
   chatGetNotificationsEnabled: () => prefs.getNotifications(),

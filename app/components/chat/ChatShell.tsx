@@ -22,6 +22,7 @@ import InvitePeopleDialog from "@/components/chat/workspaces/InvitePeopleDialog"
 import JoinWorkspaceDialog from "@/components/chat/workspaces/JoinWorkspaceDialog";
 import WorkspaceOnboarding from "@/components/chat/workspaces/WorkspaceOnboarding";
 import WorkspaceRail from "@/components/chat/workspaces/WorkspaceRail";
+import WorkspaceSettingsDialog from "@/components/chat/workspaces/WorkspaceSettingsDialog";
 import NoEntriesFound from "@/components/ui/NoEntriesFound";
 import { subscribeToRoom } from "@/lib/chat/client";
 import { LG_MEDIA_QUERY, useMediaQuery } from "@/lib/hooks/useMediaQuery";
@@ -215,6 +216,7 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
       <CreateWorkspaceDialog client={client} workspaces={workspaces} />
       <JoinWorkspaceDialog client={client} workspaces={workspaces} />
       <InvitePeopleDialog client={client} workspaces={workspaces} />
+      <WorkspaceSettingsDialog client={client} workspaces={workspaces} />
     </div>
   );
 }
