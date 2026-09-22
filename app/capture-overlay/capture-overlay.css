@@ -1,0 +1,11 @@
+/*
+ * The capture overlay is a transparent window over the whole display. The
+ * shared root layout paints a solid background on <html>/<body>; clear it at
+ * stylesheet-parse time (same reason as tray-panel.css: a useEffect runs after
+ * first paint and flashes an opaque frame over the user's screen).
+ */
+html,
+body {
+  background: transparent !important;
+  overflow: hidden;
+}

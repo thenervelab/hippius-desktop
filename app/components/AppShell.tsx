@@ -36,6 +36,14 @@ const TRAY_PANEL_ROUTE = "/tray-panel";
 const E2E_ROUTE = "/e2e";
 
 /**
+ * The screen-capture selection overlay (`app/capture-overlay`), one window
+ * per display opened by Rust. Like the tray panel it must not boot the app:
+ * it only draws a selection and reports it over `invoke`, and a second auth
+ * stack per display would be both slow and wrong.
+ */
+const CAPTURE_OVERLAY_ROUTE = "/capture-overlay";
+
+/**
  * Toaster that follows the user's resolved theme rather than the OS
  * (`theme="system"` reads prefers-color-scheme directly, which diverges
  * when the user forces Light/Dark in settings). The Tailwind `dark:`
@@ -83,7 +91,11 @@ function ThemedToaster() {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  if (pathname?.startsWith(TRAY_PANEL_ROUTE) || pathname?.startsWith(E2E_ROUTE)) {
+  if (
+    pathname?.startsWith(TRAY_PANEL_ROUTE) ||
+    pathname?.startsWith(E2E_ROUTE) ||
+    pathname?.startsWith(CAPTURE_OVERLAY_ROUTE)
+  ) {
     // The popover skips the app providers but still mounts the theme
     // provider so it follows the System/Light/Dark preference (shared
     // via localStorage) and tracks live OS theme changes. It uses the

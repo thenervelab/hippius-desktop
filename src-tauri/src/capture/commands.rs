@@ -169,7 +169,10 @@ fn open_overlay(app: &AppHandle, display: &DisplayTarget) -> Result<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
     let label = format!("{OVERLAY_LABEL_PREFIX}{}", display.id);
-    let url = WebviewUrl::App(format!("capture-overlay?display={}", display.id).into());
+    // Same split as the tray panel: the dev server serves `/capture-overlay`,
+    // the static export only `capture-overlay.html`.
+    let route = if cfg!(dev) { "capture-overlay" } else { "capture-overlay.html" };
+    let url = WebviewUrl::App(format!("{route}?display={}", display.id).into());
     let window = WebviewWindowBuilder::new(app, &label, url)
         .title("Hippius capture")
         .decorations(false)

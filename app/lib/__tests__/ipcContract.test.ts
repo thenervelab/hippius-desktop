@@ -139,6 +139,7 @@ function rustEmittedEvents(): Set<string> {
     join(ROOT, "src-tauri", "src", "sync", "projection", "events.rs"),
     join(ROOT, "src-tauri", "src", "vpn", "events.rs"),
     join(ROOT, "src-tauri", "src", "chat", "notify.rs"),
+    join(ROOT, "src-tauri", "src", "capture", "commands.rs"),
   ];
   for (const file of registryFiles) {
     const events = readFileSync(file, "utf8");
@@ -273,6 +274,15 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
       "list_ssh_keys",
       "create_vm",
       "get_notification_settings",
+      "capture_start",
+      "capture_overlay_context",
+      "capture_select",
+      "capture_cancel",
+      "capture_state",
+      "capture_support",
+      "capture_open_permission_settings",
+      "capture_get_destination",
+      "capture_set_destination",
     ];
     const missing = required.filter((c) => !registered.has(c));
     expect(

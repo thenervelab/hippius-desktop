@@ -178,3 +178,16 @@ export const REFERRALS_FEATURE_ENABLED = false;
  * `false` when the program goes live.
  */
 export const REFERRALS_COMING_SOON = true;
+
+/**
+ * Screen capture: screenshots (and, later, recordings) of an area, a window
+ * or a whole screen, filed in the user's drive with a share link copied.
+ * Hides the Drive header's Capture menu, the tray's capture actions and the
+ * Settings card. The platform half is Rust's (`capture_support`): Linux
+ * reports unsupported until its portal path lands, whatever this says.
+ *
+ * Staging only while it is new: it opens windows over every app on screen and
+ * asks for a macOS permission, so it gets an internal build before beta.
+ * Design: `docs/plans/2026-09-22-screen-capture.md`.
+ */
+export const SCREEN_CAPTURE_ENABLED = enabledFrom("staging");
