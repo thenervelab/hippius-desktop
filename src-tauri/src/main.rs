@@ -15,6 +15,7 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+pub mod capture;
 pub mod chat;
 mod cli;
 pub mod console_access;
