@@ -14,7 +14,10 @@ use crate::sync::config::{
 use crate::sync::device::get_device_name_internal;
 use crate::sync::folders::{get_all_sync_paths_internal, sanitize_label};
 use crate::sync::identity::{DriveIdentity, lookup_drive_identity};
-use crate::sync::mnemonic::{account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, master_mnemonic_path};
+use crate::sync::mnemonic::{
+    RekeyReason, RekeyRecord, account_dir, append_rekey_record, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic,
+    master_mnemonic_path, report_rekey_marker,
+};
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
 use hcfs_client::engine::types::build_synced_paths_from_state;
@@ -457,12 +460,19 @@ async fn remove_drive_inmemory(sync: &SyncRunner, label: &str, path_hint: Option
 /// cycle. The task takes the drive's existing `Arc<TokioMutex<DriveManager>>`
 /// so a concurrent sync cycle serializes against it naturally — no new lock.
 async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveManager, label: &str, sync_path: &str, folder_dir: &Path) {
-    // Consume rekey marker (no remote purge)
-    let marker = folder_dir.join(".needs_rekey");
-    if marker.exists() {
-        info!("Rekey marker found for '{}' — consuming without remote purge", label);
-        let _ = std::fs::remove_file(&marker);
-    }
+    // Report the rekey marker on every registration and LEAVE IT IN PLACE.
+    //
+    // It used to be deleted here ("consumed"), which made sense only while a
+    // remote purge consumed it. That purge went away in #302 and the delete
+    // stayed, so the marker became a one-shot that erased itself before
+    // anyone could see it — the drive's remote files were permanently
+    // undecryptable and the only record of why was gone by the next launch.
+    //
+    // The condition is permanent until those remote revisions are replaced,
+    // so the marker is a standing diagnosis. Re-logging it every launch is
+    // the point: it puts the cause in every support bundle taken from an
+    // affected machine.
+    report_rekey_marker(folder_dir, label);
 
     // Pre-populate synced-paths cache
     if let Ok(state) = manager.load_sync_state().await {
@@ -952,10 +962,16 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
         }
     }
 
-    // Remove sync state and rekey marker to start fresh
+    // Remove sync state to start fresh.
+    //
+    // The rekey marker is deliberately NOT removed with it. Recovery runs
+    // before `register_drive` reports the marker, so deleting it here erased
+    // the diagnosis one step ahead of the code that exists to log it — the
+    // same evidence loss the registration-time delete caused, on a second
+    // path. Recovery is also a rekey PRODUCER (see below), so this is the
+    // last place that should be clearing one.
     let _ = std::fs::remove_file(ctx.folder_dir.join("sync_state.json"));
     let _ = std::fs::remove_file(ctx.folder_dir.join("sync_state.json.bak"));
-    let _ = std::fs::remove_file(ctx.folder_dir.join(".needs_rekey"));
     info!("Recovery cleanup complete. Retrying initialization...");
 
     drop(manager);
@@ -969,7 +985,33 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
         zeroize::Zeroizing::new(imported.to_string())
     } else {
         let master = bip39::Mnemonic::generate(24).map_err(|e| crate::error::AppError::Crypto(e.to_string()))?;
-        warn!("Generated new random master for recovery (no login mnemonic available)");
+        warn!(
+            label = %ctx.label,
+            "Generated a NEW RANDOM master for recovery (no login mnemonic available) — \
+             every remote file already uploaded by this account becomes permanently \
+             undecryptable on this device."
+        );
+        // Record it for the same reason `ensure_derived_mnemonic` does: this
+        // strands remote revisions, and without a marker the only trace is
+        // this one line in a log that rotates. The record is per-drive because
+        // a drive's config dir is the only thing reachable here, but the
+        // master is ACCOUNT-level, so the damage is wider than the drive
+        // carrying the record — the reason variant says so.
+        //
+        // The imported-mnemonic branch above deliberately writes NO record: it
+        // re-derives from the SAME master, so whether anything is stranded
+        // depends on what the unopenable seal held, which is unknowable here.
+        // Asserting a strand we cannot establish is the failure this file's
+        // `reason: Option<_>` exists to avoid.
+        if let Err(e) = append_rekey_record(
+            ctx.folder_dir,
+            RekeyRecord {
+                rekeyed_at: chrono::Utc::now().timestamp(),
+                reason: Some(RekeyReason::RecoveryGeneratedNewMaster),
+            },
+        ) {
+            warn!("Could not record the recovery rekey for '{}': {e}", ctx.label);
+        }
         zeroize::Zeroizing::new(master.to_string())
     };
     hcfs_client::auth::save_encrypted_mnemonic(ctx.master_path, &master_str, ctx.drive_password)?;
@@ -3503,7 +3545,10 @@ mod tests {
             seal_before,
             "member prepare must leave the owner seal byte-identical"
         );
-        assert!(!folder_dir.join(".needs_rekey").exists(), "member prepare must not drop a rekey marker");
+        assert!(
+            !folder_dir.join(crate::sync::mnemonic::REKEY_MARKER).exists(),
+            "member prepare must not drop a rekey marker"
+        );
         assert!(state_path.exists(), "member prepare must not wipe sync state");
 
         // Own-drive contrast: the same state IS repaired (seal re-derived,
@@ -3516,7 +3561,10 @@ mod tests {
             derive_folder_mnemonic(master, LABEL).expect("expected derivation"),
             "own-drive prepare must re-derive the seal from the master"
         );
-        assert!(folder_dir.join(".needs_rekey").exists(), "own-drive repair drops the rekey marker");
+        assert!(
+            folder_dir.join(crate::sync::mnemonic::REKEY_MARKER).exists(),
+            "own-drive repair drops the rekey marker"
+        );
         assert!(!state_path.exists(), "own-drive repair wipes sync state");
     }
 }
