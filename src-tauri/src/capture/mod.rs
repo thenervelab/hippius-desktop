@@ -3,6 +3,9 @@
 //!
 //! Design and phasing: `docs/plans/2026-09-22-screen-capture.md`.
 
+pub mod commands;
+pub mod deliver;
+pub mod destination;
 pub mod geometry;
 pub mod naming;
 pub mod permissions;

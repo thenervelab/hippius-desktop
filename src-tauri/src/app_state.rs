@@ -39,6 +39,8 @@ pub struct AppState {
     pub oauth: OAuthState,
     /// Team chat: pending OIDC sign-in flows and the HTTP client they use.
     pub chat: crate::chat::ChatState,
+    /// Screen capture: the one live capture session, if any.
+    pub capture: crate::capture::commands::CaptureState,
     pub migration: MigrationState,
     /// Tracks the disk-copy + encryption window for user-initiated
     /// uploads. Drives the top-of-page processing banner. See
@@ -313,6 +315,7 @@ impl AppState {
             block_sub: BlockSubscriptionState::new(),
             oauth: OAuthState::new(),
             chat: crate::chat::ChatState::new(),
+            capture: crate::capture::commands::CaptureState::default(),
             migration: MigrationState::new(),
             upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),

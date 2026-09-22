@@ -297,6 +297,9 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // Screen capture copies the share link it mints; Rust-side only, so no
+        // webview capability grants clipboard access.
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             info!("Another instance attempted to start with argv: {:?}", argv);
@@ -629,6 +632,16 @@ fn main() {
             release_channel_status,
             switch_release_channel,
             hide_tray_panel,
+            // Screen capture
+            crate::capture::commands::capture_start,
+            crate::capture::commands::capture_overlay_context,
+            crate::capture::commands::capture_select,
+            crate::capture::commands::capture_cancel,
+            crate::capture::commands::capture_state,
+            crate::capture::commands::capture_support,
+            crate::capture::commands::capture_open_permission_settings,
+            crate::capture::commands::capture_get_destination,
+            crate::capture::commands::capture_set_destination,
             get_platform_info,
             is_app_translocated,
             // Finder extension enablement. Registered on every platform (they
