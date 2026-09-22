@@ -15,12 +15,21 @@ use std::path::{Path, PathBuf};
 /// Filename of the rekey marker inside a drive's config directory.
 pub(crate) const REKEY_MARKER: &str = ".needs_rekey";
 
-/// Why a drive's folder key was re-derived, and when.
+/// Scratch filename used to swap [`REKEY_MARKER`] atomically.
 ///
-/// Written by [`ensure_derived_mnemonic`] and never deleted: it records a
-/// permanent property of the drive's REMOTE contents (everything uploaded
-/// before `rekeyed_at` is encrypted under a key this device no longer has),
-/// not a task someone is going to complete.
+/// Appending a record is a read-modify-write, so a crash part-way through an
+/// in-place rewrite would truncate the history it is trying to extend. The
+/// swap is a `rename` within the same directory, which replaces the target on
+/// both Unix and Windows.
+const REKEY_MARKER_TMP: &str = ".needs_rekey.tmp";
+
+/// One occasion on which a drive's folder key was re-derived.
+///
+/// Appended, never deleted: it records a permanent property of the drive's
+/// REMOTE contents (everything uploaded before `rekeyed_at` may be encrypted
+/// under a key this device no longer has), not a task someone is going to
+/// complete. The one path that legitimately retires the whole history is a
+/// server-side folder delete, which takes the affected revisions with it.
 ///
 /// It exists as a file with contents rather than a zero-byte flag so a
 /// support bundle answers "was this drive re-keyed, and when?" without
@@ -29,13 +38,17 @@ pub(crate) const REKEY_MARKER: &str = ".needs_rekey";
 /// reported undecryptable files there was nothing left to find.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct RekeyRecord {
-    /// Unix seconds at which the folder key was re-derived.
+    /// Unix seconds at which the folder key was re-derived, or `0` when the
+    /// marker predates this struct and carried no date.
     pub rekeyed_at: i64,
-    /// Which of the two legacy states triggered it, for support triage.
-    pub reason: RekeyReason,
+    /// What triggered it, for support triage. `None` means the marker exists
+    /// but recorded no reason — a legacy zero-byte flag, or a file this build
+    /// cannot parse. It is deliberately NOT defaulted to one of the variants:
+    /// a fabricated cause in a support bundle is worse than an absent one.
+    pub reason: Option<RekeyReason>,
 }
 
-/// The two states [`ensure_derived_mnemonic`] repairs.
+/// What caused a re-derivation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(crate) enum RekeyReason {
     /// The folder seal held the master mnemonic verbatim — copied during an
@@ -44,20 +57,110 @@ pub(crate) enum RekeyReason {
     /// The folder seal held a mnemonic derived from a DIFFERENT master, so
     /// this account's master no longer reproduces it.
     DerivedFromAnotherMaster,
+    /// Unlock failed and recovery had no login mnemonic to fall back on, so it
+    /// generated a brand-new random ACCOUNT master. Every drive on the account
+    /// is stranded by this, not just the one carrying the record — only this
+    /// drive's config dir is reachable from where it is written.
+    RecoveryGeneratedNewMaster,
 }
 
-/// Read a drive's rekey record, if it has one.
+impl RekeyReason {
+    /// Stable label for logs. Not `Display`: this is a diagnostic token for a
+    /// support bundle, not user-facing copy.
+    fn as_str(self) -> &'static str {
+        match self {
+            RekeyReason::RawMasterInFolderSeal => "RawMasterInFolderSeal",
+            RekeyReason::DerivedFromAnotherMaster => "DerivedFromAnotherMaster",
+            RekeyReason::RecoveryGeneratedNewMaster => "RecoveryGeneratedNewMaster",
+        }
+    }
+}
+
+/// What a drive's config dir says about re-keying.
 ///
-/// A marker that predates [`RekeyRecord`] is a zero-byte file and will not
-/// parse; it still means "this drive was re-keyed", so it reports a record
-/// with `rekeyed_at: 0` rather than being silently ignored. Losing the old
-/// markers would re-create exactly the blind spot this is fixing.
-pub(crate) fn read_rekey_record(folder_dir: &Path) -> Option<RekeyRecord> {
-    let raw = std::fs::read(folder_dir.join(REKEY_MARKER)).ok()?;
-    Some(serde_json::from_slice(&raw).unwrap_or(RekeyRecord {
-        rekeyed_at: 0,
-        reason: RekeyReason::DerivedFromAnotherMaster,
-    }))
+/// `Absent` and `Unreadable` are separate variants on purpose: collapsing an
+/// unreadable marker into "never re-keyed" is the same silent-evidence-loss
+/// this module exists to prevent, just caused by a permission change or a
+/// transient FS error instead of a delete.
+pub(crate) enum RekeyMarker {
+    /// No marker file — this drive has never been re-keyed on this device.
+    Absent,
+    /// The marker exists and holds these records, oldest first. Never empty.
+    Present(Vec<RekeyRecord>),
+    /// The marker exists (or its absence could not be established) and could
+    /// not be read. NOT the same as `Absent`.
+    Unreadable(std::io::Error),
+}
+
+/// Read a drive's rekey history.
+///
+/// Three on-disk shapes are accepted, because a marker outlives the build that
+/// wrote it: the current JSON array, a single JSON object from the first
+/// revision that gave the marker contents, and a legacy zero-byte flag from
+/// the builds before that. The last two are reported as one record; anything
+/// that parses as none of them is reported as one record with no reason rather
+/// than discarded, since the file's existence is itself the finding.
+pub(crate) fn read_rekey_marker(folder_dir: &Path) -> RekeyMarker {
+    let raw = match std::fs::read(folder_dir.join(REKEY_MARKER)) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return RekeyMarker::Absent,
+        Err(e) => return RekeyMarker::Unreadable(e),
+    };
+
+    if let Ok(records) = serde_json::from_slice::<Vec<RekeyRecord>>(&raw) {
+        // An empty array is a marker that says nothing; the file is still the
+        // evidence, so keep the "something happened" record rather than
+        // reporting a re-keyed drive as clean.
+        if !records.is_empty() {
+            return RekeyMarker::Present(records);
+        }
+    }
+
+    if let Ok(record) = serde_json::from_slice::<RekeyRecord>(&raw) {
+        return RekeyMarker::Present(vec![record]);
+    }
+
+    RekeyMarker::Present(vec![RekeyRecord { rekeyed_at: 0, reason: None }])
+}
+
+/// Append a record to a drive's rekey history, creating it if absent.
+///
+/// An unreadable or unparseable existing marker is NOT overwritten blind — the
+/// new record is appended to whatever `read_rekey_marker` could recover, so the
+/// fact that an earlier rekey happened survives even when its detail does not.
+pub(crate) fn append_rekey_record(folder_dir: &Path, record: RekeyRecord) -> std::io::Result<()> {
+    let mut history = match read_rekey_marker(folder_dir) {
+        RekeyMarker::Present(records) => records,
+        RekeyMarker::Absent => Vec::new(),
+        RekeyMarker::Unreadable(e) => {
+            // Keep the placeholder so the count still shows a prior event.
+            warn!("Rekey marker at {:?} could not be read before appending: {e}", folder_dir);
+            vec![RekeyRecord { rekeyed_at: 0, reason: None }]
+        }
+    };
+    history.push(record);
+
+    let encoded = serde_json::to_vec_pretty(&history).map_err(std::io::Error::other)?;
+    let tmp = folder_dir.join(REKEY_MARKER_TMP);
+    std::fs::write(&tmp, encoded)?;
+    std::fs::rename(&tmp, folder_dir.join(REKEY_MARKER))
+}
+
+/// Discard a drive's rekey history.
+///
+/// The ONLY sanctioned caller is a successful server-side folder delete: the
+/// remote revisions the history warns about are gone, so continuing to warn
+/// about them reports a condition that no longer exists. Every other path must
+/// leave the marker alone — see [`report_rekey_marker`].
+pub(crate) fn clear_rekey_marker(folder_dir: &Path) {
+    match std::fs::remove_file(folder_dir.join(REKEY_MARKER)) {
+        Ok(()) => info!(
+            "Cleared rekey marker at {:?} — the remote revisions it described were deleted",
+            folder_dir
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("Could not clear rekey marker at {:?}: {e}", folder_dir),
+    }
 }
 
 /// Log a drive's rekey diagnosis, if it has one, and LEAVE THE MARKER ALONE.
@@ -72,18 +175,33 @@ pub(crate) fn read_rekey_record(folder_dir: &Path) -> Option<RekeyRecord> {
 /// affected remote revisions are replaced, so re-logging it each launch is
 /// what puts the cause into a support bundle.
 pub(crate) fn report_rekey_marker(folder_dir: &Path, label: &str) {
-    let Some(record) = read_rekey_record(folder_dir) else {
-        return;
-    };
-    warn!(
-        label = %label,
-        rekeyed_at = record.rekeyed_at,
-        reason = ?record.reason,
-        "Drive was re-keyed: files uploaded under the previous folder key \
-         cannot be decrypted on this device and will fail to download. \
-         Replacing them (re-upload from a device that can read them, or \
-         delete them) is the only fix."
-    );
+    match read_rekey_marker(folder_dir) {
+        RekeyMarker::Absent => {}
+        RekeyMarker::Unreadable(e) => {
+            warn!(
+                label = %label,
+                "Rekey marker for this drive could not be read ({e}) — whether it was \
+                 re-keyed is UNKNOWN, which is not the same as no. Check the config \
+                 directory's permissions before concluding the drive is healthy."
+            );
+        }
+        RekeyMarker::Present(records) => {
+            let reasons = records
+                .iter()
+                .map(|r| format!("{}@{}", r.reason.map_or("unrecorded", RekeyReason::as_str), r.rekeyed_at))
+                .collect::<Vec<_>>()
+                .join(", ");
+            warn!(
+                label = %label,
+                rekey_count = records.len(),
+                rekeys = %reasons,
+                "Drive was re-keyed: files uploaded under a previous folder key \
+                 cannot be decrypted on this device and will fail to download. \
+                 Replacing them (re-upload from a device that can read them, or \
+                 delete them) is the only fix."
+            );
+        }
+    }
 }
 
 /// Compute the account-level directory: `~/.hippius/drives/<account_key>/`
@@ -205,15 +323,13 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
     // process crashes after the mnemonic is saved but before the marker
     // is written, the next startup would see folder == expected and
     // skip — leaving stale remote files encrypted with the old key.
-    let record = RekeyRecord {
-        rekeyed_at: chrono::Utc::now().timestamp(),
-        reason,
-    };
-    // A marker that fails to serialize must not be downgraded to "no rekey
-    // happened" — write the empty-but-present fallback so the condition is
-    // still discoverable, and let the `?` below surface a genuine I/O fault.
-    let encoded = serde_json::to_vec_pretty(&record).unwrap_or_default();
-    std::fs::write(folder_dir.join(REKEY_MARKER), encoded)?;
+    append_rekey_record(
+        folder_dir,
+        RekeyRecord {
+            rekeyed_at: chrono::Utc::now().timestamp(),
+            reason: Some(reason),
+        },
+    )?;
 
     hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &expected, password).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
 
@@ -223,7 +339,14 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
     let _ = std::fs::remove_file(&state_path);
     let _ = std::fs::remove_file(&state_bak);
 
-    info!("Re-derived mnemonic for '{}', wiped sync state (remote files preserved)", label);
+    // The remote copies are still THERE; what they no longer are is readable.
+    // The previous wording ("remote files preserved") read as reassurance
+    // directly contradicting the warning above, which is part of why this went
+    // unnoticed — say only what this step actually did.
+    info!(
+        "Re-derived mnemonic for '{}', wiped local sync state so local files re-upload under the new key",
+        label
+    );
 
     Ok(())
 }
@@ -1131,10 +1254,26 @@ mod tests {
         (tmp, folder_dir, master_path)
     }
 
+    /// The marker's records, or a panic naming what was found instead.
+    fn records_at(folder_dir: &Path) -> Vec<RekeyRecord> {
+        match read_rekey_marker(folder_dir) {
+            RekeyMarker::Present(records) => records,
+            RekeyMarker::Absent => panic!("expected a rekey marker, found none"),
+            RekeyMarker::Unreadable(e) => panic!("expected a readable rekey marker, got {e}"),
+        }
+    }
+
+    fn is_absent(folder_dir: &Path) -> bool {
+        match read_rekey_marker(folder_dir) {
+            RekeyMarker::Absent => true,
+            RekeyMarker::Present(_) | RekeyMarker::Unreadable(_) => false,
+        }
+    }
+
     #[test]
     fn no_marker_means_no_record() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        assert!(read_rekey_record(tmp.path()).is_none());
+        assert!(is_absent(tmp.path()));
     }
 
     /// A zero-byte marker written by an older build still means "this drive
@@ -1145,9 +1284,60 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         std::fs::write(tmp.path().join(REKEY_MARKER), b"").expect("legacy marker");
 
-        let record = read_rekey_record(tmp.path()).expect("legacy marker must still report a rekey");
+        let records = records_at(tmp.path());
 
-        assert_eq!(record.rekeyed_at, 0, "an undated marker reports epoch, not a fabricated date");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].rekeyed_at, 0, "an undated marker reports epoch, not a fabricated date");
+    }
+
+    /// The honesty guard. A marker this build cannot parse says only "a rekey
+    /// happened" — inventing the likelier of the two causes would put a
+    /// fabricated finding in a support bundle, which is the failure mode this
+    /// whole file exists to remove.
+    #[test]
+    fn an_unparseable_marker_records_no_reason_rather_than_guessing() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join(REKEY_MARKER), b"{ truncated by a crash").expect("corrupt marker");
+
+        let records = records_at(tmp.path());
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].reason, None, "an unparseable marker must not name a cause it never recorded");
+        assert_eq!(records[0].rekeyed_at, 0);
+    }
+
+    /// An UNREADABLE marker is not a healthy drive. Collapsing the two is the
+    /// same silent evidence loss as deleting it, caused by a permission change
+    /// or a transient FS fault instead. A directory in the marker's place is
+    /// the portable way to make the read fail with something != NotFound.
+    #[test]
+    fn an_unreadable_marker_is_not_reported_as_absent() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        std::fs::create_dir(tmp.path().join(REKEY_MARKER)).expect("marker path occupied by a dir");
+
+        match read_rekey_marker(tmp.path()) {
+            RekeyMarker::Unreadable(_) => {}
+            RekeyMarker::Absent => panic!("an unreadable marker must never read as 'never re-keyed'"),
+            RekeyMarker::Present(_) => panic!("a directory holds no records"),
+        }
+    }
+
+    /// The shape written by the first revision that gave the marker contents:
+    /// a bare object, not an array. A marker outlives the build that wrote it.
+    #[test]
+    fn a_single_object_marker_still_reads_back() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(
+            tmp.path().join(REKEY_MARKER),
+            br#"{"rekeyed_at":1700000000,"reason":"RawMasterInFolderSeal"}"#,
+        )
+        .expect("v1 marker");
+
+        let records = records_at(tmp.path());
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].rekeyed_at, 1_700_000_000);
+        assert_eq!(records[0].reason, Some(RekeyReason::RawMasterInFolderSeal));
     }
 
     /// A seal holding the master verbatim is the migration-copy case.
@@ -1157,9 +1347,10 @@ mod tests {
 
         ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("repair succeeds");
 
-        let record = read_rekey_record(&folder_dir).expect("repair must leave a record");
-        assert_eq!(record.reason, RekeyReason::RawMasterInFolderSeal);
-        assert!(record.rekeyed_at > 0, "a fresh record must carry a real timestamp");
+        let records = records_at(&folder_dir);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].reason, Some(RekeyReason::RawMasterInFolderSeal));
+        assert!(records[0].rekeyed_at > 0, "a fresh record must carry a real timestamp");
     }
 
     /// A seal derived from a DIFFERENT master is the case that strands remote
@@ -1171,8 +1362,60 @@ mod tests {
 
         ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("repair succeeds");
 
-        let record = read_rekey_record(&folder_dir).expect("repair must leave a record");
-        assert_eq!(record.reason, RekeyReason::DerivedFromAnotherMaster);
+        let records = records_at(&folder_dir);
+        assert_eq!(records[0].reason, Some(RekeyReason::DerivedFromAnotherMaster));
+    }
+
+    /// Two rekeys strand two generations of remote revisions. Last-write-wins
+    /// would hide the first window from triage entirely.
+    #[test]
+    fn a_second_rekey_appends_rather_than_overwriting_the_first() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        append_rekey_record(
+            tmp.path(),
+            RekeyRecord {
+                rekeyed_at: 100,
+                reason: Some(RekeyReason::RawMasterInFolderSeal),
+            },
+        )
+        .expect("first record");
+        append_rekey_record(
+            tmp.path(),
+            RekeyRecord {
+                rekeyed_at: 200,
+                reason: Some(RekeyReason::RecoveryGeneratedNewMaster),
+            },
+        )
+        .expect("second record");
+
+        let records = records_at(tmp.path());
+
+        assert_eq!(records.len(), 2, "the earlier rekey window must survive the later one");
+        assert_eq!(records[0].rekeyed_at, 100, "history is oldest-first");
+        assert_eq!(records[1].reason, Some(RekeyReason::RecoveryGeneratedNewMaster));
+    }
+
+    /// Appending onto a legacy flag keeps the "something happened" evidence
+    /// instead of replacing it with only the new event.
+    #[test]
+    fn appending_onto_a_legacy_marker_keeps_the_earlier_event() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join(REKEY_MARKER), b"").expect("legacy marker");
+
+        append_rekey_record(
+            tmp.path(),
+            RekeyRecord {
+                rekeyed_at: 200,
+                reason: Some(RekeyReason::DerivedFromAnotherMaster),
+            },
+        )
+        .expect("append");
+
+        let records = records_at(tmp.path());
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].reason, None, "the legacy event survives as an unrecorded-reason entry");
+        assert_eq!(records[1].rekeyed_at, 200);
     }
 
     /// A healthy drive must NOT be marked. A spurious marker would tell
@@ -1185,11 +1428,26 @@ mod tests {
 
         ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("no-op succeeds");
 
-        assert!(read_rekey_record(&folder_dir).is_none(), "a healthy drive must not be marked");
+        assert!(is_absent(&folder_dir), "a healthy drive must not be marked");
         assert!(
             folder_dir.join("sync_state.json").exists(),
             "a healthy drive must not have its sync state wiped"
         );
+    }
+
+    /// The one sanctioned retirement: the remote revisions the history warns
+    /// about were deleted server-side, so the warning no longer describes
+    /// anything real.
+    #[test]
+    fn clearing_retires_the_marker_and_is_idempotent() {
+        let (_tmp, folder_dir, master_path) = rekey_fixture(TEST_MASTER);
+        ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("repair succeeds");
+        assert!(!is_absent(&folder_dir), "precondition: the drive is marked");
+
+        clear_rekey_marker(&folder_dir);
+        clear_rekey_marker(&folder_dir);
+
+        assert!(is_absent(&folder_dir), "a cleared marker reads as absent");
     }
 
     /// THE regression guard: reporting the diagnosis must not consume it.
@@ -1229,6 +1487,37 @@ mod tests {
         report_rekey_marker(tmp.path(), "docs");
 
         assert!(!tmp.path().join(REKEY_MARKER).exists(), "reporting must never CREATE a marker");
+    }
+
+    /// Reporting an unreadable marker must not "tidy" it away either — the
+    /// unreadable file is the evidence.
+    #[test]
+    fn reporting_an_unreadable_marker_leaves_it_alone() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        std::fs::create_dir(tmp.path().join(REKEY_MARKER)).expect("marker path occupied by a dir");
+
+        report_rekey_marker(tmp.path(), "docs");
+
+        assert!(tmp.path().join(REKEY_MARKER).exists(), "reporting must not remove an unreadable marker");
+    }
+
+    /// The atomic swap must not leave its scratch file behind — a stray
+    /// `.needs_rekey.tmp` in a config dir is exactly the kind of debris that
+    /// gets mistaken for a marker later.
+    #[test]
+    fn appending_leaves_no_scratch_file() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+
+        append_rekey_record(
+            tmp.path(),
+            RekeyRecord {
+                rekeyed_at: 1,
+                reason: Some(RekeyReason::RawMasterInFolderSeal),
+            },
+        )
+        .expect("append");
+
+        assert!(!tmp.path().join(REKEY_MARKER_TMP).exists(), "the scratch file must be renamed away");
     }
 
     /// The repair wipes sync state so local files re-upload under the new

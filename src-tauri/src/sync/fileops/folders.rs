@@ -537,6 +537,21 @@ pub async fn delete_remote_folder(
         }
     };
 
+    // The rekey marker warns that remote revisions under a previous folder key
+    // can never be decrypted here. Those revisions have just been deleted, so
+    // the marker now describes a condition that no longer exists — and unlike
+    // every other path, this one can establish that. Leaving it would make the
+    // drive warn forever after the user did the one thing that resolves it.
+    //
+    // Scoped to THIS path deliberately: a plain `remove_drive` leaves the
+    // server folder registered, so re-adding the same label lands on the same
+    // `folder_hash(label)` namespace with the stranded revisions still in it,
+    // and the marker is still telling the truth there.
+    match config_dir_for_folder(&account_id, &label) {
+        Ok(folder_dir) => crate::sync::mnemonic::clear_rekey_marker(&folder_dir),
+        Err(e) => warn!("Could not resolve the config dir to clear '{label}' rekey marker: {e}"),
+    }
+
     info!("Remote folder '{label}' deleted: {files_deleted} files removed, was_local={was_local}");
 
     Ok(DeleteRemoteFolderResult { files_deleted, was_local })
