@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { useAtomValue } from "jotai";
 import type { MatrixClient } from "matrix-js-sdk";
-import { Check, Globe, X } from "lucide-react";
+import { Check, Globe, Link2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { chatCommunitySpaceAliasAtom } from "@/components/chat/chat-ui-atoms";
 import WorkspaceAvatar from "@/components/chat/workspaces/WorkspaceAvatar";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { redeemFailureMessage, redeemInviteLink } from "@/lib/chat/invite-links";
 import { type WorkspaceInvite, acceptWorkspaceInvite, joinCommunity } from "@/lib/chat/spaces";
 import { cn } from "@/lib/utils";
 
@@ -23,12 +25,41 @@ interface JoinWorkspaceListProps {
 
 /**
  * Pending Space invitations (accept joins the Space and its default
- * channels; decline leaves) and the always-available Hippius community.
+ * channels; decline leaves), a field to paste an invite link into, and the
+ * always-available Hippius community.
+ *
  * Ported from the console; the community alias is the Rust-provided one.
+ * The paste field is the desktop's stand-in for the console's
+ * `/chat/join/<token>` page: the app has no URL routes, so a link someone
+ * sent is redeemed here (`redeemInviteLink`, Rust does the backend half).
  */
 export default function JoinWorkspaceList({ client, invites, inCommunity, onJoined, className }: JoinWorkspaceListProps) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [linkInput, setLinkInput] = useState("");
+  const [linkError, setLinkError] = useState<string | null>(null);
   const communitySpaceAlias = useAtomValue(chatCommunitySpaceAliasAtom);
+
+  const redeemLink = async (event: FormEvent) => {
+    event.preventDefault();
+    const input = linkInput.trim();
+    if (!input || busy !== null) return;
+    setBusy("link");
+    setLinkError(null);
+    try {
+      const result = await redeemInviteLink(client, input);
+      if (result.kind === "joined") {
+        toast.success("Joined the workspace");
+        setLinkInput("");
+        onJoined(result.spaceId);
+      } else {
+        setLinkError(redeemFailureMessage(result));
+      }
+    } catch (error) {
+      setLinkError(error instanceof Error ? error.message : "Could not use the invitation link");
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const respond = async (invite: WorkspaceInvite, accept: boolean) => {
     setBusy(invite.id);
@@ -110,6 +141,44 @@ export default function JoinWorkspaceList({ client, invites, inCommunity, onJoin
           </ul>
         )}
       </div>
+
+      <form onSubmit={redeemLink} aria-label="Join with an invite link">
+        <label htmlFor="chat-join-invite-link" className="text-sm font-medium leading-5 text-grey-dark-800 dark:text-grey-dark-200">
+          Have an invite link?
+        </label>
+        <div className="mt-1.5 flex items-center gap-2">
+          <Input
+            id="chat-join-invite-link"
+            value={linkInput}
+            onChange={(e) => {
+              setLinkInput(e.target.value);
+              setLinkError(null);
+            }}
+            placeholder="Paste the link or its code"
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={linkError ? true : undefined}
+            aria-describedby={linkError ? "chat-join-invite-link-error" : undefined}
+            wrapperClassName="min-h-10 flex-1 items-center"
+            className="text-xs"
+          />
+          <Button
+            type="submit"
+            variant="primary"
+            size="sm"
+            className="h-10 gap-1 px-3 text-xs"
+            loading={busy === "link"}
+            disabled={busy !== null || !linkInput.trim()}
+          >
+            <Link2 className="size-3.5" aria-hidden /> Join
+          </Button>
+        </div>
+        {linkError ? (
+          <p id="chat-join-invite-link-error" role="alert" className="mt-1.5 text-xs text-error-50 dark:text-error-40">
+            {linkError}
+          </p>
+        ) : null}
+      </form>
 
       {!inCommunity ? (
         <div>

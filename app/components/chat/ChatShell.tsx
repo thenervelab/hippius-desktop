@@ -17,6 +17,7 @@ import RightPanelContent from "@/components/chat/RightPanel";
 import RoomView from "@/components/chat/RoomView";
 import SidePanel from "@/components/chat/SidePanel";
 import CreateWorkspaceDialog from "@/components/chat/workspaces/CreateWorkspaceDialog";
+import InvitePeopleDialog from "@/components/chat/workspaces/InvitePeopleDialog";
 import JoinWorkspaceDialog from "@/components/chat/workspaces/JoinWorkspaceDialog";
 import WorkspaceOnboarding from "@/components/chat/workspaces/WorkspaceOnboarding";
 import WorkspaceRail from "@/components/chat/workspaces/WorkspaceRail";
@@ -211,6 +212,7 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
       <MoveChannelDialog client={client} workspaces={workspaces} />
       <CreateWorkspaceDialog client={client} workspaces={workspaces} />
       <JoinWorkspaceDialog client={client} workspaces={workspaces} />
+      <InvitePeopleDialog client={client} workspaces={workspaces} />
     </div>
   );
 }

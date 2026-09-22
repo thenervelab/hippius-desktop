@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  chatAcceptWorkspaceInvite,
+  chatCreateWorkspaceInvite,
   chatGetNotificationsEnabled,
   chatGetUnreadCount,
   chatNotifyMessage,
+  chatPreviewWorkspaceInvite,
   chatSetNotificationsEnabled,
   chatSetUnreadBadge,
   encodeSaveDestination,
@@ -138,5 +141,32 @@ describe("notification and badge wrappers", () => {
     invoke.mockResolvedValueOnce(false);
     await expect(chatGetNotificationsEnabled()).resolves.toBe(false);
     expect(invoke).toHaveBeenLastCalledWith("chat_get_notifications_enabled");
+  });
+});
+
+// The invite-link commands live in Rust because they carry the Hippius API
+// token. Their outcomes come back `kind`-tagged with the backend's
+// snake_case fields (`chat::backend` serialises them as-is); the UI
+// branches on `kind` and never on an error message.
+describe("workspace invite-link wrappers", () => {
+  it("name the Rust commands and pass the arguments Tauri expects (camelCase)", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const invokeMock = vi.mocked(invoke);
+
+    invokeMock.mockResolvedValueOnce({ kind: "forbidden" });
+    await expect(chatCreateWorkspaceInvite("!s:hippius.com")).resolves.toEqual({ kind: "forbidden" });
+    expect(invokeMock).toHaveBeenLastCalledWith("chat_create_workspace_invite", { spaceId: "!s:hippius.com" });
+
+    invokeMock.mockResolvedValueOnce({ kind: "accepted", space_id: "!s:hippius.com", room_ids: [] });
+    await expect(chatAcceptWorkspaceInvite("tok_12345678")).resolves.toEqual({
+      kind: "accepted",
+      space_id: "!s:hippius.com",
+      room_ids: [],
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("chat_accept_workspace_invite", { tokenOrUrl: "tok_12345678" });
+
+    invokeMock.mockResolvedValueOnce({ kind: "expired" });
+    await expect(chatPreviewWorkspaceInvite("tok_12345678")).resolves.toEqual({ kind: "expired" });
+    expect(invokeMock).toHaveBeenLastCalledWith("chat_preview_workspace_invite", { tokenOrUrl: "tok_12345678" });
   });
 });

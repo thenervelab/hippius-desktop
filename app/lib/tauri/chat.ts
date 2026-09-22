@@ -198,6 +198,67 @@ export function chatSetNotificationsEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("chat_set_notifications_enabled", { enabled });
 }
 
+// ---------------------------------------------------------------------------
+// Workspace invite links (`chat::backend`)
+//
+// A Matrix invite needs a user id; a link needs the backend's bot to invite
+// whoever redeems it. Those calls carry the desktop's Hippius API token, so
+// they go through Rust; the webview never holds that token. Every HTTP
+// status the UI branches on is already mapped in Rust into a `kind`-tagged
+// outcome — the frontend never parses an error message to decide what to
+// render. Field names are the backend's (snake_case), as Rust forwards them.
+
+export interface WorkspaceInviteLink {
+  token: string;
+  /** `https://console.hippius.com/chat/join/<token>` — what gets copied. */
+  url: string;
+  /** ISO 8601. */
+  expires_at: string;
+  max_uses: number | null;
+  uses: number;
+  space_id: string;
+}
+
+/** `chat::backend::InviteLinkOutcome`. */
+export type InviteLinkOutcome =
+  | ({ kind: "link" } & WorkspaceInviteLink)
+  /** The caller is not an admin or owner of the Space. */
+  | { kind: "forbidden" }
+  /** This backend has no invite-link endpoint: invite by handle only. */
+  | { kind: "unavailable" };
+
+/** `chat::backend::AcceptInviteOutcome`. */
+export type AcceptInviteOutcome =
+  | { kind: "accepted"; space_id: string; room_ids: string[] }
+  /** Unknown token — or something that does not even look like one. */
+  | { kind: "unknown" }
+  /** Expired, or every use spent. */
+  | { kind: "expired" };
+
+/** `chat::backend::InvitePreviewOutcome`. */
+export type InvitePreviewOutcome =
+  | { kind: "preview"; space_id: string; workspace_name: string; inviter_display_name: string | null; expires_at: string }
+  | { kind: "unknown" }
+  | { kind: "expired" };
+
+/** Mint a 7-day, unlimited-use invite link for the Space (admins/owners). */
+export function chatCreateWorkspaceInvite(spaceId: string): Promise<InviteLinkOutcome> {
+  return invoke<InviteLinkOutcome>("chat_create_workspace_invite", { spaceId });
+}
+
+/**
+ * Redeem a pasted link or bare token: the backend's bot invites this
+ * session's Matrix user to the Space and its default channels. The caller
+ * then accepts those Matrix invites (`app/lib/chat/invite-links.ts`).
+ */
+export function chatAcceptWorkspaceInvite(tokenOrUrl: string): Promise<AcceptInviteOutcome> {
+  return invoke<AcceptInviteOutcome>("chat_accept_workspace_invite", { tokenOrUrl });
+}
+
+export function chatPreviewWorkspaceInvite(tokenOrUrl: string): Promise<InvitePreviewOutcome> {
+  return invoke<InvitePreviewOutcome>("chat_preview_workspace_invite", { tokenOrUrl });
+}
+
 /**
  * Header the attachment save command reads its destination from. The body
  * of that invoke is the raw file bytes (an `ArrayBuffer`, not JSON), which

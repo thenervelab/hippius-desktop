@@ -37,6 +37,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   create categories, create a channel straight into one, and move channels
   between them; fold a category to tuck its channels away — unread counts
   roll up onto the folded header so nothing gets missed.
+- **Invite people to a chat workspace.** Admins pick colleagues by name or
+  @handle, or create a link anyone can use to join for 7 days. A link you
+  received is pasted into "Join a workspace" — the app takes you straight
+  into the team.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.

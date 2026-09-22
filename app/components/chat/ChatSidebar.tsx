@@ -3,12 +3,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { useAtom, useSetAtom } from "jotai";
 import { ClientEvent, type MatrixClient, RoomEvent, ThreadEvent } from "matrix-js-sdk";
-import { Bell, BellOff, Check, CheckCheck, FolderInput, Hash, Link2, LogOut, MessageSquare, PenSquare, Search, X } from "lucide-react";
+import { Bell, BellOff, Check, CheckCheck, FolderInput, Hash, Link2, LogOut, MessageSquare, PenSquare, Search, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import {
   createChannelCategoryAtom,
   createChannelOpenAtom,
+  invitePeopleOpenAtom,
   moveChannelAtom,
   newMessageOpenAtom,
   rightPanelAtom,
@@ -75,6 +76,7 @@ export default function ChatSidebar({ client, workspaces, className }: ChatSideb
   const setCreateChannelOpen = useSetAtom(createChannelOpenAtom);
   const setCreateChannelCategory = useSetAtom(createChannelCategoryAtom);
   const setMoveChannel = useSetAtom(moveChannelAtom);
+  const setInviteOpen = useSetAtom(invitePeopleOpenAtom);
   const [filter, setFilter] = useState("");
 
   const myUserId = client.getUserId() ?? "";
@@ -310,6 +312,17 @@ export default function ChatSidebar({ client, workspaces, className }: ChatSideb
               </div>
             ))}
           </SidebarSection>
+        ) : null}
+
+        {active && !filter ? (
+          <button
+            type="button"
+            onClick={() => setInviteOpen(true)}
+            className="mx-2 mb-1 flex h-8 w-[calc(100%-1rem)] items-center gap-2 rounded-md px-2 text-left text-xs font-medium text-grey-30 outline-none hover:bg-grey-90 hover:text-grey-10 focus-visible:ring-2 focus-visible:ring-primary-50 dark:text-grey-dark-200 dark:hover:bg-black-500 dark:hover:text-grey-light-100 dark:focus-visible:ring-primary-40"
+          >
+            <UserPlus className="size-4 shrink-0 text-grey-60 dark:text-grey-dark-700" aria-hidden />
+            <span className="truncate">Invite people to {active.name}</span>
+          </button>
         ) : null}
 
         <SidebarSection

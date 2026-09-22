@@ -30,6 +30,8 @@ export const rightPanelAtom = atom<RightPanelState>(null);
 export const activeWorkspaceIdAtom = atom<string | null>(null);
 export const createWorkspaceOpenAtom = atom(false);
 export const joinWorkspaceOpenAtom = atom(false);
+/** "Invite people to <workspace>": by handle, or an invite link minted through Rust. */
+export const invitePeopleOpenAtom = atom(false);
 
 /** Sidebar drawer when the window is too narrow for a static column. */
 export const sidebarDrawerOpenAtom = atom(false);
