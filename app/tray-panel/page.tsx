@@ -25,7 +25,9 @@ import Search from "@/app/components/ui/icons/Search";
 import Command from "@/app/components/ui/icons/Command";
 import ArrowRight from "@/app/components/ui/icons/ArrowRight";
 import Notification from "@/app/components/ui/icons/Notification";
-import { MessagesSquare } from "lucide-react";
+import { Camera, MessagesSquare } from "lucide-react";
+import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
+import { getCaptureSupport } from "@/app/lib/tauri/capture";
 import BoxSimple from "@/app/components/ui/icons/BoxSimple";
 
 // Same identicon the sidebar/ProfileCard uses; client-only (no SSR).
@@ -229,6 +231,7 @@ function Header({
           </span>
         </div>
         <div className="h-6 w-px shrink-0 rounded-2xl bg-[#606060] opacity-40" />
+        <TrayCaptureButton />
         {chatUnread > 0 && (
           <button
             type="button"
@@ -691,6 +694,46 @@ async function openMainNotifications() {
     await invoke("hide_tray_panel");
   } catch (error) {
     console.error("[TrayPanel] Failed to open notifications:", error);
+  }
+}
+
+/**
+ * Screenshot an area, from the menu bar — Loom's home, and the one place a
+ * capture does not start with the app window in front of what you want.
+ *
+ * The popover asks the MAIN window to start it (`CaptureHost`), because a
+ * first capture can need the drive picker or the macOS permission explainer,
+ * and those are main-window dialogs. It does not reveal the main window first:
+ * the capture hides it again at once, and the flash would be all the user saw.
+ */
+function TrayCaptureButton() {
+  const [supported, setSupported] = useState(false);
+  useEffect(() => {
+    if (!SCREEN_CAPTURE_ENABLED) return;
+    getCaptureSupport()
+      .then((s) => setSupported(s.supported))
+      .catch(() => setSupported(false));
+  }, []);
+  if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void captureFromTray()}
+      aria-label="Capture an area of the screen"
+      title="Capture an area"
+      className="relative flex h-9 w-9 items-center justify-center rounded-lg text-black transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/10"
+    >
+      <Camera className="size-[14px] shrink-0 opacity-40" />
+    </button>
+  );
+}
+
+async function captureFromTray() {
+  try {
+    await invoke("hide_tray_panel");
+    await emit("hippius:tray-capture", { mode: "area" });
+  } catch (error) {
+    console.error("[TrayPanel] Failed to start a capture:", error);
   }
 }
 
