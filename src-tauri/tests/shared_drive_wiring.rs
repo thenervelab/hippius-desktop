@@ -611,8 +611,14 @@ fn a_remote_upload_names_its_drive_before_the_storage_gate() {
 fn the_file_upload_command_goes_through_its_inner() {
     let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
     let command = fn_body(&src, "pub async fn upload_files_to_remote_folder(");
-    assert!(command.contains("upload_files_to_remote_folder_inner("), "the command must delegate to its inner");
-    assert!(!command.contains("require_eligible"), "the command must not carry its own copy of the gate");
+    assert!(
+        command.contains("upload_files_to_remote_folder_inner("),
+        "the command must delegate to its inner"
+    );
+    assert!(
+        !command.contains("require_eligible"),
+        "the command must not carry its own copy of the gate"
+    );
 }
 
 /// The folder key is derived ONCE per upload, not once per file.
