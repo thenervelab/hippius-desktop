@@ -12,6 +12,45 @@ use hcfs_client::engine::manager::DriveManager;
 use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
 
+/// Delete the `.bak` sibling `save_encrypted_mnemonic` leaves behind.
+///
+/// Upstream's write is temp + fsync + **copy the old blob to `<name>.bak`** +
+/// atomic rename (hcfs `auth.rs`, added between pins e66b58f and 02191cc).
+/// The backup guards a torn write, and once the rename has returned the new
+/// blob is already durable — so on a PASSWORD ROTATION the `.bak` is not
+/// insurance, it is the mnemonic still sealed under the password the user
+/// just decided to stop trusting, sitting next to the new one indefinitely.
+///
+/// Nothing else sweeps it: the cleanup lists in `clear_persisted_sync_state`
+/// and `recover_drive` name `sync_state.json.bak`, never the key blobs.
+///
+/// Call this ONLY after a rotation write, not after every save — ordinary
+/// writes should keep upstream's crash insurance.
+///
+/// Best-effort by design: a rotation must not fail because a stale file
+/// could not be unlinked. The name is built by APPENDING `.bak` to the whole
+/// filename, matching upstream's `sibling_with_suffix` —
+/// `with_extension("bak")` would produce `master_enc_mnemonic.bak` and
+/// silently sweep nothing.
+pub(crate) fn retire_key_backup(path: &Path) {
+    let Some(name) = path.file_name() else {
+        return;
+    };
+    let mut backup = name.to_os_string();
+    backup.push(".bak");
+    let backup_path = path.with_file_name(backup);
+    match std::fs::remove_file(&backup_path) {
+        Ok(()) => info!(path = %backup_path.display(), "Retired key blob sealed under the previous password"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!(
+            path = %backup_path.display(),
+            error = %e,
+            "Could not remove the key blob sealed under the previous password — \
+             it is still openable with the old password"
+        ),
+    }
+}
+
 /// Filename of the rekey marker inside a drive's config directory.
 pub(crate) const REKEY_MARKER: &str = ".needs_rekey";
 
@@ -672,9 +711,14 @@ pub async fn create_encrypted_backup(mnemonic: String, password: String, output_
 /// previous drive password and is safe to invoke from unlock flows where
 /// the only secret available is the user's recovery password.
 ///
-/// Idempotent: `save_encrypted_mnemonic` truncates on write, so re-running
-/// this function with the same inputs produces the same bytes. Safe to
-/// re-run after a partial failure.
+/// Idempotent: `save_encrypted_mnemonic` replaces the blob atomically (write
+/// to a temp sibling, fsync, rename), so re-running this function with the
+/// same inputs leaves the same live file. Safe to re-run after a partial
+/// failure.
+///
+/// It no longer truncates in place — the doc said so until the pin moved to
+/// 02191cc, and that wording is exactly what hid the `.bak` this function
+/// now has to retire (see [`retire_key_backup`]).
 ///
 /// Skips the internal `migration` pseudo-drive label (see
 /// `sync::drive_status` filters). Folders whose `enc_mnemonic.json` does
@@ -794,7 +838,14 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
             let password_owned: zeroize::Zeroizing<String> = zeroize::Zeroizing::new(new_password.as_str().to_owned());
             let label_for_task = label.clone();
             let result = tokio::task::spawn_blocking(move || {
-                hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &folder_mnemonic_owned, &password_owned).map_err(|e| e.to_string())
+                let outcome =
+                    hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &folder_mnemonic_owned, &password_owned).map_err(|e| e.to_string());
+                // Only on success: a failed write leaves the OLD blob live,
+                // and its backup is the only spare copy of a still-current key.
+                if outcome.is_ok() {
+                    retire_key_backup(&folder_enc);
+                }
+                outcome
             })
             .await;
 
@@ -1232,6 +1283,73 @@ mod tests {
         // master): Stage 3/4 recovery is deliberately unavailable there —
         // see the decided trade-off on `candidate_is_account_master`.
         assert!(!candidate_is_account_master(master, "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"));
+    }
+
+    // ── key-blob backups ────────────────────────────────────────────
+
+    /// THE security property: after a password rotation, nothing on disk may
+    /// still open with the old password.
+    ///
+    /// Upstream's `save_encrypted_mnemonic` copies the previous blob to
+    /// `<name>.bak` before replacing it (added between pins e66b58f and
+    /// 02191cc). That backup is the mnemonic sealed under the OLD password.
+    /// A user who rotates because they believe the old password is
+    /// compromised would otherwise be left with a file that still answers to
+    /// it, indefinitely — nothing else in the repo sweeps it.
+    #[test]
+    fn rotating_a_password_leaves_nothing_the_old_one_can_open() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let blob = tmp.path().join("enc_mnemonic.json");
+        let backup = tmp.path().join("enc_mnemonic.json.bak");
+
+        hcfs_client::auth::save_encrypted_mnemonic(&blob, TEST_MASTER, "old-password").expect("seal under the old password");
+        hcfs_client::auth::save_encrypted_mnemonic(&blob, TEST_MASTER, "new-password").expect("re-seal under the new one");
+
+        // Precondition: upstream really does leave the old blob behind, so
+        // this test is guarding a live hazard rather than a hypothetical.
+        assert!(
+            backup.exists(),
+            "upstream no longer writes a .bak — if that is deliberate, this \
+             guard and `retire_key_backup` can go, but confirm it first"
+        );
+        assert!(
+            hcfs_client::auth::recover_mnemonic(&backup, "old-password").is_ok(),
+            "precondition: the backup is openable with the OLD password"
+        );
+
+        retire_key_backup(&blob);
+
+        assert!(!backup.exists(), "the old-password blob must not survive a rotation");
+        assert!(
+            hcfs_client::auth::recover_mnemonic(&blob, "new-password").is_ok(),
+            "and the live blob must still open with the new password"
+        );
+    }
+
+    /// The name is built by APPENDING to the whole filename, matching
+    /// upstream's `sibling_with_suffix`. `with_extension("bak")` would target
+    /// `enc_mnemonic.bak` and sweep nothing at all, silently.
+    #[test]
+    fn retire_key_backup_targets_the_appended_name_not_a_replaced_extension() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let blob = tmp.path().join("enc_mnemonic.json");
+        std::fs::write(&blob, b"live").expect("live blob");
+        std::fs::write(tmp.path().join("enc_mnemonic.json.bak"), b"old").expect("appended");
+        std::fs::write(tmp.path().join("enc_mnemonic.bak"), b"decoy").expect("decoy");
+
+        retire_key_backup(&blob);
+
+        assert!(!tmp.path().join("enc_mnemonic.json.bak").exists(), "must remove the appended name");
+        assert!(tmp.path().join("enc_mnemonic.bak").exists(), "must not touch an unrelated sibling");
+        assert!(blob.exists(), "must never remove the live blob");
+    }
+
+    /// Best-effort: a rotation must not fail because there was nothing to
+    /// sweep (first-ever write) or the file was already gone.
+    #[test]
+    fn retiring_an_absent_backup_is_silent() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        retire_key_backup(&tmp.path().join("enc_mnemonic.json"));
     }
 
     // ── rekey marker ────────────────────────────────────────────────
