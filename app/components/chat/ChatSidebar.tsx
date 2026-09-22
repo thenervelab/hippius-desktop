@@ -17,6 +17,7 @@ import {
   sidebarDrawerOpenAtom,
 } from "@/components/chat/chat-ui-atoms";
 import CategorySection from "@/components/chat/CategorySection";
+import ChatAccountMenu from "@/components/chat/ChatAccountMenu";
 import { useClientTick } from "@/components/chat/hooks/useClientTick";
 import { useCollapsedCategories } from "@/components/chat/hooks/useCollapsedCategories";
 import { useJoinableChannels } from "@/components/chat/hooks/useJoinableChannels";
@@ -251,6 +252,7 @@ export default function ChatSidebar({ client, workspaces, className }: ChatSideb
             </span>
           </span>
         </span>
+        <ChatAccountMenu client={client} />
         <Button
           variant="ghost"
           size="icon"

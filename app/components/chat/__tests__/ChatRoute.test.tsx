@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Provider as JotaiProvider, createStore } from "jotai";
 
 import ChatRoute from "@/components/chat/ChatRoute";
@@ -20,17 +20,21 @@ vi.mock("next/navigation", () => ({
 }));
 
 let connection: ChatConnection = { kind: "signed-out" };
+// The action spies are shared across renders so a test can assert on them.
+const current = {
+  signIn: vi.fn(async () => undefined),
+  cancelSignIn: vi.fn(async () => undefined),
+  signOut: vi.fn(async () => undefined),
+  retry: vi.fn(),
+  unlockEncryption: vi.fn(),
+  repairEncryption: vi.fn(),
+};
 const stub = () =>
   ({
     connection,
     encryption: { kind: "unknown" },
     syncState: null,
-    signIn: vi.fn(async () => undefined),
-    cancelSignIn: vi.fn(async () => undefined),
-    signOut: vi.fn(async () => undefined),
-    retry: vi.fn(),
-    unlockEncryption: vi.fn(),
-    repairEncryption: vi.fn(),
+    ...current,
     client: null,
   }) satisfies ChatContextValue;
 
@@ -61,6 +65,7 @@ function mount(config: ChatConfig | null) {
 
 beforeEach(() => {
   replace.mockClear();
+  Object.values(current).forEach((spy) => spy.mockClear());
   connection = { kind: "signed-out" };
 });
 
@@ -85,6 +90,35 @@ describe("ChatRoute gate", () => {
 });
 
 describe("ChatRoute screens", () => {
+  const session = {
+    baseUrl: "https://chat.hippius.com",
+    issuer: "https://chat.hippius.com/",
+    clientId: "c",
+    userId: "@alice:hippius.com",
+    deviceId: "D",
+    accessToken: "t",
+    storeLayout: "device",
+  } as const;
+
+  it("connecting: names the account the browser signed in and lets a wrong one be dropped", () => {
+    connection = { kind: "connecting", session };
+    mount(CONFIG);
+    expect(screen.getByRole("status")).toHaveTextContent("Signed in as @alice:hippius.com");
+    const notYou = screen.getByRole("button", { name: "Not you? Sign out" });
+    expect(current.signOut).not.toHaveBeenCalled();
+    fireEvent.click(notYou);
+    expect(current.signOut).toHaveBeenCalledTimes(1);
+    // One click is one sign-out: the button goes inert while it runs.
+    expect(notYou).toBeDisabled();
+  });
+
+  it("booting (no session known yet): no account line and no sign-out to click", () => {
+    connection = { kind: "booting" };
+    mount(CONFIG);
+    expect(screen.getByRole("status")).toHaveTextContent("Connecting to chat…");
+    expect(screen.queryByRole("button", { name: /Not you/ })).toBeNull();
+  });
+
   it("signing-in: says to finish in the browser and offers Cancel, not a second sign-in", () => {
     connection = { kind: "signing-in" };
     mount(CONFIG);

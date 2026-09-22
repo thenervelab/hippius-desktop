@@ -1,7 +1,7 @@
 "use client";
 
 import { useAtomValue } from "jotai";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { chatConfigAtom } from "@/app/lib/global-atoms/chatAtoms";
@@ -44,15 +44,14 @@ function ChatBody() {
 
   switch (connection.kind) {
     case "booting":
+      return <Connecting />;
+
     case "connecting":
-      return (
-        <div
-          className="flex h-full min-h-[480px] w-full items-center justify-center p-6 text-sm text-grey-60 dark:text-grey-dark-700"
-          role="status"
-        >
-          Connecting to chat…
-        </div>
-      );
+      // The browser just came back (or the stored session is booting):
+      // say which account this is, and let a wrong one be dropped before
+      // the client finishes syncing under it — the console's callback
+      // page's "Not you? Sign out".
+      return <Connecting userId={connection.session.userId} onNotYou={signOut} />;
 
     case "signed-out":
       return <ChatSignedOut onSignIn={signIn} />;
@@ -84,6 +83,38 @@ function ChatBody() {
     case "ready":
       return <ChatShell client={connection.handle.client} />;
   }
+}
+
+function Connecting({ userId, onNotYou }: { userId?: string; onNotYou?: () => Promise<void> }) {
+  const [leaving, setLeaving] = useState(false);
+  return (
+    <div className="flex h-full min-h-[480px] w-full items-center justify-center p-6">
+      <div className="flex max-w-md flex-col items-center text-center text-sm text-grey-60 dark:text-grey-dark-700">
+        <p role="status">
+          Connecting to chat…
+          {userId ? (
+            <>
+              {" "}
+              Signed in as <span className="font-mono text-grey-10 dark:text-grey-light-100">{userId}</span>.
+            </>
+          ) : null}
+        </p>
+        {userId && onNotYou ? (
+          <button
+            type="button"
+            disabled={leaving}
+            onClick={() => {
+              setLeaving(true);
+              void onNotYou();
+            }}
+            className="mt-3 text-xs text-grey-60 underline-offset-2 hover:underline disabled:opacity-50 dark:text-grey-dark-700"
+          >
+            Not you? Sign out
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function Unavailable({

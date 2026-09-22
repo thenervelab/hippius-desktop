@@ -41,6 +41,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   @handle, or create a link anyone can use to join for 7 days. A link you
   received is pasted into "Join a workspace" — the app takes you straight
   into the team.
+- **Sign out of chat from the chat itself.** The account menu at the top of the
+  chat sidebar shows which account is signed in, signs this device out after a
+  confirmation (your encrypted history stays recoverable with your mnemonic),
+  and opens the page where your other devices can be signed out. While the
+  chat connects after a browser sign-in, a "Not you? Sign out" link lets you
+  drop a wrong account before it loads.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.

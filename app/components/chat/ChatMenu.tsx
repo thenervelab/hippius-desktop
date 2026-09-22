@@ -31,10 +31,15 @@ interface ChatMenuProps extends Pick<ComponentPropsWithoutRef<typeof Dropdown.Co
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   label?: string;
+  /**
+   * Free-form, non-interactive block above the items, rendered as-is (no
+   * uppercase transform): a "Signed in as @user" line, for instance.
+   */
+  header?: ReactNode;
 }
 
 /** Radix dropdown menu in the console's palette; trigger is any element. */
-export default function ChatMenu({ trigger, items, open, onOpenChange, align = "end", side = "bottom", label }: ChatMenuProps) {
+export default function ChatMenu({ trigger, items, open, onOpenChange, align = "end", side = "bottom", label, header }: ChatMenuProps) {
   return (
     <Dropdown.Root open={open} onOpenChange={onOpenChange} modal={false}>
       <Dropdown.Trigger asChild>{trigger}</Dropdown.Trigger>
@@ -44,6 +49,12 @@ export default function ChatMenu({ trigger, items, open, onOpenChange, align = "
             <Dropdown.Label className="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-grey-60 dark:text-grey-dark-700">
               {label}
             </Dropdown.Label>
+          ) : null}
+          {header ? (
+            <>
+              <Dropdown.Label className="px-2 py-1.5 text-sm text-grey-10 dark:text-grey-light-100">{header}</Dropdown.Label>
+              <Dropdown.Separator className="my-1 h-px bg-grey-80 dark:bg-black-500" />
+            </>
           ) : null}
           {items.map((item, index) =>
             item === "separator" ? (
