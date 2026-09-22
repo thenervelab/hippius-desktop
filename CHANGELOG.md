@@ -379,9 +379,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Deleting files is no longer stuck behind a long upload.** Removals now
   happen first, so a drive with a large backlog stops showing files you
   already deleted and stops paying to store them.
-- **A file that can't be unlocked says so.** It used to read "Sync failed.
-  Please try again", which was wrong — trying again never helps. It now tells
-  you the file needs to be uploaded again or removed.
+- **A file that can't be unlocked says so, and no longer offers a retry that
+  does nothing.** It used to read "Sync failed. Please try again" and show a
+  retry button — both wrong, because trying again never helps for these. It
+  now tells you the file needs to be uploaded again or removed, and the retry
+  button is gone for it (Skip and Exclude still work).
 - **Downloading and sharing a file from a drive someone shared with you now
   works.** Both refused with "no local key material on this device" on a shared
   drive you are browsing rather than syncing — including for a Viewer, whose only
