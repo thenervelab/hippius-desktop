@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Take a screenshot straight into Hippius.** Capture an area, a window or a
+  whole screen from the Drive page or the menu bar icon. It is saved to a Captures
+  folder in the drive you choose, and a share link is copied so you can paste it
+  right away. Available on Mac and Windows in internal builds first.
 - **Drive remembers how many rows you chose.** Pick 50 per page and it stays 50
   — in other folders, after visiting another page, and next time you open the
   app. The rows-per-page control also stops disappearing on folders that fit on

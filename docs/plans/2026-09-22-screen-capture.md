@@ -1,6 +1,6 @@
 # Screen capture: screenshots and recordings straight into Hippius
 
-**Status:** decided (see "Decisions"); phase 1 in progress.
+**Status:** phase 1 (screenshots) built on macOS and Windows; see "Phase 1 as built".
 **Branch:** `feat/screen-capture`, local only.
 
 ## The feature
@@ -161,8 +161,8 @@ rule, and the UI should say so rather than fight it.
 
 - **Drive header**: a **Capture** button beside Folder / File, opening a menu:
   Screenshot (area / window / full screen) and Record (area / window / full
-  screen). Hidden for a Viewer on a shared drive, same as the other write
-  controls.
+  screen). Not hidden for a Viewer on a shared drive: a capture is filed in the
+  capture drive, not the drive on screen.
 - **Tray popover**: the same actions. This is the primary surface, as it is for
   Loom, because it does not put the app window in front of what you are about to
   capture.
@@ -218,3 +218,27 @@ Each phase is shippable on its own, behind `SCREEN_CAPTURE_ENABLED = enabledFrom
    needs the camera entitlement, and system audio is macOS 13+ (hidden on 12.x).
 5. **macOS floor:** unchanged at 11.0. Recording is hidden on 11–12.2 because
    ScreenCaptureKit needs 12.3; screenshots work everywhere.
+
+## Phase 1 as built
+
+- **Screenshots of an area, a window or a screen** on macOS and Windows, from
+  the Drive header's Capture menu and a camera button in the tray popover.
+  Uploaded into `<drive>/Captures`, a public link minted with no expiry and
+  copied, an OS notification posted.
+- **Linux is deferred**, not built: xcap links PipeWire and XCB there, which
+  would add build packages to every release workflow and a runtime dependency
+  to the `.deb`. The follow-up is the xdg-desktop-portal Screenshot interface
+  (`ashpd`, pure Rust over the zbus the app already carries). Until then
+  `capture_support` reports unsupported and the surfaces hide.
+- **The global shortcut is not registered yet.** The proposed ⌥⇧S types "Í" on
+  a US Mac layout, so a global registration would stop that character being
+  typed in every app; on Windows Ctrl+Shift+S is Save As and Win+Shift+S the
+  Snipping Tool. Needs a decision on the key, and ideally a Settings control,
+  before it ships.
+- **Destinations are own drives only**, through `SyncFolderSelect`. Shared
+  drives where the user is an Editor are a small follow-up: the destination
+  type already carries `ownerSs58` + `folderHash`.
+- **Links do not expire** (`ShareTtl::Never`), matching Loom. They are revocable
+  from Shared Links. A setting for the default expiry is a follow-up.
+- Rules for the subsystem: `.claude/rules/screen-capture.md`.
+
