@@ -59,7 +59,7 @@ src-tauri/src/capture/  (new module)
   recording/      one backend per OS behind a `Recorder` trait
     macos.rs      drives the Swift helper (ScreenCaptureKit → MP4)
     windows.rs    windows-capture (Windows.Graphics.Capture + Media Foundation)
-    linux.rs      see Open questions
+    linux.rs      follow-up (screenshots only in the first release)
   deliver.rs      temp file → destination drive → share link → clipboard + notification
   naming.rs       "Screenshot 2026-09-22 at 14.03.11.png" (pure, unit-tested)
 
@@ -99,7 +99,7 @@ shot.
 |---|---|---|---|
 | macOS 12.3+ | ScreenCaptureKit | AVAssetWriter, H.264 in MP4, hardware encoder | In a Swift helper; system audio on 13+, mic, cursor and click highlights available |
 | Windows 10 1903+ | Windows.Graphics.Capture | Media Foundation, H.264 MP4 (`windows-capture` has a built-in `VideoEncoder`) | Pure Rust, no helper |
-| Linux | PipeWire via the ScreenCast portal | GStreamer | See Open questions |
+| Linux | PipeWire via the ScreenCast portal | GStreamer | Follow-up, not in the first release |
 
 **Why not bundle ffmpeg:** one pipeline for all three would be tidy, but it adds
 roughly 40–80 MB per platform, needs care with LGPL/GPL build flags, and its
@@ -122,7 +122,7 @@ entitlements file explains we must not add).
 
 1. The capture is written to a temp file under `~/.hippius/capture-tmp/` (not
    the OS temp dir, so a crash-orphaned recording is reclaimable at next launch).
-2. Upload to the destination (see Open questions) through the existing upload
+2. Upload to the destination (see Decisions) through the existing upload
    commands — never a new upload path. The storage gate runs as it does today.
 3. Mint a share link from the uploaded copy (`share_synced_file` for a synced
    destination, the remote-share path otherwise).
