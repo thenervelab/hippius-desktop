@@ -457,12 +457,19 @@ async fn remove_drive_inmemory(sync: &SyncRunner, label: &str, path_hint: Option
 /// cycle. The task takes the drive's existing `Arc<TokioMutex<DriveManager>>`
 /// so a concurrent sync cycle serializes against it naturally — no new lock.
 async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveManager, label: &str, sync_path: &str, folder_dir: &Path) {
-    // Consume rekey marker (no remote purge)
-    let marker = folder_dir.join(".needs_rekey");
-    if marker.exists() {
-        info!("Rekey marker found for '{}' — consuming without remote purge", label);
-        let _ = std::fs::remove_file(&marker);
-    }
+    // Report the rekey marker on every registration and LEAVE IT IN PLACE.
+    //
+    // It used to be deleted here ("consumed"), which made sense only while a
+    // remote purge consumed it. That purge went away in #302 and the delete
+    // stayed, so the marker became a one-shot that erased itself before
+    // anyone could see it — the drive's remote files were permanently
+    // undecryptable and the only record of why was gone by the next launch.
+    //
+    // The condition is permanent until those remote revisions are replaced,
+    // so the marker is a standing diagnosis. Re-logging it every launch is
+    // the point: it puts the cause in every support bundle taken from an
+    // affected machine.
+    crate::sync::shared::mnemonic::report_rekey_marker(folder_dir, label);
 
     // Pre-populate synced-paths cache
     if let Ok(state) = manager.load_sync_state().await {

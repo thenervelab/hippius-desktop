@@ -12,6 +12,80 @@ use hcfs_client::engine::manager::DriveManager;
 use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
 
+/// Filename of the rekey marker inside a drive's config directory.
+pub(crate) const REKEY_MARKER: &str = ".needs_rekey";
+
+/// Why a drive's folder key was re-derived, and when.
+///
+/// Written by [`ensure_derived_mnemonic`] and never deleted: it records a
+/// permanent property of the drive's REMOTE contents (everything uploaded
+/// before `rekeyed_at` is encrypted under a key this device no longer has),
+/// not a task someone is going to complete.
+///
+/// It exists as a file with contents rather than a zero-byte flag so a
+/// support bundle answers "was this drive re-keyed, and when?" without
+/// anyone having to reproduce the failure. The previous zero-byte marker
+/// was deleted at the next drive registration, so by the time a user
+/// reported undecryptable files there was nothing left to find.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub(crate) struct RekeyRecord {
+    /// Unix seconds at which the folder key was re-derived.
+    pub rekeyed_at: i64,
+    /// Which of the two legacy states triggered it, for support triage.
+    pub reason: RekeyReason,
+}
+
+/// The two states [`ensure_derived_mnemonic`] repairs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub(crate) enum RekeyReason {
+    /// The folder seal held the master mnemonic verbatim — copied during an
+    /// early migration without running the derivation.
+    RawMasterInFolderSeal,
+    /// The folder seal held a mnemonic derived from a DIFFERENT master, so
+    /// this account's master no longer reproduces it.
+    DerivedFromAnotherMaster,
+}
+
+/// Read a drive's rekey record, if it has one.
+///
+/// A marker that predates [`RekeyRecord`] is a zero-byte file and will not
+/// parse; it still means "this drive was re-keyed", so it reports a record
+/// with `rekeyed_at: 0` rather than being silently ignored. Losing the old
+/// markers would re-create exactly the blind spot this is fixing.
+pub(crate) fn read_rekey_record(folder_dir: &Path) -> Option<RekeyRecord> {
+    let raw = std::fs::read(folder_dir.join(REKEY_MARKER)).ok()?;
+    Some(serde_json::from_slice(&raw).unwrap_or(RekeyRecord {
+        rekeyed_at: 0,
+        reason: RekeyReason::DerivedFromAnotherMaster,
+    }))
+}
+
+/// Log a drive's rekey diagnosis, if it has one, and LEAVE THE MARKER ALONE.
+///
+/// Separate from its caller so the "does not delete" half of the contract is
+/// directly testable — that is the regression this guards. The marker used
+/// to be deleted at drive registration, which erased the only record of why
+/// a drive's remote files had become undecryptable, usually before anyone
+/// noticed they had.
+///
+/// Safe to call on every registration: the condition is permanent until the
+/// affected remote revisions are replaced, so re-logging it each launch is
+/// what puts the cause into a support bundle.
+pub(crate) fn report_rekey_marker(folder_dir: &Path, label: &str) {
+    let Some(record) = read_rekey_record(folder_dir) else {
+        return;
+    };
+    warn!(
+        label = %label,
+        rekeyed_at = record.rekeyed_at,
+        reason = ?record.reason,
+        "Drive was re-keyed: files uploaded under the previous folder key \
+         cannot be decrypted on this device and will fail to download. \
+         Replacing them (re-upload from a device that can read them, or \
+         delete them) is the only fix."
+    );
+}
+
 /// Compute the account-level directory: `~/.hippius/drives/<account_key>/`
 pub(crate) fn account_dir(account_id: &str) -> Result<PathBuf> {
     // `$HOME` unset is a genuine environment fault with no fitting typed
@@ -57,8 +131,23 @@ pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Resu
 ///   2. Folder mnemonic != derive(master, label) (derived from a different/old master)
 ///
 /// In either case it re-derives from the current master, writes a `.needs_rekey`
-/// marker (so `initialize_sync_inner` purges stale remote files), and wipes local
-/// sync state to force re-upload with the correct key.
+/// marker, and wipes local sync state so local files re-upload under the
+/// correct key.
+///
+/// It does NOT purge the remote copies, and nothing downstream does either.
+/// An earlier revision of this doc claimed `initialize_sync_inner` purged
+/// them; that purge was removed in #302 and the claim was left behind, which
+/// hid the real consequence for a year. State it plainly instead:
+///
+/// **Every remote file uploaded before the rekey stays encrypted under the
+/// OLD key and can never be decrypted by this device again.** The local
+/// copies are safe and re-upload fine; the stale remote revisions are dead
+/// weight the sync engine will keep trying to download and failing to open.
+///
+/// The marker therefore records a diagnosis, not a pending task — see
+/// [`RekeyRecord`]. Do not "consume" it by deleting it: the condition it
+/// describes is permanent until those remote files are replaced, and
+/// deleting the marker only destroys the evidence.
 pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, password: &str, label: &str) -> Result<()> {
     use zeroize::Zeroizing;
 
@@ -90,11 +179,20 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
     }
 
     // Folder mnemonic is wrong — either raw master or derived from an old master.
-    if *folder_str == *master_str {
-        info!("Folder '{}' uses raw master mnemonic — re-deriving", label);
+    let reason = if *folder_str == *master_str {
+        RekeyReason::RawMasterInFolderSeal
     } else {
-        info!("Folder '{}' uses wrong derived mnemonic (old master?) — re-deriving", label);
-    }
+        RekeyReason::DerivedFromAnotherMaster
+    };
+    // WARN, not INFO: this silently strands every remote file the drive
+    // already has. It was logged at INFO for a year and nobody saw it.
+    warn!(
+        label = %label,
+        reason = ?reason,
+        "Folder key does not match this account's master — re-deriving. \
+         Remote files uploaded under the previous key become permanently \
+         undecryptable on this device."
+    );
 
     // `master_str`/`folder_str` are unused past this comparison; scrub them now —
     // before the marker + save I/O — so the plaintext window stays as narrow as
@@ -107,8 +205,15 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
     // process crashes after the mnemonic is saved but before the marker
     // is written, the next startup would see folder == expected and
     // skip — leaving stale remote files encrypted with the old key.
-    let marker = folder_dir.join(".needs_rekey");
-    std::fs::File::create(&marker)?;
+    let record = RekeyRecord {
+        rekeyed_at: chrono::Utc::now().timestamp(),
+        reason,
+    };
+    // A marker that fails to serialize must not be downgraded to "no rekey
+    // happened" — write the empty-but-present fallback so the condition is
+    // still discoverable, and let the `?` below surface a genuine I/O fault.
+    let encoded = serde_json::to_vec_pretty(&record).unwrap_or_default();
+    std::fs::write(folder_dir.join(REKEY_MARKER), encoded)?;
 
     hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &expected, password).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
 
@@ -1004,5 +1109,144 @@ mod tests {
         // master): Stage 3/4 recovery is deliberately unavailable there —
         // see the decided trade-off on `candidate_is_account_master`.
         assert!(!candidate_is_account_master(master, "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"));
+    }
+
+    // ── rekey marker ────────────────────────────────────────────────
+
+    /// A stable BIP-39 test vector — a published fixture, never a real wallet.
+    const TEST_MASTER: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const OTHER_MASTER: &str = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+
+    /// Seal `folder_mnemonic` as the drive's folder key and `TEST_MASTER` as
+    /// the account master, then run the repair. Returns the folder dir.
+    fn rekey_fixture(folder_mnemonic: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let folder_dir = tmp.path().join("folder");
+        std::fs::create_dir_all(&folder_dir).expect("mk folder dir");
+
+        let master_path = tmp.path().join("master_enc_mnemonic.json");
+        hcfs_client::auth::save_encrypted_mnemonic(&master_path, TEST_MASTER, "pw").expect("seal master");
+        hcfs_client::auth::save_encrypted_mnemonic(folder_dir.join("enc_mnemonic.json"), folder_mnemonic, "pw").expect("seal folder");
+
+        (tmp, folder_dir, master_path)
+    }
+
+    #[test]
+    fn no_marker_means_no_record() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        assert!(read_rekey_record(tmp.path()).is_none());
+    }
+
+    /// A zero-byte marker written by an older build still means "this drive
+    /// was re-keyed". Treating it as absent would re-create the blind spot
+    /// this whole change exists to remove.
+    #[test]
+    fn a_legacy_empty_marker_still_reports_a_rekey() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join(REKEY_MARKER), b"").expect("legacy marker");
+
+        let record = read_rekey_record(tmp.path()).expect("legacy marker must still report a rekey");
+
+        assert_eq!(record.rekeyed_at, 0, "an undated marker reports epoch, not a fabricated date");
+    }
+
+    /// A seal holding the master verbatim is the migration-copy case.
+    #[test]
+    fn repairing_a_raw_master_seal_records_that_reason() {
+        let (_tmp, folder_dir, master_path) = rekey_fixture(TEST_MASTER);
+
+        ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("repair succeeds");
+
+        let record = read_rekey_record(&folder_dir).expect("repair must leave a record");
+        assert_eq!(record.reason, RekeyReason::RawMasterInFolderSeal);
+        assert!(record.rekeyed_at > 0, "a fresh record must carry a real timestamp");
+    }
+
+    /// A seal derived from a DIFFERENT master is the case that strands remote
+    /// files: the namespace still resolves, but nothing decrypts.
+    #[test]
+    fn repairing_a_foreign_derived_seal_records_that_reason() {
+        let foreign = derive_folder_mnemonic(OTHER_MASTER, "docs").expect("derive foreign folder key");
+        let (_tmp, folder_dir, master_path) = rekey_fixture(&foreign);
+
+        ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("repair succeeds");
+
+        let record = read_rekey_record(&folder_dir).expect("repair must leave a record");
+        assert_eq!(record.reason, RekeyReason::DerivedFromAnotherMaster);
+    }
+
+    /// A healthy drive must NOT be marked. A spurious marker would tell
+    /// support that a drive's remote files are unreadable when they are fine.
+    #[test]
+    fn a_correctly_derived_seal_is_never_marked() {
+        let correct = derive_folder_mnemonic(TEST_MASTER, "docs").expect("derive correct folder key");
+        let (_tmp, folder_dir, master_path) = rekey_fixture(&correct);
+        std::fs::write(folder_dir.join("sync_state.json"), b"{}").expect("sync state");
+
+        ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("no-op succeeds");
+
+        assert!(read_rekey_record(&folder_dir).is_none(), "a healthy drive must not be marked");
+        assert!(
+            folder_dir.join("sync_state.json").exists(),
+            "a healthy drive must not have its sync state wiped"
+        );
+    }
+
+    /// THE regression guard: reporting the diagnosis must not consume it.
+    ///
+    /// `register_drive` used to delete the marker ("consuming without remote
+    /// purge"), which made the one piece of evidence explaining a drive's
+    /// undecryptable files disappear at the next launch. If someone
+    /// reintroduces a delete here, this fails.
+    #[test]
+    fn reporting_the_marker_does_not_delete_it() {
+        let (_tmp, folder_dir, master_path) = rekey_fixture(TEST_MASTER);
+        ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("repair succeeds");
+        let before = std::fs::read(folder_dir.join(REKEY_MARKER)).expect("marker written");
+
+        // Every launch reports it; none of them may consume it.
+        for _ in 0..3 {
+            report_rekey_marker(&folder_dir, "docs");
+        }
+
+        assert!(
+            folder_dir.join(REKEY_MARKER).exists(),
+            "reporting must leave the marker in place — the condition it \
+             records is permanent until the remote files are replaced"
+        );
+        assert_eq!(
+            std::fs::read(folder_dir.join(REKEY_MARKER)).expect("marker still readable"),
+            before,
+            "reporting must not rewrite the marker either",
+        );
+    }
+
+    /// Reporting a drive that was never re-keyed must be inert.
+    #[test]
+    fn reporting_an_unmarked_drive_creates_nothing() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+
+        report_rekey_marker(tmp.path(), "docs");
+
+        assert!(!tmp.path().join(REKEY_MARKER).exists(), "reporting must never CREATE a marker");
+    }
+
+    /// The repair wipes sync state so local files re-upload under the new
+    /// key — but the local files themselves, and the drive's ability to
+    /// sync going forward, must survive.
+    #[test]
+    fn the_repair_installs_the_correctly_derived_seal() {
+        let (_tmp, folder_dir, master_path) = rekey_fixture(TEST_MASTER);
+        std::fs::write(folder_dir.join("sync_state.json"), b"{}").expect("sync state");
+
+        ensure_derived_mnemonic(&folder_dir, &master_path, "pw", "docs").expect("repair succeeds");
+
+        let sealed = hcfs_client::auth::recover_mnemonic(folder_dir.join("enc_mnemonic.json"), "pw").expect("recover repaired seal");
+        assert_eq!(
+            sealed.to_string(),
+            derive_folder_mnemonic(TEST_MASTER, "docs").expect("expected derivation"),
+            "the repair must install derive(master, label)"
+        );
+        assert!(!folder_dir.join("sync_state.json").exists(), "the repair wipes sync state");
     }
 }
