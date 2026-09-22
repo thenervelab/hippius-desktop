@@ -5,4 +5,7 @@
 
 pub mod geometry;
 pub mod naming;
+pub mod permissions;
+pub mod screenshot;
 pub mod session;
+pub mod targets;

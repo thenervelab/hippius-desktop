@@ -250,6 +250,11 @@ objc = "0.2"
 # (pre-1.0 crate; audit: pure-Rust deps + objc2-io-kit/windows bindings, no
 # build.rs downloads — covered by the CI `cargo deny check`).
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
+# Screen capture (displays, windows) for the capture feature. macOS and Windows
+# only: on Linux xcap links PipeWire and XCB, which would add build packages
+# to every release workflow and a runtime dependency to the .deb. Linux takes
+# screenshots through the xdg-desktop-portal instead (follow-up).
+xcap = "0.9"
 keepawake = "=0.6.0"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]

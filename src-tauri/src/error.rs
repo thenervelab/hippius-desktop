@@ -182,6 +182,15 @@ pub enum NotReadyKind {
     /// generic auth error. Distinct from [`Self::SharedDrivesUnavailable`]
     /// (feature off, bare 404): here the feature is on and the routes exist.
     SharedDrivesNotEntitled,
+    /// The OS has not granted this app permission to capture the screen
+    /// (macOS Screen Recording). Raised by `capture::commands::capture_start`
+    /// so the FE can show the explainer — open System Settings, then relaunch —
+    /// instead of taking a capture that silently comes back black.
+    ScreenRecordingPermission,
+    /// A capture was started before the user chose which drive captures go
+    /// to. Raised by `capture::commands::capture_start` so the FE opens the
+    /// destination picker and retries, rather than guessing a drive.
+    CaptureDestinationUnset,
 }
 
 impl NotReadyKind {
@@ -209,6 +218,8 @@ impl NotReadyKind {
             Self::VpnNotConnected => "VPN_NOT_CONNECTED",
             Self::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
             Self::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
+            Self::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
+            Self::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
         }
     }
 }
@@ -264,6 +275,12 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::SharedDrivesNotEntitled => {
                 write!(f, "Shared drives need a Plus, Max, or Scale plan.")
+            }
+            Self::ScreenRecordingPermission => {
+                write!(f, "Hippius needs permission to record your screen before it can take a capture.")
+            }
+            Self::CaptureDestinationUnset => {
+                write!(f, "Choose where your captures should be saved first.")
             }
         }
     }
@@ -721,6 +738,8 @@ mod tests {
                 NotReadyKind::VpnNotConnected => "VPN_NOT_CONNECTED",
                 NotReadyKind::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
                 NotReadyKind::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
+                NotReadyKind::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
+                NotReadyKind::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
             }
         }
         for kind in [
@@ -743,6 +762,8 @@ mod tests {
             NotReadyKind::VpnNotConnected,
             NotReadyKind::SharedDrivesUnavailable,
             NotReadyKind::SharedDrivesNotEntitled,
+            NotReadyKind::ScreenRecordingPermission,
+            NotReadyKind::CaptureDestinationUnset,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");
