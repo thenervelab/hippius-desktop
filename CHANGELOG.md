@@ -62,6 +62,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Chat notifications now chime.** A short two-note sound plays with each
   chat notification when the "Sound" preference is on; a Preview button in
   chat Preferences lets you hear it before deciding.
+- **Send GIFs in chat.** A GIF button next to the emoji picker (or `/gif
+  <search>`) opens a searchable picker with trending GIFs; the one you choose
+  is sent as a regular encrypted attachment, so nothing about your search
+  leaves the room, and it shows in the conversation immediately while it
+  uploads. On deployments where GIFs are not enabled the button says so.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.

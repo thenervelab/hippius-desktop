@@ -34,12 +34,14 @@ export const joinWorkspaceOpenAtom = atom(false);
 export const invitePeopleOpenAtom = atom(false);
 
 /** Sections of the chat Preferences dialog. */
-export type ChatSettingsTab = "account" | "notifications" | "encryption" | "devices";
+export type ChatSettingsTab =
+  "account" | "notifications" | "encryption" | "devices";
 /** The Preferences dialog: the section to open on, or `false` when closed. */
 export const chatSettingsOpenAtom = atom<ChatSettingsTab | false>(false);
 
 /** Sections of the workspace settings dialog. */
-export type WorkspaceSettingsTab = "general" | "members" | "channels" | "danger";
+export type WorkspaceSettingsTab =
+  "general" | "members" | "channels" | "danger";
 /** The active workspace's settings dialog: the section to open on, or `null` when closed. */
 export const workspaceSettingsAtom = atom<WorkspaceSettingsTab | null>(null);
 
@@ -53,7 +55,9 @@ export const createChannelCategoryAtom = atom<string | null>(null);
 /** "Move to…" dialog: the channel being moved, or null when closed. */
 export const moveChannelAtom = atom<string | null>(null);
 /** Event to scroll to and flash once the timeline has it (switches room if needed). */
-export const jumpToEventAtom = atom<{ roomId: string; eventId: string } | null>(null);
+export const jumpToEventAtom = atom<{ roomId: string; eventId: string } | null>(
+  null,
+);
 /**
  * Which composer a message action belongs to: a room's main composer
  * (`threadRootId: null`) or the composer of one thread panel. A room can
@@ -74,9 +78,15 @@ export interface ComposerTarget extends ComposerScope {
 }
 
 /** `target.eventId` when `target` was minted for `scope`; otherwise `null`. */
-export function targetEventIdFor(target: ComposerTarget | null, scope: ComposerScope): string | null {
+export function targetEventIdFor(
+  target: ComposerTarget | null,
+  scope: ComposerScope,
+): string | null {
   if (!target) return null;
-  return target.roomId === scope.roomId && target.threadRootId === scope.threadRootId ? target.eventId : null;
+  return target.roomId === scope.roomId &&
+    target.threadRootId === scope.threadRootId
+    ? target.eventId
+    : null;
 }
 
 /** Event currently being edited, scoped to the composer the edit began in. */
@@ -89,14 +99,49 @@ export const replyTargetAtom = atom<ComposerTarget | null>(null);
  * stays in the webview's localStorage rather than the Rust preference
  * table (which holds the notification policy).
  */
-export const autoplayGifsAtom = atomWithStorage<boolean>("hippius.chat.autoplayGifs", true);
+export const autoplayGifsAtom = atomWithStorage<boolean>(
+  "hippius.chat.autoplayGifs",
+  true,
+);
+
+/**
+ * Whether the GIF proxy is usable: `unknown` until the first answer,
+ * `disabled` once it answered 503 (no provider key on this deployment). The
+ * composer button greys out with an explanation from then on and the picker
+ * is never opened. Settled once per session by `useGifsAvailability`.
+ */
+export type GifsAvailability = "unknown" | "ready" | "disabled";
+export const gifsAvailabilityAtom = atom<GifsAvailability>("unknown");
+/** The in-flight availability probe, so concurrent hovers share one request. */
+export const gifsProbeAtom = atom<Promise<GifsAvailability> | null>(null);
+
+/**
+ * A GIF being fetched, encrypted and uploaded: shown at the end of the
+ * timeline as an optimistic bubble until the SDK's local echo takes over
+ * (or the send fails and the bubble says so).
+ */
+export interface PendingGif {
+  id: string;
+  roomId: string;
+  threadRootId: string | null;
+  title: string;
+  /** Provider preview for the local bubble only; never leaves this device. */
+  previewUrl: string;
+  width: number;
+  height: number;
+  status: "sending" | "failed";
+  error?: string;
+}
+export const pendingGifsAtom = atom<PendingGif[]>([]);
 
 /**
  * The Matrix server name (`hippius.com`), read from the Rust-provided
  * config. Falls back to the empty string before the config lands; callers
  * that build user ids must treat that as "not ready", never as a domain.
  */
-export const chatServerNameAtom = atom((get) => get(chatConfigAtom)?.serverName ?? "");
+export const chatServerNameAtom = atom(
+  (get) => get(chatConfigAtom)?.serverName ?? "",
+);
 
 /**
  * The public community Space's alias (`#hippius:hippius.com`), decided by
@@ -104,4 +149,6 @@ export const chatServerNameAtom = atom((get) => get(chatConfigAtom)?.serverName 
  * as the community and `joinCommunity` has nothing to join, which the UI
  * treats as "not ready" (the config is loaded before chat renders anyway).
  */
-export const chatCommunitySpaceAliasAtom = atom((get) => get(chatConfigAtom)?.communitySpaceAlias ?? "");
+export const chatCommunitySpaceAliasAtom = atom(
+  (get) => get(chatConfigAtom)?.communitySpaceAlias ?? "",
+);

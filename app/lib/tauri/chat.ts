@@ -126,7 +126,9 @@ export function isChatKeyringUnavailable(error: unknown): boolean {
   const message =
     typeof error === "string"
       ? error
-      : String((error as { message?: unknown } | null | undefined)?.message ?? "");
+      : String(
+          (error as { message?: unknown } | null | undefined)?.message ?? "",
+        );
   return /credential store is unavailable/i.test(message);
 }
 
@@ -142,7 +144,9 @@ export function isChatSessionExpired(error: unknown): boolean {
   const message =
     typeof error === "string"
       ? error
-      : String((error as { message?: unknown } | null | undefined)?.message ?? "");
+      : String(
+          (error as { message?: unknown } | null | undefined)?.message ?? "",
+        );
   return /^chat: session expired/i.test(message);
 }
 
@@ -157,7 +161,8 @@ export function isChatSessionExpired(error: unknown): boolean {
 export type { IncomingMessage };
 
 /** Rust's `chat::notify::NotifyOutcome` (snake_case on the wire). */
-export type NotifyOutcome = "shown" | "preference_disabled" | "not_mention_or_direct" | "room_visible";
+export type NotifyOutcome =
+  "shown" | "preference_disabled" | "not_mention_or_direct" | "room_visible";
 
 /**
  * Rust's `chat::notify::NotifyResult`: why the OS notification was or was
@@ -183,7 +188,9 @@ export interface ChatUnreadChanged {
  * the OS notification. Returns what it decided and whether to play the
  * chime.
  */
-export function chatNotifyMessage(message: IncomingMessage): Promise<NotifyResult> {
+export function chatNotifyMessage(
+  message: IncomingMessage,
+): Promise<NotifyResult> {
   return invoke<NotifyResult>("chat_notify_message", { message });
 }
 
@@ -258,12 +265,20 @@ export type AcceptInviteOutcome =
 
 /** `chat::backend::InvitePreviewOutcome`. */
 export type InvitePreviewOutcome =
-  | { kind: "preview"; space_id: string; workspace_name: string; inviter_display_name: string | null; expires_at: string }
+  | {
+      kind: "preview";
+      space_id: string;
+      workspace_name: string;
+      inviter_display_name: string | null;
+      expires_at: string;
+    }
   | { kind: "unknown" }
   | { kind: "expired" };
 
 /** Mint a 7-day, unlimited-use invite link for the Space (admins/owners). */
-export function chatCreateWorkspaceInvite(spaceId: string): Promise<InviteLinkOutcome> {
+export function chatCreateWorkspaceInvite(
+  spaceId: string,
+): Promise<InviteLinkOutcome> {
   return invoke<InviteLinkOutcome>("chat_create_workspace_invite", { spaceId });
 }
 
@@ -272,12 +287,117 @@ export function chatCreateWorkspaceInvite(spaceId: string): Promise<InviteLinkOu
  * session's Matrix user to the Space and its default channels. The caller
  * then accepts those Matrix invites (`app/lib/chat/invite-links.ts`).
  */
-export function chatAcceptWorkspaceInvite(tokenOrUrl: string): Promise<AcceptInviteOutcome> {
-  return invoke<AcceptInviteOutcome>("chat_accept_workspace_invite", { tokenOrUrl });
+export function chatAcceptWorkspaceInvite(
+  tokenOrUrl: string,
+): Promise<AcceptInviteOutcome> {
+  return invoke<AcceptInviteOutcome>("chat_accept_workspace_invite", {
+    tokenOrUrl,
+  });
 }
 
-export function chatPreviewWorkspaceInvite(tokenOrUrl: string): Promise<InvitePreviewOutcome> {
-  return invoke<InvitePreviewOutcome>("chat_preview_workspace_invite", { tokenOrUrl });
+export function chatPreviewWorkspaceInvite(
+  tokenOrUrl: string,
+): Promise<InvitePreviewOutcome> {
+  return invoke<InvitePreviewOutcome>("chat_preview_workspace_invite", {
+    tokenOrUrl,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// GIF search proxy (`chat::backend`)
+//
+// The desktop never talks to the GIF provider directly for search: the
+// backend proxy holds the provider key and normalises the shape; Rust carries
+// the Hippius API token. Rust maps the two statuses the picker renders
+// differently (503 not configured, 429 throttled) into `GifFetch` kinds; any
+// other failure rejects the invoke with a plain `AppError`. Field names below
+// are Rust's `GifResult` / `GifPage` as serialised (single words, no casing
+// to translate).
+
+export interface GifMedia {
+  url: string;
+  width: number;
+  height: number;
+}
+
+export interface GifSizedMedia extends GifMedia {
+  /** Bytes, as reported by the provider; 0 when unknown. */
+  size: number;
+}
+
+export interface GifMp4 {
+  url: string;
+  size: number;
+}
+
+export interface GifResult {
+  id: string;
+  title: string;
+  /** Small animated GIF for the grid. */
+  preview: GifMedia;
+  /** The GIF itself, sent as the attachment. */
+  full: GifSizedMedia;
+  /** Silent MP4 rendition when the provider has one; smaller than the GIF. */
+  mp4: GifMp4 | null;
+}
+
+export interface GifPage {
+  results: GifResult[];
+  /** Cursor for the next page, `null` at the end. */
+  next: string | null;
+  /** Provider mark ("Powered by GIPHY"); `null` when the backend sent none. */
+  attribution: string | null;
+}
+
+/** `chat::backend::GifFetch`. */
+export type GifFetch =
+  | ({ kind: "page" } & GifPage)
+  /** The deployment has no provider key (503); `code` is the backend's, e.g. `gifs_not_configured`. */
+  | { kind: "disabled"; code: string | null }
+  /** Per-user throttle (429). */
+  | { kind: "throttled" };
+
+export interface GifQueryArgs {
+  pos?: string | null;
+  limit?: number;
+  /** The webview's `navigator.language`, forwarded as `Accept-Language`. */
+  locale?: string | null;
+}
+
+export function chatGifsSearch(
+  q: string,
+  { pos, limit, locale }: GifQueryArgs = {},
+): Promise<GifFetch> {
+  return invoke<GifFetch>("chat_gifs_search", {
+    q,
+    pos: pos ?? null,
+    limit: limit ?? null,
+    locale: locale ?? null,
+  });
+}
+
+export function chatGifsFeatured({
+  pos,
+  limit,
+  locale,
+}: GifQueryArgs = {}): Promise<GifFetch> {
+  return invoke<GifFetch>("chat_gifs_featured", {
+    pos: pos ?? null,
+    limit: limit ?? null,
+    locale: locale ?? null,
+  });
+}
+
+/**
+ * Download a picked GIF rendition (https only, capped at `cap` bytes — Rust
+ * clamps it to its own ceiling) for the webview to encrypt and upload like
+ * any other attachment. Raw bytes, not JSON.
+ */
+export function chatGifDownload(
+  url: string,
+  cap?: number,
+): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("chat_gif_download", { url, cap: cap ?? null });
 }
 
 /**
@@ -303,9 +423,14 @@ export function encodeSaveDestination(path: string): string {
  * write (absolute path only, atomic temp+rename, no silent overwrite) is
  * Rust's — `chat::attachments::chat_save_attachment`.
  */
-export function chatSaveAttachment(destination: string, bytes: ArrayBuffer | Uint8Array): Promise<void> {
+export function chatSaveAttachment(
+  destination: string,
+  bytes: ArrayBuffer | Uint8Array,
+): Promise<void> {
   const body = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   return invoke<void>("chat_save_attachment", body, {
-    headers: { [CHAT_SAVE_DESTINATION_HEADER]: encodeSaveDestination(destination) },
+    headers: {
+      [CHAT_SAVE_DESTINATION_HEADER]: encodeSaveDestination(destination),
+    },
   });
 }

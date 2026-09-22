@@ -13,12 +13,38 @@ import {
   useState,
 } from "react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { type MatrixClient, type MatrixEvent, MsgType, type Room } from "matrix-js-sdk";
-import { Bold, Code, Italic, Paperclip, Pencil, Reply, SendHorizontal, Smile, Strikethrough, X } from "lucide-react";
+import {
+  type MatrixClient,
+  type MatrixEvent,
+  MsgType,
+  type Room,
+} from "matrix-js-sdk";
+import {
+  Bold,
+  Code,
+  Italic,
+  Paperclip,
+  Pencil,
+  Reply,
+  SendHorizontal,
+  Smile,
+  Strikethrough,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 
-import { type ComposerScope, chatServerNameAtom, editingTargetAtom, replyTargetAtom, selectedRoomIdAtom, targetEventIdFor } from "@/components/chat/chat-ui-atoms";
+import {
+  type ComposerScope,
+  chatServerNameAtom,
+  editingTargetAtom,
+  pendingGifsAtom,
+  replyTargetAtom,
+  selectedRoomIdAtom,
+  targetEventIdFor,
+} from "@/components/chat/chat-ui-atoms";
 import EmojiPicker from "@/components/chat/EmojiPicker";
+import GifPicker from "@/components/chat/GifPicker";
+import { useGifsAvailability } from "@/components/chat/hooks/useGifsAvailability";
 import UploadList, { type UploadItem } from "@/components/chat/UploadList";
 import UserAvatar from "@/components/chat/UserAvatar";
 import CustomTooltip from "@/components/chat/ChatTooltip";
@@ -37,8 +63,15 @@ import {
   triggerAt,
 } from "@/lib/chat/compose";
 import { type Emoji, replaceShortcodes, searchEmoji } from "@/lib/chat/emoji";
+import { sendGif } from "@/lib/chat/gifs";
+import { GIFS_DISABLED_MESSAGE, type GifResult } from "@/lib/chat/gifs-api";
 import type { MentionTarget } from "@/lib/chat/markdown";
-import { isValidUserId, normaliseUserId, openDirectRoom, setRoomMuted } from "@/lib/chat/rooms";
+import {
+  isValidUserId,
+  normaliseUserId,
+  openDirectRoom,
+  setRoomMuted,
+} from "@/lib/chat/rooms";
 import { eventPreview } from "@/lib/chat/threads";
 import { canEdit } from "@/lib/chat/timeline";
 import { cn } from "@/lib/utils";
@@ -55,15 +88,29 @@ interface ComposerProps {
 }
 
 type Suggestion =
-  | { kind: "mention"; userId: string; displayName: string; avatarMxc: string | null }
+  | {
+      kind: "mention";
+      userId: string;
+      displayName: string;
+      avatarMxc: string | null;
+    }
   | { kind: "emoji"; emoji: Emoji }
   | { kind: "command"; name: string; args: string; description: string };
 
-/** What `/gif` says until the picker ships on desktop. */
-export const GIF_UNAVAILABLE_MESSAGE = "GIFs are not available in the desktop app yet";
-
 const TOOL_BUTTON =
   "inline-flex size-7 items-center justify-center rounded-md text-grey-60 hover:bg-grey-90 hover:text-grey-10 disabled:opacity-40 dark:text-grey-dark-700 dark:hover:bg-black-500 dark:hover:text-grey-light-100";
+
+/** "GIF" wordmark in a frame, the way chat apps label this button. */
+function GifGlyph() {
+  return (
+    <span
+      aria-hidden
+      className="inline-flex h-[15px] items-center rounded-[3px] border-[1.5px] border-current px-[3px] text-[9px] font-bold leading-none tracking-tight"
+    >
+      GIF
+    </span>
+  );
+}
 
 /**
  * Slack-style composer: Enter sends, Shift+Enter breaks, Esc cancels an
@@ -71,34 +118,62 @@ const TOOL_BUTTON =
  * for `@`, `:` and `/`; formatting buttons wrap the selection in markdown;
  * files arrive by button, paste or drop; drafts persist per room, per user.
  */
-export default function Composer({ client, room, threadRootId = null, events, placeholder, autoFocus }: ComposerProps) {
+export default function Composer({
+  client,
+  room,
+  threadRootId = null,
+  events,
+  placeholder,
+  autoFocus,
+}: ComposerProps) {
   const me = client.getUserId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState(() => loadDraft(me, room.roomId, threadRootId));
+  const [text, setText] = useState(() =>
+    loadDraft(me, room.roomId, threadRootId),
+  );
   const [mentions, setMentions] = useState<MentionTarget[]>([]);
   const [sending, setSending] = useState(false);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
+  const [gifQuery, setGifQuery] = useState("");
+  const { availability: gifsAvailability, ensure: ensureGifsAvailability } =
+    useGifsAvailability();
+  const setPendingGifs = useSetAtom(pendingGifsAtom);
   const [editingTarget, setEditingTarget] = useAtom(editingTargetAtom);
   const [replyTarget, setReplyTarget] = useAtom(replyTargetAtom);
   const setSelectedRoomId = useSetAtom(selectedRoomIdAtom);
   const serverName = useAtomValue(chatServerNameAtom);
-  const typing = useMemo(() => new TypingNotifier(client, room.roomId), [client, room.roomId]);
+  const typing = useMemo(
+    () => new TypingNotifier(client, room.roomId),
+    [client, room.roomId],
+  );
 
   // Only targets minted for this composer (room + thread) are acted on. The
   // main composer and a thread panel's composer are both mounted for the
   // same room, and the thread's root event sits in both timelines: an edit
   // begun in the thread panel must never become the main composer's edit.
-  const scope: ComposerScope = useMemo(() => ({ roomId: room.roomId, threadRootId }), [room.roomId, threadRootId]);
+  const scope: ComposerScope = useMemo(
+    () => ({ roomId: room.roomId, threadRootId }),
+    [room.roomId, threadRootId],
+  );
   const editingId = targetEventIdFor(editingTarget, scope);
   const replyToId = targetEventIdFor(replyTarget, scope);
-  const editing = editingId ? events.find((e) => e.getId() === editingId) ?? null : null;
-  const replyTo = replyToId ? events.find((e) => e.getId() === replyToId) ?? room.findEventById(replyToId) ?? null : null;
-  const setEditingId = (eventId: string | null) => setEditingTarget(eventId ? { ...scope, eventId } : null);
-  const setReplyToId = (eventId: string | null) => setReplyTarget(eventId ? { ...scope, eventId } : null);
+  const editing = editingId
+    ? (events.find((e) => e.getId() === editingId) ?? null)
+    : null;
+  const replyTo = replyToId
+    ? (events.find((e) => e.getId() === replyToId) ??
+      room.findEventById(replyToId) ??
+      null)
+    : null;
+  const setEditingId = (eventId: string | null) =>
+    setEditingTarget(eventId ? { ...scope, eventId } : null);
+  const setReplyToId = (eventId: string | null) =>
+    setReplyTarget(eventId ? { ...scope, eventId } : null);
 
   // Restore draft on room / thread switch; drop stale edit state.
   useEffect(() => {
@@ -147,14 +222,31 @@ export default function Composer({ client, room, threadRootId = null, events, pl
       const q = trigger.query.toLowerCase();
       return room
         .getJoinedMembers()
-        .filter((m) => m.userId !== me && (m.name.toLowerCase().includes(q) || m.userId.toLowerCase().includes(q)))
+        .filter(
+          (m) =>
+            m.userId !== me &&
+            (m.name.toLowerCase().includes(q) ||
+              m.userId.toLowerCase().includes(q)),
+        )
         .sort((a, b) => a.name.localeCompare(b.name))
         .slice(0, 8)
-        .map((m) => ({ kind: "mention" as const, userId: m.userId, displayName: m.name, avatarMxc: m.getMxcAvatarUrl() ?? null }));
+        .map((m) => ({
+          kind: "mention" as const,
+          userId: m.userId,
+          displayName: m.name,
+          avatarMxc: m.getMxcAvatarUrl() ?? null,
+        }));
     }
-    if (trigger.kind === "emoji") return searchEmoji(trigger.query, 8).map((emoji) => ({ kind: "emoji" as const, emoji }));
+    if (trigger.kind === "emoji")
+      return searchEmoji(trigger.query, 8).map((emoji) => ({
+        kind: "emoji" as const,
+        emoji,
+      }));
     if (threadRootId) return []; // no slash commands in threads
-    return matchingCommands(trigger.query).map((c) => ({ kind: "command" as const, ...c }));
+    return matchingCommands(trigger.query).map((c) => ({
+      kind: "command" as const,
+      ...c,
+    }));
   }, [trigger, room, me, threadRootId]);
 
   const accept = (suggestion: Suggestion) => {
@@ -164,7 +256,17 @@ export default function Composer({ client, room, threadRootId = null, events, pl
     let replacement: string;
     if (suggestion.kind === "mention") {
       replacement = `@${suggestion.displayName}`;
-      setMentions((prev) => (prev.some((m) => m.userId === suggestion.userId) ? prev : [...prev, { userId: suggestion.userId, displayName: suggestion.displayName }]));
+      setMentions((prev) =>
+        prev.some((m) => m.userId === suggestion.userId)
+          ? prev
+          : [
+              ...prev,
+              {
+                userId: suggestion.userId,
+                displayName: suggestion.displayName,
+              },
+            ],
+      );
     } else if (suggestion.kind === "emoji") {
       replacement = suggestion.emoji.char;
     } else {
@@ -192,10 +294,17 @@ export default function Composer({ client, room, threadRootId = null, events, pl
     switch (name) {
       case "me":
         if (!args) return false;
-        await sendText(client, room, args, { mentions, threadRootId, msgtype: MsgType.Emote });
+        await sendText(client, room, args, {
+          mentions,
+          threadRootId,
+          msgtype: MsgType.Emote,
+        });
         return true;
       case "shrug":
-        await sendText(client, room, `${args ? `${args} ` : ""}¯\\_(ツ)_/¯`, { mentions, threadRootId });
+        await sendText(client, room, `${args ? `${args} ` : ""}¯\\_(ツ)_/¯`, {
+          mentions,
+          threadRootId,
+        });
         return true;
       case "topic":
         await client.setRoomTopic(room.roomId, args);
@@ -211,7 +320,8 @@ export default function Composer({ client, room, threadRootId = null, events, pl
       case "kick": {
         const [who, ...rest] = args.split(/\s+/);
         const id = normaliseUserId(who ?? "", serverName);
-        if (!isValidUserId(id)) throw new Error("Use /kick @user:server [reason]");
+        if (!isValidUserId(id))
+          throw new Error("Use /kick @user:server [reason]");
         await client.kick(room.roomId, id, rest.join(" ") || undefined);
         return true;
       }
@@ -237,9 +347,13 @@ export default function Composer({ client, room, threadRootId = null, events, pl
         return true;
       }
       case "gif":
-        // The command is recognised so it autocompletes like the console's,
-        // but the GIF picker is not in the desktop app yet.
-        throw new Error(GIF_UNAVAILABLE_MESSAGE);
+        // Settle availability before opening so a deployment without a key
+        // gets a message, never a popover that opens and vanishes.
+        if ((await ensureGifsAvailability()) === "disabled")
+          throw new Error(GIFS_DISABLED_MESSAGE);
+        setGifQuery(args);
+        setGifOpen(true);
+        return true;
       default:
         return false;
     }
@@ -248,24 +362,35 @@ export default function Composer({ client, room, threadRootId = null, events, pl
   const submit = async () => {
     const source = replaceShortcodes(text).replace(/\s+$/, "");
     if (!source.trim() || sending) return;
-    const liveMentions = mentions.filter((m) => source.includes(`@${m.displayName}`));
+    const liveMentions = mentions.filter((m) =>
+      source.includes(`@${m.displayName}`),
+    );
     setSending(true);
     typing.stop();
     try {
       if (editing) {
-        if (source !== editableSource(editing)) await editText(client, room, editing, source, liveMentions);
+        if (source !== editableSource(editing))
+          await editText(client, room, editing, source, liveMentions);
         setEditingId(null);
         setText(loadDraft(me, room.roomId, threadRootId));
       } else {
-        const parsed = threadRootId ? { kind: "text" as const, text: source } : parseInput(source);
+        const parsed = threadRootId
+          ? { kind: "text" as const, text: source }
+          : parseInput(source);
         if (parsed.kind === "unknown-command") {
-          toast.error(`Unknown command /${parsed.name}. Start with // to send a literal slash.`);
+          toast.error(
+            `Unknown command /${parsed.name}. Start with // to send a literal slash.`,
+          );
           return;
         }
         if (parsed.kind === "command") {
           if (!(await runCommand(parsed.name, parsed.args))) return;
         } else {
-          await sendText(client, room, parsed.text, { mentions: liveMentions, threadRootId, replyTo });
+          await sendText(client, room, parsed.text, {
+            mentions: liveMentions,
+            threadRootId,
+            replyTo,
+          });
         }
         setReplyToId(null);
         setText("");
@@ -317,7 +442,9 @@ export default function Composer({ client, room, threadRootId = null, events, pl
       }
       if (event.key === "ArrowUp") {
         event.preventDefault();
-        setActiveSuggestion((i) => (i - 1 + suggestions.length) % suggestions.length);
+        setActiveSuggestion(
+          (i) => (i - 1 + suggestions.length) % suggestions.length,
+        );
         return;
       }
       if (event.key === "Enter" || event.key === "Tab") {
@@ -331,7 +458,11 @@ export default function Composer({ client, room, threadRootId = null, events, pl
         return;
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
       void submit();
       return;
@@ -342,7 +473,14 @@ export default function Composer({ client, room, threadRootId = null, events, pl
       return;
     }
     if (event.key === "ArrowUp" && !text && !editing) {
-      const mine = [...events].reverse().find((e) => e.getSender() === me && canEdit(client, e) && (e.threadRootId ?? null) === threadRootId);
+      const mine = [...events]
+        .reverse()
+        .find(
+          (e) =>
+            e.getSender() === me &&
+            canEdit(client, e) &&
+            (e.threadRootId ?? null) === threadRootId,
+        );
       if (mine?.getId()) {
         event.preventDefault();
         setEditingId(mine.getId()!);
@@ -361,7 +499,11 @@ export default function Composer({ client, room, threadRootId = null, events, pl
         wrapSelection("`");
       }
     }
-    if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "x") {
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      event.shiftKey &&
+      event.key.toLowerCase() === "x"
+    ) {
       event.preventDefault();
       wrapSelection("~");
     }
@@ -375,11 +517,24 @@ export default function Composer({ client, room, threadRootId = null, events, pl
       for (const file of list) {
         const id = `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         const abort = new AbortController();
-        setUploads((prev) => [...prev, { id, name: file.name, size: file.size, loaded: 0, status: "uploading", abort }]);
+        setUploads((prev) => [
+          ...prev,
+          {
+            id,
+            name: file.name,
+            size: file.size,
+            loaded: 0,
+            status: "uploading",
+            abort,
+          },
+        ]);
         void sendFile(client, room, file, {
           threadRootId,
           abort,
-          onProgress: ({ loaded }) => setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, loaded } : u))),
+          onProgress: ({ loaded }) =>
+            setUploads((prev) =>
+              prev.map((u) => (u.id === id ? { ...u, loaded } : u)),
+            ),
         })
           .then(() => setUploads((prev) => prev.filter((u) => u.id !== id)))
           .catch((error: unknown) => {
@@ -387,12 +542,56 @@ export default function Composer({ client, room, threadRootId = null, events, pl
               setUploads((prev) => prev.filter((u) => u.id !== id));
               return;
             }
-            const message = error instanceof Error ? error.message : "Upload failed";
-            setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, status: "failed", error: message } : u)));
+            const message =
+              error instanceof Error ? error.message : "Upload failed";
+            setUploads((prev) =>
+              prev.map((u) =>
+                u.id === id ? { ...u, status: "failed", error: message } : u,
+              ),
+            );
           });
       }
     },
     [client, room, threadRootId],
+  );
+
+  /**
+   * A picked GIF: optimistic bubble at once, then the bytes are fetched by
+   * Rust, encrypted and uploaded like any other attachment. The bubble goes
+   * away when the SDK's own local echo appears (send resolved) or turns
+   * into an error the user can dismiss.
+   */
+  const sendPickedGif = useCallback(
+    (gif: GifResult) => {
+      const id = `gif-${gif.id}-${Date.now()}`;
+      const abort = new AbortController();
+      setPendingGifs((prev) => [
+        ...prev,
+        {
+          id,
+          roomId: room.roomId,
+          threadRootId,
+          title: gif.title || "GIF",
+          previewUrl: gif.preview.url,
+          width: gif.full.width || gif.preview.width,
+          height: gif.full.height || gif.preview.height,
+          status: "sending",
+        },
+      ]);
+      void sendGif(client, room, gif, { threadRootId, abort })
+        .then(() => setPendingGifs((prev) => prev.filter((p) => p.id !== id)))
+        .catch((error: unknown) => {
+          const message =
+            error instanceof Error ? error.message : "Could not send the GIF";
+          setPendingGifs((prev) =>
+            prev.map((p) =>
+              p.id === id ? { ...p, status: "failed", error: message } : p,
+            ),
+          );
+          toast.error(message);
+        });
+    },
+    [client, room, threadRootId, setPendingGifs],
   );
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -417,7 +616,11 @@ export default function Composer({ client, room, threadRootId = null, events, pl
 
   return (
     <div
-      className={cn("relative shrink-0 px-4 pb-3 pt-1", dragging && "outline-dashed outline-2 -outline-offset-4 outline-primary-50 dark:outline-primary-40")}
+      className={cn(
+        "relative shrink-0 px-4 pb-3 pt-1",
+        dragging &&
+          "outline-dashed outline-2 -outline-offset-4 outline-primary-50 dark:outline-primary-40",
+      )}
       onDragOver={(e) => {
         e.preventDefault();
         if (!dragging) setDragging(true);
@@ -429,19 +632,32 @@ export default function Composer({ client, room, threadRootId = null, events, pl
     >
       {activeBanner ? (
         <div className="mb-1 flex items-center gap-2 rounded-t-lg border border-b-0 border-grey-80 bg-grey-light-600 px-3 py-1.5 text-xs text-grey-60 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-700">
-          {activeBanner === "edit" ? <Pencil className="size-3.5 shrink-0" aria-hidden /> : <Reply className="size-3.5 shrink-0" aria-hidden />}
+          {activeBanner === "edit" ? (
+            <Pencil className="size-3.5 shrink-0" aria-hidden />
+          ) : (
+            <Reply className="size-3.5 shrink-0" aria-hidden />
+          )}
           <span className="min-w-0 flex-1 truncate">
             {activeBanner === "edit" ? (
               "Editing message"
             ) : (
               <>
-                Replying to <span className="font-medium text-grey-10 dark:text-grey-light-100">{room.getMember(replyTo!.getSender() ?? "")?.name ?? replyTo!.getSender()}</span>
+                Replying to{" "}
+                <span className="font-medium text-grey-10 dark:text-grey-light-100">
+                  {room.getMember(replyTo!.getSender() ?? "")?.name ??
+                    replyTo!.getSender()}
+                </span>
                 {" — "}
                 {eventPreview(replyTo!, 60)}
               </>
             )}
           </span>
-          <button type="button" onClick={cancelEditOrReply} aria-label="Cancel" className="text-grey-60 hover:text-grey-10 dark:text-grey-dark-700 dark:hover:text-grey-light-100">
+          <button
+            type="button"
+            onClick={cancelEditOrReply}
+            aria-label="Cancel"
+            className="text-grey-60 hover:text-grey-10 dark:text-grey-dark-700 dark:hover:text-grey-light-100"
+          >
             <X className="size-3.5" aria-hidden />
           </button>
         </div>
@@ -461,7 +677,13 @@ export default function Composer({ client, room, threadRootId = null, events, pl
           >
             {suggestions.map((s, i) => (
               <li
-                key={s.kind === "mention" ? s.userId : s.kind === "emoji" ? s.emoji.name : s.name}
+                key={
+                  s.kind === "mention"
+                    ? s.userId
+                    : s.kind === "emoji"
+                      ? s.emoji.name
+                      : s.name
+                }
                 role="option"
                 aria-selected={i === activeSuggestion}
                 onMouseEnter={() => setActiveSuggestion(i)}
@@ -476,9 +698,16 @@ export default function Composer({ client, room, threadRootId = null, events, pl
               >
                 {s.kind === "mention" ? (
                   <>
-                    <UserAvatar client={client} seed={s.userId} avatarMxc={s.avatarMxc} size={20} />
+                    <UserAvatar
+                      client={client}
+                      seed={s.userId}
+                      avatarMxc={s.avatarMxc}
+                      size={20}
+                    />
                     <span className="font-medium">{s.displayName}</span>
-                    <span className="truncate text-xs text-grey-60 dark:text-grey-dark-700">{s.userId}</span>
+                    <span className="truncate text-xs text-grey-60 dark:text-grey-dark-700">
+                      {s.userId}
+                    </span>
                   </>
                 ) : s.kind === "emoji" ? (
                   <>
@@ -488,9 +717,14 @@ export default function Composer({ client, room, threadRootId = null, events, pl
                 ) : (
                   <>
                     <span className="font-mono text-xs">
-                      /{s.name} <span className="text-grey-60 dark:text-grey-dark-700">{s.args}</span>
+                      /{s.name}{" "}
+                      <span className="text-grey-60 dark:text-grey-dark-700">
+                        {s.args}
+                      </span>
                     </span>
-                    <span className="ml-auto truncate text-xs text-grey-60 dark:text-grey-dark-700">{s.description}</span>
+                    <span className="ml-auto truncate text-xs text-grey-60 dark:text-grey-dark-700">
+                      {s.description}
+                    </span>
                   </>
                 )}
               </li>
@@ -504,7 +738,14 @@ export default function Composer({ client, room, threadRootId = null, events, pl
           onChange={(e) => updateText(e.target.value, e.target.selectionStart)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          onClick={() => setTrigger(triggerAt(text, textareaRef.current?.selectionStart ?? text.length))}
+          onClick={() =>
+            setTrigger(
+              triggerAt(
+                text,
+                textareaRef.current?.selectionStart ?? text.length,
+              ),
+            )
+          }
           onBlur={() => typing.stop()}
           rows={1}
           autoFocus={autoFocus}
@@ -514,53 +755,132 @@ export default function Composer({ client, room, threadRootId = null, events, pl
           className="block w-full resize-none bg-transparent px-3 pt-2.5 text-[15px] leading-[1.45] text-grey-10 outline-none placeholder:text-grey-60 dark:text-grey-light-100 dark:placeholder:text-grey-dark-700"
         />
 
-        <UploadList items={uploads} onCancel={(id) => setUploads((prev) => prev.filter((u) => (u.id === id ? (u.abort.abort(), false) : true)))} />
+        <UploadList
+          items={uploads}
+          onCancel={(id) =>
+            setUploads((prev) =>
+              prev.filter((u) =>
+                u.id === id ? (u.abort.abort(), false) : true,
+              ),
+            )
+          }
+        />
 
         <div className="flex items-center gap-0.5 px-1.5 pb-1.5 pt-1">
           <CustomTooltip tooltipContent="Bold (⌘B)" asChild>
-            <button type="button" className={TOOL_BUTTON} aria-label="Bold" onClick={() => wrapSelection("*")}>
+            <button
+              type="button"
+              className={TOOL_BUTTON}
+              aria-label="Bold"
+              onClick={() => wrapSelection("*")}
+            >
               <Bold className="size-4" aria-hidden />
             </button>
           </CustomTooltip>
           <CustomTooltip tooltipContent="Italic (⌘I)" asChild>
-            <button type="button" className={TOOL_BUTTON} aria-label="Italic" onClick={() => wrapSelection("_")}>
+            <button
+              type="button"
+              className={TOOL_BUTTON}
+              aria-label="Italic"
+              onClick={() => wrapSelection("_")}
+            >
               <Italic className="size-4" aria-hidden />
             </button>
           </CustomTooltip>
           <CustomTooltip tooltipContent="Strikethrough (⌘⇧X)" asChild>
-            <button type="button" className={TOOL_BUTTON} aria-label="Strikethrough" onClick={() => wrapSelection("~")}>
+            <button
+              type="button"
+              className={TOOL_BUTTON}
+              aria-label="Strikethrough"
+              onClick={() => wrapSelection("~")}
+            >
               <Strikethrough className="size-4" aria-hidden />
             </button>
           </CustomTooltip>
-          <CustomTooltip tooltipContent="Code (⌘E) — click twice for a block" asChild>
+          <CustomTooltip
+            tooltipContent="Code (⌘E) — click twice for a block"
+            asChild
+          >
             <button
               type="button"
               className={TOOL_BUTTON}
               aria-label="Code"
-              onClick={(e) => wrapSelection("`".repeat(e.detail >= 2 ? 3 : 1), e.detail >= 2)}
+              onClick={(e) =>
+                wrapSelection("`".repeat(e.detail >= 2 ? 3 : 1), e.detail >= 2)
+              }
             >
               <Code className="size-4" aria-hidden />
             </button>
           </CustomTooltip>
-          <span className="mx-1 h-4 w-px bg-grey-80 dark:bg-black-500" aria-hidden />
+          <span
+            className="mx-1 h-4 w-px bg-grey-80 dark:bg-black-500"
+            aria-hidden
+          />
           <EmojiPicker
             quickRow={false}
             side="top"
             align="start"
             onPick={insertAtCaret}
             trigger={
-              <button type="button" className={TOOL_BUTTON} aria-label="Insert emoji">
+              <button
+                type="button"
+                className={TOOL_BUTTON}
+                aria-label="Insert emoji"
+              >
                 <Smile className="size-4" aria-hidden />
               </button>
             }
           />
-          <button type="button" className={TOOL_BUTTON} aria-label="Attach file" onClick={() => fileInputRef.current?.click()} disabled={Boolean(editing)}>
+          <GifPicker
+            open={gifOpen}
+            onOpenChange={setGifOpen}
+            disabled={gifsAvailability === "disabled"}
+            initialQuery={gifQuery}
+            side="top"
+            align="start"
+            onPick={sendPickedGif}
+            trigger={
+              // The first hover or focus asks the proxy once whether GIFs
+              // are enabled here; the answer is cached for the session.
+              <button
+                type="button"
+                className={TOOL_BUTTON}
+                aria-label="Insert GIF"
+                disabled={Boolean(editing) || gifsAvailability === "disabled"}
+                onPointerEnter={() => void ensureGifsAvailability()}
+                onFocus={() => void ensureGifsAvailability()}
+                onClick={() => setGifQuery("")}
+              >
+                <GifGlyph />
+              </button>
+            }
+          />
+          <button
+            type="button"
+            className={TOOL_BUTTON}
+            aria-label="Attach file"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={Boolean(editing)}
+          >
             <Paperclip className="size-4" aria-hidden />
           </button>
-          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFileInput} aria-hidden tabIndex={-1} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={onFileInput}
+            aria-hidden
+            tabIndex={-1}
+          />
 
-          <span className="ml-auto hidden text-[11px] text-grey-60 sm:inline dark:text-grey-dark-700" aria-hidden>
-            {editing ? "Enter to save · Esc to cancel" : "Enter to send · Shift+Enter for a new line"}
+          <span
+            className="ml-auto hidden text-[11px] text-grey-60 sm:inline dark:text-grey-dark-700"
+            aria-hidden
+          >
+            {editing
+              ? "Enter to save · Esc to cancel"
+              : "Enter to send · Shift+Enter for a new line"}
           </span>
           <button
             type="button"
