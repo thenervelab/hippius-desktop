@@ -1,6 +1,6 @@
 # Screen capture: screenshots and recordings straight into Hippius
 
-**Status:** plan, awaiting decisions (see "Open questions").
+**Status:** decided (see "Decisions"); phase 1 in progress.
 **Branch:** `feat/screen-capture`, local only.
 
 ## The feature
@@ -203,16 +203,18 @@ Each phase is shippable on its own, behind `SCREEN_CAPTURE_ENABLED = enabledFrom
   displays, a second monitor left of the primary (negative coordinates), the
   permission relaunch, and a 30-minute recording's file size and CPU.
 
-## Open questions
+## Decisions
 
-1. **Where do captures go?** Proposed: a `Captures` folder in a drive the user
-   picks the first time, remembered, changeable in Settings.
-2. **Copy a share link automatically after every capture** (Loom's behaviour), or
-   only upload and offer the link in the notification?
-3. **Recording platforms for the first release**: macOS + Windows with Linux
-   limited to screenshots, or all three?
-4. **Recording extras in scope**: microphone, system audio, webcam bubble, click
-   highlights?
-5. **macOS floor**: recording needs 12.3 (ScreenCaptureKit); the app's floor is
-   11.0. Proposed: keep the floor and hide recording on 11–12.2, since
-   screenshots work there.
+1. **Destination:** a `Captures` folder in a drive the user picks on their first
+   capture, remembered in `user_preferences` and changeable in Settings. Uploaded
+   through the remote path, so it works whether or not that drive is synced here.
+2. **Share link:** copied to the clipboard automatically after every capture,
+   with a notification. This is the feature's point.
+3. **Recording platforms, first release:** macOS and Windows. Linux gets
+   screenshots; Linux recording is a follow-up.
+4. **Recording extras, first release:** microphone, system audio, webcam bubble
+   and click highlights — all four. Phase 2 is therefore larger than first
+   sketched: the webcam bubble is its own content-protected floating window and
+   needs the camera entitlement, and system audio is macOS 13+ (hidden on 12.x).
+5. **macOS floor:** unchanged at 11.0. Recording is hidden on 11–12.2 because
+   ScreenCaptureKit needs 12.3; screenshots work everywhere.
