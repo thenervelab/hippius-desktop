@@ -13,6 +13,7 @@ export type SidebarSearchView =
   | "recent-loading" // empty query, recent uploads loading with nothing cached
   | "recent" // empty query, show the recent-uploads list
   | "recent-empty" // empty query, recent uploads settled but empty
+  | "query-too-short" // something typed, but below the server's minimum
   | "skeleton" // active query, fetching, no results yet
   | "results" // active query, has results to show
   | "no-results"; // active query, settled with zero matches
@@ -20,6 +21,12 @@ export type SidebarSearchView =
 export interface SidebarSearchViewInput {
   /** True when the trimmed query is non-empty. */
   hasQuery: boolean;
+  /**
+   * True when the query is non-empty but below the server's minimum term
+   * length, so no search was issued for it. Optional so a caller with no
+   * minimum keeps the old behaviour.
+   */
+  queryTooShort?: boolean;
   /** True while the search IPC is in flight for the current query. */
   isFetching: boolean;
   /** Number of search results currently available. */
@@ -40,14 +47,24 @@ export interface SidebarSearchViewInput {
 export function getSidebarSearchView(
   input: SidebarSearchViewInput,
 ): SidebarSearchView {
-  const { hasQuery, isFetching, resultCount, recentLoading, recentCount } =
-    input;
+  const {
+    hasQuery,
+    queryTooShort = false,
+    isFetching,
+    resultCount,
+    recentLoading,
+    recentCount,
+  } = input;
 
   if (!hasQuery) {
     if (recentCount > 0) return "recent";
     if (recentLoading) return "recent-loading";
     return "recent-empty";
   }
+
+  // Ahead of every search signal: nothing was asked, so zero results is not
+  // "no matches" and a leftover in-flight flag is not "loading".
+  if (queryTooShort) return "query-too-short";
 
   if (resultCount > 0) return "results";
   if (isFetching) return "skeleton";

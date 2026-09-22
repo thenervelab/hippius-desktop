@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { FileFilterRequest } from "@/app/lib/hooks/useFilteredFiles";
+import { serverSearchTerm } from "@/app/lib/utils/searchTerm";
 
 export const DRIVE_SCOPED_SEARCH_QUERY_KEY = "drive-scoped-search";
 
@@ -48,18 +49,28 @@ export function useDriveScopedSearch(
     return () => clearTimeout(handle);
   }, [term, debounceMs]);
 
+  // Null below the server's minimum term length. A term that short is left
+  // out rather than sent: with an extension picked the search still runs on
+  // the extension alone, and without one there is nothing to ask.
+  const sendableTerm = serverSearchTerm(debouncedTerm);
+
   const extension = criteria.fileExtensions?.[0];
-  const shouldFire = enabled && Boolean(accountId) && Boolean(label) &&
-    (debouncedTerm.length > 0 || Boolean(extension));
+  const shouldFire =
+    enabled &&
+    Boolean(accountId) &&
+    Boolean(label) &&
+    (sendableTerm !== null || Boolean(extension));
 
   const { data, isFetching } = useQuery({
-    queryKey: [DRIVE_SCOPED_SEARCH_QUERY_KEY, accountId, label, debouncedTerm, extension],
+    // Keyed on the term actually sent: over an extension filter, "a" and
+    // "ab" are the same request as no term at all.
+    queryKey: [DRIVE_SCOPED_SEARCH_QUERY_KEY, accountId, label, sendableTerm, extension],
     queryFn: async (): Promise<FormattedUserFile[]> =>
       invoke<FormattedUserFile[]>("search_files_in_drive", {
         accountId,
         label,
         params: {
-          query: debouncedTerm || undefined,
+          query: sendableTerm ?? undefined,
           fileExtension: extension,
         },
       }),

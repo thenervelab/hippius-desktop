@@ -4,6 +4,11 @@ import { resolve } from "node:path";
 
 import { getRenameValidationError } from "@/components/page-sections/drive/renameValidation";
 import { normalizeRelPath } from "@/lib/utils/relPath";
+import {
+  isSearchTermTooShort,
+  MIN_SEARCH_TERM_LENGTH,
+  serverSearchTerm,
+} from "@/lib/utils/searchTerm";
 
 // These tests pin the two FE validators against the SAME JSON fixtures the Rust
 // unit tests consume (src-tauri/sync/files.rs::validate_new_name and
@@ -23,6 +28,12 @@ const fixture = (name: string): unknown =>
 interface NameCase {
   input: string;
   valid: boolean;
+  note: string;
+}
+
+interface SearchTermCase {
+  input: string;
+  sent: string | null;
   note: string;
 }
 
@@ -61,6 +72,38 @@ describe("cross-boundary contract: rel-path normalization (FE ⇔ Rust normalize
     "normalizes %j → %j (%s)",
     (input, expected) => {
       expect(normalizeRelPath(input)).toBe(expected);
+    },
+  );
+});
+
+// The rule is enforced in Rust (`classify_query` never puts a short term on the
+// wire); the FE copy only picks between "keep typing" and "no results". If the
+// two drift, the palette either claims no matches for a term that was never
+// searched, or asks for more characters while Rust is already searching.
+describe("cross-boundary contract: search term minimum (FE ⇔ Rust classify_query)", () => {
+  const cases = fixture("search_term_cases.json") as SearchTermCase[];
+
+  it("loads a non-empty shared fixture", () => {
+    expect(cases.length).toBeGreaterThan(0);
+  });
+
+  it("states the server's minimum", () => {
+    expect(MIN_SEARCH_TERM_LENGTH).toBe(3);
+  });
+
+  it.each(cases.map((c) => [c.input, c.sent, c.note] as const))(
+    "sends %j as %j (%s)",
+    (input, sent) => {
+      expect(serverSearchTerm(input)).toBe(sent);
+    },
+  );
+
+  it.each(cases.map((c) => [c.input, c.sent, c.note] as const))(
+    "hints on %j only when something was typed and nothing is sent (%s)",
+    (input, sent) => {
+      const typedSomething = input.trim().length > 0;
+
+      expect(isSearchTermTooShort(input)).toBe(typedSomething && sent === null);
     },
   );
 });
