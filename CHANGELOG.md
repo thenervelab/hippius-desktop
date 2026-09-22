@@ -59,6 +59,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   channels and categories, archive channels, and (owners only) delete the
   workspace after typing its name. Members see the same details read-only,
   and the only owner is stopped from leaving before handing over ownership.
+- **Chat notifications now chime.** A short two-note sound plays with each
+  chat notification when the "Sound" preference is on; a Preview button in
+  chat Preferences lets you hear it before deciding.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.

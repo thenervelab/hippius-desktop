@@ -1,6 +1,12 @@
 import { renderHook } from "@testing-library/react";
 import { EventEmitter } from "events";
-import { type MatrixClient, type MatrixEvent, MatrixEventEvent, type Room, RoomEvent } from "matrix-js-sdk";
+import {
+  type MatrixClient,
+  type MatrixEvent,
+  MatrixEventEvent,
+  type Room,
+  RoomEvent,
+} from "matrix-js-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauri = await vi.hoisted(async () => {
@@ -16,6 +22,10 @@ vi.mock("@tauri-apps/api/event", () => tauri.event);
 const classify = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/chat/notifications", () => ({ classifyIncoming: classify }));
 vi.mock("@/lib/chat/rooms", () => ({ directRoomMap: () => new Map() }));
+const chime = vi.hoisted(() =>
+  vi.fn<() => Promise<void>>(async () => undefined),
+);
+vi.mock("@/lib/chat/chime", () => ({ playChime: chime }));
 
 import { useChatNotifications } from "@/components/chat/hooks/useChatNotifications";
 
@@ -23,7 +33,9 @@ function fakeClient(): MatrixClient & EventEmitter {
   return new EventEmitter() as unknown as MatrixClient & EventEmitter;
 }
 
-function fakeEvent(opts: { encrypted?: boolean } = {}): MatrixEvent & EventEmitter {
+function fakeEvent(
+  opts: { encrypted?: boolean } = {},
+): MatrixEvent & EventEmitter {
   const e = new EventEmitter() as unknown as MatrixEvent & EventEmitter;
   Object.assign(e, {
     isBeingDecrypted: () => opts.encrypted ?? false,
@@ -33,16 +45,33 @@ function fakeEvent(opts: { encrypted?: boolean } = {}): MatrixEvent & EventEmitt
 }
 
 const room = { roomId: "!g" } as unknown as Room;
-const REPORT = { roomId: "!g", roomName: "#general", senderName: "bob", body: "hi", isDirect: false, isMention: true, roomIsOpen: false };
+const REPORT = {
+  roomId: "!g",
+  roomName: "#general",
+  senderName: "bob",
+  body: "hi",
+  isDirect: false,
+  isMention: true,
+  roomIsOpen: false,
+};
 
-const notifyCalls = () => tauri.core.invoke.mock.calls.filter(([cmd]) => cmd === "chat_notify_message").map(([, args]) => args);
+const notifyCalls = () =>
+  tauri.core.invoke.mock.calls
+    .filter(([cmd]) => cmd === "chat_notify_message")
+    .map(([, args]) => args);
 
 beforeEach(() => {
   tauri.reset();
-  tauri.onInvoke("chat_notify_message", () => ({ outcome: "shown", playSound: false }));
+  tauri.onInvoke("chat_notify_message", () => ({
+    outcome: "shown",
+    playSound: false,
+  }));
   classify.mockReset();
   classify.mockReturnValue(REPORT);
+  chime.mockClear();
 });
+
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe("useChatNotifications", () => {
   it("hands a live timeline event to Rust and skips what the classifier rejects", () => {
@@ -78,12 +107,59 @@ describe("useChatNotifications", () => {
 
   it("passes the currently open room, read at event time, into the classifier", () => {
     const client = fakeClient();
-    const { rerender } = renderHook(({ open }: { open: string | null }) => useChatNotifications(client, open), {
-      initialProps: { open: null as string | null },
-    });
+    const { rerender } = renderHook(
+      ({ open }: { open: string | null }) => useChatNotifications(client, open),
+      {
+        initialProps: { open: null as string | null },
+      },
+    );
     rerender({ open: "!g" });
     client.emit(RoomEvent.Timeline, fakeEvent(), room, false);
-    expect(classify).toHaveBeenCalledWith(client, room, expect.anything(), expect.objectContaining({ openRoomId: "!g" }));
+    expect(classify).toHaveBeenCalledWith(
+      client,
+      room,
+      expect.anything(),
+      expect.objectContaining({ openRoomId: "!g" }),
+    );
+  });
+
+  it("plays the chime exactly when Rust says so", async () => {
+    const client = fakeClient();
+    renderHook(() => useChatNotifications(client, null));
+
+    // Shown but sound off, or suppressed: Rust answers playSound=false → silent.
+    client.emit(RoomEvent.Timeline, fakeEvent(), room, false);
+    await flush();
+    expect(chime).not.toHaveBeenCalled();
+    tauri.onInvoke("chat_notify_message", () => ({
+      outcome: "suppressed_preference",
+      playSound: false,
+    }));
+    client.emit(RoomEvent.Timeline, fakeEvent(), room, false);
+    await flush();
+    expect(chime).not.toHaveBeenCalled();
+
+    tauri.onInvoke("chat_notify_message", () => ({
+      outcome: "shown",
+      playSound: true,
+    }));
+    client.emit(RoomEvent.Timeline, fakeEvent(), room, false);
+    await flush();
+    expect(chime).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays quiet and does not throw when the notification IPC fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    tauri.onInvoke("chat_notify_message", () => {
+      throw new Error("pool closed");
+    });
+    const client = fakeClient();
+    renderHook(() => useChatNotifications(client, null));
+    client.emit(RoomEvent.Timeline, fakeEvent(), room, false);
+    await flush();
+    expect(chime).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("pool closed"));
+    warn.mockRestore();
   });
 
   it("unsubscribes on unmount", () => {

@@ -9,6 +9,7 @@ import {
   RoomEvent,
 } from "matrix-js-sdk";
 
+import { playChime } from "@/lib/chat/chime";
 import { classifyIncoming } from "@/lib/chat/notifications";
 import { directRoomMap } from "@/lib/chat/rooms";
 import { chatNotifyMessage } from "@/lib/tauri/chat";
@@ -19,7 +20,9 @@ import { chatNotifyMessage } from "@/lib/tauri/chat";
  * establishes the Matrix facts and Rust's `chat_notify_message` applies
  * the desktop policy — mentions in channels, every DM, unless the "Chat"
  * preference is off or the room is on screen in a focused window — and
- * shows the banner. Nothing is decided in the webview.
+ * shows the banner. Nothing is decided in the webview: it plays the
+ * chime (`playChime`) exactly when Rust answers `playSound: true` — the
+ * banner was shown and the Sound preference is on.
  *
  * `openRoomId` is the room the chat surface is showing, or `null` when the
  * user is on another page: a selected room that is not on screen must not
@@ -47,11 +50,13 @@ export function useChatNotifications(
         openRoomId: openRoomRef.current,
       });
       if (!message) return;
-      chatNotifyMessage(message).catch((error) => {
-        console.warn(
-          `[chat] notification failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
+      chatNotifyMessage(message)
+        .then((result) => (result.playSound ? playChime() : undefined))
+        .catch((error) => {
+          console.warn(
+            `[chat] notification failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
     };
 
     const onTimeline = (

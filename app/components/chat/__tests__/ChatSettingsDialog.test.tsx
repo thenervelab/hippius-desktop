@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { createStore, Provider } from "jotai";
 import type { MatrixClient } from "matrix-js-sdk";
 
@@ -22,7 +28,9 @@ vi.mock("@/components/chat/ChatProvider", () => ({
   useChat: () => ({ signOut, unlockEncryption, repairEncryption, encryption }),
 }));
 
-const openExternalLink = vi.fn<(url: string) => Promise<void>>(async () => undefined);
+const openExternalLink = vi.fn<(url: string) => Promise<void>>(
+  async () => undefined,
+);
 vi.mock("@/app/lib/utils/tauri", () => ({
   openExternalLink: (url: string) => openExternalLink(url),
 }));
@@ -30,12 +38,26 @@ vi.mock("@/app/lib/utils/tauri", () => ({
 const toast = { success: vi.fn(), error: vi.fn() };
 vi.mock("sonner", () => ({ toast }));
 
-vi.mock("@/components/chat/UserAvatar", () => ({ default: () => <div data-testid="avatar" /> }));
-vi.mock("@/components/chat/EncryptionDiagnostics", () => ({ default: () => null }));
+vi.mock("@/components/chat/UserAvatar", () => ({
+  default: () => <div data-testid="avatar" />,
+}));
+vi.mock("@/components/chat/EncryptionDiagnostics", () => ({
+  default: () => null,
+}));
+const chime = {
+  play: vi.fn<() => Promise<void>>(async () => undefined),
+  supported: true,
+};
+vi.mock("@/lib/chat/chime", () => ({
+  playChime: () => chime.play(),
+  chimeSupported: () => chime.supported,
+}));
 
 const prefs = {
   getNotifications: vi.fn(async () => true),
-  setNotifications: vi.fn<(enabled: boolean) => Promise<void>>(async () => undefined),
+  setNotifications: vi.fn<(enabled: boolean) => Promise<void>>(
+    async () => undefined,
+  ),
   getSound: vi.fn(async () => true),
   setSound: vi.fn<(enabled: boolean) => Promise<void>>(async () => undefined),
 };
@@ -48,12 +70,16 @@ vi.mock("@/lib/tauri/chat", () => ({
 
 const recoveryKeyText = vi.fn(async () => "EsTc abcd efgh ijkl");
 vi.mock("@/lib/chat/settings", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/chat/settings")>("@/lib/chat/settings");
+  const actual = await vi.importActual<typeof import("@/lib/chat/settings")>(
+    "@/lib/chat/settings",
+  );
   return { ...actual, recoveryKeyText: () => recoveryKeyText() };
 });
 
-const { default: ChatSettingsDialog } = await import("@/components/chat/ChatSettingsDialog");
-const { chatSettingsOpenAtom } = await import("@/components/chat/chat-ui-atoms");
+const { default: ChatSettingsDialog } =
+  await import("@/components/chat/ChatSettingsDialog");
+const { chatSettingsOpenAtom } =
+  await import("@/components/chat/chat-ui-atoms");
 
 function makeClient(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -61,7 +87,9 @@ function makeClient(overrides: Partial<Record<string, unknown>> = {}) {
     getDeviceId: () => "DEV1",
     getCrypto: () => undefined,
     getUser: () => ({ displayName: "Alice", avatarUrl: null }),
-    getAuthMetadata: vi.fn(async () => ({ account_management_uri: "https://auth.hippius.com/account/" })),
+    getAuthMetadata: vi.fn(async () => ({
+      account_management_uri: "https://auth.hippius.com/account/",
+    })),
     setDisplayName: vi.fn(async () => ({})),
     getDevices: vi.fn(async () => ({
       devices: [
@@ -74,7 +102,10 @@ function makeClient(overrides: Partial<Record<string, unknown>> = {}) {
   } as unknown as MatrixClient;
 }
 
-function renderOpen(client: MatrixClient, tab: "account" | "notifications" | "encryption" | "devices" = "account") {
+function renderOpen(
+  client: MatrixClient,
+  tab: "account" | "notifications" | "encryption" | "devices" = "account",
+) {
   const store = createStore();
   store.set(chatSettingsOpenAtom, tab);
   render(
@@ -117,8 +148,12 @@ describe("ChatSettingsDialog / Account", () => {
 
   it("opens the IdP sessions page in the system browser for other devices", async () => {
     renderOpen(makeClient());
-    fireEvent.click(await screen.findByRole("button", { name: "Sign out other devices" }));
-    expect(openExternalLink).toHaveBeenCalledWith("https://auth.hippius.com/account/?action=org.matrix.sessions_list");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign out other devices" }),
+    );
+    expect(openExternalLink).toHaveBeenCalledWith(
+      "https://auth.hippius.com/account/?action=org.matrix.sessions_list",
+    );
   });
 
   it("renames the display name through the client and confirms with a toast", async () => {
@@ -128,7 +163,9 @@ describe("ChatSettingsDialog / Account", () => {
     const input = screen.getByRole("textbox", { name: "Display name" });
     fireEvent.change(input, { target: { value: "Alice B." } });
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(client.setDisplayName).toHaveBeenCalledWith("Alice B."));
+    await waitFor(() =>
+      expect(client.setDisplayName).toHaveBeenCalledWith("Alice B."),
+    );
     expect(toast.success).toHaveBeenCalledWith("Display name updated");
   });
 });
@@ -137,7 +174,9 @@ describe("ChatSettingsDialog / Notifications", () => {
   it("reads both switches from Rust and writes a toggle back", async () => {
     prefs.getSound.mockResolvedValue(false);
     renderOpen(makeClient(), "notifications");
-    const notify = await screen.findByRole("switch", { name: "Desktop notifications" });
+    const notify = await screen.findByRole("switch", {
+      name: "Desktop notifications",
+    });
     const sound = screen.getByRole("switch", { name: "Notification sound" });
     await waitFor(() => expect(notify).toHaveAttribute("aria-checked", "true"));
     expect(sound).toHaveAttribute("aria-checked", "false");
@@ -147,10 +186,37 @@ describe("ChatSettingsDialog / Notifications", () => {
     expect(sound).toHaveAttribute("aria-checked", "true");
   });
 
+  it("previews the chime on demand without touching the preference, and hides Preview where audio is unavailable", async () => {
+    chime.play.mockClear();
+    renderOpen(makeClient(), "notifications");
+    await screen.findByRole("switch", { name: "Desktop notifications" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Preview the notification sound" }),
+    );
+    expect(chime.play).toHaveBeenCalledTimes(1);
+    expect(prefs.setSound).not.toHaveBeenCalled();
+    cleanup();
+
+    chime.supported = false;
+    try {
+      renderOpen(makeClient(), "notifications");
+      await screen.findByRole("switch", { name: "Desktop notifications" });
+      expect(
+        screen.queryByRole("button", {
+          name: "Preview the notification sound",
+        }),
+      ).toBeNull();
+    } finally {
+      chime.supported = true;
+    }
+  });
+
   it("rolls a toggle back when Rust refuses the write", async () => {
     prefs.setNotifications.mockRejectedValue(new Error("db locked"));
     renderOpen(makeClient(), "notifications");
-    const notify = await screen.findByRole("switch", { name: "Desktop notifications" });
+    const notify = await screen.findByRole("switch", {
+      name: "Desktop notifications",
+    });
     await waitFor(() => expect(notify).toHaveAttribute("aria-checked", "true"));
 
     fireEvent.click(notify);
@@ -166,7 +232,9 @@ describe("ChatSettingsDialog / Encryption", () => {
     expect(unlockEncryption).toHaveBeenCalledTimes(1);
 
     expect(recoveryKeyText).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Reveal recovery key" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reveal recovery key" }),
+    );
     expect(await screen.findByText("EsTc abcd efgh ijkl")).toBeInTheDocument();
     expect(recoveryKeyText).toHaveBeenCalledTimes(1);
 
@@ -179,9 +247,16 @@ describe("ChatSettingsDialog / Encryption", () => {
   });
 
   it("asks for confirmation before resetting cross-signing on a foreign key", () => {
-    encryption = { kind: "foreign-key", keyId: "k", keyName: "Element", canAdopt: false };
+    encryption = {
+      kind: "foreign-key",
+      keyId: "k",
+      keyName: "Element",
+      canAdopt: false,
+    };
     renderOpen(makeClient(), "encryption");
-    fireEvent.click(screen.getByRole("button", { name: "Reset encryption for this account" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reset encryption for this account" }),
+    );
     expect(repairEncryption).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Reset encryption" }));
     expect(repairEncryption).toHaveBeenCalledWith("reset-cross-signing");
@@ -209,6 +284,10 @@ describe("ChatSettingsDialog / Devices", () => {
     const input = screen.getByRole("textbox", { name: "Device name" });
     fireEvent.change(input, { target: { value: "Work desktop" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(client.setDeviceDetails).toHaveBeenCalledWith("DEV1", { display_name: "Work desktop" }));
+    await waitFor(() =>
+      expect(client.setDeviceDetails).toHaveBeenCalledWith("DEV1", {
+        display_name: "Work desktop",
+      }),
+    );
   });
 });
