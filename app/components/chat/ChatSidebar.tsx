@@ -3,10 +3,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { useAtom, useSetAtom } from "jotai";
 import { ClientEvent, type MatrixClient, RoomEvent, ThreadEvent } from "matrix-js-sdk";
-import { Bell, BellOff, Check, CheckCheck, FolderInput, Hash, Link2, LogOut, MessageSquare, PenSquare, Search, UserPlus, X } from "lucide-react";
+import { Bell, BellOff, Check, CheckCheck, FolderInput, Hash, Link2, LogOut, MessageSquare, PenSquare, Search, Settings, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import {
+  chatSettingsOpenAtom,
   createChannelCategoryAtom,
   createChannelOpenAtom,
   invitePeopleOpenAtom,
@@ -78,6 +79,7 @@ export default function ChatSidebar({ client, workspaces, className }: ChatSideb
   const setCreateChannelCategory = useSetAtom(createChannelCategoryAtom);
   const setMoveChannel = useSetAtom(moveChannelAtom);
   const setInviteOpen = useSetAtom(invitePeopleOpenAtom);
+  const setSettingsOpen = useSetAtom(chatSettingsOpenAtom);
   const [filter, setFilter] = useState("");
 
   const myUserId = client.getUserId() ?? "";
@@ -252,7 +254,10 @@ export default function ChatSidebar({ client, workspaces, className }: ChatSideb
             </span>
           </span>
         </span>
-        <ChatAccountMenu client={client} />
+        <ChatAccountMenu
+          client={client}
+          extraItems={[{ key: "preferences", label: "Preferences", icon: Settings, onSelect: () => setSettingsOpen("account") }]}
+        />
         <Button
           variant="ghost"
           size="icon"

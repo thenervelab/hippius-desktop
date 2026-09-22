@@ -47,6 +47,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   and opens the page where your other devices can be signed out. While the
   chat connects after a browser sign-in, a "Not you? Sign out" link lets you
   drop a wrong account before it loads.
+- **Chat preferences.** "Preferences" in the chat account menu opens a settings
+  dialog: change your display name, turn desktop notifications and the
+  notification sound on or off, review encryption on this device (with a
+  recovery key you can enter in another Matrix app to read your history there),
+  and see or rename the devices signed in to your chat account.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.

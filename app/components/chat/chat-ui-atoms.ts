@@ -33,6 +33,11 @@ export const joinWorkspaceOpenAtom = atom(false);
 /** "Invite people to <workspace>": by handle, or an invite link minted through Rust. */
 export const invitePeopleOpenAtom = atom(false);
 
+/** Sections of the chat Preferences dialog. */
+export type ChatSettingsTab = "account" | "notifications" | "encryption" | "devices";
+/** The Preferences dialog: the section to open on, or `false` when closed. */
+export const chatSettingsOpenAtom = atom<ChatSettingsTab | false>(false);
+
 /** Sidebar drawer when the window is too narrow for a static column. */
 export const sidebarDrawerOpenAtom = atom(false);
 /** The "New message" (start a DM) dialog. */

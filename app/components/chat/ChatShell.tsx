@@ -7,6 +7,7 @@ import { WifiOff } from "lucide-react";
 
 import { rightPanelAtom, selectedRoomIdAtom, sidebarDrawerOpenAtom } from "@/components/chat/chat-ui-atoms";
 import { useChat } from "@/components/chat/ChatProvider";
+import ChatSettingsDialog from "@/components/chat/ChatSettingsDialog";
 import ChatSidebar from "@/components/chat/ChatSidebar";
 import EncryptionBanner from "@/components/chat/EncryptionBanner";
 import CreateChannelDialog from "@/components/chat/CreateChannelDialog";
@@ -208,6 +209,7 @@ export default function ChatShell({ client }: { client: MatrixClient }) {
       </div>
 
       <NewMessageDialog client={client} />
+      <ChatSettingsDialog client={client} />
       <CreateChannelDialog client={client} workspaces={workspaces} />
       <MoveChannelDialog client={client} workspaces={workspaces} />
       <CreateWorkspaceDialog client={client} workspaces={workspaces} />
