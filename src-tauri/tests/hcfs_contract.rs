@@ -676,6 +676,9 @@ fn folder_share_client_surface_is_reachable() {
 
     let created_at = "2026-08-23T00:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().expect("timestamp parses");
     let item = FolderShareListItem {
+        // New upstream field (hcfs #457/#458 sealed invite tokens); this
+        // contract test pins unrelated listing fields.
+        owner_wrap: None,
         token_hash: folder_share_token_hash("tok"),
         folder_hash: "0123456789abcdef".to_string(),
         path_prefix: String::new(),

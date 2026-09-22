@@ -1340,6 +1340,10 @@ mod tests {
             size_bytes: size,
             revision_seq: 1,
             revision_id: [0u8; 32],
+            // New upstream fields (hcfs #455 names beside the ss58); the browse
+            // page mapper under test does not read them.
+            uploaded_by_name: None,
+            uploaded_by_email: None,
             encrypted_path: Vec::new(),
             file_name: name.map(str::to_string),
             relative_path: rel_path.map(str::to_string),

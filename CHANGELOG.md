@@ -372,6 +372,16 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A drive that could never finish syncing now finishes.** Files the app
+  could not unlock were downloaded again on every cycle forever, so the drive
+  reported "syncing" without end and never caught up. They are now retried
+  once, then set aside, and the sync moves on.
+- **Deleting files is no longer stuck behind a long upload.** Removals now
+  happen first, so a drive with a large backlog stops showing files you
+  already deleted and stops paying to store them.
+- **A file that can't be unlocked says so.** It used to read "Sync failed.
+  Please try again", which was wrong — trying again never helps. It now tells
+  you the file needs to be uploaded again or removed.
 - **Downloading and sharing a file from a drive someone shared with you now
   works.** Both refused with "no local key material on this device" on a shared
   drive you are browsing rather than syncing — including for a Viewer, whose only

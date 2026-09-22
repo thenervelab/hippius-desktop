@@ -405,6 +405,8 @@ mod tests {
             plaintext_size: 1234,
             ciphertext_size: 1280,
             mime_type: "application/octet-stream".to_string(),
+            // New upstream field (hcfs #457); history ordering does not use it.
+            owner_wrap: None,
             created_at: now,
             expires_at: Some(now + offset),
         }

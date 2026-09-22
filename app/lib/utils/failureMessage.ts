@@ -46,6 +46,13 @@ export function failureMessage(rec: FileFailureRecord): string {
       // left disk between plan and open — not a connection fault, not a
       // missing server object.
       return "File disappeared before upload — will retry.";
+    case "undecryptable":
+      // Must read identically to Rust's `UNDECRYPTABLE_DISPLAY_REASON`.
+      // Deliberately NOT "will retry": hcfs quarantines the file after two
+      // failed attempts on the same revision and stops fetching it, so the
+      // retry wording every other case uses would promise something that
+      // never happens.
+      return "Can't be decrypted on this device — needs to be re-uploaded or removed.";
     case "other":
     default: {
       // `other` carries display text; fall back to a generic line if absent or
