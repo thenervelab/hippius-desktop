@@ -13,6 +13,8 @@
  * drifted into four different strings.
  */
 
+import { cn } from "@/lib/utils";
+
 export const UPLOAD_FILE_LABEL = "Upload File";
 export const UPLOAD_FOLDER_LABEL = "Upload Folder";
 
@@ -40,6 +42,22 @@ export const UPLOAD_FOLDER_BUTTON_LABEL = "Folder";
  * the drive header, the folder-list toolbar, and the remote buttons.
  */
 export const TOOLBAR_BUTTON_GAP = "gap-1.5";
+
+// Figma white pill style shared by the header's secondary actions (Upload
+// Folder, Download Folder, Capture). Here rather than in DriveHeader so a
+// toolbar control in its own file can use it without importing the header.
+// Mirrors the trigger styling used across the home dashboard cards.
+export const SECONDARY_PILL_CLASSES = cn(
+  "h-[30px] px-3 py-2 rounded-[6px]",
+  TOOLBAR_BUTTON_GAP,
+  "bg-white border border-grey-dark-100 text-black-600",
+  "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
+  "font-geist text-[14px] font-medium tracking-[-0.28px] leading-[1.109]",
+  "hover:bg-grey-light-700",
+  "dark:bg-black-primary-bg dark:border-black-300 dark:text-grey-light-200",
+  "dark:hover:bg-black-300",
+);
+
 
 /**
  * Registering a local folder for ongoing sync is NOT an upload — it sets
