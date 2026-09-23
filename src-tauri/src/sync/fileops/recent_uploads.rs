@@ -213,6 +213,10 @@ fn map_search_hit_to_entry(
         label: local.map_or_else(|| hit.folder_label.clone(), |(label, _)| label.clone()),
         file_count: None,
         deleted: false,
+        // Same empty→None rule as `append_browse_page`: an empty ss58 must
+        // not reach UploaderCell as a blank name (it falls back to "Owner").
+        uploaded_by: hit.file.uploaded_by.clone().filter(|s| !s.is_empty()),
+        uploaded_by_name: hit.file.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
     })
 }
 
@@ -248,6 +252,9 @@ pub struct SearchFilesParams {
     /// [`SEARCH_DEFAULT_LIMIT`] and is clamped to `[1, MAX_LIMIT]`.
     pub offset: Option<usize>,
     pub limit: Option<usize>,
+    /// Exact uploader ss58, or the server's unrecorded sentinel. Selecting an
+    /// uploader alone must still run the search (console #920 / hcfs #374).
+    pub uploaded_by: Option<String>,
 }
 
 /// What the free-text `query` of a search amounts to once the server's
@@ -286,8 +293,9 @@ fn has_narrowing_filter(params: &SearchFilesParams) -> bool {
     let has_extension = params.file_extension.as_deref().is_some_and(|ext| !ext.trim().is_empty());
     let has_size_bound = params.size_min.is_some() || params.size_max.is_some();
     let has_date_bound = params.date_from.is_some() || params.date_to.is_some();
+    let has_uploader = params.uploaded_by.as_deref().is_some_and(|s| !s.trim().is_empty());
 
-    has_extension || has_size_bound || has_date_bound
+    has_extension || has_size_bound || has_date_bound || has_uploader
 }
 
 /// Whether the search can be answered with an empty list without asking the
@@ -356,6 +364,9 @@ fn build_search_query(params: &SearchFilesParams) -> Vec<(&'static str, String)>
     if let Some(so) = trimmed(&params.sort_order) {
         let order = if so.eq_ignore_ascii_case("asc") { "asc" } else { "desc" };
         pairs.push(("sort_order", order.to_string()));
+    }
+    if let Some(uploader) = trimmed(&params.uploaded_by) {
+        pairs.push(("uploaded_by", uploader));
     }
 
     pairs.push(("offset", params.offset.unwrap_or(0).to_string()));
@@ -670,6 +681,60 @@ mod tests {
         // file_id is the hex of the 32-byte path_hash (all zeros in the
         // fixture) — the id the download path needs for a non-synced file.
         assert_eq!(entry.file_id, "0".repeat(64));
+        assert_eq!(entry.uploaded_by, None);
+        assert_eq!(entry.uploaded_by_name, None);
+    }
+
+    /// Regression: Added-by filter uses `/search_files`, and UploaderCell
+    /// falls back to muted "Owner" when `uploadedBy` is missing. Search hits
+    /// must carry the same uploader fields browse listing already maps.
+    #[test]
+    fn maps_search_hit_uploader_onto_user_file_entry() {
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
+        let value = json!({
+            "folder_hash": folder_hash("Docs"),
+            "folder_label": "Docs",
+            "path_hash": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": 2048u64,
+            "revision_seq": 1u64,
+            "revision_id": vec![0u8; 32],
+            "arion_hash": "Qm123",
+            "created_at": 1_700_000_000i64,
+            "updated_at": 1_700_000_000i64,
+            "relative_path": "Work/report.pdf",
+            "file_name": "report.pdf",
+            "uploaded_by": "5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb",
+            "uploaded_by_name": "  Grace Hopper  ",
+        });
+        let hit: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
+        let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
+        assert_eq!(entry.uploaded_by.as_deref(), Some("5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb"));
+        assert_eq!(entry.uploaded_by_name.as_deref(), Some("Grace Hopper"));
+    }
+
+    #[test]
+    fn maps_empty_search_uploader_as_absent() {
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
+        let value = json!({
+            "folder_hash": folder_hash("Docs"),
+            "folder_label": "Docs",
+            "path_hash": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": 1u64,
+            "revision_seq": 1u64,
+            "revision_id": vec![0u8; 32],
+            "created_at": 1i64,
+            "updated_at": 1i64,
+            "relative_path": "a.txt",
+            "file_name": "a.txt",
+            "uploaded_by": "",
+            "uploaded_by_name": "   ",
+        });
+        let hit: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
+        let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
+        assert_eq!(entry.uploaded_by, None, "empty ss58 is unattributed");
+        assert_eq!(entry.uploaded_by_name, None, "whitespace-only name is absent");
     }
 
     /// A server row with no content hash yet (chunk-native, or not

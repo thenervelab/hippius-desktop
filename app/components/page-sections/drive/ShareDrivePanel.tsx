@@ -5,21 +5,9 @@
 // "Share drive…" menu item is hidden for member rows and the backend
 // refuses a member label as `Validation`.
 //
-// Invite tab lifecycle (`shareDriveModalState.ts::InviteState`):
-//
-//   `choosing`    — expiry preset picker; nothing is minted yet.
-//   `running`     — `create_drive_invite` in flight.
-//   `done`        — link ready, auto-copied once; read-only URL + copy.
-//   `unavailable` — feature-off server (`SHARED_DRIVES_UNAVAILABLE`):
-//                   quiet degrade copy, no retry, never a toast.
-//   `error`       — anything else. Inline message + Try again / Close.
-//
-// There is deliberately NO invite listing/revoke surface: the server
-// stores only blake3 token hashes and exposes no list-invites endpoint,
-// and the desktop never persists minted tokens — so after this dialog
-// closes there is nothing to select for revocation. Owners revoke ACCESS
-// by removing members (the Members tab); unclaimed links die by
-// expiry/max-uses. See `shared_drives/commands.rs` module docs.
+// Invite minting lives in `CreateDriveInviteDialog` (a separate dialog).
+// This panel's Links tab lists invites the server still holds, opens sealed
+// tokens in Rust, and offers copy / revoke — console parity for seal-back.
 
 "use client";
 
@@ -29,14 +17,13 @@ import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
 import { useAtom, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, UserRoundPen, Users, X } from "lucide-react";
+import { AlertCircle, Check, Copy, Lock, UserRoundPen, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button, Icons } from "@/components/ui";
+import { Button, Icons, Skeleton } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
-import { Select } from "@/components/ui/select/Select";
 import DriveRoleChip from "./DriveRoleChip";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -61,6 +48,8 @@ import {
   deadReasonLabel,
   inviteRowView,
 } from "@/app/lib/shared-drives/inviteRowView";
+import { truncateInviteUrl } from "@/app/lib/shared-drives/inviteLink";
+import { cn } from "@/lib/utils";
 import {
   DRIVE_ROLES,
   driveRoleDemotionWarning,
@@ -69,8 +58,9 @@ import {
   parseDriveRole,
   type DriveRole,
 } from "@/app/lib/shared-drives/roles";
+import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
+import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { middleTruncate } from "@/lib/utils/middleTruncate";
 import {
   formatJoinedDate,
   getInvitesView,
@@ -78,6 +68,91 @@ import {
   type InvitesState,
   type MembersState,
 } from "./shareDriveModalState";
+
+/** How many placeholder rows to show while a tab list is on the wire. */
+const SKELETON_ROWS = 4;
+
+/**
+ * Members-tab loading body — avatar + name + role chip shaped like a real
+ * `MemberRow`, so the list does not flash empty text then jump.
+ */
+function MembersTabSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label="Loading members"
+      className="min-h-0 flex-1 overflow-hidden"
+    >
+      <span className="sr-only">Loading members…</span>
+      {Array.from({ length: SKELETON_ROWS }, (_, i) => (
+        <div
+          key={i}
+          className="flex items-center justify-between gap-2 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10"
+        >
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Skeleton variant="circle" width={28} height={28} />
+            <div className="min-w-0 space-y-1.5">
+              <Skeleton
+                width={i % 2 === 0 ? 128 : 96}
+                height={12}
+                className="rounded-md"
+              />
+              <div className="flex items-center gap-1.5">
+                <Skeleton width={52} height={18} className="rounded-full" />
+                <Skeleton width={72} height={11} className="rounded-md" />
+              </div>
+            </div>
+          </div>
+          <Skeleton width={28} height={28} className="shrink-0 rounded-md" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Links-tab loading body — summary / expiry / revoke button, with a URL
+ * field bar on the first few rows (console-parity shape for sealed invites).
+ */
+function LinksTabSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label="Loading links"
+      className="min-h-0 flex-1 overflow-hidden"
+    >
+      <span className="sr-only">Loading links…</span>
+      {Array.from({ length: SKELETON_ROWS }, (_, i) => (
+        <div
+          key={i}
+          className="border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0 space-y-1.5">
+              <Skeleton
+                width={i % 2 === 0 ? 148 : 132}
+                height={12}
+                className="rounded-md"
+              />
+              <Skeleton width={110} height={11} className="rounded-md" />
+            </div>
+            <Skeleton width={58} height={28} className="shrink-0 rounded-md" />
+          </div>
+          {/* First three rows include the link field — most live invites show one. */}
+          {i < 3 ? (
+            <Skeleton
+              height={30}
+              width="100%"
+              className="mt-2 rounded-[6px]"
+            />
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
@@ -249,14 +324,14 @@ export default function ShareDrivePanel() {
   // Body first, so the inline panel and the small-screen overlay render
   // exactly the same thing and cannot drift.
   const body = target ? (
-      <div className="flex h-full flex-col px-3 pt-4 font-geist">
-        <div className="mb-4 flex items-start justify-between gap-2 px-2">
+      <div className="flex h-full min-h-0 flex-col px-3 pb-4 pt-4 font-geist">
+        <div className="mb-4 flex shrink-0 items-start justify-between gap-2 px-2">
           <div className="min-w-0">
             <p className="text-[16px] font-medium leading-5 text-black-900 dark:text-white">
               Share access
             </p>
-            <p className="mt-0.5 truncate text-[13px] text-black-900/40 dark:text-white/40">
-              {target.folderName}
+            <p className="mt-0.5 min-w-0 truncate text-[13px] text-black-900/40 dark:text-white/40">
+              {inviteDriveDisplayName(target.folderName, target.label)}
             </p>
           </div>
           <button
@@ -269,7 +344,7 @@ export default function ShareDrivePanel() {
           </button>
         </div>
 
-        <div className="mb-5">
+        <div className="mb-5 shrink-0">
           <SegmentedControl<Tab>
             ariaLabel="Share drive sections"
             fullWidth
@@ -282,6 +357,8 @@ export default function ShareDrivePanel() {
           />
         </div>
 
+        {/* List tabs claim remaining panel height and scroll inside it —
+            fixed max-h caps left empty space below while clipping rows. */}
         {tab === "links" ? (
           <LinksTab
             state={invites}
@@ -292,6 +369,12 @@ export default function ShareDrivePanel() {
         ) : (
           <MembersTab
             state={members}
+            driveName={
+              inviteDriveDisplayName(
+                target?.folderName,
+                target?.label ?? label,
+              ) || "this drive"
+            }
             onRemove={(ss58) => void removeMember(ss58)}
             onChangeRole={(ss58, role) => void changeRole(ss58, role)}
             onCreateInvite={() => {
@@ -324,7 +407,10 @@ export default function ShareDrivePanel() {
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="h-full shrink-0 overflow-hidden"
           >
-            <div className="h-full overflow-y-auto" style={{ width: PANEL_WIDTH_PX }}>
+            <div
+              className="flex h-full min-h-0 flex-col overflow-hidden"
+              style={{ width: PANEL_WIDTH_PX }}
+            >
               {body}
             </div>
           </motion.aside>
@@ -339,7 +425,7 @@ export default function ShareDrivePanel() {
         <Dialog.Overlay className="fixed inset-0 z-[1002] bg-white/72 backdrop-blur-[5.75px] dark:bg-[rgba(4,4,4,0.4)] dark:backdrop-blur-[11.5px] animate-fade-in-0.2" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed bottom-0 right-0 top-0 z-[1003] w-full max-w-[360px] overflow-y-auto bg-cover bg-fixed bg-center bg-no-repeat font-geist animate-panel-in bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]"
+          className="fixed bottom-0 right-0 top-0 z-[1003] flex w-full max-w-[360px] flex-col overflow-hidden bg-cover bg-fixed bg-center bg-no-repeat font-geist animate-panel-in bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]"
         >
           <Dialog.Title className="sr-only">Share access</Dialog.Title>
           {body}
@@ -375,16 +461,12 @@ function LinksTab({
   if (view === "unavailable") return <SharedDrivesUnavailableNotice onClose={onClose} />;
 
   if (view === "loading") {
-    return (
-      <p className="py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-        Loading links…
-      </p>
-    );
+    return <LinksTabSkeleton />;
   }
 
   if (view === "error") {
     return (
-      <p className="py-6 text-center text-sm text-error-70">
+      <p className="min-h-0 flex-1 py-6 text-center text-sm text-error-70">
         {state.kind === "error" ? state.message : "Could not load links"}
       </p>
     );
@@ -392,7 +474,7 @@ function LinksTab({
 
   if (view === "empty") {
     return (
-      <p className="py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+      <p className="min-h-0 flex-1 py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
         No invite links yet. Create one from the Invite tab.
       </p>
     );
@@ -400,7 +482,7 @@ function LinksTab({
 
   const invites = state.kind === "ready" ? state.invites : [];
   return (
-    <div className="max-h-[260px] overflow-y-auto">
+    <div className="min-h-0 flex-1 overflow-y-auto">
       {invites.map((invite) => (
         <InviteRow
           key={invite.inviteId}
@@ -425,76 +507,191 @@ function InviteRow({
   // The same two-step inline confirm the member row uses: revoking is
   // irreversible and the row is small.
   const [confirming, setConfirming] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [copied, setCopied] = useState(false);
   const view = inviteRowView(invite, undefined, viewerSs58);
 
+  const handleCopy = async () => {
+    if (!invite.inviteUrl || copying) return;
+    setCopying(true);
+    try {
+      await navigator.clipboard.writeText(invite.inviteUrl);
+      // Toast never carries the URL — it contains the drive key in `#k=`.
+      toast.success("Invite link copied");
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Couldn't copy invite link");
+    } finally {
+      setCopying(false);
+    }
+  };
+
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
-      <div className="min-w-0">
-        <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
-          {view.summary}
-        </p>
-        <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
-          {view.live ? view.expiry : deadReasonLabel(view.deadReason)}
-          {/* Only somebody ELSE's link says who made it. Now that a manager
-              can mint, a drive's links no longer all come from one person,
-              and "who let them in" is a question the list has to answer. */}
-          {view.mintedBy && (
-            <> · by {middleTruncate(view.mintedBy, 14)}</>
-          )}
-        </p>
+    <div className="border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
+            {view.summary}
+          </p>
+          <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
+            {view.live ? view.expiry : deadReasonLabel(view.deadReason)}
+            {/* Only somebody ELSE's link says who made it. Now that a manager
+                can mint, a drive's links no longer all come from one person,
+                and "who let them in" is a question the list has to answer. */}
+            {view.mintedBy && (
+              <>
+                {" "}
+                · by{" "}
+                {accountDisplayName(
+                  view.mintedBy,
+                  invite.mintedByName,
+                  14,
+                )}
+              </>
+            )}
+          </p>
+        </div>
+
+        {view.live ? (
+          confirming ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="auto"
+                onClick={() => {
+                  setConfirming(false);
+                  onRevoke(invite.inviteId);
+                }}
+                className="h-7 rounded-md border border-error-50/40 px-2 text-xs font-medium text-error-50 hover:bg-error-50/10"
+              >
+                Confirm revoke
+              </Button>
+              <Button
+                variant="ghost"
+                size="auto"
+                onClick={() => setConfirming(false)}
+                className="h-7 rounded-md px-2 text-xs font-medium text-grey-50 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:bg-white/10"
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="ghost"
+              size="auto"
+              onClick={() => setConfirming(true)}
+              className="h-7 shrink-0 rounded-md border border-error-50/50 px-2 text-xs font-medium text-error-50 transition-colors hover:bg-error-50/10 dark:border-error-50/40 dark:hover:bg-error-50/10"
+            >
+              Revoke
+            </Button>
+          )
+        ) : (
+          // A dead link needs no action; showing a disabled Revoke would imply
+          // there is something left to do.
+          <span className="shrink-0 text-[11px] text-grey-60 dark:text-grey-dark-600">
+            No longer works
+          </span>
+        )}
       </div>
 
-      {view.live ? (
-        confirming ? (
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="ghost"
-              size="auto"
-              onClick={() => {
-                setConfirming(false);
-                onRevoke(invite.inviteId);
-              }}
-              className="h-7 rounded-md border border-error-50/40 px-2 text-xs font-medium text-error-50 hover:bg-error-50/10"
-            >
-              Confirm revoke
-            </Button>
-            <Button
-              variant="ghost"
-              size="auto"
-              onClick={() => setConfirming(false)}
-              className="h-7 rounded-md px-2 text-xs font-medium text-grey-50 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:bg-white/10"
-            >
-              Cancel
-            </Button>
-          </div>
-        ) : (
-          <Button
-            variant="ghost"
-            size="auto"
-            onClick={() => setConfirming(true)}
-            className="h-7 shrink-0 rounded-md border border-grey-80 px-2 text-xs font-medium text-grey-30 hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
-          >
-            Revoke
-          </Button>
-        )
-      ) : (
-        // A dead link needs no action; showing a disabled Revoke would imply
-        // there is something left to do.
-        <span className="shrink-0 text-[11px] text-grey-60 dark:text-grey-dark-600">
-          No longer works
+      {/* Console parity: sealed + valid → link field (ready / locked).
+          Revoked / pre-seal-back rows omit it. Never render `#k=`. */}
+      {invite.linkAvailable ? (
+        <InviteLinkField
+          url={invite.inviteUrl}
+          copying={copying}
+          copied={copied}
+          onCopy={() => void handleCopy()}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The invite's link field — same three visual states as console
+ * `InviteLinkRows.InviteLinkField`, without the unlock gate (Rust opens
+ * blobs inside `list_drive_invites`; absence of `url` is locked).
+ */
+const LOCKED_LINK_PLACEHOLDER =
+  "https://console.hippius.com/invite/Xk29fLpQ7rTnB4vW8yHc";
+
+const LINK_FIELD =
+  "mt-2 flex w-full min-w-0 items-center gap-2 rounded-[6px] border border-grey-80 bg-grey-90/40 px-2.5 py-1.5 text-left transition-colors dark:border-white/10 dark:bg-white/5";
+
+function InviteLinkField({
+  url,
+  copying,
+  copied,
+  onCopy,
+}: {
+  url: string | undefined;
+  copying: boolean;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  if (url) {
+    return (
+      <button
+        type="button"
+        title="Copy invite link"
+        aria-label="Copy invite link"
+        disabled={copying}
+        onClick={onCopy}
+        className={cn(
+          LINK_FIELD,
+          "group hover:border-primary-50 disabled:opacity-60 dark:hover:border-[#82a3f0]",
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] leading-4 text-grey-30 dark:text-grey-dark-500">
+          {truncateInviteUrl(url)}
         </span>
-      )}
+        {copied ? (
+          <Check
+            aria-hidden
+            className="size-3.5 shrink-0 text-success-40 dark:text-success-50"
+          />
+        ) : (
+          <Copy
+            aria-hidden
+            className="size-3.5 shrink-0 text-grey-50 transition-colors group-hover:text-primary-50 dark:text-grey-dark-700 dark:group-hover:text-[#82a3f0]"
+          />
+        )}
+      </button>
+    );
+  }
+
+  return (
+    <div
+      role="status"
+      aria-label="Link locked"
+      title="Could not rebuild this invite link"
+      className={LINK_FIELD}
+    >
+      <span
+        aria-hidden
+        className="min-w-0 flex-1 select-none truncate font-mono text-[11px] leading-4 text-grey-30 blur-[3px] dark:text-grey-dark-500"
+      >
+        {LOCKED_LINK_PLACEHOLDER}
+      </span>
+      <Lock
+        aria-hidden
+        className="size-3.5 shrink-0 text-grey-50 dark:text-grey-dark-700"
+      />
     </div>
   );
 }
 
 function MembersTab({
   state,
+  driveName,
   onRemove,
   onChangeRole,
   onCreateInvite,
 }: {
   state: MembersState;
+  driveName: string;
   onRemove: (memberSs58: string) => void;
   onChangeRole: (memberSs58: string, role: DriveRole) => void;
   onCreateInvite: () => void;
@@ -502,14 +699,12 @@ function MembersTab({
   const view = getMembersView(state);
 
   if (view === "loading") {
-    return (
-      <p className="py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">Loading members…</p>
-    );
+    return <MembersTabSkeleton />;
   }
 
   if (view === "unavailable") {
     return (
-      <p className="py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+      <p className="min-h-0 flex-1 py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">
         Shared drives aren&apos;t available on your server yet.
       </p>
     );
@@ -517,7 +712,7 @@ function MembersTab({
 
   if (view === "error") {
     return (
-      <div className="mb-2 flex items-start gap-2 rounded-md border border-error-90 bg-error-100/40 px-3 py-2.5 dark:border-error-30/60 dark:bg-error-30/10">
+      <div className="mb-2 flex min-h-0 flex-1 items-start gap-2 rounded-md border border-error-90 bg-error-100/40 px-3 py-2.5 dark:border-error-30/60 dark:bg-error-30/10">
         <AlertCircle className="mt-0.5 size-4 shrink-0 text-error-70" />
         <p className="break-words text-xs text-grey-50 dark:text-grey-dark-600">
           {state.kind === "error" ? state.message : "Couldn't load members"}
@@ -528,7 +723,7 @@ function MembersTab({
 
   if (view === "empty") {
     return (
-      <div className="py-6 text-center">
+      <div className="min-h-0 flex-1 py-6 text-center">
         <p className="mb-4 text-sm text-grey-50 dark:text-grey-dark-600">
           No one has joined this drive yet.
         </p>
@@ -539,15 +734,16 @@ function MembersTab({
 
   const members = state.kind === "ready" ? state.members : [];
   return (
-    <div>
-      <div className="mb-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-3 shrink-0">
         <InviteButton onClick={onCreateInvite} hasMembers />
       </div>
-      <div className="max-h-[320px] overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {members.map((member) => (
           <MemberRow
             key={member.memberSs58}
             member={member}
+            driveName={driveName}
             onRemove={onRemove}
             onChangeRole={onChangeRole}
           />
@@ -588,11 +784,12 @@ function InviteButton({
 /**
  * Changing a member's role, as a dialog.
  *
- * The role used to be an inline `Select` on the row, which committed on
- * selection: a mis-click silently changed what somebody could do to the
- * drive, with only a toast to say so. A role is a decision, so it gets the
- * app's decision surface -- pick, read what it grants, press Save -- and the
- * row keeps a three-dot menu like every other row in the app.
+ * Console parity: roles are a radio list with each option's description
+ * beside it (not a dropdown that hides the other choices). The role used to
+ * commit on an inline row select; a mis-click then changed what somebody
+ * could do, with only a toast to say so. A role is a decision, so it gets
+ * the app's decision surface -- pick, read what it grants, press Save --
+ * and the row keeps a three-dot menu like every other row in the app.
  */
 function ChangeRoleDialog({
   member,
@@ -606,6 +803,7 @@ function ChangeRoleDialog({
   const current = parseDriveRole(member.role);
   const [role, setRole] = useState<DriveRole>(current);
   const demotionWarning = driveRoleDemotionWarning(current, role);
+  const who = accountDisplayName(member.memberSs58, member.memberName);
 
   return (
     <FramedDialog
@@ -617,26 +815,38 @@ function ChangeRoleDialog({
       contentClassName="sm:w-[405px]"
     >
       <div className="font-geist">
-        <p className="mb-5 break-all text-center font-mono text-xs text-grey-50 dark:text-grey-dark-600">
-          {member.memberSs58}
+        <p className="mb-5 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+          What {who} can do in this drive.
         </p>
 
-        <div className="mb-6 flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
-            They join as
-          </span>
-          <Select
-            ariaLabel="Member role"
-            value={role}
-            onValueChange={(value) => setRole(value as DriveRole)}
-            options={DRIVE_ROLES.map((r) => ({
-              label: driveRoleLabel(r),
-              value: r,
-            }))}
-          />
-          <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-            {driveRoleDescription(role)}
-          </p>
+        <div className="mb-6 flex flex-col gap-2">
+          {DRIVE_ROLES.map((option) => (
+            <label
+              key={option}
+              className={cn(
+                "flex cursor-pointer flex-col gap-0.5 rounded-lg border p-3 transition-colors",
+                role === option
+                  ? "border-primary-50 bg-primary-100 dark:border-primary-50 dark:bg-primary-50/10"
+                  : "border-grey-80 hover:bg-grey-90 dark:border-white/10 dark:hover:bg-white/5",
+              )}
+            >
+              <span className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="change-member-role"
+                  className="accent-primary-50"
+                  checked={role === option}
+                  onChange={() => setRole(option)}
+                />
+                <span className="text-sm font-medium text-grey-10 dark:text-white">
+                  {driveRoleLabel(option)}
+                </span>
+              </span>
+              <span className="pl-6 text-xs text-grey-50 dark:text-grey-dark-600">
+                {driveRoleDescription(option)}
+              </span>
+            </label>
+          ))}
           {/* A demotion has a side effect nobody would guess: the server
               revokes the link that admitted this member when it outranks
               their new role, and demoting a manager revokes every link that
@@ -682,10 +892,12 @@ function ChangeRoleDialog({
 
 function MemberRow({
   member,
+  driveName,
   onRemove,
   onChangeRole,
 }: {
   member: DriveMemberInfo;
+  driveName: string;
   onRemove: (memberSs58: string) => void;
   onChangeRole: (memberSs58: string, role: DriveRole) => void;
 }) {
@@ -708,7 +920,7 @@ function MemberRow({
               className="truncate font-mono text-xs text-grey-10 dark:text-white"
               title={member.memberSs58}
             >
-              {middleTruncate(member.memberSs58, 22)}
+              {accountDisplayName(member.memberSs58, member.memberName)}
             </p>
             <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
               {/* The role reads as a chip here too, so a member list and a
@@ -775,7 +987,7 @@ function MemberRow({
         confirmVariant="destructive"
         confirmButtonClassName="text-white"
         button="Remove"
-        text={`Remove this member from "${member.memberSs58.slice(0, 8)}…"?`}
+        text={`Remove this member from "${driveName}"?`}
         helperText="They lose access on their next request. Files already downloaded to their device stay there, and any invite link still circulating keeps working — revoke it in the Links tab."
       />
     </>

@@ -152,8 +152,7 @@ function openMemberMenu(_memberSs58: string, item: "Change role" | "Remove from 
  */
 function changeMemberRoleTo(memberSs58: string, optionLabel: string) {
   openMemberMenu(memberSs58, "Change role");
-  fireEvent.click(screen.getByLabelText("Member role"));
-  fireEvent.click(screen.getByText(optionLabel));
+  fireEvent.click(screen.getByRole("radio", { name: new RegExp(optionLabel) }));
   fireEvent.click(screen.getByRole("button", { name: "Save role" }));
 }
 
@@ -206,12 +205,11 @@ describe("members tab", () => {
     await screen.findByRole("button", { name: "Change role" });
     openMemberMenu(MEMBER, "Change role");
 
-    const trigger = await screen.findByLabelText("Member role");
-    expect(trigger).toHaveTextContent("Editor");
-
-    fireEvent.click(trigger);
+    // Radios (console parity): every role and its description is visible at
+    // once; the member's current role starts checked.
+    expect(await screen.findByRole("radio", { name: /Editor/ })).toBeChecked();
     for (const label of ["Viewer", "Editor", "Manager"]) {
-      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+      expect(screen.getByRole("radio", { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
 
@@ -227,8 +225,7 @@ describe("members tab", () => {
     await screen.findByRole("button", { name: "Change role" });
     openMemberMenu(MEMBER, "Change role");
 
-    fireEvent.click(await screen.findByLabelText("Member role"));
-    fireEvent.click(screen.getByText("Manager"));
+    fireEvent.click(await screen.findByRole("radio", { name: /Manager/ }));
     expect(changeDriveMemberRoleMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Save role" }));
@@ -348,6 +345,8 @@ describe("links tab", () => {
     revoked: false,
     valid: true,
     createdAt: "2026-09-17T12:00:00Z",
+    linkAvailable: true,
+    inviteUrl: "https://console.example.com/invite/tok_abcdefgh#k=SECRETKEY",
   };
 
   it("lists links only when the tab is opened", async () => {
@@ -359,6 +358,52 @@ describe("links tab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Links" }));
     await screen.findByText(/Editor · 2 of 50 used/);
     expect(listDriveInvitesMock).toHaveBeenCalledWith("team-docs", undefined);
+  });
+
+  it("shows a truncated copyable URL without the #k= fragment", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    listDriveInvitesMock.mockResolvedValue([liveInvite]);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+
+    const copyBtn = await screen.findByRole("button", { name: "Copy invite link" });
+    expect(copyBtn).toHaveTextContent("https://console.example.com/invite/tok_abcd…");
+    expect(copyBtn).not.toHaveTextContent("SECRETKEY");
+    expect(copyBtn).not.toHaveTextContent("#k=");
+
+    fireEvent.click(copyBtn);
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(liveInvite.inviteUrl),
+    );
+  });
+
+  it("shows a locked stand-in when the blob is present but did not open", async () => {
+    listDriveInvitesMock.mockResolvedValue([
+      { ...liveInvite, inviteUrl: undefined },
+    ]);
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    expect(await screen.findByLabelText("Link locked")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
+  });
+
+  it("omits the link field on revoked rows", async () => {
+    listDriveInvitesMock.mockResolvedValue([
+      {
+        ...liveInvite,
+        revoked: true,
+        valid: false,
+        linkAvailable: false,
+        inviteUrl: undefined,
+      },
+    ]);
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    expect(await screen.findByText("Revoked")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Link locked")).not.toBeInTheDocument();
   });
 
   // The whole point: a minted link could not be killed at all before this.
@@ -390,7 +435,7 @@ describe("links tab", () => {
   // A dead link needs no action; a disabled Revoke would imply otherwise.
   it("offers no action on a revoked link, and says why", async () => {
     listDriveInvitesMock.mockResolvedValue([
-      { ...liveInvite, revoked: true, valid: false },
+      { ...liveInvite, revoked: true, valid: false, linkAvailable: false },
     ]);
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Links" }));

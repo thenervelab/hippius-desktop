@@ -33,6 +33,10 @@ export interface DriveMemberInfo {
   role: string;
   /** RFC 3339 timestamp of when the member joined. */
   createdAt: string;
+  /** Display name (hcfs #455); absent when unknown. */
+  memberName?: string;
+  /** Email, only for owner/managers of the same drive. */
+  memberEmail?: string;
 }
 
 /**
@@ -46,6 +50,8 @@ export interface DriveMemberInfo {
  */
 export interface DriveMembershipInfo {
   ownerSs58: string;
+  /** Owner display name (hcfs #455); absent when unknown. */
+  ownerName?: string;
   folderHash: string;
   displayLabel: string;
   role: string;
@@ -53,6 +59,14 @@ export interface DriveMembershipInfo {
   createdAt: string;
   syncedLocally: boolean;
   localLabel: string | null;
+  /**
+   * People on this drive (owner excluded). Omit / undefined means unknown —
+   * never draw "0 members" from absence.
+   */
+  memberCount?: number;
+  /** Owner account limited: uploads refused. */
+  frozen?: boolean;
+  frozenUntil?: string | null;
 }
 
 /** Result of {@link addSharedDrive}: the local drive label actually
@@ -179,12 +193,26 @@ export interface DriveInviteInfo {
    * invites the server has no provenance for.
    */
   mintedBy: string;
+  /** Minter display name (hcfs #455); absent when unknown. */
+  mintedByName?: string;
   expiresAt: string;
   maxUses: number;
   useCount: number;
   revoked: boolean;
   valid: boolean;
   createdAt: string;
+  /**
+   * Full invite URL when Rust opened the row's sealed token under the drive
+   * key. Treat as a drive-access capability: copy for the user, never log.
+   * Absent when there is no blob, the invite is dead, or open failed.
+   */
+  inviteUrl?: string;
+  /**
+   * True when the listing carried a sealed blob for a still-valid invite.
+   * The Links tab shows the link field; `inviteUrl` fills it or the locked
+   * stand-in when absent.
+   */
+  linkAvailable?: boolean;
 }
 
 /** The live invites for an OWN drive. */

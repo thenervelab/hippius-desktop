@@ -150,6 +150,14 @@ pub struct UserFileEntry {
     /// `#[serde(default)]`: FE-built listing rows never carry `deleted`.
     #[serde(default)]
     pub deleted: bool,
+    /// SS58 of whoever uploaded this revision, when the server attributes it.
+    /// Present on `/search_files` / `/browse` hits; absent for local disk-walk
+    /// rows and for files that predate attribution. Matches `FormattedUserFile.uploadedBy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploaded_by: Option<String>,
+    /// Display name beside `uploaded_by` (hcfs #455). Absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploaded_by_name: Option<String>,
 }
 
 /// Whether a given `sync_status` value should contribute to per-label
@@ -329,6 +337,8 @@ pub async fn get_user_files(
                 label: label.clone(),
                 file_count: if entry.is_folder { Some(entry.file_count) } else { None },
                 deleted: false,
+                uploaded_by: None,
+                uploaded_by_name: None,
             });
         }
     }
@@ -491,6 +501,8 @@ fn walk_disk_files_std(
             label: label.to_string(),
             file_count: None,
             deleted: false,
+            uploaded_by: None,
+            uploaded_by_name: None,
         });
     }
 }
@@ -637,6 +649,8 @@ pub async fn search_user_files_recursive(
                 label: label.clone(),
                 file_count: None,
                 deleted: false,
+                uploaded_by: None,
+                uploaded_by_name: None,
             });
         }
     }
@@ -938,6 +952,10 @@ mod tests {
             label: "Docs".to_string(),
             file_count: Some(0),
             deleted: false,
+            // Populated so the camelCase keys are pinned (skip_serializing_if
+            // would omit them when None — same rule as RemoteFileEntry).
+            uploaded_by: Some("5Member".to_string()),
+            uploaded_by_name: Some("Ada".to_string()),
         };
         let json = serde_json::to_value(&entry).expect("serialize UserFileEntry");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
@@ -961,6 +979,8 @@ mod tests {
             "label",
             "fileCount",
             "deleted",
+            "uploadedBy",
+            "uploadedByName",
         ]
         .into_iter()
         .map(String::from)
@@ -979,6 +999,8 @@ mod tests {
             "must not emit `fileType` (rename = \"type\" overrides camelCase)"
         );
         assert_eq!(json["fileId"], "0".repeat(64), "file_id must serialize under key `fileId`");
+        assert_eq!(json["uploadedBy"], "5Member");
+        assert_eq!(json["uploadedByName"], "Ada");
     }
 
     /// `filter_file_entries` must accept the rows the FE BUILDS ITSELF for
@@ -1052,6 +1074,8 @@ mod tests {
             label: label.to_string(),
             file_count: None,
             deleted: false,
+            uploaded_by: None,
+            uploaded_by_name: None,
         }
     }
 
