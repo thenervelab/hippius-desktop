@@ -180,6 +180,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Support tickets now ask what your question is about.** Pick Drive & sync,
+  Shared drives, Credits & payments, Subscription, Account & sign in, Feedback
+  or Other, instead of the old "Storage (Arion & S3)" catch-all, which also
+  offered S3, something the app does not do.
 - **Search starts at three characters.** In the sidebar search and when searching a
   folder that is not synced to this device, one or two letters now show "Type at
   least 3 characters" instead of a misleading "no results".
