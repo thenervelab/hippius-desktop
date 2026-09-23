@@ -547,9 +547,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const memberDriveLabels = useMemberDriveLabels();
   // Inside someone else's drive the figure is that drive's size (owner pays),
   // not this account's quota — console uses "Drive size:" for that.
-  const openDriveLabel =
-    remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel;
-  const storageLabel = isMemberDriveLabel(openDriveLabel, memberDriveLabels)
+  const storageLabel = isMemberDriveLabel(
+    remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel,
+    memberDriveLabels,
+  )
     ? "Drive size:"
     : "Storage Used:";
 
