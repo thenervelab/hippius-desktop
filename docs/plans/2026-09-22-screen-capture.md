@@ -1,6 +1,7 @@
 # Screen capture: screenshots and recordings straight into Hippius
 
-**Status:** phase 1 (screenshots) built on macOS and Windows; see "Phase 1 as built".
+**Status:** phase 2 (macOS recording) built on top of phase 1 screenshots; see
+"Phase 2 as built". Windows recording and Linux remain follow-ups.
 **Branch:** `feat/screen-capture`, local only.
 
 ## The feature
@@ -212,12 +213,13 @@ Each phase is shippable on its own, behind `SCREEN_CAPTURE_ENABLED = enabledFrom
    with a notification. This is the feature's point.
 3. **Recording platforms, first release:** macOS and Windows. Linux gets
    screenshots; Linux recording is a follow-up.
-4. **Recording extras, first release:** microphone, system audio, webcam bubble
-   and click highlights — all four. Phase 2 is therefore larger than first
-   sketched: the webcam bubble is its own content-protected floating window and
-   needs the camera entitlement, and system audio is macOS 13+ (hidden on 12.x).
-5. **macOS floor:** unchanged at 11.0. Recording is hidden on 11–12.2 because
-   ScreenCaptureKit needs 12.3; screenshots work everywhere.
+4. **Recording extras, first release (revised):** microphone (macOS 15+),
+   system audio (macOS 13+), cursor on. Webcam bubble and click highlights are
+   deferred — they each need their own floating window / entitlement work.
+5. **macOS floor:** unchanged at 11.0 for screenshots. Recording needs macOS 13
+   (system audio via ScreenCaptureKit); mic needs 15+. Record menu items hide
+   below that. (Earlier sketch said 12.3 for ScreenCaptureKit alone; system
+   audio pushed the practical floor to 13.)
 
 ## Phase 1 as built
 
@@ -241,4 +243,23 @@ Each phase is shippable on its own, behind `SCREEN_CAPTURE_ENABLED = enabledFrom
 - **Links do not expire** (`ShareTtl::Never`), matching Loom. They are revocable
   from Shared Links. A setting for the default expiry is a follow-up.
 - Rules for the subsystem: `.claude/rules/screen-capture.md`.
+
+## Phase 2 as built
+
+- **macOS recording** via a Swift `HippiusCapture` helper (ScreenCaptureKit →
+  H.264/AAC MP4), driven over stdin/stdout JSON from Rust. Area / window /
+  screen selection reuses the phase-1 overlay; a floating
+  `/capture-controls` bar then offers timer, pause, resume, stop and cancel.
+- **Delivery** is the same Captures folder + share-link path as screenshots.
+- **Microphone** on macOS 15+ (`SCStreamConfiguration.captureMicrophone`). On
+  13–14 the recording still includes system audio (macOS 13+) and the cursor;
+  mic is skipped rather than blocking the record. Webcam bubble and click
+  highlights are **deferred**.
+- **OS floor for Record menu items:** macOS 13+ and the helper must be built
+  (`macos/build-capture-helper.sh`). Screenshots stay available from 11.0.
+  Embed into a release app with `macos/embed-capture-helper.sh <Hippius.app>`.
+- **Windows recording** is stubbed behind the same `Recorder` trait;
+  `capture_support.recording` is false there so the Record items hide. Phase 3.
+- **Settings card / global shortcuts / tray record entry** still deferred
+  (tray still starts a screenshot area only).
 

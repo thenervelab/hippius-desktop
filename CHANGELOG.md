@@ -17,6 +17,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Record your screen straight into Hippius (Mac).** Pick an area, a window or
+  a full screen from the Capture menu, then pause, resume or stop from a small
+  floating bar. The video lands in Captures with a share link copied, same as
+  screenshots. Needs macOS 13+, and microphone audio on macOS 15+. Windows
+  recording follows later; screenshots already work there.
 - **Take a screenshot straight into Hippius.** Capture an area, a window or a
   whole screen from the Drive page or the menu bar icon. It is saved to a Captures
   folder in the drive you choose, and a share link is copied so you can paste it
