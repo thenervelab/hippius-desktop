@@ -164,8 +164,7 @@ mod tests {
 
     /// Frozen blob from console `invite-token.test.ts` — must not be
     /// regenerated. Pins the wire format desktop opens against.
-    const FROZEN_BLOB: &str =
-        "eyJ2IjoxLCJub25jZSI6IkcrMi9BT3RqZUpjZmpDSDY2aTV4ejNzT3ZiakV6a2tzIiwiY2lwaGVydGV4dCI6InBkby8zZVN4Z09SU0xEb3JCZ3p6N09Nd0hEY0RIS3NJa3lFbUtnYUYrcktPSjhmWG84blVZbkFWb3J0NHZHbS91Q3dLZ3NYcHh3TTlNaFdXeW04PSJ9";
+    const FROZEN_BLOB: &str = "eyJ2IjoxLCJub25jZSI6IkcrMi9BT3RqZUpjZmpDSDY2aTV4ejNzT3ZiakV6a2tzIiwiY2lwaGVydGV4dCI6InBkby8zZVN4Z09SU0xEb3JCZ3p6N09Nd0hEY0RIS3NJa3lFbUtnYUYrcktPSjhmWG84blVZbkFWb3J0NHZHbS91Q3dLZ3NYcHh3TTlNaFdXeW04PSJ9";
 
     const TOKEN: &str = "Zm9vYmFyLXRva2VuLXRoaXJ0eS10d28tYnl0ZXMtaGVyZQ";
     const INVITE_ID: &str = "e00dd34c4d774dff8293bbf26252ea18f0e0a0536beccc8d74b34276d9b24b33";
@@ -189,10 +188,7 @@ mod tests {
     #[test]
     fn opens_frozen_blob_from_console() {
         assert_eq!(INFO_INVITE_TOKEN, "hippius-drive-invite-token-v1");
-        assert_eq!(
-            open_invite_token(&entropy(7), INVITE_ID, FROZEN_BLOB).as_deref(),
-            Some(TOKEN)
-        );
+        assert_eq!(open_invite_token(&entropy(7), INVITE_ID, FROZEN_BLOB).as_deref(), Some(TOKEN));
     }
 
     #[test]

@@ -193,10 +193,7 @@ async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
     let minted = http_create_invite(&http, &base, BEARER, mint_args(WIRE_HASH)).await.expect("mint");
     assert_eq!(minted.token, "tok_mock_1");
     // Mock omits invite_id; desktop computes blake3(token) for seal-back.
-    assert_eq!(
-        minted.invite_id,
-        invite_id_for_token("tok_mock_1")
-    );
+    assert_eq!(minted.invite_id, invite_id_for_token("tok_mock_1"));
 
     // The resolved policy values land on the wire as concrete fields — the
     // desktop never sends an omitted lifetime/cap, so the server's own

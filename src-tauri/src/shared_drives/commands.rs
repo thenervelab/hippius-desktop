@@ -99,10 +99,7 @@ pub(crate) fn apply_manager_invite_caps(role: &str, expires_in_secs: u64, max_us
     if role != "manager" {
         return (expires_in_secs, max_uses);
     }
-    (
-        expires_in_secs.min(MANAGER_INVITE_MAX_SECS),
-        max_uses.min(MANAGER_INVITE_MAX_USES),
-    )
+    (expires_in_secs.min(MANAGER_INVITE_MAX_SECS), max_uses.min(MANAGER_INVITE_MAX_USES))
 }
 
 fn resolve_invite_policy(expires_in_secs: Option<u64>, max_uses: Option<u32>) -> (u64, u32) {
@@ -121,11 +118,7 @@ fn present_text(value: Option<String>) -> Option<String> {
 /// Forward a server `member_count` of 0/omitted as `None` so the FE never
 /// draws "0 members" from an unknown or empty listing signal.
 fn present_member_count(count: u64) -> Option<u32> {
-    if count == 0 {
-        None
-    } else {
-        u32::try_from(count).ok()
-    }
+    if count == 0 { None } else { u32::try_from(count).ok() }
 }
 
 // ─── FE-facing wire types (camelCase, desktop-owned) ───────────────────────
@@ -321,8 +314,7 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
         #[serde(default)]
         invite_id: Option<String>,
     }
-    let parsed: MintBody =
-        serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("create-invite response did not parse: {e}")))?;
+    let parsed: MintBody = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("create-invite response did not parse: {e}")))?;
     let invite_id = parsed
         .invite_id
         .filter(|id| !id.is_empty())
@@ -1205,22 +1197,17 @@ pub async fn list_drive_invites(
         let _recovery_guard = state.recovery_lock.lock().await;
         let mnemonic = crate::sync::remote::session_mnemonic(&state).ok();
         match mnemonic {
-            Some(mnemonic) => {
-                match crate::sync::remote::folder_phrase_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await {
-                    Ok(phrase) => grant::entropy_from_phrase(&phrase).ok(),
-                    Err(_) => None,
-                }
-            }
+            Some(mnemonic) => match crate::sync::remote::folder_phrase_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await {
+                Ok(phrase) => grant::entropy_from_phrase(&phrase).ok(),
+                Err(_) => None,
+            },
             None => None,
         }
     };
 
     let console_base = crate::shares::commands::console_base_url();
     for invite in &mut invites {
-        let sealed = invite
-            .sealed_token
-            .as_deref()
-            .filter(|s| !s.is_empty());
+        let sealed = invite.sealed_token.as_deref().filter(|s| !s.is_empty());
         invite.link_available = sealed.is_some() && invite.valid;
         invite.invite_url = None;
         if let (Some(sealed), Some(entropy)) = (sealed, entropy.as_ref()) {
@@ -1327,9 +1314,7 @@ pub async fn list_owned_drive_sharing(app: tauri::AppHandle, labels: Vec<String>
             // shared". A drive shared WITH this account is described by its
             // role badge, which needs no counts.
             let identity = resolve_own_drive(pool, &ctx.account_id, label).await.ok()?;
-            let member_count = folders_by_hash
-                .get(&identity.wire_folder_hash)
-                .map(|f| f.member_count as usize);
+            let member_count = folders_by_hash.get(&identity.wire_folder_hash).map(|f| f.member_count as usize);
 
             // Invites only when we have no members (or could not learn the
             // count): otherwise the badge already has its answer and N invite
@@ -2206,10 +2191,7 @@ mod tests {
         let json = serde_json::to_value(&row).unwrap();
         let obj = json.as_object().unwrap();
         assert_eq!(obj.get("linkAvailable"), Some(&serde_json::json!(true)));
-        assert_eq!(
-            obj.get("inviteUrl"),
-            Some(&serde_json::json!("https://console.example/invite/tok#k=abc"))
-        );
+        assert_eq!(obj.get("inviteUrl"), Some(&serde_json::json!("https://console.example/invite/tok#k=abc")));
         assert!(!obj.contains_key("sealedToken"), "ciphertext must not cross IPC");
     }
 

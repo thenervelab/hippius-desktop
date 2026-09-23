@@ -216,12 +216,7 @@ fn map_search_hit_to_entry(
         // Same empty→None rule as `append_browse_page`: an empty ss58 must
         // not reach UploaderCell as a blank name (it falls back to "Owner").
         uploaded_by: hit.file.uploaded_by.clone().filter(|s| !s.is_empty()),
-        uploaded_by_name: hit
-            .file
-            .uploaded_by_name
-            .clone()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
+        uploaded_by_name: hit.file.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
     })
 }
 
@@ -714,10 +709,7 @@ mod tests {
         });
         let hit: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
         let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
-        assert_eq!(
-            entry.uploaded_by.as_deref(),
-            Some("5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb")
-        );
+        assert_eq!(entry.uploaded_by.as_deref(), Some("5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb"));
         assert_eq!(entry.uploaded_by_name.as_deref(), Some("Grace Hopper"));
     }
 

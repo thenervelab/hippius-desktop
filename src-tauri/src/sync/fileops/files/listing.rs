@@ -478,7 +478,7 @@ pub async fn list_sync_folder_grouped_inner(
                             uploaded_at: info.uploaded_at,
                             updated_at: info.updated_at,
                             uploaded_by: None,
-            uploaded_by_name: None,
+                            uploaded_by_name: None,
                         });
                         seen_names.insert(remainder.to_string());
                     }
@@ -723,7 +723,7 @@ async fn cache_only_folder_candidates(
                 uploaded_at: 0,
                 updated_at: 0,
                 uploaded_by: None,
-            uploaded_by_name: None,
+                uploaded_by_name: None,
             }
         })
         .collect()

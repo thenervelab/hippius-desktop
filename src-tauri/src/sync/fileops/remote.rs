@@ -959,11 +959,7 @@ pub(crate) fn append_browse_page(
             // an empty string is the same as absent and must not reach the UI
             // as a blank "uploaded by".
             uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
-            uploaded_by_name: f
-                .uploaded_by_name
-                .clone()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
+            uploaded_by_name: f.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         });
     }
 }
