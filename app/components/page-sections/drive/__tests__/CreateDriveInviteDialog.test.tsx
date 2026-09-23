@@ -238,9 +238,10 @@ describe("create invite dialog", () => {
   });
 
   // The server caps a manager link at one use and 24 hours and answers 400
-  // past either. Clamping in the form means the link the user gets is the link
-  // the form described, instead of a rejection after they configured it.
-  it("clamps a manager invite to the server's 24-hour cap", async () => {
+  // past either. Clamping in the form (and again in Rust) means the link the
+  // user gets is the link the form described, instead of a rejection after
+  // they configured it — matching console `createDriveInvite`.
+  it("clamps a manager invite to one use and 24 hours", async () => {
     createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
 
     renderModal();
@@ -251,6 +252,18 @@ describe("create invite dialog", () => {
     const [, opts] = createDriveInviteMock.mock.calls[0];
     expect(opts.role).toBe("manager");
     expect(opts.expiresInSecs).toBeLessThanOrEqual(24 * 60 * 60);
+    expect(opts.maxUses).toBe(1);
+  });
+
+  it("offers only the 24-hour lifetime for a manager invite", () => {
+    renderModal();
+    chooseRole("Manager");
+
+    // Wider presets stay available for writer/reader; manager must not offer
+    // a lifetime the mint would silently replace.
+    expect(screen.getByText(/Manager links are single use/i)).toBeInTheDocument();
+    // After choosing Manager, the default 7-day selection snaps to 24 hours.
+    expect(screen.getByLabelText("Invite expires")).toHaveTextContent(/24 hours/i);
   });
 
   it("names the role in the warning, so the link's power is stated", async () => {

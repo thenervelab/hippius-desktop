@@ -32,14 +32,16 @@ import {
 import {
   DRIVE_ROLES,
   MANAGER_INVITE_MAX_SECONDS,
+  MANAGER_INVITE_MAX_USES,
   driveRoleDescription,
   driveRoleLabel,
   type DriveRole,
 } from "@/app/lib/shared-drives/roles";
 import {
   DEFAULT_INVITE_TTL_SECS,
-  INVITE_TTL_OPTIONS,
   NEVER_EXPIRES_SECS,
+  clampInviteTtl,
+  inviteTtlOptionsFor,
   type InviteState,
 } from "./shareDriveModalState";
 import { BILLING_ROUTE } from "@/app/lib/routes";
@@ -97,14 +99,19 @@ export default function CreateDriveInviteDialog() {
     autoCopiedRef.current = false;
     try {
       // A manager invite is capped by the server at one use and 24 hours, and
-      // exceeding either is a 400. Clamping here means the link the user gets
-      // is the link the form described, rather than a rejection after the fact.
-      const effectiveTtl =
-        inviteRole === "manager"
-          ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
-          : ttlSecs;
+      // exceeding either is a 400. Clamping here (and again in Rust) means the
+      // link the user gets is the link the form described, rather than a
+      // rejection after the fact — matching console `createDriveInvite`.
+      const isManager = inviteRole === "manager";
+      const effectiveTtl = isManager
+        ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
+        : ttlSecs;
       const link = await createDriveInvite(labelAtCall, {
         expiresInSecs: effectiveTtl,
+        // Omitted maxUses becomes the ordinary default of 50 in Rust; without
+        // sending 1 here a manager mint used to fail client-side with
+        // "A manager invite can only be used once."
+        ...(isManager ? { maxUses: MANAGER_INVITE_MAX_USES } : {}),
         role: inviteRole,
         // Named only for a drive shared with this account that is not synced
         // here; an own drive's label resolves on its own.
@@ -129,6 +136,13 @@ export default function CreateDriveInviteDialog() {
       }
     }
   }, [label, ttlSecs, inviteRole, queryClient, target?.ownerSs58, target?.folderHash]);
+
+  const handleRoleChange = useCallback((role: DriveRole) => {
+    setInviteRole(role);
+    // Choosing Manager with a wider lifetime already selected must snap the
+    // picker, not leave a value the mint would quietly replace (console).
+    setTtlSecs((secs) => clampInviteTtl(role, secs));
+  }, []);
 
   useEffect(() => {
     if (invite.kind !== "done" || autoCopiedRef.current) return;
@@ -197,7 +211,7 @@ export default function CreateDriveInviteDialog() {
           ttlSecs={ttlSecs}
           onTtlChange={setTtlSecs}
           role={inviteRole}
-          onRoleChange={setInviteRole}
+          onRoleChange={handleRoleChange}
           onMint={() => void mintInvite()}
           onRetry={() => setInvite({ kind: "choosing" })}
           onClose={() => setTarget(null)}
@@ -264,6 +278,7 @@ function InviteTab({
 
   const running = state.kind === "running";
   const managerCapped = role === "manager";
+  const ttlOptions = inviteTtlOptionsFor(role);
   return (
     <div>
       <div className="mb-5 flex flex-col gap-1.5">
@@ -282,6 +297,11 @@ function InviteTab({
         <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
           {driveRoleDescription(role)}
         </p>
+        {managerCapped ? (
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+            Manager links are single use and expire in 24 hours.
+          </p>
+        ) : null}
       </div>
 
       <div className="mb-6 flex flex-col gap-1.5">
@@ -290,14 +310,14 @@ function InviteTab({
           ariaLabel="Invite expires"
           value={String(ttlSecs)}
           onValueChange={(value) => onTtlChange(Number(value))}
-          options={INVITE_TTL_OPTIONS.map(({ label, secs }) => ({
+          options={ttlOptions.map(({ label, secs }) => ({
             label,
             value: String(secs),
           }))}
         />
         <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
           {managerCapped
-            ? "A manager link can only be used once and expires within 24 hours, whatever is chosen above — managers can invite and remove people, so the link itself is short-lived."
+            ? "A manager link can only be used once and expires within 24 hours — managers can invite and remove people, so the link itself is short-lived."
             : neverExpires
               ? `Anyone with the link can join this drive as ${driveRoleLabel(role)} for as long as the link exists. Share it only with people you trust.`
               : `Anyone with the link can join this drive as ${driveRoleLabel(role)} until the link expires. Share it only with people you trust.`}

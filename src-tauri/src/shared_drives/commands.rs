@@ -71,32 +71,38 @@ pub(crate) const WIRE_ROLES: [&str; 3] = ["reader", "writer", "manager"];
 pub(crate) const MANAGER_INVITE_MAX_USES: u32 = 1;
 pub(crate) const MANAGER_INVITE_MAX_SECS: u64 = 24 * 60 * 60;
 
-/// Resolve and check the role an invite is minted for.
+/// Resolve the role an invite is minted for.
 ///
 /// An omitted role keeps the historical `writer`, so a caller that predates
-/// the picker mints exactly what it always did.
+/// the picker mints exactly what it always did. An unknown spelling is refused
+/// by name — the server answers a bare 400, which tells the user nothing.
 ///
-/// Both refusals exist because the server answers a bare 400 and the user
-/// cannot tell which of their choices it objected to. A typo rejected by name,
-/// and a cap named as a cap, are the difference between "that role does not
-/// exist" and "something went wrong" — and a manager link minted for 7 days
-/// would be rejected AFTER the user had configured it.
-pub(crate) fn resolve_invite_role(role: Option<String>, expires_in_secs: u64, max_uses: u32) -> Result<String> {
+/// Manager caps are applied by [`apply_manager_invite_caps`], not rejected
+/// here: the console clamps, and an omitted `max_uses` resolves to the
+/// ordinary default of 50, which would otherwise fail every manager mint.
+pub(crate) fn resolve_invite_role(role: Option<String>) -> Result<String> {
     let role = role.unwrap_or_else(|| "writer".to_string());
     if !WIRE_ROLES.contains(&role.as_str()) {
         return Err(AppError::Validation(format!(
             "Unknown drive role: {role}. Expected one of reader, writer, manager."
         )));
     }
-    if role == "manager" {
-        if max_uses > MANAGER_INVITE_MAX_USES {
-            return Err(AppError::Validation("A manager invite can only be used once.".into()));
-        }
-        if expires_in_secs > MANAGER_INVITE_MAX_SECS {
-            return Err(AppError::Validation("A manager invite expires within 24 hours.".into()));
-        }
-    }
     Ok(role)
+}
+
+/// Cap a manager invite the way the console's `createDriveInvite` does:
+/// clamp, don't reject. An omitted `max_uses` becomes the ordinary default
+/// of 50; without this clamp that default would fail every manager mint
+/// with "A manager invite can only be used once" — a message that sounds
+/// like a uniqueness rule, not a uses ceiling.
+pub(crate) fn apply_manager_invite_caps(role: &str, expires_in_secs: u64, max_uses: u32) -> (u64, u32) {
+    if role != "manager" {
+        return (expires_in_secs, max_uses);
+    }
+    (
+        expires_in_secs.min(MANAGER_INVITE_MAX_SECS),
+        max_uses.min(MANAGER_INVITE_MAX_USES),
+    )
 }
 
 fn resolve_invite_policy(expires_in_secs: Option<u64>, max_uses: Option<u32>) -> (u64, u32) {
@@ -1000,9 +1006,11 @@ pub async fn create_drive_invite(
 
     // Omitted parameters resolve to the desktop policy here, not on the
     // server and not in the FE wrapper — see `resolve_invite_policy`.
+    // Manager caps are clamped (console `createDriveInvite`), not refused:
+    // the ordinary default of 50 uses would otherwise fail every manager mint.
     let (expires_in_secs, max_uses) = resolve_invite_policy(expires_in_secs, max_uses);
-
-    let role = resolve_invite_role(role, expires_in_secs, max_uses)?;
+    let role = resolve_invite_role(role)?;
+    let (expires_in_secs, max_uses) = apply_manager_invite_caps(&role, expires_in_secs, max_uses);
 
     let http = state.api_client.clone();
     let minted = http_create_invite(
@@ -1838,13 +1846,13 @@ mod tests {
     /// An omitted role must keep minting what every pre-picker build minted.
     #[test]
     fn omitted_invite_role_stays_writer() {
-        assert_eq!(resolve_invite_role(None, 3600, 5).expect("omitted role"), "writer");
+        assert_eq!(resolve_invite_role(None).expect("omitted role"), "writer");
     }
 
     #[test]
     fn every_wire_role_is_accepted() {
         for role in WIRE_ROLES {
-            assert_eq!(resolve_invite_role(Some(role.to_string()), 3600, 1).expect("wire role"), role);
+            assert_eq!(resolve_invite_role(Some(role.to_string())).expect("wire role"), role);
         }
     }
 
@@ -1852,25 +1860,23 @@ mod tests {
     /// nothing about which choice it objected to.
     #[test]
     fn an_unknown_role_is_refused_by_name() {
-        let err = resolve_invite_role(Some("admin".into()), 3600, 1).expect_err("unknown role");
+        let err = resolve_invite_role(Some("admin".into())).expect_err("unknown role");
         assert!(format!("{err}").contains("admin"), "the refusal must name the role: {err}");
     }
 
-    /// A manager link minted for a week would be rejected AFTER the user had
-    /// configured it. Both caps are refused here, each naming the cap.
+    /// Match the console: clamp manager caps rather than reject. An omitted
+    /// `max_uses` resolves to 50; rejecting that would fail every manager mint.
     #[test]
-    fn a_manager_invite_is_held_to_the_server_caps() {
-        let too_many = resolve_invite_role(Some("manager".into()), 3600, 2).expect_err("uses cap");
-        assert!(format!("{too_many}").contains("once"), "{too_many}");
-
-        let too_long = resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS + 1, 1).expect_err("ttl cap");
-        assert!(format!("{too_long}").contains("24 hours"), "{too_long}");
-
-        // Exactly at the cap is allowed — the caps ARE the defaults.
+    fn a_manager_invite_is_clamped_to_the_server_caps() {
         assert_eq!(
-            resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES).expect("at the cap"),
-            "manager"
+            apply_manager_invite_caps("manager", 7 * 24 * 60 * 60, DEFAULT_INVITE_MAX_USES),
+            (MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES)
         );
+        assert_eq!(
+            apply_manager_invite_caps("manager", MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES),
+            (MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES)
+        );
+        assert_eq!(resolve_invite_role(Some("manager".into())).expect("manager"), "manager");
     }
 
     /// The caps bind managers only; a reader or writer link is unaffected.
@@ -1878,8 +1884,8 @@ mod tests {
     fn the_manager_caps_do_not_bind_other_roles() {
         for role in ["reader", "writer"] {
             assert_eq!(
-                resolve_invite_role(Some(role.to_string()), MANAGER_INVITE_MAX_SECS * 7, 50).expect("wide link"),
-                role
+                apply_manager_invite_caps(role, MANAGER_INVITE_MAX_SECS * 7, 50),
+                (MANAGER_INVITE_MAX_SECS * 7, 50)
             );
         }
     }
