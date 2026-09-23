@@ -239,6 +239,11 @@ pub struct StorageOverview {
     pub used_display: String,
     pub total_display: String,
     pub free_display: String,
+    /// Present when usage exceeds capacity (downgrade / over free). The FE
+    /// shows this instead of the clamped "100%" so "12.56 GB of 10.00 GB"
+    /// is never paired with a percent that pretends the account is merely
+    /// full. Authored here for the same H-109 reason as the other labels.
+    pub over_display: Option<String>,
     /// What the header should offer — see [`PlanAction`]. Render this;
     /// never re-derive it from `source` / `percent` / `plan` on the FE.
     pub plan_action: PlanAction,
@@ -321,9 +326,23 @@ fn finish_overview(
         used_display: labels.used,
         total_display: labels.total,
         free_display: labels.free,
+        over_display: format_over_display(used_bytes, total_bytes),
         plan_action,
         free_tier_entitled,
     }
+}
+
+/// "2.56 GB over your plan" when usage exceeds capacity; `None` otherwise.
+///
+/// Replaces the clamped percent on the card/chip so a post-downgrade
+/// account is not told it is both over the plan and exactly 100% full.
+fn format_over_display(used_bytes: u64, total_bytes: u64) -> Option<String> {
+    if total_bytes == 0 || used_bytes <= total_bytes {
+        return None;
+    }
+    let over = used_bytes - total_bytes;
+    let idx = si_unit_index(over);
+    Some(format!("{} over your plan", format_si(over, idx, true)))
 }
 
 struct OverviewLabels {
@@ -1002,6 +1021,23 @@ mod tests {
         assert!((overview.percent - 100.0).abs() < 1e-9);
         // Raw byte counts stay honest even while the percent clamps.
         assert_eq!(overview.used_bytes, 2000 * BYTES_PER_GB);
+        // The card shows how far over rather than a contradictory 100%.
+        assert_eq!(overview.over_display.as_deref(), Some("1.00 TB over your plan"));
+    }
+
+    #[test]
+    fn under_quota_has_no_over_display() {
+        let overview = build_overview(500 * BYTES_PER_GB, Some(pro_plan(1000)), None, None, true);
+        assert!(overview.over_display.is_none());
+    }
+
+    #[test]
+    fn free_tier_over_quota_names_the_overage() {
+        // OAuth free floor is 10 GB (fallback when the catalogue is unread).
+        let overview = build_overview(12_560_000_000, None, None, None, true);
+        assert_eq!(overview.source, CapacitySource::Free);
+        assert!((overview.percent - 100.0).abs() < 1e-9);
+        assert_eq!(overview.over_display.as_deref(), Some("2.56 GB over your plan"));
     }
 
     #[test]

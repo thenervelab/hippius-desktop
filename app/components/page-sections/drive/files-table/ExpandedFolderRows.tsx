@@ -30,6 +30,7 @@ import TableActionMenu, {
 } from "@/app/components/ui/alt-table/TableActionMenu";
 import FileCheckbox from "./FileCheckbox";
 import NameCell from "./NameCell";
+import UploaderCell from "./UploaderCell";
 import { PreviewTrigger } from "@/app/components/page-sections/drive/file-preview";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
@@ -130,6 +131,13 @@ export interface ExpandedFolderRowsProps {
    * relative path, returns true while the delete IPC is in flight.
    */
   isItemDeleting?: (file: FormattedUserFile, parentPath: string) => boolean;
+  /**
+   * Show the Added by column. Must match the outer table's colgroup —
+   * nested rows are flat `<tr>` siblings in the same `<tbody>`.
+   */
+  showUploadedBy?: boolean;
+  driveOwnerSs58?: string;
+  driveOwnerName?: string;
 }
 
 /**
@@ -214,6 +222,9 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
   sortDir,
   ancestorChain = [],
   isItemDeleting,
+  showUploadedBy = false,
+  driveOwnerSs58,
+  driveOwnerName,
 }) => {
   const router = useRouter();
   const {
@@ -655,6 +666,18 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                       ? formatBytesFromBigInt(BigInt(childFile.size))
                       : "Unknown"}
               </td>
+              {showUploadedBy ? (
+                <td className={BASE_CELL_CLASS}>
+                  <UploaderCell
+                    uploadedBy={childFile.uploadedBy}
+                    uploadedByName={childFile.uploadedByName}
+                    isFolder={childFile.isFolder}
+                    sessionSs58={accountId ?? undefined}
+                    driveOwnerSs58={driveOwnerSs58}
+                    driveOwnerName={driveOwnerName}
+                  />
+                </td>
+              ) : null}
               <td className={BASE_CELL_CLASS}>
                 {childFile.createdAt === 0 ? (
                   "—"
@@ -708,6 +731,9 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                     : ancestorChain
                 }
                 isItemDeleting={isItemDeleting}
+                showUploadedBy={showUploadedBy}
+                driveOwnerSs58={driveOwnerSs58}
+                driveOwnerName={driveOwnerName}
               />
             ) : null}
           </React.Fragment>

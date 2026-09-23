@@ -18,14 +18,19 @@ import { SYNC_FOLDER_LABEL } from "../uploadActions";
  * upload TO, so on an account with no folders at all it would open a
  * picker with nothing in it.
  */
-const FolderListEmptyState: React.FC<{ onSyncFolder: () => void }> = ({
-  onSyncFolder,
-}) => (
+const FolderListEmptyState: React.FC<{
+  onSyncFolder: () => void | Promise<void>;
+  /** No plan / over capacity: Sync button disabled, no dialog on click. */
+  disabled?: boolean;
+}> = ({ onSyncFolder, disabled = false }) => (
+
   <NoEntriesFound
     title="No folders yet"
     description="Pick a folder on this computer to sync. Its files are encrypted here before they upload, and stay up to date on every device you sign in to."
     buttonText={SYNC_FOLDER_LABEL}
     onButtonClick={onSyncFolder}
+    disabled={disabled}
+    disabledMessage="Storage full. Upgrade or subscribe to sync a folder."
     // The list card already draws the border and the surface; a second
     // one around this would read as a panel inside a panel.
     cardView={false}

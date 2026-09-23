@@ -416,9 +416,23 @@ mod tests {
             FileFailureKindPayload::Other {
                 message: "disk full".to_string(),
             },
+            // The strongest case in this list: hcfs QUARANTINES an
+            // undecryptable file after two attempts on the same revision and
+            // stops fetching it. An amber "Retrying" badge would sit there
+            // forever on a file nothing is retrying. `is_transient` gets this
+            // right today only via its `_ => false` fallback, so pin it —
+            // adding the variant to the true-arm is an easy mistake to make
+            // when the copy reads like the other terminal kinds.
+            FileFailureKindPayload::Undecryptable,
         ] {
             assert!(!kind.is_transient(), "{kind:?} must not be presented as self-resolving");
         }
+
+        assert!(
+            !is_transient_reason(&FileFailureKindPayload::Undecryptable.display_reason()),
+            "the authored copy must not round-trip as transient either — \
+             `fixup_stalled_completion` dispatches on the STRING"
+        );
     }
 
     #[test]
@@ -439,12 +453,8 @@ mod tests {
     /// into the Drive table, Recent Files, the tray and the persisted
     /// failure row. `zero_balance` is a live production body.
     ///
-    /// Mapped to `ServerError { status: 402 }`, which is exactly where these
-    /// bodies landed BEFORE the bump: they arrived as
-    /// `UploadFailed("Server returned 402 …")` and `classify` re-parsed them
-    /// into that. Restoring prior behaviour is the right call for a
-    /// dependency bump; giving quota denials their own user-facing copy is a
-    /// product change and belongs in its own PR.
+    /// Mapped to `ServerError { status: 402 }` with storage-full copy — not
+    /// the credits `InsufficientBalance` path, and never the raw debug string.
     #[test]
     fn upstream_quota_denied_reads_as_a_402_not_a_debug_string() {
         use hcfs_client::engine::events::FileFailureKind as K;
@@ -456,12 +466,57 @@ mod tests {
                 matches!(payload, FileFailureKindPayload::ServerError { status: 402 }),
                 "QuotaDenied({body:?}) must not fall through to the debug-string wildcard, got {payload:?}"
             );
+            let reason = payload.display_reason();
+            assert_eq!(reason, QUOTA_DENIED_DISPLAY_REASON);
             assert!(
-                !payload.display_reason().contains("QuotaDenied"),
-                "the raw variant name must never reach the user: {}",
-                payload.display_reason()
+                !reason.contains("QuotaDenied") && !reason.contains("402"),
+                "raw variant / status must never reach the user: {reason}"
             );
+            assert!(!reason.to_lowercase().contains("try again"), "retry copy is wrong for quota: {reason}");
         }
+    }
+
+    #[test]
+    fn display_reason_402_is_storage_full_not_try_again() {
+        let kind = FileFailureKindPayload::ServerError { status: 402 };
+        assert_eq!(kind.display_reason(), QUOTA_DENIED_DISPLAY_REASON);
+        assert!(!kind.is_transient());
+    }
+
+    /// `Decryption` arrived with the hcfs bump to 02191cc, for the same
+    /// structural reason `QuotaDenied` did: `FileFailureKind` is
+    /// `#[non_exhaustive]`, so the desktop compiled unchanged and the new
+    /// variant fell into the wildcard. This time the wildcard is hardened, so
+    /// the cost was not a debug string — it was the generic "Sync failed.
+    /// Please try again." on the ONE failure class that never resolves by
+    /// trying again. hcfs quarantines the file after two attempts on the same
+    /// revision and stops fetching it, so that copy tells a user to wait for
+    /// something that will not happen.
+    #[test]
+    fn upstream_decryption_gets_its_own_copy_not_the_generic_retry_line() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+
+        let kind = K::Decryption {
+            error: "Chunk 0 decryption failed: aead::Error".to_string(),
+        };
+        let payload = FileFailureKindPayload::from(&kind);
+
+        assert!(
+            matches!(payload, FileFailureKindPayload::Undecryptable),
+            "Decryption must map to its own payload, not the wildcard; got {payload:?}"
+        );
+
+        let reason = payload.display_reason();
+        assert_eq!(reason, "Can't be decrypted on this device — needs to be re-uploaded or removed.",);
+        assert!(
+            !reason.contains("retry") && !reason.contains("try again"),
+            "this failure does NOT resolve itself — promising a retry sends \
+             the user to wait on a file hcfs has already given up on: {reason}"
+        );
+        assert!(
+            !reason.contains("aead") && !reason.contains("Chunk"),
+            "the upstream crypto detail must not reach the user: {reason}"
+        );
     }
 
     #[test]
@@ -1063,6 +1118,16 @@ pub enum FileFailureKindPayload {
     /// [`Self::ServerError`] / [`Self::Other`] — those are a missing *server*
     /// object, not a missing local file (H-080 / H-078).
     Gone,
+    /// The bytes arrived intact but would not decrypt under this drive's
+    /// key. Terminal for that remote revision: the same ciphertext and the
+    /// same key fail identically every time, so unlike every other variant
+    /// here it does NOT resolve itself by retrying.
+    ///
+    /// Carved out of [`Self::Other`] because the generic "will retry" and
+    /// "please try again" copy is actively wrong for it — hcfs quarantines
+    /// the file after two attempts and stops trying, so a user told to wait
+    /// would wait forever. This is the one failure class that needs a person.
+    Undecryptable,
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
     Other { message: String },
@@ -1098,9 +1163,25 @@ pub const SESSION_LIMIT_MARKER: &str = "Too many active upload sessions";
 /// the persisted-row `failureMessage()` stay word-aligned.
 const SESSION_LIMIT_DISPLAY_REASON: &str = "Too many uploads in progress — will retry.";
 
+/// User-facing copy for HTTP 402 / `QuotaDenied` (storage full or no plan
+/// entitlement — not the typed credits `InsufficientBalance` path).
+///
+/// Deliberately does NOT say "Please try again": retrying will not free
+/// capacity. Must stay word-identical to the FE's `QUOTA_DENIED_MESSAGE`.
+/// Short form matches Drive toolbar disabled tooltips ("Storage full. …").
+const QUOTA_DENIED_DISPLAY_REASON: &str = "Storage full. Upgrade your plan or free up space.";
+
 /// User-facing copy for a local file that vanished between plan and open.
 /// The next cycle's plan will not include it. Do not blame the connection.
 const GONE_DISPLAY_REASON: &str = "File disappeared before upload — will retry.";
+
+/// User-facing copy for a ciphertext this device's key cannot open.
+///
+/// Deliberately does NOT say "will retry": hcfs quarantines the file after
+/// two failed attempts on the same revision and stops fetching it, so the
+/// retry copy every other reason uses would promise something that will
+/// never happen. Must stay word-identical to the FE's `undecryptable` case.
+const UNDECRYPTABLE_DISPLAY_REASON: &str = "Can't be decrypted on this device — needs to be re-uploaded or removed.";
 
 /// Whether a snapshot row's authored `error` reason describes a self-resolving
 /// failure (see [`FileFailureKindPayload::is_transient`]).
@@ -1259,9 +1340,13 @@ impl FileFailureKindPayload {
                 dollars(*balance_cents),
             ),
             Self::ServerError { status: 429 } => SESSION_LIMIT_DISPLAY_REASON.to_string(),
+            // 402 without cents is storage / entitlement (QuotaDenied), not
+            // the typed InsufficientBalance credits path above.
+            Self::ServerError { status: 402 } => QUOTA_DENIED_DISPLAY_REASON.to_string(),
             Self::ServerError { status } => format!("Server error ({status}). Please try again."),
             Self::Network => NETWORK_DISPLAY_REASON.to_string(),
             Self::Gone => GONE_DISPLAY_REASON.to_string(),
+            Self::Undecryptable => UNDECRYPTABLE_DISPLAY_REASON.to_string(),
             // `Other` already carries upstream display text; fall back to a
             // generic line when it's empty/whitespace so the row never shows a
             // blank reason. Network-shaped leftovers (reqwest Display, nested
@@ -1308,21 +1393,18 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // cents (`zero_balance`, `drive_quota_exceeded`,
             // `drive_not_entitled`, or a 402 with no `error` field).
             //
-            // Mapped to the 402 it is, which is exactly where these bodies
-            // landed before hcfs split 402 handling: they arrived as
-            // `UploadFailed("Server returned 402 …")` and `classify`
-            // re-parsed them into `ServerError { status: 402 }`. Without
-            // this arm the upstream `#[non_exhaustive]` wildcard below
-            // renders the variant's DEBUG form, putting the literal string
-            // `QuotaDenied { error: "zero_balance" }` in front of the user.
-            //
-            // NOT routed to `InsufficientBalance`: that payload requires the
-            // balance/required cents these bodies do not carry, and it drives
-            // the credits banner. Giving quota denials their own copy would
-            // be better product behaviour and is a deliberate change to make
-            // on its own, not a side effect of a dependency bump.
+            // Mapped to `ServerError { status: 402 }` so `display_reason`
+            // can phrase storage-full copy without inventing a new IPC
+            // variant. NOT routed to `InsufficientBalance`: that payload
+            // requires balance/required cents these bodies do not carry,
+            // and it drives the credits banner ("Top up") — wrong CTA for
+            // plan/storage overage.
             K::QuotaDenied { .. } => Self::ServerError { status: 402 },
             K::Network => Self::Network,
+            // The transfer succeeded and the ciphertext would not open. hcfs
+            // gives it one free retry and then quarantines it, so the honest
+            // copy says a person has to act — not "will retry".
+            K::Decryption { .. } => Self::Undecryptable,
             // Carve the mid-upload-modification case out of the upstream
             // catch-all before it reaches `Other` — it is self-resolving and
             // must not be presented as a crypto fault. See

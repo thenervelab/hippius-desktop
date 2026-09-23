@@ -18,6 +18,12 @@ import { UnifiedMediaDialog } from "./file-preview";
 import { toast } from "sonner";
 import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
+import { useRemoteFileUpload, useRemoteFolderUpload } from "@/app/lib/hooks/useRemoteUploadActions";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
+import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
+import { useFileSelection } from "@/app/contexts/FileSelectionContext";
+import NoMatchingResults from "./NoMatchingResults";
 import { useSetAtom } from "jotai";
 import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { shareTargetFor } from "@/app/lib/utils/folderShareGating";
@@ -29,14 +35,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
-import {
-  useRemoteFileUpload,
-  useRemoteFolderUpload,
-} from "@/app/lib/hooks/useRemoteUploadActions";
-import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
-import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
-import { useFileSelection } from "@/app/contexts/FileSelectionContext";
-import NoMatchingResults from "./NoMatchingResults";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -80,6 +78,9 @@ interface DriveContentProps {
   /** Browsing a remote (server-only) drive — uploads are not supported
    *  there yet, so the empty state renders without an upload CTA. */
   isRemoteView?: boolean;
+  /** The typed term is too short for the server-side search that backs this
+   *  view, so the empty list means "not searched", not "no matches". */
+  searchTermTooShort?: boolean;
   onSyncPathConfigured?: () => void;
   onUploadFile?: () => void;
   onAddFolder?: () => void;
@@ -96,6 +97,13 @@ interface DriveContentProps {
   currentSubfolderPath?: string | null;
   /** Where the menu's New Folder creates; defaults to the main drive. */
   newFolderTarget?: NewFolderTarget;
+  /**
+   * Show the Added by column in list view. Same gate as the Added by
+   * filter: only inside a shared drive (or shared folder context).
+   */
+  showUploadedBy?: boolean;
+  driveOwnerSs58?: string;
+  driveOwnerName?: string;
 }
 
 const DriveContent: FC<DriveContentProps> = ({
@@ -120,6 +128,7 @@ const DriveContent: FC<DriveContentProps> = ({
   writeRefusal = null,
   isStorageFull = false,
   isRemoteView = false,
+  searchTermTooShort = false,
   onSyncPathConfigured,
   onUploadFile,
   onAddFolder,
@@ -129,6 +138,9 @@ const DriveContent: FC<DriveContentProps> = ({
   drivePathsByLabel,
   currentSubfolderPath,
   newFolderTarget,
+  showUploadedBy = false,
+  driveOwnerSs58,
+  driveOwnerName,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
@@ -139,6 +151,7 @@ const DriveContent: FC<DriveContentProps> = ({
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   // Same handoff for `RenameDialog` (also mounted at the layout level).
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
+  const { requireUploadRoom } = useCreditCheck();
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -272,6 +285,12 @@ const DriveContent: FC<DriveContentProps> = ({
             return;
           }
 
+          // No plan / full: same dialog as the toolbar buttons — never
+          // open the picker or folder-upload path from a drop.
+          if (!(await requireUploadRoom("file-upload", isStorageFull))) {
+            return;
+          }
+
           if (isSyncPathEmpty && !isRecentFiles) {
             toast.info("Please set up sync folder first to upload files.");
             return;
@@ -357,6 +376,8 @@ const DriveContent: FC<DriveContentProps> = ({
     // The listener closes over it; without this a role that arrives after
     // mount would leave a stale refusal (or none) in the handler.
     writeRefusal,
+    isStorageFull,
+    requireUploadRoom,
   ]);
 
   const handleFileDownload = (
@@ -404,14 +425,29 @@ const DriveContent: FC<DriveContentProps> = ({
   const canUpload = !isSyncPathEmpty && Boolean(onUploadFile);
   const contextActions = useMemo(
     () => ({
-      onUploadFile: remoteTarget ? remoteFile.start : canUpload ? onUploadFile : undefined,
-      onUploadFolder: remoteTarget ? remoteFolder.start : canUpload ? onAddFolder : undefined,
+      onUploadFile: remoteTarget
+        ? () => {
+            if (isStorageFull) return;
+            remoteFile.start();
+          }
+        : canUpload
+          ? onUploadFile
+          : undefined,
+      onUploadFolder: remoteTarget
+        ? () => {
+            if (isStorageFull) return;
+            remoteFolder.start();
+          }
+        : canUpload
+          ? onAddFolder
+          : undefined,
       // Only where drives are chosen — the drive list and Recent Files.
       // Inside a drive, local or remote, "Sync a Folder" answers a
       // question the user is no longer asking, and registering a NEW sync
       // folder from inside another one reads as doing something to the
       // folder they are looking at.
       onSyncFolder: isRecentFiles ? onAddSyncFolder : undefined,
+      uploadsBlocked: isStorageFull,
       newFolderTarget,
     }),
     [
@@ -424,6 +460,7 @@ const DriveContent: FC<DriveContentProps> = ({
       isRecentFiles,
       onAddSyncFolder,
       newFolderTarget,
+      isStorageFull,
     ],
   );
   usePageContextActions(contextActions);
@@ -441,6 +478,7 @@ const DriveContent: FC<DriveContentProps> = ({
         <FilesTableSkeleton
           isRecentFiles={isRecentFiles}
           rows={skeletonRows ?? (isRecentFiles ? 5 : 8)}
+          showUploadedBy={showUploadedBy}
         />
       );
     }
@@ -477,6 +515,7 @@ const DriveContent: FC<DriveContentProps> = ({
         <NoMatchingResults
           searchTerm={hasSearchTerm ? searchTerm : undefined}
           hasActiveFilters={hasActiveFilters}
+          searchTermTooShort={searchTermTooShort}
         />
       );
     }
@@ -506,6 +545,9 @@ const DriveContent: FC<DriveContentProps> = ({
             currentSubfolderPath={currentSubfolderPath}
             searchTerm={searchTerm}
             activeFilterCount={activeFilters.length}
+            showUploadedBy={showUploadedBy}
+            driveOwnerSs58={driveOwnerSs58}
+            driveOwnerName={driveOwnerName}
           />
         </>
       );

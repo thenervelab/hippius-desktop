@@ -32,17 +32,23 @@ import {
 import {
   DRIVE_ROLES,
   MANAGER_INVITE_MAX_SECONDS,
+  MANAGER_INVITE_MAX_USES,
   driveRoleDescription,
   driveRoleLabel,
   type DriveRole,
 } from "@/app/lib/shared-drives/roles";
 import {
   DEFAULT_INVITE_TTL_SECS,
-  INVITE_TTL_OPTIONS,
   NEVER_EXPIRES_SECS,
+  clampInviteTtl,
+  inviteTtlOptionsFor,
   type InviteState,
 } from "./shareDriveModalState";
 import { BILLING_ROUTE } from "@/app/lib/routes";
+import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
+import { truncateInviteUrl } from "@/app/lib/shared-drives/inviteLink";
+import { useSharedDriveMemberships } from "@/app/lib/hooks/useSharedDriveRoles";
+import { parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 
 const primaryButtonClass =
   "h-[38px] w-full rounded-[8px] text-[14px] font-medium leading-[1.4] tracking-[-0.28px]";
@@ -93,14 +99,19 @@ export default function CreateDriveInviteDialog() {
     autoCopiedRef.current = false;
     try {
       // A manager invite is capped by the server at one use and 24 hours, and
-      // exceeding either is a 400. Clamping here means the link the user gets
-      // is the link the form described, rather than a rejection after the fact.
-      const effectiveTtl =
-        inviteRole === "manager"
-          ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
-          : ttlSecs;
+      // exceeding either is a 400. Clamping here (and again in Rust) means the
+      // link the user gets is the link the form described, rather than a
+      // rejection after the fact — matching console `createDriveInvite`.
+      const isManager = inviteRole === "manager";
+      const effectiveTtl = isManager
+        ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
+        : ttlSecs;
       const link = await createDriveInvite(labelAtCall, {
         expiresInSecs: effectiveTtl,
+        // Omitted maxUses becomes the ordinary default of 50 in Rust; without
+        // sending 1 here a manager mint used to fail client-side with
+        // "A manager invite can only be used once."
+        ...(isManager ? { maxUses: MANAGER_INVITE_MAX_USES } : {}),
         role: inviteRole,
         // Named only for a drive shared with this account that is not synced
         // here; an own drive's label resolves on its own.
@@ -126,6 +137,13 @@ export default function CreateDriveInviteDialog() {
     }
   }, [label, ttlSecs, inviteRole, queryClient, target?.ownerSs58, target?.folderHash]);
 
+  const handleRoleChange = useCallback((role: DriveRole) => {
+    setInviteRole(role);
+    // Choosing Manager with a wider lifetime already selected must snap the
+    // picker, not leave a value the mint would quietly replace (console).
+    setTtlSecs((secs) => clampInviteTtl(role, secs));
+  }, []);
+
   useEffect(() => {
     if (invite.kind !== "done" || autoCopiedRef.current) return;
     autoCopiedRef.current = true;
@@ -137,13 +155,46 @@ export default function CreateDriveInviteDialog() {
       });
   }, [invite]);
 
+  const memberships = useSharedDriveMemberships();
+  // Prefer the human basename the caller passed; when that is still the
+  // synthetic `shared:…` browse label (Manage access opened before the
+  // display-name map was populated), resolve it from memberships.
+  const driveName = (() => {
+    const preferred = inviteDriveDisplayName(target?.folderName, target?.label);
+    if (preferred !== "this drive" || !target) return preferred;
+    const identity =
+      parseSharedDriveLabel(target.label) ??
+      parseSharedDriveLabel(target.folderName) ??
+      (target.ownerSs58 && target.folderHash
+        ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
+        : null);
+    if (!identity) return preferred;
+    const match = memberships.find(
+      (m) =>
+        m.ownerSs58 === identity.ownerSs58 &&
+        m.folderHash === identity.folderHash,
+    );
+    return inviteDriveDisplayName(match?.displayLabel, target.label);
+  })();
+
   if (!SHARED_DRIVES_ENABLED || !target) return null;
 
   return (
     <FramedDialog
       open
       onClose={() => setTarget(null)}
-      title={`Invite to "${target.folderName}"`}
+      title={
+        <span className="mx-auto flex w-full min-w-0 max-w-full flex-col items-center gap-0.5 px-2">
+          <span className="shrink-0">Invite to</span>
+          <span
+            className="block w-full min-w-0 truncate"
+            title={driveName}
+          >
+            &quot;{driveName}&quot;
+          </span>
+        </span>
+      }
+      titleClassName="w-full min-w-0 overflow-hidden"
       icon={<Icons.Link className="size-4 text-white" />}
       // The canonical decision-dialog recipe (ConfirmationDialog,
       // DeleteConfirmationDialog): a 585px card with a 405px content column
@@ -152,7 +203,7 @@ export default function CreateDriveInviteDialog() {
       // column run the card's full width leaves two selects and two stacked
       // buttons stretched across 585px with nothing in them.
       maxWidth="max-w-[585px]"
-      contentClassName="sm:w-[405px]"
+      contentClassName="sm:w-[405px] min-w-0 overflow-hidden"
     >
       <div className="font-geist">
         <InviteTab
@@ -160,7 +211,7 @@ export default function CreateDriveInviteDialog() {
           ttlSecs={ttlSecs}
           onTtlChange={setTtlSecs}
           role={inviteRole}
-          onRoleChange={setInviteRole}
+          onRoleChange={handleRoleChange}
           onMint={() => void mintInvite()}
           onRetry={() => setInvite({ kind: "choosing" })}
           onClose={() => setTarget(null)}
@@ -227,6 +278,7 @@ function InviteTab({
 
   const running = state.kind === "running";
   const managerCapped = role === "manager";
+  const ttlOptions = inviteTtlOptionsFor(role);
   return (
     <div>
       <div className="mb-5 flex flex-col gap-1.5">
@@ -245,6 +297,11 @@ function InviteTab({
         <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
           {driveRoleDescription(role)}
         </p>
+        {managerCapped ? (
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+            Manager links are single use and expire in 24 hours.
+          </p>
+        ) : null}
       </div>
 
       <div className="mb-6 flex flex-col gap-1.5">
@@ -253,14 +310,14 @@ function InviteTab({
           ariaLabel="Invite expires"
           value={String(ttlSecs)}
           onValueChange={(value) => onTtlChange(Number(value))}
-          options={INVITE_TTL_OPTIONS.map(({ label, secs }) => ({
+          options={ttlOptions.map(({ label, secs }) => ({
             label,
             value: String(secs),
           }))}
         />
         <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
           {managerCapped
-            ? "A manager link can only be used once and expires within 24 hours, whatever is chosen above — managers can invite and remove people, so the link itself is short-lived."
+            ? "A manager link can only be used once and expires within 24 hours — managers can invite and remove people, so the link itself is short-lived."
             : neverExpires
               ? `Anyone with the link can join this drive as ${driveRoleLabel(role)} for as long as the link exists. Share it only with people you trust.`
               : `Anyone with the link can join this drive as ${driveRoleLabel(role)} until the link expires. Share it only with people you trust.`}
@@ -328,24 +385,22 @@ function InviteDone({
 
       <div
         className={cn(
-          "mb-3 rounded-[8px] border p-3",
+          "mb-3 flex items-center gap-2 rounded-[8px] border px-3 py-2.5",
           "border-grey-80 bg-white",
           "dark:border-[#494949] dark:bg-[#1f1f1f]",
         )}
       >
-        <textarea
-          readOnly
-          value={inviteUrl}
-          onFocus={(e) => e.currentTarget.select()}
-          rows={3}
+        {/* Truncated, `#k=` stripped: the fragment is the drive key and must
+            not appear on screen. Copy still writes the full URL. */}
+        <p
           className={cn(
-            // `overflow-y-auto`, never `hidden`: a token's length varies, and
-            // a clipped URL reads as a broken one. The reader has to be able
-            // to see the whole thing they are about to hand someone.
-            "block w-full resize-none overflow-y-auto break-all bg-transparent font-mono text-xs leading-relaxed outline-none",
+            "min-w-0 flex-1 truncate font-mono text-xs",
             "text-grey-10 dark:text-grey-dark-800",
           )}
-        />
+          title="Invite link (key fragment hidden)"
+        >
+          {truncateInviteUrl(inviteUrl)}
+        </p>
       </div>
 
       {/* The link is the whole point of this screen, so copying it is the

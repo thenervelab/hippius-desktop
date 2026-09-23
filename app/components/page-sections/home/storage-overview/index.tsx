@@ -13,7 +13,7 @@ import { cn } from "@/app/lib/utils";
 import GripIcon from "../GripIcon";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
-  formatPercentLabel,
+  getUsageAsideLabel,
   getCapacitySourceLabel,
   getPlanView,
   getStorageOverviewView,
@@ -254,7 +254,10 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
                     toneStyle.label,
                   )}
                 >
-                  {formatPercentLabel(percent)}
+                  {getUsageAsideLabel({
+                    percent,
+                    overDisplay: overview.overDisplay,
+                  })}
                 </span>
               </div>
 

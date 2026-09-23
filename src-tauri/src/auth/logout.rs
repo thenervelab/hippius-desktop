@@ -134,5 +134,11 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
         cache.remove(&account_id);
     }
 
+    // 6. Reset the chat unread surfaces (dock badge, `(N) Hippius` window
+    //    title, tray mirror). The Matrix client stops when the webview's
+    //    chat provider unmounts, but the badge and title are OS state that
+    //    would otherwise keep the previous account's count on the login screen.
+    crate::chat::notify::clear_unread_badge(&app);
+
     Ok(())
 }

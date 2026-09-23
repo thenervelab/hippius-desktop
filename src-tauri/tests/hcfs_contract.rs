@@ -468,8 +468,35 @@ fn drive_memberships_response_wire_pinned() {
         ["created_at", "display_label", "folder_hash", "grant_blob", "owner_ss58", "role"]
             .into_iter()
             .collect::<BTreeSet<_>>(),
-        "DriveMembershipEntry wire keys must stay exactly these snake_case names"
+        "DriveMembershipEntry baseline keys (profile/frozen/member_count omitted when unset)"
     );
+}
+
+/// Newer HCFS fields on memberships (hcfs #455 + freeze): optional on the wire.
+#[test]
+fn drive_memberships_profile_and_freeze_fields_parse() {
+    let resp: DriveMembershipsResponse = serde_json::from_str(
+        r#"{
+            "memberships": [{
+                "owner_ss58": "5Owner",
+                "owner_name": "Ada",
+                "folder_hash": "0123456789abcdef",
+                "role": "writer",
+                "grant_blob": "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=",
+                "display_label": "team-docs",
+                "created_at": "2026-08-20T00:00:00Z",
+                "member_count": 3,
+                "frozen": true,
+                "frozen_until": "2026-10-01T00:00:00Z"
+            }]
+        }"#,
+    )
+    .expect("deserialize");
+    let entry = &resp.memberships[0];
+    assert_eq!(entry.owner_name.as_deref(), Some("Ada"));
+    assert_eq!(entry.member_count, 3);
+    assert!(entry.frozen);
+    assert_eq!(entry.frozen_until.as_deref(), Some("2026-10-01T00:00:00Z"));
 }
 
 /// The owner-side members listing (`GET /v1/drives/{fh}/members`), consumed
@@ -478,18 +505,22 @@ fn drive_memberships_response_wire_pinned() {
 #[test]
 fn drive_members_response_wire_pinned() {
     let resp: DriveMembersResponse =
-        serde_json::from_str(r#"{"members": [{"member_ss58": "5Member", "role": "writer", "created_at": "2026-08-20T00:00:00Z"}]}"#)
+        serde_json::from_str(r#"{"members": [{"member_ss58": "5Member", "role": "writer", "created_at": "2026-08-20T00:00:00Z", "member_name": "Grace", "member_email": "grace@example.com"}]}"#)
             .expect("deserialize");
     let entry = &resp.members[0];
     assert_eq!(entry.member_ss58, "5Member");
     assert_eq!(entry.role, "writer");
     assert_eq!(entry.created_at, "2026-08-20T00:00:00Z");
+    assert_eq!(entry.member_name.as_deref(), Some("Grace"));
+    assert_eq!(entry.member_email.as_deref(), Some("grace@example.com"));
 
     let json = serde_json::to_value(&DriveMemberEntry { ..entry.clone() }).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["created_at", "member_ss58", "role"].into_iter().collect::<BTreeSet<_>>(),
+        ["created_at", "member_email", "member_name", "member_ss58", "role"]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
         "DriveMemberEntry wire keys must stay exactly these snake_case names, and never a grant blob"
     );
 }
@@ -676,6 +707,9 @@ fn folder_share_client_surface_is_reachable() {
 
     let created_at = "2026-08-23T00:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().expect("timestamp parses");
     let item = FolderShareListItem {
+        // New upstream field (hcfs #457/#458 sealed invite tokens); this
+        // contract test pins unrelated listing fields.
+        owner_wrap: None,
         token_hash: folder_share_token_hash("tok"),
         folder_hash: "0123456789abcdef".to_string(),
         path_prefix: String::new(),

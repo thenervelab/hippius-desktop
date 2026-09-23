@@ -34,7 +34,7 @@ use crate::error::{AppError, NotReadyKind, Result};
 use crate::shared_drives::grant;
 use crate::sync::identity::MemberDriveIdentity;
 use base64::Engine;
-use hcfs_shared::network::{CreateDriveInviteRequest, CreateDriveInviteResponse, DriveMembersResponse, DriveMembershipsResponse};
+use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
@@ -71,32 +71,35 @@ pub(crate) const WIRE_ROLES: [&str; 3] = ["reader", "writer", "manager"];
 pub(crate) const MANAGER_INVITE_MAX_USES: u32 = 1;
 pub(crate) const MANAGER_INVITE_MAX_SECS: u64 = 24 * 60 * 60;
 
-/// Resolve and check the role an invite is minted for.
+/// Resolve the role an invite is minted for.
 ///
 /// An omitted role keeps the historical `writer`, so a caller that predates
-/// the picker mints exactly what it always did.
+/// the picker mints exactly what it always did. An unknown spelling is refused
+/// by name — the server answers a bare 400, which tells the user nothing.
 ///
-/// Both refusals exist because the server answers a bare 400 and the user
-/// cannot tell which of their choices it objected to. A typo rejected by name,
-/// and a cap named as a cap, are the difference between "that role does not
-/// exist" and "something went wrong" — and a manager link minted for 7 days
-/// would be rejected AFTER the user had configured it.
-pub(crate) fn resolve_invite_role(role: Option<String>, expires_in_secs: u64, max_uses: u32) -> Result<String> {
+/// Manager caps are applied by [`apply_manager_invite_caps`], not rejected
+/// here: the console clamps, and an omitted `max_uses` resolves to the
+/// ordinary default of 50, which would otherwise fail every manager mint.
+pub(crate) fn resolve_invite_role(role: Option<String>) -> Result<String> {
     let role = role.unwrap_or_else(|| "writer".to_string());
     if !WIRE_ROLES.contains(&role.as_str()) {
         return Err(AppError::Validation(format!(
             "Unknown drive role: {role}. Expected one of reader, writer, manager."
         )));
     }
-    if role == "manager" {
-        if max_uses > MANAGER_INVITE_MAX_USES {
-            return Err(AppError::Validation("A manager invite can only be used once.".into()));
-        }
-        if expires_in_secs > MANAGER_INVITE_MAX_SECS {
-            return Err(AppError::Validation("A manager invite expires within 24 hours.".into()));
-        }
-    }
     Ok(role)
+}
+
+/// Cap a manager invite the way the console's `createDriveInvite` does:
+/// clamp, don't reject. An omitted `max_uses` becomes the ordinary default
+/// of 50; without this clamp that default would fail every manager mint
+/// with "A manager invite can only be used once" — a message that sounds
+/// like a uniqueness rule, not a uses ceiling.
+pub(crate) fn apply_manager_invite_caps(role: &str, expires_in_secs: u64, max_uses: u32) -> (u64, u32) {
+    if role != "manager" {
+        return (expires_in_secs, max_uses);
+    }
+    (expires_in_secs.min(MANAGER_INVITE_MAX_SECS), max_uses.min(MANAGER_INVITE_MAX_USES))
 }
 
 fn resolve_invite_policy(expires_in_secs: Option<u64>, max_uses: Option<u32>) -> (u64, u32) {
@@ -104,6 +107,18 @@ fn resolve_invite_policy(expires_in_secs: Option<u64>, max_uses: Option<u32>) ->
         expires_in_secs.unwrap_or(DEFAULT_INVITE_EXPIRES_IN_SECS),
         max_uses.unwrap_or(DEFAULT_INVITE_MAX_USES),
     )
+}
+
+/// Keep a real display string; drop blank/whitespace so the FE never draws a
+/// gap where an ss58 fallback belonged (hcfs #455 / console `presentText`).
+fn present_text(value: Option<String>) -> Option<String> {
+    value.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Forward a server `member_count` of 0/omitted as `None` so the FE never
+/// draws "0 members" from an unknown or empty listing signal.
+fn present_member_count(count: u64) -> Option<u32> {
+    if count == 0 { None } else { u32::try_from(count).ok() }
 }
 
 // ─── FE-facing wire types (camelCase, desktop-owned) ───────────────────────
@@ -125,6 +140,13 @@ pub struct DriveMemberInfo {
     pub member_ss58: String,
     pub role: String,
     pub created_at: String,
+    /// Display name from the account-profile projection (hcfs #455). Absent
+    /// when the account has none on file — FE falls back to a shortened ss58.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_name: Option<String>,
+    /// Email, only disclosed to the drive's owner/managers. Same absence rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_email: Option<String>,
 }
 
 /// One drive shared WITH this account ("Shared with me" row). The sealed
@@ -134,6 +156,9 @@ pub struct DriveMemberInfo {
 #[serde(rename_all = "camelCase")]
 pub struct DriveMembershipInfo {
     pub owner_ss58: String,
+    /// Owner display name (hcfs #455); absent when unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
     pub folder_hash: String,
     pub display_label: String,
     pub role: String,
@@ -144,6 +169,18 @@ pub struct DriveMembershipInfo {
     pub synced_locally: bool,
     /// The local drive label of that row (`None` when not synced here).
     pub local_label: Option<String>,
+    /// How many people currently hold a membership (owner excluded). `None`
+    /// when the server omitted the field (old server / unknown) — the FE
+    /// must never draw "0 members" from absence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_count: Option<u32>,
+    /// Owner account limited (grace / lapsed): uploads refused; reads may
+    /// still work. Omitted/`false` when unfrozen.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub frozen: bool,
+    /// RFC 3339 end of the biller's grace window, when recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frozen_until: Option<String>,
 }
 
 /// Result of [`add_shared_drive`]: the local drive label actually allocated
@@ -223,7 +260,16 @@ pub struct MintInvite<'a> {
     pub owner: Option<&'a str>,
 }
 
-pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: &str, mint: MintInvite<'_>) -> Result<String> {
+/// Token + invite id from a successful mint. The id is `hex(blake3(token))`;
+/// when the server omits it (older builds) we compute it locally so seal-back
+/// still has a row to park against.
+#[derive(Debug)]
+pub struct MintedInvite {
+    pub token: String,
+    pub invite_id: String,
+}
+
+pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: &str, mint: MintInvite<'_>) -> Result<MintedInvite> {
     let MintInvite {
         folder_hash,
         expires_in_secs,
@@ -259,9 +305,63 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
     if !status.is_success() {
         return Err(classify_error_status(status, &body));
     }
-    let parsed: CreateDriveInviteResponse =
-        serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("create-invite response did not parse: {e}")))?;
-    Ok(parsed.invite_token)
+    // Prefer a local shape: hcfs-shared's `CreateDriveInviteResponse` may
+    // lag `invite_id`, and seal-back needs the id either way. Fall back to
+    // blake3(token) when the server omits it.
+    #[derive(serde::Deserialize)]
+    struct MintBody {
+        invite_token: String,
+        #[serde(default)]
+        invite_id: Option<String>,
+    }
+    let parsed: MintBody = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("create-invite response did not parse: {e}")))?;
+    let invite_id = parsed
+        .invite_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| super::invite_token::invite_id_for_token(&parsed.invite_token));
+    Ok(MintedInvite {
+        token: parsed.invite_token,
+        invite_id,
+    })
+}
+
+/// `PUT /v1/drives/{fh}/invites/{id}/sealed-token` — park the token sealed
+/// under the drive key so the Links tab can rebuild the URL later.
+///
+/// WRITE-ONCE server-side; only the invite's minter may call it. Callers
+/// treat failure as cosmetic (console `sealMintedToken`).
+pub async fn http_put_sealed_token(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    invite_id: &str,
+    sealed_token: &str,
+    owner: Option<&str>,
+) -> Result<()> {
+    let resp = http
+        .put(with_owner(
+            &format!(
+                "{}/v1/drives/{}/invites/{}/sealed-token",
+                base_url.trim_end_matches('/'),
+                folder_hash,
+                invite_id
+            ),
+            owner,
+        )?)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .json(&serde_json::json!({ "sealed_token": sealed_token }))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("seal-token request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_error_status(status, &body));
+    }
+    Ok(())
 }
 
 /// `GET /v1/drives/{folder_hash}/members` — owner-side member listing.
@@ -410,6 +510,9 @@ pub struct DriveInviteInfo {
     /// still parse rather than failing the whole listing.
     #[serde(default, alias = "minted_by")]
     pub minted_by: String,
+    /// Minter display name (hcfs #455); absent when unknown or minted_by empty.
+    #[serde(default, alias = "minted_by_name", skip_serializing_if = "Option::is_none")]
+    pub minted_by_name: Option<String>,
     #[serde(alias = "expires_at")]
     pub expires_at: String,
     #[serde(alias = "max_uses")]
@@ -420,6 +523,22 @@ pub struct DriveInviteInfo {
     pub valid: bool,
     #[serde(alias = "created_at")]
     pub created_at: String,
+    /// Token sealed under the drive key (hcfs #457/#458). Read from the
+    /// server listing; never serialized to the FE — only the rebuilt
+    /// `invite_url` crosses IPC.
+    #[serde(default, alias = "sealed_token", skip_serializing)]
+    pub sealed_token: Option<String>,
+    /// Full invite URL when `sealed_token` opened under this session's drive
+    /// key. FE truncates and strips `#k=` for display; copy uses the full
+    /// string. Absent when there is no blob, the invite is dead, or open
+    /// failed (locked stand-in).
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub invite_url: Option<String>,
+    /// True when the listing carried a sealed blob for a still-valid invite.
+    /// The FE shows the link field; `invite_url` fills it or the locked
+    /// stand-in when absent.
+    #[serde(default, skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
+    pub link_available: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -879,12 +998,14 @@ pub async fn create_drive_invite(
 
     // Omitted parameters resolve to the desktop policy here, not on the
     // server and not in the FE wrapper — see `resolve_invite_policy`.
+    // Manager caps are clamped (console `createDriveInvite`), not refused:
+    // the ordinary default of 50 uses would otherwise fail every manager mint.
     let (expires_in_secs, max_uses) = resolve_invite_policy(expires_in_secs, max_uses);
-
-    let role = resolve_invite_role(role, expires_in_secs, max_uses)?;
+    let role = resolve_invite_role(role)?;
+    let (expires_in_secs, max_uses) = apply_manager_invite_caps(&role, expires_in_secs, max_uses);
 
     let http = state.api_client.clone();
-    let token = http_create_invite(
+    let minted = http_create_invite(
         &http,
         &ctx.base_url,
         &ctx.bearer,
@@ -898,7 +1019,23 @@ pub async fn create_drive_invite(
     )
     .await?;
 
-    let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &token, &entropy);
+    // Best-effort seal-back (console `sealMintedToken`): the link is already
+    // usable; failing the mint over a park would trade a working invite for
+    // an error toast. An old server without the route lands the same way.
+    if let Ok(sealed) = super::invite_token::seal_invite_token(entropy.as_ref(), &minted.invite_id, &minted.token) {
+        let _ = http_put_sealed_token(
+            &http,
+            &ctx.base_url,
+            &ctx.bearer,
+            &identity.wire_folder_hash,
+            &minted.invite_id,
+            &sealed,
+            delegated_owner(&identity),
+        )
+        .await;
+    }
+
+    let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &minted.token, &entropy);
 
     info!(label = %label, folder_hash = %identity.wire_folder_hash, "Drive invite minted");
     Ok(DriveInviteLink { invite_url })
@@ -936,6 +1073,8 @@ pub async fn list_drive_members(
             member_ss58: m.member_ss58,
             role: m.role,
             created_at: m.created_at,
+            member_name: present_text(m.member_name),
+            member_email: present_text(m.member_email),
         })
         .collect())
 }
@@ -1027,10 +1166,11 @@ pub async fn change_drive_member_role(
 
 /// List the live invites for a drive this account owns.
 ///
-/// The only place an invite id exists outside the server. Revoking needs one,
-/// and the mint cannot supply it — the server returns a token, and the id is
-/// that token's hash, which is precisely what makes a minted link
-/// unrevocable without this listing.
+/// Opens each row's sealed token under the drive key and attaches a rebuilt
+/// `invite_url` so the Links tab can copy a link minted earlier. Rows without
+/// a blob (pre-seal-back, revoked, or not readable by this caller) leave
+/// `link_available` false; a blob that will not open leaves the field true
+/// and `invite_url` empty (locked stand-in).
 #[tauri::command]
 pub async fn list_drive_invites(
     app: tauri::AppHandle,
@@ -1042,7 +1182,7 @@ pub async fn list_drive_invites(
     let ctx = api_ctx(&state).await?;
     let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
-    let invites = http_list_invites(
+    let mut invites = http_list_invites(
         &state.api_client.clone(),
         &ctx.base_url,
         &ctx.bearer,
@@ -1050,6 +1190,35 @@ pub async fn list_drive_invites(
         delegated_owner(&identity),
     )
     .await?;
+
+    // Drive key for opening sealed tokens. Failure is not fatal to the
+    // listing — rows keep their metadata and show the locked link field.
+    let entropy = {
+        let _recovery_guard = state.recovery_lock.lock().await;
+        let mnemonic = crate::sync::remote::session_mnemonic(&state).ok();
+        match mnemonic {
+            Some(mnemonic) => match crate::sync::remote::folder_phrase_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await {
+                Ok(phrase) => grant::entropy_from_phrase(&phrase).ok(),
+                Err(_) => None,
+            },
+            None => None,
+        }
+    };
+
+    let console_base = crate::shares::commands::console_base_url();
+    for invite in &mut invites {
+        let sealed = invite.sealed_token.as_deref().filter(|s| !s.is_empty());
+        invite.link_available = sealed.is_some() && invite.valid;
+        invite.invite_url = None;
+        if let (Some(sealed), Some(entropy)) = (sealed, entropy.as_ref())
+            && let Some(token) = super::invite_token::open_invite_token(entropy.as_ref(), &invite.invite_id, sealed)
+        {
+            invite.invite_url = Some(build_invite_url(&console_base, &token, entropy));
+        }
+        // Never leave ciphertext on the FE wire.
+        invite.sealed_token = None;
+    }
+
     let live = invites.iter().filter(|i| i.valid && !i.revoked).count();
     info!(label = %label, count = invites.len(), live, "Listed drive invites");
     Ok(invites)
@@ -1101,12 +1270,12 @@ fn fold_drive_sharing(label: &str, member_count: Option<usize>, invites: Option<
 
 /// Sharing state for every OWN drive named in `labels`, in one call.
 ///
-/// The drive list needs this for each row at once, and there is no bulk
-/// "drives I have shared" endpoint — members and invites are both per drive,
-/// and `/v1/drive-memberships` answers the opposite question. Fanning out from
-/// the renderer meant 2N IPC round-trips whose results had to be reassembled
-/// there; doing it here is one round-trip, concurrent over the network, with
-/// the fold applied once.
+/// Member counts come from the account's `/list_folders`
+/// (`RemoteFolderInfo.member_count`) — one request for the set — rather than
+/// a `/members` fan-out per drive. Invites are still per-drive, and are
+/// fetched ONLY when a drive has no members: a drive with members is already
+/// "shared" for the badge, and a link with no join yet leaves
+/// `member_count == 0` while the Links tab still needs a signal.
 ///
 /// A drive that fails entirely is ABSENT from the result rather than failing
 /// the call: one unreachable drive must not blank the badge on eleven others.
@@ -1123,26 +1292,46 @@ pub async fn list_owned_drive_sharing(app: tauri::AppHandle, labels: Vec<String>
     let pool = state.pool()?;
     let http = state.api_client.clone();
 
+    // One listing for every own drive's member_count. Failure here means we
+    // cannot answer counts; invites-only still describe a half we can.
+    let folders_by_hash = match http_list_owner_folders(&http, &ctx.base_url, &ctx.bearer, &ctx.account_id).await {
+        Ok(folders) => folders
+            .into_iter()
+            .map(|f| (f.folder_hash.clone(), f))
+            .collect::<std::collections::HashMap<_, _>>(),
+        Err(e) => {
+            warn!(error = %e, "Own folder listing failed; sharing badge falls back to invites-only");
+            std::collections::HashMap::new()
+        }
+    };
+
     let summaries = futures_util::future::join_all(labels.iter().map(|label| {
         let http = http.clone();
         let ctx = &ctx;
+        let folders_by_hash = &folders_by_hash;
         async move {
             // Owner-only on purpose: this answers "which of MY drives have I
             // shared". A drive shared WITH this account is described by its
             // role badge, which needs no counts.
             let identity = resolve_own_drive(pool, &ctx.account_id, label).await.ok()?;
-            // Both listings are asked independently and neither is allowed to
-            // discard the other's answer.
-            let (members, invites) = futures_util::future::join(
-                http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
-                http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
-            )
-            .await;
+            let member_count = folders_by_hash.get(&identity.wire_folder_hash).map(|f| f.member_count as usize);
 
-            for err in [members.as_ref().err(), invites.as_ref().err()].into_iter().flatten() {
-                debug!(label = %label, error = %err, "Drive sharing listing failed");
-            }
-            fold_drive_sharing(label, members.ok().map(|m| m.members.len()), invites.as_deref().ok())
+            // Invites only when we have no members (or could not learn the
+            // count): otherwise the badge already has its answer and N invite
+            // GETs would be pure noise on every drive-list refresh.
+            let invites = if member_count.unwrap_or(0) == 0 {
+                match http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None).await {
+                    Ok(invites) => Some(invites),
+                    Err(err) => {
+                        debug!(label = %label, error = %err, "Drive invites listing failed");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            fold_drive_sharing(label, member_count, invites.as_deref())
         }
     }))
     .await
@@ -1215,12 +1404,16 @@ pub async fn list_my_drive_memberships(app: tauri::AppHandle) -> Result<Vec<Driv
         let local = crate::sync::identity::member_row_for_wire_identity(pool, &ctx.account_id, &m.owner_ss58, &m.folder_hash).await?;
         memberships.push(DriveMembershipInfo {
             owner_ss58: m.owner_ss58,
+            owner_name: present_text(m.owner_name),
             folder_hash: m.folder_hash,
             display_label: m.display_label,
             role: m.role,
             created_at: m.created_at,
             synced_locally: local.is_some(),
             local_label: local.map(|row| row.label),
+            member_count: present_member_count(m.member_count),
+            frozen: m.frozen,
+            frozen_until: present_text(m.frozen_until),
         });
     }
     Ok(memberships)
@@ -1638,13 +1831,13 @@ mod tests {
     /// An omitted role must keep minting what every pre-picker build minted.
     #[test]
     fn omitted_invite_role_stays_writer() {
-        assert_eq!(resolve_invite_role(None, 3600, 5).expect("omitted role"), "writer");
+        assert_eq!(resolve_invite_role(None).expect("omitted role"), "writer");
     }
 
     #[test]
     fn every_wire_role_is_accepted() {
         for role in WIRE_ROLES {
-            assert_eq!(resolve_invite_role(Some(role.to_string()), 3600, 1).expect("wire role"), role);
+            assert_eq!(resolve_invite_role(Some(role.to_string())).expect("wire role"), role);
         }
     }
 
@@ -1652,25 +1845,23 @@ mod tests {
     /// nothing about which choice it objected to.
     #[test]
     fn an_unknown_role_is_refused_by_name() {
-        let err = resolve_invite_role(Some("admin".into()), 3600, 1).expect_err("unknown role");
+        let err = resolve_invite_role(Some("admin".into())).expect_err("unknown role");
         assert!(format!("{err}").contains("admin"), "the refusal must name the role: {err}");
     }
 
-    /// A manager link minted for a week would be rejected AFTER the user had
-    /// configured it. Both caps are refused here, each naming the cap.
+    /// Match the console: clamp manager caps rather than reject. An omitted
+    /// `max_uses` resolves to 50; rejecting that would fail every manager mint.
     #[test]
-    fn a_manager_invite_is_held_to_the_server_caps() {
-        let too_many = resolve_invite_role(Some("manager".into()), 3600, 2).expect_err("uses cap");
-        assert!(format!("{too_many}").contains("once"), "{too_many}");
-
-        let too_long = resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS + 1, 1).expect_err("ttl cap");
-        assert!(format!("{too_long}").contains("24 hours"), "{too_long}");
-
-        // Exactly at the cap is allowed — the caps ARE the defaults.
+    fn a_manager_invite_is_clamped_to_the_server_caps() {
         assert_eq!(
-            resolve_invite_role(Some("manager".into()), MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES).expect("at the cap"),
-            "manager"
+            apply_manager_invite_caps("manager", 7 * 24 * 60 * 60, DEFAULT_INVITE_MAX_USES),
+            (MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES)
         );
+        assert_eq!(
+            apply_manager_invite_caps("manager", MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES),
+            (MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES)
+        );
+        assert_eq!(resolve_invite_role(Some("manager".into())).expect("manager"), "manager");
     }
 
     /// The caps bind managers only; a reader or writer link is unaffected.
@@ -1678,8 +1869,8 @@ mod tests {
     fn the_manager_caps_do_not_bind_other_roles() {
         for role in ["reader", "writer"] {
             assert_eq!(
-                resolve_invite_role(Some(role.to_string()), MANAGER_INVITE_MAX_SECS * 7, 50).expect("wide link"),
-                role
+                apply_manager_invite_caps(role, MANAGER_INVITE_MAX_SECS * 7, 50),
+                (MANAGER_INVITE_MAX_SECS * 7, 50)
             );
         }
     }
@@ -1711,12 +1902,16 @@ mod tests {
     fn drive_membership_info_wire_keys_are_pinned() {
         let info = DriveMembershipInfo {
             owner_ss58: "5Owner".to_string(),
+            owner_name: Some("Ada".to_string()),
             folder_hash: "0123456789abcdef".to_string(),
             display_label: "team-docs".to_string(),
             role: "writer".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             synced_locally: false,
             local_label: None,
+            member_count: Some(4),
+            frozen: true,
+            frozen_until: Some("2026-10-01T00:00:00Z".to_string()),
         };
         let json = serde_json::to_value(&info).expect("serialize");
         let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
@@ -1726,7 +1921,11 @@ mod tests {
                 "createdAt",
                 "displayLabel",
                 "folderHash",
+                "frozen",
+                "frozenUntil",
                 "localLabel",
+                "memberCount",
+                "ownerName",
                 "ownerSs58",
                 "role",
                 "syncedLocally"
@@ -1740,6 +1939,32 @@ mod tests {
             serde_json::Value::Null,
             "an unsynced row serializes localLabel as null"
         );
+        assert_eq!(json["ownerName"], "Ada");
+        assert_eq!(json["memberCount"], 4);
+        assert_eq!(json["frozen"], true);
+    }
+
+    #[test]
+    fn drive_membership_info_omits_unknown_profile_fields() {
+        let info = DriveMembershipInfo {
+            owner_ss58: "5Owner".to_string(),
+            owner_name: None,
+            folder_hash: "0123456789abcdef".to_string(),
+            display_label: "team-docs".to_string(),
+            role: "writer".to_string(),
+            created_at: "2026-08-20T00:00:00Z".to_string(),
+            synced_locally: false,
+            local_label: None,
+            member_count: None,
+            frozen: false,
+            frozen_until: None,
+        };
+        let json = serde_json::to_value(&info).expect("serialize");
+        let obj = json.as_object().expect("object");
+        assert!(!obj.contains_key("ownerName"));
+        assert!(!obj.contains_key("memberCount"));
+        assert!(!obj.contains_key("frozen"), "unfrozen must omit the key");
+        assert!(!obj.contains_key("frozenUntil"));
     }
 
     fn invite(valid: bool, revoked: bool) -> DriveInviteInfo {
@@ -1747,12 +1972,16 @@ mod tests {
             invite_id: "i".into(),
             role: "writer".into(),
             minted_by: String::new(),
+            minted_by_name: None,
             expires_at: String::new(),
             max_uses: 1,
             use_count: 0,
             revoked,
             valid,
             created_at: String::new(),
+            sealed_token: None,
+            invite_url: None,
+            link_available: false,
         }
     }
 
@@ -1950,8 +2179,31 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect::<std::collections::BTreeSet<_>>(),
-            "DriveInviteInfo wire keys must stay exactly these camelCase names"
+            "DriveInviteInfo wire keys must stay exactly these camelCase names when optional link fields are absent"
         );
+    }
+
+    #[test]
+    fn drive_invite_info_carries_invite_url_when_opened() {
+        let mut row = invite(true, false);
+        row.link_available = true;
+        row.invite_url = Some("https://console.example/invite/tok#k=abc".into());
+        let json = serde_json::to_value(&row).unwrap();
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj.get("linkAvailable"), Some(&serde_json::json!(true)));
+        assert_eq!(obj.get("inviteUrl"), Some(&serde_json::json!("https://console.example/invite/tok#k=abc")));
+        assert!(!obj.contains_key("sealedToken"), "ciphertext must not cross IPC");
+    }
+
+    #[test]
+    fn drive_invite_info_parses_sealed_token_from_server() {
+        let parsed: DriveInviteInfo = serde_json::from_str(
+            r#"{"invite_id":"abc","role":"writer","expires_at":"2126-01-01T00:00:00Z",
+                "max_uses":50,"use_count":2,"revoked":false,"valid":true,
+                "created_at":"2026-01-01T00:00:00Z","sealed_token":"c2VhbGVk"}"#,
+        )
+        .expect("sealed_token must deserialize");
+        assert_eq!(parsed.sealed_token.as_deref(), Some("c2VhbGVk"));
     }
 
     // ...while still reading the server's snake_case on the way in. Both

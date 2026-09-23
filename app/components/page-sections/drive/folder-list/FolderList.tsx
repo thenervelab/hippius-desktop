@@ -343,7 +343,7 @@ const FolderList: React.FC<FolderListProps> = ({
                     variant="ghost"
                     size="auto"
                     onClick={() => onManageAccess(row)}
-                    className="action-menu-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-grey-80 px-2.5 text-xs font-medium text-grey-30 transition-colors hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
+                    className="action-menu-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-primary-50 px-2.5 text-xs font-medium text-primary-50 transition-colors hover:bg-primary-50/10 dark:border-primary-brand-dark dark:text-primary-brand-dark dark:hover:bg-primary-50/15"
                   >
                     Manage access
                   </Button>

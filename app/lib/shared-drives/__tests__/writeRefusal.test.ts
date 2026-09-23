@@ -35,4 +35,10 @@ describe("driveWriteRefusal", () => {
     expect(message).not.toMatch(/\breader\b/);
     expect(message).not.toMatch(/\bwriter\b/);
   });
+
+  it("refuses every role when the drive is frozen", () => {
+    expect(driveWriteRefusal("writer", { frozen: true })).toMatch(/frozen/i);
+    expect(driveWriteRefusal("manager", { frozen: true })).toMatch(/frozen/i);
+    expect(driveWriteRefusal(null, { frozen: true })).toMatch(/frozen/i);
+  });
 });

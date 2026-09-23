@@ -10,3 +10,4 @@
 
 pub mod commands;
 pub mod grant;
+pub mod invite_token;

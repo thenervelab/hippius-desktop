@@ -222,6 +222,30 @@ fn management_commands_route_through_a_named_gate() {
     }
 }
 
+/// Seal-back after mint (console `sealMintedToken`): without it the Links
+/// tab can never re-show a link once the create dialog closes.
+#[test]
+fn create_drive_invite_seals_the_token_back() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn create_drive_invite(");
+    assert!(
+        body.contains("seal_invite_token") && body.contains("http_put_sealed_token"),
+        "create_drive_invite must park the sealed token so the Links tab can rebuild URLs"
+    );
+}
+
+/// Opening sealed tokens on list is what puts a copyable URL on each Links
+/// row; without it the tab only shows role/usage/expiry metadata.
+#[test]
+fn list_drive_invites_opens_sealed_tokens() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn list_drive_invites(");
+    assert!(
+        body.contains("open_invite_token") && body.contains("build_invite_url"),
+        "list_drive_invites must open sealed tokens and attach invite_url"
+    );
+}
+
 /// Storage on a shared drive bills the OWNER: `add_shared_drive` must not
 /// grow a `require_eligible` gate on the member's own balance (the init
 /// funnel's member skip and the server 402 are the authorities).

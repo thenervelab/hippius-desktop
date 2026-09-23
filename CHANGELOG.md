@@ -15,8 +15,51 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+### Changed
+
+- **Storage and plan banners on Overview use a button on the right**
+  (Upgrade, See storage plans, Top up). Drive keeps an underlined text
+  link under the banner copy so it does not duplicate the plan-chip
+  Upgrade in the header.
+- **Over-quota banners are red** (same danger treatment as no-plan), on
+  Overview and Drive, for free and paid plans — uploads are paused.
+
+### Fixed
+
+- **Sync Queue when storage is full (HTTP 402).** Failed uploads say
+  "Storage full. Upgrade your plan or free up space." instead of
+  "Server error (402). Please try again." Credits-exhausted failures still
+  show the credits wording. Files added to a sync folder while over quota
+  fail with the same clear message.
+- **Overview and Drive when you have no plan, or you are over Free / paid
+  storage.** File, Folder, and Sync look disabled and do not open a picker
+  or dialog on click. Drag and drop still explains with Subscribe (no plan,
+  including the 30-day deletion notice) or Upgrade (full plan, files stay).
+  Right-click upload items are disabled the same way. Backend write checks
+  remain the last line of defence.
+
 ### Added
 
+- **Drive remembers how many rows you chose.** Pick 50 per page and it stays 50
+  — in other folders, after visiting another page, and next time you open the
+  app. The rows-per-page control also stops disappearing on folders that fit on
+  one page, which used to leave you stuck on a size you could not change back.
+- **Team chat: end-to-end encrypted channels and direct messages with your
+  Hippius account, in the app.** Sign in with your Hippius account (no password
+  to remember), and the same recovery key the web console uses unlocks your
+  message history here too. Read and write in channels, direct messages and
+  threads; react, reply, edit and delete; share images and files, and save
+  what others send you straight to disk. Available on staging builds first.
+- **Chat keeps you posted while you work elsewhere in the app.** A direct
+  message or a mention in a channel shows a system notification (turn it off
+  under Settings → Notifications → Chat), and the number of unread DMs and
+  mentions appears on the app's dock/taskbar icon, in the window title and in
+  the tray popover — even when you are not on the chat page.
+- **Chat workspaces, like the web console.** A rail on the left lists the
+  workspaces you belong to with their unread counts; create one, join the
+  Hippius community, or paste an invite link to join a team. The channel list
+  follows the workspace you pick, and the app reopens where you left off in
+  each.
 - **Share a drive with someone.** Drives on a Plus, Max or Scale plan can be
   shared: invite someone by link, choose what they can do, and manage who has
   access. Starter plans do not include shared drives, so the option is not shown.
@@ -160,6 +203,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Support tickets now ask what your question is about.** Pick Drive & sync,
+  Shared drives, Credits & payments, Subscription, Account & sign in, Feedback
+  or Other, instead of the old "Storage (Arion & S3)" catch-all, which also
+  offered S3, something the app does not do.
+- **Search starts at three characters.** In the sidebar search and when searching a
+  folder that is not synced to this device, one or two letters now show "Type at
+  least 3 characters" instead of a misleading "no results".
 - **Sharing a folder as a link is no longer offered on a drive shared with you.**
   Only a drive's owner can mint a folder link, so the action used to be offered
   and then refused after you had chosen an expiry. Sharing a single file from
@@ -353,6 +403,18 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A drive that could never finish syncing now finishes.** Files the app
+  could not unlock were downloaded again on every cycle forever, so the drive
+  reported "syncing" without end and never caught up. They are now retried
+  once, then set aside, and the sync moves on.
+- **Deleting files is no longer stuck behind a long upload.** Removals now
+  happen first, so a drive with a large backlog stops showing files you
+  already deleted and stops paying to store them.
+- **A file that can't be unlocked says so, and no longer offers a retry that
+  does nothing.** It used to read "Sync failed. Please try again" and show a
+  retry button — both wrong, because trying again never helps for these. It
+  now tells you the file needs to be uploaded again or removed, and the retry
+  button is gone for it (Skip and Exclude still work).
 - **Downloading and sharing a file from a drive someone shared with you now
   works.** Both refused with "no local key material on this device" on a shared
   drive you are browsing rather than syncing — including for a Viewer, whose only

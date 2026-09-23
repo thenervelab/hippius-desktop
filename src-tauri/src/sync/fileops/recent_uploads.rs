@@ -35,10 +35,29 @@ use tracing::{debug, warn};
 /// and the limit the request specified (`limit=7`).
 const DEFAULT_LIMIT: usize = 7;
 
+/// The largest `limit` the server honours on `/search_files`. A larger value is
+/// not rejected, it is silently coerced down to this, so a caller that asked
+/// for more would believe it holds rows it never received.
+const SERVER_MAX_LIMIT: usize = 200;
+
 /// Upper bound so a caller can't pull an unbounded slice through the palette.
-/// The server itself caps at 10000; the palette never needs more than a
-/// screenful.
+/// Deliberately below [`SERVER_MAX_LIMIT`]: the palette never needs more than
+/// a screenful, and staying under the server cap means the count we ask for
+/// is the count the server agrees to.
 const MAX_LIMIT: usize = 100;
+
+// Every outgoing `limit` is clamped to `MAX_LIMIT`, so this one line is what
+// keeps all of them inside the server's cap if someone raises the palette cap.
+const _: () = assert!(MAX_LIMIT <= SERVER_MAX_LIMIT);
+
+/// Fewest characters (after trimming) the server will match a `q` against.
+/// It answers a shorter one with an empty page rather than an error, so a
+/// short term has to be handled here or the user just sees "no results".
+///
+/// Mirrored by `MIN_SEARCH_TERM_LENGTH` in `app/lib/utils/searchTerm.ts`,
+/// which only decides what hint to show; the shared fixture
+/// `tests/fixtures/search_term_cases.json` pins the two together.
+const MIN_QUERY_CHARS: usize = 3;
 
 /// Default result count for an active text search when the caller doesn't
 /// specify a limit. Larger than [`DEFAULT_LIMIT`] (the empty-state recents
@@ -194,6 +213,10 @@ fn map_search_hit_to_entry(
         label: local.map_or_else(|| hit.folder_label.clone(), |(label, _)| label.clone()),
         file_count: None,
         deleted: false,
+        // Same empty→None rule as `append_browse_page`: an empty ss58 must
+        // not reach UploaderCell as a blank name (it falls back to "Owner").
+        uploaded_by: hit.file.uploaded_by.clone().filter(|s| !s.is_empty()),
+        uploaded_by_name: hit.file.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
     })
 }
 
@@ -229,6 +252,61 @@ pub struct SearchFilesParams {
     /// [`SEARCH_DEFAULT_LIMIT`] and is clamped to `[1, MAX_LIMIT]`.
     pub offset: Option<usize>,
     pub limit: Option<usize>,
+    /// Exact uploader ss58, or the server's unrecorded sentinel. Selecting an
+    /// uploader alone must still run the search (console #920 / hcfs #374).
+    pub uploaded_by: Option<String>,
+}
+
+/// What the free-text `query` of a search amounts to once the server's
+/// minimum length is taken into account.
+#[derive(Debug, PartialEq, Eq)]
+enum TextQuery {
+    /// No term was typed (missing or whitespace only).
+    Absent,
+    /// A term was typed, but it is below [`MIN_QUERY_CHARS`].
+    TooShort,
+    /// A term the server will match, already trimmed.
+    Usable(String),
+}
+
+/// Classify the raw `query` param.
+///
+/// Length is counted in characters, not bytes: a two-letter Greek or CJK term
+/// is several bytes long and would otherwise slip past the minimum.
+fn classify_query(raw: Option<&str>) -> TextQuery {
+    let Some(term) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return TextQuery::Absent;
+    };
+
+    if term.chars().count() < MIN_QUERY_CHARS {
+        return TextQuery::TooShort;
+    }
+
+    TextQuery::Usable(term.to_string())
+}
+
+/// Whether the params narrow the result by something other than the text term.
+///
+/// `folder_hash` is deliberately not counted: it states WHERE to search, so a
+/// drive-scoped search with nothing else set is still "list everything".
+fn has_narrowing_filter(params: &SearchFilesParams) -> bool {
+    let has_extension = params.file_extension.as_deref().is_some_and(|ext| !ext.trim().is_empty());
+    let has_size_bound = params.size_min.is_some() || params.size_max.is_some();
+    let has_date_bound = params.date_from.is_some() || params.date_to.is_some();
+    let has_uploader = params.uploaded_by.as_deref().is_some_and(|s| !s.trim().is_empty());
+
+    has_extension || has_size_bound || has_date_bound || has_uploader
+}
+
+/// Whether the search can be answered with an empty list without asking the
+/// server.
+///
+/// A too-short term cannot be sent. If a filter is also set, the search still
+/// means something without the term (the filter-only result), so it runs. If
+/// nothing else is set, dropping the term would turn "search for `ab`" into
+/// "list the newest files", and showing those as matches for `ab` is wrong.
+fn is_unanswerable(params: &SearchFilesParams) -> bool {
+    classify_query(params.query.as_deref()) == TextQuery::TooShort && !has_narrowing_filter(params)
 }
 
 /// Translate a UI sort column to the server's `sort_by` field name. Mirrors
@@ -247,14 +325,16 @@ fn map_sort_column(ui: &str) -> &'static str {
 /// Pure and side-effect-free so it is exhaustively unit-testable; the caller
 /// hands the result to `reqwest`'s `.query()`, which URL-encodes each value.
 /// Only set fields contribute a pair (so a blank `query` adds no `q=`), exactly
-/// matching the console's `buildSearchParams`. `offset` and `limit` are always
-/// present because the server requires them.
+/// matching the console's `buildSearchParams`. A `query` below
+/// [`MIN_QUERY_CHARS`] adds no `q=` either; whether the request should be made
+/// at all in that case is [`is_unanswerable`]'s call, not this function's.
+/// `offset` and `limit` are always present because the server requires them.
 fn build_search_query(params: &SearchFilesParams) -> Vec<(&'static str, String)> {
     let mut pairs: Vec<(&'static str, String)> = Vec::new();
 
     let trimmed = |opt: &Option<String>| -> Option<String> { opt.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string) };
 
-    if let Some(q) = trimmed(&params.query) {
+    if let TextQuery::Usable(q) = classify_query(params.query.as_deref()) {
         pairs.push(("q", q));
     }
     if let Some(fh) = trimmed(&params.folder_hash) {
@@ -284,6 +364,9 @@ fn build_search_query(params: &SearchFilesParams) -> Vec<(&'static str, String)>
     if let Some(so) = trimmed(&params.sort_order) {
         let order = if so.eq_ignore_ascii_case("asc") { "asc" } else { "desc" };
         pairs.push(("sort_order", order.to_string()));
+    }
+    if let Some(uploader) = trimmed(&params.uploaded_by) {
+        pairs.push(("uploaded_by", uploader));
     }
 
     pairs.push(("offset", params.offset.unwrap_or(0).to_string()));
@@ -455,6 +538,11 @@ pub async fn search_files(state: tauri::State<'_, AppState>, account_id: String,
     // the session account.
     let account_id = state.require_session_account(&account_id)?;
     debug!(account_id = %account_id, ?params, "Cross-folder file search via HCFS /search_files");
+
+    if is_unanswerable(&params) {
+        return Ok(Vec::new());
+    }
+
     let query = build_search_query(&params);
     fetch_search_files(state.inner(), &account_id, &account_id, &query).await
 }
@@ -479,6 +567,11 @@ pub async fn search_files_in_drive(
     params: SearchFilesParams,
 ) -> Result<Vec<UserFileEntry>> {
     let account_id = state.require_session_account(&account_id)?;
+
+    if is_unanswerable(&params) {
+        return Ok(Vec::new());
+    }
+
     let pool = state.pool()?;
     let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
 
@@ -588,6 +681,60 @@ mod tests {
         // file_id is the hex of the 32-byte path_hash (all zeros in the
         // fixture) — the id the download path needs for a non-synced file.
         assert_eq!(entry.file_id, "0".repeat(64));
+        assert_eq!(entry.uploaded_by, None);
+        assert_eq!(entry.uploaded_by_name, None);
+    }
+
+    /// Regression: Added-by filter uses `/search_files`, and UploaderCell
+    /// falls back to muted "Owner" when `uploadedBy` is missing. Search hits
+    /// must carry the same uploader fields browse listing already maps.
+    #[test]
+    fn maps_search_hit_uploader_onto_user_file_entry() {
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
+        let value = json!({
+            "folder_hash": folder_hash("Docs"),
+            "folder_label": "Docs",
+            "path_hash": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": 2048u64,
+            "revision_seq": 1u64,
+            "revision_id": vec![0u8; 32],
+            "arion_hash": "Qm123",
+            "created_at": 1_700_000_000i64,
+            "updated_at": 1_700_000_000i64,
+            "relative_path": "Work/report.pdf",
+            "file_name": "report.pdf",
+            "uploaded_by": "5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb",
+            "uploaded_by_name": "  Grace Hopper  ",
+        });
+        let hit: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
+        let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
+        assert_eq!(entry.uploaded_by.as_deref(), Some("5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb"));
+        assert_eq!(entry.uploaded_by_name.as_deref(), Some("Grace Hopper"));
+    }
+
+    #[test]
+    fn maps_empty_search_uploader_as_absent() {
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
+        let value = json!({
+            "folder_hash": folder_hash("Docs"),
+            "folder_label": "Docs",
+            "path_hash": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": 1u64,
+            "revision_seq": 1u64,
+            "revision_id": vec![0u8; 32],
+            "created_at": 1i64,
+            "updated_at": 1i64,
+            "relative_path": "a.txt",
+            "file_name": "a.txt",
+            "uploaded_by": "",
+            "uploaded_by_name": "   ",
+        });
+        let hit: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
+        let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
+        assert_eq!(entry.uploaded_by, None, "empty ss58 is unattributed");
+        assert_eq!(entry.uploaded_by_name, None, "whitespace-only name is absent");
     }
 
     /// A server row with no content hash yet (chunk-native, or not
@@ -725,6 +872,110 @@ mod tests {
     }
 
     #[test]
+    fn short_query_is_dropped_but_its_filters_still_go_out() {
+        let pairs = build_search_query(&SearchFilesParams {
+            query: Some(" ab ".into()),
+            file_extension: Some("pdf".into()),
+            ..Default::default()
+        });
+
+        assert_eq!(query_value(&pairs, "q"), None);
+        assert_eq!(query_value(&pairs, "file_type"), Some(".pdf"));
+    }
+
+    #[test]
+    fn query_length_is_counted_in_characters_not_bytes() {
+        // Two characters, six bytes: a byte count would let it through.
+        assert_eq!(classify_query(Some("\u{4e2d}\u{6587}")), TextQuery::TooShort);
+        assert_eq!(
+            classify_query(Some("\u{4e2d}\u{6587}\u{5b57}")),
+            TextQuery::Usable("\u{4e2d}\u{6587}\u{5b57}".into())
+        );
+    }
+
+    #[test]
+    fn short_query_alone_is_unanswerable_but_a_filter_rescues_it() {
+        let short = || Some("ab".to_string());
+
+        assert!(is_unanswerable(&SearchFilesParams {
+            query: short(),
+            ..Default::default()
+        }));
+
+        // The scope is not a filter: a drive-scoped short term must not fall
+        // through to "list the whole drive".
+        assert!(is_unanswerable(&SearchFilesParams {
+            query: short(),
+            folder_hash: Some("abc123".into()),
+            ..Default::default()
+        }));
+
+        assert!(!is_unanswerable(&SearchFilesParams {
+            query: short(),
+            file_extension: Some("pdf".into()),
+            ..Default::default()
+        }));
+        assert!(!is_unanswerable(&SearchFilesParams {
+            query: short(),
+            size_min: Some(1),
+            ..Default::default()
+        }));
+        assert!(!is_unanswerable(&SearchFilesParams {
+            query: short(),
+            date_to: Some(1_700_000_000),
+            ..Default::default()
+        }));
+
+        // A blank extension is what an untouched dropdown sends.
+        assert!(is_unanswerable(&SearchFilesParams {
+            query: short(),
+            file_extension: Some("  ".into()),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn no_query_and_long_query_are_always_answerable() {
+        // Recents-style listing: nothing typed, nothing filtered.
+        assert!(!is_unanswerable(&SearchFilesParams::default()));
+
+        assert!(!is_unanswerable(&SearchFilesParams {
+            query: Some("abc".into()),
+            ..Default::default()
+        }));
+    }
+
+    // --- cross-boundary drift pin: the FE decides which hint to show from the
+    //     same rule (`app/lib/utils/searchTerm.ts`). The SAME JSON fixture
+    //     drives this test and `crossBoundaryContract.test.ts`, so the palette
+    //     can never say "no results" for a term Rust refused to send. ---
+
+    #[derive(Deserialize)]
+    struct SearchTermCase {
+        input: String,
+        sent: Option<String>,
+        note: String,
+    }
+
+    #[test]
+    fn classify_query_matches_shared_fixture() {
+        let cases: Vec<SearchTermCase> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/search_term_cases.json"
+        )))
+        .expect("search_term_cases.json is valid JSON");
+        assert!(!cases.is_empty(), "fixture must carry cases");
+
+        for case in &cases {
+            let sent = match classify_query(Some(&case.input)) {
+                TextQuery::Usable(term) => Some(term),
+                TextQuery::Absent | TextQuery::TooShort => None,
+            };
+            assert_eq!(sent, case.sent, "classify_query({:?}) - {}", case.input, case.note);
+        }
+    }
+
+    #[test]
     fn file_extension_normalises_to_lowercase_with_dot() {
         for input in [".PDF", "PDF", "pdf", ".pdf"] {
             let pairs = build_search_query(&SearchFilesParams {
@@ -779,6 +1030,9 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(query_value(&huge, "limit"), Some(MAX_LIMIT.to_string().as_str()));
+
+        let sent: usize = query_value(&huge, "limit").and_then(|v| v.parse().ok()).expect("limit is numeric");
+        assert!(sent <= SERVER_MAX_LIMIT, "an outgoing limit above the server cap is silently truncated");
 
         let off = build_search_query(&SearchFilesParams {
             offset: Some(25),

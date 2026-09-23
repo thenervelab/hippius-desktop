@@ -13,6 +13,8 @@ import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
  *  window to the Drive page (its empty-state "Upload a File" CTA). DOM
  *  CustomEvents are window-local, so cross-window nav goes through Tauri. */
 const TRAY_OPEN_FILES_TAURI_EVENT = "hippius:tray-open-files";
+/** Same, for the popover's chat button (shown while chat has unread DMs/mentions). */
+export const TRAY_OPEN_CHAT_TAURI_EVENT = "hippius:tray-open-chat";
 
 export default function TrayNavigationListener() {
   const { navigateToFilesView } = useFilesNavigation();
@@ -31,11 +33,15 @@ export default function TrayNavigationListener() {
     window.addEventListener(TRAY_OPEN_VM_EVENT, handleOpenVm);
 
     const unlisten = listen(TRAY_OPEN_FILES_TAURI_EVENT, () => goTo("/files"));
+    const unlistenChat = listen(TRAY_OPEN_CHAT_TAURI_EVENT, () =>
+      goTo("/chat"),
+    );
 
     return () => {
       window.removeEventListener(TRAY_OPEN_FILES_EVENT, handleOpenFiles);
       window.removeEventListener(TRAY_OPEN_VM_EVENT, handleOpenVm);
       void unlisten.then((fn) => fn());
+      void unlistenChat.then((fn) => fn());
     };
   }, [navigateToFilesView, push]);
 

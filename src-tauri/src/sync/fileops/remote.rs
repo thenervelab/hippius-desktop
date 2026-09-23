@@ -843,8 +843,18 @@ pub async fn get_thumbnail(
 
 // ─── Browsable remote folders (grouped listing) ─────────────────────────────
 
-/// Per-request page size for the server's `/browse` walk.
-const BROWSE_PAGE_LIMIT: u32 = 500;
+/// The most rows the server returns for one `/browse` request.
+///
+/// The server does not reject a larger `limit`, it coerces it down to this and
+/// echoes the effective value. Stating the real number here keeps the page the
+/// frontend asked for and the page it receives the same size, which paged mode
+/// depends on: it derives a page's offset from the size it requested.
+const BROWSE_PAGE_LIMIT: u32 = 200;
+
+/// The `limit` to put on the wire for a caller-chosen page size.
+fn effective_browse_limit(requested: Option<u32>) -> u32 {
+    requested.unwrap_or(BROWSE_PAGE_LIMIT).clamp(1, BROWSE_PAGE_LIMIT)
+}
 
 /// Map one `/browse` page onto the shared listing row shape.
 ///
@@ -915,6 +925,7 @@ pub(crate) fn append_browse_page(
             updated_at: created_at,
             // A folder is not uploaded by anyone; its contents are.
             uploaded_by: None,
+            uploaded_by_name: None,
         });
     }
     for f in page_files {
@@ -948,6 +959,7 @@ pub(crate) fn append_browse_page(
             // an empty string is the same as absent and must not reach the UI
             // as a blank "uploaded by".
             uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
+            uploaded_by_name: f.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         });
     }
 }
@@ -1153,7 +1165,7 @@ pub async fn list_remote_folder_grouped(
 
     // The FE picks the page size (scroll-driven lazy loading wants small
     // pages); clamp to the server's per-request ceiling either way.
-    let limit = limit.unwrap_or(BROWSE_PAGE_LIMIT).clamp(1, BROWSE_PAGE_LIMIT);
+    let limit = effective_browse_limit(limit);
     let page = browse_remote_page(
         state.inner(),
         &account_id,
@@ -1206,6 +1218,22 @@ mod tests {
         assert!(shared_drive_identity("", "abc123").is_err());
         assert!(shared_drive_identity("5Owner", "").is_err());
         assert!(shared_drive_identity("  ", "  ").is_err());
+    }
+
+    /// The server coerces anything above 200 down to 200. Sending more would
+    /// not fail, it would hand back a shorter page than the caller sized its
+    /// offsets for.
+    #[test]
+    fn browse_limit_never_exceeds_the_server_page_size() {
+        assert_eq!(BROWSE_PAGE_LIMIT, 200);
+
+        assert_eq!(effective_browse_limit(None), 200);
+        assert_eq!(effective_browse_limit(Some(500)), 200);
+        assert_eq!(effective_browse_limit(Some(u32::MAX)), 200);
+
+        assert_eq!(effective_browse_limit(Some(200)), 200);
+        assert_eq!(effective_browse_limit(Some(50)), 50);
+        assert_eq!(effective_browse_limit(Some(0)), 1);
     }
 
     /// The whole point of issuing `/browse` ourselves. `hcfs_client::browse`
@@ -1281,6 +1309,12 @@ mod tests {
     /// directory without moving its scope entry fails here too.
     #[test]
     fn webview_served_cache_roots_are_inside_the_asset_protocol_scope() {
+        // Reads `$HOME` (via `dirs::home_dir()` inside the cache-root
+        // helpers), and other tests in this binary swap `$HOME` to a tempdir
+        // under `HOME_LOCK`. Without taking the lock this races them and
+        // fails intermittently in a full `cargo test` run while passing when
+        // filtered to itself.
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let conf = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json")).expect("read tauri.conf.json");
         let conf: serde_json::Value = serde_json::from_str(&conf).expect("parse tauri.conf.json");
 
@@ -1314,6 +1348,10 @@ mod tests {
             size_bytes: size,
             revision_seq: 1,
             revision_id: [0u8; 32],
+            // New upstream fields (hcfs #455 names beside the ss58); the browse
+            // page mapper under test does not read them.
+            uploaded_by_name: None,
+            uploaded_by_email: None,
             encrypted_path: Vec::new(),
             file_name: name.map(str::to_string),
             relative_path: rel_path.map(str::to_string),
@@ -1339,6 +1377,7 @@ mod tests {
         let mut files = Vec::new();
         let attributed = hcfs_shared::network::RemoteFileEntry {
             uploaded_by: Some("5Member".to_string()),
+            uploaded_by_name: Some("Ada".to_string()),
             ..browse_file(Some("theirs.png"), None, 1, 10, 10)
         };
         let blank = hcfs_shared::network::RemoteFileEntry {
@@ -1360,9 +1399,11 @@ mod tests {
         );
 
         assert_eq!(files[0].uploaded_by.as_deref(), Some("5Member"));
+        assert_eq!(files[0].uploaded_by_name.as_deref(), Some("Ada"));
         assert_eq!(files[1].uploaded_by, None, "an empty ss58 is unattributed, not a blank name");
         assert_eq!(files[2].uploaded_by, None);
         assert_eq!(folders[0].uploaded_by, None, "a folder is not uploaded by anyone");
+        assert_eq!(folders[0].uploaded_by_name, None, "a folder is not uploaded by anyone");
     }
 
     /// Wire pin: `FileEntry` is serialized with no `rename_all`, so the FE

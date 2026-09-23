@@ -26,10 +26,44 @@ describe("failureMessage", () => {
     expect(msg).toBe("Insufficient credits — needs $1.00, you have $0.12.");
   });
 
+  it("gives undecryptable its own copy and never promises a retry", () => {
+    // The one kind that does NOT resolve itself: hcfs quarantines the file
+    // after two failed attempts on the same revision and stops fetching it.
+    // Telling the user to wait would be telling them to wait forever.
+    const msg = failureMessage({ ...base, kind: "undecryptable" });
+    expect(msg).toBe(
+      "Can't be decrypted on this device — needs to be re-uploaded or removed."
+    );
+    expect(msg.toLowerCase()).not.toContain("retry");
+    expect(msg.toLowerCase()).not.toContain("try again");
+  });
+
+  it("does not let an undecryptable row fall through to the generic line", () => {
+    // Before the hcfs bump this variant did not exist, so it landed in the
+    // `other`/default branch. `not.toBe` alone would also pass if the case
+    // were deleted and `message` happened to be set, so the row carries the
+    // generic text explicitly: only a real `undecryptable` case beats it.
+    const msg = failureMessage({
+      ...base,
+      kind: "undecryptable",
+      message: "Sync failed. Please try again.",
+    });
+    expect(msg).not.toBe("Sync failed. Please try again.");
+  });
+
   it("includes the http status for serverError", () => {
     expect(failureMessage({ ...base, kind: "serverError", httpStatus: 500 })).toBe(
       "Server error (500). Please try again."
     );
+  });
+
+  it("phrases a 402 serverError as storage full, not try again", () => {
+    // QuotaDenied / entitlement 402 — not typed insufficientBalance (credits).
+    // Must read identically to Rust's QUOTA_DENIED_DISPLAY_REASON.
+    const msg = failureMessage({ ...base, kind: "serverError", httpStatus: 402 });
+    expect(msg).toBe("Storage full. Upgrade your plan or free up space.");
+    expect(msg.toLowerCase()).not.toContain("try again");
+    expect(msg).not.toContain("402");
   });
 
   it("phrases a session-limit 429 as self-resolving, not as too many devices", () => {

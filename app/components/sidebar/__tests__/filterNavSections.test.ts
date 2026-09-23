@@ -83,6 +83,25 @@ describe("filterNavSections", () => {
     ]);
   });
 
+  // The chat gate is a RUNTIME answer from Rust (`chat_get_config`), not a
+  // build-time flag: hidden until known (`undefined`), hidden when `false`,
+  // shown only on an explicit `true`. A sidebar that showed Chat before the
+  // config landed would flash an entry the lane may not have.
+  it("shows the Chat entry only once Rust reports chat enabled", () => {
+    const labels = (gates: Parameters<typeof filterNavSections>[1]) =>
+      filterNavSections(navSections, gates).flatMap((s) => s.items.map((i) => i.label));
+    expect(labels({ shareEnabled: true })).not.toContain("Chat");
+    expect(labels({ shareEnabled: true, chatEnabled: false })).not.toContain("Chat");
+    expect(labels({ shareEnabled: true, chatEnabled: true })).toContain("Chat");
+  });
+
+  it("routes the Chat entry to /chat under INFRASTRUCTURE", () => {
+    const infra = filterNavSections(navSections, { shareEnabled: true, chatEnabled: true }).find(
+      (s) => s.label === "INFRASTRUCTURE",
+    );
+    expect(infra?.items.find((i) => i.label === "Chat")?.path).toBe("/chat");
+  });
+
   // Pins the WIRING (not today's flag values, which are release decisions):
   // the real nav data must derive Wallet and Referrals visibility from the
   // build-time flags, so flipping a flag in featureFlags.ts is guaranteed

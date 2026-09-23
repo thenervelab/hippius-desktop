@@ -60,6 +60,7 @@ const removeDriveMemberMock = vi.fn();
 const changeDriveMemberRoleMock = vi.fn();
 const listDriveInvitesMock = vi.fn();
 const revokeDriveInviteMock = vi.fn();
+const listMyDriveMembershipsMock = vi.fn().mockResolvedValue([]);
 
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
@@ -72,6 +73,8 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
       changeDriveMemberRoleMock(...args),
     listDriveInvites: (...args: unknown[]) => listDriveInvitesMock(...args),
     revokeDriveInvite: (...args: unknown[]) => revokeDriveInviteMock(...args),
+    listMyDriveMemberships: (...args: unknown[]) =>
+      listMyDriveMembershipsMock(...args),
   };
 });
 
@@ -137,6 +140,20 @@ function chooseRole(optionLabel: string) {
 
 
 describe("create invite dialog", () => {
+  it("shows a human drive name, never a shared: wire label, in the title", () => {
+    const wire =
+      "shared:5HHap2Pe2LaxxXp8Abcdefghijklmnop~263bad4ad83e395a";
+    renderModal({ label: wire, folderName: wire });
+    expect(screen.getByText("Invite to")).toBeInTheDocument();
+    expect(screen.getByText(/"this drive"/)).toBeInTheDocument();
+    expect(screen.queryByText(/shared:5HHap/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a human basename in the title", () => {
+    renderModal({ label: "team-docs", folderName: "team-docs" });
+    expect(screen.getByText(/"team-docs"/)).toBeInTheDocument();
+  });
+
   it("mints with the chosen defaults and lands on done with an auto-copied URL", async () => {
     const { writeText } = installClipboard();
     createDriveInviteMock.mockResolvedValue({
@@ -152,12 +169,14 @@ describe("create invite dialog", () => {
       // exactly what every build before the picker did.
       role: "writer",
     });
-    await screen.findByDisplayValue("https://console.example.com/invite/tok#k=abc");
+    // Display strips `#k=` (drive key); clipboard still gets the full URL.
+    expect(
+      await screen.findByText("https://console.example.com/invite/tok…"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/#k=/)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("https://console.example.com/invite/tok#k=abc"),
     );
-    // The caption points revocation at the Members tab (there is no invite
-    // revoke surface in v1 by design).
     expect(screen.getByText(/until it expires/)).toBeInTheDocument();
   });
 
@@ -219,9 +238,10 @@ describe("create invite dialog", () => {
   });
 
   // The server caps a manager link at one use and 24 hours and answers 400
-  // past either. Clamping in the form means the link the user gets is the link
-  // the form described, instead of a rejection after they configured it.
-  it("clamps a manager invite to the server's 24-hour cap", async () => {
+  // past either. Clamping in the form (and again in Rust) means the link the
+  // user gets is the link the form described, instead of a rejection after
+  // they configured it — matching console `createDriveInvite`.
+  it("clamps a manager invite to one use and 24 hours", async () => {
     createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
 
     renderModal();
@@ -232,6 +252,18 @@ describe("create invite dialog", () => {
     const [, opts] = createDriveInviteMock.mock.calls[0];
     expect(opts.role).toBe("manager");
     expect(opts.expiresInSecs).toBeLessThanOrEqual(24 * 60 * 60);
+    expect(opts.maxUses).toBe(1);
+  });
+
+  it("offers only the 24-hour lifetime for a manager invite", () => {
+    renderModal();
+    chooseRole("Manager");
+
+    // Wider presets stay available for writer/reader; manager must not offer
+    // a lifetime the mint would silently replace.
+    expect(screen.getByText(/Manager links are single use/i)).toBeInTheDocument();
+    // After choosing Manager, the default 7-day selection snaps to 24 hours.
+    expect(screen.getByLabelText("Invite expires")).toHaveTextContent(/24 hours/i);
   });
 
   it("names the role in the warning, so the link's power is stated", async () => {
@@ -258,7 +290,7 @@ describe("the invite dialog's frame", () => {
   // full width strands two selects and two stacked buttons across 585px.
   it("uses the shared decision-dialog card and column widths", () => {
     expect(source).toContain('maxWidth="max-w-[585px]"');
-    expect(source).toContain('contentClassName="sm:w-[405px]"');
+    expect(source).toContain('contentClassName="sm:w-[405px] min-w-0 overflow-hidden"');
   });
 
   // Title → what the link grants → the link → copy it → done. The paragraph
@@ -267,7 +299,7 @@ describe("the invite dialog's frame", () => {
   it("orders the finished screen explanation, link, copy, done", () => {
     const done = source.slice(source.indexOf("function InviteDone"));
     const explanation = done.indexOf("never expires");
-    const link = done.indexOf("<textarea");
+    const link = done.indexOf("truncateInviteUrl");
     const copy = done.indexOf("Copy link");
     const dismiss = done.indexOf(">\n        Done");
     for (const [name, i] of Object.entries({ explanation, link, copy, dismiss })) {
@@ -278,14 +310,12 @@ describe("the invite dialog's frame", () => {
     expect(copy).toBeLessThan(dismiss);
   });
 
-  // A token's length varies, so a fixed box WILL cut some links off. A
-  // half-shown URL reads as a broken one, and the reader cannot check what
-  // they are about to hand someone.
-  it("never clips the invite link", () => {
+  // The fragment is the drive key — the finished screen must truncate and
+  // strip `#k=`, while copy still writes the full URL.
+  it("never shows the #k= fragment on the finished screen", () => {
     const done = source.slice(source.indexOf("function InviteDone"));
-    const field = done.slice(done.indexOf("<textarea"), done.indexOf("/>", done.indexOf("<textarea")));
-    expect(field).toContain("overflow-y-auto");
-    expect(field).not.toContain("overflow-hidden");
+    expect(done).toContain("truncateInviteUrl(inviteUrl)");
+    expect(done).toContain("writeText(inviteUrl)");
   });
 
   it("matches the widths ConfirmationDialog defaults to", () => {
