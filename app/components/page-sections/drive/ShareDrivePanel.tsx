@@ -20,7 +20,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, Copy, Lock, UserRoundPen, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button, Icons } from "@/components/ui";
+import { Button, Icons, Skeleton } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
@@ -68,6 +68,91 @@ import {
   type InvitesState,
   type MembersState,
 } from "./shareDriveModalState";
+
+/** How many placeholder rows to show while a tab list is on the wire. */
+const SKELETON_ROWS = 4;
+
+/**
+ * Members-tab loading body — avatar + name + role chip shaped like a real
+ * `MemberRow`, so the list does not flash empty text then jump.
+ */
+function MembersTabSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label="Loading members"
+      className="max-h-[320px] overflow-hidden"
+    >
+      <span className="sr-only">Loading members…</span>
+      {Array.from({ length: SKELETON_ROWS }, (_, i) => (
+        <div
+          key={i}
+          className="flex items-center justify-between gap-2 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10"
+        >
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Skeleton variant="circle" width={28} height={28} />
+            <div className="min-w-0 space-y-1.5">
+              <Skeleton
+                width={i % 2 === 0 ? 128 : 96}
+                height={12}
+                className="rounded-md"
+              />
+              <div className="flex items-center gap-1.5">
+                <Skeleton width={52} height={18} className="rounded-full" />
+                <Skeleton width={72} height={11} className="rounded-md" />
+              </div>
+            </div>
+          </div>
+          <Skeleton width={28} height={28} className="shrink-0 rounded-md" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Links-tab loading body — summary / expiry / revoke button, with a URL
+ * field bar on the first few rows (console-parity shape for sealed invites).
+ */
+function LinksTabSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label="Loading links"
+      className="max-h-[260px] overflow-hidden"
+    >
+      <span className="sr-only">Loading links…</span>
+      {Array.from({ length: SKELETON_ROWS }, (_, i) => (
+        <div
+          key={i}
+          className="border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0 space-y-1.5">
+              <Skeleton
+                width={i % 2 === 0 ? 148 : 132}
+                height={12}
+                className="rounded-md"
+              />
+              <Skeleton width={110} height={11} className="rounded-md" />
+            </div>
+            <Skeleton width={58} height={28} className="shrink-0 rounded-md" />
+          </div>
+          {/* First three rows include the link field — most live invites show one. */}
+          {i < 3 ? (
+            <Skeleton
+              height={30}
+              width="100%"
+              className="mt-2 rounded-[6px]"
+            />
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
@@ -371,11 +456,7 @@ function LinksTab({
   if (view === "unavailable") return <SharedDrivesUnavailableNotice onClose={onClose} />;
 
   if (view === "loading") {
-    return (
-      <p className="py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-        Loading links…
-      </p>
-    );
+    return <LinksTabSkeleton />;
   }
 
   if (view === "error") {
@@ -613,9 +694,7 @@ function MembersTab({
   const view = getMembersView(state);
 
   if (view === "loading") {
-    return (
-      <p className="py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">Loading members…</p>
-    );
+    return <MembersTabSkeleton />;
   }
 
   if (view === "unavailable") {
