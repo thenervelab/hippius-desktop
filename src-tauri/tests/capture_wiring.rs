@@ -37,6 +37,14 @@ fn the_overlay_keeps_itself_out_of_the_capture() {
     assert!(body.contains(".content_protected(true)"), "the overlay must be excluded from screen capture");
 }
 
+/// Same rule for the recording control bar — otherwise it films itself.
+#[test]
+fn the_controls_keep_themselves_out_of_the_recording() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "fn open_controls(");
+    assert!(body.contains(".content_protected(true)"), "the control bar must be excluded from screen capture");
+}
+
 /// The overlay's capability must grant the labels the overlays are created
 /// with; a glob that matches nothing fails silently — the window opens with
 /// no event permissions at all.

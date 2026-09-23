@@ -75,7 +75,7 @@
         <true/>
     </dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Hippius may need microphone access for voice features.</string>
+    <string>Hippius needs microphone access to include your voice in screen recordings.</string>
     <key>NSCameraUsageDescription</key>
     <string>Hippius may need camera access for media features.</string>
     <!-- Removed usage descriptions for system folders to avoid permission prompts at startup.

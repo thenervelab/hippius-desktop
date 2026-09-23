@@ -1,10 +1,11 @@
 //! The capture IPCs and the session that ties them together.
 //!
 //! Flow: `capture_start` opens one transparent overlay per display →
-//! the overlay calls `capture_select` (or `capture_cancel`) → the screenshot
-//! is taken, the main window comes back, and delivery runs in the background
-//! → `capture_delivered` / `capture_failed`. Every phase change is broadcast
-//! as `capture_state_changed`, which is the only thing the surfaces read.
+//! the overlay calls `capture_select` (or `capture_cancel`) → a screenshot is
+//! taken at once, or a recording starts with a floating control bar →
+//! delivery runs in the background → `capture_delivered` / `capture_failed`.
+//! Every phase change is broadcast as `capture_state_changed`, which is the
+//! only thing the surfaces read.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +14,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::destination::{self, CaptureDestination};
+use super::recording::{self, RecordOptions, Recorder};
 use super::screenshot::Selection;
 use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, TransitionError, transition};
 use super::targets::{DisplayTarget, WindowTarget};
@@ -26,11 +28,13 @@ pub const FAILED_EVENT: &str = "capture_failed";
 /// Overlay windows are labelled `capture-overlay-<display id>`, which is also
 /// the glob the overlay's capability file grants.
 pub const OVERLAY_LABEL_PREFIX: &str = "capture-overlay-";
+pub const CONTROLS_LABEL: &str = "capture-controls";
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
-/// Whether this build can capture at all. Linux screenshots go through the
-/// desktop portal in a follow-up, so the surfaces hide themselves there.
+/// Whether this build can capture screenshots at all. Linux screenshots go
+/// through the desktop portal in a follow-up, so the surfaces hide themselves
+/// there.
 pub const CAPTURE_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
 
 #[derive(Default)]
@@ -39,11 +43,27 @@ pub struct CaptureState {
     /// Whether the main window was on screen when the capture started, so it
     /// comes back only if it was there to begin with.
     restore_main: AtomicBool,
+    /// Live recording backend, if any.
+    recorder: Mutex<Option<Box<dyn Recorder>>>,
+    /// Cancels the elapsed-time tick task.
+    tick_cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl CaptureState {
     fn current(&self) -> CapturePhase {
         self.phase.lock().map_or(CapturePhase::Idle, |p| p.unwrap_or(CapturePhase::Idle))
+    }
+
+    fn take_recorder(&self) -> Option<Box<dyn Recorder>> {
+        self.recorder.lock().ok().and_then(|mut g| g.take())
+    }
+
+    fn stop_ticks(&self) {
+        if let Ok(mut g) = self.tick_cancel.lock()
+            && let Some(tx) = g.take()
+        {
+            let _ = tx.send(());
+        }
     }
 }
 
@@ -93,6 +113,12 @@ fn close_overlays(app: &AppHandle) {
     }
 }
 
+fn close_controls(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
+        let _ = w.close();
+    }
+}
+
 /// Start a capture: check it can happen, then put an overlay on every display.
 ///
 /// Refusals are structured so the UI can answer each one:
@@ -104,8 +130,10 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
     if !CAPTURE_SUPPORTED {
         return Err(AppError::Validation("Screen capture isn't available on this system yet.".into()));
     }
-    if kind == CaptureKind::Recording {
-        return Err(AppError::Validation("Screen recording is coming in a later update.".into()));
+    if kind == CaptureKind::Recording && !recording::recording_supported() {
+        return Err(AppError::Validation(
+            "Screen recording isn't available on this system yet.".into(),
+        ));
     }
     let account_id = state.current_account_id()?;
     if destination::load(state.pool()?, &account_id).await?.is_none() {
@@ -120,7 +148,7 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
     match advance(&app, &state.capture, CaptureEvent::Start { kind, mode }) {
         Ok(_) => {}
         Err(_) if state.capture.current() != CapturePhase::Idle => {
-            focus_overlays(&app);
+            focus_active_ui(&app, &state.capture);
             return Ok(());
         }
         Err(e) => return Err(e),
@@ -135,6 +163,17 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         return Err(e);
     }
     Ok(())
+}
+
+fn focus_active_ui(app: &AppHandle, state: &CaptureState) {
+    match state.current() {
+        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } | CapturePhase::Finalizing => {
+            if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
+                let _ = w.set_focus();
+            }
+        }
+        _ => focus_overlays(app),
+    }
 }
 
 /// Put up the overlays — or, for a whole screen on a single display, skip
@@ -209,6 +248,46 @@ fn open_overlay(app: &AppHandle, display: &DisplayTarget) -> Result<()> {
     Ok(())
 }
 
+fn open_controls(app: &AppHandle) -> Result<()> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    if app.get_webview_window(CONTROLS_LABEL).is_some() {
+        return Ok(());
+    }
+    let route = if cfg!(dev) { "capture-controls" } else { "capture-controls.html" };
+    let window = WebviewWindowBuilder::new(app, CONTROLS_LABEL, WebviewUrl::App(route.into()))
+        .title("Hippius recording")
+        .decorations(false)
+        .transparent(true)
+        .shadow(true)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .content_protected(true)
+        .inner_size(320.0, 56.0)
+        .visible(false)
+        .build()
+        .map_err(|e| AppError::Other(format!("Could not open the recording controls: {e}")))?;
+
+    // Bottom-centre of the primary display.
+    if let Ok(Some(m)) = window.current_monitor() {
+        let size = m.size();
+        let scale = m.scale_factor();
+        let width = (320.0 * scale) as i32;
+        let height = (56.0 * scale) as i32;
+        let x = (size.width as i32 - width) / 2;
+        let y = size.height as i32 - height - (48.0 * scale) as i32;
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+    raise_above_menu_bar(&window);
+    window
+        .show()
+        .map_err(|e| AppError::Other(format!("Could not show the recording controls: {e}")))?;
+    let _ = window.set_focus();
+    Ok(())
+}
+
 /// Tauri's always-on-top level sits BELOW the macOS menu bar, which would
 /// leave the overlay stopping short of the top of the screen and the menu bar
 /// impossible to select. Raise it to the screen-saver level.
@@ -245,13 +324,14 @@ fn focus_overlays(app: &AppHandle) {
 pub struct OverlayContext {
     pub mode: CaptureMode,
     pub display_id: u32,
+    pub kind: CaptureKind,
     /// Pickable windows on this display, front first — only in window mode.
     pub windows: Vec<WindowTarget>,
 }
 
 #[tauri::command]
 pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_id: u32) -> Result<OverlayContext> {
-    let CapturePhase::Selecting { mode, .. } = state.capture.current() else {
+    let CapturePhase::Selecting { mode, kind } = state.capture.current() else {
         return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
     let windows = if mode == CaptureMode::Window {
@@ -261,7 +341,12 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
     } else {
         Vec::new()
     };
-    Ok(OverlayContext { mode, display_id, windows })
+    Ok(OverlayContext {
+        mode,
+        display_id,
+        kind,
+        windows,
+    })
 }
 
 #[cfg(any(target_os = "macos", windows))]
@@ -286,9 +371,21 @@ pub async fn capture_select(app: AppHandle, selection: Selection) -> Result<()> 
 
 async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
     let state = app.state::<AppState>();
+    let kind = match state.capture.current() {
+        CapturePhase::Selecting { kind, .. } => kind,
+        _ => return Err(AppError::Validation("No capture is waiting for a selection.".into())),
+    };
     advance(app, &state.capture, CaptureEvent::Selected)?;
     close_overlays(app);
 
+    match kind {
+        CaptureKind::Screenshot => finish_screenshot(app, selection).await,
+        CaptureKind::Recording => begin_recording(app, selection).await,
+    }
+}
+
+async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> {
+    let state = app.state::<AppState>();
     let taken = take_screenshot(selection).await;
     restore_own_windows(app, &state.capture);
     let path = match taken {
@@ -308,6 +405,83 @@ async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
         let _ = advance(&app, &state.capture, CaptureEvent::Finished);
     });
     Ok(())
+}
+
+async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
+    let state = app.state::<AppState>();
+    let options = RecordOptions { microphone: true };
+    let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
+    let name = super::naming::capture_file_name(CaptureKind::Recording, chrono::Local::now().naive_local());
+    let path = dir.join(name);
+
+    let started = tauri::async_runtime::spawn_blocking({
+        let path = path.clone();
+        move || recording::start(selection, &path, options)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("recording task failed: {e}")))?;
+
+    let recorder = match started {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            restore_own_windows(app, &state.capture);
+            let _ = advance(app, &state.capture, CaptureEvent::Failed);
+            let _ = app.emit(FAILED_EVENT, FailedPayload { message: e.to_string() });
+            return Err(e);
+        }
+    };
+
+    {
+        let mut guard = state.capture.recorder.lock()?;
+        *guard = Some(recorder);
+    }
+    advance(
+        app,
+        &state.capture,
+        CaptureEvent::RecordingStarted {
+            microphone: options.microphone,
+        },
+    )?;
+    restore_own_windows(app, &state.capture);
+    if let Err(e) = open_controls(app) {
+        tracing::warn!(error = %e, "recording controls could not open");
+    }
+    spawn_tick_loop(app.clone());
+    Ok(())
+}
+
+fn spawn_tick_loop(app: AppHandle) {
+    let state = app.state::<AppState>();
+    state.capture.stop_ticks();
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    if let Ok(mut g) = state.capture.tick_cancel.lock() {
+        *g = Some(tx);
+    }
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = &mut rx => break,
+                _ = interval.tick() => {
+                    let state = app.state::<AppState>();
+                    let elapsed = {
+                        let Ok(guard) = state.capture.recorder.lock() else { continue };
+                        match guard.as_ref() {
+                            Some(r) => r.elapsed_secs(),
+                            None => break,
+                        }
+                    };
+                    let phase = state.capture.current();
+                    if !matches!(phase, CapturePhase::Recording { .. } | CapturePhase::Paused { .. }) {
+                        break;
+                    }
+                    let _ = advance(&app, &state.capture, CaptureEvent::Tick { elapsed_secs: elapsed });
+                }
+            }
+        }
+    });
 }
 
 async fn take_screenshot(selection: Selection) -> Result<std::path::PathBuf> {
@@ -381,8 +555,73 @@ async fn deliver_and_announce(app: &AppHandle, path: &std::path::Path) {
 }
 
 #[tauri::command]
+pub async fn capture_pause(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    {
+        let mut guard = state.capture.recorder.lock()?;
+        let recorder = guard
+            .as_mut()
+            .ok_or_else(|| AppError::Validation("No recording is in progress.".into()))?;
+        recorder.pause()?;
+    }
+    advance(&app, &state.capture, CaptureEvent::Pause)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn capture_resume(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    {
+        let mut guard = state.capture.recorder.lock()?;
+        let recorder = guard
+            .as_mut()
+            .ok_or_else(|| AppError::Validation("No recording is in progress.".into()))?;
+        recorder.resume()?;
+    }
+    advance(&app, &state.capture, CaptureEvent::Resume)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn capture_stop(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    state.capture.stop_ticks();
+    advance(&app, &state.capture, CaptureEvent::Stop)?;
+    close_controls(&app);
+
+    let recorder = state
+        .capture
+        .take_recorder()
+        .ok_or_else(|| AppError::Validation("No recording is in progress.".into()))?;
+
+    let stopped = tauri::async_runtime::spawn_blocking(move || recorder.stop())
+        .await
+        .map_err(|e| AppError::Other(format!("stop task failed: {e}")))?;
+
+    let path = match stopped {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = advance(&app, &state.capture, CaptureEvent::Failed);
+            let _ = app.emit(FAILED_EVENT, FailedPayload { message: e.to_string() });
+            return Err(e);
+        }
+    };
+    advance(&app, &state.capture, CaptureEvent::Captured)?;
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        deliver_and_announce(&app, &path).await;
+        let state = app.state::<AppState>();
+        let _ = advance(&app, &state.capture, CaptureEvent::Finished);
+    });
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn capture_cancel(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    state.capture.stop_ticks();
     close_overlays(&app);
+    close_controls(&app);
+    if let Some(recorder) = state.capture.take_recorder() {
+        let _ = tauri::async_runtime::spawn_blocking(move || recorder.cancel()).await;
+    }
     restore_own_windows(&app, &state.capture);
     match advance(&app, &state.capture, CaptureEvent::Cancel) {
         Ok(_) => Ok(()),
@@ -402,6 +641,8 @@ pub fn capture_state(state: tauri::State<'_, AppState>) -> CapturePhase {
 #[serde(rename_all = "camelCase")]
 pub struct CaptureSupport {
     pub supported: bool,
+    /// Whether Record actions should be offered (helper present + OS floor).
+    pub recording: bool,
     pub screen_recording_permission: bool,
 }
 
@@ -409,6 +650,7 @@ pub struct CaptureSupport {
 pub fn capture_support() -> CaptureSupport {
     CaptureSupport {
         supported: CAPTURE_SUPPORTED,
+        recording: recording::recording_supported(),
         screen_recording_permission: super::permissions::screen_capture_granted(),
     }
 }

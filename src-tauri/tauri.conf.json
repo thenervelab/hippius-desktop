@@ -60,7 +60,9 @@
     "security": {
       "capabilities": [
         "default",
-        "tray-panel"
+        "tray-panel",
+        "capture-overlay",
+        "capture-controls"
       ],
       "dangerousDisableAssetCspModification": [
         "style-src"
