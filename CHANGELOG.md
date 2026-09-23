@@ -26,6 +26,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Sync Queue when storage is full (HTTP 402).** Failed uploads say
+  "Storage full. Upgrade your plan or free up space." instead of
+  "Server error (402). Please try again." Credits-exhausted failures still
+  show the credits wording. Files added to a sync folder while over quota
+  fail with the same clear message.
 - **Overview and Drive when you have no plan, or you are over Free / paid
   storage.** File, Folder, and Sync look disabled and do not open a picker
   or dialog on click. Drag and drop still explains with Subscribe (no plan,
