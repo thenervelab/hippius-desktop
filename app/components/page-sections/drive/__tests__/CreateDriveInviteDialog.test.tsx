@@ -60,6 +60,7 @@ const removeDriveMemberMock = vi.fn();
 const changeDriveMemberRoleMock = vi.fn();
 const listDriveInvitesMock = vi.fn();
 const revokeDriveInviteMock = vi.fn();
+const listMyDriveMembershipsMock = vi.fn().mockResolvedValue([]);
 
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
@@ -72,6 +73,8 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
       changeDriveMemberRoleMock(...args),
     listDriveInvites: (...args: unknown[]) => listDriveInvitesMock(...args),
     revokeDriveInvite: (...args: unknown[]) => revokeDriveInviteMock(...args),
+    listMyDriveMemberships: (...args: unknown[]) =>
+      listMyDriveMembershipsMock(...args),
   };
 });
 
@@ -137,6 +140,20 @@ function chooseRole(optionLabel: string) {
 
 
 describe("create invite dialog", () => {
+  it("shows a human drive name, never a shared: wire label, in the title", () => {
+    const wire =
+      "shared:5HHap2Pe2LaxxXp8Abcdefghijklmnop~263bad4ad83e395a";
+    renderModal({ label: wire, folderName: wire });
+    expect(screen.getByText("Invite to")).toBeInTheDocument();
+    expect(screen.getByText(/"this drive"/)).toBeInTheDocument();
+    expect(screen.queryByText(/shared:5HHap/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a human basename in the title", () => {
+    renderModal({ label: "team-docs", folderName: "team-docs" });
+    expect(screen.getByText(/"team-docs"/)).toBeInTheDocument();
+  });
+
   it("mints with the chosen defaults and lands on done with an auto-copied URL", async () => {
     const { writeText } = installClipboard();
     createDriveInviteMock.mockResolvedValue({
@@ -258,7 +275,7 @@ describe("the invite dialog's frame", () => {
   // full width strands two selects and two stacked buttons across 585px.
   it("uses the shared decision-dialog card and column widths", () => {
     expect(source).toContain('maxWidth="max-w-[585px]"');
-    expect(source).toContain('contentClassName="sm:w-[405px]"');
+    expect(source).toContain('contentClassName="sm:w-[405px] min-w-0 overflow-hidden"');
   });
 
   // Title → what the link grants → the link → copy it → done. The paragraph

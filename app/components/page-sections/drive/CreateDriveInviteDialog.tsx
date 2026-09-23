@@ -43,6 +43,9 @@ import {
   type InviteState,
 } from "./shareDriveModalState";
 import { BILLING_ROUTE } from "@/app/lib/routes";
+import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
+import { useSharedDriveMemberships } from "@/app/lib/hooks/useSharedDriveRoles";
+import { parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 
 const primaryButtonClass =
   "h-[38px] w-full rounded-[8px] text-[14px] font-medium leading-[1.4] tracking-[-0.28px]";
@@ -137,13 +140,46 @@ export default function CreateDriveInviteDialog() {
       });
   }, [invite]);
 
+  const memberships = useSharedDriveMemberships();
+  // Prefer the human basename the caller passed; when that is still the
+  // synthetic `shared:…` browse label (Manage access opened before the
+  // display-name map was populated), resolve it from memberships.
+  const driveName = (() => {
+    const preferred = inviteDriveDisplayName(target?.folderName, target?.label);
+    if (preferred !== "this drive" || !target) return preferred;
+    const identity =
+      parseSharedDriveLabel(target.label) ??
+      parseSharedDriveLabel(target.folderName) ??
+      (target.ownerSs58 && target.folderHash
+        ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
+        : null);
+    if (!identity) return preferred;
+    const match = memberships.find(
+      (m) =>
+        m.ownerSs58 === identity.ownerSs58 &&
+        m.folderHash === identity.folderHash,
+    );
+    return inviteDriveDisplayName(match?.displayLabel, target.label);
+  })();
+
   if (!SHARED_DRIVES_ENABLED || !target) return null;
 
   return (
     <FramedDialog
       open
       onClose={() => setTarget(null)}
-      title={`Invite to "${target.folderName}"`}
+      title={
+        <span className="mx-auto flex w-full min-w-0 max-w-full flex-col items-center gap-0.5 px-2">
+          <span className="shrink-0">Invite to</span>
+          <span
+            className="block w-full min-w-0 truncate"
+            title={driveName}
+          >
+            &quot;{driveName}&quot;
+          </span>
+        </span>
+      }
+      titleClassName="w-full min-w-0 overflow-hidden"
       icon={<Icons.Link className="size-4 text-white" />}
       // The canonical decision-dialog recipe (ConfirmationDialog,
       // DeleteConfirmationDialog): a 585px card with a 405px content column
@@ -152,7 +188,7 @@ export default function CreateDriveInviteDialog() {
       // column run the card's full width leaves two selects and two stacked
       // buttons stretched across 585px with nothing in them.
       maxWidth="max-w-[585px]"
-      contentClassName="sm:w-[405px]"
+      contentClassName="sm:w-[405px] min-w-0 overflow-hidden"
     >
       <div className="font-geist">
         <InviteTab

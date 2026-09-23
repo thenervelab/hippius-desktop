@@ -70,6 +70,7 @@ import {
   type DriveRole,
 } from "@/app/lib/shared-drives/roles";
 import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
+import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import {
   formatJoinedDate,
@@ -255,8 +256,8 @@ export default function ShareDrivePanel() {
             <p className="text-[16px] font-medium leading-5 text-black-900 dark:text-white">
               Share access
             </p>
-            <p className="mt-0.5 truncate text-[13px] text-black-900/40 dark:text-white/40">
-              {target.folderName}
+            <p className="mt-0.5 min-w-0 truncate text-[13px] text-black-900/40 dark:text-white/40">
+              {inviteDriveDisplayName(target.folderName, target.label)}
             </p>
           </div>
           <button
@@ -292,7 +293,12 @@ export default function ShareDrivePanel() {
         ) : (
           <MembersTab
             state={members}
-            driveName={target?.folderName ?? label ?? "this drive"}
+            driveName={
+              inviteDriveDisplayName(
+                target?.folderName,
+                target?.label ?? label,
+              ) || "this drive"
+            }
             onRemove={(ss58) => void removeMember(ss58)}
             onChangeRole={(ss58, role) => void changeRole(ss58, role)}
             onCreateInvite={() => {
