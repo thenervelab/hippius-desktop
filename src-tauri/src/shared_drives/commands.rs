@@ -34,7 +34,7 @@ use crate::error::{AppError, NotReadyKind, Result};
 use crate::shared_drives::grant;
 use crate::sync::identity::MemberDriveIdentity;
 use base64::Engine;
-use hcfs_shared::network::{CreateDriveInviteRequest, CreateDriveInviteResponse, DriveMembersResponse, DriveMembershipsResponse};
+use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
@@ -261,7 +261,16 @@ pub struct MintInvite<'a> {
     pub owner: Option<&'a str>,
 }
 
-pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: &str, mint: MintInvite<'_>) -> Result<String> {
+/// Token + invite id from a successful mint. The id is `hex(blake3(token))`;
+/// when the server omits it (older builds) we compute it locally so seal-back
+/// still has a row to park against.
+#[derive(Debug)]
+pub struct MintedInvite {
+    pub token: String,
+    pub invite_id: String,
+}
+
+pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: &str, mint: MintInvite<'_>) -> Result<MintedInvite> {
     let MintInvite {
         folder_hash,
         expires_in_secs,
@@ -297,9 +306,64 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
     if !status.is_success() {
         return Err(classify_error_status(status, &body));
     }
-    let parsed: CreateDriveInviteResponse =
+    // Prefer a local shape: hcfs-shared's `CreateDriveInviteResponse` may
+    // lag `invite_id`, and seal-back needs the id either way. Fall back to
+    // blake3(token) when the server omits it.
+    #[derive(serde::Deserialize)]
+    struct MintBody {
+        invite_token: String,
+        #[serde(default)]
+        invite_id: Option<String>,
+    }
+    let parsed: MintBody =
         serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("create-invite response did not parse: {e}")))?;
-    Ok(parsed.invite_token)
+    let invite_id = parsed
+        .invite_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| super::invite_token::invite_id_for_token(&parsed.invite_token));
+    Ok(MintedInvite {
+        token: parsed.invite_token,
+        invite_id,
+    })
+}
+
+/// `PUT /v1/drives/{fh}/invites/{id}/sealed-token` — park the token sealed
+/// under the drive key so the Links tab can rebuild the URL later.
+///
+/// WRITE-ONCE server-side; only the invite's minter may call it. Callers
+/// treat failure as cosmetic (console `sealMintedToken`).
+pub async fn http_put_sealed_token(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    invite_id: &str,
+    sealed_token: &str,
+    owner: Option<&str>,
+) -> Result<()> {
+    let resp = http
+        .put(with_owner(
+            &format!(
+                "{}/v1/drives/{}/invites/{}/sealed-token",
+                base_url.trim_end_matches('/'),
+                folder_hash,
+                invite_id
+            ),
+            owner,
+        )?)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .json(&serde_json::json!({ "sealed_token": sealed_token }))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("seal-token request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_error_status(status, &body));
+    }
+    Ok(())
 }
 
 /// `GET /v1/drives/{folder_hash}/members` — owner-side member listing.
@@ -461,6 +525,22 @@ pub struct DriveInviteInfo {
     pub valid: bool,
     #[serde(alias = "created_at")]
     pub created_at: String,
+    /// Token sealed under the drive key (hcfs #457/#458). Read from the
+    /// server listing; never serialized to the FE — only the rebuilt
+    /// `invite_url` crosses IPC.
+    #[serde(default, alias = "sealed_token", skip_serializing)]
+    pub sealed_token: Option<String>,
+    /// Full invite URL when `sealed_token` opened under this session's drive
+    /// key. FE truncates and strips `#k=` for display; copy uses the full
+    /// string. Absent when there is no blob, the invite is dead, or open
+    /// failed (locked stand-in).
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub invite_url: Option<String>,
+    /// True when the listing carried a sealed blob for a still-valid invite.
+    /// The FE shows the link field; `invite_url` fills it or the locked
+    /// stand-in when absent.
+    #[serde(default, skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
+    pub link_available: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -925,7 +1005,7 @@ pub async fn create_drive_invite(
     let role = resolve_invite_role(role, expires_in_secs, max_uses)?;
 
     let http = state.api_client.clone();
-    let token = http_create_invite(
+    let minted = http_create_invite(
         &http,
         &ctx.base_url,
         &ctx.bearer,
@@ -939,7 +1019,23 @@ pub async fn create_drive_invite(
     )
     .await?;
 
-    let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &token, &entropy);
+    // Best-effort seal-back (console `sealMintedToken`): the link is already
+    // usable; failing the mint over a park would trade a working invite for
+    // an error toast. An old server without the route lands the same way.
+    if let Ok(sealed) = super::invite_token::seal_invite_token(entropy.as_ref(), &minted.invite_id, &minted.token) {
+        let _ = http_put_sealed_token(
+            &http,
+            &ctx.base_url,
+            &ctx.bearer,
+            &identity.wire_folder_hash,
+            &minted.invite_id,
+            &sealed,
+            delegated_owner(&identity),
+        )
+        .await;
+    }
+
+    let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &minted.token, &entropy);
 
     info!(label = %label, folder_hash = %identity.wire_folder_hash, "Drive invite minted");
     Ok(DriveInviteLink { invite_url })
@@ -1070,10 +1166,11 @@ pub async fn change_drive_member_role(
 
 /// List the live invites for a drive this account owns.
 ///
-/// The only place an invite id exists outside the server. Revoking needs one,
-/// and the mint cannot supply it — the server returns a token, and the id is
-/// that token's hash, which is precisely what makes a minted link
-/// unrevocable without this listing.
+/// Opens each row's sealed token under the drive key and attaches a rebuilt
+/// `invite_url` so the Links tab can copy a link minted earlier. Rows without
+/// a blob (pre-seal-back, revoked, or not readable by this caller) leave
+/// `link_available` false; a blob that will not open leaves the field true
+/// and `invite_url` empty (locked stand-in).
 #[tauri::command]
 pub async fn list_drive_invites(
     app: tauri::AppHandle,
@@ -1085,7 +1182,7 @@ pub async fn list_drive_invites(
     let ctx = api_ctx(&state).await?;
     let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
-    let invites = http_list_invites(
+    let mut invites = http_list_invites(
         &state.api_client.clone(),
         &ctx.base_url,
         &ctx.bearer,
@@ -1093,6 +1190,40 @@ pub async fn list_drive_invites(
         delegated_owner(&identity),
     )
     .await?;
+
+    // Drive key for opening sealed tokens. Failure is not fatal to the
+    // listing — rows keep their metadata and show the locked link field.
+    let entropy = {
+        let _recovery_guard = state.recovery_lock.lock().await;
+        let mnemonic = crate::sync::remote::session_mnemonic(&state).ok();
+        match mnemonic {
+            Some(mnemonic) => {
+                match crate::sync::remote::folder_phrase_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await {
+                    Ok(phrase) => grant::entropy_from_phrase(&phrase).ok(),
+                    Err(_) => None,
+                }
+            }
+            None => None,
+        }
+    };
+
+    let console_base = crate::shares::commands::console_base_url();
+    for invite in &mut invites {
+        let sealed = invite
+            .sealed_token
+            .as_deref()
+            .filter(|s| !s.is_empty());
+        invite.link_available = sealed.is_some() && invite.valid;
+        invite.invite_url = None;
+        if let (Some(sealed), Some(entropy)) = (sealed, entropy.as_ref()) {
+            if let Some(token) = super::invite_token::open_invite_token(entropy.as_ref(), &invite.invite_id, sealed) {
+                invite.invite_url = Some(build_invite_url(&console_base, &token, entropy));
+            }
+        }
+        // Never leave ciphertext on the FE wire.
+        invite.sealed_token = None;
+    }
+
     let live = invites.iter().filter(|i| i.valid && !i.revoked).count();
     info!(label = %label, count = invites.len(), live, "Listed drive invites");
     Ok(invites)
@@ -1857,6 +1988,9 @@ mod tests {
             revoked,
             valid,
             created_at: String::new(),
+            sealed_token: None,
+            invite_url: None,
+            link_available: false,
         }
     }
 
@@ -2054,8 +2188,34 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect::<std::collections::BTreeSet<_>>(),
-            "DriveInviteInfo wire keys must stay exactly these camelCase names when minted_by_name is absent"
+            "DriveInviteInfo wire keys must stay exactly these camelCase names when optional link fields are absent"
         );
+    }
+
+    #[test]
+    fn drive_invite_info_carries_invite_url_when_opened() {
+        let mut row = invite(true, false);
+        row.link_available = true;
+        row.invite_url = Some("https://console.example/invite/tok#k=abc".into());
+        let json = serde_json::to_value(&row).unwrap();
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj.get("linkAvailable"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            obj.get("inviteUrl"),
+            Some(&serde_json::json!("https://console.example/invite/tok#k=abc"))
+        );
+        assert!(!obj.contains_key("sealedToken"), "ciphertext must not cross IPC");
+    }
+
+    #[test]
+    fn drive_invite_info_parses_sealed_token_from_server() {
+        let parsed: DriveInviteInfo = serde_json::from_str(
+            r#"{"invite_id":"abc","role":"writer","expires_at":"2126-01-01T00:00:00Z",
+                "max_uses":50,"use_count":2,"revoked":false,"valid":true,
+                "created_at":"2026-01-01T00:00:00Z","sealed_token":"c2VhbGVk"}"#,
+        )
+        .expect("sealed_token must deserialize");
+        assert_eq!(parsed.sealed_token.as_deref(), Some("c2VhbGVk"));
     }
 
     // ...while still reading the server's snake_case on the way in. Both

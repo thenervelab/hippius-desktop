@@ -31,6 +31,7 @@ use tauri_project_lib::shared_drives::commands::{
     MemberDriveInstall, MintInvite, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
 };
 use tauri_project_lib::shared_drives::grant;
+use tauri_project_lib::shared_drives::invite_token::invite_id_for_token;
 use tauri_project_lib::sync::identity::{MemberDriveIdentity, member_row_for_wire_identity, resolve_drive_identity};
 
 /// One shared `$HOME` for every test in this binary that writes config dirs.
@@ -189,8 +190,13 @@ async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
     .await;
     let http = reqwest::Client::new();
 
-    let token = http_create_invite(&http, &base, BEARER, mint_args(WIRE_HASH)).await.expect("mint");
-    assert_eq!(token, "tok_mock_1");
+    let minted = http_create_invite(&http, &base, BEARER, mint_args(WIRE_HASH)).await.expect("mint");
+    assert_eq!(minted.token, "tok_mock_1");
+    // Mock omits invite_id; desktop computes blake3(token) for seal-back.
+    assert_eq!(
+        minted.invite_id,
+        invite_id_for_token("tok_mock_1")
+    );
 
     // The resolved policy values land on the wire as concrete fields — the
     // desktop never sends an omitted lifetime/cap, so the server's own

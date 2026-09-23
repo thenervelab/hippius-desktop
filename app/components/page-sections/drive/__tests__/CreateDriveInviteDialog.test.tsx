@@ -169,12 +169,14 @@ describe("create invite dialog", () => {
       // exactly what every build before the picker did.
       role: "writer",
     });
-    await screen.findByDisplayValue("https://console.example.com/invite/tok#k=abc");
+    // Display strips `#k=` (drive key); clipboard still gets the full URL.
+    expect(
+      await screen.findByText("https://console.example.com/invite/tok…"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/#k=/)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("https://console.example.com/invite/tok#k=abc"),
     );
-    // The caption points revocation at the Members tab (there is no invite
-    // revoke surface in v1 by design).
     expect(screen.getByText(/until it expires/)).toBeInTheDocument();
   });
 
@@ -284,7 +286,7 @@ describe("the invite dialog's frame", () => {
   it("orders the finished screen explanation, link, copy, done", () => {
     const done = source.slice(source.indexOf("function InviteDone"));
     const explanation = done.indexOf("never expires");
-    const link = done.indexOf("<textarea");
+    const link = done.indexOf("truncateInviteUrl");
     const copy = done.indexOf("Copy link");
     const dismiss = done.indexOf(">\n        Done");
     for (const [name, i] of Object.entries({ explanation, link, copy, dismiss })) {
@@ -295,14 +297,12 @@ describe("the invite dialog's frame", () => {
     expect(copy).toBeLessThan(dismiss);
   });
 
-  // A token's length varies, so a fixed box WILL cut some links off. A
-  // half-shown URL reads as a broken one, and the reader cannot check what
-  // they are about to hand someone.
-  it("never clips the invite link", () => {
+  // The fragment is the drive key — the finished screen must truncate and
+  // strip `#k=`, while copy still writes the full URL.
+  it("never shows the #k= fragment on the finished screen", () => {
     const done = source.slice(source.indexOf("function InviteDone"));
-    const field = done.slice(done.indexOf("<textarea"), done.indexOf("/>", done.indexOf("<textarea")));
-    expect(field).toContain("overflow-y-auto");
-    expect(field).not.toContain("overflow-hidden");
+    expect(done).toContain("truncateInviteUrl(inviteUrl)");
+    expect(done).toContain("writeText(inviteUrl)");
   });
 
   it("matches the widths ConfirmationDialog defaults to", () => {

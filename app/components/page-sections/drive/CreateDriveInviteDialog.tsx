@@ -44,6 +44,7 @@ import {
 } from "./shareDriveModalState";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
+import { truncateInviteUrl } from "@/app/lib/shared-drives/inviteLink";
 import { useSharedDriveMemberships } from "@/app/lib/hooks/useSharedDriveRoles";
 import { parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 
@@ -364,24 +365,22 @@ function InviteDone({
 
       <div
         className={cn(
-          "mb-3 rounded-[8px] border p-3",
+          "mb-3 flex items-center gap-2 rounded-[8px] border px-3 py-2.5",
           "border-grey-80 bg-white",
           "dark:border-[#494949] dark:bg-[#1f1f1f]",
         )}
       >
-        <textarea
-          readOnly
-          value={inviteUrl}
-          onFocus={(e) => e.currentTarget.select()}
-          rows={3}
+        {/* Truncated, `#k=` stripped: the fragment is the drive key and must
+            not appear on screen. Copy still writes the full URL. */}
+        <p
           className={cn(
-            // `overflow-y-auto`, never `hidden`: a token's length varies, and
-            // a clipped URL reads as a broken one. The reader has to be able
-            // to see the whole thing they are about to hand someone.
-            "block w-full resize-none overflow-y-auto break-all bg-transparent font-mono text-xs leading-relaxed outline-none",
+            "min-w-0 flex-1 truncate font-mono text-xs",
             "text-grey-10 dark:text-grey-dark-800",
           )}
-        />
+          title="Invite link (key fragment hidden)"
+        >
+          {truncateInviteUrl(inviteUrl)}
+        </p>
       </div>
 
       {/* The link is the whole point of this screen, so copying it is the

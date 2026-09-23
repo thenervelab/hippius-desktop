@@ -201,6 +201,18 @@ export interface DriveInviteInfo {
   revoked: boolean;
   valid: boolean;
   createdAt: string;
+  /**
+   * Full invite URL when Rust opened the row's sealed token under the drive
+   * key. Treat as a drive-access capability: copy for the user, never log.
+   * Absent when there is no blob, the invite is dead, or open failed.
+   */
+  inviteUrl?: string;
+  /**
+   * True when the listing carried a sealed blob for a still-valid invite.
+   * The Links tab shows the link field; `inviteUrl` fills it or the locked
+   * stand-in when absent.
+   */
+  linkAvailable?: boolean;
 }
 
 /** The live invites for an OWN drive. */

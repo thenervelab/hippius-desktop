@@ -5,21 +5,9 @@
 // "Share drive…" menu item is hidden for member rows and the backend
 // refuses a member label as `Validation`.
 //
-// Invite tab lifecycle (`shareDriveModalState.ts::InviteState`):
-//
-//   `choosing`    — expiry preset picker; nothing is minted yet.
-//   `running`     — `create_drive_invite` in flight.
-//   `done`        — link ready, auto-copied once; read-only URL + copy.
-//   `unavailable` — feature-off server (`SHARED_DRIVES_UNAVAILABLE`):
-//                   quiet degrade copy, no retry, never a toast.
-//   `error`       — anything else. Inline message + Try again / Close.
-//
-// There is deliberately NO invite listing/revoke surface: the server
-// stores only blake3 token hashes and exposes no list-invites endpoint,
-// and the desktop never persists minted tokens — so after this dialog
-// closes there is nothing to select for revocation. Owners revoke ACCESS
-// by removing members (the Members tab); unclaimed links die by
-// expiry/max-uses. See `shared_drives/commands.rs` module docs.
+// Invite minting lives in `CreateDriveInviteDialog` (a separate dialog).
+// This panel's Links tab lists invites the server still holds, opens sealed
+// tokens in Rust, and offers copy / revoke — console parity for seal-back.
 
 "use client";
 
@@ -29,7 +17,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
 import { useAtom, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, UserRoundPen, Users, X } from "lucide-react";
+import { AlertCircle, Check, Copy, Lock, UserRoundPen, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons } from "@/components/ui";
@@ -61,6 +49,8 @@ import {
   deadReasonLabel,
   inviteRowView,
 } from "@/app/lib/shared-drives/inviteRowView";
+import { truncateInviteUrl } from "@/app/lib/shared-drives/inviteLink";
+import { cn } from "@/lib/utils";
 import {
   DRIVE_ROLES,
   driveRoleDemotionWarning,
@@ -432,73 +422,178 @@ function InviteRow({
   // The same two-step inline confirm the member row uses: revoking is
   // irreversible and the row is small.
   const [confirming, setConfirming] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [copied, setCopied] = useState(false);
   const view = inviteRowView(invite, undefined, viewerSs58);
 
+  const handleCopy = async () => {
+    if (!invite.inviteUrl || copying) return;
+    setCopying(true);
+    try {
+      await navigator.clipboard.writeText(invite.inviteUrl);
+      // Toast never carries the URL — it contains the drive key in `#k=`.
+      toast.success("Invite link copied");
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Couldn't copy invite link");
+    } finally {
+      setCopying(false);
+    }
+  };
+
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
-      <div className="min-w-0">
-        <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
-          {view.summary}
-        </p>
-        <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
-          {view.live ? view.expiry : deadReasonLabel(view.deadReason)}
-          {/* Only somebody ELSE's link says who made it. Now that a manager
-              can mint, a drive's links no longer all come from one person,
-              and "who let them in" is a question the list has to answer. */}
-          {view.mintedBy && (
-            <>
-              {" "}
-              · by{" "}
-              {accountDisplayName(
-                view.mintedBy,
-                invite.mintedByName,
-                14,
-              )}
-            </>
-          )}
-        </p>
+    <div className="border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
+            {view.summary}
+          </p>
+          <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
+            {view.live ? view.expiry : deadReasonLabel(view.deadReason)}
+            {/* Only somebody ELSE's link says who made it. Now that a manager
+                can mint, a drive's links no longer all come from one person,
+                and "who let them in" is a question the list has to answer. */}
+            {view.mintedBy && (
+              <>
+                {" "}
+                · by{" "}
+                {accountDisplayName(
+                  view.mintedBy,
+                  invite.mintedByName,
+                  14,
+                )}
+              </>
+            )}
+          </p>
+        </div>
+
+        {view.live ? (
+          confirming ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="auto"
+                onClick={() => {
+                  setConfirming(false);
+                  onRevoke(invite.inviteId);
+                }}
+                className="h-7 rounded-md border border-error-50/40 px-2 text-xs font-medium text-error-50 hover:bg-error-50/10"
+              >
+                Confirm revoke
+              </Button>
+              <Button
+                variant="ghost"
+                size="auto"
+                onClick={() => setConfirming(false)}
+                className="h-7 rounded-md px-2 text-xs font-medium text-grey-50 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:bg-white/10"
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="ghost"
+              size="auto"
+              onClick={() => setConfirming(true)}
+              className="h-7 shrink-0 rounded-md border border-grey-80 px-2 text-xs font-medium text-grey-30 hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
+            >
+              Revoke
+            </Button>
+          )
+        ) : (
+          // A dead link needs no action; showing a disabled Revoke would imply
+          // there is something left to do.
+          <span className="shrink-0 text-[11px] text-grey-60 dark:text-grey-dark-600">
+            No longer works
+          </span>
+        )}
       </div>
 
-      {view.live ? (
-        confirming ? (
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="ghost"
-              size="auto"
-              onClick={() => {
-                setConfirming(false);
-                onRevoke(invite.inviteId);
-              }}
-              className="h-7 rounded-md border border-error-50/40 px-2 text-xs font-medium text-error-50 hover:bg-error-50/10"
-            >
-              Confirm revoke
-            </Button>
-            <Button
-              variant="ghost"
-              size="auto"
-              onClick={() => setConfirming(false)}
-              className="h-7 rounded-md px-2 text-xs font-medium text-grey-50 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:bg-white/10"
-            >
-              Cancel
-            </Button>
-          </div>
-        ) : (
-          <Button
-            variant="ghost"
-            size="auto"
-            onClick={() => setConfirming(true)}
-            className="h-7 shrink-0 rounded-md border border-grey-80 px-2 text-xs font-medium text-grey-30 hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
-          >
-            Revoke
-          </Button>
-        )
-      ) : (
-        // A dead link needs no action; showing a disabled Revoke would imply
-        // there is something left to do.
-        <span className="shrink-0 text-[11px] text-grey-60 dark:text-grey-dark-600">
-          No longer works
+      {/* Console parity: sealed + valid → link field (ready / locked).
+          Revoked / pre-seal-back rows omit it. Never render `#k=`. */}
+      {invite.linkAvailable ? (
+        <InviteLinkField
+          url={invite.inviteUrl}
+          copying={copying}
+          copied={copied}
+          onCopy={() => void handleCopy()}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The invite's link field — same three visual states as console
+ * `InviteLinkRows.InviteLinkField`, without the unlock gate (Rust opens
+ * blobs inside `list_drive_invites`; absence of `url` is locked).
+ */
+const LOCKED_LINK_PLACEHOLDER =
+  "https://console.hippius.com/invite/Xk29fLpQ7rTnB4vW8yHc";
+
+const LINK_FIELD =
+  "mt-2 flex w-full min-w-0 items-center gap-2 rounded-[6px] border border-grey-80 bg-grey-90/40 px-2.5 py-1.5 text-left transition-colors dark:border-white/10 dark:bg-white/5";
+
+function InviteLinkField({
+  url,
+  copying,
+  copied,
+  onCopy,
+}: {
+  url: string | undefined;
+  copying: boolean;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  if (url) {
+    return (
+      <button
+        type="button"
+        title="Copy invite link"
+        aria-label="Copy invite link"
+        disabled={copying}
+        onClick={onCopy}
+        className={cn(
+          LINK_FIELD,
+          "group hover:border-primary-50 disabled:opacity-60 dark:hover:border-[#82a3f0]",
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] leading-4 text-grey-30 dark:text-grey-dark-500">
+          {truncateInviteUrl(url)}
         </span>
-      )}
+        {copied ? (
+          <Check
+            aria-hidden
+            className="size-3.5 shrink-0 text-success-40 dark:text-success-50"
+          />
+        ) : (
+          <Copy
+            aria-hidden
+            className="size-3.5 shrink-0 text-grey-50 transition-colors group-hover:text-primary-50 dark:text-grey-dark-700 dark:group-hover:text-[#82a3f0]"
+          />
+        )}
+      </button>
+    );
+  }
+
+  return (
+    <div
+      role="status"
+      aria-label="Link locked"
+      title="Could not rebuild this invite link"
+      className={LINK_FIELD}
+    >
+      <span
+        aria-hidden
+        className="min-w-0 flex-1 select-none truncate font-mono text-[11px] leading-4 text-grey-30 blur-[3px] dark:text-grey-dark-500"
+      >
+        {LOCKED_LINK_PLACEHOLDER}
+      </span>
+      <Lock
+        aria-hidden
+        className="size-3.5 shrink-0 text-grey-50 dark:text-grey-dark-700"
+      />
     </div>
   );
 }

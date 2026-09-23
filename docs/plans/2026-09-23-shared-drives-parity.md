@@ -34,7 +34,7 @@ Base: `origin/staging`
 
 | # | Item | Status |
 |---|---|---|
-| 10 | Seal invite tokens after mint; Links tab re-show (copy, locked, loading). Never show `#k=` | `[ ]` |
+| 10 | Seal invite tokens after mint; Links tab re-show (copy, locked, loading). Never show `#k=` | `[x]` |
 | 11 | Editors/Managers share folder by link in someone else's drive (`member_folder_shares`) | `[ ]` |
 | 12 | Email invites manager-side (field, Links statuses, Approve + X25519 sealing) | `[ ]` |
 
