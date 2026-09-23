@@ -1239,14 +1239,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setShowPrivateStartSyncingSelector(true);
   }, [isRecentFiles, handleNavigateToSettings]);
 
-  // Context menu handlers
+  // Context menu handlers. When storage is blocked the menu items are
+  // disabled (no dialog). Drag-and-drop still explains via requireUploadRoom.
   const handleContextUploadFile = useCallback(() => {
-    // AddButton.openWithPaths applies the same storage gate.
-    addButtonRef.current?.openWithPaths([]);
-  }, []);
+    if (isStorageFull) return;
+    void addButtonRef.current?.open();
+  }, [isStorageFull]);
 
   const handleContextAddFolder = useCallback(async () => {
-    if (!(await requireUploadRoom("folder-upload", isStorageFull))) return;
+    if (isStorageFull) return;
+    if (!(await requireUploadRoom("folder-upload", false))) return;
     setFolderUploadInitialPath(undefined);
     setIsFolderUploadOpen(true);
   }, [requireUploadRoom, isStorageFull]);
@@ -1259,7 +1261,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // choosing a folder needs the settings page.
   const [showSyncFolderDialog, setShowSyncFolderDialog] = useState(false);
   const handleContextAddSyncFolder = useCallback(async () => {
-    if (!(await requireUploadRoom("folder-sync", isStorageFull))) return;
+    if (isStorageFull) return;
+    if (!(await requireUploadRoom("folder-sync", false))) return;
     setShowSyncFolderDialog(true);
   }, [requireUploadRoom, isStorageFull]);
 

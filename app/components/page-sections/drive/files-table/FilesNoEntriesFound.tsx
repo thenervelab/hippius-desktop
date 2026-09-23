@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 import { getUploadBlockReason } from "@/app/components/page-sections/drive/uploadRoomState";
+import { NO_PLAN_RETENTION_DAYS } from "@/app/components/page-sections/drive/service-status/driveStatusBannerState";
 
 // Custom events for communicating with AddButton
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -101,16 +102,18 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
 
   const title = showStorageFullVariant
     ? isNoPlan
-      ? "No storage plan"
+      ? "You don't have a subscription plan"
       : "You've used all the storage in your plan"
     : isRecentFiles
       ? "No Recent files yet"
       : "No Entries in Your Storage";
 
+  // Match Overview / Drive banners: no-plan carries the 30-day deletion
+  // clock; over-quota keeps files and only pauses uploads.
   const description = showStorageFullVariant
     ? isNoPlan
-      ? "Subscribe to a plan to start uploading. Existing files stay available."
-      : "Upgrade your plan for more room, or remove some files to free space."
+      ? `Your account has no storage. Files you have already uploaded are permanently deleted after ${NO_PLAN_RETENTION_DAYS} days without a plan, and nothing new can be uploaded until you subscribe.`
+      : "Uploads are paused, your files stay available. Upgrade or free up space."
     : !isSyncPathConfigured
       ? isRecentFiles
         ? "Please set up sync path first"

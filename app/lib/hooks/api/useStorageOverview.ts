@@ -1,5 +1,11 @@
+import { useAtomValue } from "jotai";
+
 import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import { useInvokeQuery } from "./useInvokeQuery";
+import {
+  applyStorageOverviewDevOverride,
+  storageOverviewDevOverrideAtom,
+} from "./storageOverviewDevOverride";
 
 /**
  * TanStack Query key for the home page's storage/plan cards and the top-bar
@@ -107,6 +113,8 @@ export interface StorageOverview {
   planAction: PlanAction;
 }
 
+const IS_DEV = process.env.NODE_ENV === "development";
+
 /**
  * Plan-aware overview: bytes used vs the effective capacity, plus the
  * plan-or-free-tier decision, composed in one Rust round-trip
@@ -117,9 +125,12 @@ export interface StorageOverview {
  * Polling mirrors `useDriveStorageStats`: the indexer ingests asynchronously,
  * so a block-cadence refetch keeps the cards converging without ever being
  * the bottleneck once the indexer catches up.
+ *
+ * In development only, `storageOverviewDevOverrideAtom` can replace the
+ * live payload so quota UX can be exercised without many accounts.
  */
 export function useStorageOverview() {
-  return useInvokeQuery<StorageOverview>({
+  const query = useInvokeQuery<StorageOverview>({
     command: "get_storage_overview",
     queryKey: (addr) => [STORAGE_OVERVIEW_QUERY_KEY, addr],
     options: {
@@ -128,4 +139,12 @@ export function useStorageOverview() {
       refetchInterval: LIVE_DATA_REFRESH_MS,
     },
   });
+
+  // Gated so production bundles drop the override path.
+  const scenario = useAtomValue(storageOverviewDevOverrideAtom);
+  const data = IS_DEV
+    ? applyStorageOverviewDevOverride(query.data, scenario)
+    : query.data;
+
+  return { ...query, data };
 }

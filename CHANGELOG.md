@@ -17,13 +17,18 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Overview when you are over Free (or any plan) storage — and when you
-  have no plan at all.** The card shows how far over you are instead of a
-  contradictory "100%", a banner explains that uploads are paused and your
-  files stay, and File / Folder / Sync a Folder open Subscribe (no plan) or
-  Upgrade (full) on click rather than starting an upload that will fail.
+- **Overview and Drive when you have no plan, or you are over Free / paid
+  storage.** File, Folder, and Sync look disabled and do not open a picker
+  or dialog on click. Drag and drop still explains with Subscribe (no plan,
+  including the 30-day deletion notice) or Upgrade (full plan, files stay).
+  Right-click upload items are disabled the same way. Backend write checks
+  remain the last line of defence.
 
 ### Added
+
+- **Dev-only storage overview panel** (development builds): simulate no-plan,
+  free under/over, and paid under/over without switching accounts. See
+  `docs/testing-storage-quota-ux.md`.
 
 - **Team chat: end-to-end encrypted channels and direct messages with your
   Hippius account, in the app.** Sign in with your Hippius account (no password

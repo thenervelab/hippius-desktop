@@ -1,4 +1,5 @@
 "use client";
+
 import React from "react";
 import { useAtom } from "jotai";
 import { useRouter } from "next/navigation";
@@ -15,60 +16,16 @@ import { openLinkByKey } from "@/app/lib/utils/links";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 import { getUploadBlockReason } from "./uploadRoomState";
+import { getUploadBlockDialogCopy } from "./uploadBlockCopy";
 
-type StorageDialogCopy = {
+type DialogCopy = {
   title: string;
   description: string;
   primaryLabel: string;
   needsPlan: boolean;
 };
 
-const upgradeCopy: Record<
-  Exclude<InsufficientCreditsReason, "vm-creation">,
-  StorageDialogCopy
-> = {
-  "file-upload": {
-    title: "Not enough storage",
-    description:
-      "This file would go past the storage your plan includes. Upgrade your plan for more room, or remove some files to free space.",
-    primaryLabel: "Upgrade",
-    needsPlan: true,
-  },
-  "folder-upload": {
-    title: "Not enough storage",
-    description:
-      "This folder would go past the storage your plan includes. Upgrade your plan for more room, or remove some files to free space.",
-    primaryLabel: "Upgrade",
-    needsPlan: true,
-  },
-  "folder-sync": {
-    title: "Not enough storage",
-    description:
-      "Syncing this folder would go past the storage your plan includes. Upgrade your plan for more room, or pick a smaller folder.",
-    primaryLabel: "Upgrade",
-    needsPlan: true,
-  },
-  // A share link uploads a re-encrypted copy of the file, and the server
-  // bills that copy like any upload — so a refusal here means THIS share
-  // does not fit, the same as an upload of the same size would not.
-  sharing: {
-    title: "Not enough storage",
-    description:
-      "Sharing this file would go past the storage your plan includes. Upgrade your plan for more room, or free some space.",
-    primaryLabel: "Upgrade",
-    needsPlan: true,
-  },
-};
-
-const subscribeCopy: StorageDialogCopy = {
-  title: "No storage plan",
-  description:
-    "Your account has no storage plan, so nothing can be uploaded yet. Subscribe to a plan to get storage — your existing files stay available.",
-  primaryLabel: "Subscribe",
-  needsPlan: true,
-};
-
-const vmCopy: StorageDialogCopy = {
+const vmCopy: DialogCopy = {
   title: "Not enough balance for VM creation",
   description:
     "Creating a virtual machine needs at least $10 on your account balance. Top up before proceeding.",
@@ -76,30 +33,42 @@ const vmCopy: StorageDialogCopy = {
   needsPlan: false,
 };
 
+/** Fallback when Overview has not settled but eligibility already refused. */
+const genericUpgradeCopy: DialogCopy = {
+  title: "Not enough storage",
+  description:
+    "Uploads are paused, your files stay available. Upgrade or free up space.",
+  primaryLabel: "Upgrade",
+  needsPlan: true,
+};
+
 function resolveCopy(
   reason: InsufficientCreditsReason,
-  isNoPlan: boolean,
-): StorageDialogCopy {
+  overviewSource: ReturnType<typeof useStorageOverview>["data"],
+): DialogCopy {
   if (reason === "vm-creation") return vmCopy;
-  if (isNoPlan) return subscribeCopy;
-  return upgradeCopy[reason];
+
+  const block = getUploadBlockReason(overviewSource);
+  if (block) {
+    const copy = getUploadBlockDialogCopy(block, overviewSource?.source);
+    return { ...copy, needsPlan: true };
+  }
+
+  // Live eligibility refused without an Overview block (rare race). Prefer
+  // over-quota wording: files stay, no 30-day deletion clock.
+  return genericUpgradeCopy;
 }
 
 const InsufficientCreditsDialog: React.FC = () => {
   const [reason, setReason] = useAtom(insufficientCreditsDialogOpenAtom);
   const router = useRouter();
   const { data: overview } = useStorageOverview();
-  // Prefer Overview's no-plan signal so an access-key account is asked to
-  // Subscribe, not Upgrade — the same distinction the banner already makes.
-  const isNoPlan =
-    getUploadBlockReason(overview) === "no-plan" ||
-    overview?.source === "none";
 
   if (!reason) return null;
 
   const { title, description, needsPlan, primaryLabel } = resolveCopy(
     reason,
-    isNoPlan,
+    overview,
   );
 
   const handleClose = () => setReason(false);
@@ -107,8 +76,6 @@ const InsufficientCreditsDialog: React.FC = () => {
   const handlePrimary = () => {
     setReason(false);
     if (needsPlan) {
-      // The desktop has its own Subscription Plans page — keep the user in
-      // the app instead of bouncing them out to the console.
       router.push(BILLING_ROUTE);
       return;
     }
@@ -132,9 +99,6 @@ const InsufficientCreditsDialog: React.FC = () => {
       </p>
 
       <div className="flex flex-col gap-3">
-        {/* Storage is sold as a plan, so a bigger plan is the only way out
-            of a full drive. Credits buy no Drive storage and offering them
-            here would send the user somewhere that cannot help. */}
         <Button
           variant="primary"
           size="auto"

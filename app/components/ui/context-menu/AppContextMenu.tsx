@@ -115,12 +115,19 @@ const AppContextMenu: React.FC = () => {
 
   if (!point || !actions) return null;
 
-  const items: Array<{ label: string; icon: React.ReactNode; run: () => void }> = [];
+  const uploadsBlocked = Boolean(actions.uploadsBlocked);
+  const items: Array<{
+    label: string;
+    icon: React.ReactNode;
+    run: () => void;
+    disabled?: boolean;
+  }> = [];
   if (actions.onUploadFile) {
     items.push({
       label: UPLOAD_FILE_LABEL,
       icon: <Upload className="size-4" />,
       run: actions.onUploadFile,
+      disabled: uploadsBlocked,
     });
   }
   if (actions.onUploadFolder) {
@@ -128,6 +135,7 @@ const AppContextMenu: React.FC = () => {
       label: UPLOAD_FOLDER_LABEL,
       icon: <UploadCloud className="size-4" />,
       run: actions.onUploadFolder,
+      disabled: uploadsBlocked,
     });
   }
   // Always offered. With no folder open — Overview, the drive list — it
@@ -143,6 +151,7 @@ const AppContextMenu: React.FC = () => {
       label: SYNC_FOLDER_LABEL,
       icon: <FolderSync className="size-4" />,
       run: actions.onSyncFolder,
+      disabled: uploadsBlocked,
     });
   }
 
@@ -150,6 +159,9 @@ const AppContextMenu: React.FC = () => {
     top: Math.min(point.y, window.innerHeight - items.length * ITEM_HEIGHT - 16),
     left: Math.min(point.x, window.innerWidth - MENU_WIDTH - 8),
   };
+
+  const disabledItemClass =
+    "flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium !text-grey-50 cursor-not-allowed opacity-50 dark:!text-grey-dark-500";
 
   return createPortal(
     <div
@@ -169,12 +181,21 @@ const AppContextMenu: React.FC = () => {
               key={item.label}
               type="button"
               role="menuitem"
+              disabled={item.disabled}
+              aria-disabled={item.disabled || undefined}
               className={
-                index < items.length - 1
-                  ? `${ITEM_CLASS} border-b border-grey-80 dark:border-black-300`
-                  : ITEM_CLASS
+                item.disabled
+                  ? `${disabledItemClass}${
+                      index < items.length - 1
+                        ? " border-b border-grey-80 dark:border-black-300"
+                        : ""
+                    }`
+                  : index < items.length - 1
+                    ? `${ITEM_CLASS} border-b border-grey-80 dark:border-black-300`
+                    : ITEM_CLASS
               }
               onClick={() => {
+                if (item.disabled) return;
                 close();
                 item.run();
               }}

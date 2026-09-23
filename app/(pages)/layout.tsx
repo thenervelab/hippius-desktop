@@ -18,6 +18,7 @@ import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
 import { LocalWalletProvider } from "@/app/contexts/LocalWalletContext";
 import ChatHost from "@/components/chat/ChatHost";
+import StorageQuotaDevPanel from "@/components/page-sections/drive/StorageQuotaDevPanel";
 
 export default function ProtectedLayout({
   children,
@@ -45,6 +46,8 @@ export default function ProtectedLayout({
             Yields to the row and card menus, which handle their own
             right-clicks. */}
           <AppContextMenu />
+          {/* Development only: simulate no-plan / free / paid quota states. */}
+          <StorageQuotaDevPanel />
           <RecoveryEventListener />
           <AccountRecoveryDialog />
           <div className="flex flex-col min-h-screen w-full bg-cover bg-center bg-no-repeat bg-fixed bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]">

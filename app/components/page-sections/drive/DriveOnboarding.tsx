@@ -66,8 +66,6 @@ import {
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
-import { cn } from "@/lib/utils";
-
 interface DriveOnboardingProps {
   // Fired when a folder is added or a remote folder is synced. `newLabel`
   // is the unique label of the newly added/synced folder; the parent uses
@@ -156,15 +154,23 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // here run exactly what the toolbar buttons above the list run.
   const contextActions = useMemo(
     () => ({
-      onUploadFile: () => void addButtonRef.current?.open(),
+      // Keep handlers registered so the menu can list the items as
+      // disabled when blocked, rather than hiding them.
+      onUploadFile: () => {
+        if (isStorageFull) return;
+        void addButtonRef.current?.open();
+      },
       onUploadFolder: async () => {
-        if (!(await requireUploadRoom("folder-upload", isStorageFull))) return;
+        if (isStorageFull) return;
+        if (!(await requireUploadRoom("folder-upload", false))) return;
         setIsFolderUploadOpen(true);
       },
       onSyncFolder: async () => {
-        if (!(await requireUploadRoom("folder-sync", isStorageFull))) return;
+        if (isStorageFull) return;
+        if (!(await requireUploadRoom("folder-sync", false))) return;
         setShowAddDialog(true);
       },
+      uploadsBlocked: isStorageFull,
     }),
     [requireUploadRoom, isStorageFull],
   );
@@ -699,22 +705,20 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                   <Button
                     variant="defaultStable"
                     size="auto"
-                    title={UPLOAD_FOLDER_HINT}
+                    title={
+                      isStorageFull
+                        ? "Storage full. Upgrade your plan to upload."
+                        : UPLOAD_FOLDER_HINT
+                    }
+                    disabled={isStorageFull}
                     onClick={async () => {
-                      if (
-                        !(await requireUploadRoom(
-                          "folder-upload",
-                          isStorageFull,
-                        ))
-                      ) {
+                      if (isStorageFull) return;
+                      if (!(await requireUploadRoom("folder-upload", false))) {
                         return;
                       }
                       setIsFolderUploadOpen(true);
                     }}
-                    className={cn(
-                      "h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium",
-                      isStorageFull && "opacity-50",
-                    )}
+                    className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
                   >
                     <ArrowUpToLine className="size-3.5 shrink-0" />
                     {UPLOAD_FOLDER_BUTTON_LABEL}
@@ -723,13 +727,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                     ref={addButtonRef}
                     defaultFolderLabel={firstLocalLabel}
                     storageBlocked={isStorageFull}
-                    className={cn(
-                      "h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium",
-                      isStorageFull && "opacity-50",
-                    )}
-                    // Matches the Upload Folder button beside it. This row
-                    // is 12px, so the button's default 16px glyph read as
-                    // oversized next to its own label.
+                    className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
                     iconClassName="size-3.5"
                   />
                   <span
@@ -741,19 +739,20 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
               <Button
                 variant="primary"
                 size="auto"
-                title={SYNC_FOLDER_HINT}
+                title={
+                  isStorageFull
+                    ? "Storage full. Upgrade or subscribe to sync a folder."
+                    : SYNC_FOLDER_HINT
+                }
+                disabled={isStorageFull}
                 onClick={async () => {
-                  if (
-                    !(await requireUploadRoom("folder-sync", isStorageFull))
-                  ) {
+                  if (isStorageFull) return;
+                  if (!(await requireUploadRoom("folder-sync", false))) {
                     return;
                   }
                   setShowAddDialog(true);
                 }}
-                className={cn(
-                  "h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium",
-                  isStorageFull && "opacity-50",
-                )}
+                className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
               >
                 <RefreshCw className="size-3" strokeWidth={2} />
                 {SYNC_FOLDER_LABEL}
@@ -764,10 +763,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           buildActions={buildRowActions}
           emptyState={
             <FolderListEmptyState
+              disabled={isStorageFull}
               onSyncFolder={async () => {
-                if (
-                  !(await requireUploadRoom("folder-sync", isStorageFull))
-                ) {
+                if (isStorageFull) return;
+                if (!(await requireUploadRoom("folder-sync", false))) {
                   return;
                 }
                 setShowAddDialog(true);

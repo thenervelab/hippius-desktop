@@ -415,14 +415,29 @@ const DriveContent: FC<DriveContentProps> = ({
   const canUpload = !isSyncPathEmpty && Boolean(onUploadFile);
   const contextActions = useMemo(
     () => ({
-      onUploadFile: remoteTarget ? remoteFile.start : canUpload ? onUploadFile : undefined,
-      onUploadFolder: remoteTarget ? remoteFolder.start : canUpload ? onAddFolder : undefined,
+      onUploadFile: remoteTarget
+        ? () => {
+            if (isStorageFull) return;
+            remoteFile.start();
+          }
+        : canUpload
+          ? onUploadFile
+          : undefined,
+      onUploadFolder: remoteTarget
+        ? () => {
+            if (isStorageFull) return;
+            remoteFolder.start();
+          }
+        : canUpload
+          ? onAddFolder
+          : undefined,
       // Only where drives are chosen — the drive list and Recent Files.
       // Inside a drive, local or remote, "Sync a Folder" answers a
       // question the user is no longer asking, and registering a NEW sync
       // folder from inside another one reads as doing something to the
       // folder they are looking at.
       onSyncFolder: isRecentFiles ? onAddSyncFolder : undefined,
+      uploadsBlocked: isStorageFull,
       newFolderTarget,
     }),
     [
@@ -435,6 +450,7 @@ const DriveContent: FC<DriveContentProps> = ({
       isRecentFiles,
       onAddSyncFolder,
       newFolderTarget,
+      isStorageFull,
     ],
   );
   usePageContextActions(contextActions);

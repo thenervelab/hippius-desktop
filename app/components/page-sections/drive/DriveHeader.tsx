@@ -256,10 +256,12 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           <Button
             variant="defaultStable"
             size="auto"
+            disabled={isStorageFull}
             onClick={async () => {
-              // Known-full opens the upgrade dialog on click — do not start
-              // the folder picker and fail after the user has chosen files.
-              if (!(await requireUploadRoom("folder-upload", isStorageFull))) {
+              // Disabled when blocked: do not open dialog from the button.
+              // Drag-and-drop still opens the dialog via DriveContent.
+              if (isStorageFull) return;
+              if (!(await requireUploadRoom("folder-upload", false))) {
                 return;
               }
               if (!hasConfiguredDrives) {
@@ -270,11 +272,12 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               }
               setIsFolderUploadOpen(true);
             }}
-            className={cn(
-              SECONDARY_PILL_CLASSES,
-              isStorageFull && "opacity-50",
-            )}
-            title={UPLOAD_FOLDER_LABEL}
+            className={SECONDARY_PILL_CLASSES}
+            title={
+              isStorageFull
+                ? "Storage full. Upgrade your plan to upload."
+                : UPLOAD_FOLDER_LABEL
+            }
           >
             <ArrowUpToLine className="size-4 shrink-0" />
             {UPLOAD_FOLDER_BUTTON_LABEL}
@@ -332,11 +335,13 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             label={remoteUpload.label}
             parentPath={remoteUpload.parentPath}
             onUploaded={remoteUpload.onUploaded}
+            storageBlocked={isStorageFull}
           />
           <RemoteUploadButton
             label={remoteUpload.label}
             parentPath={remoteUpload.parentPath}
             onUploaded={remoteUpload.onUploaded}
+            storageBlocked={isStorageFull}
           />
         </>
       )}
@@ -361,7 +366,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             ref={addButtonRef}
             defaultFolderLabel={defaultFolderLabel}
             storageBlocked={isStorageFull}
-            className={isStorageFull ? "opacity-50" : undefined}
             nestedUpload={
               isNested && nestedFolderName
                 ? {
@@ -375,24 +379,18 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           />
       ) : null}
 
-      {/* Start Syncing button - show for empty sync paths or no sync paths.
-          When the user is out of storage the sync flow is a dead-end (every
-          upload would be refused), so the button dims and opens the same
-          upgrade dialog as File / Folder upload. */}
+      {/* Start Syncing: when storage is blocked the control is disabled
+          (not a dialog-on-click). Drops still explain via the dialog. */}
       {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
         <StartSyncingButton
-          onClick={async () => {
-            if (isStorageFull) {
-              await requireUploadRoom("folder-sync", true);
-              return;
-            }
-            if (isRecentFiles && hasNoSyncPaths) {
-              onNavigateToSettings?.();
-              return;
-            }
-            onStartSyncing?.();
-          }}
-          className={isStorageFull ? "opacity-50" : undefined}
+          onClick={
+            isStorageFull
+              ? undefined
+              : isRecentFiles && hasNoSyncPaths
+                ? onNavigateToSettings
+                : onStartSyncing
+          }
+          disabled={isStorageFull}
         />
       )}
 

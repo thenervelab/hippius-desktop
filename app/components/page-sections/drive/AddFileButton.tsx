@@ -109,8 +109,11 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         // Same gate order as the button's own click: eligibility first,
         // then a configured drive, so a surface that opens this by ref
         // cannot skip a check the button applies.
+        // Toolbar / context menu: when blocked the control is disabled and
+        // must not open the subscribe dialog. Drop paths use openWith*.
         open: async () => {
-          if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
+          if (storageBlocked) return;
+          if (!(await requireUploadRoom("file-upload", false))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -121,6 +124,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           setDroppedPaths(null);
           setIsOpen(true);
         },
+        // Drag-and-drop: still explain via the dialog when blocked.
         openWithFiles: async (files: FileList) => {
           if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
           if (!hasConfiguredDrives) {
@@ -177,10 +181,12 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         }
       };
 
+      // Empty-state "Upload a File" click. When blocked that empty state
+      // already swaps to Subscribe/Upgrade; do not open the dialog here.
       const handleOpenModal = () => {
-        if (isOpen) return;
+        if (isOpen || storageBlocked) return;
         void (async () => {
-          if (!(await requireUploadRoom("file-upload", storageBlocked))) {
+          if (!(await requireUploadRoom("file-upload", false))) {
             return;
           }
           setDroppedFiles(null);
@@ -249,7 +255,9 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
             className,
           )}
           onClick={async () => {
-            if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
+            // Toolbar: disabled when blocked. Do not open the dialog here.
+            if (storageBlocked) return;
+            if (!(await requireUploadRoom("file-upload", false))) return;
             if (!hasConfiguredDrives) {
               toast.warning(
                 "Set up a sync folder in Settings → Sync & Storage before uploading.",
@@ -260,7 +268,12 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
             setDroppedPaths(null);
             setIsOpen(true);
           }}
-          disabled={isLoading || externalDisabled}
+          disabled={isLoading || externalDisabled || storageBlocked}
+          title={
+            storageBlocked
+              ? "Storage full. Upgrade or subscribe to upload."
+              : UPLOAD_FILE_LABEL
+          }
         >
           {isLoading ? (
             <Loader2 className={cn("animate-spin", iconClassName)} />
