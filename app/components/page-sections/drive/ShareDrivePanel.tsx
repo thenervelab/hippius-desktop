@@ -495,7 +495,7 @@ function InviteRow({
               variant="ghost"
               size="auto"
               onClick={() => setConfirming(true)}
-              className="h-7 shrink-0 rounded-md border border-grey-80 px-2 text-xs font-medium text-grey-30 hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
+              className="h-7 shrink-0 rounded-md border border-error-50/50 px-2 text-xs font-medium text-error-50 transition-colors hover:bg-error-50/10 dark:border-error-50/40 dark:hover:bg-error-50/10"
             >
               Revoke
             </Button>
