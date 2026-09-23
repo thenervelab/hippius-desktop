@@ -43,6 +43,11 @@ type AddButtonProps = {
    */
   iconClassName?: string;
   disabled?: boolean; // Optional external disabled state
+  /**
+   * The polled eligibility check already says uploads will be refused.
+   * Click opens the upgrade dialog instead of the file picker.
+   */
+  storageBlocked?: boolean;
   defaultFolderLabel?: string | null;
   // When set, the dialog opens UploadFilesFlow in `mode="folder"` so files
   // are uploaded into a specific nested subfolder instead of the root of
@@ -78,6 +83,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       className,
       iconClassName = "size-4",
       disabled: externalDisabled,
+      storageBlocked = false,
       defaultFolderLabel,
       nestedUpload,
     },
@@ -94,7 +100,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     );
     const isLoading = uploadingState !== "idle";
     const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
-    const { checkEligibility } = useCreditCheck();
+    const { requireUploadRoom } = useCreditCheck();
 
     // Expose methods to parent components
     useImperativeHandle(
@@ -104,7 +110,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         // then a configured drive, so a surface that opens this by ref
         // cannot skip a check the button applies.
         open: async () => {
-          if (!(await checkEligibility("file-upload"))) return;
+          if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -116,7 +122,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           setIsOpen(true);
         },
         openWithFiles: async (files: FileList) => {
-          if (!(await checkEligibility("file-upload"))) return;
+          if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -128,7 +134,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           setIsOpen(true);
         },
         openWithPaths: async (paths: string[]) => {
-          if (!(await checkEligibility("file-upload"))) return;
+          if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -141,7 +147,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         isDialogOpen: () => isOpen,
       }),
-      [isOpen, hasConfiguredDrives, checkEligibility],
+      [isOpen, hasConfiguredDrives, requireUploadRoom, storageBlocked],
     );
 
     // Memoize title to prevent recalculation
@@ -232,7 +238,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
             className,
           )}
           onClick={async () => {
-            if (!(await checkEligibility("file-upload"))) return;
+            if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
             if (!hasConfiguredDrives) {
               toast.warning(
                 "Set up a sync folder in Settings → Sync & Storage before uploading.",

@@ -187,7 +187,11 @@ const DriveStatusBanner: React.FC<{ className?: string }> = ({ className }) => {
 
   return (
     <StatusBanner
-      banner={getDriveStatusBanner(data, overview?.source)}
+      banner={getDriveStatusBanner(
+        data,
+        overview?.source,
+        overview?.overDisplay,
+      )}
       className={cn("mx-3 mb-3", className)}
     />
   );

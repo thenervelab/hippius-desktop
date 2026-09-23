@@ -93,5 +93,27 @@ export function useCreditCheck() {
     [polkadotAddress, setReason]
   );
 
-  return { checkEligibility };
+  /**
+   * Prefer this at upload / sync click sites when the page already knows
+   * storage is full from the polled eligibility check.
+   *
+   * Opens the existing upgrade/subscribe dialog immediately — no picker,
+   * no encrypt-then-fail — then falls through to a live check when the
+   * account still has room. Backend `require_eligible` remains the gate.
+   */
+  const requireUploadRoom = useCallback(
+    async (
+      action: InsufficientCreditsReason,
+      knownStorageFull: boolean,
+    ): Promise<boolean> => {
+      if (knownStorageFull) {
+        setReason(action);
+        return false;
+      }
+      return checkEligibility(action);
+    },
+    [checkEligibility, setReason],
+  );
+
+  return { checkEligibility, requireUploadRoom };
 }

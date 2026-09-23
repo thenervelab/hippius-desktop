@@ -7,6 +7,7 @@ import { useSetAtom } from "jotai";
 import { toast } from "sonner";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import {
@@ -56,10 +57,14 @@ export function useRemoteFileUpload({
 }: RemoteUploadTarget): RemoteUploadAction {
   const { polkadotAddress } = useWalletAuth();
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
+  const { checkEligibility } = useCreditCheck();
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(async () => {
     if (!polkadotAddress || !label || busy) return;
+    // Gate before the OS picker so an over-quota account is not asked to
+    // choose files that will only be refused.
+    if (!(await checkEligibility("file-upload"))) return;
 
     const picked = await openSelection({ multiple: true, directory: false });
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
@@ -99,7 +104,15 @@ export function useRemoteFileUpload({
     } finally {
       setBusy(false);
     }
-  }, [polkadotAddress, label, parentPath, busy, onUploaded, setInsufficient]);
+  }, [
+    polkadotAddress,
+    label,
+    parentPath,
+    busy,
+    onUploaded,
+    setInsufficient,
+    checkEligibility,
+  ]);
 
   return { start: () => void run(), busy };
 }
@@ -112,10 +125,12 @@ export function useRemoteFolderUpload({
 }: RemoteUploadTarget): RemoteUploadAction {
   const { polkadotAddress } = useWalletAuth();
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
+  const { checkEligibility } = useCreditCheck();
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(async () => {
     if (!polkadotAddress || !label || busy) return;
+    if (!(await checkEligibility("folder-upload"))) return;
 
     const picked = await openSelection({ multiple: false, directory: true });
     const folderPath = Array.isArray(picked) ? picked[0] : picked;
@@ -147,7 +162,15 @@ export function useRemoteFolderUpload({
     } finally {
       setBusy(false);
     }
-  }, [polkadotAddress, label, parentPath, busy, onUploaded, setInsufficient]);
+  }, [
+    polkadotAddress,
+    label,
+    parentPath,
+    busy,
+    onUploaded,
+    setInsufficient,
+    checkEligibility,
+  ]);
 
   return { start: () => void run(), busy };
 }

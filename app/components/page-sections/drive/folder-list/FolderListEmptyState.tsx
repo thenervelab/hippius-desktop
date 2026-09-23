@@ -18,9 +18,10 @@ import { SYNC_FOLDER_LABEL } from "../uploadActions";
  * upload TO, so on an account with no folders at all it would open a
  * picker with nothing in it.
  */
-const FolderListEmptyState: React.FC<{ onSyncFolder: () => void }> = ({
-  onSyncFolder,
-}) => (
+const FolderListEmptyState: React.FC<{
+  onSyncFolder: () => void | Promise<void>;
+}> = ({ onSyncFolder }) => (
+
   <NoEntriesFound
     title="No folders yet"
     description="Pick a folder on this computer to sync. Its files are encrypted here before they upload, and stay up to date on every device you sign in to."

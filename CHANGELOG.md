@@ -15,6 +15,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+### Fixed
+
+- **Overview when you are over Free (or any plan) storage.** The card shows
+  how far over you are instead of a contradictory "100%", a banner explains
+  that uploads are paused and your files stay, and File / Folder / Sync a
+  Folder open the upgrade dialog on click rather than starting an upload
+  that will fail.
+
 ### Added
 
 - **Team chat: end-to-end encrypted channels and direct messages with your

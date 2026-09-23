@@ -39,7 +39,6 @@ import {
 import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
 import RemoteFolderUploadButton from "./RemoteFolderUploadButton";
-import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
 // Mirrors the trigger styling used across the home dashboard cards.
@@ -226,7 +225,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
     onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
   const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
-  const { checkEligibility } = useCreditCheck();
+  const { requireUploadRoom } = useCreditCheck();
 
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
@@ -258,7 +257,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             variant="defaultStable"
             size="auto"
             onClick={async () => {
-              if (!(await checkEligibility("folder-upload"))) return;
+              // Known-full opens the upgrade dialog on click — do not start
+              // the folder picker and fail after the user has chosen files.
+              if (!(await requireUploadRoom("folder-upload", isStorageFull))) {
+                return;
+              }
               if (!hasConfiguredDrives) {
                 toast.warning(
                   "Set up a sync folder in Settings → Sync & Storage before uploading.",
@@ -267,7 +270,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               }
               setIsFolderUploadOpen(true);
             }}
-            className={SECONDARY_PILL_CLASSES}
+            className={cn(
+              SECONDARY_PILL_CLASSES,
+              isStorageFull && "opacity-50",
+            )}
             title={UPLOAD_FOLDER_LABEL}
           >
             <ArrowUpToLine className="size-4 shrink-0" />
@@ -354,6 +360,8 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         <AddButton
             ref={addButtonRef}
             defaultFolderLabel={defaultFolderLabel}
+            storageBlocked={isStorageFull}
+            className={isStorageFull ? "opacity-50" : undefined}
             nestedUpload={
               isNested && nestedFolderName
                 ? {
@@ -368,18 +376,22 @@ const DriveHeader: FC<DriveHeaderProps> = ({
       ) : null}
 
       {/* Start Syncing button - show for empty sync paths or no sync paths.
-          When the user is out of credits the sync flow is a dead-end (every
-          upload would 402), so the button dims and reroutes to the plans
-          page — same destination as the out-of-storage empty-state CTA. */}
+          When the user is out of storage the sync flow is a dead-end (every
+          upload would be refused), so the button dims and opens the same
+          upgrade dialog as File / Folder upload. */}
       {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
         <StartSyncingButton
-          onClick={
-            isStorageFull
-              ? () => push(BILLING_ROUTE)
-              : isRecentFiles && hasNoSyncPaths
-                ? onNavigateToSettings
-                : onStartSyncing
-          }
+          onClick={async () => {
+            if (isStorageFull) {
+              await requireUploadRoom("folder-sync", true);
+              return;
+            }
+            if (isRecentFiles && hasNoSyncPaths) {
+              onNavigateToSettings?.();
+              return;
+            }
+            onStartSyncing?.();
+          }}
           className={isStorageFull ? "opacity-50" : undefined}
         />
       )}

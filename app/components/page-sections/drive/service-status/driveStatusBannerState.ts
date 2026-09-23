@@ -67,6 +67,47 @@ export function getNoStoragePlanBanner(
 }
 
 /**
+ * Banner when stored bytes exceed the plan or free allowance.
+ *
+ * Covers the downgrade / back-to-Free case: nothing is deleted, uploads
+ * are paused until the account upgrades or frees space. Distinct from
+ * {@link getNoStoragePlanBanner}, which is the access-key "no plan at
+ * all" path (and does threaten deletion).
+ *
+ * `overDisplay` is the Rust-authored overage string; its presence is the
+ * signal that the account is past capacity — do not re-derive from
+ * percent, which is clamped to 100.
+ */
+export function getOverQuotaBanner(input: {
+  capacitySource?: "subscription" | "free" | "none";
+  overDisplay?: string | null;
+}): DriveStatusBanner | null {
+  const { capacitySource, overDisplay } = input;
+  if (!overDisplay) return null;
+  if (capacitySource !== "free" && capacitySource !== "subscription") {
+    return null;
+  }
+
+  if (capacitySource === "free") {
+    return {
+      tone: "warning",
+      title: "You're over your free storage",
+      description:
+        "Uploads are paused, your files stay available. Upgrade or free up space.",
+      action: { label: "Upgrade", href: BILLING_ROUTE },
+    };
+  }
+
+  return {
+    tone: "warning",
+    title: "You're over your plan's storage",
+    description:
+      "Uploads are paused, your files stay available. Upgrade to a larger plan or free up space.",
+    action: { label: "Upgrade", href: BILLING_ROUTE },
+  };
+}
+
+/**
  * What Drive wants the user to know, from `/api/services/status/`.
  *
  * The states and the wording follow the console's own `driveBanners`, so
@@ -79,12 +120,19 @@ export function getNoStoragePlanBanner(
 export function getDriveStatusBanner(
   status: DriveServiceStatus | undefined,
   capacitySource?: "subscription" | "free" | "none",
+  overDisplay?: string | null,
 ): DriveStatusBanner | null {
   // Checked FIRST, and it outranks anything the services endpoint says:
   // an account with no capacity at all cannot use Drive at all, where a
   // bad billing state still leaves it readable.
   const noPlan = getNoStoragePlanBanner(capacitySource);
   if (noPlan) return noPlan;
+
+  // Past capacity (free overage or post-downgrade) outranks billing
+  // notices: uploads are already paused, and the user needs that fact
+  // before a cancelled-plan note that still implies they can upload.
+  const overQuota = getOverQuotaBanner({ capacitySource, overDisplay });
+  if (overQuota) return overQuota;
 
   const state = status?.state;
   if (!state) return null;
