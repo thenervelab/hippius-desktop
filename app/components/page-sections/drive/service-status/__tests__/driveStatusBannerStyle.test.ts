@@ -24,11 +24,16 @@ describe("the drive status banner matches the console's", () => {
     expect(banner).toMatch(/badge:\s*"bg-primary-50 text-white"/);
   });
 
-  // A filled button competes with the page's own actions for the same
-  // glance; the banner is telling the user something.
-  it("offers its action as a text link", () => {
-    expect(banner).toMatch(/underline underline-offset-2/);
-    expect(banner).not.toMatch(/<Button/);
+  // Right-side primary button, same placement as ConflictsBanner /
+  // CreditsExhaustedBanner. The body copy stays instructional; the CTA
+  // is the button, not an underlined text link under the description.
+  it("offers its action as a right-side button", () => {
+    expect(banner).toMatch(/<Button/);
+    expect(banner).toMatch(/asLink/);
+    expect(banner).toMatch(/variant="primary"/);
+    expect(banner).toMatch(/banner\.action/);
+    expect(banner).not.toMatch(/underline underline-offset-2/);
+    expect(banner).not.toMatch(/from "next\/link"/);
   });
 
   // A plan still provisioning resolves on its own, so the badge shows

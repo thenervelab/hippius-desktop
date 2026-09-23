@@ -15,6 +15,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+### Changed
+
+- **Storage and plan banners use a button on the right** (Upgrade, See
+  storage plans, Top up) instead of an underlined text link under the
+  body copy. Same layout on Overview, Drive, and other StatusBanner
+  surfaces.
+
 ### Fixed
 
 - **Overview and Drive when you have no plan, or you are over Free / paid
