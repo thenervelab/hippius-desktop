@@ -67,6 +67,7 @@ import {
 } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
+import { useUploaderOptions } from "./AddedByFilter";
 import {
   useMemberDriveLabels,
   useSharedDriveMembership,
@@ -230,6 +231,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     fileSize: 0,
     fileSizes: [] as number[],
     excludedOnly: false,
+    uploadedBy: undefined as string | undefined,
     lastUpdated: Date.now(),
   });
 
@@ -247,6 +249,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       fileSize: 0,
       fileSizes: [],
       excludedOnly: false,
+      uploadedBy: undefined,
       lastUpdated: Date.now(),
     });
   }, []);
@@ -554,6 +557,43 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     ? "Drive size:"
     : "Storage Used:";
 
+  // Label of the drive currently open (root or nested) — same expression the
+  // header / Added-by filter use, before the breadcrumb memo.
+  const filterDriveLabel =
+    isRecentFiles || isOnLocalView
+      ? null
+      : (remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel ?? null);
+  const filterDriveSharing = useDriveSharing(
+    browsedSharedDrive ? null : filterDriveLabel,
+  );
+  const filterSyncedMembership = useSharedDriveMembership(
+    browsedSharedDrive ? null : filterDriveLabel,
+  );
+  const showAddedByFilter =
+    Boolean(filterDriveLabel) &&
+    (Boolean(browsedSharedDrive) || filterDriveSharing.isShared);
+  const addedByOwnerSs58 = browsedSharedDrive
+    ? browsedSharedDrive.ownerSs58
+    : (filterSyncedMembership.membership?.ownerSs58 ??
+      (filterDriveSharing.isShared ? (polkadotAddress ?? undefined) : undefined));
+  const addedByTarget = browsedSharedDrive
+    ? {
+        ownerSs58: browsedSharedDrive.ownerSs58,
+        folderHash: browsedSharedDrive.folderHash,
+      }
+    : filterSyncedMembership.membership
+      ? {
+          ownerSs58: filterSyncedMembership.membership.ownerSs58,
+          folderHash: filterSyncedMembership.membership.folderHash,
+        }
+      : undefined;
+  const addedByOptions = useUploaderOptions(
+    showAddedByFilter ? filterDriveLabel : null,
+    addedByOwnerSs58,
+    polkadotAddress ?? undefined,
+    addedByTarget,
+  );
+
   const nestedListing = useNestedFolderListing({
     accountId: polkadotAddress,
     syncPath: nestedDrive?.syncPath ?? null,
@@ -693,6 +733,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     dateRange: filterState.dateRange,
     fileSizes: filterState.fileSizes,
     excludedOnly: filterState.excludedOnly,
+    uploadedBy: filterState.uploadedBy,
   });
   const useRecursiveResults = shouldUseRecursiveSearch({
     hasActiveSearchOrFilter,
@@ -726,6 +767,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       dateRange: filterState.dateRange,
       fileSizes: filterState.fileSizes,
       excludedOnly: filterState.excludedOnly,
+      uploadedBy: filterState.uploadedBy,
     }),
     [
       searchTerm,
@@ -733,26 +775,33 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       filterState.dateRange,
       filterState.fileSizes,
       filterState.excludedOnly,
+      filterState.uploadedBy,
     ],
   );
 
   // A browsed drive searches the server instead — see
-  // `shouldUseDriveScopedSearch`.
+  // `shouldUseDriveScopedSearch`. "Added by" also forces server search
+  // on a synced shared drive, because attribution is not on local disk.
+  const scopedSearchLabel =
+    remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel ?? null;
   const useRemoteSearch = shouldUseDriveScopedSearch({
     hasActiveSearchOrFilter,
     isRemoteView,
     remoteLabel: remoteUploadLabel,
     isRecentFiles: Boolean(isRecentFiles),
+    uploadedBy: filterState.uploadedBy,
+    driveLabel: scopedSearchLabel,
   });
   const searchTermTooShort = shouldHintSearchTermTooShort({
     usesDriveScopedSearch: useRemoteSearch,
     searchTerm,
     fileExtension: filterState.fileExtension,
+    uploadedBy: filterState.uploadedBy,
   });
   const { data: remoteSearchResults, isFetching: isRemoteSearching } =
     useDriveScopedSearch({
       accountId: polkadotAddress,
-      label: remoteUploadLabel,
+      label: scopedSearchLabel,
       criteria: recursiveCriteria,
       enabled: useRemoteSearch,
     });
@@ -763,7 +812,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       label: recursiveSearchLabel,
       subfolder: recursiveSearchSubfolder,
       criteria: recursiveCriteria,
-      enabled: hasActiveSearchOrFilter && !isRecentFiles,
+      enabled: hasActiveSearchOrFilter && !isRecentFiles && !useRemoteSearch,
     });
 
   // When the recursive search is active (filter set + drive context),
@@ -948,12 +997,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // Update active filters when filter settings change
   useEffect(() => {
+    const uploadedByLabel = filterState.uploadedBy
+      ? addedByOptions.find((o) => o.ss58 === filterState.uploadedBy)?.label
+      : undefined;
     const newActiveFilters = generateActiveFilters(
       filterState.fileExtension,
       filterState.dateRange,
       filterState.fileSize,
       filterState.fileSizes,
       filterState.excludedOnly,
+      filterState.uploadedBy,
+      uploadedByLabel,
     );
     setActiveFilters(newActiveFilters);
   }, [
@@ -962,7 +1016,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     filterState.fileSize,
     filterState.fileSizes,
     filterState.excludedOnly,
+    filterState.uploadedBy,
     filterState.lastUpdated,
+    addedByOptions,
   ]);
 
   // Reset scroll when filters or folder tab change
@@ -1007,6 +1063,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
         case "excludedOnly":
           updates.excludedOnly = false;
+          break;
+
+        case "uploadedBy":
+          updates.uploadedBy = undefined;
           break;
       }
 
@@ -1074,6 +1134,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const handleExcludedOnlyChange = useCallback(
     (excludedOnly: boolean) => {
       updateFilters({ excludedOnly });
+    },
+    [updateFilters],
+  );
+
+  const handleUploadedByChange = useCallback(
+    (uploadedBy: string | undefined) => {
+      updateFilters({ uploadedBy });
     },
     [updateFilters],
   );
@@ -2114,6 +2181,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onFileSizesChange={handleFileSizesChange}
                 onExcludedOnlyChange={handleExcludedOnlyChange}
                 showExcludedFilter={showExcludedFilter}
+                addedByOptions={showAddedByFilter ? addedByOptions : undefined}
+                selectedUploadedBy={filterState.uploadedBy}
+                onUploadedByChange={
+                  showAddedByFilter ? handleUploadedByChange : undefined
+                }
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
                 onSetFolderUploadOpen={handleFolderUploadOpenChange}
@@ -2125,7 +2197,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isReadOnlyDrive={!openDriveCanWrite}
                 openDriveDisplayName={
                   openDriveLabel
-                    ? (labelDisplayNames[openDriveLabel] ?? openDriveLabel)
+                    ? (sharedDriveNames.get(openDriveLabel) ??
+                      labelDisplayNames[openDriveLabel] ??
+                      openDriveLabel)
                     : null
                 }
                 isNested={isNested}

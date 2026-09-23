@@ -50,6 +50,7 @@ function hasAnyCriteria(criteria: FileFilterRequest): boolean {
         dateRange: criteria.dateRange,
         fileSizes: criteria.fileSizes,
         excludedOnly: criteria.excludedOnly,
+        uploadedBy: criteria.uploadedBy,
     });
 }
 

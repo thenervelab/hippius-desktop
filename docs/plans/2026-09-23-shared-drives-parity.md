@@ -27,7 +27,7 @@ Base: `origin/staging`
 | 5 | Member count beside owner on Shared with me (`Owner · 4 members`); never fake `0` on load failure | `[x]` |
 | 6 | Shared `accountDisplayName` helper for Shared by, members, Created by, File Details | `[x]` |
 | 7 | Sharing badge: use listing `member_count`; only fetch invites when members==0 | `[x]` |
-| 8 | "Added by" filter inside shared drives (`uploaded_by` in Rust search + UI picker) | `[~]` Rust `uploaded_by` search param + narrowing filter done; FE picker / Not recorded UI still TODO |
+| 8 | "Added by" filter inside shared drives (`uploaded_by` in Rust search + UI picker) | `[x]` |
 | 9 | Frozen drives read-only (`frozen` through; hide write actions via `driveWriteRefusal`) | `[x]` |
 
 ## Batch C — larger

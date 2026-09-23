@@ -16,6 +16,12 @@ describe("filterCriteriaAreActive", () => {
     expect(filterCriteriaAreActive({ searchTerm: "  " })).toBe(false);
     expect(filterCriteriaAreActive({ fileSizes: [] })).toBe(false);
   });
+
+  it("treats Added by alone as an active filter", () => {
+    expect(filterCriteriaAreActive({ uploadedBy: "5Owner" })).toBe(true);
+    expect(filterCriteriaAreActive({ uploadedBy: "_none" })).toBe(true);
+    expect(filterCriteriaAreActive({ uploadedBy: "  " })).toBe(false);
+  });
 });
 
 describe("filesViewMode", () => {
@@ -83,6 +89,30 @@ describe("shouldUseDriveScopedSearch", () => {
     expect(shouldUseDriveScopedSearch({ ...base, isRemoteView: false })).toBe(false);
   });
 
+  it("forces server search when Added by is set on a synced drive", () => {
+    expect(
+      shouldUseDriveScopedSearch({
+        ...base,
+        isRemoteView: false,
+        remoteLabel: null,
+        uploadedBy: "5Member",
+        driveLabel: "team-docs",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not force Added by search without a drive label", () => {
+    expect(
+      shouldUseDriveScopedSearch({
+        ...base,
+        isRemoteView: false,
+        remoteLabel: null,
+        uploadedBy: "5Member",
+        driveLabel: null,
+      }),
+    ).toBe(false);
+  });
+
   it("does not fire with nothing typed", () => {
     expect(
       shouldUseDriveScopedSearch({ ...base, hasActiveSearchOrFilter: false }),
@@ -131,6 +161,12 @@ describe("shouldHintSearchTermTooShort", () => {
   it("defers to an extension filter", () => {
     expect(
       shouldHintSearchTermTooShort({ ...base, fileExtension: "pdf" }),
+    ).toBe(false);
+  });
+
+  it("defers to an Added by filter", () => {
+    expect(
+      shouldHintSearchTermTooShort({ ...base, uploadedBy: "5Owner" }),
     ).toBe(false);
   });
 });

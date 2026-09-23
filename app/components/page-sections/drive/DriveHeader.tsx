@@ -118,6 +118,10 @@ interface DriveHeaderProps {
   onExcludedOnlyChange?: (excludedOnly: boolean) => void;
   /** See `shouldOfferExcludedFilter` — hidden on a drive with no rules. */
   showExcludedFilter?: boolean;
+  /** Shared-drive "Added by" options; omit when the drive is not shared. */
+  addedByOptions?: Array<{ ss58: string; label: string }>;
+  selectedUploadedBy?: string;
+  onUploadedByChange?: (ss58: string | undefined) => void;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
@@ -203,6 +207,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   onFileSizesChange,
   onExcludedOnlyChange,
   showExcludedFilter = false,
+  addedByOptions,
+  selectedUploadedBy,
+  onUploadedByChange,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
@@ -543,6 +550,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   onFileSizesChange={onFileSizesChange}
                   onExcludedOnlyChange={onExcludedOnlyChange}
                   showExcludedFilter={showExcludedFilter}
+                  addedByOptions={addedByOptions}
+                  selectedUploadedBy={selectedUploadedBy}
+                  onUploadedByChange={onUploadedByChange}
                 />
                 <div className="flex items-center gap-3 shrink-0">
                   {/* Stats are hidden inside a nested folder — the totals
