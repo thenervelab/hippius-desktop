@@ -89,6 +89,16 @@ fn kind_columns(kind: &FileFailureKindPayload) -> KindColumns {
             balance_cents: None,
             required_cents: None,
         },
+        // No detail columns: the upstream error string names the chunk
+        // index and the AEAD fault, which tells a user nothing they can act
+        // on. The kind itself carries the whole meaning.
+        FileFailureKindPayload::Undecryptable => KindColumns {
+            kind: "undecryptable",
+            message: None,
+            http_status: None,
+            balance_cents: None,
+            required_cents: None,
+        },
         FileFailureKindPayload::Gone => KindColumns {
             kind: "gone",
             message: None,
@@ -284,6 +294,23 @@ fn record_from_row(row: &sqlx::sqlite::SqliteRow) -> FileFailureRecord {
 
 #[cfg(test)]
 mod tests {
+    /// The upstream `Decryption` error string names a chunk index and an AEAD
+    /// fault — useful in a log, useless to a user. It must not land in the
+    /// `message` column, because `failureMessage()` renders that column when
+    /// present and would put the crypto detail in the Drive table.
+    #[test]
+    fn undecryptable_stores_its_kind_and_no_crypto_detail() {
+        use crate::sync::projection::events::FileFailureKindPayload;
+
+        let columns = kind_columns(&FileFailureKindPayload::Undecryptable);
+
+        assert_eq!(columns.kind, "undecryptable", "wire tag must match the serde tag");
+        assert!(columns.message.is_none(), "no upstream text may be persisted");
+        assert!(columns.http_status.is_none(), "the transfer succeeded — no status");
+        assert!(columns.balance_cents.is_none());
+        assert!(columns.required_cents.is_none());
+    }
+
     use super::*;
 
     /// Self-contained in-memory pool with just this table created inline. The
@@ -332,11 +359,18 @@ mod tests {
             K::Network,
             K::ChangedWhileUploading,
             K::Gone,
+            K::Undecryptable,
             K::Other { message: "x".to_string() },
         ];
         for kind in &all {
             match kind {
-                K::InsufficientBalance { .. } | K::ServerError { .. } | K::Network | K::ChangedWhileUploading | K::Gone | K::Other { .. } => {}
+                K::InsufficientBalance { .. }
+                | K::ServerError { .. }
+                | K::Network
+                | K::ChangedWhileUploading
+                | K::Gone
+                | K::Undecryptable
+                | K::Other { .. } => {}
             }
         }
         all
@@ -362,7 +396,15 @@ mod tests {
 
         assert_eq!(
             tags,
-            vec!["insufficientBalance", "serverError", "network", "changedWhileUploading", "gone", "other"],
+            vec![
+                "insufficientBalance",
+                "serverError",
+                "network",
+                "changedWhileUploading",
+                "gone",
+                "undecryptable",
+                "other"
+            ],
             "these exact strings are the `FileFailureKind` union in app/lib/types/fileFailure.ts"
         );
     }

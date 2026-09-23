@@ -7,6 +7,7 @@ import {
   USAGE_CRITICAL_PERCENT,
   USAGE_WARN_PERCENT,
   formatPercentLabel,
+  getUsageAsideLabel,
   getCapacitySourceLabel,
   getPlanHeading,
   getPlanView,
@@ -155,6 +156,28 @@ describe("formatPercentLabel", () => {
     expect(formatPercentLabel(0.2)).toBe("<1%");
     expect(formatPercentLabel(0.999)).toBe("<1%");
     expect(formatPercentLabel(1)).toBe("1%");
+  });
+});
+
+describe("getUsageAsideLabel", () => {
+  // Over-quota must not sit next to a clamped 100% — that reads as
+  // "12.56 GB of 10.00 GB" AND "full" when the account is past the plan.
+  it("prefers the Rust overage string over the clamped percent", () => {
+    expect(
+      getUsageAsideLabel({
+        percent: 100,
+        overDisplay: "2.56 GB over your plan",
+      }),
+    ).toBe("2.56 GB over your plan");
+  });
+
+  it("falls back to the percent label when the account is within capacity", () => {
+    expect(getUsageAsideLabel({ percent: 42.4, overDisplay: null })).toBe(
+      "42%",
+    );
+    expect(getUsageAsideLabel({ percent: 0.2, overDisplay: undefined })).toBe(
+      "<1%",
+    );
   });
 });
 

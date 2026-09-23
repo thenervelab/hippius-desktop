@@ -20,7 +20,7 @@ import {
   useFileFailure,
   useRetryFailure,
 } from "@/app/lib/hooks/useFileFailure";
-import { failureMessage } from "@/app/lib/utils/failureMessage";
+import { failureMessage, isRetryableFailure } from "@/app/lib/utils/failureMessage";
 import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
 import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 
@@ -472,7 +472,13 @@ const NameCell: FC<NameCellProps> = ({
             syncedBadgeMs={syncedBadgeMs}
             failure={failure}
             onRetry={
-              failure ? () => retryFile.mutate(failure.relativePath) : undefined
+              // Gated on the KIND, not merely on a failure existing: a
+              // quarantined file cannot be retried from here (see
+              // `isRetryableFailure`), and offering the affordance would
+              // contradict the very copy this badge is showing.
+              failure && isRetryableFailure(failure.kind)
+                ? () => retryFile.mutate(failure.relativePath)
+                : undefined
             }
             retrying={retryFile.isPending}
           />

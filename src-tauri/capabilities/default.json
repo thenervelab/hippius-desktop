@@ -6,6 +6,7 @@
     "permissions": [
         "core:default",
         "opener:default",
+        "notification:default",
         "opener:allow-reveal-item-in-dir",
         "deep-link:default",
         "deep-link:allow-register",

@@ -70,6 +70,12 @@ export function useTrayPanelData() {
   // Unread notification count for the header bell badge — same DB-backed value
   // the main window's top-bar bell shows (`get_unread_count`).
   const [unreadCount, setUnreadCount] = useState(0);
+  // Chat attention count (unread DMs + mentions) — the number Rust puts on
+  // the dock badge and in the window title (`chat::notify`). Seeded from
+  // `chat_get_unread_count`, then follows the `chat_unread_changed`
+  // broadcast (reaches every window). Zero while chat is disabled or
+  // signed out, which is what hides the popover's chat button.
+  const [chatUnread, setChatUnread] = useState(0);
   // First-load gate for the upload list. True until the first authoritative
   // fetch (one that ran with a hydrated session) resolves, so the popover shows
   // a loading skeleton instead of the empty state before any data has arrived.
@@ -176,7 +182,9 @@ export function useTrayPanelData() {
       .then((un) => {
         unlistenFocus = un;
       })
-      .catch((error) => console.error("[TrayPanel] focus listener failed:", error));
+      .catch((error) =>
+        console.error("[TrayPanel] focus listener failed:", error),
+      );
 
     // Explicit "the popover is now visible" signal from Rust's
     // `toggle_tray_panel` (fires on every show). The webview's own focus event
@@ -193,7 +201,9 @@ export function useTrayPanelData() {
       .then((un) => {
         unlistenShown = un;
       })
-      .catch((error) => console.error("[TrayPanel] shown listener failed:", error));
+      .catch((error) =>
+        console.error("[TrayPanel] shown listener failed:", error),
+      );
 
     // Live sync progress (uploading / failed). Events reach every window.
     // The `sync_files_completed_changed` DOM event the main window uses to
@@ -215,25 +225,52 @@ export function useTrayPanelData() {
       .then((un) => {
         unlistenSnapshot = un;
       })
-      .catch((error) => console.error("[TrayPanel] snapshot listener failed:", error));
+      .catch((error) =>
+        console.error("[TrayPanel] snapshot listener failed:", error),
+      );
+
+    // Chat unread: seed once (the popover is prewarmed before any message
+    // arrives, and a count set before this webview listened would be missed),
+    // then mirror the broadcast.
+    void invoke<number>("chat_get_unread_count")
+      .then((count) => setChatUnread(count))
+      .catch((error) =>
+        console.error("[TrayPanel] chat unread seed failed:", error),
+      );
+    let unlistenChatUnread: (() => void) | undefined;
+    void listen<{ count: number }>("chat_unread_changed", (event) => {
+      setChatUnread(event.payload.count);
+    })
+      .then((un) => {
+        unlistenChatUnread = un;
+      })
+      .catch((error) =>
+        console.error("[TrayPanel] chat unread listener failed:", error),
+      );
 
     // Mirror the chain block + connectivity broadcast (app.emit reaches every
     // window, so this works even though the subscription runs for the main one).
     let unlistenBlock: (() => void) | undefined;
-    void listen<{ blockNumber: number; isConnected: boolean }>("block_number_updated", (event) => {
-      setBlockNumber(event.payload.blockNumber);
-      setIsConnected(event.payload.isConnected);
-    })
+    void listen<{ blockNumber: number; isConnected: boolean }>(
+      "block_number_updated",
+      (event) => {
+        setBlockNumber(event.payload.blockNumber);
+        setIsConnected(event.payload.isConnected);
+      },
+    )
       .then((un) => {
         unlistenBlock = un;
       })
-      .catch((error) => console.error("[TrayPanel] block listener failed:", error));
+      .catch((error) =>
+        console.error("[TrayPanel] block listener failed:", error),
+      );
 
     return () => {
       window.clearInterval(interval);
       unlistenFocus?.();
       unlistenShown?.();
       unlistenSnapshot?.();
+      unlistenChatUnread?.();
       unlistenBlock?.();
     };
   }, [refresh]);
@@ -254,5 +291,15 @@ export function useTrayPanelData() {
     [recentUploads, snapshot.files, retainedCompleted],
   );
 
-  return { menu, feed, snapshot, blockNumber, isConnected, unreadCount, loading, refresh };
+  return {
+    menu,
+    feed,
+    snapshot,
+    blockNumber,
+    isConnected,
+    unreadCount,
+    chatUnread,
+    loading,
+    refresh,
+  };
 }

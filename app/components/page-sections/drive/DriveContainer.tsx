@@ -33,11 +33,17 @@ import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
 import { useDriveScopedSearch } from "@/app/lib/hooks/useDriveScopedSearch";
 import { Pagination } from "@/components/ui/table";
+import {
+  BROWSE_PAGE_SIZE_OPTIONS,
+  shouldShowBrowsePager,
+} from "./browsePager";
+import { browsePageSizeAtom } from "@/app/lib/global-atoms/drivePagingAtoms";
 import type { SortingState } from "@tanstack/react-table";
 import {
   filterCriteriaAreActive,
   isDriveFolderListView,
   isNestedFolderView,
+  shouldHintSearchTermTooShort,
   shouldUseDriveScopedSearch,
   shouldUseRecursiveSearch,
 } from "@/lib/utils/filesViewMode";
@@ -68,7 +74,7 @@ import {
   makeSharedDriveLabel,
   parseSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
   getViewModePreference,
@@ -78,6 +84,9 @@ import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useInvokeQuery } from "@/app/lib/hooks/api/useInvokeQuery";
+import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import { isUploadBlocked } from "@/app/components/page-sections/drive/uploadRoomState";
 import {
   triggerSyncPathRefreshAtom,
   hasConfiguredDrivesAtom,
@@ -98,7 +107,6 @@ import { cn } from "@/app/lib/utils";
  * the fold on a laptop, so the pager is reachable without scrolling to find
  * it. A pager the reader has to hunt for is the problem infinite scroll had.
  */
-const DEFAULT_BROWSE_PAGE_SIZE = 20;
 
 /**
  * Table column id -> the field name `/browse` sorts on.
@@ -164,11 +172,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const handleFolderUploadOpenChange = useCallback((open: boolean) => {
     setIsFolderUploadOpen(open);
     if (!open) setFolderUploadInitialPath(undefined);
-  }, []);
-
-  const handleAddFolderFromDrop = useCallback((path: string) => {
-    setFolderUploadInitialPath(path);
-    setIsFolderUploadOpen(true);
   }, []);
 
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
@@ -256,8 +259,27 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     },
   });
   // `check_action_eligibility` answers Drive actions from the plan's
-  // storage allowance now, not from a credit balance.
-  const isStorageFull = fileUploadEligibility?.eligible === false;
+  // storage allowance now, not from a credit balance. Overview is the
+  // proactive UI gate for access-key / no-plan and at-or-over capacity:
+  // `/can_upload` fail-opens and is polled with 0 bytes, so it alone
+  // left Folder/File/Sync looking live on a no-plan account.
+  const { data: storageOverview } = useStorageOverview();
+  const isStorageFull = isUploadBlocked(
+    storageOverview,
+    fileUploadEligibility?.eligible === false,
+  );
+  const { requireUploadRoom } = useCreditCheck();
+
+  const handleAddFolderFromDrop = useCallback(
+    async (path: string) => {
+      // Overview no-plan / full is checked inside requireUploadRoom; the
+      // polled flag covers the rare case Overview still shows room.
+      if (!(await requireUploadRoom("folder-upload", isStorageFull))) return;
+      setFolderUploadInitialPath(path);
+      setIsFolderUploadOpen(true);
+    },
+    [requireUploadRoom, isStorageFull],
+  );
 
   // Per-drive sync status is owned by Rust and pushed via the
   // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
@@ -458,7 +480,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `useRecursiveFileSearch` for a local one), which spans every nested
   // folder and is not what this pages.
   const [browsePage, setBrowsePage] = useState(1);
-  const [browsePageSize, setBrowsePageSize] = useState(DEFAULT_BROWSE_PAGE_SIZE);
+  // Remembered across navigation and restarts: it used to be `useState`, so
+  // leaving Drive for Overview and coming back put the reader on 20 again
+  // with no indication why. The PAGE number stays local on purpose — which
+  // slice of a folder is a moment, not a preference.
+  const [browsePageSize, setBrowsePageSize] = useAtom(browsePageSizeAtom);
 
   // Sorting lives here, not in the table, because on a remote level the sort
   // is part of the REQUEST. The server orders the whole folder before paging
@@ -695,6 +721,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     remoteLabel: remoteUploadLabel,
     isRecentFiles: Boolean(isRecentFiles),
   });
+  const searchTermTooShort = shouldHintSearchTermTooShort({
+    usesDriveScopedSearch: useRemoteSearch,
+    searchTerm,
+    fileExtension: filterState.fileExtension,
+  });
   const { data: remoteSearchResults, isFetching: isRemoteSearching } =
     useDriveScopedSearch({
       accountId: polkadotAddress,
@@ -754,7 +785,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     1,
     Math.ceil(browseTotalItems / Math.max(1, browsePageSize)),
   );
-  const showBrowsePager = browsePagingActive && browseTotalPages > 1;
+  // Not simply `totalPages > 1`: the size control lives inside the pager, so
+  // that rule left a reader who picked 50 stranded on it the moment a folder
+  // fitted on one page. See `shouldShowBrowsePager`.
+  const showBrowsePager = shouldShowBrowsePager({
+    pagingActive: browsePagingActive,
+    totalPages: browseTotalPages,
+    pageSize: browsePageSize,
+  });
 
   // The rows for the page on screen.
   //
@@ -1216,15 +1254,19 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setShowPrivateStartSyncingSelector(true);
   }, [isRecentFiles, handleNavigateToSettings]);
 
-  // Context menu handlers
+  // Context menu handlers. When storage is blocked the menu items are
+  // disabled (no dialog). Drag-and-drop still explains via requireUploadRoom.
   const handleContextUploadFile = useCallback(() => {
-    addButtonRef.current?.openWithPaths([]);
-  }, []);
+    if (isStorageFull) return;
+    void addButtonRef.current?.open();
+  }, [isStorageFull]);
 
-  const handleContextAddFolder = useCallback(() => {
+  const handleContextAddFolder = useCallback(async () => {
+    if (isStorageFull) return;
+    if (!(await requireUploadRoom("folder-upload", false))) return;
     setFolderUploadInitialPath(undefined);
     setIsFolderUploadOpen(true);
-  }, []);
+  }, [requireUploadRoom, isStorageFull]);
 
   // Open the picker here rather than sending the user to Settings.
   //
@@ -1233,9 +1275,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // different screen and losing the one they were on. Nothing about
   // choosing a folder needs the settings page.
   const [showSyncFolderDialog, setShowSyncFolderDialog] = useState(false);
-  const handleContextAddSyncFolder = useCallback(() => {
+  const handleContextAddSyncFolder = useCallback(async () => {
+    if (isStorageFull) return;
+    if (!(await requireUploadRoom("folder-sync", false))) return;
     setShowSyncFolderDialog(true);
-  }, []);
+  }, [requireUploadRoom, isStorageFull]);
 
   // Breadcrumb / Local-view navigation handlers.
   //
@@ -1812,6 +1856,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        isStorageFull={isStorageFull}
       />
     );
   } else if (
@@ -1830,6 +1875,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        isStorageFull={isStorageFull}
       />
     );
   } else if (isOnLocalView && !isRecentFiles && !isNested && !isRemoteRoot) {
@@ -1844,6 +1890,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        isStorageFull={isStorageFull}
       />
     );
   } else {
@@ -1900,6 +1947,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 // not also be sliced by it.
                 displayedData={browsePageRows ?? visibleData}
                 searchTerm={searchTerm}
+                searchTermTooShort={searchTermTooShort}
                 activeFilters={activeFilters}
                 viewMode={viewMode}
                 error={error}
@@ -1966,8 +2014,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                     currentPage={browsePage}
                     totalPages={browseTotalPages}
                     setPage={setBrowsePage}
+                    totalCount={browseTotalItems}
                     pageSize={browsePageSize}
                     setPageSize={handleBrowsePageSizeChange}
+                    pageSizeOptions={BROWSE_PAGE_SIZE_OPTIONS}
                   />
                 </div>
               ) : null;

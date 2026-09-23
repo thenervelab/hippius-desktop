@@ -1,3 +1,5 @@
+import { isSearchTermTooShort } from "@/app/lib/utils/searchTerm";
+
 /** Search, type/date/size, or the Excluded chip — flatten via recursive search. */
 export function filterCriteriaAreActive(opts: {
   searchTerm?: string;
@@ -59,6 +61,27 @@ export function shouldUseDriveScopedSearch(opts: {
     opts.isRemoteView &&
     Boolean(opts.remoteLabel) &&
     !opts.isRecentFiles
+  );
+}
+
+/**
+ * Whether the drive page should ask for a longer search term instead of
+ * reporting that nothing matched.
+ *
+ * Only the server-backed search has a minimum term length, so a local drive
+ * never shows this. An extension filter keeps the search meaningful without
+ * the term (it runs on the extension alone), so the hint would be wrong there
+ * too: rows are on screen, or the filter itself matched nothing.
+ */
+export function shouldHintSearchTermTooShort(opts: {
+  usesDriveScopedSearch: boolean;
+  searchTerm: string | null | undefined;
+  fileExtension?: string | null;
+}): boolean {
+  return (
+    opts.usesDriveScopedSearch &&
+    isSearchTermTooShort(opts.searchTerm) &&
+    !opts.fileExtension
   );
 }
 

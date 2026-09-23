@@ -30,7 +30,9 @@ const RemoteFolderUploadButton: React.FC<{
   parentPath?: string;
   onUploaded?: () => void;
   className?: string;
-}> = ({ label, parentPath, onUploaded, className }) => {
+  /** No plan / over capacity: disabled, no dialog on click. */
+  storageBlocked?: boolean;
+}> = ({ label, parentPath, onUploaded, className, storageBlocked = false }) => {
   // Same action the right-click menu runs; see `useRemoteUploadActions`.
   const { start: pickAndUpload, busy } = useRemoteFolderUpload({
     label,
@@ -42,9 +44,16 @@ const RemoteFolderUploadButton: React.FC<{
     <Button
       variant="defaultStable"
       size="auto"
-      disabled={busy}
-      title={UPLOAD_FOLDER_HINT}
-      onClick={pickAndUpload}
+      disabled={busy || storageBlocked}
+      title={
+        storageBlocked
+          ? "Storage full. Upgrade your plan to upload."
+          : UPLOAD_FOLDER_HINT
+      }
+      onClick={() => {
+        if (storageBlocked) return;
+        pickAndUpload();
+      }}
       className={cn(
         "h-[30px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
         TOOLBAR_BUTTON_GAP,
