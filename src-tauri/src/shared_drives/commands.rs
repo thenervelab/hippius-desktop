@@ -1210,10 +1210,10 @@ pub async fn list_drive_invites(
         let sealed = invite.sealed_token.as_deref().filter(|s| !s.is_empty());
         invite.link_available = sealed.is_some() && invite.valid;
         invite.invite_url = None;
-        if let (Some(sealed), Some(entropy)) = (sealed, entropy.as_ref()) {
-            if let Some(token) = super::invite_token::open_invite_token(entropy.as_ref(), &invite.invite_id, sealed) {
-                invite.invite_url = Some(build_invite_url(&console_base, &token, entropy));
-            }
+        if let (Some(sealed), Some(entropy)) = (sealed, entropy.as_ref())
+            && let Some(token) = super::invite_token::open_invite_token(entropy.as_ref(), &invite.invite_id, sealed)
+        {
+            invite.invite_url = Some(build_invite_url(&console_base, &token, entropy));
         }
         // Never leave ciphertext on the FE wire.
         invite.sealed_token = None;
