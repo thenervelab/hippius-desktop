@@ -1,12 +1,21 @@
 /**
- * Whether the browsed level's pager is worth drawing.
- *
- * Rows per page. Not a preset in the size control's list, deliberately:
- * `buildPageSizeOptions` merges the size a table opens on into the options,
- * so 20 is offered alongside 10/25/50/100 rather than silently rounding to
- * one of them.
+ * Whether the browsed level's pager is worth drawing, and what sizes it
+ * offers.
  */
+
+/** Rows per page before the reader chooses otherwise. */
 export const DEFAULT_BROWSE_PAGE_SIZE = 20;
+
+/**
+ * The sizes the drive's control offers, the default among them.
+ *
+ * Stated here rather than left to `buildPageSizeOptions`, which merges in
+ * whatever size the table OPENED on. That covered 20 only while the table
+ * always opened on 20; once the choice persisted, a reader who picked 50 was
+ * offered 10/25/50/100 on every later visit with no way back to the default
+ * they started on — it had quietly stopped being one of the options.
+ */
+export const BROWSE_PAGE_SIZE_OPTIONS = [10, DEFAULT_BROWSE_PAGE_SIZE, 25, 50, 100];
 
 export interface BrowsePagerVisibility {
   /** Paging applies to this view at all (not a search result, not Recent). */
