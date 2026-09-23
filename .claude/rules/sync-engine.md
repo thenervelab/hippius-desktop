@@ -61,6 +61,15 @@ A drive in `sync_paths` may be a **member drive** — one that lives in another 
 
 Guard sites are counted by `tests/shared_drive_wiring.rs`, but a new call site it does not know about is not covered — resolve, do not derive.
 
+## Re-keyed drives
+
+`ensure_derived_mnemonic` (`sync/shared/mnemonic.rs`) overwrites a folder seal that does not equal `derive(master, label)` and records a `.needs_rekey` history. Remote files uploaded under the previous key stay on the server, and the ones with no local copy fail to decrypt every cycle (hcfs quarantines them per revision and releases the quarantine when a new revision is uploaded). The previous key is usually recoverable, which is what `sync/fileops/rekey_probe.rs` (`probe_rekey_recovery`, read-only, one metadata listing, no downloads) measures:
+
+- a `RawMasterInFolderSeal` drive's old key is the account master used AS the folder phrase — `encryption_key_from_phrase(master)`, never `derive(master, label)`, which is the NEW key;
+- since hcfs `02191cc`, `save_encrypted_mnemonic` leaves the blob it replaced as `<file>.bak`, so a re-key keeps the previous folder seal on disk as `enc_mnemonic.json.bak`. **Do not retire it on the re-key path** — `retire_key_backup` is for password rotation, and here the `.bak` is the only local copy of the key that opens the stranded files. Pinned by `a_raw_master_rekey_is_recoverable_from_the_master_and_the_backup`.
+
+A key opening a file's `encrypted_path` proves it opens the file: hcfs encrypts the path and the chunks with the same drive key.
+
 ## hcfs-client dependency
 
 The sync engine delegates to `hcfs-client` (from the `hcfs` repo, pinned to a git rev in Cargo.toml). Drive API: `new()`, `init()`, `unlock()`, `sync_async(SyncMode)`, `stage()`, `set_config()`, `set_progress_handlers()`. All file encryption is handled by hcfs-client via BIP-39 mnemonic.

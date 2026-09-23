@@ -538,7 +538,7 @@ pub async fn delete_remote_folder(
     };
 
     // The rekey marker warns that remote revisions under a previous folder key
-    // can never be decrypted here. Those revisions have just been deleted, so
+    // do not open with the drive's current key. Those revisions have just been deleted, so
     // the marker now describes a condition that no longer exists — and unlike
     // every other path, this one can establish that. Leaving it would make the
     // drive warn forever after the user did the one thing that resolves it.
