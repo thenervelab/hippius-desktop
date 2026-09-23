@@ -79,20 +79,28 @@ describe("InsufficientCreditsDialog", () => {
     mockOverview = { source: "none" };
     renderWithReason("file-upload");
 
-    expect(screen.getByText("No storage plan")).toBeInTheDocument();
-    expect(screen.getByText(/subscribe to a plan/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("You don't have a subscription plan"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/permanently deleted after/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /subscribe/i }));
     expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
   });
 
-  // A share uploads a re-encrypted copy the server bills, so a refusal is
-  // about THIS share's size — not a Drive-wide freeze. The old copy said
-  // "new share links are paused", which read as a policy, not a full plan.
-  it("explains a share refusal as this share not fitting", () => {
+  // Share refusals use the same over-quota dialog as uploads: files stay,
+  // uploads pause. The old share-only line read like a policy freeze.
+  it("explains a share refusal with the shared over-quota copy", () => {
+    mockOverview = {
+      source: "subscription",
+      overDisplay: "1.00 GB over your plan",
+    };
     renderWithReason("sharing");
 
-    expect(screen.getByText(/sharing this file would go past the storage your plan includes/i)).toBeInTheDocument();
-    expect(screen.queryByText(/paused/i)).not.toBeInTheDocument();
+    expect(screen.getByText("You're over your plan's storage")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Uploads are paused, your files stay available/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/new share links are paused/i)).not.toBeInTheDocument();
   });
 
   it("keeps VM creation on the credits route", () => {

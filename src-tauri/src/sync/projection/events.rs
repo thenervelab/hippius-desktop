@@ -472,10 +472,7 @@ mod tests {
                 !reason.contains("QuotaDenied") && !reason.contains("402"),
                 "raw variant / status must never reach the user: {reason}"
             );
-            assert!(
-                !reason.to_lowercase().contains("try again"),
-                "retry copy is wrong for quota: {reason}"
-            );
+            assert!(!reason.to_lowercase().contains("try again"), "retry copy is wrong for quota: {reason}");
         }
     }
 

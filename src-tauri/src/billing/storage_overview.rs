@@ -1022,10 +1022,7 @@ mod tests {
         // Raw byte counts stay honest even while the percent clamps.
         assert_eq!(overview.used_bytes, 2000 * BYTES_PER_GB);
         // The card shows how far over rather than a contradictory 100%.
-        assert_eq!(
-            overview.over_display.as_deref(),
-            Some("1.00 TB over your plan")
-        );
+        assert_eq!(overview.over_display.as_deref(), Some("1.00 TB over your plan"));
     }
 
     #[test]
@@ -1040,10 +1037,7 @@ mod tests {
         let overview = build_overview(12_560_000_000, None, None, None, true);
         assert_eq!(overview.source, CapacitySource::Free);
         assert!((overview.percent - 100.0).abs() < 1e-9);
-        assert_eq!(
-            overview.over_display.as_deref(),
-            Some("2.56 GB over your plan")
-        );
+        assert_eq!(overview.over_display.as_deref(), Some("2.56 GB over your plan"));
     }
 
     #[test]
