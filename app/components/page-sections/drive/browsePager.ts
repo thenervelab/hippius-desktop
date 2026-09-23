@@ -14,8 +14,14 @@ export const DEFAULT_BROWSE_PAGE_SIZE = 20;
  * always opened on 20; once the choice persisted, a reader who picked 50 was
  * offered 10/25/50/100 on every later visit with no way back to the default
  * they started on — it had quietly stopped being one of the options.
+ *
+ * No 25: five rows apart from the default of 20, it asks the reader to weigh
+ * a difference they cannot see. The steps that remain each roughly double.
+ * A reader already on 25 keeps it while they are on it — `buildPageSizeOptions`
+ * merges the CURRENT size in, so the control never reads a size it is not
+ * using — and it drops off the list once they leave it.
  */
-export const BROWSE_PAGE_SIZE_OPTIONS = [10, DEFAULT_BROWSE_PAGE_SIZE, 25, 50, 100];
+export const BROWSE_PAGE_SIZE_OPTIONS = [10, DEFAULT_BROWSE_PAGE_SIZE, 50, 100];
 
 export interface BrowsePagerVisibility {
   /** Paging applies to this view at all (not a search result, not Recent). */

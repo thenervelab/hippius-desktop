@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BROWSE_PAGE_SIZE_OPTIONS,
   DEFAULT_BROWSE_PAGE_SIZE,
   MAX_BROWSE_PAGE_SIZE,
   normalizeBrowsePageSize,
@@ -82,5 +83,31 @@ describe("restoring a remembered page size", () => {
 
   it("takes the caller's fallback when one is given", () => {
     expect(normalizeBrowsePageSize("nonsense", 25)).toBe(25);
+  });
+});
+
+describe("the sizes the drive offers", () => {
+  it("always offers the default, whatever is stored", () => {
+    expect(BROWSE_PAGE_SIZE_OPTIONS).toContain(DEFAULT_BROWSE_PAGE_SIZE);
+  });
+
+  // 25 sat five rows from the default of 20 — a difference the reader cannot
+  // see, in a list where every other step roughly doubles.
+  it("offers steps that are worth telling apart", () => {
+    expect(BROWSE_PAGE_SIZE_OPTIONS).toEqual([10, 20, 50, 100]);
+  });
+
+  it("is sorted, with no duplicates", () => {
+    const sorted = [...BROWSE_PAGE_SIZE_OPTIONS].sort((a, b) => a - b);
+    expect(BROWSE_PAGE_SIZE_OPTIONS).toEqual(sorted);
+    expect(new Set(BROWSE_PAGE_SIZE_OPTIONS).size).toBe(BROWSE_PAGE_SIZE_OPTIONS.length);
+  });
+
+  // Every option has to survive a storage round trip, or choosing it once
+  // means opening on the default forever after.
+  it("offers nothing the normaliser would refuse", () => {
+    for (const size of BROWSE_PAGE_SIZE_OPTIONS) {
+      expect(normalizeBrowsePageSize(String(size))).toBe(size);
+    }
   });
 });
