@@ -21,6 +21,15 @@ vi.mock("@/app/lib/utils/links", () => ({
   openLinkByKey: (...a: unknown[]) => openLinkByKey(...a),
 }));
 
+vi.mock("@/app/lib/hooks/api/useStorageOverview", () => ({
+  useStorageOverview: () => ({ data: mockOverview }),
+}));
+
+let mockOverview: {
+  source?: "subscription" | "free" | "none";
+  overDisplay?: string | null;
+} | undefined = { source: "subscription" };
+
 /** Every Drive action is gated on the plan allowance, so all of these must
  *  end up on the plans page. `vm-creation` is the one credit-priced action
  *  and is asserted separately. */
@@ -46,6 +55,7 @@ describe("InsufficientCreditsDialog", () => {
   beforeEach(() => {
     push.mockReset();
     openLinkByKey.mockReset();
+    mockOverview = { source: "subscription" };
   });
 
   // The whole reason `StorageLimitReached` is a separate error kind is that
@@ -57,15 +67,23 @@ describe("InsufficientCreditsDialog", () => {
       renderWithReason(reason);
 
       expect(screen.getByText("Not enough storage")).toBeInTheDocument();
-      // Matched against the CTA's CURRENT wording, or renaming the button
-      // would quietly turn this guard into one that can never fail.
       expect(screen.queryByRole("button", { name: /top up/i })).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole("button", { name: /view plans/i }));
+      fireEvent.click(screen.getByRole("button", { name: /upgrade/i }));
       expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
       expect(openLinkByKey).not.toHaveBeenCalled();
     },
   );
+
+  it("asks an access-key account with no plan to Subscribe", () => {
+    mockOverview = { source: "none" };
+    renderWithReason("file-upload");
+
+    expect(screen.getByText("No storage plan")).toBeInTheDocument();
+    expect(screen.getByText(/subscribe to a plan/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /subscribe/i }));
+    expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
+  });
 
   // A share uploads a re-encrypted copy the server bills, so a refusal is
   // about THIS share's size — not a Drive-wide freeze. The old copy said

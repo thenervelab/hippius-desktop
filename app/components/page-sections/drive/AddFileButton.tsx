@@ -160,21 +160,32 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       setDroppedPaths(null);
     }, []);
 
-    // Handle external events
+    // Handle external events — same gate as the button click so a drop or
+    // empty-state "Upload a File" cannot open the picker on a no-plan or
+    // full account.
     useEffect(() => {
       const handleDroppedFiles = (event: Event) => {
         const customEvent = event as CustomEvent;
         if (customEvent.detail?.files && !isOpen) {
-          setDroppedFiles(customEvent.detail.files);
-          setIsOpen(true);
+          void (async () => {
+            if (!(await requireUploadRoom("file-upload", storageBlocked))) {
+              return;
+            }
+            setDroppedFiles(customEvent.detail.files);
+            setIsOpen(true);
+          })();
         }
       };
 
       const handleOpenModal = () => {
-        if (!isOpen) {
+        if (isOpen) return;
+        void (async () => {
+          if (!(await requireUploadRoom("file-upload", storageBlocked))) {
+            return;
+          }
           setDroppedFiles(null);
           setIsOpen(true);
-        }
+        })();
       };
 
       window.addEventListener(HIPPIUS_DROP_EVENT, handleDroppedFiles);
@@ -184,7 +195,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         window.removeEventListener(HIPPIUS_DROP_EVENT, handleDroppedFiles);
         window.removeEventListener(HIPPIUS_OPEN_MODAL_EVENT, handleOpenModal);
       };
-    }, [isOpen]);
+    }, [isOpen, requireUploadRoom, storageBlocked]);
 
     // Render current step content - memoized to prevent unnecessary re-renders
     const renderStepContent = useMemo(() => {

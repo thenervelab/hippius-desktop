@@ -13,27 +13,39 @@ import { FramedDialog } from "@/components/ui/FramedDialog";
 import { cn } from "@/lib/utils";
 import { openLinkByKey } from "@/app/lib/utils/links";
 import { BILLING_ROUTE } from "@/app/lib/routes";
+import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
+import { getUploadBlockReason } from "./uploadRoomState";
 
-const copy: Record<
-  InsufficientCreditsReason,
-  { title: string; description: string; needsPlan: boolean }
+type StorageDialogCopy = {
+  title: string;
+  description: string;
+  primaryLabel: string;
+  needsPlan: boolean;
+};
+
+const upgradeCopy: Record<
+  Exclude<InsufficientCreditsReason, "vm-creation">,
+  StorageDialogCopy
 > = {
   "file-upload": {
     title: "Not enough storage",
     description:
       "This file would go past the storage your plan includes. Upgrade your plan for more room, or remove some files to free space.",
+    primaryLabel: "Upgrade",
     needsPlan: true,
   },
   "folder-upload": {
     title: "Not enough storage",
     description:
       "This folder would go past the storage your plan includes. Upgrade your plan for more room, or remove some files to free space.",
+    primaryLabel: "Upgrade",
     needsPlan: true,
   },
   "folder-sync": {
     title: "Not enough storage",
     description:
       "Syncing this folder would go past the storage your plan includes. Upgrade your plan for more room, or pick a smaller folder.",
+    primaryLabel: "Upgrade",
     needsPlan: true,
   },
   // A share link uploads a re-encrypted copy of the file, and the server
@@ -43,24 +55,52 @@ const copy: Record<
     title: "Not enough storage",
     description:
       "Sharing this file would go past the storage your plan includes. Upgrade your plan for more room, or free some space.",
+    primaryLabel: "Upgrade",
     needsPlan: true,
   },
-  // VM creation is genuinely credit-priced and keeps the credits route.
-  "vm-creation": {
-    title: "Not enough balance for VM creation",
-    description:
-      "Creating a virtual machine needs at least $10 on your account balance. Top up before proceeding.",
-    needsPlan: false,
-  },
 };
+
+const subscribeCopy: StorageDialogCopy = {
+  title: "No storage plan",
+  description:
+    "Your account has no storage plan, so nothing can be uploaded yet. Subscribe to a plan to get storage — your existing files stay available.",
+  primaryLabel: "Subscribe",
+  needsPlan: true,
+};
+
+const vmCopy: StorageDialogCopy = {
+  title: "Not enough balance for VM creation",
+  description:
+    "Creating a virtual machine needs at least $10 on your account balance. Top up before proceeding.",
+  primaryLabel: "Subscribe",
+  needsPlan: false,
+};
+
+function resolveCopy(
+  reason: InsufficientCreditsReason,
+  isNoPlan: boolean,
+): StorageDialogCopy {
+  if (reason === "vm-creation") return vmCopy;
+  if (isNoPlan) return subscribeCopy;
+  return upgradeCopy[reason];
+}
 
 const InsufficientCreditsDialog: React.FC = () => {
   const [reason, setReason] = useAtom(insufficientCreditsDialogOpenAtom);
   const router = useRouter();
+  const { data: overview } = useStorageOverview();
+  // Prefer Overview's no-plan signal so an access-key account is asked to
+  // Subscribe, not Upgrade — the same distinction the banner already makes.
+  const isNoPlan =
+    getUploadBlockReason(overview) === "no-plan" ||
+    overview?.source === "none";
 
   if (!reason) return null;
 
-  const { title, description, needsPlan } = copy[reason];
+  const { title, description, needsPlan, primaryLabel } = resolveCopy(
+    reason,
+    isNoPlan,
+  );
 
   const handleClose = () => setReason(false);
 
@@ -106,7 +146,7 @@ const InsufficientCreditsDialog: React.FC = () => {
             "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
           )}
         >
-          {needsPlan ? "View plans" : "Subscribe"}
+          {needsPlan ? primaryLabel : "Subscribe"}
         </Button>
         {needsPlan ? (
           <Button

@@ -57,14 +57,14 @@ export function useRemoteFileUpload({
 }: RemoteUploadTarget): RemoteUploadAction {
   const { polkadotAddress } = useWalletAuth();
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
-  const { checkEligibility } = useCreditCheck();
+  const { requireUploadRoom } = useCreditCheck();
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(async () => {
     if (!polkadotAddress || !label || busy) return;
-    // Gate before the OS picker so an over-quota account is not asked to
-    // choose files that will only be refused.
-    if (!(await checkEligibility("file-upload"))) return;
+    // Overview no-plan / full first — /can_upload fail-opens and must not
+    // open the OS picker for an account that cannot upload.
+    if (!(await requireUploadRoom("file-upload"))) return;
 
     const picked = await openSelection({ multiple: true, directory: false });
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
@@ -111,7 +111,7 @@ export function useRemoteFileUpload({
     busy,
     onUploaded,
     setInsufficient,
-    checkEligibility,
+    requireUploadRoom,
   ]);
 
   return { start: () => void run(), busy };
@@ -125,12 +125,12 @@ export function useRemoteFolderUpload({
 }: RemoteUploadTarget): RemoteUploadAction {
   const { polkadotAddress } = useWalletAuth();
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
-  const { checkEligibility } = useCreditCheck();
+  const { requireUploadRoom } = useCreditCheck();
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(async () => {
     if (!polkadotAddress || !label || busy) return;
-    if (!(await checkEligibility("folder-upload"))) return;
+    if (!(await requireUploadRoom("folder-upload"))) return;
 
     const picked = await openSelection({ multiple: false, directory: true });
     const folderPath = Array.isArray(picked) ? picked[0] : picked;
@@ -169,7 +169,7 @@ export function useRemoteFolderUpload({
     busy,
     onUploaded,
     setInsufficient,
-    checkEligibility,
+    requireUploadRoom,
   ]);
 
   return { start: () => void run(), busy };
