@@ -248,6 +248,9 @@ pub struct SearchFilesParams {
     /// [`SEARCH_DEFAULT_LIMIT`] and is clamped to `[1, MAX_LIMIT]`.
     pub offset: Option<usize>,
     pub limit: Option<usize>,
+    /// Exact uploader ss58, or the server's unrecorded sentinel. Selecting an
+    /// uploader alone must still run the search (console #920 / hcfs #374).
+    pub uploaded_by: Option<String>,
 }
 
 /// What the free-text `query` of a search amounts to once the server's
@@ -286,8 +289,9 @@ fn has_narrowing_filter(params: &SearchFilesParams) -> bool {
     let has_extension = params.file_extension.as_deref().is_some_and(|ext| !ext.trim().is_empty());
     let has_size_bound = params.size_min.is_some() || params.size_max.is_some();
     let has_date_bound = params.date_from.is_some() || params.date_to.is_some();
+    let has_uploader = params.uploaded_by.as_deref().is_some_and(|s| !s.trim().is_empty());
 
-    has_extension || has_size_bound || has_date_bound
+    has_extension || has_size_bound || has_date_bound || has_uploader
 }
 
 /// Whether the search can be answered with an empty list without asking the
@@ -356,6 +360,9 @@ fn build_search_query(params: &SearchFilesParams) -> Vec<(&'static str, String)>
     if let Some(so) = trimmed(&params.sort_order) {
         let order = if so.eq_ignore_ascii_case("asc") { "asc" } else { "desc" };
         pairs.push(("sort_order", order.to_string()));
+    }
+    if let Some(uploader) = trimmed(&params.uploaded_by) {
+        pairs.push(("uploaded_by", uploader));
     }
 
     pairs.push(("offset", params.offset.unwrap_or(0).to_string()));

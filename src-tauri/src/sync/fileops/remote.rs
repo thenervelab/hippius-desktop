@@ -925,6 +925,7 @@ pub(crate) fn append_browse_page(
             updated_at: created_at,
             // A folder is not uploaded by anyone; its contents are.
             uploaded_by: None,
+            uploaded_by_name: None,
         });
     }
     for f in page_files {
@@ -958,6 +959,11 @@ pub(crate) fn append_browse_page(
             // an empty string is the same as absent and must not reach the UI
             // as a blank "uploaded by".
             uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
+            uploaded_by_name: f
+                .uploaded_by_name
+                .clone()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         });
     }
 }
@@ -1375,6 +1381,7 @@ mod tests {
         let mut files = Vec::new();
         let attributed = hcfs_shared::network::RemoteFileEntry {
             uploaded_by: Some("5Member".to_string()),
+            uploaded_by_name: Some("Ada".to_string()),
             ..browse_file(Some("theirs.png"), None, 1, 10, 10)
         };
         let blank = hcfs_shared::network::RemoteFileEntry {
@@ -1396,9 +1403,11 @@ mod tests {
         );
 
         assert_eq!(files[0].uploaded_by.as_deref(), Some("5Member"));
+        assert_eq!(files[0].uploaded_by_name.as_deref(), Some("Ada"));
         assert_eq!(files[1].uploaded_by, None, "an empty ss58 is unattributed, not a blank name");
         assert_eq!(files[2].uploaded_by, None);
         assert_eq!(folders[0].uploaded_by, None, "a folder is not uploaded by anyone");
+        assert_eq!(folders[0].uploaded_by_name, None, "a folder is not uploaded by anyone");
     }
 
     /// Wire pin: `FileEntry` is serialized with no `rename_all`, so the FE
