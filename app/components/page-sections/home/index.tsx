@@ -9,6 +9,7 @@ import PageHeader from "./PageHeader";
 import StorageOverviewCard from "./storage-overview";
 import DriveBreakdownCard from "./breakdown/DriveBreakdownCard";
 import NoStoragePlanBanner from "./NoStoragePlanBanner";
+import OverQuotaBanner from "./OverQuotaBanner";
 import Drive from "@/app/components/page-sections/drive/DriveContainer";
 
 const Home: React.FC = () => {
@@ -38,6 +39,7 @@ const Home: React.FC = () => {
                 interrupting for. Renders nothing for an account that has
                 storage. */}
             <NoStoragePlanBanner className="mb-3" />
+            <OverQuotaBanner className="mb-3" />
 
             {/* One card, not two. The Plan card beside this one restated the
                 plan name and the allowance the storage card was already

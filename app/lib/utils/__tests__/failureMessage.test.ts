@@ -57,6 +57,15 @@ describe("failureMessage", () => {
     );
   });
 
+  it("phrases a 402 serverError as storage full, not try again", () => {
+    // QuotaDenied / entitlement 402 — not typed insufficientBalance (credits).
+    // Must read identically to Rust's QUOTA_DENIED_DISPLAY_REASON.
+    const msg = failureMessage({ ...base, kind: "serverError", httpStatus: 402 });
+    expect(msg).toBe("Storage full. Upgrade your plan or free up space.");
+    expect(msg.toLowerCase()).not.toContain("try again");
+    expect(msg).not.toContain("402");
+  });
+
   it("phrases a session-limit 429 as self-resolving, not as too many devices", () => {
     const msg = failureMessage({ ...base, kind: "serverError", httpStatus: 429 });
     expect(msg).toBe("Too many uploads in progress — will retry.");

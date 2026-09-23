@@ -15,6 +15,29 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+### Changed
+
+- **Storage and plan banners on Overview use a button on the right**
+  (Upgrade, See storage plans, Top up). Drive keeps an underlined text
+  link under the banner copy so it does not duplicate the plan-chip
+  Upgrade in the header.
+- **Over-quota banners are red** (same danger treatment as no-plan), on
+  Overview and Drive, for free and paid plans — uploads are paused.
+
+### Fixed
+
+- **Sync Queue when storage is full (HTTP 402).** Failed uploads say
+  "Storage full. Upgrade your plan or free up space." instead of
+  "Server error (402). Please try again." Credits-exhausted failures still
+  show the credits wording. Files added to a sync folder while over quota
+  fail with the same clear message.
+- **Overview and Drive when you have no plan, or you are over Free / paid
+  storage.** File, Folder, and Sync look disabled and do not open a picker
+  or dialog on click. Drag and drop still explains with Subscribe (no plan,
+  including the 30-day deletion notice) or Upgrade (full plan, files stay).
+  Right-click upload items are disabled the same way. Backend write checks
+  remain the last line of defence.
+
 ### Added
 
 - **Drive remembers how many rows you chose.** Pick 50 per page and it stays 50
