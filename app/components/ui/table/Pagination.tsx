@@ -100,43 +100,50 @@ export const Pagination: React.FC<TablePaginationProps> = ({
         )}
       </div>
 
-      {/* Page buttons — center */}
-      <div className="order-1 flex flex-wrap items-center justify-center gap-2 sm:order-2 sm:gap-3">
-        <PaginationButton
-          disabled={currentPage <= 1}
-          onClick={() => setPage(Math.max(1, currentPage - 1))}
-          className="px-0"
-        >
-          <ChevronLeft className="size-4 text-[#6A7282] dark:text-grey-light-100" />
-        </PaginationButton>
+      {/* Page buttons — center.
+          Dropped entirely on a single page: arrows that can never be enabled
+          and a lone "1" are controls with nothing to do. The row still
+          carries the range label and the size control, which is why it can
+          be shown at all on one page — a reader who chose 50 needs the way
+          back to 20 even when everything fits. */}
+      {totalPages > 1 && (
+        <div className="order-1 flex flex-wrap items-center justify-center gap-2 sm:order-2 sm:gap-3">
+          <PaginationButton
+            disabled={currentPage <= 1}
+            onClick={() => setPage(Math.max(1, currentPage - 1))}
+            className="px-0"
+          >
+            <ChevronLeft className="size-4 text-[#6A7282] dark:text-grey-light-100" />
+          </PaginationButton>
 
-        {pageData.map((p, i) =>
-          p < 0 ? (
-            <span
-              key={`${p}-${i}`}
-              className="px-1 text-[14px] font-medium tracking-[-0.28px] text-[rgba(0,0,0,0.47)] dark:text-[#ffffff79]"
-            >
-              ...
-            </span>
-          ) : (
-            <PaginationButton
-              key={p}
-              active={p === currentPage}
-              onClick={() => setPage(p)}
-            >
-              {p}
-            </PaginationButton>
-          ),
-        )}
+          {pageData.map((p, i) =>
+            p < 0 ? (
+              <span
+                key={`${p}-${i}`}
+                className="px-1 text-[14px] font-medium tracking-[-0.28px] text-[rgba(0,0,0,0.47)] dark:text-[#ffffff79]"
+              >
+                ...
+              </span>
+            ) : (
+              <PaginationButton
+                key={p}
+                active={p === currentPage}
+                onClick={() => setPage(p)}
+              >
+                {p}
+              </PaginationButton>
+            ),
+          )}
 
-        <PaginationButton
-          disabled={currentPage >= totalPages}
-          onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
-          className="px-0"
-        >
-          <ChevronRight className="size-4 text-[#6A7282] dark:text-grey-light-100" />
-        </PaginationButton>
-      </div>
+          <PaginationButton
+            disabled={currentPage >= totalPages}
+            onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+            className="px-0"
+          >
+            <ChevronRight className="size-4 text-[#6A7282] dark:text-grey-light-100" />
+          </PaginationButton>
+        </div>
+      )}
 
       {/* Page size + mobile range label — right */}
       <div className="order-3 flex items-center justify-between sm:flex-1 sm:justify-end">

@@ -33,6 +33,10 @@ import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
 import { useDriveScopedSearch } from "@/app/lib/hooks/useDriveScopedSearch";
 import { Pagination } from "@/components/ui/table";
+import {
+  DEFAULT_BROWSE_PAGE_SIZE,
+  shouldShowBrowsePager,
+} from "./browsePager";
 import type { SortingState } from "@tanstack/react-table";
 import {
   filterCriteriaAreActive,
@@ -99,7 +103,6 @@ import { cn } from "@/app/lib/utils";
  * the fold on a laptop, so the pager is reachable without scrolling to find
  * it. A pager the reader has to hunt for is the problem infinite scroll had.
  */
-const DEFAULT_BROWSE_PAGE_SIZE = 20;
 
 /**
  * Table column id -> the field name `/browse` sorts on.
@@ -760,7 +763,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     1,
     Math.ceil(browseTotalItems / Math.max(1, browsePageSize)),
   );
-  const showBrowsePager = browsePagingActive && browseTotalPages > 1;
+  // Not simply `totalPages > 1`: the size control lives inside the pager, so
+  // that rule left a reader who picked 50 stranded on it the moment a folder
+  // fitted on one page. See `shouldShowBrowsePager`.
+  const showBrowsePager = shouldShowBrowsePager({
+    pagingActive: browsePagingActive,
+    totalPages: browseTotalPages,
+    pageSize: browsePageSize,
+  });
 
   // The rows for the page on screen.
   //
@@ -1973,6 +1983,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                     currentPage={browsePage}
                     totalPages={browseTotalPages}
                     setPage={setBrowsePage}
+                    totalCount={browseTotalItems}
                     pageSize={browsePageSize}
                     setPageSize={handleBrowsePageSizeChange}
                   />

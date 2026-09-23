@@ -128,3 +128,39 @@ describe("Pagination page-size control in dark mode", () => {
     }
   });
 });
+
+/**
+ * On a single page the row exists for the size control alone — a reader who
+ * chose 50 must be able to get back to 20 even where everything fits. The
+ * page buttons are not part of that: an arrow that can never be enabled and a
+ * lone "1" are controls with nothing to do.
+ */
+describe("Pagination on a single page", () => {
+  const renderPager = (totalPages: number) =>
+    render(
+      <Pagination
+        currentPage={1}
+        totalPages={totalPages}
+        setPage={vi.fn()}
+        totalCount={40}
+        pageSize={50}
+        setPageSize={vi.fn()}
+      />,
+    );
+
+  it("drops the page buttons", () => {
+    renderPager(1);
+    expect(screen.queryByRole("button", { name: "1" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the size control and the range label", () => {
+    renderPager(1);
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
+    expect(screen.getAllByText("1-40 OUT OF 40").length).toBeGreaterThan(0);
+  });
+
+  it("still draws the buttons once there is a second page", () => {
+    renderPager(2);
+    expect(screen.getByRole("button", { name: "2" })).toBeInTheDocument();
+  });
+});

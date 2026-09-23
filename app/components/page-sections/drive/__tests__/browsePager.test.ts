@@ -22,7 +22,9 @@ describe("the browse pager", () => {
     expect(container).toMatch(
       /browsePagingActive =[\s\S]{0,120}!hasActiveSearchOrFilter/,
     );
-    expect(container).toMatch(/showBrowsePager = browsePagingActive/);
+    expect(container).toMatch(
+      /showBrowsePager = shouldShowBrowsePager\(\{[\s\S]{0,120}pagingActive: browsePagingActive/,
+    );
   });
 
   // Recent Files is a synthetic cross-drive merge with no level to page.
@@ -74,9 +76,19 @@ describe("the browse pager", () => {
     );
   });
 
-  // One page is not worth a control.
-  it("is hidden when everything fits on one page", () => {
-    expect(container).toMatch(/showBrowsePager[\s\S]{0,240}browseTotalPages > 1/);
+  /**
+   * The rule used to be `browseTotalPages > 1` here, which is right only
+   * while the size control is not inside the pager. It is: a reader who
+   * picked 50 and opened a folder of 40 files lost the only way back to 20.
+   * The decision moved to `shouldShowBrowsePager`, which is unit-tested;
+   * this pins that the container asks it rather than growing a second copy
+   * of the rule, and that it hands over the size the answer depends on.
+   */
+  it("asks the shared rule, with the size the rule needs", () => {
+    expect(container).toMatch(
+      /showBrowsePager = shouldShowBrowsePager\(\{[\s\S]{0,200}pageSize: browsePageSize/,
+    );
+    expect(container).not.toMatch(/showBrowsePager[\s\S]{0,80}browseTotalPages > 1/);
   });
 
   // The level's own size, not the rows currently in hand: a remote level
