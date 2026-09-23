@@ -24,11 +24,11 @@ const COLUMN_WIDTHS: Record<string, number> = {
 };
 
 const COLUMN_WIDTHS_WITH_UPLOADER: Record<string, number> = {
-  name: 38,
+  name: 42,
   size: 11,
-  added_by: 14,
-  date_uploaded: 15,
-  type: 14,
+  added_by: 18,
+  date_uploaded: 14,
+  type: 10,
   actions: 5,
 };
 

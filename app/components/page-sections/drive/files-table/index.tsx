@@ -128,11 +128,13 @@ const DEFAULT_COLUMN_WIDTHS_NO_SELECTION = {
   actions: 5,
 };
 
-/** Shared-drive listing: carve room for Added by between Size and Date. */
+/** Shared-drive listing: carve room for Added by between Size and Date.
+ *  `added_by` ~18% ≈ console's `w-40` (10rem) so You/Owner/names and a
+ *  middle-truncated ss58 aren't cramped; header "Added by" stays fully visible. */
 const DEFAULT_COLUMN_WIDTHS_WITH_UPLOADER = {
-  name: 46,
+  name: 42,
   size: 11,
-  added_by: 14,
+  added_by: 18,
   date_uploaded: 14,
   type: 10,
   actions: 5,
@@ -142,7 +144,7 @@ const MIN_COLUMN_WIDTHS = {
   selection: 10,
   name: 23,
   size: 10,
-  added_by: 10,
+  added_by: 14,
   date_uploaded: 14,
   type: 10,
   actions: 5,
@@ -197,7 +199,8 @@ const getStoredBaseColumnWidths = (
     : DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
   if (typeof window === "undefined") return { ...defaults };
   try {
-    const key = `filesTable_baseColumnWidths_v2_${isRecentFiles ? "recent" : "main"}`;
+    // v3: wider Added by default (was 14% in v2 — too narrow for ss58).
+    const key = `filesTable_baseColumnWidths_v3_${isRecentFiles ? "recent" : "main"}`;
     const stored = localStorage.getItem(key);
     if (stored) {
       return normalizeBaseColumnWidths(JSON.parse(stored), showUploadedBy);
@@ -218,7 +221,7 @@ const saveBaseColumnWidths = (
     const baseWidths = { ...columnWidths };
     delete baseWidths.selection;
 
-    const key = `filesTable_baseColumnWidths_v2_${isRecentFiles ? "recent" : "main"}`;
+    const key = `filesTable_baseColumnWidths_v3_${isRecentFiles ? "recent" : "main"}`;
     localStorage.setItem(key, JSON.stringify(baseWidths));
   } catch {}
 };

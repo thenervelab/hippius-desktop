@@ -93,7 +93,9 @@ export default function UploaderCell({
     );
   }
 
-  const label = name ?? middleTruncate(uploadedBy, 22);
+  // 28 chars fits the ~18% Added by column; 22 was too aggressive in the
+  // old skinny cell and still left CSS truncate fighting the middle ellipsis.
+  const label = name ?? middleTruncate(uploadedBy, 28);
   return (
     <CustomTooltip2
       side="bottom"
