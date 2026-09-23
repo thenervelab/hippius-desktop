@@ -15,20 +15,20 @@ Base: `origin/staging`
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Reset search + filters when open drive or folder changes (console #920) | `[ ]` |
-| 2 | Size labels: "Drive size" / "Total size" / "Storage Used" (not "Total Storage") | `[ ]` |
-| 3 | Remove-member confirm names the **drive**, not the member ss58 | `[ ]` |
+| 1 | Reset search + filters when open drive or folder changes (console #920) | `[x]` |
+| 2 | Size labels: "Drive size" inside shared drive; "Storage Used" on own drives (not "Total Storage"). "Total size" on Shared with me list N/A — desktop has no list toolbar totals yet | `[~]` |
+| 3 | Remove-member confirm names the **drive**, not the member ss58 | `[x]` |
 
 ## Batch B — Rust + UI
 
 | # | Item | Status |
 |---|---|---|
-| 4 | Pass through HCFS fields: `member_count`, `owner_name`, member name/email, `uploaded_by_name`, invite creator name | `[ ]` |
-| 5 | Member count beside owner on Shared with me (`Owner · 4 members`); never fake `0` on load failure | `[ ]` |
-| 6 | Shared account-label helper for Shared by, members, remove confirm, Created by, File Details | `[ ]` |
-| 7 | Sharing badge: use listing `member_count`; only fetch invites when members==0 | `[ ]` |
-| 8 | "Added by" filter inside shared drives (`uploaded_by` + member picker + Not recorded) | `[ ]` |
-| 9 | Frozen drives read-only (`frozen` through; hide write actions) | `[ ]` |
+| 4 | Pass through HCFS fields: `member_count`, `owner_name`, member name/email, `uploaded_by_name`, invite `minted_by_name`, `frozen`/`frozen_until` | `[x]` |
+| 5 | Member count beside owner on Shared with me (`Owner · 4 members`); never fake `0` on load failure | `[x]` |
+| 6 | Shared `accountDisplayName` helper for Shared by, members, Created by, File Details | `[x]` |
+| 7 | Sharing badge: use listing `member_count`; only fetch invites when members==0 | `[x]` |
+| 8 | "Added by" filter inside shared drives (`uploaded_by` in Rust search + UI picker) | `[~]` Rust `uploaded_by` search param + narrowing filter done; FE picker / Not recorded UI still TODO |
+| 9 | Frozen drives read-only (`frozen` through; hide write actions via `driveWriteRefusal`) | `[x]` |
 
 ## Batch C — larger
 
@@ -42,14 +42,14 @@ Base: `origin/staging`
 
 | # | Item | Status |
 |---|---|---|
-| 13 | Document `SHARED_DRIVES_ENABLED` vs console create/use split; fix rules doc that says "true on every lane" | `[ ]` |
+| 13 | Document `SHARED_DRIVES_ENABLED` vs console create/use split; fix rules doc that said "true on every lane" | `[x]` Left as one flag (`enabledFrom("beta")`); TODO noted to match console split without silently enabling create on prod |
 
-### Flag decision (draft)
+### Flag decision
 
 - Desktop today: one flag `SHARED_DRIVES_ENABLED = enabledFrom("beta")` (off prod, on beta/staging).
 - Console: `SHARED_DRIVES` (use: on prod) + `SHARED_DRIVES_CREATE` (create: off prod).
-- **Prefer matching console split if straightforward**; otherwise leave TODO and do **not** silently enable create on production.
-- Rules file `.claude/rules/shares-and-shared-drives.md` currently claims the flag is `true` on every lane — that is wrong relative to `featureFlags.ts`.
+- **Prefer matching console split if straightforward**; otherwise leave TODO — do **not** silently enable create on production.
+- Rules file and featureFlags comment corrected.
 
 ## Already done elsewhere (do not redo)
 

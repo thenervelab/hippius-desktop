@@ -112,7 +112,12 @@ export const VM_VPN_ENABLED = false;
  * silently anyway (the backend maps the unmounted routes to
  * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches and hides).
  *
- * **On.** The surface is reachable on every lane, including production.
+ * **Gated to beta** (`enabledFrom("beta")`): off production, on beta/staging.
+ *
+ * Console splits create vs use (`SHARED_DRIVES` on prod for members/invite
+ * accept; `SHARED_DRIVES_CREATE` off prod until launch). Desktop still uses
+ * one flag for both mint and use. Matching that split is a follow-up — do
+ * not silently enable create on production without an explicit decision.
  *
  * Two gates still stand in front of it, which is what makes that safe:
  *
