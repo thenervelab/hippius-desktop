@@ -15,7 +15,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, Copy, Lock, UserRoundPen, Users, X } from "lucide-react";
 import { toast } from "sonner";
@@ -32,6 +32,7 @@ import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   createDriveInviteDialogAtom,
+  folderGrantsFeatureEnabledAtom,
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
@@ -39,10 +40,12 @@ import {
   isSharedDrivesUnavailable,
   listDriveInvites,
   listDriveMembers,
+  listDriveFolderGrants,
   removeDriveMember,
   revokeDriveInvite,
   type DriveInviteInfo,
   type DriveMemberInfo,
+  type DriveFolderGrantInfo,
 } from "@/app/lib/tauri/sharedDrives";
 import {
   deadReasonLabel,
@@ -169,6 +172,7 @@ export default function ShareDrivePanel() {
   const { isDesktop, isLargeDesktop } = useBreakpoint();
 
   const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
+  const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
 
   // Members first: it is what someone opens this for once the drive is
   // already shared, which is the only state it opens in.
@@ -206,9 +210,14 @@ export default function ShareDrivePanel() {
   const loadMembers = useCallback(async (driveLabel: string) => {
     setMembers({ kind: "loading" });
     try {
-      const rows = await listDriveMembers(driveLabel, driveTarget);
+      const [rows, grants] = await Promise.all([
+        listDriveMembers(driveLabel, driveTarget),
+        folderGrantsEnabled
+          ? listDriveFolderGrants(driveLabel, driveTarget).catch(() => [])
+          : Promise.resolve([] as DriveFolderGrantInfo[]),
+      ]);
       if (driveLabel !== currentLabelRef.current) return;
-      setMembers({ kind: "ready", members: rows });
+      setMembers({ kind: "ready", members: rows, folderGrants: grants });
     } catch (err) {
       if (driveLabel !== currentLabelRef.current) return;
       if (isSharedDrivesUnavailable(err)) {
@@ -218,7 +227,7 @@ export default function ShareDrivePanel() {
         setMembers({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [driveTarget]);
+  }, [driveTarget, folderGrantsEnabled]);
 
   const loadInvites = useCallback(async (driveLabel: string) => {
     setInvites({ kind: "loading" });
@@ -277,7 +286,7 @@ export default function ShareDrivePanel() {
       const labelAtCall = label;
       try {
         await removeDriveMember(labelAtCall, memberSs58, driveTarget);
-        toast.success("Member removed");
+        toast.success("Access removed");
         void invalidateOwnedDriveSharing(queryClient);
         await loadMembers(labelAtCall);
       } catch (err) {
@@ -733,6 +742,26 @@ function MembersTab({
   }
 
   const members = state.kind === "ready" ? state.members : [];
+  const folderGrants = state.kind === "ready" ? state.folderGrants : [];
+  // Group grants by holder so one person with two folders is one remove target.
+  const grantsByHolder = new Map<
+    string,
+    { name?: string; email?: string; folders: string[]; createdAt: string }
+  >();
+  for (const g of folderGrants) {
+    const existing = grantsByHolder.get(g.memberSs58);
+    if (existing) {
+      existing.folders.push(g.pathPrefix);
+    } else {
+      grantsByHolder.set(g.memberSs58, {
+        name: g.memberName,
+        email: g.memberEmail,
+        folders: [g.pathPrefix],
+        createdAt: g.createdAt,
+      });
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="mb-3 shrink-0">
@@ -748,7 +777,93 @@ function MembersTab({
             onChangeRole={onChangeRole}
           />
         ))}
+        {grantsByHolder.size > 0 ? (
+          <div className="mt-4">
+            <p className="mb-2 px-0.5 text-[11px] font-medium uppercase tracking-wide text-grey-50 dark:text-grey-dark-600">
+              Folder access
+            </p>
+            {[...grantsByHolder.entries()].map(([ss58, info]) => (
+              <FolderGrantRow
+                key={ss58}
+                memberSs58={ss58}
+                memberName={info.name}
+                folders={info.folders}
+                createdAt={info.createdAt}
+                onRemove={onRemove}
+              />
+            ))}
+          </div>
+        ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * One grant holder in the Folder access section. Remove uses the same
+ * DELETE as a full member — it clears every folder they hold on this drive.
+ */
+function FolderGrantRow({
+  memberSs58,
+  memberName,
+  folders,
+  createdAt,
+  onRemove,
+}: {
+  memberSs58: string;
+  memberName?: string;
+  folders: string[];
+  createdAt: string;
+  onRemove: (memberSs58: string) => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const who = accountDisplayName(memberSs58, memberName);
+
+  return (
+    <div className="flex items-center justify-between gap-2 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <Avatar
+          size={28}
+          name={memberSs58}
+          variant="marble"
+          colors={["#92A1C6", "#146A7C", "#F0AB3D", "#C271B4", "#C20D90"]}
+        />
+        <div className="min-w-0">
+          <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
+            {who}
+          </p>
+          <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
+            {folders.join(", ")}
+            {createdAt ? ` · ${formatJoinedDate(createdAt)}` : ""}
+          </p>
+        </div>
+      </div>
+      <TableActionMenu
+        items={[
+          {
+            icon: <Icons.Trash className="size-4" />,
+            itemTitle: "Remove access",
+            onItemClick: () => setConfirmOpen(true),
+          },
+        ]}
+      />
+      <ConfirmationDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onBack={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          onRemove(memberSs58);
+        }}
+        heading="Remove folder access"
+        icon={<Icons.Trash className="size-4 text-white" />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
+        confirmButtonClassName="text-white"
+        button="Remove"
+        text={`Remove ${who}'s access to ${folders.length === 1 ? `"${folders[0]}"` : "these folders"}?`}
+        helperText="They lose folder access on their next request. Files already downloaded stay on their device."
+      />
     </div>
   );
 }

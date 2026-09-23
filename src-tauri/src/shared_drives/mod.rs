@@ -9,5 +9,6 @@
 //! add/remove/init entry points.
 
 pub mod commands;
+pub mod folder_grant_path;
 pub mod grant;
 pub mod invite_token;

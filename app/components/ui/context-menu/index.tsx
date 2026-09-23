@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Download, Link2, Trash2, FolderOpen, Pencil } from "lucide-react";
+import { Download, Link2, Trash2, FolderOpen, Pencil, FolderInput } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -9,12 +9,18 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   offersShareAction,
+  isMemberDriveLabel,
   FOLDER_SHARE_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderShareGating";
+import {
+  canShareFolderGrant,
+  folderGrantPathPrefix,
+  FOLDER_GRANT_DISABLED_TOOLTIP,
+} from "@/app/lib/utils/folderGrantGating";
 import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
@@ -26,14 +32,13 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
 import {
+  createDriveInviteDialogAtom,
+  folderGrantsFeatureEnabledAtom,
   folderShareFeatureEnabledAtom,
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
-import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
-
-
-
-interface ContextMenuProps {
+import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";interface ContextMenuProps {
   x: number;
   y: number;
   file: FormattedUserFile | null;
@@ -79,6 +84,8 @@ export default function FileContextMenu({
   const { getParam } = useUrlParams();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
+  const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
+  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
 
@@ -259,6 +266,43 @@ export default function FileContextMenu({
               >
                 <Link2 className="size-4" />
                 <span>Share via link</span>
+              </button>
+            )}
+
+          {/* Share folder — folder invite (view-only). Join is console-only. */}
+          {SHARED_DRIVES_ENABLED
+            && file.isFolder
+            && canShareFolderGrant(file, folderGrantsEnabled, memberDriveLabels) && (
+              <button
+                className={menuItemClass}
+                onClick={() => {
+                  if (!file.label) return;
+                  const pathPrefix = folderGrantPathPrefix(file, "");
+                  if (!pathPrefix) return;
+                  setInviteDialogTarget({
+                    label: file.label,
+                    folderName: file.name,
+                    pathPrefix,
+                  });
+                  onClose();
+                }}
+              >
+                <FolderInput className="size-4" />
+                <span>Share folder</span>
+              </button>
+            )}
+
+          {file.isFolder
+            && SHARED_DRIVES_ENABLED
+            && folderGrantsEnabled === false
+            && !isMemberDriveLabel(file.label, memberDriveLabels) && (
+              <button
+                className={cn(menuItemClass, "opacity-60 cursor-not-allowed")}
+                disabled
+                title={FOLDER_GRANT_DISABLED_TOOLTIP}
+              >
+                <FolderInput className="size-4" />
+                <span>Share folder</span>
               </button>
             )}
 

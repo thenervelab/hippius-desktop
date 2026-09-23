@@ -50,13 +50,17 @@ export function inviteRowView(
     revoked: boolean;
     valid: boolean;
     mintedBy?: string;
+    pathPrefix?: string | null;
   },
   now: Date = new Date(),
   /** The reader's own address, so their own links say nothing extra. */
   viewerSs58?: string | null,
 ): InviteRowView {
   const role = driveRoleLabel(parseDriveRole(invite.role));
-  const summary = `${role} · ${invite.useCount} of ${invite.maxUses} used`;
+  const folderBit = invite.pathPrefix?.trim()
+    ? ` · ${invite.pathPrefix.trim()}`
+    : "";
+  const summary = `${role}${folderBit} · ${invite.useCount} of ${invite.maxUses} used`;
 
   const never = isSentinelExpiry(invite.expiresAt, now);
   const expiryDate = new Date(invite.expiresAt);

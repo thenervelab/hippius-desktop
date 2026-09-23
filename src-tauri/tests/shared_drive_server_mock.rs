@@ -705,5 +705,6 @@ fn mint_args(folder_hash: &str) -> MintInvite<'_> {
         max_uses: 5,
         role: "writer",
         owner: None,
+        path_prefix: None,
     }
 }

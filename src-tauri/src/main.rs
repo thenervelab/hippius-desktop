@@ -469,6 +469,8 @@ fn main() {
             // Shared drives (owner invites/members + member add/leave).
             crate::shared_drives::commands::create_drive_invite,
             crate::shared_drives::commands::list_drive_members,
+            crate::shared_drives::commands::list_drive_folder_grants,
+            crate::shared_drives::commands::replace_folder_grants,
             crate::shared_drives::commands::remove_drive_member,
             crate::shared_drives::commands::change_drive_member_role,
             crate::shared_drives::commands::list_drive_invites,
@@ -476,6 +478,7 @@ fn main() {
             crate::shared_drives::commands::list_shared_drive_stats,
             crate::shared_drives::commands::revoke_drive_invite,
             crate::shared_drives::commands::list_my_drive_memberships,
+            crate::shared_drives::commands::list_my_folder_grants,
             crate::shared_drives::commands::leave_shared_drive,
             crate::shared_drives::commands::leave_shared_drive_by_identity,
             crate::shared_drives::commands::add_shared_drive,

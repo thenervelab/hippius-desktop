@@ -75,6 +75,7 @@ vi.mock("@/app/lib/featureFlags", () => ({
 // wrapper module (not raw invoke) keeps the tests on the modal's contract.
 const createDriveInviteMock = vi.fn();
 const listDriveMembersMock = vi.fn();
+const listDriveFolderGrantsMock = vi.fn();
 const removeDriveMemberMock = vi.fn();
 const changeDriveMemberRoleMock = vi.fn();
 const listDriveInvitesMock = vi.fn();
@@ -88,6 +89,8 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     ...original,
     createDriveInvite: (...args: unknown[]) => createDriveInviteMock(...args),
     listDriveMembers: (...args: unknown[]) => listDriveMembersMock(...args),
+    listDriveFolderGrants: (...args: unknown[]) =>
+      listDriveFolderGrantsMock(...args),
     removeDriveMember: (...args: unknown[]) => removeDriveMemberMock(...args),
     changeDriveMemberRole: (...args: unknown[]) =>
       changeDriveMemberRoleMock(...args),
@@ -136,6 +139,7 @@ function renderModal(target: { label: string; folderName: string } | null = { la
 beforeEach(() => {
   vi.clearAllMocks();
   flagState.sharedDrivesEnabled = true;
+  listDriveFolderGrantsMock.mockResolvedValue([]);
 });
 
 

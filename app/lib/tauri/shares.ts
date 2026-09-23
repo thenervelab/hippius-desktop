@@ -37,6 +37,11 @@ export interface ServerCapabilities {
    * Absent on older servers; Rust collapses missing to `false`.
    */
   share_owner_wrap: boolean;
+  /**
+   * Folder grants: share one folder of a shared drive, read-only.
+   * Absent on older servers; Rust collapses missing to `false`.
+   */
+  folder_grants: boolean;
 }
 
 /**

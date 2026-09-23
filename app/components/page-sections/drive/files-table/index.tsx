@@ -31,9 +31,12 @@ import {
   Folder,
   FolderOpen,
   Pencil,
+  FolderInput,
 } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
+  createDriveInviteDialogAtom,
+  folderGrantsFeatureEnabledAtom,
   folderShareFeatureEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
@@ -48,10 +51,17 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   offersShareAction,
+  isMemberDriveLabel,
   FOLDER_SHARE_DISABLED_TOOLTIP,
   shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
+import {
+  canShareFolderGrant,
+  folderGrantPathPrefix,
+  FOLDER_GRANT_DISABLED_TOOLTIP,
+} from "@/app/lib/utils/folderGrantGating";
 import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
@@ -611,9 +621,11 @@ const FilesTable: FC<FilesTableProps> = memo(
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
     const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
+    const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
     // Which of this listing's rows sit in a drive shared WITH this account.
     const memberDriveLabels = useMemberDriveLabels();
     const setShareModalFile = useSetAtom(shareModalFileAtom);
+    const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
     const setRenameModalFile = useSetAtom(renameModalFileAtom);
     const enableFolderExpander = !isRecentFiles;
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
@@ -1123,6 +1135,54 @@ const FilesTable: FC<FilesTableProps> = memo(
                     file.isFolder &&
                     !canShareFolder(file, folderSharesEnabled)
                       ? FOLDER_SHARE_DISABLED_TOOLTIP
+                      : undefined,
+                },
+              ]
+            : []),
+          ...(SHARED_DRIVES_ENABLED &&
+          file.isFolder &&
+          !isMemberDriveLabel(file.label, memberDriveLabels)
+            ? [
+                {
+                  icon: <FolderInput className="size-4" />,
+                  itemTitle: "Share folder",
+                  onItemClick: () => {
+                    if (
+                      !canShareFolderGrant(
+                        file,
+                        folderGrantsEnabled,
+                        memberDriveLabels,
+                      )
+                    ) {
+                      return;
+                    }
+                    if (!file.label) return;
+                    const pathPrefix = folderGrantPathPrefix(
+                      file,
+                      parentSubFolderPath ?? normalizedSubfolderPath ?? "",
+                    );
+                    if (!pathPrefix) return;
+                    setInviteDialogTarget({
+                      label: file.label,
+                      folderName: file.name,
+                      pathPrefix,
+                    });
+                  },
+                  disabled:
+                    itemDeleting ||
+                    !canShareFolderGrant(
+                      file,
+                      folderGrantsEnabled,
+                      memberDriveLabels,
+                    ),
+                  tooltip:
+                    !itemDeleting &&
+                    !canShareFolderGrant(
+                      file,
+                      folderGrantsEnabled,
+                      memberDriveLabels,
+                    )
+                      ? FOLDER_GRANT_DISABLED_TOOLTIP
                       : undefined,
                 },
               ]

@@ -6,6 +6,7 @@
 import type {
   DriveInviteInfo,
   DriveMemberInfo,
+  DriveFolderGrantInfo,
 } from "@/app/lib/tauri/sharedDrives";
 import {
   MANAGER_INVITE_MAX_SECONDS,
@@ -36,7 +37,12 @@ export type InviteState =
 export type MembersState =
   | { kind: "idle" }
   | { kind: "loading" }
-  | { kind: "ready"; members: DriveMemberInfo[] }
+  | {
+      kind: "ready";
+      members: DriveMemberInfo[];
+      /** Folder-grant holders; empty when the server omits them. */
+      folderGrants: DriveFolderGrantInfo[];
+    }
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
 
@@ -78,8 +84,11 @@ export function getMembersView(state: MembersState): MembersView {
     case "idle":
     case "loading":
       return "loading";
-    case "ready":
-      return state.members.length === 0 ? "empty" : "rows";
+    case "ready": {
+      const hasPeople =
+        state.members.length > 0 || state.folderGrants.length > 0;
+      return hasPeople ? "rows" : "empty";
+    }
     case "unavailable":
       return "unavailable";
     case "error":

@@ -228,6 +228,23 @@ fn classify_error_status(status: reqwest::StatusCode, body: &str) -> AppError {
         return AppError::NotReady(NotReadyKind::SharedDrivesNotEntitled);
     }
 
+    // Folder-grant mint / replace: some files under the folder have paths the
+    // server cannot trust to place them there. Match the slug, never English.
+    if status.as_u16() == 409 && envelope.as_ref().is_some_and(|env| env.error == "folder_paths_unreliable") {
+        return AppError::Validation(
+            "Some files in this folder need repair before it can be shared.".into(),
+        );
+    }
+    if status.as_u16() == 409 && envelope.as_ref().is_some_and(|env| env.error == "overlapping_folder_grant") {
+        return AppError::Validation(
+            "This person already has access to this folder, a folder inside it, or a folder around it."
+                .into(),
+        );
+    }
+    if status.as_u16() == 409 && envelope.as_ref().is_some_and(|env| env.error == "already_member") {
+        return AppError::Validation("This person already has access to the whole drive.".into());
+    }
+
     match (status.as_u16(), envelope) {
         (404, None) => AppError::NotReady(NotReadyKind::SharedDrivesUnavailable),
         (404, Some(env)) => AppError::NotFound(env.message),
@@ -258,6 +275,10 @@ pub struct MintInvite<'a> {
     /// Set by a MANAGER minting for a drive they do not own; `None` for an
     /// owner, which the server reads as caller-as-owner.
     pub owner: Option<&'a str>,
+    /// Drive-relative folder for a folder invite. `None` = whole-drive invite.
+    /// When set, the response MUST echo it or the mint is refused (an older
+    /// server ignoring the field would mint a whole-drive invite).
+    pub path_prefix: Option<&'a str>,
 }
 
 /// Token + invite id from a successful mint. The id is `hex(blake3(token))`;
@@ -276,6 +297,7 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
         max_uses,
         role,
         owner,
+        path_prefix,
     } = mint;
     let req = CreateDriveInviteRequest {
         folder_hash: folder_hash.to_string(),
@@ -290,6 +312,7 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
         // server-side, which is what every build before the picker minted --
         // fine as a default, wrong as a silent one now that the user chooses.
         role: Some(role.to_string()),
+        path_prefix: path_prefix.map(str::to_string),
     };
     let resp = http
         .post(format!("{}/v1/drive-invites", base_url.trim_end_matches('/')))
@@ -313,8 +336,25 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
         invite_token: String,
         #[serde(default)]
         invite_id: Option<String>,
+        #[serde(default)]
+        path_prefix: Option<String>,
     }
     let parsed: MintBody = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("create-invite response did not parse: {e}")))?;
+    // A folder mint MUST see its path_prefix echoed. An older server that
+    // ignored the field minted a whole-drive invite; putting a folder key
+    // (or drive entropy) in that link would be wrong both ways.
+    if let Some(asked) = path_prefix {
+        match parsed.path_prefix.as_deref() {
+            Some(echoed) if echoed == asked => {}
+            _ => {
+                return Err(AppError::Validation(
+                    "This server minted a whole-drive invite instead of a folder invite. \
+                     Folder sharing needs a newer HCFS build."
+                        .into(),
+                ));
+            }
+        }
+    }
     let invite_id = parsed
         .invite_id
         .filter(|id| !id.is_empty())
@@ -539,6 +579,10 @@ pub struct DriveInviteInfo {
     /// stand-in when absent.
     #[serde(default, skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
     pub link_available: bool,
+    /// Folder of a folder invite; absent for a whole-drive invite. The Links
+    /// tab must show it, or a folder invite reads as access to everything.
+    #[serde(default, alias = "path_prefix", skip_serializing_if = "Option::is_none")]
+    pub path_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -954,11 +998,16 @@ pub(crate) async fn open_grant_entropy_inner(
         .map_err(|e| AppError::Other(format!("grant-open task failed to join: {e}")))?
 }
 
-/// Mint an invite link for an OWN drive.
+/// Mint an invite link for an OWN drive (or a folder of it).
 ///
-/// The link is assembled here, in Rust: the invite token and the folder-key
-/// entropy exist nowhere else — not in logs, not in another IPC response —
+/// The link is assembled here, in Rust: the invite token and the fragment
+/// key exist nowhere else — not in logs, not in another IPC response —
 /// and the FE only copies the finished URL to the clipboard.
+///
+/// When `path_prefix` is set this is a **folder invite**: always reader /
+/// single-use / ≤30 days, the fragment carries the **derived file key**
+/// (never drive entropy), and a response that does not echo the prefix is
+/// refused. Gated on `capabilities.folder_grants`.
 #[tauri::command]
 pub async fn create_drive_invite(
     app: tauri::AppHandle,
@@ -968,41 +1017,50 @@ pub async fn create_drive_invite(
     role: Option<String>,
     owner_ss58: Option<String>,
     folder_hash: Option<String>,
+    path_prefix: Option<String>,
 ) -> Result<DriveInviteLink> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
     let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
-    // The folder-key entropy the link's fragment carries. The master read is
-    // serialized against password rotation (`recovery_lock`), the sanctioned
-    // accessor discipline for every master-mnemonic consumer. `Zeroizing`
-    // means every return path — including the HTTP error below — scrubs the
-    // entropy by drop, with no manual zeroize choreography to miss.
-    let entropy: Zeroizing<[u8; 32]> = {
-        // The master read is serialized against password rotation
-        // (`recovery_lock`), the sanctioned discipline for every
-        // master-mnemonic consumer. `Zeroizing` means every return path --
-        // including the HTTP error below -- scrubs the entropy by drop.
+    let folder_prefix = match path_prefix {
+        Some(raw) => Some(super::folder_grant_path::folder_grant_path_prefix(&raw)?),
+        None => None,
+    };
+    if folder_prefix.is_some() {
+        let caps = crate::shares::capabilities::fetch_capabilities(&*state, &ctx.account_id).await?;
+        if !caps.folder_grants {
+            return Err(AppError::Validation(
+                "Folder sharing is not enabled on this server.".into(),
+            ));
+        }
+    }
+
+    // Fragment key material. Whole-drive invites carry folder-mnemonic
+    // ENTROPY; folder invites carry the DERIVED file key (`seed[..32]`).
+    // Mixing them up would hand a grant holder the wrong kind of key.
+    let fragment_key: Zeroizing<[u8; 32]> = {
         let _recovery_guard = state.recovery_lock.lock().await;
-        // ONE resolver for the folder key, shared with uploads and renames.
-        // It knows all three sources: this account's master for an own drive,
-        // the OWNER-sealed mnemonic for a member drive synced here, and this
-        // account's own grant for one that never was. The mint used to carry
-        // its own copy of that branch, which read the drive password without
-        // the session mnemonic -- so an encrypted password could not be
-        // decrypted and a manager simply could not mint.
         let mnemonic = crate::sync::remote::session_mnemonic(&state)?;
         let phrase = crate::sync::remote::folder_phrase_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await?;
-        grant::entropy_from_phrase(&phrase)?
+        if folder_prefix.is_some() {
+            let key = crate::sync::remote::encryption_key_from_phrase(&phrase)?;
+            Zeroizing::new(key)
+        } else {
+            grant::entropy_from_phrase(&phrase)?
+        }
     };
 
-    // Omitted parameters resolve to the desktop policy here, not on the
-    // server and not in the FE wrapper — see `resolve_invite_policy`.
-    // Manager caps are clamped (console `createDriveInvite`), not refused:
-    // the ordinary default of 50 uses would otherwise fail every manager mint.
-    let (expires_in_secs, max_uses) = resolve_invite_policy(expires_in_secs, max_uses);
-    let role = resolve_invite_role(role)?;
-    let (expires_in_secs, max_uses) = apply_manager_invite_caps(&role, expires_in_secs, max_uses);
+    let (expires_in_secs, max_uses, role_owned) = if folder_prefix.is_some() {
+        let (secs, _) = resolve_invite_policy(expires_in_secs, max_uses);
+        let (secs, uses, role) = super::folder_grant_path::apply_folder_invite_policy(secs);
+        (secs, uses, role.to_string())
+    } else {
+        let (secs, uses) = resolve_invite_policy(expires_in_secs, max_uses);
+        let role = resolve_invite_role(role)?;
+        let (secs, uses) = apply_manager_invite_caps(&role, secs, uses);
+        (secs, uses, role)
+    };
 
     let http = state.api_client.clone();
     let minted = http_create_invite(
@@ -1013,16 +1071,16 @@ pub async fn create_drive_invite(
             folder_hash: &identity.wire_folder_hash,
             expires_in_secs,
             max_uses,
-            role: &role,
+            role: &role_owned,
             owner: delegated_owner(&identity),
+            path_prefix: folder_prefix.as_deref(),
         },
     )
     .await?;
 
-    // Best-effort seal-back (console `sealMintedToken`): the link is already
-    // usable; failing the mint over a park would trade a working invite for
-    // an error toast. An old server without the route lands the same way.
-    if let Ok(sealed) = super::invite_token::seal_invite_token(entropy.as_ref(), &minted.invite_id, &minted.token) {
+    // Best-effort seal-back: seal under the SAME key the link fragment uses
+    // so the Links tab rebuilds the correct `#k=` on open.
+    if let Ok(sealed) = super::invite_token::seal_invite_token(fragment_key.as_ref(), &minted.invite_id, &minted.token) {
         let _ = http_put_sealed_token(
             &http,
             &ctx.base_url,
@@ -1035,9 +1093,14 @@ pub async fn create_drive_invite(
         .await;
     }
 
-    let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &minted.token, &entropy);
+    let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &minted.token, &fragment_key);
 
-    info!(label = %label, folder_hash = %identity.wire_folder_hash, "Drive invite minted");
+    info!(
+        label = %label,
+        folder_hash = %identity.wire_folder_hash,
+        path_prefix = folder_prefix.as_deref().unwrap_or(""),
+        "Drive invite minted"
+    );
     Ok(DriveInviteLink { invite_url })
 }
 
@@ -1075,6 +1138,197 @@ pub async fn list_drive_members(
             created_at: m.created_at,
             member_name: present_text(m.member_name),
             member_email: present_text(m.member_email),
+        })
+        .collect())
+}
+
+/// One folder grant on a drive, owner/manager view (no grant blob).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveFolderGrantInfo {
+    pub member_ss58: String,
+    pub path_prefix: String,
+    pub role: String,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_email: Option<String>,
+}
+
+/// Folder grants on a drive this account owns or manages — one row per
+/// (holder, folder). Holders never appear in [`list_drive_members`].
+#[tauri::command]
+pub async fn list_drive_folder_grants(
+    app: tauri::AppHandle,
+    label: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<Vec<DriveFolderGrantInfo>> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+
+    let caps = crate::shares::capabilities::fetch_capabilities(&*state, &ctx.account_id).await?;
+    if !caps.folder_grants {
+        return Ok(Vec::new());
+    }
+
+    let resp = http_list_members(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        delegated_owner(&identity),
+    )
+    .await?;
+    Ok(resp
+        .folder_grants
+        .into_iter()
+        .map(|g| DriveFolderGrantInfo {
+            member_ss58: g.member_ss58,
+            path_prefix: g.path_prefix,
+            role: g.role,
+            created_at: g.created_at,
+            member_name: present_text(g.member_name),
+            member_email: present_text(g.member_email),
+        })
+        .collect())
+}
+
+/// Replace the folders a grant holder may read
+/// (`PUT /v1/drives/{fh}/grants/{ss58}`).
+#[tauri::command]
+pub async fn replace_folder_grants(
+    app: tauri::AppHandle,
+    label: String,
+    member_ss58: String,
+    path_prefixes: Vec<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<Vec<String>> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+
+    let caps = crate::shares::capabilities::fetch_capabilities(&*state, &ctx.account_id).await?;
+    if !caps.folder_grants {
+        return Err(AppError::Validation(
+            "Folder sharing is not enabled on this server.".into(),
+        ));
+    }
+
+    let mut normalized = Vec::with_capacity(path_prefixes.len());
+    for raw in &path_prefixes {
+        normalized.push(super::folder_grant_path::folder_grant_path_prefix(raw)?);
+    }
+    if normalized.is_empty() {
+        return Err(AppError::Validation(
+            "At least one folder is required. To remove every grant, remove the person instead."
+                .into(),
+        ));
+    }
+
+    let resp = http_replace_folder_grants(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        &member_ss58,
+        &normalized,
+        delegated_owner(&identity),
+    )
+    .await?;
+    info!(
+        label = %label,
+        folder_hash = %identity.wire_folder_hash,
+        count = resp.path_prefixes.len(),
+        "Folder grants replaced"
+    );
+    Ok(resp.path_prefixes)
+}
+
+/// `PUT /v1/drives/{folder_hash}/grants/{member_ss58}`.
+pub async fn http_replace_folder_grants(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    member_ss58: &str,
+    path_prefixes: &[String],
+    owner: Option<&str>,
+) -> Result<hcfs_shared::network::ReplaceFolderGrantsResponse> {
+    let resp = http
+        .put(with_owner(
+            &format!(
+                "{}/v1/drives/{}/grants/{}",
+                base_url.trim_end_matches('/'),
+                folder_hash,
+                member_ss58
+            ),
+            owner,
+        )?)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .json(&hcfs_shared::network::ReplaceFolderGrantsRequest {
+            path_prefixes: path_prefixes.to_vec(),
+        })
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("replace-folder-grants request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_error_status(status, &body));
+    }
+    serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("replace-folder-grants response did not parse: {e}")))
+}
+
+/// One folder grant held by this account (blob-free for the FE).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyFolderGrantInfo {
+    pub owner_ss58: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
+    pub folder_hash: String,
+    pub display_label: String,
+    pub path_prefix: String,
+    pub role: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub frozen: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frozen_until: Option<String>,
+}
+
+/// Folder grants shared WITH this account — kept apart from whole-drive
+/// memberships so an older FE never treats a grant as the whole drive.
+#[tauri::command]
+pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolderGrantInfo>> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+
+    let caps = crate::shares::capabilities::fetch_capabilities(&*state, &ctx.account_id).await?;
+    if !caps.folder_grants {
+        return Ok(Vec::new());
+    }
+
+    let resp = http_list_memberships(&state.api_client.clone(), &ctx.base_url, &ctx.bearer).await?;
+    Ok(resp
+        .folder_grants
+        .into_iter()
+        .map(|g| MyFolderGrantInfo {
+            owner_ss58: g.owner_ss58,
+            owner_name: present_text(g.owner_name),
+            folder_hash: g.folder_hash,
+            display_label: g.display_label,
+            path_prefix: g.path_prefix,
+            role: g.role,
+            created_at: g.created_at,
+            frozen: g.frozen,
+            frozen_until: present_text(g.frozen_until),
         })
         .collect())
 }
@@ -1191,17 +1445,23 @@ pub async fn list_drive_invites(
     )
     .await?;
 
-    // Drive key for opening sealed tokens. Failure is not fatal to the
-    // listing — rows keep their metadata and show the locked link field.
-    let entropy = {
+    // Drive key for opening sealed tokens. Folder invites are sealed under
+    // the derived file key; whole-drive under folder-mnemonic entropy.
+    // Failure is not fatal to the listing — rows keep their metadata and
+    // show the locked link field.
+    let (entropy, file_key) = {
         let _recovery_guard = state.recovery_lock.lock().await;
         let mnemonic = crate::sync::remote::session_mnemonic(&state).ok();
         match mnemonic {
             Some(mnemonic) => match crate::sync::remote::folder_phrase_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await {
-                Ok(phrase) => grant::entropy_from_phrase(&phrase).ok(),
-                Err(_) => None,
+                Ok(phrase) => {
+                    let entropy = grant::entropy_from_phrase(&phrase).ok();
+                    let file_key = crate::sync::remote::encryption_key_from_phrase(&phrase).ok().map(Zeroizing::new);
+                    (entropy, file_key)
+                }
+                Err(_) => (None, None),
             },
-            None => None,
+            None => (None, None),
         }
     };
 
@@ -1210,10 +1470,15 @@ pub async fn list_drive_invites(
         let sealed = invite.sealed_token.as_deref().filter(|s| !s.is_empty());
         invite.link_available = sealed.is_some() && invite.valid;
         invite.invite_url = None;
-        if let (Some(sealed), Some(entropy)) = (sealed, entropy.as_ref())
-            && let Some(token) = super::invite_token::open_invite_token(entropy.as_ref(), &invite.invite_id, sealed)
+        let open_key: Option<&[u8; 32]> = if invite.path_prefix.is_some() {
+            file_key.as_deref()
+        } else {
+            entropy.as_deref()
+        };
+        if let (Some(sealed), Some(key)) = (sealed, open_key)
+            && let Some(token) = super::invite_token::open_invite_token(key, &invite.invite_id, sealed)
         {
-            invite.invite_url = Some(build_invite_url(&console_base, &token, entropy));
+            invite.invite_url = Some(build_invite_url(&console_base, &token, key));
         }
         // Never leave ciphertext on the FE wire.
         invite.sealed_token = None;
@@ -1982,6 +2247,7 @@ mod tests {
             sealed_token: None,
             invite_url: None,
             link_available: false,
+            path_prefix: None,
         }
     }
 

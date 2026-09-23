@@ -51,6 +51,10 @@ pub struct ServerCapabilities {
     /// `PUT /v1/shares/owner-wraps` and `PUT /v1/folder-shares/owner-wraps`,
     /// plus `owner_wrap` on the owner listings. Absent on older servers.
     pub share_owner_wrap: bool,
+    /// Folder grants: share one folder of a shared drive, read-only
+    /// (`HCFS_FEATURE_FOLDER_GRANTS`). Requires shared drives. Absent on
+    /// older servers and off in prod until clients are ready.
+    pub folder_grants: bool,
 }
 
 /// Hit `<base>/v1/capabilities` once. 404 collapses to a
@@ -151,13 +155,15 @@ mod tests {
 
     #[test]
     fn full_capabilities_shape_round_trips() {
-        let caps: ServerCapabilities =
-            serde_json::from_str(r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true}"#)
-                .expect("parse");
+        let caps: ServerCapabilities = serde_json::from_str(
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true}"#,
+        )
+        .expect("parse");
         assert!(caps.shares);
         assert!(caps.folder_shares);
         assert!(caps.folder_share_revoke_by_hash);
         assert!(caps.share_owner_wrap);
+        assert!(caps.folder_grants);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -166,14 +172,30 @@ mod tests {
         let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
         assert_eq!(
             keys,
-            ["folder_share_revoke_by_hash", "folder_shares", "share_owner_wrap", "shares"]
-                .into_iter()
-                .collect(),
+            [
+                "folder_grants",
+                "folder_share_revoke_by_hash",
+                "folder_shares",
+                "share_owner_wrap",
+                "shares"
+            ]
+            .into_iter()
+            .collect(),
             "capabilities wire keys drifted"
         );
 
         let old: ServerCapabilities =
             serde_json::from_str(r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true}"#).expect("parse old");
         assert!(!old.share_owner_wrap);
+        assert!(!old.folder_grants);
+    }
+
+    /// A pre-folder-grants server omits the field; that must read as unavailable,
+    /// never a parse error — same deployment-skew story as folder_shares.
+    #[test]
+    fn missing_folder_grants_field_defaults_to_false() {
+        let caps: ServerCapabilities =
+            serde_json::from_str(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
+        assert!(!caps.folder_grants);
     }
 }

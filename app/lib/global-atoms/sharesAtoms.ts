@@ -72,6 +72,16 @@ export const folderShareRevokeByHashEnabledAtom = atom((get) => {
 });
 
 /**
+ * Derived: does the connected server support folder grants (share one folder
+ * of a shared drive, read-only)? Hidden until `capabilities.folder_grants`
+ * is confirmed — `null` capabilities collapse to false.
+ */
+export const folderGrantsFeatureEnabledAtom = atom((get) => {
+  const caps = get(serverCapabilitiesAtom);
+  return caps?.folder_grants === true;
+});
+
+/**
  * What `ShareFileModal` is currently sharing. `null` means closed.
  *
  * Storing the file (rather than just `(label, name)`) lets the modal render
@@ -144,6 +154,11 @@ export type ShareDriveModalTarget = {
    */
   ownerSs58?: string;
   folderHash?: string;
+  /**
+   * When set, the create-invite dialog mints a **folder invite** for this
+   * drive-relative path (view-only, single-use). Absent = whole-drive invite.
+   */
+  pathPrefix?: string;
 };
 
 export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);

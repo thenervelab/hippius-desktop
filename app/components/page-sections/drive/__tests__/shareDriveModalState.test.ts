@@ -20,11 +20,28 @@ describe("getMembersView", () => {
   });
 
   it("splits ready into empty vs rows", () => {
-    expect(getMembersView({ kind: "ready", members: [] })).toBe("empty");
+    expect(getMembersView({ kind: "ready", members: [], folderGrants: [] })).toBe(
+      "empty",
+    );
     expect(
       getMembersView({
         kind: "ready",
         members: [{ memberSs58: "5X", role: "writer", createdAt: "2026-08-20T00:00:00Z" }],
+        folderGrants: [],
+      }),
+    ).toBe("rows");
+    expect(
+      getMembersView({
+        kind: "ready",
+        members: [],
+        folderGrants: [
+          {
+            memberSs58: "5Y",
+            pathPrefix: "Work",
+            role: "reader",
+            createdAt: "2026-09-23T00:00:00Z",
+          },
+        ],
       }),
     ).toBe("rows");
   });

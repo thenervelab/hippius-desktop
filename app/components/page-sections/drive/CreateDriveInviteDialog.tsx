@@ -66,6 +66,8 @@ export default function CreateDriveInviteDialog() {
   const [inviteRole, setInviteRole] = useState<DriveRole>("writer");
   const autoCopiedRef = useRef(false);
   const label = target?.label ?? null;
+  const pathPrefix = target?.pathPrefix?.trim() || null;
+  const isFolderInvite = Boolean(pathPrefix);
   const currentLabelRef = useRef<string | null>(null);
   currentLabelRef.current = label;
 
@@ -83,14 +85,15 @@ export default function CreateDriveInviteDialog() {
           ? { kind: "notEntitled" }
           : { kind: "choosing" },
       );
+      // Folder invites are capped at 30 days server-side; default to 7 days.
       setTtlSecs(DEFAULT_INVITE_TTL_SECS);
-      setInviteRole("writer");
+      setInviteRole(isFolderInvite ? "reader" : "writer");
       autoCopiedRef.current = false;
     }
     // `undefined` while the plan is still loading: the dialog opens on the
     // form and the server's own refusal is the backstop, rather than
     // flashing an upgrade prompt at somebody who has already paid.
-  }, [target, planIncludesSharedDrives]);
+  }, [target, planIncludesSharedDrives, isFolderInvite]);
 
   const mintInvite = useCallback(async () => {
     if (!label) return;
@@ -102,17 +105,18 @@ export default function CreateDriveInviteDialog() {
       // exceeding either is a 400. Clamping here (and again in Rust) means the
       // link the user gets is the link the form described, rather than a
       // rejection after the fact — matching console `createDriveInvite`.
-      const isManager = inviteRole === "manager";
-      const effectiveTtl = isManager
-        ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
-        : ttlSecs;
+      // Folder invites are always reader / single-use / ≤30 days in Rust.
+      const isManager = !isFolderInvite && inviteRole === "manager";
+      const effectiveTtl = isFolderInvite
+        ? Math.min(ttlSecs, 30 * 24 * 60 * 60)
+        : isManager
+          ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
+          : ttlSecs;
       const link = await createDriveInvite(labelAtCall, {
         expiresInSecs: effectiveTtl,
-        // Omitted maxUses becomes the ordinary default of 50 in Rust; without
-        // sending 1 here a manager mint used to fail client-side with
-        // "A manager invite can only be used once."
         ...(isManager ? { maxUses: MANAGER_INVITE_MAX_USES } : {}),
-        role: inviteRole,
+        role: isFolderInvite ? "reader" : inviteRole,
+        pathPrefix: pathPrefix ?? undefined,
         // Named only for a drive shared with this account that is not synced
         // here; an own drive's label resolves on its own.
         target:
@@ -135,7 +139,16 @@ export default function CreateDriveInviteDialog() {
         setInvite({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [label, ttlSecs, inviteRole, queryClient, target?.ownerSs58, target?.folderHash]);
+  }, [
+    label,
+    ttlSecs,
+    inviteRole,
+    queryClient,
+    target?.ownerSs58,
+    target?.folderHash,
+    pathPrefix,
+    isFolderInvite,
+  ]);
 
   const handleRoleChange = useCallback((role: DriveRole) => {
     setInviteRole(role);
@@ -185,12 +198,14 @@ export default function CreateDriveInviteDialog() {
       onClose={() => setTarget(null)}
       title={
         <span className="mx-auto flex w-full min-w-0 max-w-full flex-col items-center gap-0.5 px-2">
-          <span className="shrink-0">Invite to</span>
+          <span className="shrink-0">
+            {isFolderInvite ? "Share folder from" : "Invite to"}
+          </span>
           <span
             className="block w-full min-w-0 truncate"
-            title={driveName}
+            title={isFolderInvite ? pathPrefix ?? driveName : driveName}
           >
-            &quot;{driveName}&quot;
+            &quot;{isFolderInvite ? pathPrefix : driveName}&quot;
           </span>
         </span>
       }
@@ -212,6 +227,7 @@ export default function CreateDriveInviteDialog() {
           onTtlChange={setTtlSecs}
           role={inviteRole}
           onRoleChange={handleRoleChange}
+          folderInvite={isFolderInvite}
           onMint={() => void mintInvite()}
           onRetry={() => setInvite({ kind: "choosing" })}
           onClose={() => setTarget(null)}
@@ -227,6 +243,7 @@ function InviteTab({
   onTtlChange,
   role,
   onRoleChange,
+  folderInvite = false,
   onMint,
   onRetry,
   onClose,
@@ -236,6 +253,7 @@ function InviteTab({
   onTtlChange: (secs: number) => void;
   role: DriveRole;
   onRoleChange: (role: DriveRole) => void;
+  folderInvite?: boolean;
   onMint: () => void;
   onRetry: () => void;
   onClose: () => void;
@@ -277,32 +295,41 @@ function InviteTab({
   }
 
   const running = state.kind === "running";
-  const managerCapped = role === "manager";
-  const ttlOptions = inviteTtlOptionsFor(role);
+  const managerCapped = !folderInvite && role === "manager";
+  const ttlOptions = inviteTtlOptionsFor(folderInvite ? "reader" : role).filter(
+    (o) => !folderInvite || o.secs !== NEVER_EXPIRES_SECS,
+  );
   return (
     <div>
-      <div className="mb-5 flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
-          They join as
-        </span>
-        <Select
-          ariaLabel="Invite role"
-          value={role}
-          onValueChange={(value) => onRoleChange(value as DriveRole)}
-          options={DRIVE_ROLES.map((r) => ({
-            label: driveRoleLabel(r),
-            value: r,
-          }))}
-        />
-        <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-          {driveRoleDescription(role)}
+      {folderInvite ? (
+        <p className="mb-5 text-sm text-grey-50 dark:text-grey-dark-600">
+          Creates a view-only, single-use link. The recipient opens it in the
+          console to join — desktop does not accept invite links.
         </p>
-        {managerCapped ? (
-          <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-            Manager links are single use and expire in 24 hours.
+      ) : (
+        <div className="mb-5 flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+            They join as
+          </span>
+          <Select
+            ariaLabel="Invite role"
+            value={role}
+            onValueChange={(value) => onRoleChange(value as DriveRole)}
+            options={DRIVE_ROLES.map((r) => ({
+              label: driveRoleLabel(r),
+              value: r,
+            }))}
+          />
+          <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
+            {driveRoleDescription(role)}
           </p>
-        ) : null}
-      </div>
+          {managerCapped ? (
+            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+              Manager links are single use and expire in 24 hours.
+            </p>
+          ) : null}
+        </div>
+      )}
 
       <div className="mb-6 flex flex-col gap-1.5">
         <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">Invite expires</span>
@@ -316,11 +343,13 @@ function InviteTab({
           }))}
         />
         <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-          {managerCapped
-            ? "A manager link can only be used once and expires within 24 hours — managers can invite and remove people, so the link itself is short-lived."
-            : neverExpires
-              ? `Anyone with the link can join this drive as ${driveRoleLabel(role)} for as long as the link exists. Share it only with people you trust.`
-              : `Anyone with the link can join this drive as ${driveRoleLabel(role)} until the link expires. Share it only with people you trust.`}
+          {folderInvite
+            ? "Anyone with the link can join this folder as a viewer until the link expires. Share it only with people you trust."
+            : managerCapped
+              ? "A manager link can only be used once and expires within 24 hours — managers can invite and remove people, so the link itself is short-lived."
+              : neverExpires
+                ? `Anyone with the link can join this drive as ${driveRoleLabel(role)} for as long as the link exists. Share it only with people you trust.`
+                : `Anyone with the link can join this drive as ${driveRoleLabel(role)} until the link expires. Share it only with people you trust.`}
         </p>
       </div>
 

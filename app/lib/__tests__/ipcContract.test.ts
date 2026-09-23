@@ -255,6 +255,9 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
     const required = [
       "create_drive_invite",
       "list_drive_members",
+      "list_drive_folder_grants",
+      "replace_folder_grants",
+      "list_my_folder_grants",
       "remove_drive_member",
       "list_my_drive_memberships",
       "leave_shared_drive",

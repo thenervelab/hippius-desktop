@@ -114,6 +114,11 @@ export async function createDriveInvite(
     maxUses?: number;
     role?: DriveRole;
     target?: DriveTarget;
+    /**
+     * Drive-relative folder for a folder invite. When set, Rust forces
+     * reader / single-use / ≤30 days and puts the derived file key in `#k=`.
+     */
+    pathPrefix?: string;
   },
 ): Promise<DriveInviteLink> {
   return invoke<DriveInviteLink>("create_drive_invite", {
@@ -121,6 +126,7 @@ export async function createDriveInvite(
     expiresInSecs: opts?.expiresInSecs,
     maxUses: opts?.maxUses,
     role: opts?.role,
+    pathPrefix: opts?.pathPrefix ?? null,
     ...targetArgs(opts?.target),
   });
 }
@@ -132,6 +138,48 @@ export async function listDriveMembers(
 ): Promise<DriveMemberInfo[]> {
   return invoke<DriveMemberInfo[]>("list_drive_members", {
     label,
+    ...targetArgs(target),
+  });
+}
+
+/** One folder grant on a drive (owner/manager view). */
+export interface DriveFolderGrantInfo {
+  memberSs58: string;
+  pathPrefix: string;
+  role: string;
+  createdAt: string;
+  memberName?: string;
+  memberEmail?: string;
+}
+
+/**
+ * Folder grants on a drive this account owns or manages. Empty when the
+ * server does not advertise `folder_grants`.
+ */
+export async function listDriveFolderGrants(
+  label: string,
+  target?: DriveTarget,
+): Promise<DriveFolderGrantInfo[]> {
+  return invoke<DriveFolderGrantInfo[]>("list_drive_folder_grants", {
+    label,
+    ...targetArgs(target),
+  });
+}
+
+/**
+ * Replace the folders a grant holder may read. Removing every grant is
+ * {@link removeDriveMember} instead.
+ */
+export async function replaceFolderGrants(
+  label: string,
+  memberSs58: string,
+  pathPrefixes: string[],
+  target?: DriveTarget,
+): Promise<string[]> {
+  return invoke<string[]>("replace_folder_grants", {
+    label,
+    memberSs58,
+    pathPrefixes,
     ...targetArgs(target),
   });
 }
@@ -213,6 +261,11 @@ export interface DriveInviteInfo {
    * stand-in when absent.
    */
   linkAvailable?: boolean;
+  /**
+   * Folder of a folder invite; absent for a whole-drive invite. The Links
+   * tab must show it, or a folder invite reads as access to everything.
+   */
+  pathPrefix?: string;
 }
 
 /** The live invites for an OWN drive. */
