@@ -20,9 +20,12 @@ vi.mock("@/components/ui/SyncFolderSelect", () => ({
   ),
 }));
 
-function renderOpen(resumeMode: "area" | "window" | "screen" | null) {
+function renderOpen(
+  resumeMode: "area" | "window" | "screen" | null,
+  resumeKind: "screenshot" | "recording" | null = resumeMode ? "screenshot" : null,
+) {
   const store = createStore();
-  store.set(captureDialogAtom, { kind: "destination", resumeMode });
+  store.set(captureDialogAtom, { kind: "destination", resumeKind, resumeMode });
   render(
     <Provider store={store}>
       <CaptureDestinationDialog />

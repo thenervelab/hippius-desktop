@@ -17,22 +17,19 @@ import {
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 /**
- * Choose which drive screenshots are filed in. Opens on the first capture
- * (and resumes it once a drive is chosen), and from Settings to change it.
- *
- * Uses the same `SyncFolderSelect` every upload uses, cloud-only drives
- * included — a capture is uploaded straight to the server, so the drive does
- * not need to be synced here. Captures go into a `Captures` folder inside it.
+ * Choose which drive screenshots and recordings are filed in. Opens on the
+ * first capture (and resumes it once a drive is chosen), and from the Capture
+ * menu to change it.
  */
 export default function CaptureDestinationDialog() {
   const [dialog, setDialog] = useAtom(captureDialogAtom);
   const open = dialog?.kind === "destination";
+  const resumeKind = open ? dialog.resumeKind : null;
   const resumeMode = open ? dialog.resumeMode : null;
   const [label, setLabel] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const startCapture = useStartCapture();
 
-  // Open on the drive already chosen, so "change" starts from the current one.
   useEffect(() => {
     if (!open) return;
     getCaptureDestination()
@@ -48,8 +45,8 @@ export default function CaptureDestinationDialog() {
     try {
       await setCaptureDestination({ label, displayName: label });
       setDialog(null);
-      if (resumeMode) {
-        void startCapture(resumeMode);
+      if (resumeKind && resumeMode) {
+        void startCapture(resumeKind, resumeMode);
       } else {
         toast.success(`Captures will be saved to ${label}`);
       }
@@ -69,8 +66,9 @@ export default function CaptureDestinationDialog() {
     >
       <div className="flex flex-col gap-5">
         <p className="text-sm text-grey-50 dark:text-grey-dark-600">
-          Screenshots are saved to a <span className="font-semibold">Captures</span>{" "}
-          folder in this drive, and a share link is copied so you can paste it straight away.
+          Screenshots and recordings are saved to a{" "}
+          <span className="font-semibold">Captures</span> folder in this drive,
+          and a share link is copied so you can paste it straight away.
         </p>
 
         <SyncFolderSelect

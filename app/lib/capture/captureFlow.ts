@@ -1,5 +1,5 @@
 import { atom } from "jotai";
-import type { CaptureMode } from "@/app/lib/tauri/capture";
+import type { CaptureKind, CaptureMode } from "@/app/lib/tauri/capture";
 import {
   isCaptureDestinationUnset,
   isScreenRecordingPermissionMissing,
@@ -11,17 +11,21 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
  * start a capture — the Drive header, the tray, the shortcut — lands the user
  * in the same dialog, mounted once by `CaptureHost`.
  *
- * The destination dialog carries the mode it interrupted, so choosing a drive
- * carries straight on into that capture instead of making the user start over.
+ * The destination dialog carries the kind+mode it interrupted, so choosing a
+ * drive carries straight on into that capture instead of making the user start
+ * over.
  */
 export type CaptureDialog =
-  | { kind: "destination"; resumeMode: CaptureMode | null }
+  | { kind: "destination"; resumeKind: CaptureKind | null; resumeMode: CaptureMode | null }
   | { kind: "permission" };
 
 export const captureDialogAtom = atom<CaptureDialog | null>(null);
 
-/** Whether this build and platform can capture, from Rust's `capture_support`. */
+/** Whether this build and platform can capture screenshots, from Rust. */
 export const captureSupportedAtom = atom<boolean>(false);
+
+/** Whether Record actions should be offered (macOS helper present). */
+export const captureRecordingAtom = atom<boolean>(false);
 
 /** What `capture_start`'s refusal asks the UI to do next. */
 export type CaptureRefusal =

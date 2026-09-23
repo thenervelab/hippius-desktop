@@ -15,6 +15,9 @@ export type CapturePhase =
   | { phase: "idle" }
   | { phase: "selecting"; kind: CaptureKind; mode: CaptureMode }
   | { phase: "capturing"; kind: CaptureKind }
+  | { phase: "recording"; elapsedSecs: number; microphone: boolean }
+  | { phase: "paused"; elapsedSecs: number; microphone: boolean }
+  | { phase: "finalizing" }
   | { phase: "delivering"; kind: CaptureKind };
 
 /** A selection rectangle in the overlay's own CSS pixels (logical points). */
@@ -41,6 +44,7 @@ export interface CaptureWindowTarget extends LogicalRect {
 export interface CaptureOverlayContext {
   mode: CaptureMode;
   displayId: number;
+  kind: CaptureKind;
   /** Front first; empty outside window mode. */
   windows: CaptureWindowTarget[];
 }
@@ -62,6 +66,7 @@ export interface CaptureDelivered {
 
 export interface CaptureSupport {
   supported: boolean;
+  recording: boolean;
   screenRecordingPermission: boolean;
 }
 
@@ -79,6 +84,18 @@ export function getCaptureOverlayContext(displayId: number): Promise<CaptureOver
 
 export function selectCapture(selection: CaptureSelection): Promise<void> {
   return invoke("capture_select", { selection });
+}
+
+export function pauseCapture(): Promise<void> {
+  return invoke("capture_pause");
+}
+
+export function resumeCapture(): Promise<void> {
+  return invoke("capture_resume");
+}
+
+export function stopCapture(): Promise<void> {
+  return invoke("capture_stop");
 }
 
 export function cancelCapture(): Promise<void> {

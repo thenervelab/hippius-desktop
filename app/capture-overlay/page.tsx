@@ -36,9 +36,9 @@ const DIM = "rgba(0, 0, 0, 0.38)";
 const FRAME = "#3167DD";
 
 const HINTS = {
-  area: "Drag to capture an area",
-  window: "Click a window to capture it",
-  screen: "Click to capture this screen",
+  area: { screenshot: "Drag to capture an area", recording: "Drag to record an area" },
+  window: { screenshot: "Click a window to capture it", recording: "Click a window to record it" },
+  screen: { screenshot: "Click to capture this screen", recording: "Click to record this screen" },
 } as const;
 
 function displayIdFromLocation(): number | null {
@@ -86,7 +86,7 @@ export default function CaptureOverlayPage() {
   }, []);
 
   if (!context) return null;
-  const { mode, displayId } = context;
+  const { mode, displayId, kind } = context;
 
   const pointFrom = (e: React.PointerEvent): Point => ({ x: e.clientX, y: e.clientY });
 
@@ -158,7 +158,7 @@ export default function CaptureOverlayPage() {
       )}
 
       <div className="pointer-events-none absolute left-1/2 top-6 -translate-x-1/2 rounded-full bg-black/80 px-4 py-2 text-sm text-white shadow-lg">
-        {HINTS[mode]}
+        {HINTS[mode][kind]}
         <span className="ml-3 text-white/60">Esc to cancel</span>
       </div>
     </div>

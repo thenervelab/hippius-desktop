@@ -180,7 +180,7 @@ export const REFERRALS_FEATURE_ENABLED = false;
 export const REFERRALS_COMING_SOON = true;
 
 /**
- * Screen capture: screenshots (and, later, recordings) of an area, a window
+ * Screen capture: screenshots and (on macOS) recordings of an area, a window
  * or a whole screen, filed in the user's drive with a share link copied.
  * Hides the Drive header's Capture menu, the tray's capture actions and the
  * Settings card. The platform half is Rust's (`capture_support`): Linux
