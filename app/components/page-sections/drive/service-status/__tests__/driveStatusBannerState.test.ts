@@ -158,12 +158,13 @@ describe("the no-plan banner is shared, not copied", () => {
 describe("an account past its free or plan allowance", () => {
   const over = "2.56 GB over your plan";
 
-  it("warns that uploads are paused and files stay", () => {
+  it("uses danger tone: uploads are paused and files stay", () => {
     const free = getOverQuotaBanner({
       capacitySource: "free",
       overDisplay: over,
     });
-    expect(free?.tone).toBe("warning");
+    // Same red treatment as no-plan — a hard upload block, not a soft warn.
+    expect(free?.tone).toBe("danger");
     expect(free?.title).toMatch(/over your free storage/i);
     expect(free?.description).toMatch(/uploads are paused/i);
     expect(free?.description).toMatch(/files stay available/i);
@@ -175,6 +176,7 @@ describe("an account past its free or plan allowance", () => {
       capacitySource: "subscription",
       overDisplay: over,
     });
+    expect(paid?.tone).toBe("danger");
     expect(paid?.title).toMatch(/over your plan/i);
     expect(paid?.description).toMatch(/larger plan/i);
   });

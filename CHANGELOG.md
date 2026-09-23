@@ -17,10 +17,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
-- **Storage and plan banners use a button on the right** (Upgrade, See
-  storage plans, Top up) instead of an underlined text link under the
-  body copy. Same layout on Overview, Drive, and other StatusBanner
-  surfaces.
+- **Storage and plan banners on Overview use a button on the right**
+  (Upgrade, See storage plans, Top up). Drive keeps an underlined text
+  link under the banner copy so it does not duplicate the plan-chip
+  Upgrade in the header.
+- **Over-quota banners are red** (same danger treatment as no-plan), on
+  Overview and Drive, for free and paid plans — uploads are paused.
 
 ### Fixed
 
@@ -32,10 +34,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   remain the last line of defence.
 
 ### Added
-
-- **Dev-only storage overview panel** (development builds): simulate no-plan,
-  free under/over, and paid under/over without switching accounts. See
-  `docs/testing-storage-quota-ux.md`.
 
 - **Team chat: end-to-end encrypted channels and direct messages with your
   Hippius account, in the app.** Sign in with your Hippius account (no password

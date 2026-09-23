@@ -7,12 +7,13 @@ import { StatusBanner } from "@/app/components/page-sections/drive/service-statu
 import { getOverQuotaBanner } from "@/app/components/page-sections/drive/service-status/driveStatusBannerState";
 
 /**
- * Warning bar above the Overview storage card when usage exceeds the
+ * Red danger bar above the Overview storage card when usage exceeds the
  * free allowance or a paid plan (typically after a downgrade).
  *
- * Files stay; uploads pause. Distinct from {@link NoStoragePlanBanner},
- * which is the access-key "no plan" path. Renders nothing when the
- * account is within capacity.
+ * Files stay; uploads pause. Same danger treatment as no-plan — a hard
+ * upload block, not a soft billing warn. Distinct from
+ * {@link NoStoragePlanBanner}, which is the access-key "no plan" path.
+ * Renders nothing when the account is within capacity.
  */
 const OverQuotaBanner: React.FC<{ className?: string }> = ({ className }) => {
   const { data: overview } = useStorageOverview();

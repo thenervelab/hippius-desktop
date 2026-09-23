@@ -88,9 +88,11 @@ export function getOverQuotaBanner(input: {
     return null;
   }
 
+  // Danger (red), same as no-plan: uploads are hard-blocked. Warning
+  // (amber) is reserved for billing soft states like past_due / canceled.
   if (capacitySource === "free") {
     return {
-      tone: "warning",
+      tone: "danger",
       title: "You're over your free storage",
       description:
         "Uploads are paused, your files stay available. Upgrade or free up space.",
@@ -99,7 +101,7 @@ export function getOverQuotaBanner(input: {
   }
 
   return {
-    tone: "warning",
+    tone: "danger",
     title: "You're over your plan's storage",
     description:
       "Uploads are paused, your files stay available. Upgrade to a larger plan or free up space.",

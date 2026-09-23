@@ -24,16 +24,26 @@ describe("the drive status banner matches the console's", () => {
     expect(banner).toMatch(/badge:\s*"bg-primary-50 text-white"/);
   });
 
-  // Right-side primary button, same placement as ConflictsBanner /
-  // CreditsExhaustedBanner. The body copy stays instructional; the CTA
-  // is the button, not an underlined text link under the description.
-  it("offers its action as a right-side button", () => {
+  // StatusBanner supports both CTA modes: Overview keeps a right-side
+  // primary button (default); Drive passes actionAsButton={false} so the
+  // plan-chip Upgrade is not duplicated by a second filled button.
+  it("supports a right-side button CTA for Overview", () => {
+    expect(banner).toMatch(/actionAsButton/);
+    expect(banner).toMatch(/actionAsButton = true/);
     expect(banner).toMatch(/<Button/);
     expect(banner).toMatch(/asLink/);
     expect(banner).toMatch(/variant="primary"/);
     expect(banner).toMatch(/banner\.action/);
-    expect(banner).not.toMatch(/underline underline-offset-2/);
-    expect(banner).not.toMatch(/from "next\/link"/);
+  });
+
+  it("Drive uses an underlined text link instead of a button", () => {
+    expect(banner).toMatch(/actionAsButton=\{false\}/);
+    expect(banner).toMatch(/from "next\/link"/);
+    expect(banner).toMatch(/underline underline-offset-2/);
+    expect(banner).toMatch(/styles\.action/);
+    expect(banner).toMatch(/action:\s*"text-primary-50 hover:text-primary-40"/);
+    expect(banner).toMatch(/action:\s*"text-warning-50 hover:text-warning-40"/);
+    expect(banner).toMatch(/action:\s*"text-error-50 hover:text-error-40"/);
   });
 
   // A plan still provisioning resolves on its own, so the badge shows
