@@ -33,6 +33,11 @@ import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
 import { useDriveScopedSearch } from "@/app/lib/hooks/useDriveScopedSearch";
 import { Pagination } from "@/components/ui/table";
+import {
+  BROWSE_PAGE_SIZE_OPTIONS,
+  shouldShowBrowsePager,
+} from "./browsePager";
+import { browsePageSizeAtom } from "@/app/lib/global-atoms/drivePagingAtoms";
 import type { SortingState } from "@tanstack/react-table";
 import {
   filterCriteriaAreActive,
@@ -69,7 +74,7 @@ import {
   makeSharedDriveLabel,
   parseSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
   getViewModePreference,
@@ -99,7 +104,6 @@ import { cn } from "@/app/lib/utils";
  * the fold on a laptop, so the pager is reachable without scrolling to find
  * it. A pager the reader has to hunt for is the problem infinite scroll had.
  */
-const DEFAULT_BROWSE_PAGE_SIZE = 20;
 
 /**
  * Table column id -> the field name `/browse` sorts on.
@@ -459,7 +463,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `useRecursiveFileSearch` for a local one), which spans every nested
   // folder and is not what this pages.
   const [browsePage, setBrowsePage] = useState(1);
-  const [browsePageSize, setBrowsePageSize] = useState(DEFAULT_BROWSE_PAGE_SIZE);
+  // Remembered across navigation and restarts: it used to be `useState`, so
+  // leaving Drive for Overview and coming back put the reader on 20 again
+  // with no indication why. The PAGE number stays local on purpose — which
+  // slice of a folder is a moment, not a preference.
+  const [browsePageSize, setBrowsePageSize] = useAtom(browsePageSizeAtom);
 
   // Sorting lives here, not in the table, because on a remote level the sort
   // is part of the REQUEST. The server orders the whole folder before paging
@@ -760,7 +768,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     1,
     Math.ceil(browseTotalItems / Math.max(1, browsePageSize)),
   );
-  const showBrowsePager = browsePagingActive && browseTotalPages > 1;
+  // Not simply `totalPages > 1`: the size control lives inside the pager, so
+  // that rule left a reader who picked 50 stranded on it the moment a folder
+  // fitted on one page. See `shouldShowBrowsePager`.
+  const showBrowsePager = shouldShowBrowsePager({
+    pagingActive: browsePagingActive,
+    totalPages: browseTotalPages,
+    pageSize: browsePageSize,
+  });
 
   // The rows for the page on screen.
   //
@@ -1973,8 +1988,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                     currentPage={browsePage}
                     totalPages={browseTotalPages}
                     setPage={setBrowsePage}
+                    totalCount={browseTotalItems}
                     pageSize={browsePageSize}
                     setPageSize={handleBrowsePageSizeChange}
+                    pageSizeOptions={BROWSE_PAGE_SIZE_OPTIONS}
                   />
                 </div>
               ) : null;
