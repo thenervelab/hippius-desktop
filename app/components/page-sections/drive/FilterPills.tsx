@@ -4,6 +4,7 @@ import React from "react";
 import FileExtensionSelector from "./filter-dialog-content/FileExtensionSelector";
 import DateRangeSelector from "./filter-dialog-content/DateRangeSelector";
 import EnhancedFileSizeSelector from "./filter-dialog-content/EnhancedFileSizeSelector";
+import AddedByFilter from "./AddedByFilter";
 import { cn } from "@/app/lib/utils";
 import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
 import type { DateRange } from "@/app/lib/types/dateRange";
@@ -21,14 +22,17 @@ interface FilterPillsProps {
    *  `shouldOfferExcludedFilter`. A drive that excludes nothing gets a
    *  filter that can only ever return nothing. */
   showExcludedFilter?: boolean;
+  /** Shared-drive "Added by" picker — only when the open drive is shared. */
+  addedByOptions?: Array<{ ss58: string; label: string }>;
+  selectedUploadedBy?: string;
+  onUploadedByChange?: (ss58: string | undefined) => void;
   className?: string;
 }
 
 /**
  * Filter pills row above the files table. Hosts the three console-style
  * selectors: File Type (specific extension), File Size (range buckets),
- * Date Range. Each selector owns its own dropdown — this component is
- * just a layout wrapper.
+ * Date Range — plus "Added by" inside a shared drive.
  */
 const FilterPills: React.FC<FilterPillsProps> = ({
   selectedFileExtension,
@@ -40,6 +44,9 @@ const FilterPills: React.FC<FilterPillsProps> = ({
   onFileSizesChange,
   onExcludedOnlyChange,
   showExcludedFilter = false,
+  addedByOptions,
+  selectedUploadedBy,
+  onUploadedByChange,
   className = "",
 }) => {
   return (
@@ -58,6 +65,14 @@ const FilterPills: React.FC<FilterPillsProps> = ({
         selectedRange={selectedDateRange}
         onRangeSelect={onDateRangeChange}
       />
+
+      {addedByOptions && onUploadedByChange ? (
+        <AddedByFilter
+          options={addedByOptions}
+          value={selectedUploadedBy}
+          onChange={onUploadedByChange}
+        />
+      ) : null}
 
       {onExcludedOnlyChange && showExcludedFilter && (
         <button

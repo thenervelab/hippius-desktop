@@ -67,13 +67,19 @@ import {
 } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
-import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useUploaderOptions } from "./AddedByFilter";
+import {
+  useMemberDriveLabels,
+  useSharedDriveMembership,
+  useSharedDriveMembershipByIdentity,
+} from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
 import {
   makeSharedDriveLabel,
   parseSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
+import { isMemberDriveLabel } from "@/app/lib/utils/folderShareGating";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
@@ -223,11 +229,28 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     fileSize: 0,
     fileSizes: [] as number[],
     excludedOnly: false,
+    uploadedBy: undefined as string | undefined,
     lastUpdated: Date.now(),
   });
 
   // Active filters state
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
+
+  // Console #920 parity: leaving a drive or folder must not carry its
+  // search/filters into the next one. Keyed on the open location so every
+  // navigation path (breadcrumb, cards, nested URL) clears the same way.
+  const clearSearchAndFilters = useCallback(() => {
+    setSearchTerm("");
+    setFilterState({
+      fileExtension: undefined,
+      dateRange: undefined,
+      fileSize: 0,
+      fileSizes: [],
+      excludedOnly: false,
+      uploadedBy: undefined,
+      lastUpdated: Date.now(),
+    });
+  }, []);
 
   // State to track if sync folder is configured
   const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<
@@ -518,6 +541,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     if (browsePage !== 1) setBrowsePage(1);
   }
 
+  // Open drive + folder location for search/filter reset (console #920).
+  // Includes the cards/local view and the active sync label so switching
+  // drives clears the same way as diving into a nested folder.
+  const searchScopeKey = `${activeSyncFolderLabel ?? ""}|${activeRemoteLabel ?? ""}|${browseLevelKey}|${isOnLocalView}`;
+  const lastSearchScopeRef = useRef(searchScopeKey);
+  useEffect(() => {
+    if (lastSearchScopeRef.current === searchScopeKey) return;
+    lastSearchScopeRef.current = searchScopeKey;
+    clearSearchAndFilters();
+  }, [searchScopeKey, clearSearchAndFilters]);
+
   // Changing the size changes which rows page 1 holds, so the reader is put
   // back on it rather than left on a page number that now means something
   // else (or no longer exists).
@@ -530,6 +564,52 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // one and not the other would browse the next drive under somebody else's
   // namespace. See `sharedDriveLabel.ts`.
   const browsedSharedDrive = parseSharedDriveLabel(remoteUploadLabel);
+  const memberDriveLabels = useMemberDriveLabels();
+  // Inside someone else's drive the figure is that drive's size (owner pays),
+  // not this account's quota — console uses "Drive size:" for that.
+  const storageLabel = isMemberDriveLabel(
+    remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel,
+    memberDriveLabels,
+  )
+    ? "Drive size:"
+    : "Storage Used:";
+
+  // Label of the drive currently open (root or nested) — same expression the
+  // header / Added-by filter use, before the breadcrumb memo.
+  const filterDriveLabel =
+    isRecentFiles || isOnLocalView
+      ? null
+      : (remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel ?? null);
+  const filterDriveSharing = useDriveSharing(
+    browsedSharedDrive ? null : filterDriveLabel,
+  );
+  const filterSyncedMembership = useSharedDriveMembership(
+    browsedSharedDrive ? null : filterDriveLabel,
+  );
+  const showAddedByFilter =
+    Boolean(filterDriveLabel) &&
+    (Boolean(browsedSharedDrive) || filterDriveSharing.isShared);
+  const addedByOwnerSs58 = browsedSharedDrive
+    ? browsedSharedDrive.ownerSs58
+    : (filterSyncedMembership.membership?.ownerSs58 ??
+      (filterDriveSharing.isShared ? (polkadotAddress ?? undefined) : undefined));
+  const addedByTarget = browsedSharedDrive
+    ? {
+        ownerSs58: browsedSharedDrive.ownerSs58,
+        folderHash: browsedSharedDrive.folderHash,
+      }
+    : filterSyncedMembership.membership
+      ? {
+          ownerSs58: filterSyncedMembership.membership.ownerSs58,
+          folderHash: filterSyncedMembership.membership.folderHash,
+        }
+      : undefined;
+  const addedByOptions = useUploaderOptions(
+    showAddedByFilter ? filterDriveLabel : null,
+    addedByOwnerSs58,
+    polkadotAddress ?? undefined,
+    addedByTarget,
+  );
 
   const nestedListing = useNestedFolderListing({
     accountId: polkadotAddress,
@@ -670,6 +750,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     dateRange: filterState.dateRange,
     fileSizes: filterState.fileSizes,
     excludedOnly: filterState.excludedOnly,
+    uploadedBy: filterState.uploadedBy,
   });
   const useRecursiveResults = shouldUseRecursiveSearch({
     hasActiveSearchOrFilter,
@@ -703,6 +784,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       dateRange: filterState.dateRange,
       fileSizes: filterState.fileSizes,
       excludedOnly: filterState.excludedOnly,
+      uploadedBy: filterState.uploadedBy,
     }),
     [
       searchTerm,
@@ -710,26 +792,33 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       filterState.dateRange,
       filterState.fileSizes,
       filterState.excludedOnly,
+      filterState.uploadedBy,
     ],
   );
 
   // A browsed drive searches the server instead — see
-  // `shouldUseDriveScopedSearch`.
+  // `shouldUseDriveScopedSearch`. "Added by" also forces server search
+  // on a synced shared drive, because attribution is not on local disk.
+  const scopedSearchLabel =
+    remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel ?? null;
   const useRemoteSearch = shouldUseDriveScopedSearch({
     hasActiveSearchOrFilter,
     isRemoteView,
     remoteLabel: remoteUploadLabel,
     isRecentFiles: Boolean(isRecentFiles),
+    uploadedBy: filterState.uploadedBy,
+    driveLabel: scopedSearchLabel,
   });
   const searchTermTooShort = shouldHintSearchTermTooShort({
     usesDriveScopedSearch: useRemoteSearch,
     searchTerm,
     fileExtension: filterState.fileExtension,
+    uploadedBy: filterState.uploadedBy,
   });
   const { data: remoteSearchResults, isFetching: isRemoteSearching } =
     useDriveScopedSearch({
       accountId: polkadotAddress,
-      label: remoteUploadLabel,
+      label: scopedSearchLabel,
       criteria: recursiveCriteria,
       enabled: useRemoteSearch,
     });
@@ -740,7 +829,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       label: recursiveSearchLabel,
       subfolder: recursiveSearchSubfolder,
       criteria: recursiveCriteria,
-      enabled: hasActiveSearchOrFilter && !isRecentFiles,
+      enabled: hasActiveSearchOrFilter && !isRecentFiles && !useRemoteSearch,
     });
 
   // When the recursive search is active (filter set + drive context),
@@ -925,12 +1014,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // Update active filters when filter settings change
   useEffect(() => {
+    const uploadedByLabel = filterState.uploadedBy
+      ? addedByOptions.find((o) => o.ss58 === filterState.uploadedBy)?.label
+      : undefined;
     const newActiveFilters = generateActiveFilters(
       filterState.fileExtension,
       filterState.dateRange,
       filterState.fileSize,
       filterState.fileSizes,
       filterState.excludedOnly,
+      filterState.uploadedBy,
+      uploadedByLabel,
     );
     setActiveFilters(newActiveFilters);
   }, [
@@ -939,7 +1033,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     filterState.fileSize,
     filterState.fileSizes,
     filterState.excludedOnly,
+    filterState.uploadedBy,
     filterState.lastUpdated,
+    addedByOptions,
   ]);
 
   // Reset scroll when filters or folder tab change
@@ -985,6 +1081,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         case "excludedOnly":
           updates.excludedOnly = false;
           break;
+
+        case "uploadedBy":
+          updates.uploadedBy = undefined;
+          break;
       }
 
       updateFilters(updates);
@@ -992,13 +1092,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     [filterState.fileSizes, updateFilters],
   );
 
-  // Header "Total Storage Used":
+  // Header size figure:
   //   - active folder: raw per-drive bytes from the Rust aggregator. Raw
   //     (not CID-deduplicated) is intentional — it matches what the user
   //     sees in the folder's rows. See 2026-04-17-folder-tab-stats-fix.md.
   //   - fallback (no active folder, e.g. mid-bootstrap): keep the indexer
   //     value so it stays consistent with the Home page / Available
   //     Credits numbers.
+  // Label is "Drive size:" vs "Storage Used:" — see `storageLabel` above.
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
@@ -1050,6 +1151,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const handleExcludedOnlyChange = useCallback(
     (excludedOnly: boolean) => {
       updateFilters({ excludedOnly });
+    },
+    [updateFilters],
+  );
+
+  const handleUploadedByChange = useCallback(
+    (uploadedBy: string | undefined) => {
+      updateFilters({ uploadedBy });
     },
     [updateFilters],
   );
@@ -1483,22 +1591,34 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // control that appears late on every drive is a worse trade than one that
   // briefly appears for a Viewer.
   const browsedMembership = useSharedDriveMembershipByIdentity(browsedSharedDrive);
+  const syncedMembership = useSharedDriveMembership(
+    browsedSharedDrive ? null : openDriveLabel,
+  );
+  const openDriveFrozen = Boolean(
+    browsedSharedDrive
+      ? browsedMembership.membership?.frozen
+      : syncedMembership.membership?.frozen,
+  );
   // The role this account holds on the open drive, for the refusal wording.
   const openDriveRole = browsedSharedDrive
     ? browsedMembership.membership
       ? parseDriveRole(browsedMembership.membership.role)
       : null
     : syncedDriveRole;
-  const openDriveWriteRefusal = driveWriteRefusal(openDriveRole);
+  const openDriveWriteRefusal = driveWriteRefusal(openDriveRole, {
+    frozen: openDriveFrozen,
+  });
 
-  const openDriveCanWrite = browsedSharedDrive
-    ? canWriteToDrive({
-        isOwner: false,
-        role: browsedMembership.membership
-          ? parseDriveRole(browsedMembership.membership.role)
-          : undefined,
-      }) || !browsedMembership.isSettled
-    : syncedDriveCanWrite;
+  const openDriveCanWrite = openDriveFrozen
+    ? false
+    : browsedSharedDrive
+      ? canWriteToDrive({
+          isOwner: false,
+          role: browsedMembership.membership
+            ? parseDriveRole(browsedMembership.membership.role)
+            : undefined,
+        }) || !browsedMembership.isSettled
+      : syncedDriveCanWrite;
 
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];
@@ -1814,7 +1934,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       viewMode === "card" ? (
         <CardViewSkeleton isRecentFiles={isRecentFiles} />
       ) : (
-        <FilesTableSkeleton isRecentFiles={isRecentFiles} />
+        <FilesTableSkeleton
+          isRecentFiles={isRecentFiles}
+          showUploadedBy={showAddedByFilter}
+        />
       );
   } else if (error && !isRecentFiles && !isNested) {
     // `useUserFiles` exposes a terminal error (after TanStack Query's
@@ -1988,6 +2111,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 currentSubfolderPath={
                   isNested ? (urlSubFolderPath ?? "") : null
                 }
+                showUploadedBy={showAddedByFilter}
+                driveOwnerSs58={addedByOwnerSs58}
               />
             );
 
@@ -2034,6 +2159,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isRefetching={false}
                 isFetching={false}
                 formattedStorageSize={formattedStorageSize}
+                storageLabel={storageLabel}
                 allFilteredDataLength={displayedFileCount}
                 viewMode={viewMode}
                 setViewMode={handleViewModeChange}
@@ -2086,6 +2212,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onFileSizesChange={handleFileSizesChange}
                 onExcludedOnlyChange={handleExcludedOnlyChange}
                 showExcludedFilter={showExcludedFilter}
+                addedByOptions={showAddedByFilter ? addedByOptions : undefined}
+                selectedUploadedBy={filterState.uploadedBy}
+                onUploadedByChange={
+                  showAddedByFilter ? handleUploadedByChange : undefined
+                }
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
                 onSetFolderUploadOpen={handleFolderUploadOpenChange}
@@ -2097,7 +2228,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isReadOnlyDrive={!openDriveCanWrite}
                 openDriveDisplayName={
                   openDriveLabel
-                    ? (labelDisplayNames[openDriveLabel] ?? openDriveLabel)
+                    ? (sharedDriveNames.get(openDriveLabel) ??
+                      labelDisplayNames[openDriveLabel] ??
+                      openDriveLabel)
                     : null
                 }
                 isNested={isNested}

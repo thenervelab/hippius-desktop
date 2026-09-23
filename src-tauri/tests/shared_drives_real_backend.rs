@@ -475,7 +475,8 @@ async fn member_accept_and_install(env: &LiveEnv, http: &reqwest::Client, owner:
         },
     )
     .await
-    .expect("mint invite");
+    .expect("mint invite")
+    .token;
 
     // The `#k=` fragment entropy — `create_drive_invite`'s derivation.
     let fragment_entropy = grant::entropy_from_phrase(&owner.folder_phrase).expect("fragment entropy");

@@ -145,13 +145,13 @@ describe("FileDetailsPanel upload attribution", () => {
   it("stays quiet on a drive that is not shared", () => {
     driveSharing.isShared = false;
     renderPanel(makeFile({ uploadedBy: "5Someone" }));
-    expect(screen.queryByText("Uploaded by")).not.toBeInTheDocument();
+    expect(screen.queryByText("Added by")).not.toBeInTheDocument();
   });
 
   it("names the uploader on a shared drive", () => {
     driveSharing.isShared = true;
     renderPanel(makeFile({ uploadedBy: "5SomeoneElseEntirely1234567890" }));
-    expect(screen.getByText("Uploaded by")).toBeInTheDocument();
+    expect(screen.getByText("Added by")).toBeInTheDocument();
   });
 
   // An ss58 the reader has to compare against their own is not an answer.
@@ -162,15 +162,17 @@ describe("FileDetailsPanel upload attribution", () => {
   });
 
   // The server attributes rows it can; older rows and admin writes have none.
-  it("stays quiet on a file the server never attributed", () => {
+  // File Details still shows the row — UploaderCell falls back to Owner.
+  it("falls back to Owner when the server never attributed the file", () => {
     driveSharing.isShared = true;
     renderPanel(makeFile({ uploadedBy: undefined }));
-    expect(screen.queryByText("Uploaded by")).not.toBeInTheDocument();
+    expect(screen.getByText("Added by")).toBeInTheDocument();
+    expect(screen.getByText("Owner")).toBeInTheDocument();
   });
 
   it("stays quiet on a folder, which nobody uploaded", () => {
     driveSharing.isShared = true;
     renderPanel(makeFile({ isFolder: true, uploadedBy: "5Someone" }));
-    expect(screen.queryByText("Uploaded by")).not.toBeInTheDocument();
+    expect(screen.queryByText("Added by")).not.toBeInTheDocument();
   });
 });
