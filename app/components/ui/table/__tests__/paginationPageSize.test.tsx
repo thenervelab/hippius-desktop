@@ -86,3 +86,45 @@ describe("Pagination page-size control", () => {
     expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("25");
   });
 });
+
+/**
+ * The open list is drawn by the OS. It takes its colours from `color-scheme`
+ * and from the select's own background and text — a `dark:` class on an
+ * `<option>` is not enough on its own. Left at the light default it painted a
+ * white popup and inherited translucent white text, so in dark mode the
+ * closed control read correctly and every option in the open list was
+ * invisible.
+ */
+describe("Pagination page-size control in dark mode", () => {
+  const renderPager = () =>
+    render(
+      <Pagination
+        currentPage={1}
+        totalPages={3}
+        setPage={vi.fn()}
+        pageSize={50}
+        setPageSize={vi.fn()}
+      />,
+    );
+
+  it("asks the OS for a dark popup", () => {
+    renderPager();
+    expect(screen.getByRole("combobox").className).toContain("dark:[color-scheme:dark]");
+  });
+
+  it("gives the control an opaque dark background, not a translucent one", () => {
+    renderPager();
+    const className = screen.getByRole("combobox").className;
+    expect(className).toContain("dark:bg-black-500");
+    // `dark:bg-white/[0.02]` is what the popup inherited and painted over white.
+    expect(className).not.toMatch(/dark:bg-white\//);
+  });
+
+  it("colours every option for both themes rather than inheriting", () => {
+    renderPager();
+    for (const option of screen.getAllByRole("option")) {
+      expect(option.className).toContain("dark:text-");
+      expect(option.className).toContain("dark:bg-");
+    }
+  });
+});

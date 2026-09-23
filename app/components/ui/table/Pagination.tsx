@@ -152,10 +152,23 @@ export const Pagination: React.FC<TablePaginationProps> = ({
             <select
               value={pageSize}
               onChange={(e) => setPageSize(Number(e.target.value))}
-              className="h-8 w-full rounded-[8px] border border-[#e4e4e7] bg-white px-[10px] font-geist text-[14px] font-medium uppercase tracking-[-0.28px] text-[#585858] shadow-[0px_2px_5px_0px_rgba(0,0,0,0.05)] dark:border-black-300 dark:bg-white/[0.02] dark:text-[#ffffff79]"
+              // The OPEN list is drawn by the OS, not by us, and it takes its
+              // colours from `color-scheme` and from the select's own
+              // background/text — not from any `dark:` class on the options.
+              // Left at the light default it painted a white popup and
+              // inherited the translucent white text, so every option was
+              // invisible in dark mode while the closed control looked right.
+              // `dark:[color-scheme:dark]` is what makes the popup dark; the
+              // opaque background and full-strength text are what keep the
+              // options legible on the engines that inherit them instead.
+              className="h-8 w-full rounded-[8px] border border-[#e4e4e7] bg-white px-[10px] font-geist text-[14px] font-medium uppercase tracking-[-0.28px] text-[#585858] shadow-[0px_2px_5px_0px_rgba(0,0,0,0.05)] dark:border-black-300 dark:bg-black-500 dark:text-grey-light-200 dark:[color-scheme:dark]"
             >
               {sizeOptions.map((o) => (
-                <option key={o} value={o}>
+                <option
+                  key={o}
+                  value={o}
+                  className="bg-white text-[#585858] dark:bg-black-500 dark:text-grey-light-200"
+                >
                   {o}/PAGE
                 </option>
               ))}
