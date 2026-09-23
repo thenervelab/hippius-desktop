@@ -24,7 +24,6 @@ import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
-import { Select } from "@/components/ui/select/Select";
 import DriveRoleChip from "./DriveRoleChip";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -701,11 +700,12 @@ function InviteButton({
 /**
  * Changing a member's role, as a dialog.
  *
- * The role used to be an inline `Select` on the row, which committed on
- * selection: a mis-click silently changed what somebody could do to the
- * drive, with only a toast to say so. A role is a decision, so it gets the
- * app's decision surface -- pick, read what it grants, press Save -- and the
- * row keeps a three-dot menu like every other row in the app.
+ * Console parity: roles are a radio list with each option's description
+ * beside it (not a dropdown that hides the other choices). The role used to
+ * commit on an inline row select; a mis-click then changed what somebody
+ * could do, with only a toast to say so. A role is a decision, so it gets
+ * the app's decision surface -- pick, read what it grants, press Save --
+ * and the row keeps a three-dot menu like every other row in the app.
  */
 function ChangeRoleDialog({
   member,
@@ -719,6 +719,7 @@ function ChangeRoleDialog({
   const current = parseDriveRole(member.role);
   const [role, setRole] = useState<DriveRole>(current);
   const demotionWarning = driveRoleDemotionWarning(current, role);
+  const who = accountDisplayName(member.memberSs58, member.memberName);
 
   return (
     <FramedDialog
@@ -730,26 +731,38 @@ function ChangeRoleDialog({
       contentClassName="sm:w-[405px]"
     >
       <div className="font-geist">
-        <p className="mb-5 break-all text-center font-mono text-xs text-grey-50 dark:text-grey-dark-600">
-          {member.memberSs58}
+        <p className="mb-5 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+          What {who} can do in this drive.
         </p>
 
-        <div className="mb-6 flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
-            They join as
-          </span>
-          <Select
-            ariaLabel="Member role"
-            value={role}
-            onValueChange={(value) => setRole(value as DriveRole)}
-            options={DRIVE_ROLES.map((r) => ({
-              label: driveRoleLabel(r),
-              value: r,
-            }))}
-          />
-          <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-            {driveRoleDescription(role)}
-          </p>
+        <div className="mb-6 flex flex-col gap-2">
+          {DRIVE_ROLES.map((option) => (
+            <label
+              key={option}
+              className={cn(
+                "flex cursor-pointer flex-col gap-0.5 rounded-lg border p-3 transition-colors",
+                role === option
+                  ? "border-primary-50 bg-primary-100 dark:border-primary-50 dark:bg-primary-50/10"
+                  : "border-grey-80 hover:bg-grey-90 dark:border-white/10 dark:hover:bg-white/5",
+              )}
+            >
+              <span className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="change-member-role"
+                  className="accent-primary-50"
+                  checked={role === option}
+                  onChange={() => setRole(option)}
+                />
+                <span className="text-sm font-medium text-grey-10 dark:text-white">
+                  {driveRoleLabel(option)}
+                </span>
+              </span>
+              <span className="pl-6 text-xs text-grey-50 dark:text-grey-dark-600">
+                {driveRoleDescription(option)}
+              </span>
+            </label>
+          ))}
           {/* A demotion has a side effect nobody would guess: the server
               revokes the link that admitted this member when it outranks
               their new role, and demoting a manager revokes every link that

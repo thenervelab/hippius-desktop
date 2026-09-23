@@ -152,8 +152,7 @@ function openMemberMenu(_memberSs58: string, item: "Change role" | "Remove from 
  */
 function changeMemberRoleTo(memberSs58: string, optionLabel: string) {
   openMemberMenu(memberSs58, "Change role");
-  fireEvent.click(screen.getByLabelText("Member role"));
-  fireEvent.click(screen.getByText(optionLabel));
+  fireEvent.click(screen.getByRole("radio", { name: new RegExp(optionLabel) }));
   fireEvent.click(screen.getByRole("button", { name: "Save role" }));
 }
 
@@ -206,12 +205,11 @@ describe("members tab", () => {
     await screen.findByRole("button", { name: "Change role" });
     openMemberMenu(MEMBER, "Change role");
 
-    const trigger = await screen.findByLabelText("Member role");
-    expect(trigger).toHaveTextContent("Editor");
-
-    fireEvent.click(trigger);
+    // Radios (console parity): every role and its description is visible at
+    // once; the member's current role starts checked.
+    expect(await screen.findByRole("radio", { name: /Editor/ })).toBeChecked();
     for (const label of ["Viewer", "Editor", "Manager"]) {
-      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+      expect(screen.getByRole("radio", { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
 
@@ -227,8 +225,7 @@ describe("members tab", () => {
     await screen.findByRole("button", { name: "Change role" });
     openMemberMenu(MEMBER, "Change role");
 
-    fireEvent.click(await screen.findByLabelText("Member role"));
-    fireEvent.click(screen.getByText("Manager"));
+    fireEvent.click(await screen.findByRole("radio", { name: /Manager/ }));
     expect(changeDriveMemberRoleMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Save role" }));
