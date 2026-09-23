@@ -106,6 +106,22 @@ fn resolve_invite_policy(expires_in_secs: Option<u64>, max_uses: Option<u32>) ->
     )
 }
 
+/// Keep a real display string; drop blank/whitespace so the FE never draws a
+/// gap where an ss58 fallback belonged (hcfs #455 / console `presentText`).
+fn present_text(value: Option<String>) -> Option<String> {
+    value.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Forward a server `member_count` of 0/omitted as `None` so the FE never
+/// draws "0 members" from an unknown or empty listing signal.
+fn present_member_count(count: u64) -> Option<u32> {
+    if count == 0 {
+        None
+    } else {
+        u32::try_from(count).ok()
+    }
+}
+
 // ─── FE-facing wire types (camelCase, desktop-owned) ───────────────────────
 
 /// Result of a successful invite mint. The URL embeds the invite token (path)
@@ -125,6 +141,13 @@ pub struct DriveMemberInfo {
     pub member_ss58: String,
     pub role: String,
     pub created_at: String,
+    /// Display name from the account-profile projection (hcfs #455). Absent
+    /// when the account has none on file — FE falls back to a shortened ss58.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_name: Option<String>,
+    /// Email, only disclosed to the drive's owner/managers. Same absence rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_email: Option<String>,
 }
 
 /// One drive shared WITH this account ("Shared with me" row). The sealed
@@ -134,6 +157,9 @@ pub struct DriveMemberInfo {
 #[serde(rename_all = "camelCase")]
 pub struct DriveMembershipInfo {
     pub owner_ss58: String,
+    /// Owner display name (hcfs #455); absent when unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
     pub folder_hash: String,
     pub display_label: String,
     pub role: String,
@@ -144,6 +170,18 @@ pub struct DriveMembershipInfo {
     pub synced_locally: bool,
     /// The local drive label of that row (`None` when not synced here).
     pub local_label: Option<String>,
+    /// How many people currently hold a membership (owner excluded). `None`
+    /// when the server omitted the field (old server / unknown) — the FE
+    /// must never draw "0 members" from absence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_count: Option<u32>,
+    /// Owner account limited (grace / lapsed): uploads refused; reads may
+    /// still work. Omitted/`false` when unfrozen.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub frozen: bool,
+    /// RFC 3339 end of the biller's grace window, when recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frozen_until: Option<String>,
 }
 
 /// Result of [`add_shared_drive`]: the local drive label actually allocated
@@ -410,6 +448,9 @@ pub struct DriveInviteInfo {
     /// still parse rather than failing the whole listing.
     #[serde(default, alias = "minted_by")]
     pub minted_by: String,
+    /// Minter display name (hcfs #455); absent when unknown or minted_by empty.
+    #[serde(default, alias = "minted_by_name", skip_serializing_if = "Option::is_none")]
+    pub minted_by_name: Option<String>,
     #[serde(alias = "expires_at")]
     pub expires_at: String,
     #[serde(alias = "max_uses")]
@@ -936,6 +977,8 @@ pub async fn list_drive_members(
             member_ss58: m.member_ss58,
             role: m.role,
             created_at: m.created_at,
+            member_name: present_text(m.member_name),
+            member_email: present_text(m.member_email),
         })
         .collect())
 }
@@ -1101,12 +1144,12 @@ fn fold_drive_sharing(label: &str, member_count: Option<usize>, invites: Option<
 
 /// Sharing state for every OWN drive named in `labels`, in one call.
 ///
-/// The drive list needs this for each row at once, and there is no bulk
-/// "drives I have shared" endpoint — members and invites are both per drive,
-/// and `/v1/drive-memberships` answers the opposite question. Fanning out from
-/// the renderer meant 2N IPC round-trips whose results had to be reassembled
-/// there; doing it here is one round-trip, concurrent over the network, with
-/// the fold applied once.
+/// Member counts come from the account's `/list_folders`
+/// (`RemoteFolderInfo.member_count`) — one request for the set — rather than
+/// a `/members` fan-out per drive. Invites are still per-drive, and are
+/// fetched ONLY when a drive has no members: a drive with members is already
+/// "shared" for the badge, and a link with no join yet leaves
+/// `member_count == 0` while the Links tab still needs a signal.
 ///
 /// A drive that fails entirely is ABSENT from the result rather than failing
 /// the call: one unreachable drive must not blank the badge on eleven others.
@@ -1123,26 +1166,48 @@ pub async fn list_owned_drive_sharing(app: tauri::AppHandle, labels: Vec<String>
     let pool = state.pool()?;
     let http = state.api_client.clone();
 
+    // One listing for every own drive's member_count. Failure here means we
+    // cannot answer counts; invites-only still describe a half we can.
+    let folders_by_hash = match http_list_owner_folders(&http, &ctx.base_url, &ctx.bearer, &ctx.account_id).await {
+        Ok(folders) => folders
+            .into_iter()
+            .map(|f| (f.folder_hash.clone(), f))
+            .collect::<std::collections::HashMap<_, _>>(),
+        Err(e) => {
+            warn!(error = %e, "Own folder listing failed; sharing badge falls back to invites-only");
+            std::collections::HashMap::new()
+        }
+    };
+
     let summaries = futures_util::future::join_all(labels.iter().map(|label| {
         let http = http.clone();
         let ctx = &ctx;
+        let folders_by_hash = &folders_by_hash;
         async move {
             // Owner-only on purpose: this answers "which of MY drives have I
             // shared". A drive shared WITH this account is described by its
             // role badge, which needs no counts.
             let identity = resolve_own_drive(pool, &ctx.account_id, label).await.ok()?;
-            // Both listings are asked independently and neither is allowed to
-            // discard the other's answer.
-            let (members, invites) = futures_util::future::join(
-                http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
-                http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
-            )
-            .await;
+            let member_count = folders_by_hash
+                .get(&identity.wire_folder_hash)
+                .map(|f| f.member_count as usize);
 
-            for err in [members.as_ref().err(), invites.as_ref().err()].into_iter().flatten() {
-                debug!(label = %label, error = %err, "Drive sharing listing failed");
-            }
-            fold_drive_sharing(label, members.ok().map(|m| m.members.len()), invites.as_deref().ok())
+            // Invites only when we have no members (or could not learn the
+            // count): otherwise the badge already has its answer and N invite
+            // GETs would be pure noise on every drive-list refresh.
+            let invites = if member_count.unwrap_or(0) == 0 {
+                match http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None).await {
+                    Ok(invites) => Some(invites),
+                    Err(err) => {
+                        debug!(label = %label, error = %err, "Drive invites listing failed");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            fold_drive_sharing(label, member_count, invites.as_deref())
         }
     }))
     .await
@@ -1215,12 +1280,16 @@ pub async fn list_my_drive_memberships(app: tauri::AppHandle) -> Result<Vec<Driv
         let local = crate::sync::identity::member_row_for_wire_identity(pool, &ctx.account_id, &m.owner_ss58, &m.folder_hash).await?;
         memberships.push(DriveMembershipInfo {
             owner_ss58: m.owner_ss58,
+            owner_name: present_text(m.owner_name),
             folder_hash: m.folder_hash,
             display_label: m.display_label,
             role: m.role,
             created_at: m.created_at,
             synced_locally: local.is_some(),
             local_label: local.map(|row| row.label),
+            member_count: present_member_count(m.member_count),
+            frozen: m.frozen,
+            frozen_until: present_text(m.frozen_until),
         });
     }
     Ok(memberships)
@@ -1711,12 +1780,16 @@ mod tests {
     fn drive_membership_info_wire_keys_are_pinned() {
         let info = DriveMembershipInfo {
             owner_ss58: "5Owner".to_string(),
+            owner_name: Some("Ada".to_string()),
             folder_hash: "0123456789abcdef".to_string(),
             display_label: "team-docs".to_string(),
             role: "writer".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             synced_locally: false,
             local_label: None,
+            member_count: Some(4),
+            frozen: true,
+            frozen_until: Some("2026-10-01T00:00:00Z".to_string()),
         };
         let json = serde_json::to_value(&info).expect("serialize");
         let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
@@ -1726,7 +1799,11 @@ mod tests {
                 "createdAt",
                 "displayLabel",
                 "folderHash",
+                "frozen",
+                "frozenUntil",
                 "localLabel",
+                "memberCount",
+                "ownerName",
                 "ownerSs58",
                 "role",
                 "syncedLocally"
@@ -1740,6 +1817,32 @@ mod tests {
             serde_json::Value::Null,
             "an unsynced row serializes localLabel as null"
         );
+        assert_eq!(json["ownerName"], "Ada");
+        assert_eq!(json["memberCount"], 4);
+        assert_eq!(json["frozen"], true);
+    }
+
+    #[test]
+    fn drive_membership_info_omits_unknown_profile_fields() {
+        let info = DriveMembershipInfo {
+            owner_ss58: "5Owner".to_string(),
+            owner_name: None,
+            folder_hash: "0123456789abcdef".to_string(),
+            display_label: "team-docs".to_string(),
+            role: "writer".to_string(),
+            created_at: "2026-08-20T00:00:00Z".to_string(),
+            synced_locally: false,
+            local_label: None,
+            member_count: None,
+            frozen: false,
+            frozen_until: None,
+        };
+        let json = serde_json::to_value(&info).expect("serialize");
+        let obj = json.as_object().expect("object");
+        assert!(!obj.contains_key("ownerName"));
+        assert!(!obj.contains_key("memberCount"));
+        assert!(!obj.contains_key("frozen"), "unfrozen must omit the key");
+        assert!(!obj.contains_key("frozenUntil"));
     }
 
     fn invite(valid: bool, revoked: bool) -> DriveInviteInfo {
@@ -1747,6 +1850,7 @@ mod tests {
             invite_id: "i".into(),
             role: "writer".into(),
             minted_by: String::new(),
+            minted_by_name: None,
             expires_at: String::new(),
             max_uses: 1,
             use_count: 0,
@@ -1950,7 +2054,7 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect::<std::collections::BTreeSet<_>>(),
-            "DriveInviteInfo wire keys must stay exactly these camelCase names"
+            "DriveInviteInfo wire keys must stay exactly these camelCase names when minted_by_name is absent"
         );
     }
 
