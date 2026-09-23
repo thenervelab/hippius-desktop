@@ -44,3 +44,7 @@ coverage/
 
 # Git worktrees for parallel branch work (never tracked)
 .worktrees/
+
+# Screen-capture helper build products (built by macos/build-capture-helper.sh)
+macos/HippiusCapture/.build/
+src-tauri/binaries/
