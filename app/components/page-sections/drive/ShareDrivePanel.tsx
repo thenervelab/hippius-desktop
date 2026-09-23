@@ -82,7 +82,7 @@ function MembersTabSkeleton() {
       role="status"
       aria-busy="true"
       aria-label="Loading members"
-      className="max-h-[320px] overflow-hidden"
+      className="min-h-0 flex-1 overflow-hidden"
     >
       <span className="sr-only">Loading members…</span>
       {Array.from({ length: SKELETON_ROWS }, (_, i) => (
@@ -121,7 +121,7 @@ function LinksTabSkeleton() {
       role="status"
       aria-busy="true"
       aria-label="Loading links"
-      className="max-h-[260px] overflow-hidden"
+      className="min-h-0 flex-1 overflow-hidden"
     >
       <span className="sr-only">Loading links…</span>
       {Array.from({ length: SKELETON_ROWS }, (_, i) => (
@@ -324,8 +324,8 @@ export default function ShareDrivePanel() {
   // Body first, so the inline panel and the small-screen overlay render
   // exactly the same thing and cannot drift.
   const body = target ? (
-      <div className="flex h-full flex-col px-3 pt-4 font-geist">
-        <div className="mb-4 flex items-start justify-between gap-2 px-2">
+      <div className="flex h-full min-h-0 flex-col px-3 pb-4 pt-4 font-geist">
+        <div className="mb-4 flex shrink-0 items-start justify-between gap-2 px-2">
           <div className="min-w-0">
             <p className="text-[16px] font-medium leading-5 text-black-900 dark:text-white">
               Share access
@@ -344,7 +344,7 @@ export default function ShareDrivePanel() {
           </button>
         </div>
 
-        <div className="mb-5">
+        <div className="mb-5 shrink-0">
           <SegmentedControl<Tab>
             ariaLabel="Share drive sections"
             fullWidth
@@ -357,6 +357,8 @@ export default function ShareDrivePanel() {
           />
         </div>
 
+        {/* List tabs claim remaining panel height and scroll inside it —
+            fixed max-h caps left empty space below while clipping rows. */}
         {tab === "links" ? (
           <LinksTab
             state={invites}
@@ -405,7 +407,10 @@ export default function ShareDrivePanel() {
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="h-full shrink-0 overflow-hidden"
           >
-            <div className="h-full overflow-y-auto" style={{ width: PANEL_WIDTH_PX }}>
+            <div
+              className="flex h-full min-h-0 flex-col overflow-hidden"
+              style={{ width: PANEL_WIDTH_PX }}
+            >
               {body}
             </div>
           </motion.aside>
@@ -420,7 +425,7 @@ export default function ShareDrivePanel() {
         <Dialog.Overlay className="fixed inset-0 z-[1002] bg-white/72 backdrop-blur-[5.75px] dark:bg-[rgba(4,4,4,0.4)] dark:backdrop-blur-[11.5px] animate-fade-in-0.2" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed bottom-0 right-0 top-0 z-[1003] w-full max-w-[360px] overflow-y-auto bg-cover bg-fixed bg-center bg-no-repeat font-geist animate-panel-in bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]"
+          className="fixed bottom-0 right-0 top-0 z-[1003] flex w-full max-w-[360px] flex-col overflow-hidden bg-cover bg-fixed bg-center bg-no-repeat font-geist animate-panel-in bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]"
         >
           <Dialog.Title className="sr-only">Share access</Dialog.Title>
           {body}
@@ -461,7 +466,7 @@ function LinksTab({
 
   if (view === "error") {
     return (
-      <p className="py-6 text-center text-sm text-error-70">
+      <p className="min-h-0 flex-1 py-6 text-center text-sm text-error-70">
         {state.kind === "error" ? state.message : "Could not load links"}
       </p>
     );
@@ -469,7 +474,7 @@ function LinksTab({
 
   if (view === "empty") {
     return (
-      <p className="py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+      <p className="min-h-0 flex-1 py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
         No invite links yet. Create one from the Invite tab.
       </p>
     );
@@ -477,7 +482,7 @@ function LinksTab({
 
   const invites = state.kind === "ready" ? state.invites : [];
   return (
-    <div className="max-h-[260px] overflow-y-auto">
+    <div className="min-h-0 flex-1 overflow-y-auto">
       {invites.map((invite) => (
         <InviteRow
           key={invite.inviteId}
@@ -699,7 +704,7 @@ function MembersTab({
 
   if (view === "unavailable") {
     return (
-      <p className="py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+      <p className="min-h-0 flex-1 py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">
         Shared drives aren&apos;t available on your server yet.
       </p>
     );
@@ -707,7 +712,7 @@ function MembersTab({
 
   if (view === "error") {
     return (
-      <div className="mb-2 flex items-start gap-2 rounded-md border border-error-90 bg-error-100/40 px-3 py-2.5 dark:border-error-30/60 dark:bg-error-30/10">
+      <div className="mb-2 flex min-h-0 flex-1 items-start gap-2 rounded-md border border-error-90 bg-error-100/40 px-3 py-2.5 dark:border-error-30/60 dark:bg-error-30/10">
         <AlertCircle className="mt-0.5 size-4 shrink-0 text-error-70" />
         <p className="break-words text-xs text-grey-50 dark:text-grey-dark-600">
           {state.kind === "error" ? state.message : "Couldn't load members"}
@@ -718,7 +723,7 @@ function MembersTab({
 
   if (view === "empty") {
     return (
-      <div className="py-6 text-center">
+      <div className="min-h-0 flex-1 py-6 text-center">
         <p className="mb-4 text-sm text-grey-50 dark:text-grey-dark-600">
           No one has joined this drive yet.
         </p>
@@ -729,11 +734,11 @@ function MembersTab({
 
   const members = state.kind === "ready" ? state.members : [];
   return (
-    <div>
-      <div className="mb-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-3 shrink-0">
         <InviteButton onClick={onCreateInvite} hasMembers />
       </div>
-      <div className="max-h-[320px] overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {members.map((member) => (
           <MemberRow
             key={member.memberSs58}
