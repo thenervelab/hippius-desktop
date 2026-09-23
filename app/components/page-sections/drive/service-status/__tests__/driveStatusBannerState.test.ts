@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   getDriveStatusBanner,
   getNoStoragePlanBanner,
+  getOverQuotaBanner,
   NO_PLAN_RETENTION_DAYS,
 } from "../driveStatusBannerState";
 import { BILLING_ROUTE } from "@/app/lib/routes";
@@ -151,5 +152,58 @@ describe("the no-plan banner is shared, not copied", () => {
     expect(getNoStoragePlanBanner("free")).toBeNull();
     expect(getNoStoragePlanBanner("subscription")).toBeNull();
     expect(getNoStoragePlanBanner(undefined)).toBeNull();
+  });
+});
+
+describe("an account past its free or plan allowance", () => {
+  const over = "2.56 GB over your plan";
+
+  it("uses danger tone: uploads are paused and files stay", () => {
+    const free = getOverQuotaBanner({
+      capacitySource: "free",
+      overDisplay: over,
+    });
+    // Same red treatment as no-plan — a hard upload block, not a soft warn.
+    expect(free?.tone).toBe("danger");
+    expect(free?.title).toMatch(/over your free storage/i);
+    expect(free?.description).toMatch(/uploads are paused/i);
+    expect(free?.description).toMatch(/files stay available/i);
+    expect(free?.action?.href).toBe(BILLING_ROUTE);
+  });
+
+  it("uses plan-upgrade wording on a paid plan", () => {
+    const paid = getOverQuotaBanner({
+      capacitySource: "subscription",
+      overDisplay: over,
+    });
+    expect(paid?.tone).toBe("danger");
+    expect(paid?.title).toMatch(/over your plan/i);
+    expect(paid?.description).toMatch(/larger plan/i);
+  });
+
+  // Access-key no-plan is a different banner (deletion clock). Over-quota
+  // must not paper over it when both inputs arrive.
+  it("does not fire for the no-plan source", () => {
+    expect(
+      getOverQuotaBanner({ capacitySource: "none", overDisplay: over }),
+    ).toBeNull();
+  });
+
+  it("does not fire without an overage string", () => {
+    expect(
+      getOverQuotaBanner({ capacitySource: "free", overDisplay: null }),
+    ).toBeNull();
+  });
+
+  it("outranks a cancelled-plan notice on Drive", () => {
+    expect(
+      getDriveStatusBanner({ state: "canceled" }, "free", over)?.title,
+    ).toMatch(/over your free storage/i);
+  });
+
+  it("still loses to the no-plan banner", () => {
+    expect(
+      getDriveStatusBanner({ state: "canceled" }, "none", over)?.tone,
+    ).toBe("danger");
   });
 });

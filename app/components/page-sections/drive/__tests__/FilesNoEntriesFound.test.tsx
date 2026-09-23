@@ -8,6 +8,10 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
+vi.mock("@/app/lib/hooks/api/useStorageOverview", () => ({
+  useStorageOverview: () => ({ data: { source: "subscription" } }),
+}));
+
 describe("FilesNoEntriesFound", () => {
   // Remote folders are read-only from the desktop: uploads into them are
   // not supported yet, so the empty state must not offer an upload CTA or

@@ -84,6 +84,9 @@ import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useInvokeQuery } from "@/app/lib/hooks/api/useInvokeQuery";
+import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import { isUploadBlocked } from "@/app/components/page-sections/drive/uploadRoomState";
 import {
   triggerSyncPathRefreshAtom,
   hasConfiguredDrivesAtom,
@@ -171,11 +174,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     if (!open) setFolderUploadInitialPath(undefined);
   }, []);
 
-  const handleAddFolderFromDrop = useCallback((path: string) => {
-    setFolderUploadInitialPath(path);
-    setIsFolderUploadOpen(true);
-  }, []);
-
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
     undefined as string | null | undefined,
   );
@@ -261,8 +259,27 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     },
   });
   // `check_action_eligibility` answers Drive actions from the plan's
-  // storage allowance now, not from a credit balance.
-  const isStorageFull = fileUploadEligibility?.eligible === false;
+  // storage allowance now, not from a credit balance. Overview is the
+  // proactive UI gate for access-key / no-plan and at-or-over capacity:
+  // `/can_upload` fail-opens and is polled with 0 bytes, so it alone
+  // left Folder/File/Sync looking live on a no-plan account.
+  const { data: storageOverview } = useStorageOverview();
+  const isStorageFull = isUploadBlocked(
+    storageOverview,
+    fileUploadEligibility?.eligible === false,
+  );
+  const { requireUploadRoom } = useCreditCheck();
+
+  const handleAddFolderFromDrop = useCallback(
+    async (path: string) => {
+      // Overview no-plan / full is checked inside requireUploadRoom; the
+      // polled flag covers the rare case Overview still shows room.
+      if (!(await requireUploadRoom("folder-upload", isStorageFull))) return;
+      setFolderUploadInitialPath(path);
+      setIsFolderUploadOpen(true);
+    },
+    [requireUploadRoom, isStorageFull],
+  );
 
   // Per-drive sync status is owned by Rust and pushed via the
   // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
@@ -1237,15 +1254,19 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setShowPrivateStartSyncingSelector(true);
   }, [isRecentFiles, handleNavigateToSettings]);
 
-  // Context menu handlers
+  // Context menu handlers. When storage is blocked the menu items are
+  // disabled (no dialog). Drag-and-drop still explains via requireUploadRoom.
   const handleContextUploadFile = useCallback(() => {
-    addButtonRef.current?.openWithPaths([]);
-  }, []);
+    if (isStorageFull) return;
+    void addButtonRef.current?.open();
+  }, [isStorageFull]);
 
-  const handleContextAddFolder = useCallback(() => {
+  const handleContextAddFolder = useCallback(async () => {
+    if (isStorageFull) return;
+    if (!(await requireUploadRoom("folder-upload", false))) return;
     setFolderUploadInitialPath(undefined);
     setIsFolderUploadOpen(true);
-  }, []);
+  }, [requireUploadRoom, isStorageFull]);
 
   // Open the picker here rather than sending the user to Settings.
   //
@@ -1254,9 +1275,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // different screen and losing the one they were on. Nothing about
   // choosing a folder needs the settings page.
   const [showSyncFolderDialog, setShowSyncFolderDialog] = useState(false);
-  const handleContextAddSyncFolder = useCallback(() => {
+  const handleContextAddSyncFolder = useCallback(async () => {
+    if (isStorageFull) return;
+    if (!(await requireUploadRoom("folder-sync", false))) return;
     setShowSyncFolderDialog(true);
-  }, []);
+  }, [requireUploadRoom, isStorageFull]);
 
   // Breadcrumb / Local-view navigation handlers.
   //
@@ -1833,6 +1856,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        isStorageFull={isStorageFull}
       />
     );
   } else if (
@@ -1851,6 +1875,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        isStorageFull={isStorageFull}
       />
     );
   } else if (isOnLocalView && !isRecentFiles && !isNested && !isRemoteRoot) {
@@ -1865,6 +1890,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        isStorageFull={isStorageFull}
       />
     );
   } else {

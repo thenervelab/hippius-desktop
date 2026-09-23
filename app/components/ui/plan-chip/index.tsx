@@ -8,7 +8,7 @@ import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 import { getPlanActionNote } from "./planActionView";
 import {
-  formatPercentLabel,
+  getUsageAsideLabel,
   getPlanHeading,
   getPlanView,
   getUsageTone,
@@ -191,7 +191,10 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
               PERCENT_TONE[tone],
             )}
           >
-            {formatPercentLabel(percent)}
+            {getUsageAsideLabel({
+              percent,
+              overDisplay: overview?.overDisplay,
+            })}
           </span>
         </div>
       ) : (

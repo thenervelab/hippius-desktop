@@ -84,6 +84,12 @@ export interface StorageOverview {
   totalDisplay: string;
   freeDisplay: string;
   /**
+   * Present when usage exceeds capacity (e.g. after a downgrade onto Free).
+   * Render this in place of the clamped percent so "12.56 GB of 10.00 GB"
+   * is never paired with "100%". Authored in Rust (H-109).
+   */
+  overDisplay: string | null;
+  /**
    * What the header should offer this account, decided in Rust:
    *
    *   - `upgrade`         — no plan, or a plan at/over 80% full. More

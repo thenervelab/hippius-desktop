@@ -108,10 +108,12 @@ describe("the header card and the storage card share one usage scale", () => {
   });
 
   // A free-tier account saw only the size of its allowance, which says
-  // nothing about whether the Upgrade button beside it matters.
+  // nothing about whether the Upgrade button beside it matters. Over
+  // capacity, the aside shows Rust's overDisplay via getUsageAsideLabel
+  // rather than a contradictory 100%.
   it("states usage on the free tier too, not just the allowance", () => {
     expect(chip).not.toMatch(/included/);
-    expect(chip).toContain("formatPercentLabel");
+    expect(chip).toContain("getUsageAsideLabel");
   });
 
   // usedPending is Rust's flag; inferring it from a zero would report a

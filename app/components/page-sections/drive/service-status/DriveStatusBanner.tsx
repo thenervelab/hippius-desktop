@@ -7,6 +7,7 @@ import Link from "next/link";
 import { cn } from "@/app/lib/utils";
 import { useDriveServiceStatus } from "@/app/lib/hooks/useDriveServiceStatus";
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
+import { Button } from "@/components/ui/button";
 
 import {
   getDriveStatusBanner,
@@ -50,6 +51,10 @@ const TONE = {
   },
 } as const;
 
+/** Same pill size as ConflictsBanner / CreditsExhaustedBanner CTAs. */
+const ACTION_BUTTON_CLASS =
+  "h-[30px] shrink-0 gap-[10px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]";
+
 /**
  * The banner itself: tone, badge, copy, optional action, optional
  * dismissal. Purely presentational and content-agnostic, so any page can
@@ -64,11 +69,17 @@ const TONE = {
  * none, because the Drive page and the Overview page sit in wrappers
  * with different horizontal padding and a baked-in `mx-3` double-indents
  * one of them.
+ *
+ * `actionAsButton` (default true) puts Upgrade / See storage plans / Top
+ * up on the right as a primary button — what Overview wants. Drive
+ * already shows Upgrade in the plan chip header, so it passes false and
+ * gets an underlined text link under the description instead.
  */
 export const StatusBanner: React.FC<{
   banner: DriveStatusBannerContent | null;
   className?: string;
-}> = ({ banner, className }) => {
+  actionAsButton?: boolean;
+}> = ({ banner, className, actionAsButton = true }) => {
   const dismissKey = banner?.dismissKey;
 
   // Read once on mount rather than during render: localStorage is
@@ -120,10 +131,16 @@ export const StatusBanner: React.FC<{
         )}
       />
 
-      <div className="relative flex items-start gap-3.5">
+      <div
+        className={cn(
+          "relative flex gap-3.5",
+          actionAsButton ? "items-center" : "items-start",
+        )}
+      >
         <span
           className={cn(
-            "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[8px] shadow-[inset_0_-2px_0_0_rgba(0,0,0,0.14)]",
+            "flex size-9 shrink-0 items-center justify-center rounded-[8px] shadow-[inset_0_-2px_0_0_rgba(0,0,0,0.14)]",
+            !actionAsButton && "mt-0.5",
             styles.badge,
           )}
         >
@@ -141,10 +158,9 @@ export const StatusBanner: React.FC<{
           <p className="mt-1 text-[13px] font-medium leading-5 tracking-[-0.26px] text-grey-60 dark:text-[#c4c4c4]">
             {banner.description}
           </p>
-          {banner.action && (
-            /* A text link, not a button: the banner is telling the user
-               something, and a filled button competes with the page's own
-               actions for the same glance. */
+          {!actionAsButton && banner.action && (
+            /* A text link, not a button: Drive already has Upgrade in the
+               plan chip, and a filled button would compete with it. */
             <Link
               href={banner.action.href}
               className={cn(
@@ -157,12 +173,29 @@ export const StatusBanner: React.FC<{
           )}
         </div>
 
+        {/* Right-side CTA (Upgrade / See storage plans / Top up), same
+            placement as ConflictsBanner and CreditsExhaustedBanner. */}
+        {actionAsButton && banner.action && (
+          <Button
+            asLink
+            href={banner.action.href}
+            variant="primary"
+            size="auto"
+            className={ACTION_BUTTON_CLASS}
+          >
+            {banner.action.label}
+          </Button>
+        )}
+
         {banner.dismissKey && (
           <button
             type="button"
             onClick={dismiss}
             aria-label={`Dismiss ${banner.title}`}
-            className="-mr-1 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-[6px] text-grey-50 transition-colors hover:bg-grey-10/10 hover:text-grey-10 dark:text-[#a3a3a3] dark:hover:bg-white/5 dark:hover:text-white"
+            className={cn(
+              "-mr-1 flex size-7 shrink-0 items-center justify-center rounded-[6px] text-grey-50 transition-colors hover:bg-grey-10/10 hover:text-grey-10 dark:text-[#a3a3a3] dark:hover:bg-white/5 dark:hover:text-white",
+              !actionAsButton && "-mt-1",
+            )}
           >
             <X className="size-4" />
           </button>
@@ -187,7 +220,12 @@ const DriveStatusBanner: React.FC<{ className?: string }> = ({ className }) => {
 
   return (
     <StatusBanner
-      banner={getDriveStatusBanner(data, overview?.source)}
+      banner={getDriveStatusBanner(
+        data,
+        overview?.source,
+        overview?.overDisplay,
+      )}
+      actionAsButton={false}
       className={cn("mx-3 mb-3", className)}
     />
   );
