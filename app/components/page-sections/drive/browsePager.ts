@@ -40,3 +40,40 @@ export function shouldShowBrowsePager({
   if (!pagingActive) return false;
   return totalPages > 1 || pageSize !== defaultPageSize;
 }
+
+/**
+ * Where the chosen rows-per-page is remembered.
+ *
+ * Presentation state, kept in localStorage beside the theme preference
+ * rather than in the Rust `user_preferences` table: it says nothing about
+ * the account or its data, only about how this device likes to read a list.
+ */
+export const BROWSE_PAGE_SIZE_STORAGE_KEY = "hippius:drive-page-size";
+
+/**
+ * The largest size that may be restored from storage. Bigger than any preset
+ * the control offers, so a future one still survives a round trip, but
+ * bounded: a hand-edited or corrupted entry must not open the drive with a
+ * hundred thousand rows in it.
+ */
+export const MAX_BROWSE_PAGE_SIZE = 500;
+
+/**
+ * Read a stored page size back, falling back to the default for anything that
+ * is not a whole, positive, in-range number.
+ *
+ * Storage is a string typed by nobody: a missing key, a half-written value,
+ * `"0"`, `"-5"`, `"20.5"` all have to land somewhere sensible — and a zero or
+ * a NaN divides the level into an infinite page count.
+ */
+export function normalizeBrowsePageSize(
+  stored: unknown,
+  fallback: number = DEFAULT_BROWSE_PAGE_SIZE,
+): number {
+  const value = typeof stored === "string" ? Number(stored) : stored;
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (!Number.isInteger(value)) return fallback;
+  if (value < 1 || value > MAX_BROWSE_PAGE_SIZE) return fallback;
+  return value;
+}
+

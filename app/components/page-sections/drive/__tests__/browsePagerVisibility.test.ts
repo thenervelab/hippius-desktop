@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BROWSE_PAGE_SIZE,
+  MAX_BROWSE_PAGE_SIZE,
+  normalizeBrowsePageSize,
   shouldShowBrowsePager,
 } from "@/app/components/page-sections/drive/browsePager";
 
@@ -45,5 +47,40 @@ describe("when the browse pager is drawn", () => {
   it("takes the default it compares against from the caller", () => {
     expect(show({ totalPages: 1, pageSize: 25, defaultPageSize: 25 })).toBe(false);
     expect(show({ totalPages: 1, pageSize: 20, defaultPageSize: 25 })).toBe(true);
+  });
+});
+
+/**
+ * Storage is a string typed by nobody. A zero or a NaN reaching the page
+ * maths divides the level into an infinite page count; a huge one opens the
+ * drive with every row in the DOM.
+ */
+describe("restoring a remembered page size", () => {
+  it("keeps a sensible stored size", () => {
+    expect(normalizeBrowsePageSize("50")).toBe(50);
+    expect(normalizeBrowsePageSize(100)).toBe(100);
+  });
+
+  it("falls back to the default when nothing is stored", () => {
+    expect(normalizeBrowsePageSize(null)).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+    expect(normalizeBrowsePageSize(undefined)).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+    expect(normalizeBrowsePageSize("")).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+  });
+
+  it("refuses a size that would break the page maths", () => {
+    expect(normalizeBrowsePageSize("0")).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+    expect(normalizeBrowsePageSize("-5")).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+    expect(normalizeBrowsePageSize("abc")).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+    expect(normalizeBrowsePageSize("20.5")).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+  });
+
+  it("refuses a size that would render the whole drive at once", () => {
+    expect(normalizeBrowsePageSize(String(MAX_BROWSE_PAGE_SIZE + 1))).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+    expect(normalizeBrowsePageSize("1e9")).toBe(DEFAULT_BROWSE_PAGE_SIZE);
+    expect(normalizeBrowsePageSize(MAX_BROWSE_PAGE_SIZE)).toBe(MAX_BROWSE_PAGE_SIZE);
+  });
+
+  it("takes the caller's fallback when one is given", () => {
+    expect(normalizeBrowsePageSize("nonsense", 25)).toBe(25);
   });
 });

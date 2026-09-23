@@ -115,6 +115,18 @@ describe("the browse pager", () => {
     expect(container).toMatch(/lastBrowseLevelRef[\s\S]{0,200}setBrowsePage\(1\)/);
   });
 
+  /**
+   * The size is a PREFERENCE and the page is a moment. As `useState` the size
+   * died whenever Drive unmounted, so a reader who chose 50, went to
+   * Overview and came back was on 20 again with no indication why.
+   */
+  it("remembers the page size but not the page", () => {
+    expect(container).toMatch(
+      /\[browsePageSize, setBrowsePageSize\] = useAtom\(browsePageSizeAtom\)/,
+    );
+    expect(container).toMatch(/\[browsePage, setBrowsePage\] = useState\(1\)/);
+  });
+
   // A new size changes which rows page 1 holds, so the old page number
   // means something else.
   it("returns to page 1 when the page size changes", () => {

@@ -34,9 +34,10 @@ import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
 import { useDriveScopedSearch } from "@/app/lib/hooks/useDriveScopedSearch";
 import { Pagination } from "@/components/ui/table";
 import {
-  DEFAULT_BROWSE_PAGE_SIZE,
+  BROWSE_PAGE_SIZE_OPTIONS,
   shouldShowBrowsePager,
 } from "./browsePager";
+import { browsePageSizeAtom } from "@/app/lib/global-atoms/drivePagingAtoms";
 import type { SortingState } from "@tanstack/react-table";
 import {
   filterCriteriaAreActive,
@@ -73,7 +74,7 @@ import {
   makeSharedDriveLabel,
   parseSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
   getViewModePreference,
@@ -462,7 +463,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `useRecursiveFileSearch` for a local one), which spans every nested
   // folder and is not what this pages.
   const [browsePage, setBrowsePage] = useState(1);
-  const [browsePageSize, setBrowsePageSize] = useState(DEFAULT_BROWSE_PAGE_SIZE);
+  // Remembered across navigation and restarts: it used to be `useState`, so
+  // leaving Drive for Overview and coming back put the reader on 20 again
+  // with no indication why. The PAGE number stays local on purpose — which
+  // slice of a folder is a moment, not a preference.
+  const [browsePageSize, setBrowsePageSize] = useAtom(browsePageSizeAtom);
 
   // Sorting lives here, not in the table, because on a remote level the sort
   // is part of the REQUEST. The server orders the whole folder before paging
@@ -1986,6 +1991,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                     totalCount={browseTotalItems}
                     pageSize={browsePageSize}
                     setPageSize={handleBrowsePageSizeChange}
+                    pageSizeOptions={BROWSE_PAGE_SIZE_OPTIONS}
                   />
                 </div>
               ) : null;
