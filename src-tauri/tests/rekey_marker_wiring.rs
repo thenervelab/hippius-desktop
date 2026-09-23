@@ -47,7 +47,7 @@ fn only_clear_rekey_marker_removes_the_marker() {
                 "clear_rekey_marker",
                 "{file}:{} removes the rekey marker from `{current_fn}`:\n  {line}\n\
                  The marker is a standing diagnosis, not a one-shot flag — deleting it erases \
-                 the only record of why a drive's remote files became undecryptable. If this \
+                 the only record of why a drive's remote files stopped opening. If this \
                  site genuinely retires the condition (it deleted the remote revisions), call \
                  `clear_rekey_marker` and say why.",
                 idx + 1,
@@ -56,26 +56,33 @@ fn only_clear_rekey_marker_removes_the_marker() {
     }
 }
 
-/// `recover_drive` re-derives the folder key and, without a login mnemonic,
-/// mints a brand-new ACCOUNT master — the single most destructive rekey in the
-/// app. It must RECORD that, not clean up after it.
+/// `recover_drive` rebuilds a drive's key from the ACCOUNT master. It must
+/// never invent one: a generated master replaces the account's identity and
+/// strands every drive's remote files. It used to, in an `else` arm no
+/// production caller reached, placed AFTER the cleanup that deletes the seal.
 #[test]
-fn recovery_records_a_rekey_instead_of_clearing_one() {
+fn recovery_never_invents_a_master_and_refuses_before_cleanup() {
     let source = src("sync/drive/lifecycle.rs");
     let body = fn_body(&source, "async fn recover_drive(");
 
     assert!(
-        body.contains("append_rekey_record"),
-        "`recover_drive` must append a RekeyRecord: generating a new random master strands \
-         every remote file on the account, and a log line alone rotates away."
+        !body.contains("Mnemonic::generate"),
+        "`recover_drive` must not generate a master — refuse with \
+         `MasterMnemonicUnrecoverable` when none was resolved."
     );
+
+    let refusal = body
+        .find("MasterMnemonicUnrecoverable")
+        .expect("`recover_drive` must refuse when it has no master");
+    let first_cleanup = body.find("remove_file").expect("recovery still cleans up the corrupt seal");
     assert!(
-        body.contains("RecoveryGeneratedNewMaster"),
-        "the recovery rekey needs its own reason variant so triage can tell it from the two \
-         legacy seal states."
+        refusal < first_cleanup,
+        "the no-master refusal must come BEFORE any cleanup, or it errors out with the \
+         drive's seal already deleted."
     );
+
     assert!(
-        !body.contains("remove_file(ctx.folder_dir.join(\".needs_rekey\"))"),
+        !body.contains(".needs_rekey"),
         "`recover_drive` must not delete the rekey marker — it runs BEFORE `register_drive` \
          reports it, so the delete erased the diagnosis one step ahead of the code that logs it."
     );

@@ -66,7 +66,7 @@ const REKEY_MARKER_TMP: &str = ".needs_rekey.tmp";
 ///
 /// Appended, never deleted: it records a permanent property of the drive's
 /// REMOTE contents (everything uploaded before `rekeyed_at` may be encrypted
-/// under a key this device no longer has), not a task someone is going to
+/// under a key the drive no longer uses), not a task someone is going to
 /// complete. The one path that legitimately retires the whole history is a
 /// server-side folder delete, which takes the affected revisions with it.
 ///
@@ -96,11 +96,6 @@ pub(crate) enum RekeyReason {
     /// The folder seal held a mnemonic derived from a DIFFERENT master, so
     /// this account's master no longer reproduces it.
     DerivedFromAnotherMaster,
-    /// Unlock failed and recovery had no login mnemonic to fall back on, so it
-    /// generated a brand-new random ACCOUNT master. Every drive on the account
-    /// is stranded by this, not just the one carrying the record — only this
-    /// drive's config dir is reachable from where it is written.
-    RecoveryGeneratedNewMaster,
 }
 
 impl RekeyReason {
@@ -110,7 +105,6 @@ impl RekeyReason {
         match self {
             RekeyReason::RawMasterInFolderSeal => "RawMasterInFolderSeal",
             RekeyReason::DerivedFromAnotherMaster => "DerivedFromAnotherMaster",
-            RekeyReason::RecoveryGeneratedNewMaster => "RecoveryGeneratedNewMaster",
         }
     }
 }
@@ -235,9 +229,10 @@ pub(crate) fn report_rekey_marker(folder_dir: &Path, label: &str) {
                 rekey_count = records.len(),
                 rekeys = %reasons,
                 "Drive was re-keyed: files uploaded under a previous folder key \
-                 cannot be decrypted on this device and will fail to download. \
-                 Replacing them (re-upload from a device that can read them, or \
-                 delete them) is the only fix."
+                 do not open with the drive's current key and will fail to \
+                 download. The previous key is often still on this device (the \
+                 account master, or enc_mnemonic.json.bak) — run \
+                 probe_rekey_recovery to see which files it opens."
             );
         }
     }
@@ -297,9 +292,15 @@ pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Resu
 /// hid the real consequence for a year. State it plainly instead:
 ///
 /// **Every remote file uploaded before the rekey stays encrypted under the
-/// OLD key and can never be decrypted by this device again.** The local
-/// copies are safe and re-upload fine; the stale remote revisions are dead
-/// weight the sync engine will keep trying to download and failing to open.
+/// OLD key, which this drive no longer uses.** The local copies are safe and
+/// re-upload fine; the remote revisions with no local copy fail to open on
+/// every sync until they are replaced or recovered.
+///
+/// The old key is usually NOT gone: for `RawMasterInFolderSeal` it is the
+/// account master itself, and hcfs's `save_encrypted_mnemonic` keeps the seal
+/// this function overwrites as `enc_mnemonic.json.bak`. Do not retire that
+/// `.bak` here — it is the only local copy of the key that opens the stranded
+/// files. `probe_rekey_recovery` reports which candidate opens them.
 ///
 /// The marker therefore records a diagnosis, not a pending task — see
 /// [`RekeyRecord`]. Do not "consume" it by deleting it: the condition it
@@ -347,8 +348,8 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
         label = %label,
         reason = ?reason,
         "Folder key does not match this account's master — re-deriving. \
-         Remote files uploaded under the previous key become permanently \
-         undecryptable on this device."
+         Remote files uploaded under the previous key will not open with the \
+         new one; the previous seal is kept as enc_mnemonic.json.bak."
     );
 
     // `master_str`/`folder_str` are unused past this comparison; scrub them now —
@@ -1501,7 +1502,7 @@ mod tests {
             tmp.path(),
             RekeyRecord {
                 rekeyed_at: 200,
-                reason: Some(RekeyReason::RecoveryGeneratedNewMaster),
+                reason: Some(RekeyReason::DerivedFromAnotherMaster),
             },
         )
         .expect("second record");
@@ -1510,7 +1511,7 @@ mod tests {
 
         assert_eq!(records.len(), 2, "the earlier rekey window must survive the later one");
         assert_eq!(records[0].rekeyed_at, 100, "history is oldest-first");
-        assert_eq!(records[1].reason, Some(RekeyReason::RecoveryGeneratedNewMaster));
+        assert_eq!(records[1].reason, Some(RekeyReason::DerivedFromAnotherMaster));
     }
 
     /// Appending onto a legacy flag keeps the "something happened" evidence

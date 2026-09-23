@@ -15,8 +15,7 @@ use crate::sync::device::get_device_name_internal;
 use crate::sync::folders::{get_all_sync_paths_internal, sanitize_label};
 use crate::sync::identity::{DriveIdentity, lookup_drive_identity};
 use crate::sync::mnemonic::{
-    RekeyReason, RekeyRecord, account_dir, append_rekey_record, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic,
-    master_mnemonic_path, report_rekey_marker,
+    account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, master_mnemonic_path, report_rekey_marker,
 };
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
@@ -465,7 +464,7 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
     // It used to be deleted here ("consumed"), which made sense only while a
     // remote purge consumed it. That purge went away in #302 and the delete
     // stayed, so the marker became a one-shot that erased itself before
-    // anyone could see it — the drive's remote files were permanently
+    // anyone could see it — the drive's remote files would not open with its current key
     // undecryptable and the only record of why was gone by the next launch.
     //
     // The condition is permanent until those remote revisions are replaced,
@@ -952,6 +951,18 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
         return Err(member_drive_unrepairable(ctx.label));
     }
 
+    // Recovery rebuilds the drive key from the ACCOUNT master, so with no
+    // master it refuses before touching anything. This used to be an `else`
+    // arm further down that generated a fresh random master and wrote it over
+    // `master_enc_mnemonic.json` — replacing the account's identity and
+    // stranding every drive's remote files — and it ran after the cleanup
+    // below had already deleted the seal. The only production caller,
+    // `initialize_sync_inner`, always resolves the master first and fails with
+    // this same error when it cannot, so no reachable path loses anything.
+    let Some(master) = ctx.existing_mnemonic else {
+        return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::MasterMnemonicUnrecoverable));
+    };
+
     // Remove corrupted enc_mnemonic.json
     let enc_path = ctx.folder_dir.join("enc_mnemonic.json");
     if enc_path.exists() {
@@ -980,40 +991,8 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
 
     debug!("Creating fresh drive after recovery...");
 
-    let master_str: zeroize::Zeroizing<String> = if let Some(imported) = ctx.existing_mnemonic {
-        debug!("Using login mnemonic as master for recovery");
-        zeroize::Zeroizing::new(imported.to_string())
-    } else {
-        let master = bip39::Mnemonic::generate(24).map_err(|e| crate::error::AppError::Crypto(e.to_string()))?;
-        warn!(
-            label = %ctx.label,
-            "Generated a NEW RANDOM master for recovery (no login mnemonic available) — \
-             every remote file already uploaded by this account becomes permanently \
-             undecryptable on this device."
-        );
-        // Record it for the same reason `ensure_derived_mnemonic` does: this
-        // strands remote revisions, and without a marker the only trace is
-        // this one line in a log that rotates. The record is per-drive because
-        // a drive's config dir is the only thing reachable here, but the
-        // master is ACCOUNT-level, so the damage is wider than the drive
-        // carrying the record — the reason variant says so.
-        //
-        // The imported-mnemonic branch above deliberately writes NO record: it
-        // re-derives from the SAME master, so whether anything is stranded
-        // depends on what the unopenable seal held, which is unknowable here.
-        // Asserting a strand we cannot establish is the failure this file's
-        // `reason: Option<_>` exists to avoid.
-        if let Err(e) = append_rekey_record(
-            ctx.folder_dir,
-            RekeyRecord {
-                rekeyed_at: chrono::Utc::now().timestamp(),
-                reason: Some(RekeyReason::RecoveryGeneratedNewMaster),
-            },
-        ) {
-            warn!("Could not record the recovery rekey for '{}': {e}", ctx.label);
-        }
-        zeroize::Zeroizing::new(master.to_string())
-    };
+    debug!("Using login mnemonic as master for recovery");
+    let master_str = zeroize::Zeroizing::new(master.to_string());
     hcfs_client::auth::save_encrypted_mnemonic(ctx.master_path, &master_str, ctx.drive_password)?;
     let derived = zeroize::Zeroizing::new(derive_folder_mnemonic(&master_str, ctx.label)?);
 
@@ -3453,6 +3432,53 @@ mod tests {
             "the guard must fire BEFORE the cleanup deletes/rewrites the seal"
         );
         assert!(!master_path.exists(), "member recovery must not mint a master file");
+    }
+
+    /// An OWN drive with no master to recover from must be refused BEFORE the
+    /// cleanup too, and must never get one invented for it. Recovery used to
+    /// generate a random 24-word master here and write it over
+    /// `master_enc_mnemonic.json` — a new account identity that strands every
+    /// drive's remote files — and it did so after deleting the seal.
+    #[tokio::test]
+    async fn recover_drive_without_a_master_refuses_before_touching_anything() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let folder_dir = tmp.path().join("cfg");
+        std::fs::create_dir_all(&folder_dir).expect("mk cfg dir");
+        let enc = folder_dir.join("enc_mnemonic.json");
+        std::fs::write(&enc, b"unopenable-seal").expect("write seal");
+        let state = folder_dir.join("sync_state.json");
+        std::fs::write(&state, b"{}").expect("write sync state");
+        let sync_path = tmp.path().join("sync");
+        std::fs::create_dir_all(&sync_path).expect("mk sync dir");
+        let master_path = tmp.path().join("master_enc_mnemonic.json");
+
+        let identity = DriveIdentity::own("5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY", "0123456789abcdef");
+        let ctx = RecoveryContext {
+            sync_path: sync_path.to_str().expect("utf8 path"),
+            folder_dir: &folder_dir,
+            master_path: &master_path,
+            server_url: "",
+            bearer_token: "token",
+            identity: &identity,
+            label: "docs",
+            drive_password: "pw",
+            existing_mnemonic: None,
+        };
+        let manager = DriveManager::new(sync_path.clone(), folder_dir.clone());
+
+        let Err(err) = recover_drive(manager, &ctx).await else {
+            panic!("recovery without a master must refuse");
+        };
+        let crate::error::AppError::NotReady(crate::error::NotReadyKind::MasterMnemonicUnrecoverable) = err else {
+            panic!("refusal must be MasterMnemonicUnrecoverable, the error the init funnel already surfaces; got {err:?}");
+        };
+        assert!(!master_path.exists(), "recovery must never write a master it invented");
+        assert_eq!(
+            std::fs::read(&enc).expect("seal still there"),
+            b"unopenable-seal",
+            "the refusal must precede the cleanup"
+        );
+        assert!(state.exists(), "sync state must survive a refused recovery");
     }
 
     /// An UNINITIALIZED member config dir has no self-heal path: fresh init
