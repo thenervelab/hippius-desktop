@@ -3,6 +3,9 @@ import React, { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { BILLING_ROUTE } from "@/app/lib/routes";
+import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
+import { getUploadBlockReason } from "@/app/components/page-sections/drive/uploadRoomState";
+import { NO_PLAN_RETENTION_DAYS } from "@/app/components/page-sections/drive/service-status/driveStatusBannerState";
 
 // Custom events for communicating with AddButton
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -32,10 +35,13 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
   onStartSyncing,
 }) => {
   const router = useRouter();
+  const { data: overview } = useStorageOverview();
+  const blockReason = getUploadBlockReason(overview);
   // Show the out-of-storage variant whenever the plan has no room left,
   // regardless of sync-folder state — with nowhere to put a file nothing
   // else is actionable, so this CTA wins over upload and start-syncing.
   const showStorageFullVariant = isStorageFull;
+  const isNoPlan = blockReason === "no-plan" || overview?.source === "none";
   const handleFiles = useCallback(
     (files: FileList) => {
       if (files.length === 0) {
@@ -63,22 +69,18 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
 
   const handlePrimaryClick = useCallback(() => {
     // Out of room, so send the user to the plans page. Checked FIRST so
-    // the button copy ("View plans") matches the click destination even
-    // when sync isn't configured yet.
-    // Storage is sold as a plan, so the way out of a full drive is a
-    // larger plan, not a balance top-up.
+    // the button copy matches the click destination even when sync isn't
+    // configured yet.
     if (showStorageFullVariant) {
       router.push(BILLING_ROUTE);
       return;
     }
 
-    // If sync path is not configured, route to the start-syncing flow.
     if (!isSyncPathConfigured) {
       onStartSyncing?.();
       return;
     }
 
-    // Otherwise, ask the AddButton to open the upload modal.
     if (typeof window !== "undefined") {
       const event = new CustomEvent(HIPPIUS_OPEN_MODAL_EVENT, {
         bubbles: true,
@@ -88,10 +90,6 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
     }
   }, [isSyncPathConfigured, showStorageFullVariant, router, onStartSyncing]);
 
-  // Remote folders are read-only from the desktop for now: uploading into
-  // one is not supported yet, so the empty state must not offer an upload
-  // button or a drop target — a plain notice is the whole surface. Sits
-  // after the hooks so the hook order never varies between renders.
   if (isRemoteView) {
     return (
       <NoEntriesFound
@@ -103,13 +101,19 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
   }
 
   const title = showStorageFullVariant
-    ? "You've used all the storage in your plan"
+    ? isNoPlan
+      ? "You don't have a subscription plan"
+      : "You've used all the storage in your plan"
     : isRecentFiles
       ? "No Recent files yet"
       : "No Entries in Your Storage";
 
+  // Match Overview / Drive banners: no-plan carries the 30-day deletion
+  // clock; over-quota keeps files and only pauses uploads.
   const description = showStorageFullVariant
-    ? "Upgrade your plan for more room, or remove some files to free space."
+    ? isNoPlan
+      ? `Your account has no storage. Files you have already uploaded are permanently deleted after ${NO_PLAN_RETENTION_DAYS} days without a plan, and nothing new can be uploaded until you subscribe.`
+      : "Uploads are paused, your files stay available. Upgrade or free up space."
     : !isSyncPathConfigured
       ? isRecentFiles
         ? "Please set up sync path first"
@@ -119,13 +123,17 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
         : "You currently do not have any entries uploaded to Hippius. Drop files here or use the button.";
 
   const dragDescription = showStorageFullVariant
-    ? "Upgrade your plan to upload more files"
+    ? isNoPlan
+      ? "Subscribe to a plan to upload files"
+      : "Upgrade your plan to upload more files"
     : !isSyncPathConfigured
       ? "Please set up sync path first"
       : "Drop files here to upload";
 
   const buttonText = showStorageFullVariant
-    ? "View plans"
+    ? isNoPlan
+      ? "Subscribe"
+      : "Upgrade"
     : !isSyncPathConfigured
       ? "Start Syncing"
       : "Upload a File";

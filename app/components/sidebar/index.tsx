@@ -7,6 +7,7 @@ import { navSections, filterNavSections } from "./NavData";
 import { useAtom, useAtomValue } from "jotai";
 import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { chatEnabledAtom } from "@/app/lib/global-atoms/chatAtoms";
 import { InView } from "react-intersection-observer";
 import { useEffect, useMemo, useRef } from "react";
 import SidebarSearch from "./SidebarSearch";
@@ -64,10 +65,11 @@ const Sidebar: React.FC = () => {
   }, [setCollapsed]);
 
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const chatEnabled = useAtomValue(chatEnabledAtom);
 
   const visibleSections = useMemo(
-    () => filterNavSections(navSections, { shareEnabled }),
-    [shareEnabled],
+    () => filterNavSections(navSections, { shareEnabled, chatEnabled }),
+    [shareEnabled, chatEnabled],
   );
 
   if (pathname.startsWith("/settings")) return null;

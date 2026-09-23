@@ -22,6 +22,12 @@ export type CapacitySource = "subscription" | "free" | "none";
 
 export interface PlanInfo {
   name: string;
+  /**
+   * The plan's code (`free` | `solo` | `duo` | `max` | `scale`). Empty when
+   * the rail did not report one. Entitlement decisions key on THIS, never on
+   * `name`, which is a marketing label that changes without a release.
+   */
+  code?: string;
   amount: number;
   interval: string;
   storageBytes: number;
@@ -77,6 +83,12 @@ export interface StorageOverview {
   usedDisplay: string;
   totalDisplay: string;
   freeDisplay: string;
+  /**
+   * Present when usage exceeds capacity (e.g. after a downgrade onto Free).
+   * Render this in place of the clamped percent so "12.56 GB of 10.00 GB"
+   * is never paired with "100%". Authored in Rust (H-109).
+   */
+  overDisplay: string | null;
   /**
    * What the header should offer this account, decided in Rust:
    *

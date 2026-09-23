@@ -31,7 +31,7 @@ function findRepoRoot(): string {
     dir = parent;
   }
   throw new Error(
-    "ipcContract: could not locate repo root (no src-tauri/src/main.rs found walking up from cwd)"
+    "ipcContract: could not locate repo root (no src-tauri/src/main.rs found walking up from cwd)",
   );
 }
 
@@ -75,8 +75,8 @@ function frontendSourceFiles(): string[] {
 }
 
 function rustSourceFiles(): string[] {
-  return walk(join(ROOT, "src-tauri", "src"), (p) => p.endsWith(".rs")).map((p) =>
-    readFileSync(p, "utf8")
+  return walk(join(ROOT, "src-tauri", "src"), (p) => p.endsWith(".rs")).map(
+    (p) => readFileSync(p, "utf8"),
   );
 }
 
@@ -131,16 +131,20 @@ function invokedCommands(): Set<string> {
 function rustEmittedEvents(): Set<string> {
   const names = new Set<string>();
   // Canonical const registries: `pub const NAME: &str = "value";`. One per
-  // module that owns events — `sync/projection/events.rs` and `vpn/events.rs`.
-  // (The VPN commands emit via these consts, not quoted literals, so the
-  // literal-emit window scan below would miss them.)
+  // module that owns events — `sync/projection/events.rs`, `vpn/events.rs`
+  // and `chat/notify.rs` (the `chat_unread_changed` broadcast). (These modules
+  // emit via consts, not quoted literals, so the literal-emit window scan
+  // below would miss them.)
   const registryFiles = [
     join(ROOT, "src-tauri", "src", "sync", "projection", "events.rs"),
     join(ROOT, "src-tauri", "src", "vpn", "events.rs"),
+    join(ROOT, "src-tauri", "src", "chat", "notify.rs"),
   ];
   for (const file of registryFiles) {
     const events = readFileSync(file, "utf8");
-    for (const m of events.matchAll(/pub const [A-Z_0-9]+:\s*&str\s*=\s*"([^"]+)"/g)) {
+    for (const m of events.matchAll(
+      /pub const [A-Z_0-9]+:\s*&str\s*=\s*"([^"]+)"/g,
+    )) {
       names.add(m[1]);
     }
   }
@@ -176,7 +180,8 @@ function feEmittedEvents(): Set<string> {
 
 /** Event names the FE listens for. */
 function listenedEvents(): Set<string> {
-  const re = /\blisten\s*(?:<[^>]*>)?\s*\(\s*["']([a-zA-Z][a-zA-Z0-9_:.-]*)["']/g;
+  const re =
+    /\blisten\s*(?:<[^>]*>)?\s*\(\s*["']([a-zA-Z][a-zA-Z0-9_:.-]*)["']/g;
   const names = new Set<string>();
   for (const src of frontendSourceFiles()) {
     for (const m of src.matchAll(re)) names.add(m[1]);
@@ -203,7 +208,10 @@ const KNOWN_UNREGISTERED_COMMANDS = new Set<string>([
 // Splash `PHASE_CONTENT` uses a `command:` field for cosmetic beat names, not
 // Tauri IPC. `finish_splash` IS a real command and must stay registered;
 // these two are display-only and must not trip the invoke⊆registered check.
-const KNOWN_NON_IPC_COMMAND_FIELDS = new Set<string>(["check_updates", "checking_tools"]);
+const KNOWN_NON_IPC_COMMAND_FIELDS = new Set<string>([
+  "check_updates",
+  "checking_tools",
+]);
 
 // Commands the FE dispatches through a NON-literal (a `Record<Action, string>`
 // lookup in FailedFilesModal), invisible to the string-literal scan above. List
@@ -231,12 +239,12 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
         (c) =>
           !registered.has(c) &&
           !KNOWN_UNREGISTERED_COMMANDS.has(c) &&
-          !KNOWN_NON_IPC_COMMAND_FIELDS.has(c)
+          !KNOWN_NON_IPC_COMMAND_FIELDS.has(c),
       )
       .sort();
     expect(
       missing,
-      `FE invokes commands with no #[tauri::command] in generate_handler![]: ${missing.join(", ")}`
+      `FE invokes commands with no #[tauri::command] in generate_handler![]: ${missing.join(", ")}`,
     ).toEqual([]);
   });
 
@@ -269,7 +277,7 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
     const missing = required.filter((c) => !registered.has(c));
     expect(
       missing,
-      `generate_handler![] dropped required commands: ${missing.join(", ")}`
+      `generate_handler![] dropped required commands: ${missing.join(", ")}`,
     ).toEqual([]);
   });
 
@@ -278,17 +286,19 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
     for (const c of KNOWN_NON_IPC_COMMAND_FIELDS) {
       expect(
         registered.has(c),
-        `"${c}" is now a #[tauri::command] — drop it from KNOWN_NON_IPC_COMMAND_FIELDS`
+        `"${c}" is now a #[tauri::command] — drop it from KNOWN_NON_IPC_COMMAND_FIELDS`,
       ).toBe(false);
     }
   });
 
   it("table-dispatched commands (non-literal invoke) are registered in Rust", () => {
     const registered = registeredCommands();
-    const missing = KNOWN_TABLE_DISPATCHED_COMMANDS.filter((c) => !registered.has(c));
+    const missing = KNOWN_TABLE_DISPATCHED_COMMANDS.filter(
+      (c) => !registered.has(c),
+    );
     expect(
       missing,
-      `table-dispatched commands missing from generate_handler![]: ${missing.join(", ")}`
+      `table-dispatched commands missing from generate_handler![]: ${missing.join(", ")}`,
     ).toEqual([]);
   });
 
@@ -298,11 +308,11 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
     for (const c of KNOWN_UNREGISTERED_COMMANDS) {
       expect(
         invoked.has(c),
-        `"${c}" is allow-listed but the FE no longer invokes it — drop it from KNOWN_UNREGISTERED_COMMANDS`
+        `"${c}" is allow-listed but the FE no longer invokes it — drop it from KNOWN_UNREGISTERED_COMMANDS`,
       ).toBe(true);
       expect(
         registered.has(c),
-        `"${c}" is now registered in Rust — drop it from KNOWN_UNREGISTERED_COMMANDS`
+        `"${c}" is now registered in Rust — drop it from KNOWN_UNREGISTERED_COMMANDS`,
       ).toBe(false);
     }
   });
@@ -319,7 +329,7 @@ describe("IPC event contract (FE listen ↔ Rust/FE emit)", () => {
     const orphans = [...listened].filter((e) => !emitted.has(e)).sort();
     expect(
       orphans,
-      `FE listens for events nothing emits (renamed/removed event ⇒ dead listener): ${orphans.join(", ")}`
+      `FE listens for events nothing emits (renamed/removed event ⇒ dead listener): ${orphans.join(", ")}`,
     ).toEqual([]);
   });
 });

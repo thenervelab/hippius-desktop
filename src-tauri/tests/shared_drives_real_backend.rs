@@ -143,7 +143,7 @@ use hcfs_client::engine::runner::{DriveSlot, SyncRunner, trigger_sync};
 
 use tauri_project_lib::auth::account_key::account_key;
 use tauri_project_lib::shared_drives::commands::{
-    MemberDriveInstall, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
+    MemberDriveInstall, MintInvite, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
 };
 use tauri_project_lib::shared_drives::grant;
 use tauri_project_lib::sync::events::SHARED_DRIVE_REVOKED_MARKER;
@@ -459,9 +459,24 @@ struct MemberDrive {
 /// open, `install_member_drive`, resolver, engine unlock — asserting the
 /// contract at each seam.
 async fn member_accept_and_install(env: &LiveEnv, http: &reqwest::Client, owner: &OwnerDrive) -> MemberDrive {
-    let invite_token = http_create_invite(http, &env.server_url, &env.owner_bearer, &owner.identity.wire_folder_hash, 3600, 5)
-        .await
-        .expect("mint invite");
+    // `writer` keeps the live lane exercising the shape every shipped build
+    // minted before the role picker existed.
+    let invite_token = http_create_invite(
+        http,
+        &env.server_url,
+        &env.owner_bearer,
+        MintInvite {
+            folder_hash: &owner.identity.wire_folder_hash,
+            expires_in_secs: 3600,
+            max_uses: 5,
+            role: "writer",
+            // The owner's own mint; a manager's delegated mint names the owner.
+            owner: None,
+        },
+    )
+    .await
+    .expect("mint invite")
+    .token;
 
     // The `#k=` fragment entropy — `create_drive_invite`'s derivation.
     let fragment_entropy = grant::entropy_from_phrase(&owner.folder_phrase).expect("fragment entropy");

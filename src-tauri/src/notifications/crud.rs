@@ -635,6 +635,7 @@ const DEFAULT_PREFERENCES: &[(&str, &str, &str)] = &[
         "Files",
         "Notifications for file operations including sync completion and failures",
     ),
+    ("chat", "Chat", "Desktop notifications for new team chat messages and mentions"),
 ];
 
 /// Seed the default preference rows for `owner` if absent.

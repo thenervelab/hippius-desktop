@@ -11,6 +11,7 @@ import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
+import DriveSharingHeaderMark from "./DriveSharingHeaderMark";
 import SyncFolderBreadcrumb, {
   BreadcrumbSegment,
 } from "./SyncFolderBreadcrumb";
@@ -38,7 +39,6 @@ import {
 import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
 import RemoteFolderUploadButton from "./RemoteFolderUploadButton";
-import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
 // Mirrors the trigger styling used across the home dashboard cards.
@@ -69,6 +69,8 @@ interface DriveHeaderProps {
   isRefetching?: boolean;
   isFetching?: boolean;
   formattedStorageSize: string;
+  /** Console parity — see StorageStateList. Defaults to "Storage Used:". */
+  storageLabel?: string;
   allFilteredDataLength: number;
   viewMode: "list" | "card";
   setViewMode: (mode: "list" | "card") => void;
@@ -115,6 +117,10 @@ interface DriveHeaderProps {
   onExcludedOnlyChange?: (excludedOnly: boolean) => void;
   /** See `shouldOfferExcludedFilter` — hidden on a drive with no rules. */
   showExcludedFilter?: boolean;
+  /** Shared-drive "Added by" options; omit when the drive is not shared. */
+  addedByOptions?: Array<{ ss58: string; label: string }>;
+  selectedUploadedBy?: string;
+  onUploadedByChange?: (ss58: string | undefined) => void;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
@@ -127,6 +133,21 @@ interface DriveHeaderProps {
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
   breadcrumbSegments?: BreadcrumbSegment[];
   onBreadcrumbLocalClick?: () => void;
+  /**
+   * The drive currently open, by local label. Drives the header's shared
+   * badge and its way in to managing access, so standing inside a drive says
+   * the same thing its row in the list does.
+   */
+  openDriveLabel?: string | null;
+  openDriveDisplayName?: string | null;
+  /** True when the open drive is one this account may only read. */
+  isReadOnlyDrive?: boolean;
+  /**
+   * Set when the open drive is one somebody shared with this account and it
+   * is being browsed WITHOUT being synced here — there is no local label, so
+   * the header identifies it by its wire identity.
+   */
+  browsedSharedDrive?: { ownerSs58: string; folderHash: string } | null;
   // Nested folder browsing mode. When `isNested` is true:
   //  - the Upload File and Upload Folder actions target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
@@ -158,6 +179,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   isRefetching = false,
   isFetching = false,
   formattedStorageSize,
+  storageLabel = "Storage Used:",
   allFilteredDataLength,
   viewMode,
   setViewMode,
@@ -184,11 +206,18 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   onFileSizesChange,
   onExcludedOnlyChange,
   showExcludedFilter = false,
+  addedByOptions,
+  selectedUploadedBy,
+  onUploadedByChange,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
   folderUploadInitialPath,
   breadcrumbSegments = [],
+  openDriveLabel,
+  openDriveDisplayName,
+  isReadOnlyDrive = false,
+  browsedSharedDrive = null,
   onBreadcrumbLocalClick,
   isNested = false,
   nestedFolderName = null,
@@ -206,7 +235,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
     onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
   const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
-  const { checkEligibility } = useCreditCheck();
+  const { requireUploadRoom } = useCreditCheck();
 
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
@@ -219,6 +248,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   // One decision for both upload buttons — see `resolveUploadAction`.
   const uploadAction = resolveUploadAction({
     hideUploads,
+    isReadOnlyDrive,
     isRecentFiles: Boolean(isRecentFiles),
     hasNoSyncPaths: Boolean(hasNoSyncPaths),
     isSyncPathEmpty: Boolean(isSyncPathEmpty),
@@ -236,8 +266,14 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           <Button
             variant="defaultStable"
             size="auto"
+            disabled={isStorageFull}
             onClick={async () => {
-              if (!(await checkEligibility("folder-upload"))) return;
+              // Disabled when blocked: do not open dialog from the button.
+              // Drag-and-drop still opens the dialog via DriveContent.
+              if (isStorageFull) return;
+              if (!(await requireUploadRoom("folder-upload", false))) {
+                return;
+              }
               if (!hasConfiguredDrives) {
                 toast.warning(
                   "Set up a sync folder in Settings → Sync & Storage before uploading.",
@@ -247,7 +283,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               setIsFolderUploadOpen(true);
             }}
             className={SECONDARY_PILL_CLASSES}
-            title={UPLOAD_FOLDER_LABEL}
+            title={
+              isStorageFull
+                ? "Storage full. Upgrade your plan to upload."
+                : UPLOAD_FOLDER_LABEL
+            }
           >
             <ArrowUpToLine className="size-4 shrink-0" />
             {UPLOAD_FOLDER_BUTTON_LABEL}
@@ -289,7 +329,12 @@ const DriveHeader: FC<DriveHeaderProps> = ({
 
       {/* A folder that is not synced here uploads straight to the server,
           so it gets its own button rather than the local flow's. */}
-      {remoteUpload && (
+      {/* `isReadOnlyDrive` as well as `remoteUpload`: these three bypass
+          `resolveUploadAction` entirely, so the role gate that hides the
+          local upload buttons never reached them and a Viewer was offered
+          New Folder, Folder and File on a drive the server refuses every
+          write to. */}
+      {remoteUpload && !isReadOnlyDrive && (
         <>
           <RemoteNewFolderButton
             label={remoteUpload.label}
@@ -300,11 +345,13 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             label={remoteUpload.label}
             parentPath={remoteUpload.parentPath}
             onUploaded={remoteUpload.onUploaded}
+            storageBlocked={isStorageFull}
           />
           <RemoteUploadButton
             label={remoteUpload.label}
             parentPath={remoteUpload.parentPath}
             onUploaded={remoteUpload.onUploaded}
+            storageBlocked={isStorageFull}
           />
         </>
       )}
@@ -328,6 +375,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         <AddButton
             ref={addButtonRef}
             defaultFolderLabel={defaultFolderLabel}
+            storageBlocked={isStorageFull}
             nestedUpload={
               isNested && nestedFolderName
                 ? {
@@ -341,20 +389,18 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           />
       ) : null}
 
-      {/* Start Syncing button - show for empty sync paths or no sync paths.
-          When the user is out of credits the sync flow is a dead-end (every
-          upload would 402), so the button dims and reroutes to the plans
-          page — same destination as the out-of-storage empty-state CTA. */}
+      {/* Start Syncing: when storage is blocked the control is disabled
+          (not a dialog-on-click). Drops still explain via the dialog. */}
       {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
         <StartSyncingButton
           onClick={
             isStorageFull
-              ? () => push(BILLING_ROUTE)
+              ? undefined
               : isRecentFiles && hasNoSyncPaths
                 ? onNavigateToSettings
                 : onStartSyncing
           }
-          className={isStorageFull ? "opacity-50" : undefined}
+          disabled={isStorageFull}
         />
       )}
 
@@ -459,13 +505,26 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               Lives inside the outer grey card's top section (px-2.5 py-2 per Figma).
               The default mt-6/mb-5 from SyncFolderBreadcrumb is overridden so the
               row stays compact and vertically aligned with the buttons. */}
-          <div className="flex items-center justify-between gap-4 flex-wrap min-w-0 w-full px-2.5 py-2">
-            <SyncFolderBreadcrumb
-              segments={breadcrumbSegments}
-              onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
-              className="mt-0 mb-0"
-            />
-            <div className="flex items-center gap-3 flex-wrap">
+          {/* Right-aligned, and NOT via `justify-between`. That rule pushes
+              the two groups apart on a shared line but leaves the actions at
+              the START of a wrapped one, so the toolbar moved depending on
+              how deep the folder was. `ml-auto` on the actions group is a
+              property of the group itself, so it holds the right edge on
+              whichever line it lands on. */}
+          <div className="flex items-center gap-x-4 gap-y-2 flex-wrap min-w-0 w-full px-2.5 py-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <SyncFolderBreadcrumb
+                segments={breadcrumbSegments}
+                onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
+                className="mt-0 mb-0"
+              />
+              <DriveSharingHeaderMark
+                label={openDriveLabel}
+                displayName={openDriveDisplayName}
+                browsedSharedDrive={browsedSharedDrive}
+              />
+            </div>
+            <div className="flex items-center gap-3 flex-wrap ml-auto">
               {refreshButton}
               {actionButtons}
             </div>
@@ -501,6 +560,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   onFileSizesChange={onFileSizesChange}
                   onExcludedOnlyChange={onExcludedOnlyChange}
                   showExcludedFilter={showExcludedFilter}
+                  addedByOptions={addedByOptions}
+                  selectedUploadedBy={selectedUploadedBy}
+                  onUploadedByChange={onUploadedByChange}
                 />
                 <div className="flex items-center gap-3 shrink-0">
                   {/* Stats are hidden inside a nested folder — the totals
@@ -509,6 +571,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   {!isNested && (
                     <StorageStateList
                       storageUsed={formattedStorageSize}
+                      storageLabel={storageLabel}
                       numberOfFiles={allFilteredDataLength || 0}
                     />
                   )}

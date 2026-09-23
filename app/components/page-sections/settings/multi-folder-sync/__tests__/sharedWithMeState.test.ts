@@ -1,6 +1,9 @@
 // Row/view routing for the "Shared with me" section.
 
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   getMembershipRowAction,
@@ -57,5 +60,22 @@ describe("getMembershipRowAction", () => {
     expect(getMembershipRowAction({ syncedLocally: true, localLabel: null })).toEqual({
       kind: "sync-locally",
     });
+  });
+});
+
+// The row printed the wire word raw, so a drive shared with you announced
+// itself as "writer". The wire vocabulary is reader/writer/manager; every
+// surface a person reads says Viewer/Editor/Manager.
+describe("the Shared with me row's role", () => {
+  it("never shows a wire word", () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../SharedWithMeSection.tsx"),
+      "utf8",
+    );
+    // The row now renders the shared role CHIP, which does the labelling
+    // itself. What must never appear is the raw wire word.
+    expect(source).toContain("<DriveRoleChip role={role} />");
+    expect(source).toContain("parseDriveRole(membership.role)");
+    expect(source).not.toMatch(/·\s*\{membership\.role\}/);
   });
 });

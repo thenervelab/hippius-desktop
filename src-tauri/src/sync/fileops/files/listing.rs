@@ -36,6 +36,18 @@ pub struct FileEntry {
     /// Server-side timestamp: when the file was last updated (Unix seconds).
     /// 0 when not available (file not yet synced).
     pub updated_at: i64,
+    /// SS58 of whoever uploaded this revision, when the server attributes it.
+    ///
+    /// `None` covers three different things and the UI must treat them alike
+    /// -- say nothing: a folder (never attributed), a file the server has no
+    /// attribution for (rows predating it, admin-bearer writes), and a local
+    /// disk entry that has not been uploaded from here yet. It is worth
+    /// showing only on a SHARED drive, where "who put this here" has more
+    /// than one possible answer.
+    pub uploaded_by: Option<String>,
+    /// Display name beside `uploaded_by` (hcfs #455). Absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploaded_by_name: Option<String>,
 }
 
 /// List contents of sync folder.
@@ -227,6 +239,8 @@ async fn list_sync_folder_inner_with(
             file_count,
             uploaded_at: info.map_or(0, |i| i.uploaded_at),
             updated_at: info.map_or(0, |i| i.updated_at),
+            uploaded_by: None,
+            uploaded_by_name: None,
         });
     }
 
@@ -463,6 +477,8 @@ pub async fn list_sync_folder_grouped_inner(
                             file_count: 0,
                             uploaded_at: info.uploaded_at,
                             updated_at: info.updated_at,
+                            uploaded_by: None,
+                            uploaded_by_name: None,
                         });
                         seen_names.insert(remainder.to_string());
                     }
@@ -508,6 +524,8 @@ pub async fn list_sync_folder_grouped_inner(
             file_count,
             uploaded_at: 0,
             updated_at: 0,
+            uploaded_by: None,
+            uploaded_by_name: None,
         });
     }
     files.extend(server_only_files);
@@ -704,6 +722,8 @@ async fn cache_only_folder_candidates(
                 file_count: 0,
                 uploaded_at: 0,
                 updated_at: 0,
+                uploaded_by: None,
+                uploaded_by_name: None,
             }
         })
         .collect()
@@ -737,6 +757,8 @@ mod tests {
             file_count: 0,
             uploaded_at: 2,
             updated_at: 3,
+            uploaded_by: None,
+            uploaded_by_name: None,
         };
         let file_keys: BTreeSet<String> = serde_json::to_value(&child)
             .expect("serialize FileEntry")
@@ -756,6 +778,8 @@ mod tests {
             "file_count",
             "uploaded_at",
             "updated_at",
+            // Read by File Details to say who put a file in a shared drive.
+            "uploaded_by",
         ]
         .into_iter()
         .map(String::from)

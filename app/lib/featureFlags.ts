@@ -7,13 +7,14 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). No flag needs the lane gate right now; it
-// is there for the next one that ships to testers before production.
+// staging, never production). `SHARED_DRIVES_ENABLED` uses it.
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
 // per-branch value either conflicts on every promotion or rides into
 // production through a hunk nobody read.
+
+import { enabledFrom } from "@/app/lib/buildChannel";
 
 /**
  * Switch the home-page Credit Usage chart and the Total Credit Used
@@ -111,20 +112,42 @@ export const VM_VPN_ENABLED = false;
  * silently anyway (the backend maps the unmounted routes to
  * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches and hides).
  *
- * **Off on every lane.** It was briefly gated to beta and staging so
- * testers could exercise it, but the feature is not ready to be used at
- * all yet — invites are minted and accepted at the console, so it only
- * works when the server fleet runs with `HCFS_FEATURE_SHARED_DRIVES=1`
- * and the console's `/invite/{token}` page is live. Showing the surfaces
- * without those is a flow that cannot complete.
+ * **Gated to beta** (`enabledFrom("beta")`): off production, on beta/staging.
  *
- * It was also left `true` through 0.6.0 without ever being announced,
- * which left the app contradicting itself: the Drive plan cards grey out
- * the shared team drive perk as "coming soon" while the sharing surfaces
- * were reachable. Turn it on — for a lane with `enabledFrom`, or
- * everywhere with `true` — when both sides ship together.
+ * Console splits create vs use (`SHARED_DRIVES` on prod for members/invite
+ * accept; `SHARED_DRIVES_CREATE` off prod until launch). Desktop still uses
+ * one flag for both mint and use. Matching that split is a follow-up — do
+ * not silently enable create on production without an explicit decision.
+ *
+ * Two gates still stand in front of it, which is what makes that safe:
+ *
+ *   - a plan without the perk never sees "Share drive" at all
+ *     (`planSupportsSharedDrives`), and the server refuses a mint with
+ *     `shared_drives_not_entitled` even if it somehow did;
+ *   - a server fleet without `HCFS_FEATURE_SHARED_DRIVES=1` answers the
+ *     unmounted routes as `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the
+ *     UI hides rather than erroring on.
+ *
+ * So the worst case on a lane whose fleet is not ready is a menu item that
+ * opens a modal saying the feature is not available — not a broken flow.
+ *
+ * Worth remembering why it was dark: it was left `true` through 0.6.0 without
+ * ever being announced, which left the app contradicting itself — the Drive
+ * plan cards grey out the shared team drive perk as "coming soon" while the
+ * sharing surfaces were reachable. Check that copy still matches before this
+ * reaches production.
+ *
+ * **Gated to beta because the console gates itself the same way.** The desktop
+ * owns only part of the flow: an invite link is ACCEPTED on the console's
+ * `/invite/[token]` page, and the console keeps its own `SHARED_DRIVES` flag
+ * off in production. On everywhere here would let a production owner mint
+ * links that land on a console page with the feature off — the desktop half
+ * working perfectly and the flow dying at the one step it does not own.
+ * Nothing in either codebase catches that, so the two flags flip together at
+ * launch. `pnpm dev` resolves to staging (see `next.config.ts`), so local
+ * work still sees it.
  */
-export const SHARED_DRIVES_ENABLED = false;
+export const SHARED_DRIVES_ENABLED = enabledFrom("beta");
 
 /**
  * API token settings. When `false`, the surface is fully invisible: the

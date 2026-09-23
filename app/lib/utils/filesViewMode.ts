@@ -1,4 +1,6 @@
-/** Search, type/date/size, or the Excluded chip — flatten via recursive search. */
+import { isSearchTermTooShort } from "@/app/lib/utils/searchTerm";
+
+/** Search, type/date/size, Added by, or the Excluded chip — flatten via search. */
 export function filterCriteriaAreActive(opts: {
   searchTerm?: string;
   fileExtension?: string;
@@ -6,6 +8,8 @@ export function filterCriteriaAreActive(opts: {
   dateRange?: { from?: string } | null;
   fileSizes?: number[];
   excludedOnly?: boolean;
+  /** Exact uploader ss58 or `_none` — selecting alone must still run search. */
+  uploadedBy?: string;
 }): boolean {
   return (
     Boolean(opts.searchTerm?.trim()) ||
@@ -13,7 +17,8 @@ export function filterCriteriaAreActive(opts: {
     Boolean(opts.fileExtensions && opts.fileExtensions.length > 0) ||
     Boolean(opts.dateRange?.from) ||
     Boolean(opts.fileSizes && opts.fileSizes.length > 0) ||
-    Boolean(opts.excludedOnly)
+    Boolean(opts.excludedOnly) ||
+    Boolean(opts.uploadedBy?.trim())
   );
 }
 
@@ -47,18 +52,55 @@ export function shouldRunInMemoryFilter(opts: {
  * the rows already on screen — which misses every subfolder and reads as
  * broken next to a local drive. The server-side search covers the whole
  * drive instead.
+ *
+ * An "Added by" filter also forces this path: attribution lives on the
+ * server (`uploaded_by`), and local recursive walk cannot answer it.
  */
 export function shouldUseDriveScopedSearch(opts: {
   hasActiveSearchOrFilter: boolean;
   isRemoteView: boolean;
   remoteLabel: string | null;
   isRecentFiles: boolean;
+  /** When set, prefer server search even on a synced shared drive. */
+  uploadedBy?: string | null;
+  /** Local or remote label that can scope `search_files_in_drive`. */
+  driveLabel?: string | null;
 }): boolean {
+  if (opts.isRecentFiles) return false;
+  if (
+    opts.uploadedBy?.trim() &&
+    Boolean(opts.driveLabel ?? opts.remoteLabel) &&
+    opts.hasActiveSearchOrFilter
+  ) {
+    return true;
+  }
   return (
     opts.hasActiveSearchOrFilter &&
     opts.isRemoteView &&
-    Boolean(opts.remoteLabel) &&
-    !opts.isRecentFiles
+    Boolean(opts.remoteLabel)
+  );
+}
+
+/**
+ * Whether the drive page should ask for a longer search term instead of
+ * reporting that nothing matched.
+ *
+ * Only the server-backed search has a minimum term length, so a local drive
+ * never shows this. An extension filter keeps the search meaningful without
+ * the term (it runs on the extension alone), so the hint would be wrong there
+ * too: rows are on screen, or the filter itself matched nothing.
+ */
+export function shouldHintSearchTermTooShort(opts: {
+  usesDriveScopedSearch: boolean;
+  searchTerm: string | null | undefined;
+  fileExtension?: string | null;
+  uploadedBy?: string | null;
+}): boolean {
+  return (
+    opts.usesDriveScopedSearch &&
+    isSearchTermTooShort(opts.searchTerm) &&
+    !opts.fileExtension &&
+    !opts.uploadedBy?.trim()
   );
 }
 

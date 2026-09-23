@@ -1,4 +1,5 @@
 "use client";
+
 import React from "react";
 import { useAtom } from "jotai";
 import { useRouter } from "next/navigation";
@@ -13,62 +14,68 @@ import { FramedDialog } from "@/components/ui/FramedDialog";
 import { cn } from "@/lib/utils";
 import { openLinkByKey } from "@/app/lib/utils/links";
 import { BILLING_ROUTE } from "@/app/lib/routes";
+import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
+import { getUploadBlockReason } from "./uploadRoomState";
+import { getUploadBlockDialogCopy } from "./uploadBlockCopy";
 
-const copy: Record<
-  InsufficientCreditsReason,
-  { title: string; description: string; needsPlan: boolean }
-> = {
-  "file-upload": {
-    title: "Not enough storage",
-    description:
-      "This file would go past the storage your plan includes. Upgrade your plan for more room, or remove some files to free space.",
-    needsPlan: true,
-  },
-  "folder-upload": {
-    title: "Not enough storage",
-    description:
-      "This folder would go past the storage your plan includes. Upgrade your plan for more room, or remove some files to free space.",
-    needsPlan: true,
-  },
-  "folder-sync": {
-    title: "Not enough storage",
-    description:
-      "Syncing this folder would go past the storage your plan includes. Upgrade your plan for more room, or pick a smaller folder.",
-    needsPlan: true,
-  },
-  // A share link uploads a re-encrypted copy of the file, and the server
-  // bills that copy like any upload — so a refusal here means THIS share
-  // does not fit, the same as an upload of the same size would not.
-  sharing: {
-    title: "Not enough storage",
-    description:
-      "Sharing this file would go past the storage your plan includes. Upgrade your plan for more room, or free some space.",
-    needsPlan: true,
-  },
-  // VM creation is genuinely credit-priced and keeps the credits route.
-  "vm-creation": {
-    title: "Not enough balance for VM creation",
-    description:
-      "Creating a virtual machine needs at least $10 on your account balance. Top up before proceeding.",
-    needsPlan: false,
-  },
+type DialogCopy = {
+  title: string;
+  description: string;
+  primaryLabel: string;
+  needsPlan: boolean;
 };
+
+const vmCopy: DialogCopy = {
+  title: "Not enough balance for VM creation",
+  description:
+    "Creating a virtual machine needs at least $10 on your account balance. Top up before proceeding.",
+  primaryLabel: "Subscribe",
+  needsPlan: false,
+};
+
+/** Fallback when Overview has not settled but eligibility already refused. */
+const genericUpgradeCopy: DialogCopy = {
+  title: "Not enough storage",
+  description:
+    "Uploads are paused, your files stay available. Upgrade or free up space.",
+  primaryLabel: "Upgrade",
+  needsPlan: true,
+};
+
+function resolveCopy(
+  reason: InsufficientCreditsReason,
+  overviewSource: ReturnType<typeof useStorageOverview>["data"],
+): DialogCopy {
+  if (reason === "vm-creation") return vmCopy;
+
+  const block = getUploadBlockReason(overviewSource);
+  if (block) {
+    const copy = getUploadBlockDialogCopy(block, overviewSource?.source);
+    return { ...copy, needsPlan: true };
+  }
+
+  // Live eligibility refused without an Overview block (rare race). Prefer
+  // over-quota wording: files stay, no 30-day deletion clock.
+  return genericUpgradeCopy;
+}
 
 const InsufficientCreditsDialog: React.FC = () => {
   const [reason, setReason] = useAtom(insufficientCreditsDialogOpenAtom);
   const router = useRouter();
+  const { data: overview } = useStorageOverview();
 
   if (!reason) return null;
 
-  const { title, description, needsPlan } = copy[reason];
+  const { title, description, needsPlan, primaryLabel } = resolveCopy(
+    reason,
+    overview,
+  );
 
   const handleClose = () => setReason(false);
 
   const handlePrimary = () => {
     setReason(false);
     if (needsPlan) {
-      // The desktop has its own Subscription Plans page — keep the user in
-      // the app instead of bouncing them out to the console.
       router.push(BILLING_ROUTE);
       return;
     }
@@ -92,9 +99,6 @@ const InsufficientCreditsDialog: React.FC = () => {
       </p>
 
       <div className="flex flex-col gap-3">
-        {/* Storage is sold as a plan, so a bigger plan is the only way out
-            of a full drive. Credits buy no Drive storage and offering them
-            here would send the user somewhere that cannot help. */}
         <Button
           variant="primary"
           size="auto"
@@ -106,7 +110,7 @@ const InsufficientCreditsDialog: React.FC = () => {
             "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
           )}
         >
-          {needsPlan ? "View plans" : "Subscribe"}
+          {needsPlan ? primaryLabel : "Subscribe"}
         </Button>
         {needsPlan ? (
           <Button

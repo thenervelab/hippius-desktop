@@ -163,10 +163,48 @@ pub async fn resolve_drive_identity(pool: &SqlitePool, account_id: &str, label: 
 /// [`AppError::Db`]. Funnel-style operations that require the row (init,
 /// backfills) must use [`resolve_drive_identity`] instead.
 pub async fn resolve_drive_identity_or_own(pool: &SqlitePool, account_id: &str, label: &str) -> Result<DriveIdentity> {
+    // A drive being BROWSED without being synced here carries its wire
+    // identity in the label itself, because there is no row to look up. This
+    // is checked before the row lookup and before the own-drive fallback: the
+    // fallback answers with THIS account's namespace, which is how a file
+    // uploaded into somebody's shared drive landed in the uploader's own
+    // instead, with nothing erroring. Every label-keyed path gets this for
+    // free rather than each having to be threaded separately.
+    if let Some(identity) = shared_drive_browse_identity(label) {
+        return Ok(identity);
+    }
     match lookup_drive_identity(pool, account_id, label).await? {
         Some(identity) => Ok(identity),
         None => Ok(DriveIdentity::own(account_id, &crate::sync::mnemonic::folder_hash(label))),
     }
+}
+
+/// Prefix marking a synthetic browse label. Mirrors the frontend's
+/// `app/lib/shared-drives/sharedDriveLabel.ts`; the two are one contract and
+/// change together.
+const SHARED_BROWSE_PREFIX: &str = "shared:";
+/// Separator between owner and folder hash. Deliberately not `/`: the label
+/// passes through URL parameters and path joins that split on slashes, and a
+/// slash there silently un-marked the drive one folder below its root.
+const SHARED_BROWSE_SEPARATOR: char = '~';
+
+/// The wire identity a synthetic browse label names, or `None` for an
+/// ordinary label.
+///
+/// Both halves must be present. Half an identity falls through to the normal
+/// resolution rather than being guessed at, and the caller-side validators
+/// refuse it outright.
+pub fn shared_drive_browse_identity(label: &str) -> Option<DriveIdentity> {
+    let rest = label.strip_prefix(SHARED_BROWSE_PREFIX)?;
+    let (owner, hash) = rest.split_once(SHARED_BROWSE_SEPARATOR)?;
+    if owner.is_empty() || hash.is_empty() {
+        return None;
+    }
+    Some(DriveIdentity {
+        wire_ss58: owner.to_string(),
+        wire_folder_hash: hash.to_string(),
+        is_member: true,
+    })
 }
 
 /// The local `sync_paths` row (label + sync root) already syncing a given
@@ -249,6 +287,62 @@ fn is_wire_folder_hash(hash: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A drive browsed without being synced here carries its wire identity in
+    /// the label. Resolving it as an OWN drive is what sent a file uploaded
+    /// into somebody's shared drive to the uploader's own namespace instead,
+    /// with nothing erroring.
+    #[test]
+    fn a_browse_label_resolves_to_the_owners_namespace() {
+        let id = shared_drive_browse_identity("shared:5Owner~abc123").expect("identity");
+        assert_eq!(id.wire_ss58, "5Owner");
+        assert_eq!(id.wire_folder_hash, "abc123");
+        assert!(id.is_member, "somebody else's drive is never own");
+    }
+
+    /// An ordinary label must fall through to the row lookup untouched.
+    #[test]
+    fn an_ordinary_label_is_not_a_browse_label() {
+        for label in ["Documents", "", "shared", "sharedDocs", "share:5Owner~abc"] {
+            assert!(shared_drive_browse_identity(label).is_none(), "{label} is not a browse label");
+        }
+    }
+
+    /// Half an identity falls through rather than being guessed at.
+    #[test]
+    fn half_a_browse_label_falls_through() {
+        for label in ["shared:5Owner", "shared:5Owner~", "shared:~abc123", "shared:", "shared:~"] {
+            assert!(shared_drive_browse_identity(label).is_none(), "{label} must not resolve");
+        }
+    }
+
+    /// The label is carried in URL parameters and joined into folder paths by
+    /// machinery that splits on `/`. A slash in the separator is what broke
+    /// this one level below a drive's root.
+    #[test]
+    fn the_browse_label_format_contains_no_slash() {
+        assert!(!SHARED_BROWSE_PREFIX.contains('/'));
+        assert_ne!(SHARED_BROWSE_SEPARATOR, '/');
+    }
+
+    /// The format is one contract with the frontend, which builds these
+    /// labels. Two halves that disagree resolve to the wrong namespace in
+    /// silence, so the Rust side reads the TypeScript's own constants.
+    #[test]
+    fn the_browse_label_format_matches_the_frontend() {
+        let ts = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../app/lib/shared-drives/sharedDriveLabel.ts"))
+            .expect("read sharedDriveLabel.ts");
+
+        assert!(
+            ts.contains(&format!("SHARED_DRIVE_LABEL_PREFIX = \"{SHARED_BROWSE_PREFIX}\"")),
+            "the frontend's prefix must be {SHARED_BROWSE_PREFIX}"
+        );
+        assert!(
+            ts.contains(&format!("SHARED_DRIVE_LABEL_SEPARATOR = \"{SHARED_BROWSE_SEPARATOR}\"")),
+            "the frontend's separator must be {SHARED_BROWSE_SEPARATOR}"
+        );
+    }
+
     use super::*;
 
     /// In-memory pool with the production `sync_paths` shape (incl. the

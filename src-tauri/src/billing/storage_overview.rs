@@ -81,6 +81,14 @@ const FREE_TIER_FALLBACK_GB: u64 = 10;
 pub struct PlanInfo {
     /// Human plan name (e.g. "Pro"); may be empty if the API omits it.
     pub name: String,
+    /// The plan's CODE (`free` | `solo` | `duo` | `max` | `scale`), which is
+    /// what an entitlement decision keys on. Empty when the rail did not say
+    /// — the legacy Stripe subscription has no code at all.
+    ///
+    /// Distinct from [`Self::name`] on purpose: `name` is a marketing label
+    /// that changes without a release, so a feature gate written against it
+    /// silently stops matching. Shared drives' gate reads this.
+    pub code: String,
     /// Price per billing interval, in the plan's currency unit.
     pub amount: f64,
     /// Billing interval as the API reports it (e.g. "month", "year").
@@ -231,6 +239,11 @@ pub struct StorageOverview {
     pub used_display: String,
     pub total_display: String,
     pub free_display: String,
+    /// Present when usage exceeds capacity (downgrade / over free). The FE
+    /// shows this instead of the clamped "100%" so "12.56 GB of 10.00 GB"
+    /// is never paired with a percent that pretends the account is merely
+    /// full. Authored here for the same H-109 reason as the other labels.
+    pub over_display: Option<String>,
     /// What the header should offer — see [`PlanAction`]. Render this;
     /// never re-derive it from `source` / `percent` / `plan` on the FE.
     pub plan_action: PlanAction,
@@ -313,9 +326,23 @@ fn finish_overview(
         used_display: labels.used,
         total_display: labels.total,
         free_display: labels.free,
+        over_display: format_over_display(used_bytes, total_bytes),
         plan_action,
         free_tier_entitled,
     }
+}
+
+/// "2.56 GB over your plan" when usage exceeds capacity; `None` otherwise.
+///
+/// Replaces the clamped percent on the card/chip so a post-downgrade
+/// account is not told it is both over the plan and exactly 100% full.
+fn format_over_display(used_bytes: u64, total_bytes: u64) -> Option<String> {
+    if total_bytes == 0 || used_bytes <= total_bytes {
+        return None;
+    }
+    let over = used_bytes - total_bytes;
+    let idx = si_unit_index(over);
+    Some(format!("{} over your plan", format_si(over, idx, true)))
 }
 
 struct OverviewLabels {
@@ -578,6 +605,7 @@ fn plan_from_drive_subscription(sub: &serde_json::Value, plans: &serde_json::Val
 
     Some(PlanInfo {
         name,
+        code: code.to_string(),
         amount,
         interval: "month".into(),
         storage_bytes,
@@ -600,6 +628,10 @@ fn plan_from_subscription(active: &serde_json::Value) -> Option<PlanInfo> {
     let storage_gb = capacity_gb_for_credits(credits_per_billing);
     Some(PlanInfo {
         name: sub.get("plan_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        // The legacy Stripe storage subscription predates plan codes. Empty
+        // means "unknown", which entitlement treats as permitted rather than
+        // refused — see `planEntitlement.ts`.
+        code: String::new(),
         amount: sub.get("amount").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
         interval: sub.get("interval").and_then(|v| v.as_str()).unwrap_or("month").to_string(),
         storage_bytes: storage_gb.saturating_mul(BYTES_PER_GB),
@@ -722,8 +754,20 @@ pub async fn get_storage_overview(
 mod tests {
     use super::*;
 
+    /// The shared-drives gate keys on the plan CODE, and there is no codegen
+    /// across IPC to catch it going missing. A gate written against `name`
+    /// silently stops matching when marketing renames a tier, which is the
+    /// bug this field exists to end.
+    #[test]
+    fn plan_info_sends_the_code_as_well_as_the_name() {
+        let json = serde_json::to_value(pro_plan(100)).unwrap();
+        assert_eq!(json["code"], "max", "the plan code must reach the frontend");
+        assert!(json.get("name").is_some(), "the display name stays, for the chip");
+    }
+
     fn pro_plan(gb: u64) -> PlanInfo {
         PlanInfo {
+            code: "max".into(),
             name: "Pro".into(),
             amount: 5.0,
             interval: "month".into(),
@@ -737,6 +781,7 @@ mod tests {
 
     fn plan_funded(by: &str, amount: f64) -> PlanInfo {
         PlanInfo {
+            code: "max".into(),
             funding: Some(by.into()),
             amount,
             ..pro_plan(100)
@@ -976,6 +1021,23 @@ mod tests {
         assert!((overview.percent - 100.0).abs() < 1e-9);
         // Raw byte counts stay honest even while the percent clamps.
         assert_eq!(overview.used_bytes, 2000 * BYTES_PER_GB);
+        // The card shows how far over rather than a contradictory 100%.
+        assert_eq!(overview.over_display.as_deref(), Some("1.00 TB over your plan"));
+    }
+
+    #[test]
+    fn under_quota_has_no_over_display() {
+        let overview = build_overview(500 * BYTES_PER_GB, Some(pro_plan(1000)), None, None, true);
+        assert!(overview.over_display.is_none());
+    }
+
+    #[test]
+    fn free_tier_over_quota_names_the_overage() {
+        // OAuth free floor is 10 GB (fallback when the catalogue is unread).
+        let overview = build_overview(12_560_000_000, None, None, None, true);
+        assert_eq!(overview.source, CapacitySource::Free);
+        assert!((overview.percent - 100.0).abs() < 1e-9);
+        assert_eq!(overview.over_display.as_deref(), Some("2.56 GB over your plan"));
     }
 
     #[test]

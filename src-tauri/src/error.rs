@@ -1104,6 +1104,12 @@ mod tests {
     #[test]
     fn genuine_auth_failures_log_at_warn() {
         let capture = crate::test_helpers::capture_logs();
+        // Like every other warn-tier capture test: an earlier test in the
+        // process that serialized a genuine `Auth` (the all-kinds pin does)
+        // has already consumed this kind's throttle window, and the capture
+        // lock only orders the tests -- it does not reopen the window. Without
+        // the reset this passes or fails on the runner's thread scheduling.
+        reset_warn_throttle("Auth");
         let _ = serde_json::to_string(&AppError::Auth(
             "This sign-in expired or was already completed. Please start a new sign-in from the Hippius app.".into(),
         ));

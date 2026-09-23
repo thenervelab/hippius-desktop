@@ -19,6 +19,7 @@ import { Icons } from "@/components/ui";
 import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { resolveFolderMenuPlan } from "@/components/page-sections/settings/multi-folder-sync/folderMenuGating";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import type { RemoteFolder, SyncFolder } from "@/app/lib/types/sync-folder";
 
 import type { FolderRow } from "./folderRows";
@@ -36,6 +37,22 @@ export interface FolderActionHandlers {
   /** Selective-sync picker for a LOCAL drive. */
   /** Only offered while `SHARED_DRIVES_ENABLED`, and never on a member row. */
   onShareDrive?: (folder: SyncFolder) => void;
+  /**
+   * Whether the account's plan includes shared drives. Omitted means "not
+   * known yet", which permits the item — see `resolveFolderMenuPlan`.
+   */
+  planSupportsSharedDrives?: boolean;
+  /**
+   * The viewer's role on this row's drive, when somebody shared it with them.
+   * Lets a MANAGER reach the mint on a drive they do not own.
+   */
+  role?: DriveRole;
+  /**
+   * Share a drive that exists on the server but is not synced on this device.
+   * Separate from `onShareDrive` only because the two branches hold different
+   * folder shapes; both open the same modal.
+   */
+  onShareRemoteDrive?: (folder: RemoteFolder) => void;
 }
 
 /**
@@ -56,6 +73,8 @@ export function buildFolderActions(
     const folder = row.local;
     const plan = resolveFolderMenuPlan(folder, {
       sharedDrivesEnabled: SHARED_DRIVES_ENABLED,
+      planSupportsSharedDrives: handlers.planSupportsSharedDrives,
+      role: handlers.role,
     });
     const items: ActionItem[] = [];
 
@@ -144,6 +163,22 @@ export function buildFolderActions(
       icon: <FolderSearch className="size-4" />,
       itemTitle: "Choose what syncs…",
       onItemClick: () => handlers.onBrowseRemote?.(folder),
+    });
+  }
+  // A drive listed here is one this account owns on the server that is not
+  // synced on THIS device -- synced from another machine, or never synced
+  // locally. Sharing it needs no local row: the invite is metadata plus a
+  // folder mnemonic derived from the master and the label. Withholding the
+  // item here meant an owner could not invite anyone to most of their drives
+  // from a second machine.
+  if (
+    SHARED_DRIVES_ENABLED &&
+    handlers.onShareRemoteDrive
+  ) {
+    items.push({
+      icon: <UserPlus className="size-4" />,
+      itemTitle: "Share drive…",
+      onItemClick: () => handlers.onShareRemoteDrive?.(folder),
     });
   }
   if (handlers.onDeleteFromServer) {

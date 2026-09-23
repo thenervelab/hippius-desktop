@@ -1,11 +1,13 @@
 "use client";
 
+import { parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 import { useCallback, useState } from "react";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { useSetAtom } from "jotai";
 import { toast } from "sonner";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import {
@@ -55,10 +57,14 @@ export function useRemoteFileUpload({
 }: RemoteUploadTarget): RemoteUploadAction {
   const { polkadotAddress } = useWalletAuth();
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
+  const { requireUploadRoom } = useCreditCheck();
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(async () => {
     if (!polkadotAddress || !label || busy) return;
+    // Overview no-plan / full first — /can_upload fail-opens and must not
+    // open the OS picker for an account that cannot upload.
+    if (!(await requireUploadRoom("file-upload"))) return;
 
     const picked = await openSelection({ multiple: true, directory: false });
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
@@ -78,6 +84,9 @@ export function useRemoteFileUpload({
         label,
         paths,
         parentPath,
+        // A shared drive browsed without syncing it carries its wire
+        // identity IN the label, so nothing has to thread it separately.
+        parseSharedDriveLabel(label) ?? undefined,
       );
       reportRemoteUploadOutcome(paths.length, failures);
       const uploaded = paths.length - failures.length;
@@ -95,7 +104,15 @@ export function useRemoteFileUpload({
     } finally {
       setBusy(false);
     }
-  }, [polkadotAddress, label, parentPath, busy, onUploaded, setInsufficient]);
+  }, [
+    polkadotAddress,
+    label,
+    parentPath,
+    busy,
+    onUploaded,
+    setInsufficient,
+    requireUploadRoom,
+  ]);
 
   return { start: () => void run(), busy };
 }
@@ -108,10 +125,12 @@ export function useRemoteFolderUpload({
 }: RemoteUploadTarget): RemoteUploadAction {
   const { polkadotAddress } = useWalletAuth();
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
+  const { requireUploadRoom } = useCreditCheck();
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(async () => {
     if (!polkadotAddress || !label || busy) return;
+    if (!(await requireUploadRoom("folder-upload"))) return;
 
     const picked = await openSelection({ multiple: false, directory: true });
     const folderPath = Array.isArray(picked) ? picked[0] : picked;
@@ -128,6 +147,7 @@ export function useRemoteFolderUpload({
         label,
         folderPath,
         parentPath,
+        parseSharedDriveLabel(label) ?? undefined,
       );
       reportRemoteUploadOutcomeForFolder(failures);
       onUploaded?.();
@@ -142,7 +162,15 @@ export function useRemoteFolderUpload({
     } finally {
       setBusy(false);
     }
-  }, [polkadotAddress, label, parentPath, busy, onUploaded, setInsufficient]);
+  }, [
+    polkadotAddress,
+    label,
+    parentPath,
+    busy,
+    onUploaded,
+    setInsufficient,
+    requireUploadRoom,
+  ]);
 
   return { start: () => void run(), busy };
 }

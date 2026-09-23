@@ -984,7 +984,7 @@ pub async fn create_folder_share_inner(
     // carries this key, never folder-mnemonic entropy. Wiped on drop.
     let mnemonic = crate::sync::remote::session_mnemonic(state)?;
     let file_key =
-        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(pool, account_id, folder_label, &mnemonic, &identity).await?);
+        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, &identity).await?);
 
     // Drive-scoped client: `create_folder_share` sends the folder_hash from
     // the client CONFIG, so `build_account_client`'s label-less client would
@@ -2178,6 +2178,9 @@ mod tests {
             folder_hash: "abcdef0123456789".to_string(),
             path_prefix: path_prefix.to_string(),
             display_name: "Photos".to_string(),
+            // New upstream field (hcfs #457/#458 sealed invite tokens); the
+            // listing-resolution tests do not exercise it.
+            owner_wrap: None,
             created_at: Utc::now(),
             expires_at: None,
             revoked_at: None,

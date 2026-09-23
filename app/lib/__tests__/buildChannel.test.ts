@@ -112,9 +112,7 @@ describe("the channel actually reaches the bundle", () => {
 });
 
 /**
- * The mechanism has no live consumer right now — shared drives was gated
- * to beta and has since been turned off on every lane — so these pin the
- * gate itself rather than a particular flag. The reason it exists outlasts
+ * Shared drives is the live consumer. The reason the gate exists outlasts
  * any one feature: a value edited per branch either conflicts on every
  * promotion or rides into production through an unread hunk, the same
  * shape as the per-branch updater key that shipped a broken updater.
@@ -133,5 +131,35 @@ describe("the lane gate stays usable", () => {
     const imported = /^import \{[^}]*enabledFrom[^}]*\} from/m.test(flags);
     const used = /=\s*enabledFrom\(/.test(flags);
     expect(imported).toBe(used);
+  });
+});
+
+/**
+ * The desktop owns only part of the shared-drive flow. An invite link is
+ * ACCEPTED on the console's `/invite/[token]` page, and the console keeps its
+ * own SHARED_DRIVES flag off in production. A desktop build with the feature
+ * on in production would let an owner mint links that land on a console page
+ * with the feature off: the desktop half working perfectly, the flow dying at
+ * the one step it does not own, and nothing in either codebase noticing.
+ */
+describe("shared drives is gated with the console, not ahead of it", () => {
+  const flags = read("app/lib/featureFlags.ts");
+
+  it("is gated to a lane rather than on everywhere", () => {
+    expect(flags).toMatch(/SHARED_DRIVES_ENABLED\s*=\s*enabledFrom\(/);
+    expect(flags).not.toMatch(/SHARED_DRIVES_ENABLED\s*=\s*true/);
+  });
+
+  it("is off in production, which is where the console is off", () => {
+    const gate = flags.match(/SHARED_DRIVES_ENABLED\s*=\s*enabledFrom\("(\w+)"\)/);
+    expect(gate, "SHARED_DRIVES_ENABLED must name its lane").not.toBeNull();
+    expect(isEnabledOn(gate![1] as Parameters<typeof isEnabledOn>[0], "production")).toBe(false);
+  });
+
+  // Without this a developer running `pnpm tauri:dev` loses every lane-gated
+  // surface and reads it as the feature being broken.
+  it("still resolves to a lane that shows it in local dev", () => {
+    const config = read("next.config.ts");
+    expect(config).toMatch(/NODE_ENV\s*===\s*"development"\s*\?\s*"staging"/);
   });
 });

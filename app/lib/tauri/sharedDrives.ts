@@ -1,11 +1,8 @@
 // Typed wrappers around the Rust shared-drive IPC commands.
 //
 // The Rust source of truth lives at `src-tauri/src/shared_drives/`.
-// `create_drive_invite`, `list_drive_members`, `remove_drive_member`,
-// `list_my_drive_memberships`, `leave_shared_drive`, and `add_shared_drive`
-// are the six commands; this file is the only place in the FE that talks to
-// them (the `shares.ts` convention), so swapping the wire shape is a
-// one-file change.
+// This file is the only place in the FE that talks to those commands (the
+// `shares.ts` convention), so swapping the wire shape is a one-file change.
 //
 // Feature-off servers: the shared-drive routes are mounted only under
 // `HCFS_FEATURE_SHARED_DRIVES=1`; against a feature-off server the backend
@@ -17,6 +14,7 @@
 // the surface reacting.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 
 /**
@@ -35,6 +33,10 @@ export interface DriveMemberInfo {
   role: string;
   /** RFC 3339 timestamp of when the member joined. */
   createdAt: string;
+  /** Display name (hcfs #455); absent when unknown. */
+  memberName?: string;
+  /** Email, only for owner/managers of the same drive. */
+  memberEmail?: string;
 }
 
 /**
@@ -48,6 +50,8 @@ export interface DriveMemberInfo {
  */
 export interface DriveMembershipInfo {
   ownerSs58: string;
+  /** Owner display name (hcfs #455); absent when unknown. */
+  ownerName?: string;
   folderHash: string;
   displayLabel: string;
   role: string;
@@ -55,6 +59,14 @@ export interface DriveMembershipInfo {
   createdAt: string;
   syncedLocally: boolean;
   localLabel: string | null;
+  /**
+   * People on this drive (owner excluded). Omit / undefined means unknown —
+   * never draw "0 members" from absence.
+   */
+  memberCount?: number;
+  /** Owner account limited: uploads refused. */
+  frozen?: boolean;
+  frozenUntil?: string | null;
 }
 
 /** Result of {@link addSharedDrive}: the local drive label actually
@@ -74,20 +86,54 @@ export interface AddSharedDriveResult {
  * modal's expiry preset row is a display concern only
  * (`shareDriveModalState.ts::DEFAULT_INVITE_TTL_SECS`).
  */
+/**
+ * Which drive a manage call addresses when there is no local label.
+ *
+ * A manager may hold a drive they never synced here; the label-keyed path
+ * resolves a `sync_paths` row such a drive does not have, and the lenient
+ * fallback then answers with THIS account's namespace. Naming the wire
+ * identity is how those calls address the right drive.
+ */
+export interface DriveTarget {
+  ownerSs58?: string | null;
+  folderHash?: string | null;
+}
+
+/** The identity args every manage IPC accepts, normalised to nulls. */
+function targetArgs(target?: DriveTarget) {
+  return {
+    ownerSs58: target?.ownerSs58 ?? null,
+    folderHash: target?.folderHash ?? null,
+  };
+}
+
 export async function createDriveInvite(
   label: string,
-  opts?: { expiresInSecs?: number; maxUses?: number },
+  opts?: {
+    expiresInSecs?: number;
+    maxUses?: number;
+    role?: DriveRole;
+    target?: DriveTarget;
+  },
 ): Promise<DriveInviteLink> {
   return invoke<DriveInviteLink>("create_drive_invite", {
     label,
     expiresInSecs: opts?.expiresInSecs,
     maxUses: opts?.maxUses,
+    role: opts?.role,
+    ...targetArgs(opts?.target),
   });
 }
 
 /** List the members of an OWN drive. */
-export async function listDriveMembers(label: string): Promise<DriveMemberInfo[]> {
-  return invoke<DriveMemberInfo[]>("list_drive_members", { label });
+export async function listDriveMembers(
+  label: string,
+  target?: DriveTarget,
+): Promise<DriveMemberInfo[]> {
+  return invoke<DriveMemberInfo[]>("list_drive_members", {
+    label,
+    ...targetArgs(target),
+  });
 }
 
 /**
@@ -97,8 +143,166 @@ export async function listDriveMembers(label: string): Promise<DriveMemberInfo[]
 export async function removeDriveMember(
   label: string,
   memberSs58: string,
+  target?: DriveTarget,
 ): Promise<void> {
-  await invoke<void>("remove_drive_member", { label, memberSs58 });
+  await invoke<void>("remove_drive_member", {
+    label,
+    memberSs58,
+    ...targetArgs(target),
+  });
+}
+
+/**
+ * Change a member's role on an OWN drive.
+ *
+ * The new role binds on the member's very next request, so nothing here has
+ * to warn about propagation. Two refusals come back as `Validation` and are
+ * worth surfacing verbatim: targeting yourself (a manager leaves rather than
+ * demoting themself) and a role outside the server's vocabulary.
+ *
+ * A downward change is sticky — the server revokes the invite that admitted
+ * the member when that link still outranks the new role, and demoting a
+ * manager revokes every live invite they minted, so a spare link cannot
+ * re-escalate them.
+ */
+export async function changeDriveMemberRole(
+  label: string,
+  memberSs58: string,
+  role: DriveRole,
+  target?: DriveTarget,
+): Promise<void> {
+  await invoke<void>("change_drive_member_role", {
+    label,
+    memberSs58,
+    role,
+    ...targetArgs(target),
+  });
+}
+
+/** One live invite for a drive, as the server lists it. */
+export interface DriveInviteInfo {
+  /**
+   * The blake3 hash of the token, never the token. The server cannot hand
+   * back a link, which is why revoking by id is the only way to kill an
+   * invite whose link the caller no longer holds.
+   */
+  inviteId: string;
+  role: string;
+  /**
+   * Who minted it — the owner, or a manager they delegated to. Empty for
+   * invites the server has no provenance for.
+   */
+  mintedBy: string;
+  /** Minter display name (hcfs #455); absent when unknown. */
+  mintedByName?: string;
+  expiresAt: string;
+  maxUses: number;
+  useCount: number;
+  revoked: boolean;
+  valid: boolean;
+  createdAt: string;
+  /**
+   * Full invite URL when Rust opened the row's sealed token under the drive
+   * key. Treat as a drive-access capability: copy for the user, never log.
+   * Absent when there is no blob, the invite is dead, or open failed.
+   */
+  inviteUrl?: string;
+  /**
+   * True when the listing carried a sealed blob for a still-valid invite.
+   * The Links tab shows the link field; `inviteUrl` fills it or the locked
+   * stand-in when absent.
+   */
+  linkAvailable?: boolean;
+}
+
+/** The live invites for an OWN drive. */
+export async function listDriveInvites(
+  label: string,
+  target?: DriveTarget,
+): Promise<DriveInviteInfo[]> {
+  return invoke<DriveInviteInfo[]>("list_drive_invites", {
+    label,
+    ...targetArgs(target),
+  });
+}
+
+/**
+ * What one drive row needs to know about its own sharing, folded in Rust.
+ * See `shared_drives/commands.rs::fold_drive_sharing` for the rule.
+ */
+export interface DriveSharingSummary {
+  label: string;
+  /** People who have joined. */
+  memberCount: number;
+  /** Invite links that can still admit someone. */
+  liveInviteCount: number;
+  /** Every invite the server still lists, expired and revoked included. */
+  totalInviteCount: number;
+}
+
+/**
+ * Sharing state for every OWN drive in `labels`, in one round-trip.
+ *
+ * A drive whose listings both failed is ABSENT from the result rather than
+ * failing the call, and a label that is not an own drive is skipped; the
+ * caller treats absence as "unknown", never as "not shared".
+ */
+export async function listOwnedDriveSharing(
+  labels: readonly string[],
+): Promise<DriveSharingSummary[]> {
+  return invoke<DriveSharingSummary[]>("list_owned_drive_sharing", {
+    labels: [...labels],
+  });
+}
+
+/**
+ * Revoke one invite for an OWN drive.
+ *
+ * Succeeds on a 404 as well: malformed, unknown, another drive's and
+ * already-revoked ids all answer the same plain 404, so a failure is never
+ * proof the invite existed — and "gone" is the state the caller asked for
+ * either way.
+ */
+export async function revokeDriveInvite(
+  label: string,
+  inviteId: string,
+  target?: DriveTarget,
+): Promise<void> {
+  await invoke<void>("revoke_drive_invite", {
+    label,
+    inviteId,
+    ...targetArgs(target),
+  });
+}
+
+/**
+ * Size, file count and last-changed for one drive shared with this account.
+ *
+ * A drive whose owner's listing did not come back is ABSENT from the result,
+ * never present with zeroes — an unknown size is not a zero, and a row that
+ * renders one as "0 B" claims a drive is empty when nobody asked successfully.
+ */
+export interface SharedDriveStats {
+  ownerSs58: string;
+  folderHash: string;
+  fileCount: number;
+  totalBytes: number;
+  /** Server-side last-change time, Unix SECONDS. */
+  updatedAt: number;
+}
+
+/**
+ * Stats for the drives shared with this account, by owner.
+ *
+ * The membership listing carries no counts, so only the owner's folder
+ * listing has them. One request per distinct owner, not per drive.
+ */
+export async function listSharedDriveStats(
+  owners: readonly string[],
+): Promise<SharedDriveStats[]> {
+  return invoke<SharedDriveStats[]>("list_shared_drive_stats", {
+    owners: [...owners],
+  });
 }
 
 /** List the drives shared WITH this account. */
@@ -116,6 +320,21 @@ export async function listMyDriveMemberships(): Promise<DriveMembershipInfo[]> {
  */
 export async function leaveSharedDrive(label: string): Promise<void> {
   await invoke<void>("leave_shared_drive", { label });
+}
+
+/**
+ * Leave a shared drive named by its WIRE identity.
+ *
+ * The label-keyed {@link leaveSharedDrive} resolves a local `sync_paths` row,
+ * which a drive browsed but never synced here does not have. Membership is
+ * server-side and does not depend on a local copy, so this works either way
+ * and removes the local drive too when one exists.
+ */
+export async function leaveSharedDriveByIdentity(
+  ownerSs58: string,
+  folderHash: string,
+): Promise<void> {
+  await invoke<void>("leave_shared_drive_by_identity", { ownerSs58, folderHash });
 }
 
 /**

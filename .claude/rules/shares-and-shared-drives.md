@@ -27,7 +27,7 @@ The `HIPPIUS_CONSOLE_BASE_URL` runtime override is honored in dev builds and **s
 
 ## Shared drives (cross-account member drives)
 
-An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI dark behind `SHARED_DRIVES_ENABLED = false` (`app/lib/featureFlags.ts`). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
+An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI gated on `SHARED_DRIVES_ENABLED` (`app/lib/featureFlags.ts`), which is `enabledFrom("beta")` — **off on production, on beta and staging**. The rules file previously claimed it was `true` on every lane; that was wrong. Console splits create vs use (`SHARED_DRIVES` on prod for members/invite accept, `SHARED_DRIVES_CREATE` off prod). Desktop still has one flag covering both mint and use — matching the console split is a follow-up if straightforward; do **not** silently enable create on production. A SECOND gate sits in front of it: `planSupportsSharedDrives` (a DENYLIST — Starter and free are out, an unrecognised plan is in, because hiding a perk somebody bought is worse than a surface the server refuses with an upgrade prompt). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
 
 ### DriveIdentity resolver — the local label is decoupled from the wire identity
 
@@ -66,7 +66,57 @@ Phase 3 console must copy the KAT vectors verbatim (`grant_passphrase_is_pinned`
 
 The invite URL is assembled IN RUST (`create_drive_invite`): token + entropy exist nowhere else — not in logs (no-secret-log pin in `tests/shared_drive_wiring.rs`), not in another IPC. Invite policy defaults (7d / 50 uses) live in Rust (`resolve_invite_policy`); `http_create_invite` takes non-Option values so no call path can send an omitted field. The FE expiry presets (`shareDriveModalState.ts::INVITE_TTL_OPTIONS`) include "Never expires", sent as the hcfs server's 100-year lifetime cap (`NEVER_EXPIRES_SECS` = 100\*365\*24\*3600 — it must equal the server's `MAX_EXPIRES_SECS` exactly, or the preset 400s at mint time); an OMITTED lifetime still resolves to the finite 7-day default.
 
-There is NO invite listing/revoke surface in v1 (server stores only token hashes; the desktop never persists minted tokens) — owners revoke access by removing members. `leave_shared_drive` ALWAYS sends `?owner=` (the bare server fallback deletes ALL same-hash memberships) and proceeds to local removal on a domain 404 (owner removed us first). Feature-off servers answer a bare 404 on these routes, mapped by `classify_error_status` to `NotReady(SharedDrivesUnavailable)` so the FE hides the surface instead of erroring.
+Invites are listed and revoked by id (`list_drive_invites` / `revoke_drive_invite`, the panel's Links tab); the desktop never persists a minted token, and revoking a link is distinct from removing a member (the link still circulating vs. someone already in). **The drive list's badge and Manage access come from ONE IPC, `list_owned_drive_sharing`**, which fans out members + invites per own drive and folds them in Rust (`fold_drive_sharing`: a drive is omitted only when BOTH listings fail — unknown is not private). The FE hook `useOwnedDriveSharing` is a TanStack query keyed on the sorted label set; every mint / revoke / remove / re-role calls `invalidateOwnedDriveSharing`. It was a hand-rolled effect whose deps included the labels array, so every drive-page re-render cancelled the fetch in flight and the badge never drew — do not put a per-render array in a fetch effect's deps. `leave_shared_drive` ALWAYS sends `?owner=` (the bare server fallback deletes ALL same-hash memberships) and proceeds to local removal on a domain 404 (owner removed us first). Feature-off servers answer a bare 404 on these routes, mapped by `classify_error_status` to `NotReady(SharedDrivesUnavailable)` so the FE hides the surface instead of erroring.
+
+### Who pays, and who the server is asked about
+
+Storage on a member drive is the OWNER's. Two consequences that are invisible
+from the app when they are wrong:
+
+- **The upload pre-flight names the DRIVE, not the caller.** `check_drive_quota_for`
+  sends the owner's ss58 and the drive's wire folder hash for a member drive, which is
+  what routes hcfs-server to the owner's allowance; an own drive sends the empty hash,
+  keeping the server's membership fallback inert. Sending the empty hash unconditionally
+  asked about the caller's plan, so a member whose own plan was full could not upload to
+  a drive with room. The refusal reads as "my plan is full" whoever's plan it was, which
+  is why nobody reports it. The upload commands therefore resolve their drive BEFORE the
+  gate; that is the only order in which the gate can name it.
+- `add_shared_drive` still has no member-side credit gate at all (the init funnel's member
+  skip and the server 402 are the authorities).
+
+### The folder key: one resolver, three sources
+
+`remote::folder_phrase_for_label` is the ONLY place that answers "where does this
+drive's key live": this account's master for an own drive, the owner-sealed
+`enc_mnemonic.json` for a member drive synced here, and this account's own grant for
+one that was never synced. Uploads, renames and the invite mint all take it from there.
+
+Two rules it exists to hold, both of which failed while there were copies of it:
+
+1. **The encryption key and the manifest SIGNING key come from the same phrase.** They were
+   derived separately and only the encryption path had a member branch, so a file on a
+   shared drive was encrypted with the owner's key and signed with one derived from the
+   uploader's master. Nothing local fails when they disagree.
+2. **It reads the drive password WITH the session mnemonic.** The mint's own copy passed
+   `None`, so an encrypted password could not be opened and a manager could not mint at all.
+
+It is derived ONCE per upload, never per file: the grant path is Argon2id, so per-file
+derivation cost seconds apiece.
+
+### The browse label
+
+A drive browsed without being synced here carries its wire identity IN its label,
+`shared:<owner>~<hash>` (`app/lib/shared-drives/sharedDriveLabel.ts`, mirrored by
+`identity::shared_drive_browse_identity`; a test reads the TypeScript's own constants).
+**No slash, deliberately**: the label passes through URL parameters and path joins that
+split on `/`, and the first cut used `shared://owner/hash`, which came back mangled one
+folder below the drive root, un-marked the view as remote, and silently dropped uploads
+into the LOCAL flow.
+
+`resolve_drive_identity_or_own` recognises it before the row lookup, so every label-keyed
+path is addressed correctly without being threaded individually. That matters because the
+fallback answers with THIS account's namespace, which is a wrong answer no error reports:
+the write succeeds, in the wrong drive.
 
 ### Member init skips
 

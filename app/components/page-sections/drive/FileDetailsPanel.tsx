@@ -29,6 +29,9 @@ import { revealFile } from "@/lib/utils/revealFile";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
+import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
+import { useSharedDriveMembership } from "@/app/lib/hooks/useSharedDriveRoles";
+import UploaderCell from "@/app/components/page-sections/drive/files-table/UploaderCell";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -65,6 +68,15 @@ interface PanelBodyProps {
 const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
   const { polkadotAddress } = useWalletAuth();
   const arionCid = arionContentHash(file);
+  // Attribution is only worth showing on a SHARED drive. On a solo drive
+  // every file was uploaded by the reader, so the row would say nothing and
+  // cost a line on every file they open.
+  const { isShared: driveIsShared } = useDriveSharing(file.label);
+  const { membership } = useSharedDriveMembership(file.label);
+  // Member drive → owner from membership; own shared drive → the viewer.
+  const driveOwnerSs58 =
+    membership?.ownerSs58 ??
+    (driveIsShared ? (polkadotAddress ?? undefined) : undefined);
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -148,6 +160,20 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
             <span>{fileSize}</span>
           </div>
         </PillRow>
+
+        {driveIsShared && !file.isFolder && (
+          // Who put this here. A shared drive has more than one possible
+          // answer — same UploaderCell the table uses (You / Owner / name /
+          // truncated ss58 / Not recorded).
+          <PillRow label="Added by">
+            <UploaderCell
+              uploadedBy={file.uploadedBy}
+              uploadedByName={file.uploadedByName}
+              sessionSs58={polkadotAddress ?? undefined}
+              driveOwnerSs58={driveOwnerSs58}
+            />
+          </PillRow>
+        )}
 
         {file.label && (
           <PillRow label="Sync Folder">

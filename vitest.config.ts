@@ -31,6 +31,8 @@ export default defineConfig({
         "app/**/*.test.{ts,tsx}",
         "app/**/*.d.ts",
         "app/lib/test-utils/**",
+        "app/lib/chat/testing/**",
+        "app/lib/chat/crypto/testing/**",
         "app/e2e/**",
       ],
       thresholds: {

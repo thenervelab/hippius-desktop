@@ -188,23 +188,62 @@ fn leave_shared_drive_always_passes_the_owner_param() {
     );
 }
 
-/// Every owner-side command resolves its label through the single
-/// `resolve_own_drive` gate (which refuses member labels). Counting the call
-/// sites means dropping the gate from ONE command still fails here.
+/// Every management command resolves its label through ONE of the two named
+/// gates, never the raw lenient resolver.
+///
+/// Management used to be owner-only (`resolve_own_drive`, which refuses member
+/// labels). It now admits a delegated manager, which means the local refusal
+/// is gone and the SERVER is the authority on role — so the thing worth
+/// pinning changed shape: not "everything uses the owner gate", but "nothing
+/// reaches `resolve_drive_identity_or_own` directly". A command that did would
+/// silently skip whichever gate its siblings share, and the difference between
+/// the two is invisible at the call site.
 #[test]
-fn owner_side_commands_route_through_the_own_drive_gate() {
+fn management_commands_route_through_a_named_gate() {
     let src = shared_drive_commands_src();
     for command in [
         "pub async fn create_drive_invite(",
         "pub async fn list_drive_members(",
         "pub async fn remove_drive_member(",
+        "pub async fn change_drive_member_role(",
+        "pub async fn list_drive_invites(",
+        "pub async fn revoke_drive_invite(",
+        "pub async fn list_owned_drive_sharing(",
     ] {
         let body = fn_body(&src, command);
         assert!(
-            body.contains("resolve_own_drive("),
-            "{command} must resolve its label through resolve_own_drive"
+            body.contains("resolve_manage_target(") || body.contains("resolve_own_drive("),
+            "{command} must resolve its label through a named gate"
+        );
+        assert!(
+            !body.contains("resolve_drive_identity_or_own("),
+            "{command} must not reach past its gate to the raw lenient resolver"
         );
     }
+}
+
+/// Seal-back after mint (console `sealMintedToken`): without it the Links
+/// tab can never re-show a link once the create dialog closes.
+#[test]
+fn create_drive_invite_seals_the_token_back() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn create_drive_invite(");
+    assert!(
+        body.contains("seal_invite_token") && body.contains("http_put_sealed_token"),
+        "create_drive_invite must park the sealed token so the Links tab can rebuild URLs"
+    );
+}
+
+/// Opening sealed tokens on list is what puts a copyable URL on each Links
+/// row; without it the tab only shows role/usage/expiry metadata.
+#[test]
+fn list_drive_invites_opens_sealed_tokens() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn list_drive_invites(");
+    assert!(
+        body.contains("open_invite_token") && body.contains("build_invite_url"),
+        "list_drive_invites must open sealed tokens and attach invite_url"
+    );
 }
 
 /// Storage on a shared drive bills the OWNER: `add_shared_drive` must not
@@ -417,4 +456,203 @@ fn revoked_latch_clears_ride_the_existing_teardown_edges() {
         reset.contains("revoked_notify.clear_all()"),
         "handle_sync_reset must wipe the revocation latch across accounts"
     );
+}
+
+/// A MANAGER minting on a drive they do not own must take the folder key from
+/// the ONE resolver that knows where a drive's key lives, never from a copy
+/// of that branch.
+///
+/// The master chain (`derive_folder_mnemonic(master, label)`) yields the key
+/// for a drive of that name owned by THIS account. On a member drive it is
+/// simply a different key, and nothing here would fail: the mint succeeds, the
+/// link looks right, and the recipient joins and finds that nothing decrypts.
+/// The same reasoning, and the same file, as `remote::encryption_key_for_label`
+/// — which is unit-tested; this pins the mint to it so the branch cannot be
+/// refactored away.
+#[test]
+fn a_delegated_mint_takes_the_owners_sealed_folder_key() {
+    let body = fn_body(&shared_drive_commands_src(), "pub async fn create_drive_invite");
+
+    assert!(
+        body.contains("folder_phrase_for_label"),
+        "the mint must take its folder key from the one resolver that knows all three sources"
+    );
+
+    // It used to carry its own copy of the member branch, and that copy read
+    // the drive password WITHOUT the session mnemonic -- so an encrypted
+    // password could not be decrypted and a manager could not mint at all.
+    // The resolver takes the mnemonic; a second copy here would be free to
+    // forget it again.
+    assert!(
+        !body.contains("enc_mnemonic.json"),
+        "the mint must not re-implement where a member drive's key lives"
+    );
+    assert!(
+        !body.contains("get_drive_password"),
+        "the mint must not read the drive password itself: that is how it came to read it without a mnemonic"
+    );
+    assert!(!body.contains("derive_folder_mnemonic"), "nor re-derive an own drive's phrase");
+}
+
+/// Every delegated management call names the drive's owner.
+///
+/// `folder_hash` is label-derived and collides across owners as a matter of
+/// course, so a call that drops the owner addresses whichever row the server
+/// finds first. The value comes from ONE helper so a new management command
+/// cannot quietly omit it.
+#[test]
+fn every_management_command_passes_the_delegated_owner() {
+    let src = shared_drive_commands_src();
+
+    for sig in [
+        "pub async fn list_drive_members",
+        "pub async fn list_drive_invites",
+        "pub async fn revoke_drive_invite",
+        "pub async fn change_drive_member_role",
+        "pub async fn remove_drive_member",
+        "pub async fn create_drive_invite",
+    ] {
+        let body = fn_body(&src, sig);
+        assert!(
+            body.contains("delegated_owner(&identity)"),
+            "{sig} must pass the delegated owner, or a manager's call addresses the wrong drive"
+        );
+    }
+}
+
+/// The management commands resolve through the MANAGEABLE resolver, not the
+/// owner-only one — otherwise a manager is refused locally before the server
+/// ever sees the call, which is what made the desktop mint Manager invites it
+/// could not then honour.
+#[test]
+fn management_commands_admit_a_delegated_manager() {
+    let src = shared_drive_commands_src();
+
+    for sig in [
+        "pub async fn list_drive_members",
+        "pub async fn list_drive_invites",
+        "pub async fn revoke_drive_invite",
+        "pub async fn change_drive_member_role",
+        "pub async fn create_drive_invite",
+    ] {
+        let body = fn_body(&src, sig);
+        assert!(
+            body.contains("resolve_manage_target"),
+            "{sig} must resolve through the target gate, which admits a delegated manager \
+             and lets the caller name a drive that is not synced here"
+        );
+    }
+
+    // The badge listing is the exception and stays owner-only: it answers
+    // "which of MY drives have I shared".
+    let sharing = fn_body(&src, "pub async fn list_owned_drive_sharing");
+    assert!(sharing.contains("resolve_own_drive"), "the sharing badge listing stays owner-only");
+}
+
+/// A file's encryption key and its manifest signing key come from ONE folder
+/// phrase.
+///
+/// They used to be derived separately, and only the encryption path had a
+/// member branch: on a drive shared with this account, a remote upload
+/// encrypted with the OWNER's folder key and signed with one derived from this
+/// account's master. Two keys for one file, and nothing local fails when they
+/// disagree — the file uploads, and the mismatch is somebody else's problem
+/// later. Pinned on the source because no hermetic test round-trips a real
+/// manifest.
+#[test]
+fn upload_and_rename_take_both_keys_from_one_folder_phrase() {
+    for (file, sig) in [
+        ("/src/sync/fileops/remote_upload.rs", "async fn upload_one_file"),
+        ("/src/sync/fileops/remote_rename.rs", "pub async fn rename_remote_file"),
+    ] {
+        let src = std::fs::read_to_string(format!("{}{file}", env!("CARGO_MANIFEST_DIR"))).unwrap_or_else(|e| panic!("read {file}: {e}"));
+
+        assert!(
+            src.contains("folder_phrase_for_label"),
+            "{file} must take its folder phrase from the one resolver that knows about member drives"
+        );
+        assert!(
+            !src.contains("signing_key_for_folder(&mnemonic, label)"),
+            "{file} must not re-derive a signing key from the master: a member drive's key is the OWNER's"
+        );
+        let _ = sig;
+    }
+}
+
+/// `signing_key_for_folder` takes a PHRASE, never `(master, label)`.
+///
+/// The old signature is what made the member bug invisible: deriving the
+/// phrase inside meant the call site could not pass the owner's.
+#[test]
+fn the_signing_key_is_derived_from_a_phrase_not_a_master() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
+    let body = fn_body(&src, "pub(crate) fn signing_key_for_folder");
+    assert!(
+        !body.contains("derive_folder_mnemonic"),
+        "deriving the phrase inside means the caller cannot pass the owner's"
+    );
+}
+
+/// A remote upload resolves its destination drive BEFORE the storage gate.
+///
+/// Storage on a drive shared with this account is paid for by its OWNER, so
+/// the pre-flight has to name the drive; gating first asks about the caller's
+/// own allowance instead. The refusal that produces reads as "my plan is
+/// full" whoever's plan it actually was, which is why it needs pinning rather
+/// than documenting.
+#[test]
+fn a_remote_upload_names_its_drive_before_the_storage_gate() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
+
+    for sig in [
+        "pub async fn upload_files_to_remote_folder",
+        "pub async fn upload_folder_to_remote_folder",
+    ] {
+        let body = fn_body(&src, sig);
+        let resolved = body.find("upload_target_identity").unwrap_or(usize::MAX);
+        let gated = body.find("require_eligible").unwrap_or(0);
+        assert!(
+            resolved < gated,
+            "{sig} must resolve its drive before the storage gate, or the gate asks about the wrong account"
+        );
+        assert!(
+            body.contains("require_eligible_for_drive"),
+            "{sig} must name the drive it is writing into"
+        );
+        assert_eq!(
+            body.matches("upload_target_identity").count(),
+            1,
+            "{sig} must resolve the drive exactly once"
+        );
+    }
+}
+
+/// The folder key is derived ONCE per upload, not once per file.
+///
+/// It used to be derived inside the per-file function. For a drive shared
+/// with this account and not synced here that is an Argon2id grant open for
+/// every file, seconds apiece, so a fifty-file upload spent over a minute
+/// doing nothing but re-deriving the same key. Nothing fails when it
+/// regresses; the upload just gets slower, which is why it is pinned.
+#[test]
+fn the_folder_key_is_derived_once_per_upload_not_per_file() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
+
+    let per_file = fn_body(&src, "pub(crate) async fn upload_to_remote_folder_with_progress");
+    assert!(
+        !per_file.contains("folder_phrase_for_label"),
+        "the per-file path must take the phrase, not derive it"
+    );
+
+    for sig in [
+        "pub async fn upload_files_to_remote_folder",
+        "pub async fn upload_folder_to_remote_folder",
+    ] {
+        let body = fn_body(&src, sig);
+        assert_eq!(
+            body.matches("folder_phrase_for_label").count(),
+            1,
+            "{sig} must derive the folder key exactly once"
+        );
+    }
 }

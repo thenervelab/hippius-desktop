@@ -3,11 +3,66 @@
 // synced-vs-unsynced routing, and the Sync-locally flow (last-browse-dir
 // picker → add_shared_drive → verbatim Validation toast).
 
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@testing-library/jest-dom";
 
+// The overflow menu is Radix-backed and does not open under jsdom. These
+// tests are about what the row OFFERS and what pressing it does, not about
+// Radix, so the shell renders its items as plain buttons.
+const listSharedDriveStatsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/app/lib/hooks/useSharedDriveStats", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/app/lib/hooks/useSharedDriveStats")
+  >();
+  return {
+    ...actual,
+    useSharedDriveStats: () => listSharedDriveStatsMock(),
+  };
+});
+
+vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
+  __esModule: true,
+  default: ({
+    items,
+    children,
+  }: {
+    items: { itemTitle: React.ReactNode; onItemClick?: () => void; disabled?: boolean }[];
+    children: React.ReactNode;
+  }) => (
+    <div>
+      {children}
+      {/* The real menu PORTALS its items out of the row, so a click on one
+          never travels through the row's own open handler. Rendered inline
+          here, they would — `row-action-area` stands in for the portal. */}
+      {items.map((item, i) => (
+        <button
+          key={i}
+          type="button"
+          className="row-action-area"
+          disabled={item.disabled}
+          onClick={() => item.onItemClick?.()}
+        >
+          {item.itemTitle}
+        </button>
+      ))}
+    </div>
+  ),
+}));
+
 import { SharedWithMeSection } from "../SharedWithMeSection";
+
+// The section asks the owners' listings for each drive's size and counts, so
+// it reads the query client.
+const render = (ui: React.ReactElement) =>
+  rtlRender(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      {ui}
+    </QueryClientProvider>,
+  );
+
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
 
 const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
@@ -74,6 +129,7 @@ function membership(overrides: Partial<DriveMembershipInfo> = {}): DriveMembersh
 }
 
 beforeEach(() => {
+  listSharedDriveStatsMock.mockReturnValue(new Map());
   vi.clearAllMocks();
   flagState.sharedDrivesEnabled = true;
   getLastBrowseDirectoryMock.mockResolvedValue("/Users/me");
@@ -121,14 +177,20 @@ describe("silent non-rows states", () => {
 });
 
 describe("rows", () => {
-  it("shows an unsynced membership with owner badge, label, role and Sync locally", async () => {
+  it("shows an unsynced membership as a folder with its label, role and actions", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([membership()]);
     render(<SharedWithMeSection />);
 
     await screen.findByText("team-docs");
-    expect(screen.getByTestId("avatar")).toHaveAttribute("data-name", OWNER);
-    expect(screen.getByText(/writer/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Sync locally" })).toBeInTheDocument();
+    // The owner's identicon used to sit here, which made a shared drive look
+    // like a person rather than a place for files. The owner is named on the
+    // line below instead.
+    expect(screen.queryByTestId("avatar")).not.toBeInTheDocument();
+    // The label people read, never the wire word: this row used to print
+    // "writer" straight from the membership.
+    expect(screen.getByText(/Editor/)).toBeInTheDocument();
+    expect(screen.queryByText(/writer/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sync to this computer" })).toBeInTheDocument();
   });
 
   it("shows a synced membership's local label with no action button", async () => {
@@ -137,8 +199,10 @@ describe("rows", () => {
     ]);
     render(<SharedWithMeSection />);
 
-    await screen.findByText(/Synced as "team-docs-2"/);
-    expect(screen.queryByRole("button", { name: "Sync locally" })).not.toBeInTheDocument();
+    await screen.findByText(/Synced here/);
+    // Already here: syncing again would either no-op or re-install it at a
+    // new path, and neither is what the word promises.
+    expect(screen.queryByRole("button", { name: "Sync to this computer" })).not.toBeInTheDocument();
   });
 });
 
@@ -152,7 +216,7 @@ describe("sync locally", () => {
     const onDriveAdded = vi.fn();
 
     render(<SharedWithMeSection onDriveAdded={onDriveAdded} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sync locally" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync to this computer" }));
 
     await waitFor(() =>
       expect(addSharedDriveMock).toHaveBeenCalledWith(OWNER, "0123456789abcdef", "/Users/me/Team", "team-docs"),
@@ -162,7 +226,7 @@ describe("sync locally", () => {
     );
     expect(saveLastBrowseDirectoryMock).toHaveBeenCalledWith("/Users/me/Team");
     await waitFor(() => expect(onDriveAdded).toHaveBeenCalledWith("team-docs"));
-    await screen.findByText(/Synced as "team-docs"/);
+    await screen.findByText(/Synced here/);
   });
 
   it("does nothing when the picker is cancelled", async () => {
@@ -170,7 +234,7 @@ describe("sync locally", () => {
     openDialogMock.mockResolvedValue(null);
 
     render(<SharedWithMeSection />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sync locally" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync to this computer" }));
 
     await waitFor(() => expect(openDialogMock).toHaveBeenCalled());
     expect(addSharedDriveMock).not.toHaveBeenCalled();
@@ -183,8 +247,117 @@ describe("sync locally", () => {
     addSharedDriveMock.mockRejectedValue({ kind: "Validation", message });
 
     render(<SharedWithMeSection />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sync locally" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync to this computer" }));
 
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(message));
+  });
+});
+
+// Looking at what somebody shared with you used to require copying it to
+// this machine first: "Sync locally" was the row's only action. Browsing
+// needs no local copy and no folder key — /browse authorises any member of
+// the drive and returns names and paths in plaintext.
+describe("opening a shared drive without syncing it", () => {
+  it("opens the drive by its wire identity when the row is clicked", async () => {
+    const onOpenDrive = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection onOpenDrive={onOpenDrive} />);
+
+    fireEvent.click(await screen.findByText("team-docs"));
+    expect(onOpenDrive).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerSs58: OWNER, displayLabel: "team-docs" }),
+    );
+  });
+
+  // The row's own control must not also open the drive behind the dialog it
+  // raises — the classic nested-affordance mis-click.
+  it("does not open the drive when a menu action is pressed", async () => {
+    const onOpenDrive = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection onOpenDrive={onOpenDrive} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Sync to this computer/ }));
+    expect(onOpenDrive).not.toHaveBeenCalled();
+  });
+
+  it("is reachable from the keyboard", async () => {
+    const onOpenDrive = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection onOpenDrive={onOpenDrive} />);
+
+    const row = await screen.findByRole("button", { name: "Open team-docs" });
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onOpenDrive).toHaveBeenCalledTimes(1);
+  });
+
+  // Settings has nowhere to browse to, so the row stays a plain row there.
+  it("stays inert on a surface that cannot browse", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection />);
+    await screen.findByText("team-docs");
+    expect(screen.queryByRole("button", { name: /Open team-docs/ })).not.toBeInTheDocument();
+  });
+});
+
+// The membership listing carries no counts, so a row starts with nothing to
+// show and only the OWNER's listing can correct it. Rendering an uncorrected
+// row as "0 B - 0 files" claims a drive is empty when nobody successfully
+// asked, which is the failure nobody files a bug for.
+describe("a shared drive's size and counts", () => {
+  it("shows them once the owner's listing has answered", async () => {
+    listSharedDriveStatsMock.mockReturnValue(
+      new Map([
+        [
+          `${OWNER}:0123456789abcdef`,
+          {
+            ownerSs58: OWNER,
+            folderHash: "0123456789abcdef",
+            fileCount: 5,
+            totalBytes: 5_890_000,
+            updatedAt: 1_789_000_000,
+          },
+        ],
+      ]),
+    );
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection />);
+
+    await screen.findByText("team-docs");
+    expect(screen.getByText((_t, el) => el?.textContent?.trim() === "5 files")).toBeInTheDocument();
+    expect(screen.getByText(/MB/)).toBeInTheDocument();
+  });
+
+  it("shows nothing at all while the drive's size is unknown", async () => {
+    listSharedDriveStatsMock.mockReturnValue(new Map());
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection />);
+
+    await screen.findByText("team-docs");
+    // Never "0 B" or "0 files": an unknown is not an empty drive.
+    expect(screen.queryByText((_t, el) => el?.textContent?.trim() === "0 files")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^0 B$/)).not.toBeInTheDocument();
+  });
+
+  // A drive that really is empty has answered, and says so.
+  it("says zero for a drive the owner's listing reports as empty", async () => {
+    listSharedDriveStatsMock.mockReturnValue(
+      new Map([
+        [
+          `${OWNER}:0123456789abcdef`,
+          {
+            ownerSs58: OWNER,
+            folderHash: "0123456789abcdef",
+            fileCount: 0,
+            totalBytes: 0,
+            updatedAt: 0,
+          },
+        ],
+      ]),
+    );
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection />);
+
+    await screen.findByText("team-docs");
+    expect(screen.getByText((_t, el) => el?.textContent?.trim() === "0 files")).toBeInTheDocument();
   });
 });

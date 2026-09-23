@@ -7,6 +7,7 @@ pub mod drive_summaries;
 pub mod files;
 pub mod folders;
 pub mod recent_uploads;
+pub mod rekey_probe;
 pub mod remote;
 pub mod remote_rename;
 pub mod remote_upload;

@@ -27,7 +27,7 @@ describe("the plan chip stays two rows", () => {
 
     const afterBar = chip.slice(chip.indexOf('role="progressbar"'));
     expect(afterBar).toContain("usedLabel");
-    expect(afterBar).toContain("formatPercentLabel(percent)");
+    expect(afterBar).toContain("getUsageAsideLabel");
 
     // The old layout gave the numbers their own `justify-between` row under
     // the bar. That row is what made the chip a line taller.

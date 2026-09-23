@@ -103,8 +103,9 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
     }
 
     let mnemonic = super::remote::session_mnemonic(state)?;
-    let encryption_key = super::remote::encryption_key_for_label(pool, account_id, label, &mnemonic, identity).await?;
-    let signing_key = signing_key_for_folder(&mnemonic, label)?;
+    let encryption_key = super::remote::encryption_key_for_label(state, account_id, label, &mnemonic, identity).await?;
+    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
+    let signing_key = signing_key_for_folder(&folder_phrase)?;
 
     let old_relative = wire_relative_path(parent_path, old_name);
     let new_relative = wire_relative_path(parent_path, new_name);
@@ -113,9 +114,13 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
     let new_encrypted_path = hcfs_client::crypto::encrypt_small(new_relative.as_bytes(), &encryption_key)
         .map_err(|e| AppError::Crypto(format!("Failed to seal the new path: {e}")))?;
 
-    let folder_hash = hcfs_client::drive::keys::folder_hash(label);
+    // The WIRE hash, not one derived from the local label: a member's local
+    // name for a drive cannot derive the owner's folder hash, so a rename on
+    // a drive shared with this account addressed a folder in the caller's own
+    // namespace instead. Land mine 3 from the shared-drive rules.
+    let folder_hash = identity.wire_folder_hash.clone();
     let client = super::remote::build_client(pool, account_id, identity).await?;
-    let base_revision_id = current_revision_id(&client, account_id, &folder_hash, &old_path_hash).await?;
+    let base_revision_id = current_revision_id(&client, &identity.wire_ss58, &folder_hash, &old_path_hash).await?;
 
     let renames = vec![SingleRename {
         old_path_hash,
@@ -368,9 +373,24 @@ async fn collect_folder_tree(
 const RENAME_BATCH: usize = 500;
 /// Directory rows per `register`/`unregister_folder_entries` call.
 const FOLDER_ENTRY_BATCH: usize = 500;
-/// Pages per directory level, and directories per tree.
-const BROWSE_PAGE: u32 = 500;
-const MAX_BROWSE_PAGES: u32 = 200;
+/// Rows per `/browse` request. This is the server's own per-request cap: it
+/// coerces a larger `limit` down to 200 rather than rejecting it, so asking
+/// for more only hides the real page size.
+const BROWSE_PAGE: u32 = 200;
+/// Pages walked per directory level before the rename is refused.
+///
+/// Sized so that `BROWSE_PAGE * MAX_BROWSE_PAGES` stays at 100 000 entries,
+/// the documented "too large to rename" threshold. It was 200 pages of 500;
+/// left alone under the 200-row cap, the threshold would have quietly fallen
+/// to 40 000 and refused folders that used to rename fine.
+const MAX_BROWSE_PAGES: u32 = 500;
+/// Entries one directory level may hold and still be renamed remotely.
+const MAX_DIRECTORY_ENTRIES: u32 = BROWSE_PAGE * MAX_BROWSE_PAGES;
+
+// Retuning either constant alone moves the threshold; make that a build error
+// rather than a behaviour change someone finds in production.
+const _: () = assert!(MAX_DIRECTORY_ENTRIES == 100_000);
+/// Directories per tree.
 const MAX_TREE_DIRECTORIES: usize = 5_000;
 
 /// Rename a FOLDER in a drive this device does not sync.
@@ -409,22 +429,27 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
     }
 
     let mnemonic = super::remote::session_mnemonic(state)?;
-    let encryption_key = super::remote::encryption_key_for_label(pool, account_id, label, &mnemonic, identity).await?;
-    let signing_key = signing_key_for_folder(&mnemonic, label)?;
+    let encryption_key = super::remote::encryption_key_for_label(state, account_id, label, &mnemonic, identity).await?;
+    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
+    let signing_key = signing_key_for_folder(&folder_phrase)?;
 
     let old_prefix = wire_relative_path(parent_path, old_name);
     let new_prefix = wire_relative_path(parent_path, new_name);
 
-    let folder_hash = hcfs_client::drive::keys::folder_hash(label);
+    // The WIRE hash, not one derived from the local label: a member's local
+    // name for a drive cannot derive the owner's folder hash, so a rename on
+    // a drive shared with this account addressed a folder in the caller's own
+    // namespace instead. Land mine 3 from the shared-drive rules.
+    let folder_hash = identity.wire_folder_hash.clone();
     let client = super::remote::build_client(pool, account_id, identity).await?;
 
     // The destination has to be free before anything moves.
-    let (sibling_folders, sibling_files) = browse_directory(&client, account_id, &folder_hash, parent_path).await?;
+    let (sibling_folders, sibling_files) = browse_directory(&client, &identity.wire_ss58, &folder_hash, parent_path).await?;
     let sibling_folder_paths: Vec<String> = sibling_folders.iter().map(|n| wire_relative_path(parent_path, n)).collect();
     let sibling_file_paths: Vec<String> = sibling_files.iter().filter_map(|f| f.relative_path.clone()).collect();
     assert_destination_available(&sibling_folder_paths, &sibling_file_paths, &old_prefix, &new_prefix)?;
 
-    let tree = collect_folder_tree(&client, account_id, &folder_hash, &old_prefix, &encryption_key).await?;
+    let tree = collect_folder_tree(&client, &identity.wire_ss58, &folder_hash, &old_prefix, &encryption_key).await?;
     let plan = plan_folder_rename(&tree, &old_prefix, &new_prefix)?;
 
     let mut moved = 0usize;
@@ -494,10 +519,15 @@ pub async fn create_remote_folder(
     label: String,
     parent_path: Option<String>,
     name: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
 ) -> Result<String> {
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
-    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+    // A drive shared with this account that is not synced here has no local
+    // row; the lenient resolver would create the folder in THIS account's
+    // namespace instead. Same rule as uploading and browsing.
+    let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
     create_remote_folder_inner(pool, &account_id, parent_path.as_deref().unwrap_or_default(), &name, &identity).await
 }
 
@@ -596,6 +626,15 @@ pub async fn rename_remote_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The walk advances by rows RETURNED, so its reach is pages times the
+    /// server's page size, not pages times whatever we ask for. Pin both
+    /// halves: the page size is the server's, and the reach is unchanged.
+    #[test]
+    fn browse_walk_still_reaches_one_hundred_thousand_entries() {
+        assert_eq!(BROWSE_PAGE, 200, "the server returns at most 200 rows per /browse request");
+        assert_eq!(MAX_DIRECTORY_ENTRIES, 100_000);
+    }
 
     fn file(path: &str, seed: u8) -> RemoteEntry {
         RemoteEntry {

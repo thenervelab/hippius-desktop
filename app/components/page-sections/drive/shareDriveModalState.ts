@@ -3,7 +3,14 @@
 // unit-testable without a render. Tested in
 // `__tests__/shareDriveModalState.test.ts`.
 
-import type { DriveMemberInfo } from "@/app/lib/tauri/sharedDrives";
+import type {
+  DriveInviteInfo,
+  DriveMemberInfo,
+} from "@/app/lib/tauri/sharedDrives";
+import {
+  MANAGER_INVITE_MAX_SECONDS,
+  type DriveRole,
+} from "@/app/lib/shared-drives/roles";
 
 /**
  * Invite-tab lifecycle. Mirrors `ShareFileModal`'s machine minus progress
@@ -32,6 +39,31 @@ export type MembersState =
   | { kind: "ready"; members: DriveMemberInfo[] }
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
+
+export type InvitesState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ready"; invites: DriveInviteInfo[] }
+  | { kind: "unavailable" }
+  | { kind: "error"; message: string };
+
+/**
+ * Same five-state shape as members, deliberately: both tabs load the same way
+ * against the same server, so one reader can learn one shape.
+ */
+export function getInvitesView(state: InvitesState): MembersView {
+  switch (state.kind) {
+    case "loading":
+    case "idle":
+      return "loading";
+    case "unavailable":
+      return "unavailable";
+    case "error":
+      return "error";
+    default:
+      return state.invites.length === 0 ? "empty" : "rows";
+  }
+}
 
 export type MembersView = "loading" | "rows" | "empty" | "unavailable" | "error";
 
@@ -73,6 +105,38 @@ export const INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> 
   { label: "30 days", secs: 30 * 24 * 60 * 60 },
   { label: "Never expires", secs: NEVER_EXPIRES_SECS },
 ];
+
+/**
+ * The lifetimes a link of this role may actually carry.
+ *
+ * A manager invite is hard-capped by the server at 24 hours, and both the
+ * Rust mint and the console clamp anything wider. Offering "7 days" /
+ * "Never expires" for a manager would still mint a working link, but the
+ * done dialog would describe the lifetime the user picked rather than the
+ * one that was sent — so the chooser stops offering them (console
+ * `inviteTtlOptionsFor`).
+ */
+export function inviteTtlOptionsFor(
+  role: DriveRole,
+): ReadonlyArray<{ label: string; secs: number }> {
+  return role === "manager"
+    ? INVITE_TTL_OPTIONS.filter((o) => o.secs <= MANAGER_INVITE_MAX_SECONDS)
+    : INVITE_TTL_OPTIONS;
+}
+
+/**
+ * Pull a chosen lifetime back inside what the role allows.
+ *
+ * Needed because the role is picked after the lifetime: choosing Manager
+ * with "30 days" already selected must move the selection, not leave a
+ * value on screen that the mint would quietly replace.
+ */
+export function clampInviteTtl(role: DriveRole, secs: number): number {
+  const allowed = inviteTtlOptionsFor(role);
+  return allowed.some((o) => o.secs === secs)
+    ? secs
+    : (allowed[allowed.length - 1]?.secs ?? DEFAULT_INVITE_TTL_SECS);
+}
 
 /**
  * The preset selected when the dialog opens — 7 days, mirroring the Rust
