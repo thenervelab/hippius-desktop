@@ -30,7 +30,8 @@ import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
-import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
+import { useSharedDriveMembership } from "@/app/lib/hooks/useSharedDriveRoles";
+import UploaderCell from "@/app/components/page-sections/drive/files-table/UploaderCell";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -71,6 +72,11 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
   // every file was uploaded by the reader, so the row would say nothing and
   // cost a line on every file they open.
   const { isShared: driveIsShared } = useDriveSharing(file.label);
+  const { membership } = useSharedDriveMembership(file.label);
+  // Member drive → owner from membership; own shared drive → the viewer.
+  const driveOwnerSs58 =
+    membership?.ownerSs58 ??
+    (driveIsShared ? (polkadotAddress ?? undefined) : undefined);
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -155,16 +161,17 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
           </div>
         </PillRow>
 
-        {driveIsShared && file.uploadedBy && !file.isFolder && (
+        {driveIsShared && !file.isFolder && (
           // Who put this here. A shared drive has more than one possible
-          // answer, and "it was me" is worth as much as a name -- an ss58 the
-          // reader has to compare against their own is not an answer.
-          <PillRow label="Uploaded by">
-            <div className="break-all">
-              {file.uploadedBy === polkadotAddress
-                ? "You"
-                : accountDisplayName(file.uploadedBy, file.uploadedByName, 24)}
-            </div>
+          // answer — same UploaderCell the table uses (You / Owner / name /
+          // truncated ss58 / Not recorded).
+          <PillRow label="Added by">
+            <UploaderCell
+              uploadedBy={file.uploadedBy}
+              uploadedByName={file.uploadedByName}
+              sessionSs58={polkadotAddress ?? undefined}
+              driveOwnerSs58={driveOwnerSs58}
+            />
           </PillRow>
         )}
 

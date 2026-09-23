@@ -1911,7 +1911,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       viewMode === "card" ? (
         <CardViewSkeleton isRecentFiles={isRecentFiles} />
       ) : (
-        <FilesTableSkeleton isRecentFiles={isRecentFiles} />
+        <FilesTableSkeleton
+          isRecentFiles={isRecentFiles}
+          showUploadedBy={showAddedByFilter}
+        />
       );
   } else if (error && !isRecentFiles && !isNested) {
     // `useUserFiles` exposes a terminal error (after TanStack Query's
@@ -2082,6 +2085,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 currentSubfolderPath={
                   isNested ? (urlSubFolderPath ?? "") : null
                 }
+                showUploadedBy={showAddedByFilter}
+                driveOwnerSs58={addedByOwnerSs58}
               />
             );
 

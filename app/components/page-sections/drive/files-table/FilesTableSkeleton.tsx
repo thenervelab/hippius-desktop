@@ -8,9 +8,11 @@ import Skeleton from "@/components/ui/skeleton";
 interface FilesTableSkeletonProps {
   isRecentFiles?: boolean;
   rows?: number;
+  /** Match the real table's Added by column inside a shared drive. */
+  showUploadedBy?: boolean;
 }
 
-// Mirrors `DEFAULT_COLUMN_WIDTHS_NO_SELECTION` in files-table/index.tsx so
+// Mirrors `DEFAULT_COLUMN_WIDTHS_*` in files-table/index.tsx so
 // the skeleton sits at the same column widths as the real table — when the
 // data loads the columns don't shift.
 const COLUMN_WIDTHS: Record<string, number> = {
@@ -21,8 +23,17 @@ const COLUMN_WIDTHS: Record<string, number> = {
   actions: 5,
 };
 
-const COLUMNS: Array<{
-  id: keyof typeof COLUMN_WIDTHS;
+const COLUMN_WIDTHS_WITH_UPLOADER: Record<string, number> = {
+  name: 38,
+  size: 11,
+  added_by: 14,
+  date_uploaded: 15,
+  type: 14,
+  actions: 5,
+};
+
+const BASE_COLUMNS: Array<{
+  id: string;
   label: string;
   skeletonWidth: string;
 }> = [
@@ -32,6 +43,12 @@ const COLUMNS: Array<{
   { id: "type", label: "File Type", skeletonWidth: "50%" },
   { id: "actions", label: "", skeletonWidth: "20px" },
 ];
+
+const UPLOADER_COLUMN = {
+  id: "added_by",
+  label: "Added by",
+  skeletonWidth: "55%",
+};
 
 const SKELETON_BAR_CLASS =
   "rounded-full bg-grey-80 dark:bg-black-300 animate-pulse";
@@ -44,7 +61,19 @@ const SKELETON_BAR_CLASS =
 const FilesTableSkeleton: React.FC<FilesTableSkeletonProps> = ({
   isRecentFiles = false,
   rows,
-}) => (
+  showUploadedBy = false,
+}) => {
+  const widths = showUploadedBy ? COLUMN_WIDTHS_WITH_UPLOADER : COLUMN_WIDTHS;
+  const columns = showUploadedBy
+    ? [
+        BASE_COLUMNS[0],
+        BASE_COLUMNS[1],
+        UPLOADER_COLUMN,
+        ...BASE_COLUMNS.slice(2),
+      ]
+    : BASE_COLUMNS;
+
+  return (
   <div
     className={cn(
       "flex flex-col gap-y-8 relative",
@@ -69,10 +98,10 @@ const FilesTableSkeleton: React.FC<FilesTableSkeletonProps> = ({
           style={{ borderSpacing: 0 }}
         >
           <colgroup>
-            {COLUMNS.map((col) => (
+            {columns.map((col) => (
               <col
                 key={col.id}
-                style={{ width: `${COLUMN_WIDTHS[col.id]}%` }}
+                style={{ width: `${widths[col.id]}%` }}
               />
             ))}
           </colgroup>
@@ -83,7 +112,7 @@ const FilesTableSkeleton: React.FC<FilesTableSkeletonProps> = ({
             )}
           >
             <tr className="border-b border-grey-dark-100 dark:border-black-300">
-              {COLUMNS.map((col) => (
+              {columns.map((col) => (
                 <th
                   key={col.id}
                   className={cn(
@@ -101,7 +130,7 @@ const FilesTableSkeleton: React.FC<FilesTableSkeletonProps> = ({
                 key={`skeleton-row-${rowIndex}`}
                 className="border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 dark:odd:bg-black-500 dark:even:bg-black-primary-bg"
               >
-                {COLUMNS.map((col) => (
+                {columns.map((col) => (
                   <td
                     key={`skeleton-cell-${rowIndex}-${col.id}`}
                     className={cn(
@@ -126,7 +155,8 @@ const FilesTableSkeleton: React.FC<FilesTableSkeletonProps> = ({
       </TableModule.TableWrapper>
     </div>
   </div>
-);
+  );
+};
 
 export default FilesTableSkeleton;
 
@@ -148,6 +178,7 @@ export const FolderRowsSkeleton: React.FC<{
     selection: "16px",
     name: "60%",
     size: "55%",
+    added_by: "55%",
     date_uploaded: "65%",
     type: "50%",
     actions: "20px",

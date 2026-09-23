@@ -99,6 +99,13 @@ interface DriveContentProps {
   currentSubfolderPath?: string | null;
   /** Where the menu's New Folder creates; defaults to the main drive. */
   newFolderTarget?: NewFolderTarget;
+  /**
+   * Show the Added by column in list view. Same gate as the Added by
+   * filter: only inside a shared drive (or shared folder context).
+   */
+  showUploadedBy?: boolean;
+  driveOwnerSs58?: string;
+  driveOwnerName?: string;
 }
 
 const DriveContent: FC<DriveContentProps> = ({
@@ -133,6 +140,9 @@ const DriveContent: FC<DriveContentProps> = ({
   drivePathsByLabel,
   currentSubfolderPath,
   newFolderTarget,
+  showUploadedBy = false,
+  driveOwnerSs58,
+  driveOwnerName,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
@@ -445,6 +455,7 @@ const DriveContent: FC<DriveContentProps> = ({
         <FilesTableSkeleton
           isRecentFiles={isRecentFiles}
           rows={skeletonRows ?? (isRecentFiles ? 5 : 8)}
+          showUploadedBy={showUploadedBy}
         />
       );
     }
@@ -511,6 +522,9 @@ const DriveContent: FC<DriveContentProps> = ({
             currentSubfolderPath={currentSubfolderPath}
             searchTerm={searchTerm}
             activeFilterCount={activeFilters.length}
+            showUploadedBy={showUploadedBy}
+            driveOwnerSs58={driveOwnerSs58}
+            driveOwnerName={driveOwnerName}
           />
         </>
       );

@@ -85,6 +85,7 @@ import ExpandedFolderRows from "./ExpandedFolderRows";
 import { canExpandFolderRow } from "./folderExpansion";
 import { NameCellExpander } from "./FolderRail";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
+import UploaderCell from "./UploaderCell";
 
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
@@ -127,18 +128,35 @@ const DEFAULT_COLUMN_WIDTHS_NO_SELECTION = {
   actions: 5,
 };
 
-const MIN_COLUMN_WIDTHS = {
-  selection: 10,
-  name: 23,
-  size: 10,
+/** Shared-drive listing: carve room for Added by between Size and Date. */
+const DEFAULT_COLUMN_WIDTHS_WITH_UPLOADER = {
+  name: 46,
+  size: 11,
+  added_by: 14,
   date_uploaded: 14,
   type: 10,
   actions: 5,
 };
 
-const normalizeBaseColumnWidths = (value: Record<string, number>) => {
+const MIN_COLUMN_WIDTHS = {
+  selection: 10,
+  name: 23,
+  size: 10,
+  added_by: 10,
+  date_uploaded: 14,
+  type: 10,
+  actions: 5,
+};
+
+const normalizeBaseColumnWidths = (
+  value: Record<string, number>,
+  showUploadedBy: boolean,
+) => {
+  const defaults = showUploadedBy
+    ? DEFAULT_COLUMN_WIDTHS_WITH_UPLOADER
+    : DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
   const merged = {
-    ...DEFAULT_COLUMN_WIDTHS_NO_SELECTION,
+    ...defaults,
     ...value,
   };
   delete (merged as Record<string, number | undefined>).selection;
@@ -146,9 +164,19 @@ const normalizeBaseColumnWidths = (value: Record<string, number>) => {
   // had the column persisted in localStorage don't keep its slice after it's
   // been collapsed into the Name column.
   delete (merged as Record<string, number | undefined>).folder;
+  if (!showUploadedBy) {
+    delete (merged as Record<string, number | undefined>).added_by;
+  }
+  // Strip keys that are not part of this mode's defaults (e.g. a stored
+  // Added by width when browsing an own drive).
+  for (const key of Object.keys(merged)) {
+    if (!(key in defaults)) {
+      delete (merged as Record<string, number | undefined>)[key];
+    }
+  }
   const total = Object.values(merged).reduce((sum, width) => sum + width, 0);
   if (total <= 0) {
-    return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
+    return { ...defaults };
   }
   if (Math.abs(total - 100) < 0.5) {
     return merged;
@@ -160,17 +188,23 @@ const normalizeBaseColumnWidths = (value: Record<string, number>) => {
 };
 
 // Store the "base" column widths (without selection column) to preserve user preferences
-const getStoredBaseColumnWidths = (isRecentFiles: boolean) => {
-  if (typeof window === "undefined") return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
+const getStoredBaseColumnWidths = (
+  isRecentFiles: boolean,
+  showUploadedBy: boolean,
+) => {
+  const defaults = showUploadedBy
+    ? DEFAULT_COLUMN_WIDTHS_WITH_UPLOADER
+    : DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
+  if (typeof window === "undefined") return { ...defaults };
   try {
     const key = `filesTable_baseColumnWidths_v2_${isRecentFiles ? "recent" : "main"}`;
     const stored = localStorage.getItem(key);
     if (stored) {
-      return normalizeBaseColumnWidths(JSON.parse(stored));
+      return normalizeBaseColumnWidths(JSON.parse(stored), showUploadedBy);
     }
-    return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
+    return { ...defaults };
   } catch {
-    return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
+    return { ...defaults };
   }
 };
 
@@ -241,6 +275,9 @@ interface DriveRowCtx {
   sortDir: ExpandedFolderRowsProps["sortDir"];
   cascadeAncestorChain: FormattedUserFile[];
   isItemDeleting: ExpandedFolderRowsProps["isItemDeleting"];
+  showUploadedBy: boolean;
+  driveOwnerSs58?: string;
+  driveOwnerName?: string;
 }
 
 interface DriveFileRowProps {
@@ -428,6 +465,9 @@ const DriveFileRow = memo(function DriveFileRow({
               : ctx.cascadeAncestorChain
           }
           isItemDeleting={ctx.isItemDeleting}
+          showUploadedBy={ctx.showUploadedBy}
+          driveOwnerSs58={ctx.driveOwnerSs58}
+          driveOwnerName={ctx.driveOwnerName}
         />
       )}
     </>
@@ -482,6 +522,16 @@ interface FilesTableProps {
    * comparator and the server's are not the same function.
    */
   serverSorted?: boolean;
+  /**
+   * Show the Added by column. Only meaningful in a shared drive: in a drive
+   * you own alone every row names you, so the column is pure width. Matches
+   * the console's `showUploadedBy` and desktop's Added by filter visibility.
+   */
+  showUploadedBy?: boolean;
+  /** The drive's owner ss58, for UploaderCell's You/Owner/Not-recorded cases. */
+  driveOwnerSs58?: string;
+  /** The drive owner's display name when known. */
+  driveOwnerName?: string;
 }
 
 const FilesTable: FC<FilesTableProps> = memo(
@@ -502,6 +552,9 @@ const FilesTable: FC<FilesTableProps> = memo(
     sorting: controlledSorting,
     onSortingChange,
     serverSorted = false,
+    showUploadedBy = false,
+    driveOwnerSs58,
+    driveOwnerName,
   }) => {
     const { polkadotAddress } = useWalletAuth();
     const drivePaths = useMemo(
@@ -1162,6 +1215,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       hasAnyFolder,
       handleSetSelectedFile,
       createTableItems,
+      sessionSs58: polkadotAddress ?? undefined,
+      driveOwnerSs58,
+      driveOwnerName,
     });
     cellCtxRef.current = {
       files,
@@ -1173,11 +1229,14 @@ const FilesTable: FC<FilesTableProps> = memo(
       hasAnyFolder,
       handleSetSelectedFile,
       createTableItems,
+      sessionSs58: polkadotAddress ?? undefined,
+      driveOwnerSs58,
+      driveOwnerName,
     };
 
-    // Stable columns: `isSelectionMode` is the only real dependency because
-    // it changes the column STRUCTURE (adds/removes the selection column) —
-    // a rare, explicit user action where a one-off cell remount is fine.
+    // Stable columns: `isSelectionMode` / `showUploadedBy` change STRUCTURE
+    // (add/remove selection or Added by) — rare explicit context switches
+    // where a one-off cell remount is fine.
     const columns = useMemo(() => {
       const selectionColumn = !isSelectionMode
         ? []
@@ -1243,6 +1302,35 @@ const FilesTable: FC<FilesTableProps> = memo(
         );
       };
       const triggerClass = "min-w-0 px-0 py-0";
+      const uploaderColumn = !showUploadedBy
+        ? []
+        : [
+            columnHelper.display({
+              id: "added_by",
+              header: "Added by",
+              enableSorting: false,
+              cell: ({ row }) => {
+                const file = row.original;
+                const {
+                  sessionSs58,
+                  driveOwnerSs58: ownerSs58,
+                  driveOwnerName: ownerName,
+                } = cellCtxRef.current;
+                return (
+                  <div className="text-grey-dark-800 text-xs font-medium truncate tracking-[-0.24px]">
+                    <UploaderCell
+                      uploadedBy={file.uploadedBy}
+                      uploadedByName={file.uploadedByName}
+                      isFolder={file.isFolder}
+                      sessionSs58={sessionSs58}
+                      driveOwnerSs58={ownerSs58}
+                      driveOwnerName={ownerName}
+                    />
+                  </div>
+                );
+              },
+            }),
+          ];
       return [
         ...selectionColumn,
         columnHelper.accessor("name", {
@@ -1316,6 +1404,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             );
           },
         }),
+        ...uploaderColumn,
         columnHelper.accessor("createdAt", {
           header: "Date Uploaded",
           enableSorting: true,
@@ -1415,10 +1504,13 @@ const FilesTable: FC<FilesTableProps> = memo(
       // Everything volatile is read through cellCtxRef at render time (see
       // the comment above) — adding it here would defeat the stable cell
       // identity this memo exists to provide.
-    }, [isSelectionMode]);
+    }, [isSelectionMode, showUploadedBy]);
 
     const [columnWidths, setColumnWidths] = useState(() => {
-      const baseWidths = getStoredBaseColumnWidths(isRecentFiles);
+      const baseWidths = getStoredBaseColumnWidths(
+        isRecentFiles,
+        showUploadedBy,
+      );
       return convertBaseWidthsToMode(baseWidths, isSelectionMode);
     });
 
@@ -1432,13 +1524,16 @@ const FilesTable: FC<FilesTableProps> = memo(
     } | null>(null);
     const [justResized, setJustResized] = useState(false);
 
-    // Load base widths when file context changes (not selection mode)
+    // Load base widths when file context or Added by visibility changes
     useEffect(() => {
-      const baseWidths = getStoredBaseColumnWidths(isRecentFiles);
+      const baseWidths = getStoredBaseColumnWidths(
+        isRecentFiles,
+        showUploadedBy,
+      );
       const newWidths = convertBaseWidthsToMode(baseWidths, isSelectionMode);
       setColumnWidths(newWidths);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isRecentFiles]);
+    }, [isRecentFiles, showUploadedBy]);
 
     useEffect(() => {
       const timeoutId = setTimeout(() => {
@@ -1724,6 +1819,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         "selection",
         "name",
         "size",
+        "added_by",
         "date_uploaded",
         "type",
         "actions",
@@ -1885,6 +1981,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       sortDir,
       cascadeAncestorChain,
       isItemDeleting,
+      showUploadedBy,
+      driveOwnerSs58,
+      driveOwnerName,
     };
     const rowCtxRef = useRef<DriveRowCtx>(rowCtx);
     rowCtxRef.current = rowCtx;
