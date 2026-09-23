@@ -67,13 +67,17 @@ import {
 } from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
-import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
+import {
+  useMemberDriveLabels,
+  useSharedDriveMembershipByIdentity,
+} from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
 import {
   makeSharedDriveLabel,
   parseSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
+import { isMemberDriveLabel } from "@/app/lib/utils/folderShareGating";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { driveAtFolderListAtom } from "@/app/lib/global-atoms/driveViewAtoms";
 import {
@@ -230,6 +234,21 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // Active filters state
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
+
+  // Console #920 parity: leaving a drive or folder must not carry its
+  // search/filters into the next one. Keyed on the open location so every
+  // navigation path (breadcrumb, cards, nested URL) clears the same way.
+  const clearSearchAndFilters = useCallback(() => {
+    setSearchTerm("");
+    setFilterState({
+      fileExtension: undefined,
+      dateRange: undefined,
+      fileSize: 0,
+      fileSizes: [],
+      excludedOnly: false,
+      lastUpdated: Date.now(),
+    });
+  }, []);
 
   // State to track if sync folder is configured
   const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<
@@ -501,6 +520,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     if (browsePage !== 1) setBrowsePage(1);
   }
 
+  // Open drive + folder location for search/filter reset (console #920).
+  // Includes the cards/local view and the active sync label so switching
+  // drives clears the same way as diving into a nested folder.
+  const searchScopeKey = `${activeSyncFolderLabel ?? ""}|${activeRemoteLabel ?? ""}|${browseLevelKey}|${isOnLocalView}`;
+  const lastSearchScopeRef = useRef(searchScopeKey);
+  useEffect(() => {
+    if (lastSearchScopeRef.current === searchScopeKey) return;
+    lastSearchScopeRef.current = searchScopeKey;
+    clearSearchAndFilters();
+  }, [searchScopeKey, clearSearchAndFilters]);
+
   // Changing the size changes which rows page 1 holds, so the reader is put
   // back on it rather than left on a page number that now means something
   // else (or no longer exists).
@@ -513,6 +543,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // one and not the other would browse the next drive under somebody else's
   // namespace. See `sharedDriveLabel.ts`.
   const browsedSharedDrive = parseSharedDriveLabel(remoteUploadLabel);
+  const memberDriveLabels = useMemberDriveLabels();
+  // Inside someone else's drive the figure is that drive's size (owner pays),
+  // not this account's quota — console uses "Drive size:" for that.
+  const openDriveLabel =
+    remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel;
+  const storageLabel = isMemberDriveLabel(openDriveLabel, memberDriveLabels)
+    ? "Drive size:"
+    : "Storage Used:";
 
   const nestedListing = useNestedFolderListing({
     accountId: polkadotAddress,
@@ -975,13 +1013,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     [filterState.fileSizes, updateFilters],
   );
 
-  // Header "Total Storage Used":
+  // Header size figure:
   //   - active folder: raw per-drive bytes from the Rust aggregator. Raw
   //     (not CID-deduplicated) is intentional — it matches what the user
   //     sees in the folder's rows. See 2026-04-17-folder-tab-stats-fix.md.
   //   - fallback (no active folder, e.g. mid-bootstrap): keep the indexer
   //     value so it stays consistent with the Home page / Available
   //     Credits numbers.
+  // Label is "Drive size:" vs "Storage Used:" — see `storageLabel` above.
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
@@ -2008,6 +2047,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isRefetching={false}
                 isFetching={false}
                 formattedStorageSize={formattedStorageSize}
+                storageLabel={storageLabel}
                 allFilteredDataLength={displayedFileCount}
                 viewMode={viewMode}
                 setViewMode={handleViewModeChange}

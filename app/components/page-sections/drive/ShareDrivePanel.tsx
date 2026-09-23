@@ -292,6 +292,7 @@ export default function ShareDrivePanel() {
         ) : (
           <MembersTab
             state={members}
+            driveName={target?.folderName ?? label ?? "this drive"}
             onRemove={(ss58) => void removeMember(ss58)}
             onChangeRole={(ss58, role) => void changeRole(ss58, role)}
             onCreateInvite={() => {
@@ -490,11 +491,13 @@ function InviteRow({
 
 function MembersTab({
   state,
+  driveName,
   onRemove,
   onChangeRole,
   onCreateInvite,
 }: {
   state: MembersState;
+  driveName: string;
   onRemove: (memberSs58: string) => void;
   onChangeRole: (memberSs58: string, role: DriveRole) => void;
   onCreateInvite: () => void;
@@ -548,6 +551,7 @@ function MembersTab({
           <MemberRow
             key={member.memberSs58}
             member={member}
+            driveName={driveName}
             onRemove={onRemove}
             onChangeRole={onChangeRole}
           />
@@ -682,10 +686,12 @@ function ChangeRoleDialog({
 
 function MemberRow({
   member,
+  driveName,
   onRemove,
   onChangeRole,
 }: {
   member: DriveMemberInfo;
+  driveName: string;
   onRemove: (memberSs58: string) => void;
   onChangeRole: (memberSs58: string, role: DriveRole) => void;
 }) {
@@ -775,7 +781,7 @@ function MemberRow({
         confirmVariant="destructive"
         confirmButtonClassName="text-white"
         button="Remove"
-        text={`Remove this member from "${member.memberSs58.slice(0, 8)}…"?`}
+        text={`Remove this member from "${driveName}"?`}
         helperText="They lose access on their next request. Files already downloaded to their device stay there, and any invite link still circulating keeps working — revoke it in the Links tab."
       />
     </>

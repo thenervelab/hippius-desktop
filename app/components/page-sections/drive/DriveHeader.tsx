@@ -70,6 +70,8 @@ interface DriveHeaderProps {
   isRefetching?: boolean;
   isFetching?: boolean;
   formattedStorageSize: string;
+  /** Console parity — see StorageStateList. Defaults to "Storage Used:". */
+  storageLabel?: string;
   allFilteredDataLength: number;
   viewMode: "list" | "card";
   setViewMode: (mode: "list" | "card") => void;
@@ -174,6 +176,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   isRefetching = false,
   isFetching = false,
   formattedStorageSize,
+  storageLabel = "Storage Used:",
   allFilteredDataLength,
   viewMode,
   setViewMode,
@@ -548,6 +551,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   {!isNested && (
                     <StorageStateList
                       storageUsed={formattedStorageSize}
+                      storageLabel={storageLabel}
                       numberOfFiles={allFilteredDataLength || 0}
                     />
                   )}
