@@ -69,8 +69,8 @@ import {
   parseDriveRole,
   type DriveRole,
 } from "@/app/lib/shared-drives/roles";
+import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { middleTruncate } from "@/lib/utils/middleTruncate";
 import {
   formatJoinedDate,
   getInvitesView,
@@ -440,7 +440,15 @@ function InviteRow({
               can mint, a drive's links no longer all come from one person,
               and "who let them in" is a question the list has to answer. */}
           {view.mintedBy && (
-            <> · by {middleTruncate(view.mintedBy, 14)}</>
+            <>
+              {" "}
+              · by{" "}
+              {accountDisplayName(
+                view.mintedBy,
+                invite.mintedByName,
+                14,
+              )}
+            </>
           )}
         </p>
       </div>
@@ -714,7 +722,7 @@ function MemberRow({
               className="truncate font-mono text-xs text-grey-10 dark:text-white"
               title={member.memberSs58}
             >
-              {middleTruncate(member.memberSs58, 22)}
+              {accountDisplayName(member.memberSs58, member.memberName)}
             </p>
             <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
               {/* The role reads as a chip here too, so a member list and a

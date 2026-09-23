@@ -30,7 +30,7 @@ import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
-import { middleTruncate } from "@/lib/utils/middleTruncate";
+import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -163,7 +163,7 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
             <div className="break-all">
               {file.uploadedBy === polkadotAddress
                 ? "You"
-                : middleTruncate(file.uploadedBy, 24)}
+                : accountDisplayName(file.uploadedBy, file.uploadedByName, 24)}
             </div>
           </PillRow>
         )}

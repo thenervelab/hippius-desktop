@@ -69,6 +69,7 @@ import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import {
   useMemberDriveLabels,
+  useSharedDriveMembership,
   useSharedDriveMembershipByIdentity,
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
@@ -1499,22 +1500,34 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // control that appears late on every drive is a worse trade than one that
   // briefly appears for a Viewer.
   const browsedMembership = useSharedDriveMembershipByIdentity(browsedSharedDrive);
+  const syncedMembership = useSharedDriveMembership(
+    browsedSharedDrive ? null : openDriveLabel,
+  );
+  const openDriveFrozen = Boolean(
+    browsedSharedDrive
+      ? browsedMembership.membership?.frozen
+      : syncedMembership.membership?.frozen,
+  );
   // The role this account holds on the open drive, for the refusal wording.
   const openDriveRole = browsedSharedDrive
     ? browsedMembership.membership
       ? parseDriveRole(browsedMembership.membership.role)
       : null
     : syncedDriveRole;
-  const openDriveWriteRefusal = driveWriteRefusal(openDriveRole);
+  const openDriveWriteRefusal = driveWriteRefusal(openDriveRole, {
+    frozen: openDriveFrozen,
+  });
 
-  const openDriveCanWrite = browsedSharedDrive
-    ? canWriteToDrive({
-        isOwner: false,
-        role: browsedMembership.membership
-          ? parseDriveRole(browsedMembership.membership.role)
-          : undefined,
-      }) || !browsedMembership.isSettled
-    : syncedDriveCanWrite;
+  const openDriveCanWrite = openDriveFrozen
+    ? false
+    : browsedSharedDrive
+      ? canWriteToDrive({
+          isOwner: false,
+          role: browsedMembership.membership
+            ? parseDriveRole(browsedMembership.membership.role)
+            : undefined,
+        }) || !browsedMembership.isSettled
+      : syncedDriveCanWrite;
 
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];

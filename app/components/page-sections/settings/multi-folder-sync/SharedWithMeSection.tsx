@@ -25,7 +25,7 @@ import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { buildSharedDriveActions } from "./sharedDriveRowActions";
 import { SettingsCard } from "../SettingsCard";
-import { middleTruncate } from "@/lib/utils/middleTruncate";
+import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRowDate } from "@/components/page-sections/drive/folder-list/formatRowDate";
 import { RowDot as Dot } from "@/components/page-sections/drive/folder-list/RowDot";
@@ -236,6 +236,7 @@ export function SharedWithMeSection({
               className={cn(
                 "flex items-center justify-between gap-3 p-3 hover:bg-grey-light-400 dark:hover:bg-white/5",
                 onOpenDrive && "cursor-pointer",
+                membership.frozen && "opacity-80",
               )}
             >
               <div className="min-w-0 flex-1">
@@ -255,6 +256,18 @@ export function SharedWithMeSection({
                       carries the same ordering the roles do, so a list can
                       be read for access at a glance. */}
                   <DriveRoleChip role={role} />
+                  {membership.frozen && (
+                    <span
+                      className="flex-shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-grey-50 dark:text-grey-dark-600"
+                      title={
+                        membership.frozenUntil
+                          ? `Frozen until ${membership.frozenUntil}`
+                          : "This drive is frozen — uploads are refused"
+                      }
+                    >
+                      Frozen
+                    </span>
+                  )}
                   {action.kind === "synced" && (
                     <span className="flex-shrink-0 whitespace-nowrap text-[11px] font-medium text-[#04c870]">
                       Synced here
@@ -293,7 +306,16 @@ export function SharedWithMeSection({
                   className="ml-6 mt-1 truncate font-geist text-[13px] font-medium text-[#0A0A0A]/40 dark:text-white/40"
                   title={membership.ownerSs58}
                 >
-                  Shared by {middleTruncate(membership.ownerSs58, 22)}
+                  Shared by {accountDisplayName(membership.ownerSs58, membership.ownerName)}
+                  {/* Zero and absent both draw nothing — never fake "0 members"
+                      off a missing count (console OwnerCell parity). */}
+                  {membership.memberCount ? (
+                    <span>
+                      {" "}
+                      · {membership.memberCount}{" "}
+                      {membership.memberCount === 1 ? "member" : "members"}
+                    </span>
+                  ) : null}
                 </p>
               </div>
 

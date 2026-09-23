@@ -44,6 +44,8 @@ export type FormattedUserFile = {
    * solo drive it is always the reader, which is noise.
    */
   uploadedBy?: string;
+  /** Display name beside uploadedBy (hcfs #455). */
+  uploadedByName?: string;
   isFolder?: boolean;
   type?: string;
   isErasureCoded: boolean;
