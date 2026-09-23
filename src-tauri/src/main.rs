@@ -120,6 +120,7 @@ use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files_in_drive};
+use crate::sync::rekey_probe::probe_rekey_recovery;
 use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped};
 use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, rename_remote_folder};
 use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
@@ -432,6 +433,8 @@ fn main() {
             delete_remote_folder,
             // Remote folder browsing & one-off download
             list_remote_folder_files,
+            // Read-only: which keys open a re-keyed drive's remote files
+            probe_rekey_recovery,
             upload_files_to_remote_folder,
             upload_folder_to_remote_folder,
             search_files_in_drive,
