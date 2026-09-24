@@ -26,6 +26,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   drive or folder, and invitations still waiting. You can change someone's
   role or remove them right there, approve an emailed invitation that is
   waiting for you, and revoke a link you just made.
+- **Manage access is one list** instead of tabs: the people who have the
+  drive or folder, invitations still waiting, and every link with how often
+  it was used and when it expires, all in one place.
 - **Changing which folders someone can open now lets you add a folder**, as
   Viewer or Editor, not only take folders away.
 - **Storage and plan banners on Overview use a button on the right**

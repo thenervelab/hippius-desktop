@@ -66,7 +66,7 @@ Phase 3 console must copy the KAT vectors verbatim (`grant_passphrase_is_pinned`
 
 The invite URL is assembled IN RUST (`create_drive_invite`): token + entropy exist nowhere else — not in logs (no-secret-log pin in `tests/shared_drive_wiring.rs`), not in another IPC. Invite policy defaults (7d / 50 uses) live in Rust (`resolve_invite_policy`); `http_create_invite` takes non-Option values so no call path can send an omitted field. The FE expiry presets (`shareDriveModalState.ts::INVITE_TTL_OPTIONS`) include "Never expires", sent as the hcfs server's 100-year lifetime cap (`NEVER_EXPIRES_SECS` = 100\*365\*24\*3600 — it must equal the server's `MAX_EXPIRES_SECS` exactly, or the preset 400s at mint time); an OMITTED lifetime still resolves to the finite 7-day default.
 
-Invites are listed and revoked by id (`list_drive_invites` / `revoke_drive_invite`, the panel's Links tab); the desktop never persists a minted token, and revoking a link is distinct from removing a member (the link still circulating vs. someone already in). **The drive list's badge and Manage access come from ONE IPC, `list_owned_drive_sharing`**, which fans out members + invites per own drive and folds them in Rust (`fold_drive_sharing`: a drive is omitted only when BOTH listings fail — unknown is not private). The FE hook `useOwnedDriveSharing` is a TanStack query keyed on the sorted label set; every mint / revoke / remove / re-role calls `invalidateOwnedDriveSharing`. It was a hand-rolled effect whose deps included the labels array, so every drive-page re-render cancelled the fetch in flight and the badge never drew — do not put a per-render array in a fetch effect's deps. `leave_shared_drive` ALWAYS sends `?owner=` (the bare server fallback deletes ALL same-hash memberships) and proceeds to local removal on a domain 404 (owner removed us first). Feature-off servers answer a bare 404 on these routes, mapped by `classify_error_status` to `NotReady(SharedDrivesUnavailable)` so the FE hides the surface instead of erroring.
+Invites are listed and revoked by id (`list_drive_invites` / `revoke_drive_invite`; the panel reads them through `list_access_panel`); the desktop never persists a minted token, and revoking a link is distinct from removing a member (the link still circulating vs. someone already in). **The drive list's badge comes from ONE IPC, `list_owned_drive_sharing`**, which fans out members + invites per own drive and folds them in Rust (`fold_drive_sharing`: a drive is omitted only when BOTH listings fail; unknown is not private). The FE hook `useOwnedDriveSharing` is a TanStack query keyed on the sorted label set; every mint / revoke / remove / re-role calls `invalidateOwnedDriveSharing`. It was a hand-rolled effect whose deps included the labels array, so every drive-page re-render cancelled the fetch in flight and the badge never drew Do not put a per-render array in a fetch effect's deps. `leave_shared_drive` ALWAYS sends `?owner=` (the bare server fallback deletes ALL same-hash memberships) and proceeds to local removal on a domain 404 (owner removed us first). Feature-off servers answer a bare 404 on these routes, mapped by `classify_error_status` to `NotReady(SharedDrivesUnavailable)` so the FE hides the surface instead of erroring.
 
 ### Who pays, and who the server is asked about
 
@@ -182,7 +182,7 @@ from the `role` / `expiresInSecs` / `maxUses` the mint returns, which are what w
 after Rust's defaults and caps, and revokes it by the returned `inviteId`. One mixed form
 let a typed address silently turn a link into an email invite. Refusals route on the
 subkind to inline notices (`shareDialogState.ts::noticeForError`), never a toast. Each
-success bumps `driveInvitesVersionAtom`, which reloads an open Links tab.
+success bumps `driveInvitesVersionAtom`, which reloads an open Manage access panel.
 
 **People with access comes from one Rust fold, `list_share_access`** (`fold_share_access`):
 owner, whole-drive members for a drive, holders of a grant AT OR ABOVE the folder for a
@@ -196,6 +196,23 @@ then "+ N more · Manage access" to the panel. A dev and staging only preview fi
 for these commands with fake people, latency and refusals; it is off at build time on beta
 and production. Pinned by `share-dialog/__tests__/ShareDialog.test.tsx` and the
 `fold_share_access` unit tests.
+
+**The Manage access panel is one list, from one Rust fold** (`ShareDrivePanel.tsx` +
+`drive/access-panel/`, `list_access_panel` in `shared_drives/access_panel.rs`), for a
+drive or, when the target carries `pathPrefix`, one folder. People (owner, members,
+folder holders tagged with their folder; a folder panel lists whole-drive members as
+"Has the whole drive"), Pending invites, Links (working ones with usage, expiry and
+maker; ended ones folded into one line). Link status, usage percent, never-expires
+and seconds left are decided in Rust against the clock; TypeScript only words them
+(`accessPanelView.ts`, words shared with the console's panel). `can_manage` is the
+OWNER only: everyone else gets the people read only and Leave, and somebody else's
+drive is never asked for invites. Sealed links open through `open_invite_links` (shared
+with `list_drive_invites`), which also reports a missing drive key; the panel then shows
+"Links are locked…" and routes Unlock through `useUnlockFlow` (the sync banner's flow),
+reading the list again once the recovery dialog closes. Rows reuse the Share dialog's
+`MemberRow` / `PendingRow` / `useRowChanges`, so changes are pessimistic in both. The
+dev fixture covers the panel too (`"12 locked"` draws locked links). Pinned by
+`access_panel.rs` unit and wire tests and `drive/__tests__/ShareDrivePanel.test.tsx`.
 
 **Refusals are "coming soon", mapped in Rust.** The server words them as `400 bad_request`
 plus a message, so `classify_folder_invite_refusal` / `classify_folder_email_refusal`
