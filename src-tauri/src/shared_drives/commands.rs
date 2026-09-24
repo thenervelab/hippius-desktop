@@ -3690,7 +3690,7 @@ mod tests {
         let (_, role) = plan_folder_grant_replace(&["Work".into()], None).unwrap();
         assert_eq!(role, None, "no role: the server keeps its Viewer default");
         assert!(plan_folder_grant_replace(&[], None).is_err(), "removing everything is Remove access");
-        assert!(plan_folder_grant_replace(&["".into()], None).is_err(), "never the whole drive");
+        assert!(plan_folder_grant_replace(&[String::new()], None).is_err(), "never the whole drive");
         assert!(plan_folder_grant_replace(&["a/../b".into()], None).is_err());
         assert!(
             plan_folder_grant_replace(&["Work".into()], Some("manager".into())).is_err(),
