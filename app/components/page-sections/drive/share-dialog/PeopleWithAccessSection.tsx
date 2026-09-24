@@ -53,9 +53,21 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 /** The value the row's select uses for "Remove access". Never a role. */
 const REMOVE = "remove";
 
-const ROW = "flex min-h-[48px] items-center gap-3 py-2";
+/**
+ * Every person row is three columns: the avatar (fixed), the words (take
+ * what is left and cut each line short with an ellipsis) and the role on the
+ * right, in a slot of one fixed width so Owner, Viewer and Editor line up
+ * whether they are a select or plain text. Without the fixed slot a long name
+ * ran on under the role select.
+ */
+export const ROW = "flex min-h-[48px] min-w-0 items-center gap-3 py-2";
+/** The words column: never wider than what the avatar and the role leave. */
+export const TEXT_COLUMN = "min-w-0 flex-1 overflow-hidden";
 const META = "truncate text-xs text-grey-50 dark:text-grey-dark-600";
-const ROLE_TEXT = "shrink-0 text-xs text-grey-50 dark:text-grey-dark-600";
+/** The right-hand slot: as wide as the role select, so the column aligns. */
+export const ROLE_SLOT = "flex w-[98px] shrink-0 items-center";
+/** A role as plain text, indented like the select's value so they align. */
+export const ROLE_TEXT = "min-w-0 flex-1 truncate pl-2.5 text-xs text-grey-50 dark:text-grey-dark-600";
 const SMALL_BUTTON = "h-8 shrink-0 rounded-[6px] px-3 text-xs font-medium";
 
 /** What a row is waiting on, while a change is on the wire. */
@@ -119,8 +131,11 @@ export function PeopleWithAccessSection({
   retry: () => void;
   /** Something changed on the server: badges and the Links tab refresh. */
   onChanged: () => void;
-  /** Opens the manage panel for this drive. */
-  onManage: () => void;
+  /**
+   * Opens the manage panel for this drive; with "people", straight on its
+   * full list of people (the "+N more" row, which is where that list went).
+   */
+  onManage: (openOn?: "people") => void;
 }) {
   const { busy, rowError, run } = useRowChanges(onChanged, reload);
 
@@ -201,7 +216,7 @@ export function PeopleWithAccessSection({
         </h3>
         <button
           type="button"
-          onClick={onManage}
+          onClick={() => onManage()}
           className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary-50 hover:underline dark:text-primary-brand-dark"
         >
           Manage access
@@ -245,7 +260,7 @@ export function PeopleWithAccessSection({
             <li>
               <button
                 type="button"
-                onClick={onManage}
+                onClick={() => onManage("people")}
                 className={cn(ROW, "w-full text-left text-xs font-medium text-primary-50 hover:underline dark:text-primary-brand-dark")}
               >
                 <span
@@ -282,9 +297,12 @@ const BUSY_WORD: Record<Busy, string> = {
 };
 
 /** The small spinner and word a row shows while its change is on the wire. */
-export function BusyLabel({ busy }: { busy: Busy }) {
+export function BusyLabel({ busy, className }: { busy: Busy; className?: string }) {
   return (
-    <span role="status" className="inline-flex shrink-0 items-center gap-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
+    <span
+      role="status"
+      className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-grey-50 dark:text-grey-dark-600", className)}
+    >
       <Loader2 className="size-3.5 animate-spin" aria-hidden />
       {BUSY_WORD[busy]}
     </span>
@@ -303,11 +321,13 @@ export function OwnerRow({ ss58, isYou, name }: { ss58: string; isYou: boolean; 
   return (
     <div className={ROW}>
       <PersonAvatar ss58={ss58} />
-      <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        <AccountLabel ss58={ss58} name={name} className="text-sm text-grey-10 dark:text-white" />
+      <div className={cn(TEXT_COLUMN, "flex items-baseline gap-1.5")}>
+        <AccountLabel ss58={ss58} name={name} focusable className="text-sm text-grey-10 dark:text-white" />
         {isYou ? <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">(you)</span> : null}
       </div>
-      <span className={ROLE_TEXT}>Owner</span>
+      <span className={ROLE_SLOT}>
+        <span className={ROLE_TEXT}>Owner</span>
+      </span>
     </div>
   );
 }
@@ -347,43 +367,50 @@ export function MemberRow({
   return (
     <div className={cn(ROW, busy === "removing" && "opacity-60")} aria-busy={busy ? true : undefined}>
       <PersonAvatar ss58={member.memberSs58} />
-      <div className="min-w-0 flex-1">
+      <div className={TEXT_COLUMN}>
         <div className="flex min-w-0 items-baseline gap-1.5">
           <AccountLabel
             ss58={member.memberSs58}
             name={member.memberName}
             email={member.memberEmail}
+            focusable
             className="text-sm text-grey-10 dark:text-white"
           />
           {member.isYou ? <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">(you)</span> : null}
         </div>
         {meta !== undefined ? (
-          meta ? <p className={META}>{meta}</p> : null
+          meta ? <p className={META} title={typeof meta === "string" ? meta : undefined}>{meta}</p> : null
         ) : member.memberEmail ? (
-          <p className={META}>{member.memberEmail}</p>
+          <p className={META} title={member.memberEmail}>{member.memberEmail}</p>
         ) : null}
       </div>
-      {busy ? <BusyLabel busy={busy} /> : null}
-      {member.isYou || readOnly ? (
-        // Nobody changes their own role; a member leaves instead.
-        <span className={ROLE_TEXT}>{driveRoleLabel(role)}</span>
-      ) : busy === "removing" ? null : (
-        <Select
-          ariaLabel={`Role for ${who}`}
-          value={role}
-          onValueChange={choose}
-          disabled={Boolean(busy)}
-          size="compact"
-          chrome="quiet"
-          minimal
-          options={[
-            ...DRIVE_ROLES.map((r) => ({ label: driveRoleLabel(r), value: r, description: driveRoleDescription(r) })),
-            { label: "Remove access", value: REMOVE },
-          ]}
-          className="w-auto shrink-0"
-          triggerClassName="w-[98px]"
-        />
-      )}
+      {/* A role change keeps the old role in view, disabled, until the server
+          answers; the words sit left of the slot and the name gives way. */}
+      {busy === "saving" ? <BusyLabel busy={busy} /> : null}
+      <span className={ROLE_SLOT}>
+        {busy && busy !== "saving" ? (
+          <BusyLabel busy={busy} className="pl-2.5" />
+        ) : member.isYou || readOnly ? (
+          // Nobody changes their own role; a member leaves instead.
+          <span className={ROLE_TEXT}>{driveRoleLabel(role)}</span>
+        ) : (
+          <Select
+            ariaLabel={`Role for ${who}`}
+            value={role}
+            onValueChange={choose}
+            disabled={Boolean(busy)}
+            size="compact"
+            chrome="quiet"
+            minimal
+            options={[
+              ...DRIVE_ROLES.map((r) => ({ label: driveRoleLabel(r), value: r, description: driveRoleDescription(r) })),
+              { label: "Remove access", value: REMOVE },
+            ]}
+            className="w-full"
+            triggerClassName="w-[98px]"
+          />
+        )}
+      </span>
 
       <ConfirmationDialog
         open={pending === "remove"}
@@ -444,21 +471,21 @@ function HolderRow({
   return (
     <div className={cn(ROW, busy === "removing" && "opacity-60")} aria-busy={busy ? true : undefined}>
       <PersonAvatar ss58={holder.memberSs58} />
-      <div className="min-w-0 flex-1">
+      <div className={TEXT_COLUMN}>
         <AccountLabel
           ss58={holder.memberSs58}
           name={holder.memberName}
           email={holder.memberEmail}
+          focusable
           className="text-sm text-grey-10 dark:text-white"
         />
         {holder.memberEmail || via ? (
-          <p className={META}>{[holder.memberEmail, via].filter(Boolean).join(" · ")}</p>
+          <p className={META} title={[holder.memberEmail, via].filter(Boolean).join(" · ")}>
+            {[holder.memberEmail, via].filter(Boolean).join(" · ")}
+          </p>
         ) : null}
       </div>
-      <span className={ROLE_TEXT}>{role}</span>
-      {busy ? (
-        <BusyLabel busy={busy} />
-      ) : readOnly ? null : (
+      {busy ? null : readOnly ? null : (
         <Button
           type="button"
           variant="defaultStable"
@@ -470,6 +497,10 @@ function HolderRow({
           Remove
         </Button>
       )}
+      {/* Last, so the role lines up with the members' role column. */}
+      <span className={ROLE_SLOT}>
+        {busy ? <BusyLabel busy={busy} className="pl-2.5" /> : <span className={ROLE_TEXT}>{role}</span>}
+      </span>
       <ConfirmationDialog
         open={confirming}
         onClose={() => setConfirming(false)}
@@ -530,16 +561,16 @@ export function PendingRow({
       >
         <Mail className="size-4" />
       </span>
-      <div className="min-w-0 flex-1 basis-[150px]">
+      <div className="min-w-0 flex-1 basis-[150px] overflow-hidden">
         <p className="truncate text-sm text-grey-10 dark:text-white" title={address}>
           {address}
         </p>
         {meta !== undefined ? (
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-grey-50 dark:text-grey-dark-600">
             {meta}
           </div>
         ) : (
-          <p className={cn(META, needsApproval && "text-warning-50 dark:text-warning-50")}>
+          <p className={cn(META, needsApproval && "text-warning-50 dark:text-warning-50")} title={pendingInviteMeta(invite)}>
             {pendingInviteMeta(invite)}
             <span className="@sm:hidden"> · {driveRoleLabel(parseDriveRole(invite.role))}</span>
           </p>

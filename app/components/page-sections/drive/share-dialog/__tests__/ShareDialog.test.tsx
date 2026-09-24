@@ -877,6 +877,19 @@ describe("People with access", () => {
     expect(screen.getByText("sent@example.com")).toBeInTheDocument();
   });
 
+  it("cuts a long name short beside a role slot of fixed width", async () => {
+    const long = "Srinivasa Ramanujan Aiyangar Venkataraghavan";
+    listShareAccessMock.mockResolvedValue(
+      access({ members: [{ memberSs58: "5Long", memberName: long, memberEmail: "sr@example.com", role: "writer", isYou: false }] }),
+    );
+    renderDialog();
+    const name = await screen.findByText(long);
+    expect(name).toHaveClass("truncate");
+    expect(name.closest(".flex-1")).toHaveClass("min-w-0", "overflow-hidden");
+    expect(screen.getByText("sr@example.com")).toHaveClass("truncate");
+    expect(screen.getByLabelText(`Role for ${long}`).closest("span.shrink-0")).toHaveClass("w-[98px]");
+  });
+
   it("shows six rows at most, the last one leading to Manage access", async () => {
     listShareAccessMock.mockResolvedValue(
       access({
@@ -894,7 +907,8 @@ describe("People with access", () => {
     expect(screen.getByText("Person 3")).toBeInTheDocument();
     expect(screen.queryByText("Person 4")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "+2 more · Manage access" }));
-    expect(store.get(shareDriveModalAtom)).toMatchObject({ label: "team-docs" });
+    // Straight to the full list of people: they are what the row stood for.
+    expect(store.get(shareDriveModalAtom)).toMatchObject({ label: "team-docs", openOn: "people" });
     expect(store.get(shareDialogAtom)).toBeNull();
   });
 

@@ -125,7 +125,7 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
   // Manage access opens the panel for what this dialog shares: the drive, or
   // this folder (its holders, invitations and links). The panel and this
   // dialog are two surfaces for one thing, so this one closes as it opens.
-  const manage = useCallback(() => {
+  const manage = useCallback((openOn?: "people") => {
     close();
     openManagePanel({
       label: target.label,
@@ -133,6 +133,7 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
       ownerSs58: target.ownerSs58,
       folderHash: target.folderHash,
       ...(pathPrefix !== null ? { pathPrefix } : {}),
+      ...(openOn ? { openOn } : {}),
     });
   }, [close, openManagePanel, target.label, target.ownerSs58, target.folderHash, driveName, pathPrefix]);
 

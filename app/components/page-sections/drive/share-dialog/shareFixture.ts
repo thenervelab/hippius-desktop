@@ -45,6 +45,7 @@ const NAMES = [
 /** Names long enough to test truncation in a 360px panel. */
 const LONG_NAMES = [
   "Maximiliana Alexandrovna Konstantinopoulou-Richardson",
+  "Srinivasa Ramanujan Aiyangar Venkataraghavan",
   "Bartholomew Fitzgerald Wolfeschlegelsteinhausen",
   "Anastasia Valentina Papadopoulou-Montgomery",
 ];
@@ -95,7 +96,9 @@ function slug(name: string): string {
 /** A person's name (or none, about one in five) and email. */
 function person(i: number): { name?: string; email?: string } {
   if (i % 5 === 4) return {};
-  const long = i % 9 === 7;
+  // The second person is long too, so a long name is among the rows a
+  // group shows before "Show all".
+  const long = i % 9 === 7 || i === 1;
   const name = long ? LONG_NAMES[i % LONG_NAMES.length] : NAMES[mix(i) % NAMES.length];
   const domain = i % 11 === 3 ? "research-and-development.very-long-company-domain.example.com" : "example.com";
   return { name, email: `${slug(name)}${i}@${domain}` };

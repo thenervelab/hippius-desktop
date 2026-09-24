@@ -21,6 +21,7 @@ export default function AccountLabel({
   maxChars = 22,
   className,
   prefix,
+  focusable = false,
 }: {
   ss58: string;
   name?: string | null;
@@ -29,12 +30,26 @@ export default function AccountLabel({
   className?: string;
   /** Words before the label inside the same hover target, e.g. "by ". */
   prefix?: string;
+  /**
+   * For a label that may be cut short in a list row: it takes keyboard
+   * focus (which opens the same tooltip as hover) and its accessible name
+   * carries the full name, email and address, since the eye may only see
+   * the start of them.
+   */
+  focusable?: boolean;
 }) {
   const view = accountLabelView(ss58, name, email, maxChars);
   return (
     <CustomTooltip2
       side="bottom"
-      className="min-w-0 max-w-full"
+      tabIndex={focusable ? 0 : undefined}
+      className={cn(
+        "min-w-0 max-w-full",
+        focusable &&
+          // An underline, not a ring: the row clips its words column, which
+          // would cut a ring off.
+          "outline-none focus-visible:underline focus-visible:decoration-primary-50 focus-visible:underline-offset-2 dark:focus-visible:decoration-primary-brand-dark",
+      )}
       tooltipContent={
         <span className="flex flex-col gap-0.5">
           {view.isName ? <span className="font-medium">{view.label}</span> : null}
@@ -54,6 +69,11 @@ export default function AccountLabel({
         {prefix}
         {view.label}
       </span>
+      {focusable ? (
+        <span className="sr-only">
+          {view.email ? `, ${view.email}` : ""}, address {view.ss58}
+        </span>
+      ) : null}
     </CustomTooltip2>
   );
 }

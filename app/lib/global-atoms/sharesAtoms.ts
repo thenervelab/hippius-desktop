@@ -175,6 +175,12 @@ export type ShareDriveModalTarget = {
    * scopes the panel to that folder the same way.
    */
   pathPrefix?: string;
+  /**
+   * Manage access panel only: open straight on this group's full list
+   * rather than the overview (the Share dialog's "+N more" row does, since
+   * the people it could not show are what the reader went looking for).
+   */
+  openOn?: "people";
 };
 
 export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);
