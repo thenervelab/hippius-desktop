@@ -38,6 +38,7 @@ import {
   createDriveInviteDialogAtom,
   folderGrantsFeatureEnabledAtom,
   folderShareFeatureEnabledAtom,
+  memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -60,7 +61,10 @@ import {
   folderGrantPathPrefix,
   FOLDER_GRANT_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderGrantGating";
-import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import {
+  useMemberDriveLabels,
+  useWritableMemberDriveLabels,
+} from "@/app/lib/hooks/useSharedDriveRoles";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
@@ -624,6 +628,10 @@ const FilesTable: FC<FilesTableProps> = memo(
     const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
     // Which of this listing's rows sit in a drive shared WITH this account.
     const memberDriveLabels = useMemberDriveLabels();
+    // Whether a folder in one of those drives may be shared by link: an
+    // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
+    const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
+    const writableMemberDriveLabels = useWritableMemberDriveLabels();
     const setShareModalFile = useSetAtom(shareModalFileAtom);
     const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
     const setRenameModalFile = useSetAtom(renameModalFileAtom);
@@ -1107,7 +1115,10 @@ const FilesTable: FC<FilesTableProps> = memo(
           // all: only its owner can mint a folder link (`offersShareAction`).
           ...((file.isFolder || file.syncStatus === "synced") &&
           shareEnabled &&
-          offersShareAction(file, memberDriveLabels)
+          offersShareAction(file, memberDriveLabels, {
+            memberFolderShares,
+            writableMemberDriveLabels,
+          })
             ? [
                 {
                   icon: <Link2 className="size-4" />,
@@ -1244,8 +1255,15 @@ const FilesTable: FC<FilesTableProps> = memo(
         polkadotAddress,
         shareEnabled,
         folderSharesEnabled,
+        // Missing before: a folder row's "Share folder" item kept whatever
+        // capability answer the first render saw, so it stayed disabled after
+        // the server confirmed folder grants.
+        folderGrantsEnabled,
         memberDriveLabels,
+        memberFolderShares,
+        writableMemberDriveLabels,
         setShareModalFile,
+        setInviteDialogTarget,
         setRenameModalFile,
         isItemDeleting,
         normalizedSubfolderPath,

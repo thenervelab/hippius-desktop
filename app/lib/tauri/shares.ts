@@ -42,6 +42,8 @@ export interface ServerCapabilities {
    * Absent on older servers; Rust collapses missing to `false`.
    */
   folder_grants: boolean;
+  /** `POST /v1/folder-shares` takes `owner_ss58` (hcfs #458). */
+  member_folder_shares?: boolean;
 }
 
 /**

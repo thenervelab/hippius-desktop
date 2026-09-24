@@ -55,6 +55,11 @@ pub struct ServerCapabilities {
     /// (`HCFS_FEATURE_FOLDER_GRANTS`). Requires shared drives. Absent on
     /// older servers and off in prod until clients are ready.
     pub folder_grants: bool,
+    /// `POST /v1/folder-shares` takes `owner_ss58`, so an Editor or Manager
+    /// can share a folder by link inside a drive somebody else owns
+    /// (hcfs #458). Absent on older servers, which read that mint under the
+    /// caller's own account and find nothing.
+    pub member_folder_shares: bool,
 }
 
 /// Hit `<base>/v1/capabilities` once. 404 collapses to a
@@ -156,7 +161,7 @@ mod tests {
     #[test]
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true}"#,
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true}"#,
         )
         .expect("parse");
         assert!(caps.shares);
@@ -164,6 +169,7 @@ mod tests {
         assert!(caps.folder_share_revoke_by_hash);
         assert!(caps.share_owner_wrap);
         assert!(caps.folder_grants);
+        assert!(caps.member_folder_shares);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -176,6 +182,7 @@ mod tests {
                 "folder_grants",
                 "folder_share_revoke_by_hash",
                 "folder_shares",
+                "member_folder_shares",
                 "share_owner_wrap",
                 "shares"
             ]
@@ -188,6 +195,7 @@ mod tests {
             serde_json::from_str(r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true}"#).expect("parse old");
         assert!(!old.share_owner_wrap);
         assert!(!old.folder_grants);
+        assert!(!old.member_folder_shares, "an older server never claims member folder shares");
     }
 
     /// A pre-folder-grants server omits the field; that must read as unavailable,

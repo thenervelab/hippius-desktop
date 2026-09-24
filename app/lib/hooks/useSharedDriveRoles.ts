@@ -4,7 +4,10 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { rolesByLocalLabel } from "@/app/lib/shared-drives/driveRowSharing";
+import {
+  rolesByLocalLabel,
+  writableMemberDriveLabels,
+} from "@/app/lib/shared-drives/driveRowSharing";
 import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import {
   isSharedDrivesUnavailable,
@@ -141,6 +144,21 @@ export function useMemberDriveLabels(): ReadonlySet<string> {
       memberships.length === 0
         ? EMPTY_LABELS
         : new Set(memberships.map((m) => m.localLabel).filter((l): l is string => Boolean(l))),
+    [memberships],
+  );
+}
+
+/**
+ * Labels of the drives shared with this account that it may WRITE to: an
+ * Editor or Manager role on a drive that is not frozen. Both spellings of a
+ * drive are in the set, its local label when synced here and its
+ * `shared:<owner>~<hash>` browse label, so a row from either view is answered
+ * without the caller knowing which it is. The server re-checks every write.
+ */
+export function useWritableMemberDriveLabels(): ReadonlySet<string> {
+  const memberships = useSharedDriveMemberships();
+  return useMemo(
+    () => writableMemberDriveLabels(memberships),
     [memberships],
   );
 }

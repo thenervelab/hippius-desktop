@@ -82,6 +82,16 @@ export const folderGrantsFeatureEnabledAtom = atom((get) => {
 });
 
 /**
+ * Whether an Editor or Manager may share a folder by link inside a drive
+ * somebody else owns (`capabilities.member_folder_shares`, hcfs #458).
+ * `null` capabilities collapse to `false`.
+ */
+export const memberFolderSharesEnabledAtom = atom((get) => {
+  const caps = get(serverCapabilitiesAtom);
+  return caps?.member_folder_shares === true;
+});
+
+/**
  * What `ShareFileModal` is currently sharing. `null` means closed.
  *
  * Storing the file (rather than just `(label, name)`) lets the modal render

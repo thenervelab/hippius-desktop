@@ -40,6 +40,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Editors and Managers can share a folder by link from a drive someone else owns.** Viewers and frozen drives do not see the option.
 - **Invite people to a shared drive by email.** Owners and managers can send a single-use invitation from the invite dialog, see where each one is on the Links tab, and approve it once the person opens it.
 - **Shared drives show people by name.** Members, invite links, Shared with me, the Added by column and File Details name each person, with their full address and email on hover.
 - **Drive remembers how many rows you chose.** Pick 50 per page and it stays 50

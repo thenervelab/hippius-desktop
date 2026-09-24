@@ -7,6 +7,7 @@ import { MoreVertical, Download, FolderOpen, Link2, Pencil } from "lucide-react"
 import { useAtomValue } from "jotai";
 import {
   folderShareFeatureEnabledAtom,
+  memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -20,7 +21,10 @@ import {
   FOLDER_SHARE_DISABLED_TOOLTIP,
   shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
-import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import {
+  useMemberDriveLabels,
+  useWritableMemberDriveLabels,
+} from "@/app/lib/hooks/useSharedDriveRoles";
 import { cn } from "@/lib/utils";
 
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -92,6 +96,10 @@ const CardView: FC<CardViewProps> = ({
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
+  // Whether a folder in one of those drives may be shared by link: an
+  // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
+  const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
+  const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
@@ -342,7 +350,10 @@ const CardView: FC<CardViewProps> = ({
                           ...((file.isFolder ||
                             file.syncStatus === "synced") &&
                           shareEnabled &&
-                          offersShareAction(file, memberDriveLabels)
+                          offersShareAction(file, memberDriveLabels, {
+            memberFolderShares,
+            writableMemberDriveLabels,
+          })
                             ? [
                                 {
                                   icon: <Link2 className="size-4" />,

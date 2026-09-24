@@ -138,7 +138,7 @@ Desktop routing: `classify_sync_error` (`tauri_bridge.rs`) checks the marker BEF
 
 ### v1 scope cuts
 
-Deliberate, documented where they bite: no folder-entity materialization on member drives (empty folders from the owner don't appear on member devices; files sync fully), no member migration/share-links/selective-sync-exclusions surfaces (server rejects member share creation anyway), membership fetch is FE-on-demand — never wired into `restore_session` (the login path's hang-proof timeout discipline is not risked for a listing) — and the files-page stats join leaves member rows blank.
+Deliberate, documented where they bite: no folder-entity materialization on member drives (empty folders from the owner don't appear on member devices; files sync fully), no member migration/selective-sync-exclusions surfaces (member FOLDER links are allowed for Editors and Managers, see "Member mint"), membership fetch is FE-on-demand — never wired into `restore_session` (the login path's hang-proof timeout discipline is not risked for a listing) — and the files-page stats join leaves member rows blank.
 
 **Caution**: `recent_uploads.rs`'s `hash_to_drive` map still keys drives by the label-derived hash — safe ONLY because member drives are excluded from the search surfaces in v1. If member drives ever reach search/recent-uploads, that map must move to the identity columns or member hits will mis-join.
 
@@ -150,11 +150,15 @@ A folder inside a synced drive is shared as a LIVE link, not an artifact. One me
 
 `shares/commands.rs::create_folder_share_inner`. EVERY gate lives in the inner funnel, not the IPC — the macOS Finder right-click (`finder_bridge/dispatch.rs`) calls it directly, the same lesson the zip pipeline learned.
 
-Gates: `require_folder_shares_supported` (the IPC's own authority, independent of the FE gate), owner-only (a member drive is refused with a modal-ready message — the server is owner-mint-only in v1, and a member's derived key would be wrong anyway), and `folder_share_path_prefix` (mirrors `resolve_inside_sync_root`'s component rules WITHOUT touching disk — the mint is metadata-only, so a cloud-only folder is shareable; `""` shares the whole drive).
+Gates: `require_folder_shares_supported` (the IPC's own authority, independent of the FE gate), the member branch (below), and `folder_share_path_prefix` (mirrors `resolve_inside_sync_root`'s component rules WITHOUT touching disk — the mint is metadata-only, so a cloud-only folder is shareable; `""` shares the whole drive).
 
 Two zip-era guards are deliberately ABSENT: no settlement check (the recipient browses the SERVER's state, so a half-synced local copy cannot corrupt the share) and no billing-eligibility gate (nothing is uploaded).
 
 The file key comes from the canonical `sync::remote::encryption_key_for_label` chain, and the client must be DRIVE-scoped (`sync::remote::build_client`) — the share flow's account-scoped label-less client is refused with `MissingFolderHash` because `create_folder_share` sends the folder hash from the client CONFIG. An OUTSIDE-drive folder from Finder is refused ("Only folders inside a synced Hippius drive…"). The create-path 404 `folder_not_found` slug maps to a "let it finish a sync" `Validation`, discriminated from a bare 404 (feature-off server).
+
+### Member mint (hcfs #458)
+
+A folder in somebody else's drive goes through `create_member_folder_share`: `capabilities.member_folder_shares` first, then this account's access from `/v1/drive-memberships` (`member_access_for`: the whole-drive membership, else a folder grant that COVERS the path), refused locally unless Editor or Manager and not frozen (`member_folder_share_refusal`, the server answers a Viewer with the same 404 as a stranger). hcfs-client's `create_folder_share` cannot send `owner_ss58`, so the POST is a direct reqwest call with the same four metadata fields plus the owner; the keystore put, compensating revoke, origin row and owner wrap mirror the owner path. The key is still `encryption_key_for_label` (owner's seal or this account's grant), never this account's master. FE: `offersShareAction` shows the item on a member drive only with the capability and a label in `useWritableMemberDriveLabels()`; hidden, not disabled, otherwise.
 
 ### Capability gate
 

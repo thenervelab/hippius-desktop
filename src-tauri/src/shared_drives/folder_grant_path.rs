@@ -49,6 +49,18 @@ pub fn folder_grant_path_prefix(relative_path: &str) -> Result<String> {
     Ok(nfc)
 }
 
+/// Whether a grant on `granted` covers `path`: the folder itself or anything
+/// inside it, compared by whole path segments so `Trip` never covers
+/// `Trip Photos`. Both sides are drive-relative with no surrounding `/`.
+pub fn prefix_covers(granted: &str, path: &str) -> bool {
+    let granted = granted.trim_matches('/');
+    let path = path.trim_matches('/');
+    if granted.is_empty() {
+        return false;
+    }
+    path == granted || path.strip_prefix(granted).is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Clamp invite policy for a folder mint: always reader / 1 use / ≤30 days.
 pub fn apply_folder_invite_policy(expires_in_secs: u64) -> (u64, u32, &'static str) {
     (expires_in_secs.min(FOLDER_INVITE_MAX_SECS), FOLDER_INVITE_MAX_USES, FOLDER_INVITE_ROLE)
@@ -85,6 +97,17 @@ mod tests {
         let got = folder_grant_path_prefix(nfd).unwrap();
         assert_eq!(got, "Caf\u{00E9}");
         assert!(unicode_normalization::is_nfc(&got));
+    }
+
+    #[test]
+    fn a_grant_covers_its_folder_and_what_is_inside_it_only() {
+        assert!(prefix_covers("Clients/ACME", "Clients/ACME"));
+        assert!(prefix_covers("Clients/ACME", "Clients/ACME/2026/q1"));
+        assert!(prefix_covers("/Clients/ACME/", "Clients/ACME/x"));
+        assert!(!prefix_covers("Clients/ACME", "Clients"), "never above the grant");
+        assert!(!prefix_covers("Trip", "Trip Photos"), "segment boundary, not a string prefix");
+        assert!(!prefix_covers("Clients/ACME", ""), "never the whole drive");
+        assert!(!prefix_covers("", "anything"), "an empty grant covers nothing");
     }
 
     #[test]

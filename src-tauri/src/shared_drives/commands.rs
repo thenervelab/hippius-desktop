@@ -711,6 +711,19 @@ pub(crate) struct ApiCtx {
     bearer: String,
 }
 
+impl ApiCtx {
+    /// The concrete regional base URL, for callers outside this module that
+    /// issue their own requests (the member folder-share mint).
+    pub(crate) fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// The session's API bearer. A credential: never log it.
+    pub(crate) fn bearer(&self) -> &str {
+        &self.bearer
+    }
+}
+
 /// Resolve the session account, the concrete regional base URL, and the
 /// bearer token — the `recent_uploads::fetch_search_files` plumbing.
 /// [`api_ctx`] for callers outside this module (`sync::fileops::remote` needs

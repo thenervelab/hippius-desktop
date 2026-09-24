@@ -1,4 +1,10 @@
-import { driveRoleLabel, parseDriveRole, type DriveRole } from "./roles";
+import {
+  canWriteToDrive,
+  driveRoleLabel,
+  parseDriveRole,
+  type DriveRole,
+} from "./roles";
+import { makeSharedDriveLabel } from "./sharedDriveLabel";
 
 /**
  * What a drive row should say about sharing.
@@ -141,4 +147,27 @@ export function rolesByLocalLabel(
     }
   }
   return byLabel;
+}
+
+/**
+ * The labels (local and browse) of every shared drive this account may write
+ * to: Editor or Manager, and not frozen. See `useWritableMemberDriveLabels`.
+ */
+export function writableMemberDriveLabels(
+  memberships: readonly {
+    ownerSs58: string;
+    folderHash: string;
+    role: string;
+    localLabel: string | null;
+    frozen?: boolean;
+  }[],
+): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const m of memberships) {
+    if (m.frozen) continue;
+    if (!canWriteToDrive({ isOwner: false, role: parseDriveRole(m.role) })) continue;
+    out.add(makeSharedDriveLabel({ ownerSs58: m.ownerSs58, folderHash: m.folderHash }));
+    if (m.localLabel) out.add(m.localLabel);
+  }
+  return out;
 }

@@ -256,8 +256,40 @@ describe("every surface that offers Share via link consults the gate", () => {
 
   it.each(SURFACES)("%s gates the item on offersShareAction", (surface) => {
     const src = readFileSync(join(process.cwd(), surface), "utf8");
-    expect(src).toContain("offersShareAction(file, memberDriveLabels)");
+    expect(src).toMatch(/offersShareAction\(file, memberDriveLabels, \{\s*memberFolderShares,\s*writableMemberDriveLabels,/);
     // The labels have to come from the listing, not from a local guess.
     expect(src).toContain("useMemberDriveLabels()");
+    // And the member half from the role listing plus the server capability.
+    expect(src).toContain("useWritableMemberDriveLabels()");
+    expect(src).toContain("memberFolderSharesEnabledAtom");
+  });
+});
+
+describe("offersShareAction — an Editor or Manager in someone else's drive (hcfs #458)", () => {
+  const BROWSED = "shared:5DSQAMf3JVb3VyuXwqWUx3tj6aX6EX9f5p1UDJYh5TMdSK63~263bad4ad83e395a";
+  const writable = new Set([BROWSED, "team"]);
+
+  it("offers the folder link once the server takes owner_ss58 and the role can write", () => {
+    const ctx = { memberFolderShares: true, writableMemberDriveLabels: writable };
+    expect(offersShareAction(folder({ label: BROWSED }), undefined, ctx)).toBe(true);
+    expect(offersShareAction(folder({ label: "team" }), new Set(["team"]), ctx)).toBe(true);
+  });
+
+  it("keeps it hidden on an older server", () => {
+    expect(
+      offersShareAction(folder({ label: BROWSED }), undefined, {
+        memberFolderShares: false,
+        writableMemberDriveLabels: writable,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps it hidden for a Viewer or a frozen drive (not in the writable set)", () => {
+    expect(
+      offersShareAction(folder({ label: "viewer-drive" }), new Set(["viewer-drive"]), {
+        memberFolderShares: true,
+        writableMemberDriveLabels: writable,
+      }),
+    ).toBe(false);
   });
 });

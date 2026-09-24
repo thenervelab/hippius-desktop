@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   driveRowSharing,
   rolesByLocalLabel,
+  writableMemberDriveLabels,
 } from "@/app/lib/shared-drives/driveRowSharing";
 
 const OWNER = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -151,5 +152,37 @@ describe("a drive whose invites have all lapsed", () => {
 
   it("leaves a drive with no invites and no members unmarked", () => {
     expect(driveRowSharing({ totalInviteCount: 0 }).isShared).toBe(false);
+  });
+});
+
+describe("writableMemberDriveLabels", () => {
+  const m = (role: string, over: Record<string, unknown> = {}) => ({
+    ownerSs58: "5Owner",
+    folderHash: `h-${role}`,
+    role,
+    localLabel: null as string | null,
+    ...over,
+  });
+
+  it("holds Editors and Managers, under both spellings of the drive", () => {
+    const set = writableMemberDriveLabels([
+      m("writer", { localLabel: "team" }),
+      m("manager"),
+      m("reader", { localLabel: "readonly" }),
+    ]);
+    expect(set.has("team")).toBe(true);
+    expect(set.has("shared:5Owner~h-writer")).toBe(true);
+    expect(set.has("shared:5Owner~h-manager")).toBe(true);
+    expect(set.has("readonly")).toBe(false);
+    expect(set.has("shared:5Owner~h-reader")).toBe(false);
+  });
+
+  it("leaves a frozen drive out, whatever the role", () => {
+    const set = writableMemberDriveLabels([m("manager", { frozen: true, localLabel: "cold" })]);
+    expect(set.size).toBe(0);
+  });
+
+  it("degrades an unknown role to no write access", () => {
+    expect(writableMemberDriveLabels([m("owner")]).size).toBe(0);
   });
 });

@@ -17,7 +17,10 @@ import {
   folderGrantPathPrefix,
   FOLDER_GRANT_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderGrantGating";
-import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import {
+  useMemberDriveLabels,
+  useWritableMemberDriveLabels,
+} from "@/app/lib/hooks/useSharedDriveRoles";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
 import { useAtomValue, useSetAtom } from "jotai";
@@ -35,6 +38,7 @@ import {
   createDriveInviteDialogAtom,
   folderGrantsFeatureEnabledAtom,
   folderShareFeatureEnabledAtom,
+  memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
@@ -88,6 +92,10 @@ export default function FileContextMenu({
   const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
+  // Whether a folder in one of those drives may be shared by link: an
+  // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
+  const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
+  const writableMemberDriveLabels = useWritableMemberDriveLabels();
 
   useEffect(() => {
     setMounted(true);
@@ -241,7 +249,10 @@ export default function FileContextMenu({
           */}
           {(file.isFolder || file.syncStatus === "synced")
             && shareEnabled
-            && offersShareAction(file, memberDriveLabels)
+            && offersShareAction(file, memberDriveLabels, {
+            memberFolderShares,
+            writableMemberDriveLabels,
+          })
             && onShareFile && (
               <button
                 // `menuItemClass` hard-codes cursor-pointer and hover styling
