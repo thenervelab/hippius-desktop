@@ -701,16 +701,77 @@ describe("folder access (HCFS #475: no role change for a holder)", () => {
     expect(screen.getByRole("button", { name: "Remove access" })).toBeInTheDocument();
   });
 
-  it("narrows a holder to fewer folders, keeping at least one", async () => {
-    replaceFolderGrantsMock.mockResolvedValue(["Clients/ACME"]);
+  const replaced = (pathPrefixes: string[], roles: string[]) => ({ memberSs58: HOLDER, pathPrefixes, roles });
+
+  it("narrows a holder to fewer folders, keeping at least one, with no role sent", async () => {
+    replaceFolderGrantsMock.mockResolvedValue(replaced(["Clients/ACME"], ["reader"]));
     renderWith({ label: "team-docs", folderName: "team-docs" });
     await screen.findByText("Ada");
     fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Clients/Beta" }));
     fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
     await waitFor(() =>
-      expect(replaceFolderGrantsMock).toHaveBeenCalledWith("team-docs", HOLDER, ["Clients/ACME"], undefined),
+      expect(replaceFolderGrantsMock).toHaveBeenCalledWith("team-docs", HOLDER, ["Clients/ACME"], {
+        role: undefined,
+        target: undefined,
+      }),
     );
+  });
+
+  it("adds a folder with the chosen access, keeping the ones they hold", async () => {
+    replaceFolderGrantsMock.mockResolvedValue(
+      replaced(["Clients/ACME", "Clients/Beta", "Work"], ["reader", "reader", "writer"]),
+    );
+    renderWith({ label: "team-docs", folderName: "team-docs" });
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
+    fireEvent.change(screen.getByLabelText("Folder to add"), { target: { value: "Work" } });
+    fireEvent.click(screen.getByLabelText("Access to the added folder"));
+    fireEvent.click(screen.getAllByText("Editor").at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
+    await waitFor(() =>
+      expect(replaceFolderGrantsMock).toHaveBeenCalledWith(
+        "team-docs",
+        HOLDER,
+        ["Clients/ACME", "Clients/Beta", "Work"],
+        { role: "writer", target: undefined },
+      ),
+    );
+  });
+
+  it("says Editor on a folder is coming soon and can add it as view only", async () => {
+    replaceFolderGrantsMock
+      .mockRejectedValueOnce({ kind: "NotReady", subkind: "FOLDER_EDITOR_INVITES_UNAVAILABLE", message: "x" })
+      .mockResolvedValueOnce(replaced(["Clients/ACME", "Clients/Beta", "Work"], ["reader", "reader", "reader"]));
+    renderWith({ label: "team-docs", folderName: "team-docs" });
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
+    fireEvent.change(screen.getByLabelText("Folder to add"), { target: { value: "Work" } });
+    fireEvent.click(screen.getByLabelText("Access to the added folder"));
+    fireEvent.click(screen.getAllByText("Editor").at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
+    expect(
+      await screen.findByText("Editor access for a single folder is coming soon. You can share it as view only for now."),
+    ).toBeInTheDocument();
+    // The dialog stays open with what was typed.
+    expect(screen.getByLabelText("Folder to add")).toHaveValue("Work");
+    fireEvent.click(screen.getByRole("button", { name: "Add as view only" }));
+    await waitFor(() => expect(replaceFolderGrantsMock).toHaveBeenCalledTimes(2));
+    expect(replaceFolderGrantsMock.mock.calls[1][3]).toEqual({ role: "reader", target: undefined });
+    await waitFor(() => expect(screen.queryByLabelText("Folder to add")).not.toBeInTheDocument());
+  });
+
+  it("shows Rust's reason inline when a folder path is refused", async () => {
+    replaceFolderGrantsMock.mockRejectedValueOnce({
+      kind: "Validation",
+      message: "Folder path contains an illegal component.",
+    });
+    renderWith({ label: "team-docs", folderName: "team-docs" });
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
+    fireEvent.change(screen.getByLabelText("Folder to add"), { target: { value: "a/../b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
+    expect(await screen.findByText("Folder path contains an illegal component.")).toBeInTheDocument();
   });
 
   // The panel manages the WHOLE drive: its invite is a whole-drive invite

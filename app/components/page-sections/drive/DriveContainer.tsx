@@ -1647,7 +1647,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const openDriveCanWrite = openDriveFrozen
     ? false
     : openFolderGrant.isGrant
-      ? canWriteToDrive({ isOwner: false, role: openDriveRole ?? undefined })
+      ? // Rust decides it: an Editor grant on a server with writer grants
+        // on. A writer grant while the server has writes off only fails.
+        Boolean(openFolderGrant.grant?.canWrite)
     : browsedSharedDrive
       ? canWriteToDrive({
           isOwner: false,

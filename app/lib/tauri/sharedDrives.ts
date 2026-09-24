@@ -25,6 +25,8 @@ import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
  */
 export interface DriveInviteLink {
   inviteUrl: string;
+  /** The server's id for the new invite, so it can be revoked right away. */
+  inviteId: string;
   /**
    * What was actually sent, after Rust applied its defaults and the manager
    * and folder caps. The Share dialog describes the new link from these, so
@@ -174,6 +176,63 @@ export async function listDriveMembers(
   });
 }
 
+/** A whole-drive member, as the Share dialog lists them. */
+export interface ShareAccessMember {
+  memberSs58: string;
+  role: string;
+  memberName?: string;
+  memberEmail?: string;
+  /** This account: its own role is never changed from here. */
+  isYou: boolean;
+}
+
+/** Someone holding a grant on the shared folder, or on a folder around it. */
+export interface ShareAccessHolder {
+  memberSs58: string;
+  /** `reader` or `writer`. */
+  role: string;
+  /** The grant's folder: the shared one, or a folder it sits inside. */
+  pathPrefix: string;
+  memberName?: string;
+  memberEmail?: string;
+  /** Other folders on the drive they hold; removing them removes those too. */
+  otherFolderCount: number;
+}
+
+/**
+ * Everyone with access to a drive or one folder of it, folded in Rust
+ * (`list_share_access`): who owns it, who is in it, and the emailed
+ * invitations still waiting for this drive or folder.
+ */
+export interface ShareAccess {
+  ownerSs58: string;
+  ownerIsYou: boolean;
+  /** Whole-drive members; empty for a folder. */
+  members: ShareAccessMember[];
+  /** Folder holders; empty for a drive. */
+  folderHolders: ShareAccessHolder[];
+  /** Live emailed invitations for exactly this drive or folder. */
+  pendingInvites: DriveInviteInfo[];
+  /** People with whole-drive access (they can open any folder too). */
+  driveMemberCount: number;
+}
+
+/**
+ * Who has access, for the Share dialog. `pathPrefix` present (even empty)
+ * means a folder; Rust refuses an empty one rather than list the drive.
+ */
+export async function listShareAccess(
+  label: string,
+  pathPrefix: string | null,
+  target?: DriveTarget,
+): Promise<ShareAccess> {
+  return invoke<ShareAccess>("list_share_access", {
+    label,
+    pathPrefix,
+    ...targetArgs(target),
+  });
+}
+
 /** One folder grant on a drive (owner/manager view). */
 export interface DriveFolderGrantInfo {
   memberSs58: string;
@@ -198,21 +257,39 @@ export async function listDriveFolderGrants(
   });
 }
 
+/** A holder's folders after a replace, as the server stored them. */
+export interface ReplacedFolderGrants {
+  memberSs58: string;
+  pathPrefixes: string[];
+  /** The stored role for each entry of `pathPrefixes`, same order. */
+  roles: string[];
+}
+
 /**
- * Replace the folders a grant holder may read. Removing every grant is
+ * Replace the folders a grant holder may reach: add folders or narrow to
+ * fewer. `role` applies only to folders this call ADDS (Viewer when omitted);
+ * a folder they already hold keeps its role. Removing every grant is
  * {@link removeDriveMember} instead.
+ *
+ * Refusals to match (structured): {@link isFolderEditorInvitesUnavailable}
+ * for an Editor folder while the server has writer grants off, and
+ * {@link isFolderInvitesUnavailable} when folder grants are off.
  */
 export async function replaceFolderGrants(
   label: string,
   memberSs58: string,
   pathPrefixes: string[],
-  target?: DriveTarget,
-): Promise<string[]> {
-  return invoke<string[]>("replace_folder_grants", {
+  opts?: {
+    role?: Exclude<DriveRole, "manager">;
+    target?: DriveTarget;
+  },
+): Promise<ReplacedFolderGrants> {
+  return invoke<ReplacedFolderGrants>("replace_folder_grants", {
     label,
     memberSs58,
     pathPrefixes,
-    ...targetArgs(target),
+    role: opts?.role ?? null,
+    ...targetArgs(opts?.target),
   });
 }
 
@@ -585,6 +662,11 @@ export interface MyFolderGrantInfo {
   /** `reader` (Viewer) or `writer` (Editor); anything else reads as Viewer. */
   role: string;
   createdAt: string;
+  /**
+   * Whether this account may change files in the folder, decided in Rust:
+   * an Editor grant, writer grants on at the server, and not frozen.
+   */
+  canWrite: boolean;
   frozen?: boolean;
   frozenUntil?: string;
 }

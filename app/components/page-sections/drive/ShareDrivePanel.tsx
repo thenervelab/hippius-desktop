@@ -18,10 +18,14 @@ import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, Copy, FolderMinus, Lock, UserRoundPen, Users, X } from "lucide-react";
+import { AlertCircle, Check, Copy, FolderPen, Lock, UserRoundPen, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons, Skeleton } from "@/components/ui";
+import Input from "@/components/ui/input";
+import { Select } from "@/components/ui/select/Select";
+import { SectionNoticeView } from "./share-dialog/SectionNoticeView";
+import { noticeForError, type SectionNotice } from "./share-dialog/shareDialogState";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
@@ -73,6 +77,7 @@ import {
 import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import {
+  FOLDER_INVITE_ROLES,
   formatJoinedDate,
   getInvitesView,
   getMembersView,
@@ -370,18 +375,15 @@ export default function ShareDrivePanel() {
     [label, loadMembers, queryClient, driveTarget],
   );
 
+  // Throws on refusal: the Change folders dialog shows why inline and stays
+  // open, since an Editor folder may be "coming soon" with a way forward.
   const changeGrantFolders = useCallback(
-    async (memberSs58: string, folders: string[]) => {
+    async (memberSs58: string, folders: string[], role?: FolderRole) => {
       if (!label) return;
       const labelAtCall = label;
-      try {
-        await replaceFolderGrants(labelAtCall, memberSs58, folders, driveTarget);
-        toast.success("Folders updated");
-        await loadMembers(labelAtCall);
-      } catch (err) {
-        if (labelAtCall !== currentLabelRef.current) return;
-        toast.error(`Could not change folders: ${errorMessage(err)}`);
-      }
+      await replaceFolderGrants(labelAtCall, memberSs58, folders, { role, target: driveTarget });
+      toast.success("Folders updated");
+      await loadMembers(labelAtCall);
     },
     [label, loadMembers, driveTarget],
   );
@@ -464,9 +466,7 @@ export default function ShareDrivePanel() {
             }
             onRemove={(ss58) => void removeMember(ss58)}
             onChangeRole={(ss58, role) => void changeRole(ss58, role)}
-            onChangeGrantFolders={(ss58, folders) =>
-              void changeGrantFolders(ss58, folders)
-            }
+            onChangeGrantFolders={changeGrantFolders}
             onCreateInvite={openShareDialog}
           />
         )}
@@ -820,7 +820,7 @@ function MembersTab({
   driveName: string;
   onRemove: (memberSs58: string) => void;
   onChangeRole: (memberSs58: string, role: DriveRole) => void;
-  onChangeGrantFolders: (memberSs58: string, folders: string[]) => void;
+  onChangeGrantFolders: ChangeGrantFolders;
   onCreateInvite: () => void;
 }) {
   const view = getMembersView(state);
@@ -923,7 +923,7 @@ function FolderGrantRow({
 }: {
   holder: FolderGrantHolder;
   onRemove: (memberSs58: string) => void;
-  onChangeFolders: (memberSs58: string, folders: string[]) => void;
+  onChangeFolders: ChangeGrantFolders;
 }) {
   const [dialog, setDialog] = useState<"none" | "folders" | "remove">("none");
   const who = accountDisplayName(holder.memberSs58, holder.memberName);
@@ -931,16 +931,13 @@ function FolderGrantRow({
   const folders = holder.folders;
 
   const items = [
-    // Narrowing someone to fewer folders; adding a folder is a new invite.
-    ...(folders.length > 1
-      ? [
-          {
-            icon: <FolderMinus className="size-4" />,
-            itemTitle: "Change folders",
-            onItemClick: () => setDialog("folders"),
-          },
-        ]
-      : []),
+    // Add folders (Viewer or Editor) or narrow to fewer. A folder they
+    // already hold keeps its role; the role only applies to what is added.
+    {
+      icon: <FolderPen className="size-4" />,
+      itemTitle: "Change folders",
+      onItemClick: () => setDialog("folders"),
+    },
     {
       icon: <Icons.Trash className="size-4" />,
       itemTitle: "Remove access",
@@ -995,7 +992,7 @@ function FolderGrantRow({
           who={who}
           folders={folders}
           onClose={() => setDialog("none")}
-          onConfirm={(kept) => onChangeFolders(holder.memberSs58, kept)}
+          onConfirm={(next, addRole) => onChangeFolders(holder.memberSs58, next, addRole)}
         />
       )}
       <ConfirmationDialog
@@ -1019,9 +1016,18 @@ function FolderGrantRow({
   );
 }
 
+/** Viewer or Editor: the roles a folder can be granted with. */
+type FolderRole = Exclude<DriveRole, "manager">;
+
+/** Replace a holder's folders; `role` applies to folders being added. */
+type ChangeGrantFolders = (memberSs58: string, folders: string[], role?: FolderRole) => Promise<void>;
+
 /**
- * Narrowing a holder to fewer of the folders they hold. At least one must
- * stay: removing every folder is Remove access, a different request.
+ * Change which folders a holder has: untick to take one away, or add a
+ * folder with Viewer or Editor access. At least one must stay: removing every
+ * folder is Remove access, a different request. The folder path is checked
+ * by Rust on Save (the same rule a folder invite uses), and a refusal stays
+ * in the dialog with the reason.
  */
 function ChangeFoldersDialog({
   who,
@@ -1032,25 +1038,44 @@ function ChangeFoldersDialog({
   who: string;
   folders: string[];
   onClose: () => void;
-  onConfirm: (kept: string[]) => void;
+  onConfirm: (next: string[], addRole?: FolderRole) => Promise<void>;
 }) {
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set(folders));
-  const unchanged = kept.size === folders.length;
+  const [added, setAdded] = useState("");
+  const [addRole, setAddRole] = useState<FolderRole>("reader");
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<SectionNotice | null>(null);
+  const adding = added.trim().length > 0;
+  const next = [...folders.filter((f) => kept.has(f)), ...(adding ? [added.trim()] : [])];
+  const unchanged = !adding && kept.size === folders.length;
+
+  const save = async (role: FolderRole) => {
+    setSaving(true);
+    setNotice(null);
+    try {
+      await onConfirm(next, adding ? role : undefined);
+      onClose();
+    } catch (err) {
+      setNotice(noticeForError(err));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <FramedDialog
       open
       onClose={onClose}
       title="Change folders"
-      icon={<FolderMinus className="size-4 text-white" />}
+      icon={<FolderPen className="size-4 text-white" />}
       maxWidth="max-w-[585px]"
       contentClassName="sm:w-[405px]"
     >
       <div className="font-geist">
         <p className="mb-5 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-          Which folders {who} keeps access to.
+          Which folders {who} has access to.
         </p>
-        <div className="mb-6 flex flex-col gap-2">
+        <div className="mb-4 flex flex-col gap-2">
           {folders.map((folder) => (
             <label
               key={folder}
@@ -1062,10 +1087,10 @@ function ChangeFoldersDialog({
                 checked={kept.has(folder)}
                 onChange={(e) =>
                   setKept((prev) => {
-                    const next = new Set(prev);
-                    if (e.target.checked) next.add(folder);
-                    else next.delete(folder);
-                    return next;
+                    const nextSet = new Set(prev);
+                    if (e.target.checked) nextSet.add(folder);
+                    else nextSet.delete(folder);
+                    return nextSet;
                   })
                 }
               />
@@ -1074,26 +1099,70 @@ function ChangeFoldersDialog({
               </span>
             </label>
           ))}
-          {kept.size === 0 && (
-            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-              Keep at least one folder. To take everything away, use Remove
-              access instead.
-            </p>
-          )}
         </div>
+
+        <div className="mb-4">
+          <p className="mb-1.5 text-xs font-medium text-grey-10 dark:text-white">Add a folder</p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="min-w-0 flex-1">
+              <Input
+                aria-label="Folder to add"
+                placeholder="Clients/ACME"
+                value={added}
+                onChange={(e) => {
+                  setAdded(e.target.value);
+                  setNotice(null);
+                }}
+                wrapperClassName="min-h-[40px] py-2 sm:min-h-[40px]"
+                className="text-sm"
+              />
+            </div>
+            <Select
+              ariaLabel="Access to the added folder"
+              value={addRole}
+              onValueChange={(value) => {
+                setAddRole(value as FolderRole);
+                setNotice((n) => (n?.kind === "folderEditor" ? null : n));
+              }}
+              options={FOLDER_INVITE_ROLES.map((r) => ({ label: driveRoleLabel(r), value: r }))}
+              className="sm:w-[116px] sm:shrink-0"
+              triggerClassName="min-h-[40px] py-2 sm:min-h-[40px] px-3"
+              valueClassName="text-sm"
+            />
+          </div>
+          <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
+            A path inside the drive. Folders they already have keep their access.
+          </p>
+        </div>
+
+        {next.length === 0 && (
+          <p className="mb-4 text-xs text-grey-50 dark:text-grey-dark-600">
+            Keep at least one folder. To take everything away, use Remove access instead.
+          </p>
+        )}
+        {notice ? (
+          <SectionNoticeView
+            notice={notice}
+            viewOnlyLabel="Add as view only"
+            onViewOnly={() => {
+              setAddRole("reader");
+              void save("reader");
+            }}
+            onUpgrade={onClose}
+            className="mb-4"
+          />
+        ) : null}
+
         <div className="flex flex-col gap-3">
           <Button
             type="button"
             variant="primary"
             size="auto"
-            disabled={kept.size === 0 || unchanged}
-            onClick={() => {
-              onConfirm(folders.filter((f) => kept.has(f)));
-              onClose();
-            }}
+            disabled={saving || next.length === 0 || unchanged}
+            onClick={() => void save(addRole)}
             className="h-[38px] w-full rounded-[8px] text-[14px] font-medium leading-[1.4] tracking-[-0.28px]"
           >
-            Save folders
+            {saving ? "Saving…" : "Save folders"}
           </Button>
           <Button
             type="button"
