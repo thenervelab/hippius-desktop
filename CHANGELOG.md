@@ -22,6 +22,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   address never turns a link into an invitation by mistake. Problems are
   explained right where they happen, and the dialog stays open so you can
   invite several people in a row.
+- **The Share dialog shows who has access**: the owner, everyone in the
+  drive or folder, and invitations still waiting. You can change someone's
+  role or remove them right there, approve an emailed invitation that is
+  waiting for you, and revoke a link you just made.
+- **Changing which folders someone can open now lets you add a folder**, as
+  Viewer or Editor, not only take folders away.
 - **Storage and plan banners on Overview use a button on the right**
   (Upgrade, See storage plans, Top up). Drive keeps an underlined text
   link under the banner copy so it does not duplicate the plan-chip

@@ -146,13 +146,22 @@ Deliberate, documented where they bite: no folder-entity materialization on memb
 
 **Caution**: `recent_uploads.rs`'s `hash_to_drive` map still keys drives by the label-derived hash — safe ONLY because member drives are excluded from the search surfaces in v1. If member drives ever reach search/recent-uploads, that map must move to the identity columns or member hits will mis-join.
 
-### Folder roles (HCFS #475, not merged yet)
+### Folder roles (HCFS #475)
 
 `shared_drives/folder_roles.rs` holds the WHOLE contract in its module doc (capabilities
 `folder_grants` / `folder_grant_writes`, Viewer or Editor folder invites, the exact refusal
-messages, no holder role change, what a writer holder may do). Keep it there: the day #475
-merges is one reconcile, plus an hcfs pin bump (it moves `sync_flow` to the server
-`relative_path`).
+messages, no holder role change, what a writer holder may do). The hcfs pin is at #475's
+merge, whose sync places a download at the path that hashes to its file id (the decrypted
+path, else the server `relative_path`).
+
+Replacing a holder's folders (`replace_folder_grants`, the panel's Change folders) can ADD
+folders: `role` applies only to added folders, held ones keep theirs, and the response's
+`roles` (same order as `path_prefixes`) is what was stored. "writer folder grants are not
+enabled" maps to `FolderEditorInvitesUnavailable` (`classify_folder_grant_refusal`). A
+grant's write controls key on `MyFolderGrantInfo.canWrite`, decided in Rust
+(`grant_can_write`: Editor, `folder_grant_writes` on, not frozen), because a writer grant
+cannot write while the flag is off. There is no remote delete on the desktop, for grant
+holders or anyone else browsing a drive without syncing it.
 
 **A folder share can never become a whole-drive invite.** A folder mints only through
 `create_folder_invite` (path REQUIRED, planned by `plan_folder_invite` before any request;
@@ -165,15 +174,28 @@ whole-drive. Pinned by `a_folder_invite_can_never_go_out_as_a_drive_invite` and
 `tests/shared_drive_folder_roles_mock.rs`.
 
 **The Share dialog keeps the two invite kinds apart** (`drive/share-dialog/`, opened by
-setting `shareDialogAtom`). "Invite people" calls only `email_drive_invite` (the address
-checked as typed by `check_invite_email`, the same `validate_invite_email` rule the send
-applies; expiry left to Rust's default); "Share a link" calls only `create_drive_invite` /
-`create_folder_invite` and describes the result from the `role` / `expiresInSecs` /
-`maxUses` the mint returns, which are what was SENT after Rust's defaults and caps. One
-mixed form let a typed address silently turn a link into an email invite. Refusals route
-on the subkind to inline notices (`shareDialogState.ts::noticeForError`), never a toast.
-Each success bumps `driveInvitesVersionAtom`, which reloads an open Links tab. Pinned by
-`share-dialog/__tests__/ShareDialog.test.tsx`.
+setting `shareDialogAtom`). Top to bottom: Invite people, People with access, General
+access, Done. "Invite people" calls only `email_drive_invite` (the address checked as typed
+by `check_invite_email`; the role and Send appear once the field has text); "General
+access" calls only `create_drive_invite` / `create_folder_invite` and describes the result
+from the `role` / `expiresInSecs` / `maxUses` the mint returns, which are what was SENT
+after Rust's defaults and caps, and revokes it by the returned `inviteId`. One mixed form
+let a typed address silently turn a link into an email invite. Refusals route on the
+subkind to inline notices (`shareDialogState.ts::noticeForError`), never a toast. Each
+success bumps `driveInvitesVersionAtom`, which reloads an open Links tab.
+
+**People with access comes from one Rust fold, `list_share_access`** (`fold_share_access`):
+owner, whole-drive members for a drive, holders of a grant AT OR ABOVE the folder for a
+folder (`prefix_covers`, nearest grant wins), and live emailed invitations for exactly that
+drive or folder. Role change, remove, cancel and approve are PESSIMISTIC: the row says
+"Saving…" / "Removing…" until the command succeeds and the listing is read again, and a
+refusal leaves the row as it was with "Couldn't change access for <name>. <reason>". A
+demotion is confirmed first (the server revokes links as part of it). Six rows at most,
+then "+ N more · Manage access" to the panel. A dev and staging only preview fixture
+(`shareAccessApi.ts`, `localStorage["hippius:share-dialog-fixture"] = "0".."30"`) stands in
+for these commands with fake people, latency and refusals; it is off at build time on beta
+and production. Pinned by `share-dialog/__tests__/ShareDialog.test.tsx` and the
+`fold_share_access` unit tests.
 
 **Refusals are "coming soon", mapped in Rust.** The server words them as `400 bad_request`
 plus a message, so `classify_folder_invite_refusal` / `classify_folder_email_refusal`
