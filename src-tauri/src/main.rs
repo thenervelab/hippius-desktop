@@ -477,6 +477,7 @@ fn main() {
             crate::shared_drives::commands::list_drive_invites,
             crate::shared_drives::commands::email_drive_invite,
             crate::shared_drives::commands::email_invites_available,
+            crate::shared_drives::commands::check_invite_email,
             crate::shared_drives::commands::approve_email_invite,
             crate::shared_drives::commands::list_owned_drive_sharing,
             crate::shared_drives::commands::list_shared_drive_stats,

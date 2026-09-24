@@ -126,10 +126,19 @@ fn present_member_count(count: u64) -> Option<u32> {
 /// Result of a successful invite mint. The URL embeds the invite token (path)
 /// and the folder-key entropy (`#k=` fragment) — the ONLY channel either
 /// secret crosses IPC on.
+///
+/// The policy fields are what was actually SENT, after the defaults and the
+/// manager and folder caps: the Share dialog describes the link from these, so
+/// it can never quote a lifetime or a uses count the server was not asked for.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveInviteLink {
     pub invite_url: String,
+    /// `reader`, `writer` or `manager`.
+    pub role: String,
+    pub expires_in_secs: u64,
+    /// 1 for a folder or a manager link.
+    pub max_uses: u32,
 }
 
 /// One row of the owner-side members table. Deliberately blob-free, like the
@@ -1244,7 +1253,12 @@ async fn mint_invite_link(
         path_prefix = folder_prefix.as_deref().unwrap_or(""),
         "Drive invite minted"
     );
-    Ok(DriveInviteLink { invite_url })
+    Ok(DriveInviteLink {
+        invite_url,
+        role: role_owned,
+        expires_in_secs,
+        max_uses,
+    })
 }
 
 /// List the members of an OWN drive.
@@ -1674,17 +1688,7 @@ pub(crate) struct EmailInvitePolicy {
 /// expire before anyone could approve it); a lifetime between one hour and
 /// thirty days, defaulting to the ordinary seven.
 pub(crate) fn resolve_email_invite(email: &str, role: Option<String>, expires_in_secs: Option<u64>) -> Result<EmailInvitePolicy> {
-    let email = email.trim();
-    // Deliberately loose: the server is the authority on what it can mail.
-    // This only stops the obvious slip of a name or a blank field.
-    let looks_like_address = email.len() <= 254
-        && !email.contains(char::is_whitespace)
-        && email
-            .split_once('@')
-            .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.'));
-    if !looks_like_address {
-        return Err(AppError::Validation("Enter one email address, like name@example.com.".into()));
-    }
+    let email = validate_invite_email(email)?;
     let role = role.unwrap_or_else(|| "writer".to_string());
     match role.as_str() {
         "reader" | "writer" => {}
@@ -1704,10 +1708,67 @@ pub(crate) fn resolve_email_invite(email: &str, role: Option<String>, expires_in
         ));
     }
     Ok(EmailInvitePolicy {
-        email: email.to_string(),
+        email,
         role,
         expires_in_secs,
     })
+}
+
+/// What the Share dialog is told about a typed address, as it is typed.
+const INVALID_INVITE_EMAIL: &str = "Enter one email address, like name@example.com.";
+
+/// The one address rule, shared by the send and by the as-you-type check, so
+/// the field can never accept what the send then refuses. Returns the address
+/// trimmed.
+///
+/// Deliberately loose: the server is the authority on what it can mail. This
+/// only stops the obvious slip of a name, a list or a blank field.
+pub(crate) fn validate_invite_email(email: &str) -> Result<String> {
+    let email = email.trim();
+    let looks_like_address = email.len() <= 254
+        && !email.contains(char::is_whitespace)
+        && !email.contains(',')
+        && email.matches('@').count() == 1
+        && email
+            .split_once('@')
+            .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.'));
+    if !looks_like_address {
+        return Err(AppError::Validation(INVALID_INVITE_EMAIL.into()));
+    }
+    Ok(email.to_string())
+}
+
+/// The as-you-type verdict on an invite address.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InviteEmailCheck {
+    /// Whether "Send invite" may be pressed.
+    pub valid: bool,
+    /// What to say under the field. Absent while the field is empty, so an
+    /// untouched field is not scolded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+fn invite_email_check(email: &str) -> InviteEmailCheck {
+    if email.trim().is_empty() {
+        return InviteEmailCheck { valid: false, message: None };
+    }
+    match validate_invite_email(email) {
+        Ok(_) => InviteEmailCheck { valid: true, message: None },
+        Err(_) => InviteEmailCheck {
+            valid: false,
+            message: Some(INVALID_INVITE_EMAIL.into()),
+        },
+    }
+}
+
+/// Check a typed invite address against the same rule the send applies, with
+/// no network call: the Share dialog asks on every change so it can say what
+/// is wrong before anyone presses Send.
+#[tauri::command]
+pub fn check_invite_email(email: String) -> InviteEmailCheck {
+    invite_email_check(&email)
 }
 
 /// Map a failed `POST /v1/drive-invites/email`.
@@ -3177,6 +3238,74 @@ mod tests {
         ] {
             assert!(resolve_email_invite(bad, None, None).is_err(), "{bad:?} must be refused");
         }
+    }
+
+    #[test]
+    fn email_invite_policy_refuses_two_addresses_in_one_field() {
+        for bad in ["ada@example.com,bob@example.com", "ada@b@example.com"] {
+            assert!(resolve_email_invite(bad, None, None).is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    // The field and the send share one rule: whatever the as-you-type check
+    // accepts, the send accepts, and the reverse.
+    #[test]
+    fn the_typed_address_check_agrees_with_the_send() {
+        for input in [
+            "ada@example.com",
+            "  ada@example.com ",
+            "ada",
+            "ada@",
+            "@example.com",
+            "ada@example",
+            "a b@example.com",
+            "ada@.com",
+            "ada@example.com,bob@example.com",
+        ] {
+            let check = invite_email_check(input);
+            assert_eq!(check.valid, validate_invite_email(input).is_ok(), "{input:?}");
+            assert_eq!(check.message.is_some(), !check.valid, "{input:?}: an invalid address says why");
+        }
+    }
+
+    #[test]
+    fn an_empty_field_is_not_valid_and_not_scolded() {
+        for input in ["", "   "] {
+            assert_eq!(invite_email_check(input), InviteEmailCheck { valid: false, message: None });
+        }
+    }
+
+    #[test]
+    fn invite_email_check_wire_keys_are_pinned() {
+        let json = serde_json::to_value(invite_email_check("ada")).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({ "valid": false, "message": "Enter one email address, like name@example.com." })
+        );
+        let json = serde_json::to_value(invite_email_check("ada@example.com")).expect("serialize");
+        assert_eq!(json, serde_json::json!({ "valid": true }));
+    }
+
+    // The Share dialog describes a new link from these fields, so a renamed
+    // key would ship as an undefined lifetime or uses count.
+    #[test]
+    fn drive_invite_link_wire_keys_are_pinned() {
+        let link = DriveInviteLink {
+            invite_url: "https://console.example/invite/t#k=x".into(),
+            role: "reader".into(),
+            expires_in_secs: 3600,
+            max_uses: 1,
+        };
+        let json = serde_json::to_value(&link).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "inviteUrl": "https://console.example/invite/t#k=x",
+                "role": "reader",
+                "expiresInSecs": 3600,
+                "maxUses": 1,
+            })
+        );
     }
 
     #[test]
