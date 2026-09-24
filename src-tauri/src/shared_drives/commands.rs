@@ -1479,9 +1479,9 @@ pub async fn list_share_access(
 /// and folder holders), emailed invitations still waiting, and link invites
 /// split into working and ended, with their sealed links opened here.
 ///
-/// The member listing is required (any member of the drive may read it); the
-/// invite listing is manager-only on the server and best effort here, so a
-/// Viewer or Editor gets the people and no links rather than an error.
+/// The member listing is required (any member of the drive may read it). The
+/// invite listing is fetched for an own drive only, and best effort: a list
+/// of people is still right without the links.
 #[tauri::command]
 pub async fn list_access_panel(
     app: tauri::AppHandle,
@@ -1502,14 +1502,22 @@ pub async fn list_access_panel(
     let http = state.api_client.clone();
     let owner = delegated_owner(&identity);
 
+    // Invites and links are the owner's to see in the panel: somebody else's
+    // drive is never asked for them (and its sealed links never opened).
+    let invites = async {
+        if identity.is_member {
+            Ok(Vec::new())
+        } else {
+            http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner).await
+        }
+    };
     let (listing, invites) = tokio::join!(
         http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
-        http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+        invites,
     );
     let listing = listing?;
     let mut invites = invites.unwrap_or_else(|e| {
-        // Expected for a Viewer or Editor: invites are management surface.
-        debug!(label = %label, error = %e, "Access panel: invite listing unavailable; links omitted");
+        warn!(label = %label, error = %e, "Access panel: invite listing failed; links omitted");
         Vec::new()
     });
     let key_unavailable = open_invite_links(&state, &ctx.account_id, &label, &identity, &mut invites).await;

@@ -17,8 +17,8 @@
 //! - `links_locked`: some active link has a sealed copy that cannot be opened
 //!   because the drive key is not available in this session. The panel then
 //!   asks for the unlock password instead of showing a broken field.
-//! - what the viewer is here (`your_role`, `can_manage`), so the header and
-//!   footer never guess from a second listing.
+//! - what the viewer is here (`your_role`, and `can_manage`, which is the
+//!   owner only), so the header and footer never guess from a second listing.
 //!
 //! Pure: the command fetches, opens sealed links, and hands the rows here.
 
@@ -42,7 +42,8 @@ pub struct AccessPanel {
     /// This account's role here: `owner`, its member role, or the role of the
     /// folder grant it holds. `None` when the listings do not say.
     pub your_role: Option<String>,
-    /// Owner or Manager: may invite, change roles, remove and see links.
+    /// The drive's owner: may invite, change roles, remove and see links.
+    /// Everyone else reads the people list and may leave.
     pub can_manage: bool,
     /// Whole-drive members, this account first. A folder panel lists them
     /// too, since the whole drive includes the folder.
@@ -342,7 +343,9 @@ pub(crate) fn fold_access_panel(
     } else {
         folder_holders.iter().find(|h| h.is_you).map(|h| h.role.clone())
     };
-    let can_manage = owner_is_you || your_role.as_deref() == Some("manager");
+    // Owner only. Delegated management is being withdrawn from the product,
+    // so a member's role, whatever the wire says, never opens the controls.
+    let can_manage = owner_is_you;
 
     let (pending_invites, links, inactive_links) = split_invites(account_id, folder, invites, now);
     let links_locked = key_unavailable && links.iter().any(|l| l.link_available && l.invite_url.is_none());
@@ -405,7 +408,7 @@ mod tests {
         let panel = fold_access_panel("5Me", "5Owner", None, listing(), Vec::new(), false, now());
         assert!(!panel.owner_is_you);
         assert_eq!(panel.your_role.as_deref(), Some("manager"));
-        assert!(panel.can_manage, "a manager manages");
+        assert!(!panel.can_manage, "only the owner manages, whatever a member's wire role");
         let people: Vec<&str> = panel.members.iter().map(|m| m.member_ss58.as_str()).collect();
         assert_eq!(people, ["5Me", "5Ann"], "you first, then the server's order");
         assert_eq!(panel.members[1].member_name.as_deref(), Some("Ann"));
