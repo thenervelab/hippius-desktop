@@ -15,7 +15,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import CreateDriveInviteDialog from "../CreateDriveInviteDialog";
-import { createDriveInviteDialogAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  createDriveInviteDialogAtom,
+  serverCapabilitiesAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Flip the flag per test — the modal reads it at render time.
@@ -46,9 +49,13 @@ vi.mock("@/app/lib/hooks/useSharedDrivesInPlan", () => ({
   useSharedDrivesInPlan: () => planState.included,
 }));
 
+const folderRolesFlag = vi.hoisted(() => ({ on: false }));
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
     return flagState.sharedDrivesEnabled;
+  },
+  get FOLDER_ROLES_ENABLED() {
+    return folderRolesFlag.on;
   },
 }));
 
@@ -136,6 +143,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   flagState.sharedDrivesEnabled = true;
   emailInvitesAvailableMock.mockResolvedValue(false);
+  folderRolesFlag.on = false;
 });
 
 
@@ -466,5 +474,102 @@ describe("invite by email", () => {
   it("will not send without an address", async () => {
     await openEmailMode();
     expect(screen.getByRole("button", { name: "Send invitation" })).toBeDisabled();
+  });
+});
+
+describe("folder invites with roles (folder roles, staging only)", () => {
+  const CAPS = {
+    shares: true,
+    folder_shares: true,
+    folder_share_revoke_by_hash: true,
+    share_owner_wrap: true,
+    folder_grants: true,
+    folder_grant_roles: true,
+  };
+
+  function renderFolder(caps: typeof CAPS | null = CAPS, pathPrefix = "Clients/ACME") {
+    const store = createStore();
+    store.set(serverCapabilitiesAtom, caps);
+    store.set(createDriveInviteDialogAtom, {
+      label: "team-docs",
+      folderName: "ACME",
+      pathPrefix,
+    });
+    return render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider store={store}>{(<CreateDriveInviteDialog />) as ReactNode}</Provider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("stays view-only and single use without the flag", async () => {
+    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+    renderFolder();
+    expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
+    expect(screen.getByText(/view-only, single-use link/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    await waitFor(() =>
+      expect(createDriveInviteMock).toHaveBeenCalledWith(
+        "team-docs",
+        expect.objectContaining({ role: "reader", pathPrefix: "Clients/ACME" }),
+      ),
+    );
+  });
+
+  it("stays view-only with the flag on a server without folder roles", () => {
+    folderRolesFlag.on = true;
+    renderFolder({ ...CAPS, folder_grant_roles: false });
+    expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
+  });
+
+  it("offers the drive's role picker and mints the chosen role", async () => {
+    folderRolesFlag.on = true;
+    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+    renderFolder();
+    chooseRole("Editor");
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    await waitFor(() =>
+      expect(createDriveInviteMock).toHaveBeenCalledWith(
+        "team-docs",
+        expect.objectContaining({ role: "writer", pathPrefix: "Clients/ACME" }),
+      ),
+    );
+  });
+
+  it("caps a folder Manager invite like a drive Manager invite", async () => {
+    folderRolesFlag.on = true;
+    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+    renderFolder();
+    chooseRole("Manager");
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    await waitFor(() => expect(createDriveInviteMock).toHaveBeenCalled());
+    const [, opts] = createDriveInviteMock.mock.calls[0];
+    expect(opts).toMatchObject({ role: "manager", maxUses: 1 });
+    expect(opts.expiresInSecs).toBeLessThanOrEqual(24 * 60 * 60);
+  });
+
+  it("can mail a folder invitation, naming the folder", async () => {
+    folderRolesFlag.on = true;
+    emailInvitesAvailableMock.mockResolvedValue(true);
+    emailDriveInviteMock.mockResolvedValue({ inviteId: "i1" });
+    renderFolder();
+    fireEvent.click(await screen.findByRole("button", { name: "Invite by email" }));
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "ada@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send invitation" }));
+    await waitFor(() =>
+      expect(emailDriveInviteMock).toHaveBeenCalledWith(
+        "team-docs",
+        "ada@example.com",
+        expect.objectContaining({ pathPrefix: "Clients/ACME" }),
+      ),
+    );
+  });
+
+  it("titles an invite from inside a grant with the folder's name, not a slash", () => {
+    folderRolesFlag.on = true;
+    renderFolder(CAPS, "/");
+    expect(screen.getByText(/"ACME"/)).toBeInTheDocument();
   });
 });

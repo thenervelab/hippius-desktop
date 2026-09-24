@@ -39,6 +39,7 @@ import {
   folderGrantsFeatureEnabledAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
+  folderRolesEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -52,6 +53,7 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   offersShareAction,
+  offersWriteAction,
   isMemberDriveLabel,
   FOLDER_SHARE_DISABLED_TOOLTIP,
   shareTargetFor,
@@ -62,6 +64,7 @@ import {
   FOLDER_GRANT_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderGrantGating";
 import {
+  useManageableMemberDriveLabels,
   useMemberDriveLabels,
   useWritableMemberDriveLabels,
 } from "@/app/lib/hooks/useSharedDriveRoles";
@@ -632,6 +635,13 @@ const FilesTable: FC<FilesTableProps> = memo(
     // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
     const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
     const writableMemberDriveLabels = useWritableMemberDriveLabels();
+    // With folder roles on: where this account is a Manager in somebody
+    // else's drive (or granted folder), so it may share a folder there too.
+    const folderRolesEnabled = useAtomValue(folderRolesEnabledAtom);
+    const manageableMemberDriveLabels = useManageableMemberDriveLabels();
+    const manageableLabels = folderRolesEnabled
+      ? manageableMemberDriveLabels
+      : undefined;
     const setShareModalFile = useSetAtom(shareModalFileAtom);
     const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
     const setRenameModalFile = useSetAtom(renameModalFileAtom);
@@ -1152,7 +1162,8 @@ const FilesTable: FC<FilesTableProps> = memo(
             : []),
           ...(SHARED_DRIVES_ENABLED &&
           file.isFolder &&
-          !isMemberDriveLabel(file.label, memberDriveLabels)
+          (!isMemberDriveLabel(file.label, memberDriveLabels) ||
+            Boolean(file.label && manageableLabels?.has(file.label)))
             ? [
                 {
                   icon: <FolderInput className="size-4" />,
@@ -1163,6 +1174,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         file,
                         folderGrantsEnabled,
                         memberDriveLabels,
+                        manageableLabels,
                       )
                     ) {
                       return;
@@ -1185,6 +1197,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                       file,
                       folderGrantsEnabled,
                       memberDriveLabels,
+                      manageableLabels,
                     ),
                   tooltip:
                     !itemDeleting &&
@@ -1192,6 +1205,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                       file,
                       folderGrantsEnabled,
                       memberDriveLabels,
+                      manageableLabels,
                     )
                       ? FOLDER_GRANT_DISABLED_TOOLTIP
                       : undefined,
@@ -1199,21 +1213,26 @@ const FilesTable: FC<FilesTableProps> = memo(
               ]
             : []),
           // Rename shares the delete-style gating plus the local-presence
-          // gate in `canRenameFile` — the rename is an on-disk operation.
-          {
-            icon: <Pencil className="size-4" />,
-            itemTitle: "Rename",
-            disabled: itemDeleting || !canRenameFile(file),
-            tooltip:
-              !itemDeleting && !canRenameFile(file)
-                ? RENAME_DISABLED_TOOLTIP
-                : undefined,
-            onItemClick: () => {
-              if (!itemDeleting && canRenameFile(file)) {
-                setRenameModalFile(file);
-              }
-            },
-          },
+          // gate in `canRenameFile`. Absent where this account's role in
+          // somebody else's drive cannot write (`offersWriteAction`).
+          ...(offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels)
+            ? [
+                {
+                  icon: <Pencil className="size-4" />,
+                  itemTitle: "Rename",
+                  disabled: itemDeleting || !canRenameFile(file),
+                  tooltip:
+                    !itemDeleting && !canRenameFile(file)
+                      ? RENAME_DISABLED_TOOLTIP
+                      : undefined,
+                  onItemClick: () => {
+                    if (!itemDeleting && canRenameFile(file)) {
+                      setRenameModalFile(file);
+                    }
+                  },
+                },
+              ]
+            : []),
           // Delete is gated by both sync state (unassigned files are
           // mid-upload) and live deletion state (already in flight).
           // Cloud-only rows hide it entirely — the delete pipeline removes
@@ -1262,6 +1281,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         memberDriveLabels,
         memberFolderShares,
         writableMemberDriveLabels,
+        manageableLabels,
         setShareModalFile,
         setInviteDialogTarget,
         setRenameModalFile,

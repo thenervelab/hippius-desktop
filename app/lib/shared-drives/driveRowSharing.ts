@@ -4,7 +4,7 @@ import {
   parseDriveRole,
   type DriveRole,
 } from "./roles";
-import { makeSharedDriveLabel } from "./sharedDriveLabel";
+import { makeFolderGrantLabel, makeSharedDriveLabel } from "./sharedDriveLabel";
 
 /**
  * What a drive row should say about sharing.
@@ -161,13 +161,49 @@ export function writableMemberDriveLabels(
     localLabel: string | null;
     frozen?: boolean;
   }[],
+  /** Folder grants held, when folder roles are on; their `grant:` labels. */
+  folderGrants: readonly FolderGrantRow[] = [],
+): ReadonlySet<string> {
+  return memberLabelsWhere(memberships, folderGrants, (role) =>
+    canWriteToDrive({ isOwner: false, role }),
+  );
+}
+
+/** The fields of a held folder grant these label sets read. */
+export interface FolderGrantRow {
+  ownerSs58: string;
+  folderHash: string;
+  pathPrefix: string;
+  role: string;
+  frozen?: boolean;
+}
+
+/**
+ * Labels (local, `shared:` and `grant:`) of what this account MANAGES in
+ * somebody else's drives: a Manager role, not frozen. Drives the folder
+ * "Share folder" item and "Manage access" for a folder Manager.
+ */
+export function manageableMemberDriveLabels(
+  memberships: Parameters<typeof writableMemberDriveLabels>[0],
+  folderGrants: readonly FolderGrantRow[] = [],
+): ReadonlySet<string> {
+  return memberLabelsWhere(memberships, folderGrants, (role) => role === "manager");
+}
+
+function memberLabelsWhere(
+  memberships: Parameters<typeof writableMemberDriveLabels>[0],
+  folderGrants: readonly FolderGrantRow[],
+  allowed: (role: DriveRole) => boolean,
 ): ReadonlySet<string> {
   const out = new Set<string>();
   for (const m of memberships) {
-    if (m.frozen) continue;
-    if (!canWriteToDrive({ isOwner: false, role: parseDriveRole(m.role) })) continue;
+    if (m.frozen || !allowed(parseDriveRole(m.role))) continue;
     out.add(makeSharedDriveLabel({ ownerSs58: m.ownerSs58, folderHash: m.folderHash }));
     if (m.localLabel) out.add(m.localLabel);
+  }
+  for (const g of folderGrants) {
+    if (g.frozen || !allowed(parseDriveRole(g.role))) continue;
+    out.add(makeFolderGrantLabel(g));
   }
   return out;
 }

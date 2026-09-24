@@ -87,6 +87,13 @@ interface DriveOnboardingProps {
     folderHash: string;
     displayLabel: string;
   }) => void;
+  /** Open a FOLDER shared with this account, rooted at that folder. */
+  onOpenFolderGrant?: (grant: {
+    ownerSs58: string;
+    folderHash: string;
+    pathPrefix: string;
+    folderName: string;
+  }) => void;
   /**
    * Polled plan gate: uploads / sync will be refused. Clicks open the
    * upgrade dialog instead of the folder picker.
@@ -99,6 +106,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSelectFolder,
   onOpenRemoteFolder,
   onOpenSharedDrive,
+  onOpenFolderGrant,
   isStorageFull = false,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -787,6 +795,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             exactly like a freshly added local folder. */}
         <SharedWithMeSection
           onOpenDrive={onOpenSharedDrive}
+          onOpenFolderGrant={onOpenFolderGrant}
           onManageAccess={setShareDriveTarget}
           onDriveAdded={(label) => {
             loadFolders();

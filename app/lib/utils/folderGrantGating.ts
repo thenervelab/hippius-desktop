@@ -7,6 +7,7 @@
  */
 
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 import {
   isMemberDriveLabel,
   folderShareRelativePath,
@@ -21,10 +22,29 @@ export function canShareFolderGrant(
   file: FormattedUserFile,
   folderGrantsEnabled: boolean,
   memberDriveLabels?: ReadonlySet<string>,
+  /**
+   * With folder roles on: labels of drives (or granted folders) somebody
+   * else owns where this account is a Manager, not frozen. A Manager may
+   * share a folder at or below what they manage.
+   */
+  manageableMemberLabels?: ReadonlySet<string>,
 ): boolean {
   if (!file.isFolder) return false;
   if (!folderGrantsEnabled) return false;
-  return !isMemberDriveLabel(file.label, memberDriveLabels);
+  if (!isMemberDriveLabel(file.label, memberDriveLabels)) return true;
+  return Boolean(file.label && manageableMemberLabels?.has(file.label));
+}
+
+/**
+ * Whether folder collaboration with roles is available: the staging-only lane
+ * flag AND a server advertising folder grants with roles. Unknown
+ * capabilities (`null`) read as off, so nothing appears until it is known.
+ */
+export function folderRolesAvailable(
+  flag: boolean,
+  caps: Pick<ServerCapabilities, "folder_grants" | "folder_grant_roles"> | null,
+): boolean {
+  return flag && caps?.folder_grants === true && caps?.folder_grant_roles === true;
 }
 
 export const FOLDER_GRANT_DISABLED_TOOLTIP =

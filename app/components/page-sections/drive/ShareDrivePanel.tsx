@@ -17,7 +17,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, Copy, Lock, UserRoundPen, Users, X } from "lucide-react";
+import { AlertCircle, Check, Copy, FolderMinus, Lock, UserRoundPen, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons, Skeleton } from "@/components/ui";
@@ -34,11 +34,14 @@ import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   createDriveInviteDialogAtom,
   folderGrantsFeatureEnabledAtom,
+  folderRolesEnabledAtom,
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
   approveEmailInvite,
   changeDriveMemberRole,
+  changeFolderGrantRole,
+  replaceFolderGrants,
   isSharedDrivesUnavailable,
   listDriveInvites,
   listDriveMembers,
@@ -73,6 +76,8 @@ import {
   formatJoinedDate,
   getInvitesView,
   getMembersView,
+  groupFolderGrantsByHolder,
+  type FolderGrantHolder,
   type InvitesState,
   type MembersState,
 } from "./shareDriveModalState";
@@ -178,6 +183,11 @@ export default function ShareDrivePanel() {
 
   const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
   const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
+  const folderRolesEnabled = useAtomValue(folderRolesEnabledAtom);
+  // Managing from INSIDE a folder grant (a folder Manager): only that
+  // folder's holders and links, never the drive's members. Rust scopes the
+  // listings by the `grant:` label; this decides what the panel draws.
+  const folderScope = target?.folderScope ?? null;
 
   // Members first: it is what someone opens this for once the drive is
   // already shared, which is the only state it opens in.
@@ -216,7 +226,10 @@ export default function ShareDrivePanel() {
     setMembers({ kind: "loading" });
     try {
       const [rows, grants] = await Promise.all([
-        listDriveMembers(driveLabel, driveTarget),
+        // A folder Manager has no view of the drive's members.
+        folderScope
+          ? Promise.resolve([] as DriveMemberInfo[])
+          : listDriveMembers(driveLabel, driveTarget),
         folderGrantsEnabled
           ? listDriveFolderGrants(driveLabel, driveTarget).catch(() => [])
           : Promise.resolve([] as DriveFolderGrantInfo[]),
@@ -232,7 +245,7 @@ export default function ShareDrivePanel() {
         setMembers({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [driveTarget, folderGrantsEnabled]);
+  }, [driveTarget, folderGrantsEnabled, folderScope]);
 
   const loadInvites = useCallback(async (driveLabel: string) => {
     setInvites({ kind: "loading" });
@@ -354,6 +367,38 @@ export default function ShareDrivePanel() {
     [label, loadMembers, queryClient, driveTarget],
   );
 
+  const changeGrantRole = useCallback(
+    async (memberSs58: string, role: DriveRole) => {
+      if (!label) return;
+      const labelAtCall = label;
+      try {
+        await changeFolderGrantRole(labelAtCall, memberSs58, role, driveTarget);
+        toast.success(`Role changed to ${driveRoleLabel(role)}`);
+        await loadMembers(labelAtCall);
+      } catch (err) {
+        if (labelAtCall !== currentLabelRef.current) return;
+        toast.error(`Could not change role: ${errorMessage(err)}`);
+      }
+    },
+    [label, loadMembers, driveTarget],
+  );
+
+  const changeGrantFolders = useCallback(
+    async (memberSs58: string, folders: string[]) => {
+      if (!label) return;
+      const labelAtCall = label;
+      try {
+        await replaceFolderGrants(labelAtCall, memberSs58, folders, driveTarget);
+        toast.success("Folders updated");
+        await loadMembers(labelAtCall);
+      } catch (err) {
+        if (labelAtCall !== currentLabelRef.current) return;
+        toast.error(`Could not change folders: ${errorMessage(err)}`);
+      }
+    },
+    [label, loadMembers, driveTarget],
+  );
+
   const onClose = () => setTarget(null);
   const open = Boolean(SHARED_DRIVES_ENABLED && target);
 
@@ -367,7 +412,9 @@ export default function ShareDrivePanel() {
               Share access
             </p>
             <p className="mt-0.5 min-w-0 truncate text-[13px] text-black-900/40 dark:text-white/40">
-              {inviteDriveDisplayName(target.folderName, target.label)}
+              {folderScope
+                ? target.folderName
+                : inviteDriveDisplayName(target.folderName, target.label)}
             </p>
           </div>
           <button
@@ -414,6 +461,15 @@ export default function ShareDrivePanel() {
             }
             onRemove={(ss58) => void removeMember(ss58)}
             onChangeRole={(ss58, role) => void changeRole(ss58, role)}
+            onChangeGrantRole={
+              folderRolesEnabled
+                ? (ss58, role) => void changeGrantRole(ss58, role)
+                : undefined
+            }
+            onChangeGrantFolders={(ss58, folders) =>
+              void changeGrantFolders(ss58, folders)
+            }
+            folderScope={folderScope}
             onCreateInvite={() => {
               if (!target) return;
               // Close the panel as the dialog opens. They are two surfaces for
@@ -422,7 +478,11 @@ export default function ShareDrivePanel() {
               // panel's own overlay on small screens, where the panel sits
               // above FramedDialog's layer.
               setTarget(null);
-              setInviteDialogTarget(target);
+              // From inside a folder grant the invite is to that folder:
+              // "/" is its root, which Rust roots at the grant.
+              setInviteDialogTarget(
+                folderScope ? { ...target, pathPrefix: "/" } : target,
+              );
             }}
           />
         )}
@@ -754,12 +814,19 @@ function MembersTab({
   driveName,
   onRemove,
   onChangeRole,
+  onChangeGrantRole,
+  onChangeGrantFolders,
+  folderScope,
   onCreateInvite,
 }: {
   state: MembersState;
   driveName: string;
   onRemove: (memberSs58: string) => void;
   onChangeRole: (memberSs58: string, role: DriveRole) => void;
+  /** Present only with folder roles on. */
+  onChangeGrantRole?: (memberSs58: string, role: DriveRole) => void;
+  onChangeGrantFolders: (memberSs58: string, folders: string[]) => void;
+  folderScope: string | null;
   onCreateInvite: () => void;
 }) {
   const view = getMembersView(state);
@@ -791,7 +858,9 @@ function MembersTab({
     return (
       <div className="min-h-0 flex-1 py-6 text-center">
         <p className="mb-4 text-sm text-grey-50 dark:text-grey-dark-600">
-          No one has joined this drive yet.
+          {folderScope
+            ? "No one else has access to this folder yet."
+            : "No one has joined this drive yet."}
         </p>
         <InviteButton onClick={onCreateInvite} />
       </div>
@@ -801,23 +870,7 @@ function MembersTab({
   const members = state.kind === "ready" ? state.members : [];
   const folderGrants = state.kind === "ready" ? state.folderGrants : [];
   // Group grants by holder so one person with two folders is one remove target.
-  const grantsByHolder = new Map<
-    string,
-    { name?: string; email?: string; folders: string[]; createdAt: string }
-  >();
-  for (const g of folderGrants) {
-    const existing = grantsByHolder.get(g.memberSs58);
-    if (existing) {
-      existing.folders.push(g.pathPrefix);
-    } else {
-      grantsByHolder.set(g.memberSs58, {
-        name: g.memberName,
-        email: g.memberEmail,
-        folders: [g.pathPrefix],
-        createdAt: g.createdAt,
-      });
-    }
-  }
+  const grantsByHolder = groupFolderGrantsByHolder(folderGrants);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -834,20 +887,18 @@ function MembersTab({
             onChangeRole={onChangeRole}
           />
         ))}
-        {grantsByHolder.size > 0 ? (
+        {grantsByHolder.length > 0 ? (
           <div className="mt-4">
             <p className="mb-2 px-0.5 text-[11px] font-medium uppercase tracking-wide text-grey-50 dark:text-grey-dark-600">
               Folder access
             </p>
-            {[...grantsByHolder.entries()].map(([ss58, info]) => (
+            {grantsByHolder.map((holder) => (
               <FolderGrantRow
-                key={ss58}
-                memberSs58={ss58}
-                memberName={info.name}
-                memberEmail={info.email}
-                folders={info.folders}
-                createdAt={info.createdAt}
+                key={holder.memberSs58}
+                holder={holder}
                 onRemove={onRemove}
+                onChangeRole={onChangeGrantRole}
+                onChangeFolders={onChangeGrantFolders}
               />
             ))}
           </div>
@@ -858,75 +909,121 @@ function MembersTab({
 }
 
 /**
- * One grant holder in the Folder access section. Remove uses the same
- * DELETE as a full member — it clears every folder they hold on this drive.
+ * One grant holder in the Folder access section: who, which folders, their
+ * role (Viewer unless the server speaks folder roles), and what can be done.
+ * Remove uses the same DELETE as a full member, clearing every folder they
+ * hold on this drive.
  */
 function FolderGrantRow({
-  memberSs58,
-  memberName,
-  memberEmail,
-  folders,
-  createdAt,
+  holder,
   onRemove,
+  onChangeRole,
+  onChangeFolders,
 }: {
-  memberSs58: string;
-  memberName?: string;
-  memberEmail?: string;
-  folders: string[];
-  createdAt: string;
+  holder: FolderGrantHolder;
   onRemove: (memberSs58: string) => void;
+  /** Present only with folder roles on. */
+  onChangeRole?: (memberSs58: string, role: DriveRole) => void;
+  onChangeFolders: (memberSs58: string, folders: string[]) => void;
 }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const who = accountDisplayName(memberSs58, memberName);
+  const [dialog, setDialog] = useState<"none" | "role" | "folders" | "remove">("none");
+  const who = accountDisplayName(holder.memberSs58, holder.memberName);
+  const role = parseDriveRole(holder.role);
+  const folders = holder.folders;
+
+  const items = [
+    ...(onChangeRole
+      ? [
+          {
+            icon: <UserRoundPen className="size-4" />,
+            itemTitle: "Change role",
+            onItemClick: () => setDialog("role"),
+          },
+        ]
+      : []),
+    // Narrowing someone to fewer folders; adding a folder is a new invite.
+    ...(folders.length > 1
+      ? [
+          {
+            icon: <FolderMinus className="size-4" />,
+            itemTitle: "Change folders",
+            onItemClick: () => setDialog("folders"),
+          },
+        ]
+      : []),
+    {
+      icon: <Icons.Trash className="size-4" />,
+      itemTitle: "Remove access",
+      variant: "destructive" as const,
+      onItemClick: () => setDialog("remove"),
+    },
+  ];
 
   return (
     <div className="flex items-center justify-between gap-2 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
       <div className="flex min-w-0 items-center gap-2.5">
         <Avatar
           size={28}
-          name={memberSs58}
+          name={holder.memberSs58}
           variant="marble"
           colors={["#92A1C6", "#146A7C", "#F0AB3D", "#C271B4", "#C20D90"]}
         />
         <div className="min-w-0">
           <AccountLabel
-            ss58={memberSs58}
-            name={memberName}
-            email={memberEmail}
+            ss58={holder.memberSs58}
+            name={holder.memberName}
+            email={holder.memberEmail}
             className="text-xs font-medium text-grey-10 dark:text-white"
           />
-          <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
-            {folders.join(", ")}
-            {createdAt ? ` · ${formatJoinedDate(createdAt)}` : ""}
-          </p>
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
+            <DriveRoleChip role={role} />
+            <span
+              className="min-w-0 truncate text-[11px] text-grey-50 dark:text-grey-dark-600"
+              title={folders.join(", ")}
+            >
+              {folders.join(", ")}
+              {holder.createdAt && formatJoinedDate(holder.createdAt)
+                ? ` · ${formatJoinedDate(holder.createdAt)}`
+                : ""}
+            </span>
+          </div>
         </div>
       </div>
-      <TableActionMenu
-        dropdownTitle=""
-        items={[
-          {
-            icon: <Icons.Trash className="size-4" />,
-            itemTitle: "Remove access",
-            onItemClick: () => setConfirmOpen(true),
-          },
-        ]}
-      >
+      <TableActionMenu dropdownTitle="" items={items}>
         <Button
           variant="ghost"
           size="auto"
-          aria-label={`Actions for ${memberSs58}`}
+          aria-label={`Actions for ${holder.memberSs58}`}
           className="h-7 w-7 shrink-0 rounded-md p-0 text-grey-70 transition-colors hover:bg-grey-90 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white"
         >
           <Icons.EllipsisVertical className="size-[18px]" />
         </Button>
       </TableActionMenu>
+
+      {dialog === "role" && onChangeRole && (
+        <ChangeRoleDialog
+          who={who}
+          currentRole={role}
+          place="folder"
+          onClose={() => setDialog("none")}
+          onConfirm={(next) => onChangeRole(holder.memberSs58, next)}
+        />
+      )}
+      {dialog === "folders" && (
+        <ChangeFoldersDialog
+          who={who}
+          folders={folders}
+          onClose={() => setDialog("none")}
+          onConfirm={(kept) => onChangeFolders(holder.memberSs58, kept)}
+        />
+      )}
       <ConfirmationDialog
-        open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        onBack={() => setConfirmOpen(false)}
+        open={dialog === "remove"}
+        onClose={() => setDialog("none")}
+        onBack={() => setDialog("none")}
         onConfirm={() => {
-          setConfirmOpen(false);
-          onRemove(memberSs58);
+          setDialog("none");
+          onRemove(holder.memberSs58);
         }}
         heading="Remove folder access"
         icon={<Icons.Trash className="size-4 text-white" />}
@@ -938,6 +1035,97 @@ function FolderGrantRow({
         helperText="They lose folder access on their next request. Files already downloaded stay on their device."
       />
     </div>
+  );
+}
+
+/**
+ * Narrowing a holder to fewer of the folders they hold. At least one must
+ * stay: removing every folder is Remove access, a different request.
+ */
+function ChangeFoldersDialog({
+  who,
+  folders,
+  onClose,
+  onConfirm,
+}: {
+  who: string;
+  folders: string[];
+  onClose: () => void;
+  onConfirm: (kept: string[]) => void;
+}) {
+  const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set(folders));
+  const unchanged = kept.size === folders.length;
+
+  return (
+    <FramedDialog
+      open
+      onClose={onClose}
+      title="Change folders"
+      icon={<FolderMinus className="size-4 text-white" />}
+      maxWidth="max-w-[585px]"
+      contentClassName="sm:w-[405px]"
+    >
+      <div className="font-geist">
+        <p className="mb-5 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+          Which folders {who} keeps access to.
+        </p>
+        <div className="mb-6 flex flex-col gap-2">
+          {folders.map((folder) => (
+            <label
+              key={folder}
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-grey-80 p-3 transition-colors hover:bg-grey-90 dark:border-white/10 dark:hover:bg-white/5"
+            >
+              <input
+                type="checkbox"
+                className="accent-primary-50"
+                checked={kept.has(folder)}
+                onChange={(e) =>
+                  setKept((prev) => {
+                    const next = new Set(prev);
+                    if (e.target.checked) next.add(folder);
+                    else next.delete(folder);
+                    return next;
+                  })
+                }
+              />
+              <span className="min-w-0 truncate text-sm text-grey-10 dark:text-white" title={folder}>
+                {folder}
+              </span>
+            </label>
+          ))}
+          {kept.size === 0 && (
+            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+              Keep at least one folder. To take everything away, use Remove
+              access instead.
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col gap-3">
+          <Button
+            type="button"
+            variant="primary"
+            size="auto"
+            disabled={kept.size === 0 || unchanged}
+            onClick={() => {
+              onConfirm(folders.filter((f) => kept.has(f)));
+              onClose();
+            }}
+            className="h-[38px] w-full rounded-[8px] text-[14px] font-medium leading-[1.4] tracking-[-0.28px]"
+          >
+            Save folders
+          </Button>
+          <Button
+            type="button"
+            variant="defaultStable"
+            size="auto"
+            onClick={onClose}
+            className="h-[38px] w-full rounded-[8px] border border-grey-80 text-[14px] font-medium leading-[1.4] tracking-[-0.28px] text-grey-10 dark:border-white/10 dark:text-white"
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </FramedDialog>
   );
 }
 
@@ -980,18 +1168,25 @@ function InviteButton({
  * and the row keeps a three-dot menu like every other row in the app.
  */
 function ChangeRoleDialog({
-  member,
+  who,
+  currentRole,
+  place = "drive",
   onClose,
   onConfirm,
 }: {
-  member: DriveMemberInfo;
+  who: string;
+  currentRole: DriveRole;
+  /** A drive member, or a folder grant holder (folder roles). */
+  place?: "drive" | "folder";
   onClose: () => void;
   onConfirm: (role: DriveRole) => void;
 }) {
-  const current = parseDriveRole(member.role);
+  const current = currentRole;
   const [role, setRole] = useState<DriveRole>(current);
-  const demotionWarning = driveRoleDemotionWarning(current, role);
-  const who = accountDisplayName(member.memberSs58, member.memberName);
+  // The link-revocation side effects are the drive server's documented
+  // behaviour; nothing is known yet about folders, so nothing is claimed.
+  const demotionWarning =
+    place === "drive" ? driveRoleDemotionWarning(current, role) : null;
 
   return (
     <FramedDialog
@@ -1004,7 +1199,7 @@ function ChangeRoleDialog({
     >
       <div className="font-geist">
         <p className="mb-5 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-          What {who} can do in this drive.
+          What {who} can do in this {place}.
         </p>
 
         <div className="mb-6 flex flex-col gap-2">
@@ -1155,7 +1350,8 @@ function MemberRow({
 
       {dialog === "role" && (
         <ChangeRoleDialog
-          member={member}
+          who={accountDisplayName(member.memberSs58, member.memberName)}
+          currentRole={parseDriveRole(member.role)}
           onClose={() => setDialog("none")}
           onConfirm={(next) => onChangeRole(member.memberSs58, next)}
         />

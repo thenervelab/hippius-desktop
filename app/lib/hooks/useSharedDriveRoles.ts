@@ -4,15 +4,21 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { useAtomValue } from "jotai";
 import {
+  manageableMemberDriveLabels,
   rolesByLocalLabel,
   writableMemberDriveLabels,
 } from "@/app/lib/shared-drives/driveRowSharing";
+import { parseFolderGrantLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
+import { folderRolesEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import {
   isSharedDrivesUnavailable,
   listMyDriveMemberships,
+  listMyFolderGrants,
   type DriveMembershipInfo,
+  type MyFolderGrantInfo,
 } from "@/app/lib/tauri/sharedDrives";
 
 const EMPTY_ROLES: ReadonlyMap<string, DriveRole> = new Map();
@@ -157,8 +163,77 @@ export function useMemberDriveLabels(): ReadonlySet<string> {
  */
 export function useWritableMemberDriveLabels(): ReadonlySet<string> {
   const memberships = useSharedDriveMemberships();
+  const { grants } = useMyFolderGrants();
   return useMemo(
-    () => writableMemberDriveLabels(memberships),
-    [memberships],
+    () => writableMemberDriveLabels(memberships, grants),
+    [memberships, grants],
   );
+}
+
+/**
+ * Labels of what this account MANAGES in somebody else's drives (Manager,
+ * not frozen), whole drives and granted folders alike.
+ */
+export function useManageableMemberDriveLabels(): ReadonlySet<string> {
+  const memberships = useSharedDriveMemberships();
+  const { grants } = useMyFolderGrants();
+  return useMemo(
+    () => manageableMemberDriveLabels(memberships, grants),
+    [memberships, grants],
+  );
+}
+
+export const MY_FOLDER_GRANTS_QUERY_KEY = "my-folder-grants";
+const EMPTY_GRANTS: readonly MyFolderGrantInfo[] = [];
+
+/**
+ * The folders shared WITH this account (folder grants), once folder roles are
+ * on. Off, or on a server without them, this is empty and nothing is fetched,
+ * so the whole-drive surfaces behave exactly as before.
+ */
+export function useMyFolderGrants(): {
+  grants: readonly MyFolderGrantInfo[];
+  isSettled: boolean;
+} {
+  const enabled = useAtomValue(folderRolesEnabledAtom);
+  const { data, isFetched } = useQuery({
+    queryKey: [MY_FOLDER_GRANTS_QUERY_KEY],
+    queryFn: async () => {
+      try {
+        return await listMyFolderGrants();
+      } catch (err) {
+        if (!isSharedDrivesUnavailable(err)) {
+          console.warn("[useMyFolderGrants] listing failed:", err);
+        }
+        return [] as MyFolderGrantInfo[];
+      }
+    },
+    enabled,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  return { grants: data ?? EMPTY_GRANTS, isSettled: !enabled || isFetched };
+}
+
+/** The folder grant a `grant:` browse label names, if this account holds it. */
+export function useFolderGrantForLabel(label: string | null | undefined): {
+  grant: MyFolderGrantInfo | undefined;
+  isGrant: boolean;
+  isSettled: boolean;
+} {
+  const { grants, isSettled } = useMyFolderGrants();
+  const parsed = useMemo(() => parseFolderGrantLabel(label), [label]);
+  const grant = useMemo(
+    () =>
+      parsed
+        ? grants.find(
+            (g) =>
+              g.ownerSs58 === parsed.ownerSs58 &&
+              g.folderHash === parsed.folderHash &&
+              g.pathPrefix.replace(/^\/+|\/+$/g, "") === parsed.pathPrefix,
+          )
+        : undefined,
+    [grants, parsed],
+  );
+  return { grant, isGrant: parsed !== null, isSettled };
 }

@@ -44,6 +44,11 @@ export interface ServerCapabilities {
   folder_grants: boolean;
   /** `POST /v1/folder-shares` takes `owner_ss58` (hcfs #458). */
   member_folder_shares?: boolean;
+  /**
+   * Folder grants carry Viewer, Editor and Manager (assumed until HCFS
+   * publishes folder roles). Absent means reader-only folder grants.
+   */
+  folder_grant_roles?: boolean;
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   canShareFolder,
   isMemberDriveLabel,
   offersShareAction,
+  offersWriteAction,
   driveFolderHash,
   folderShareRelativePath,
   shareTargetFor,
@@ -265,7 +266,7 @@ describe("every surface that offers Share via link consults the gate", () => {
   });
 });
 
-describe("offersShareAction — an Editor or Manager in someone else's drive (hcfs #458)", () => {
+describe("offersShareAction: an Editor or Manager in someone else's drive (hcfs #458)", () => {
   const BROWSED = "shared:5DSQAMf3JVb3VyuXwqWUx3tj6aX6EX9f5p1UDJYh5TMdSK63~263bad4ad83e395a";
   const writable = new Set([BROWSED, "team"]);
 
@@ -291,5 +292,20 @@ describe("offersShareAction — an Editor or Manager in someone else's drive (hc
         writableMemberDriveLabels: writable,
       }),
     ).toBe(false);
+  });
+});
+
+describe("offersWriteAction", () => {
+  const writable = new Set(["team", "grant:5O~h~61"]);
+
+  it("always offers writes on this account's own drive", () => {
+    expect(offersWriteAction(folder({ label: "mine" }), new Set(["team"]), writable)).toBe(true);
+  });
+
+  it("offers them in somebody else's drive only where the role can write", () => {
+    expect(offersWriteAction(folder({ label: "team" }), new Set(["team", "viewer"]), writable)).toBe(true);
+    expect(offersWriteAction(folder({ label: "viewer" }), new Set(["team", "viewer"]), writable)).toBe(false);
+    expect(offersWriteAction(folder({ label: "grant:5O~h~61" }), undefined, writable)).toBe(true);
+    expect(offersWriteAction(folder({ label: "grant:5O~h~62" }), undefined, writable)).toBe(false);
   });
 });

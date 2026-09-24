@@ -9,6 +9,7 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   offersShareAction,
+  offersWriteAction,
   isMemberDriveLabel,
   FOLDER_SHARE_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderShareGating";
@@ -18,6 +19,7 @@ import {
   FOLDER_GRANT_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderGrantGating";
 import {
+  useManageableMemberDriveLabels,
   useMemberDriveLabels,
   useWritableMemberDriveLabels,
 } from "@/app/lib/hooks/useSharedDriveRoles";
@@ -39,10 +41,13 @@ import {
   folderGrantsFeatureEnabledAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
+  folderRolesEnabledAtom,
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";interface ContextMenuProps {
+import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+
+interface ContextMenuProps {
   x: number;
   y: number;
   file: FormattedUserFile | null;
@@ -96,6 +101,8 @@ export default function FileContextMenu({
   // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
   const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
+  const folderRolesEnabled = useAtomValue(folderRolesEnabledAtom);
+  const manageableMemberDriveLabels = useManageableMemberDriveLabels();
 
   useEffect(() => {
     setMounted(true);
@@ -280,10 +287,15 @@ export default function FileContextMenu({
               </button>
             )}
 
-          {/* Share folder — folder invite (view-only). Join is console-only. */}
+          {/* Share folder: a folder invite. Join is console-only. */}
           {SHARED_DRIVES_ENABLED
             && file.isFolder
-            && canShareFolderGrant(file, folderGrantsEnabled, memberDriveLabels) && (
+            && canShareFolderGrant(
+              file,
+              folderGrantsEnabled,
+              memberDriveLabels,
+              folderRolesEnabled ? manageableMemberDriveLabels : undefined,
+            ) && (
               <button
                 className={menuItemClass}
                 onClick={() => {
@@ -317,7 +329,7 @@ export default function FileContextMenu({
               </button>
             )}
 
-          {onRename && (
+          {onRename && offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels) && (
             <button
               // No `pointer-events-none` here: it would stop the element
               // from ever being a hover target, making the `title` tooltip

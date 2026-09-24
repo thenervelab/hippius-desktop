@@ -23,9 +23,13 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
 });
 
 const flagState = vi.hoisted(() => ({ on: true }));
+const folderRolesFlag = vi.hoisted(() => ({ on: false }));
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
     return flagState.on;
+  },
+  get FOLDER_ROLES_ENABLED() {
+    return folderRolesFlag.on;
   },
 }));
 

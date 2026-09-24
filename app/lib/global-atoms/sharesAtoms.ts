@@ -7,6 +7,8 @@
 import { atom } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { ServerCapabilities } from "@/app/lib/tauri/shares";
+import { FOLDER_ROLES_ENABLED } from "@/app/lib/featureFlags";
+import { folderRolesAvailable } from "@/app/lib/utils/folderGrantGating";
 
 /**
  * Cached server capabilities. Populated once after login by
@@ -92,6 +94,15 @@ export const memberFolderSharesEnabledAtom = atom((get) => {
 });
 
 /**
+ * Whether folder collaboration with roles is on: the staging-only lane flag
+ * AND the server advertising both folder grants and folder roles. See
+ * `folderRolesAvailable`.
+ */
+export const folderRolesEnabledAtom = atom((get) =>
+  folderRolesAvailable(FOLDER_ROLES_ENABLED, get(serverCapabilitiesAtom)),
+);
+
+/**
  * What `ShareFileModal` is currently sharing. `null` means closed.
  *
  * Storing the file (rather than just `(label, name)`) lets the modal render
@@ -169,6 +180,13 @@ export type ShareDriveModalTarget = {
    * drive-relative path (view-only, single-use). Absent = whole-drive invite.
    */
   pathPrefix?: string;
+  /**
+   * Set when managing from INSIDE a folder grant (a folder Manager): the
+   * granted folder. The panel then lists only that folder's holders and
+   * links (Rust scopes them by the `grant:` label) and never whole-drive
+   * members.
+   */
+  folderScope?: string;
 };
 
 export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);

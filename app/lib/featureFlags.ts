@@ -150,6 +150,23 @@ export const VM_VPN_ENABLED = false;
 export const SHARED_DRIVES_ENABLED = enabledFrom("beta");
 
 /**
+ * Folder collaboration with roles: Viewer, Editor and Manager on one folder
+ * of a drive, instead of read-only folder grants.
+ *
+ * The HCFS API is agreed but NOT published, so the desktop is built against
+ * an assumed contract (documented in one place, the module doc of
+ * `src-tauri/src/shared_drives/folder_roles.rs`). Two gates stand in front of
+ * every surface: this flag, and the server advertising
+ * `capabilities.folder_grant_roles` (`folderRolesEnabledAtom`). With either
+ * off, whole-drive sharing and read-only folder grants work exactly as
+ * before.
+ *
+ * **Staging only** (`enabledFrom("staging")`): off in beta and production
+ * until the server contract is published and checked against this build.
+ */
+export const FOLDER_ROLES_ENABLED = enabledFrom("staging");
+
+/**
  * API token settings. When `false`, the surface is fully invisible: the
  * "API Token" item is filtered out of the settings sidebar
  * (`filterSettingsNavItems`) and the section does not render even if the

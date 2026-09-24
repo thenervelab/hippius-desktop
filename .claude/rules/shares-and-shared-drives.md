@@ -142,7 +142,7 @@ Desktop routing: `classify_sync_error` (`tauri_bridge.rs`) checks the marker BEF
 
 ### v1 scope cuts
 
-Deliberate, documented where they bite: no folder-entity materialization on member drives (empty folders from the owner don't appear on member devices; files sync fully), no member migration/selective-sync-exclusions surfaces (member FOLDER links are allowed for Editors and Managers, see "Member mint"), membership fetch is FE-on-demand — never wired into `restore_session` (the login path's hang-proof timeout discipline is not risked for a listing) — and the files-page stats join leaves member rows blank.
+Deliberate, documented where they bite: no folder-entity materialization on member drives (empty folders from the owner don't appear on member devices; files sync fully), no member migration/selective-sync-exclusions surfaces (member FOLDER links are allowed for Editors and Managers, see "Member mint"), membership fetch is FE-on-demand, never wired into `restore_session` (the login path's hang-proof timeout discipline is not risked for a listing), and the files-page stats join leaves member rows blank.
 
 **Caution**: `recent_uploads.rs`'s `hash_to_drive` map still keys drives by the label-derived hash — safe ONLY because member drives are excluded from the search surfaces in v1. If member drives ever reach search/recent-uploads, that map must move to the identity columns or member hits will mis-join.
 
@@ -172,7 +172,7 @@ A folder inside a synced drive is shared as a LIVE link, not an artifact. One me
 
 `shares/commands.rs::create_folder_share_inner`. EVERY gate lives in the inner funnel, not the IPC — the macOS Finder right-click (`finder_bridge/dispatch.rs`) calls it directly, the same lesson the zip pipeline learned.
 
-Gates: `require_folder_shares_supported` (the IPC's own authority, independent of the FE gate), the member branch (below), and `folder_share_path_prefix` (mirrors `resolve_inside_sync_root`'s component rules WITHOUT touching disk — the mint is metadata-only, so a cloud-only folder is shareable; `""` shares the whole drive).
+Gates: `require_folder_shares_supported` (the IPC's own authority, independent of the FE gate), the member branch (below), and `folder_share_path_prefix` (mirrors `resolve_inside_sync_root`'s component rules WITHOUT touching disk: the mint is metadata-only, so a cloud-only folder is shareable; `""` shares the whole drive).
 
 Two zip-era guards are deliberately ABSENT: no settlement check (the recipient browses the SERVER's state, so a half-synced local copy cannot corrupt the share) and no billing-eligibility gate (nothing is uploaded).
 

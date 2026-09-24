@@ -13,6 +13,7 @@ import {
   EMAIL_INVITE_ROLES,
   EMAIL_INVITE_TTL_OPTIONS,
   clampEmailInviteTtl,
+  groupFolderGrantsByHolder,
 } from "../shareDriveModalState";
 import { MANAGER_INVITE_MAX_SECONDS } from "@/app/lib/shared-drives/roles";
 
@@ -118,5 +119,24 @@ describe("emailed invitation choices", () => {
   it("snaps a link-only lifetime back to the default", () => {
     expect(clampEmailInviteTtl(NEVER_EXPIRES_SECS)).toBe(DEFAULT_INVITE_TTL_SECS);
     expect(clampEmailInviteTtl(24 * 60 * 60)).toBe(24 * 60 * 60);
+  });
+});
+
+describe("groupFolderGrantsByHolder", () => {
+  it("makes one row per person, keyed by ss58, with every folder", () => {
+    const rows = groupFolderGrantsByHolder([
+      { memberSs58: "5A", pathPrefix: "b", role: "writer", createdAt: "2026-02-01" },
+      { memberSs58: "5B", pathPrefix: "x", role: "reader", createdAt: "2026-01-01", memberName: "Bo" },
+      { memberSs58: "5A", pathPrefix: "a", role: "writer", createdAt: "2026-01-15", memberName: "Ada" },
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      memberSs58: "5A",
+      memberName: "Ada",
+      folders: ["a", "b"],
+      role: "writer",
+      createdAt: "2026-01-15",
+    });
+    expect(rows[1]).toMatchObject({ memberSs58: "5B", memberName: "Bo", folders: ["x"] });
   });
 });

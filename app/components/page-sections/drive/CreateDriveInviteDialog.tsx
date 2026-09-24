@@ -9,7 +9,7 @@
 // Putting the wizard inside the list surface made both worse.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check } from "lucide-react";
 import { toast } from "sonner";
@@ -21,7 +21,10 @@ import { Select } from "@/components/ui/select/Select";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { createDriveInviteDialogAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  createDriveInviteDialogAtom,
+  folderRolesEnabledAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import {
@@ -83,6 +86,11 @@ export default function CreateDriveInviteDialog() {
   const label = target?.label ?? null;
   const pathPrefix = target?.pathPrefix?.trim() || null;
   const isFolderInvite = Boolean(pathPrefix);
+  // Folder collaboration with roles (staging flag + server capability): a
+  // folder invite gets the same role picker and email option as a drive's.
+  // Off, a folder invite stays view-only and single use, exactly as before.
+  const folderRolesEnabled = useAtomValue(folderRolesEnabledAtom);
+  const folderRoles = isFolderInvite && folderRolesEnabled;
   const currentLabelRef = useRef<string | null>(null);
   currentLabelRef.current = label;
 
@@ -120,11 +128,12 @@ export default function CreateDriveInviteDialog() {
     [target?.ownerSs58, target?.folderHash],
   );
 
-  // Ask once per open whether this server can mail invitations. Folder
-  // invites cannot be mailed (the server refuses `path_prefix` there).
+  // Ask once per open whether this server can mail invitations. A folder
+  // invite can be mailed only with folder roles (the server refuses
+  // `path_prefix` on that route otherwise).
   useEffect(() => {
     setEmailAvailable(null);
-    if (!label || isFolderInvite) return;
+    if (!label || (isFolderInvite && !folderRoles)) return;
     let cancelled = false;
     emailInvitesAvailable(label, driveTarget)
       .then((available) => {
@@ -136,7 +145,7 @@ export default function CreateDriveInviteDialog() {
     return () => {
       cancelled = true;
     };
-  }, [label, isFolderInvite, driveTarget]);
+  }, [label, isFolderInvite, folderRoles, driveTarget]);
 
   const sendEmailInvite = useCallback(async () => {
     if (!label) return;
@@ -148,6 +157,7 @@ export default function CreateDriveInviteDialog() {
         role,
         expiresInSecs: clampEmailInviteTtl(ttlSecs),
         target: driveTarget,
+        ...(isFolderInvite && pathPrefix ? { pathPrefix } : {}),
       });
       if (labelAtCall !== currentLabelRef.current) return;
       setInvite({ kind: "emailSent", email: email.trim() });
@@ -170,7 +180,7 @@ export default function CreateDriveInviteDialog() {
         setInvite({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [label, email, inviteRole, ttlSecs, driveTarget, queryClient]);
+  }, [label, email, inviteRole, ttlSecs, driveTarget, queryClient, isFolderInvite, pathPrefix]);
 
   const handleModeChange = useCallback((next: InviteMode) => {
     setMode(next);
@@ -193,16 +203,16 @@ export default function CreateDriveInviteDialog() {
       // link the user gets is the link the form described, rather than a
       // rejection after the fact — matching console `createDriveInvite`.
       // Folder invites are always reader / single-use / ≤30 days in Rust.
-      const isManager = !isFolderInvite && inviteRole === "manager";
-      const effectiveTtl = isFolderInvite
-        ? Math.min(ttlSecs, 30 * 24 * 60 * 60)
-        : isManager
-          ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
-          : ttlSecs;
+      const role: DriveRole = isFolderInvite && !folderRoles ? "reader" : inviteRole;
+      const isManager = role === "manager";
+      const folderTtl = isFolderInvite ? Math.min(ttlSecs, 30 * 24 * 60 * 60) : ttlSecs;
+      const effectiveTtl = isManager
+        ? Math.min(folderTtl, MANAGER_INVITE_MAX_SECONDS)
+        : folderTtl;
       const link = await createDriveInvite(labelAtCall, {
         expiresInSecs: effectiveTtl,
         ...(isManager ? { maxUses: MANAGER_INVITE_MAX_USES } : {}),
-        role: isFolderInvite ? "reader" : inviteRole,
+        role,
         pathPrefix: pathPrefix ?? undefined,
         // Named only for a drive shared with this account that is not synced
         // here; an own drive's label resolves on its own.
@@ -235,6 +245,7 @@ export default function CreateDriveInviteDialog() {
     target?.folderHash,
     pathPrefix,
     isFolderInvite,
+    folderRoles,
   ]);
 
   const handleRoleChange = useCallback((role: DriveRole) => {
@@ -277,6 +288,11 @@ export default function CreateDriveInviteDialog() {
     return inviteDriveDisplayName(match?.displayLabel, target.label);
   })();
 
+  // "/" is the root of a folder grant being managed from inside it; the
+  // folder's own name says more than a slash.
+  const folderTitle =
+    pathPrefix === "/" ? (target?.folderName ?? null) : pathPrefix;
+
   if (!SHARED_DRIVES_ENABLED || !target) return null;
 
   return (
@@ -290,9 +306,9 @@ export default function CreateDriveInviteDialog() {
           </span>
           <span
             className="block w-full min-w-0 truncate"
-            title={isFolderInvite ? pathPrefix ?? driveName : driveName}
+            title={isFolderInvite ? folderTitle ?? driveName : driveName}
           >
-            &quot;{isFolderInvite ? pathPrefix : driveName}&quot;
+            &quot;{isFolderInvite ? folderTitle : driveName}&quot;
           </span>
         </span>
       }
@@ -315,9 +331,10 @@ export default function CreateDriveInviteDialog() {
           role={inviteRole}
           onRoleChange={handleRoleChange}
           folderInvite={isFolderInvite}
+          folderRoles={folderRoles}
           mode={mode}
           onModeChange={handleModeChange}
-          emailAvailable={emailAvailable === true && !isFolderInvite}
+          emailAvailable={emailAvailable === true && (!isFolderInvite || folderRoles)}
           email={email}
           onEmailChange={setEmail}
           onSendEmail={() => void sendEmailInvite()}
@@ -339,6 +356,7 @@ function InviteTab({
   role,
   onRoleChange,
   folderInvite = false,
+  folderRoles = false,
   mode,
   onModeChange,
   emailAvailable,
@@ -355,6 +373,8 @@ function InviteTab({
   role: DriveRole;
   onRoleChange: (role: DriveRole) => void;
   folderInvite?: boolean;
+  /** A folder invite with the full role set (folder roles on). */
+  folderRoles?: boolean;
   mode: InviteMode;
   onModeChange: (mode: InviteMode) => void;
   emailAvailable: boolean;
@@ -409,10 +429,12 @@ function InviteTab({
 
   const running = state.kind === "running";
   const byEmail = emailAvailable && mode === "email";
-  const managerCapped = !folderInvite && !byEmail && role === "manager";
+  // Folder invites without roles are always Viewer; with them, the picker.
+  const pickRole = !folderInvite || folderRoles;
+  const managerCapped = pickRole && !byEmail && role === "manager";
   const ttlOptions = byEmail
     ? EMAIL_INVITE_TTL_OPTIONS
-    : inviteTtlOptionsFor(folderInvite ? "reader" : role).filter(
+    : inviteTtlOptionsFor(pickRole ? role : "reader").filter(
         (o) => !folderInvite || o.secs !== NEVER_EXPIRES_SECS,
       );
   const roleOptions = byEmail ? EMAIL_INVITE_ROLES : DRIVE_ROLES;
@@ -462,10 +484,10 @@ function InviteTab({
           </p>
         </div>
       ) : null}
-      {folderInvite ? (
+      {!pickRole ? (
         <p className="mb-5 text-sm text-grey-50 dark:text-grey-dark-600">
           Creates a view-only, single-use link. The recipient opens it in the
-          console to join — desktop does not accept invite links.
+          console to join; the desktop app does not accept invite links.
         </p>
       ) : (
         <div className="mb-5 flex flex-col gap-1.5">
@@ -507,7 +529,7 @@ function InviteTab({
           {byEmail
             ? `Only the person who opens the email can use it, as ${driveRoleLabel(role)}, and only until it expires.`
             : folderInvite
-            ? "Anyone with the link can join this folder as a viewer until the link expires. Share it only with people you trust."
+            ? `Anyone with the link can join this folder as ${folderRoles ? driveRoleLabel(role) : "a viewer"} until the link expires. They see this folder and what is inside it, nothing above it. Share it only with people you trust.`
             : managerCapped
               ? "A manager link can only be used once and expires within 24 hours — managers can invite and remove people, so the link itself is short-lived."
               : neverExpires

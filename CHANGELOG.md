@@ -41,6 +41,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Share one folder as a Viewer, Editor or Manager** (internal test builds only for now). People you share a folder with see it under Shared with me, can open it without seeing anything above it, and can do what their role allows.
 - **Editors and Managers can share a folder by link from a drive someone else owns.** Viewers and frozen drives do not see the option.
 - **Invite people to a shared drive by email.** Owners and managers can send a single-use invitation from the invite dialog, see where each one is on the Links tab, and approve it once the person opens it.
 - **Shared drives show people by name.** Members, invite links, Shared with me, the Added by column and File Details name each person, with their full address and email on hover.

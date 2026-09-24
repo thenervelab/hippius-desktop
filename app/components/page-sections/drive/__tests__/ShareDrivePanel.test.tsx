@@ -5,7 +5,7 @@
 // views and the two-step remove.
 
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
@@ -13,7 +13,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import ShareDriveModal from "../ShareDrivePanel";
-import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  serverCapabilitiesAtom,
+  shareDriveModalAtom,
+  type ShareDriveModalTarget,
+} from "@/app/lib/global-atoms/sharesAtoms";
 
 // Flip the flag per test — the modal reads it at render time.
 // The panel slides inline on large screens and overlays below; jsdom has no
@@ -65,9 +69,13 @@ vi.mock("@/app/lib/wallet-auth-context", () => ({
   useWalletAuth: () => ({ polkadotAddress: "5Me" }),
 }));
 
+const folderRolesFlag = vi.hoisted(() => ({ on: false }));
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
     return flagState.sharedDrivesEnabled;
+  },
+  get FOLDER_ROLES_ENABLED() {
+    return folderRolesFlag.on;
   },
 }));
 
@@ -81,6 +89,8 @@ const changeDriveMemberRoleMock = vi.fn();
 const listDriveInvitesMock = vi.fn();
 const revokeDriveInviteMock = vi.fn();
 const approveEmailInviteMock = vi.fn();
+const changeFolderGrantRoleMock = vi.fn();
+const replaceFolderGrantsMock = vi.fn();
 
 /** A stable member address, so the role assertions read for themselves. */
 const MEMBER = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
@@ -98,6 +108,8 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     listDriveInvites: (...args: unknown[]) => listDriveInvitesMock(...args),
     revokeDriveInvite: (...args: unknown[]) => revokeDriveInviteMock(...args),
     approveEmailInvite: (...args: unknown[]) => approveEmailInviteMock(...args),
+    changeFolderGrantRole: (...args: unknown[]) => changeFolderGrantRoleMock(...args),
+    replaceFolderGrants: (...args: unknown[]) => replaceFolderGrantsMock(...args),
   };
 });
 
@@ -597,5 +609,95 @@ describe("mailed invitations on the links tab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Approve so they can join" }));
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
     expect(listDriveInvitesMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("folder access with roles (folder roles, staging only)", () => {
+  const CAPS = {
+    shares: true,
+    folder_shares: true,
+    folder_share_revoke_by_hash: true,
+    share_owner_wrap: true,
+    folder_grants: true,
+    folder_grant_roles: true,
+  };
+  const HOLDER = "5HolderAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+  function renderWith(target: ShareDriveModalTarget, caps: typeof CAPS | null = CAPS) {
+    const store = createStore();
+    store.set(serverCapabilitiesAtom, caps);
+    store.set(shareDriveModalAtom, target);
+    return render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
+      </QueryClientProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    folderRolesFlag.on = true;
+    listDriveMembersMock.mockResolvedValue([]);
+    listDriveFolderGrantsMock.mockResolvedValue([
+      { memberSs58: HOLDER, pathPrefix: "Clients/ACME", role: "reader", createdAt: "2026-08-20T00:00:00Z", memberName: "Ada" },
+      { memberSs58: HOLDER, pathPrefix: "Clients/Beta", role: "reader", createdAt: "2026-08-21T00:00:00Z" },
+    ]);
+  });
+
+  afterEach(() => {
+    folderRolesFlag.on = false;
+  });
+
+  it("shows each holder once, by name, with their role and folders", async () => {
+    renderWith({ label: "team-docs", folderName: "team-docs" });
+    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    expect(screen.getByText("Viewer")).toBeInTheDocument();
+    expect(screen.getByText(/Clients\/ACME, Clients\/Beta/)).toBeInTheDocument();
+  });
+
+  it("changes a holder's role through the grant route", async () => {
+    changeFolderGrantRoleMock.mockResolvedValue(undefined);
+    renderWith({ label: "team-docs", folderName: "team-docs" });
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByRole("button", { name: "Change role" }));
+    fireEvent.click(screen.getByRole("radio", { name: /Editor/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save role" }));
+    await waitFor(() =>
+      expect(changeFolderGrantRoleMock).toHaveBeenCalledWith("team-docs", HOLDER, "writer", undefined),
+    );
+  });
+
+  it("offers no role change on a server without folder roles", async () => {
+    renderWith({ label: "team-docs", folderName: "team-docs" }, { ...CAPS, folder_grant_roles: false });
+    await screen.findByText("Ada");
+    expect(screen.queryByRole("button", { name: "Change role" })).not.toBeInTheDocument();
+  });
+
+  it("narrows a holder to fewer folders, keeping at least one", async () => {
+    replaceFolderGrantsMock.mockResolvedValue(["Clients/ACME"]);
+    renderWith({ label: "team-docs", folderName: "team-docs" });
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Clients/Beta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
+    await waitFor(() =>
+      expect(replaceFolderGrantsMock).toHaveBeenCalledWith("team-docs", HOLDER, ["Clients/ACME"], undefined),
+    );
+  });
+
+  it("from inside a grant, lists only the folder's holders and never the drive's members", async () => {
+    const grantLabel = "grant:5Owner~abc~436c69656e7473";
+    renderWith({
+      label: grantLabel,
+      folderName: "Clients",
+      ownerSs58: "5Owner",
+      folderHash: "abc",
+      folderScope: "Clients",
+    });
+    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    expect(listDriveMembersMock).not.toHaveBeenCalled();
+    expect(listDriveFolderGrantsMock).toHaveBeenCalledWith(grantLabel, {
+      ownerSs58: "5Owner",
+      folderHash: "abc",
+    });
   });
 });

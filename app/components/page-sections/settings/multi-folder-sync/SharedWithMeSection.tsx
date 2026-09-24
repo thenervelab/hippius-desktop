@@ -42,6 +42,7 @@ import {
   leaveSharedDriveByIdentity,
   listMyDriveMemberships,
   type DriveMembershipInfo,
+  type MyFolderGrantInfo,
 } from "@/app/lib/tauri/sharedDrives";
 import {
   getLastBrowseDirectory,
@@ -50,10 +51,19 @@ import {
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { parseDriveRole } from "@/app/lib/shared-drives/roles";
 import {
+  folderGrantRowView,
   getMembershipRowAction,
   getSharedWithMeView,
   type SharedWithMeData,
 } from "./sharedWithMeState";
+import SharedFolderGrantRow from "./SharedFolderGrantRow";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  MY_FOLDER_GRANTS_QUERY_KEY,
+  useMyFolderGrants,
+} from "@/app/lib/hooks/useSharedDriveRoles";
+import { makeFolderGrantLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
+import type { ShareDriveModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
 
 interface SharedWithMeSectionProps {
   /**
@@ -76,7 +86,17 @@ interface SharedWithMeSectionProps {
    * Open the manage-access panel for a drive this account manages. Offered
    * only on a drive synced here — the manage IPCs resolve a local label.
    */
-  onManageAccess?: (target: { label: string; folderName: string }) => void;
+  onManageAccess?: (target: ShareDriveModalTarget) => void;
+  /**
+   * Open a FOLDER shared with this account (folder roles), rooted at that
+   * folder. Omitted where there is nowhere to browse to.
+   */
+  onOpenFolderGrant?: (grant: {
+    ownerSs58: string;
+    folderHash: string;
+    pathPrefix: string;
+    folderName: string;
+  }) => void;
   /**
    * Fired after `add_shared_drive` succeeds with the allocated local
    * label — the parent refreshes its drive lists (and may navigate to
@@ -89,7 +109,13 @@ export function SharedWithMeSection({
   onDriveAdded,
   onOpenDrive,
   onManageAccess,
+  onOpenFolderGrant,
 }: SharedWithMeSectionProps) {
+  const queryClient = useQueryClient();
+  // Folders shared with this account: only once folder roles are on (the
+  // hook fetches nothing otherwise), each its own row below the drives.
+  const { grants: folderGrants } = useMyFolderGrants();
+  const [leaveGrant, setLeaveGrant] = useState<MyFolderGrantInfo | null>(null);
   const [data, setData] = useState<SharedWithMeData>({ kind: "idle" });
   // The row whose add_shared_drive call is in flight, keyed by
   // `${ownerSs58}:${folderHash}` (the membership's wire identity).
@@ -188,7 +214,22 @@ export function SharedWithMeSection({
     [onDriveAdded, load],
   );
 
-  if (getSharedWithMeView(SHARED_DRIVES_ENABLED, data) === "hidden") return null;
+  /**
+   * Leaving a folder removes this account's access to the drive's granted
+   * folders (the server's member DELETE clears every grant on that drive).
+   */
+  const leaveFolderGrant = async (grant: MyFolderGrantInfo) => {
+    try {
+      await leaveSharedDriveByIdentity(grant.ownerSs58, grant.folderHash);
+      toast.success(`Left "${folderGrantRowView(grant).folderName}"`);
+      await queryClient.invalidateQueries({ queryKey: [MY_FOLDER_GRANTS_QUERY_KEY] });
+    } catch (err) {
+      if (isSharedDrivesUnavailable(err)) return;
+      toast.error(`Could not leave the folder: ${errorMessage(err)}`);
+    }
+  };
+
+  if (getSharedWithMeView(SHARED_DRIVES_ENABLED, data, folderGrants.length) === "hidden") return null;
   const memberships = data.kind === "ready" ? data.memberships : [];
 
   return (
@@ -380,7 +421,62 @@ export function SharedWithMeSection({
             </div>
           );
         })}
+        {folderGrants.map((grant) => {
+          const view = folderGrantRowView(grant);
+          const grantLabel = makeFolderGrantLabel(grant);
+          return (
+            <SharedFolderGrantRow
+              key={view.key}
+              grant={grant}
+              onOpen={
+                onOpenFolderGrant
+                  ? () =>
+                      onOpenFolderGrant({
+                        ownerSs58: grant.ownerSs58,
+                        folderHash: grant.folderHash,
+                        pathPrefix: view.path,
+                        folderName: view.folderName,
+                      })
+                  : undefined
+              }
+              onManageAccess={
+                onManageAccess
+                  ? () =>
+                      onManageAccess({
+                        // The grant label scopes every manage call to the
+                        // folder; the identity names the owner's drive.
+                        label: grantLabel,
+                        folderName: view.folderName,
+                        ownerSs58: grant.ownerSs58,
+                        folderHash: grant.folderHash,
+                        folderScope: view.path,
+                      })
+                  : undefined
+              }
+              onLeave={() => setLeaveGrant(grant)}
+            />
+          );
+        })}
       </div>
+
+      <ConfirmationDialog
+        open={leaveGrant !== null}
+        onClose={() => setLeaveGrant(null)}
+        onBack={() => setLeaveGrant(null)}
+        onConfirm={() => {
+          const target = leaveGrant;
+          setLeaveGrant(null);
+          if (target) void leaveFolderGrant(target);
+        }}
+        heading="Leave shared folder"
+        icon={<Icons.Trash className="size-4 text-white" />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
+        confirmButtonClassName="text-white"
+        button="Leave folder"
+        text={`Leave "${leaveGrant ? folderGrantRowView(leaveGrant).folderName : ""}"?`}
+        helperText="You lose access to it, and to any other folder of the same drive shared with you. The owner can invite you again."
+      />
 
       <ConfirmationDialog
         open={leaveTarget !== null}

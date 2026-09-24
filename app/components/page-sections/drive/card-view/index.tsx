@@ -18,6 +18,7 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   offersShareAction,
+  offersWriteAction,
   FOLDER_SHARE_DISABLED_TOOLTIP,
   shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
@@ -385,9 +386,11 @@ const CardView: FC<CardViewProps> = ({
                                 },
                               ]
                             : []),
-                          // Rename — same local-presence gating as the
-                          // table-view 3-dots menu (shared `canRenameFile`).
-                          {
+                          // Rename: same local-presence gating as the
+                          // table-view 3-dots menu (shared `canRenameFile`),
+                          // and absent where the role cannot write.
+                          ...(offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels)
+                            ? [{
                             icon: <Pencil className="size-4" />,
                             itemTitle: "Rename",
                             disabled: !canRenameFile(file),
@@ -404,7 +407,8 @@ const CardView: FC<CardViewProps> = ({
                                 setRenameModalFile(file);
                               }
                             },
-                          },
+                          }]
+                            : []),
                           // Delete: disabled for unpinned files, hidden for
                           // cloud-only rows — the delete pipeline removes the
                           // LOCAL copy and lets sync propagate, which a

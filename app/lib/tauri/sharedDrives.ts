@@ -455,6 +455,11 @@ export async function emailDriveInvite(
     role?: Exclude<DriveRole, "manager">;
     expiresInSecs?: number;
     target?: DriveTarget;
+    /**
+     * A folder to invite into (folder roles, assumed until HCFS publishes
+     * them). Rust refuses it on a server without `folder_grant_roles`.
+     */
+    pathPrefix?: string;
   },
 ): Promise<{ inviteId: string }> {
   return invoke<{ inviteId: string }>("email_drive_invite", {
@@ -462,6 +467,7 @@ export async function emailDriveInvite(
     email,
     role: opts?.role ?? null,
     expiresInSecs: opts?.expiresInSecs ?? null,
+    pathPrefix: opts?.pathPrefix ?? null,
     ...targetArgs(opts?.target),
   });
 }
@@ -500,4 +506,47 @@ export async function approveEmailInvite(
 /** The server has no mail service: hide "Invite by email", never toast it. */
 export function isEmailInvitesUnavailable(error: unknown): boolean {
   return isNotReady(error, "EMAIL_INVITES_UNAVAILABLE");
+}
+
+/** One folder shared WITH this account (a folder grant it holds). */
+export interface MyFolderGrantInfo {
+  ownerSs58: string;
+  ownerName?: string;
+  folderHash: string;
+  /** The drive the folder belongs to, as its owner named it. */
+  displayLabel: string;
+  /** The granted folder, drive-relative. */
+  pathPrefix: string;
+  /** `reader` unless the server speaks folder roles. */
+  role: string;
+  createdAt: string;
+  frozen?: boolean;
+  frozenUntil?: string;
+}
+
+/**
+ * The folders shared WITH this account, apart from whole-drive memberships so
+ * a grant is never mistaken for the drive. Empty on a server without folder
+ * grants.
+ */
+export async function listMyFolderGrants(): Promise<MyFolderGrantInfo[]> {
+  return invoke<MyFolderGrantInfo[]>("list_my_folder_grants");
+}
+
+/**
+ * Change a folder grant holder's role (folder roles, assumed until HCFS
+ * publishes them). Refusals come back as `Validation`, worded for the user.
+ */
+export async function changeFolderGrantRole(
+  label: string,
+  memberSs58: string,
+  role: DriveRole,
+  target?: DriveTarget,
+): Promise<void> {
+  await invoke<void>("change_folder_grant_role", {
+    label,
+    memberSs58,
+    role,
+    ...targetArgs(target),
+  });
 }

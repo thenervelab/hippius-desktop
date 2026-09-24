@@ -61,6 +61,22 @@ export function offersShareAction(
 }
 
 /**
+ * Whether a row may offer a WRITE action (rename). Always on this account's
+ * own drives; on somebody else's only where its role can write (Editor or
+ * Manager) and the drive is not frozen. Hidden, not disabled, where it
+ * cannot: a Viewer's answer does not change by waiting. The server refuses
+ * the write anyway; this is the affordance.
+ */
+export function offersWriteAction(
+  file: Pick<FormattedUserFile, "label">,
+  memberDriveLabels: ReadonlySet<string> | undefined,
+  writableMemberDriveLabels: ReadonlySet<string> | undefined,
+): boolean {
+  if (!isMemberDriveLabel(file.label, memberDriveLabels)) return true;
+  return Boolean(file.label && writableMemberDriveLabels?.has(file.label));
+}
+
+/**
  * Whether a drive label names a drive shared WITH this account rather than one
  * it owns.
  *

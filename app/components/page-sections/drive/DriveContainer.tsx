@@ -72,11 +72,13 @@ import {
   useMemberDriveLabels,
   useSharedDriveMembership,
   useSharedDriveMembershipByIdentity,
+  useFolderGrantForLabel,
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
 import {
   makeSharedDriveLabel,
+  makeFolderGrantLabel,
   parseSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
 import { isMemberDriveLabel } from "@/app/lib/utils/folderShareGating";
@@ -1489,6 +1491,30 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     [],
   );
 
+  /**
+   * Open a FOLDER somebody shared with this account (folder roles), rooted at
+   * that folder: its `grant:` label carries the folder, and Rust puts it in
+   * front of every path the view sends, so nothing above it is reachable.
+   */
+  const handleOpenFolderGrant = useCallback(
+    (grant: {
+      ownerSs58: string;
+      folderHash: string;
+      pathPrefix: string;
+      folderName: string;
+    }) => {
+      const label = makeFolderGrantLabel(grant);
+      setSharedDriveNames((prev) =>
+        prev.get(label) === grant.folderName
+          ? prev
+          : new Map(prev).set(label, grant.folderName),
+      );
+      setActiveRemoteLabel(label);
+      setIsOnLocalView(false);
+    },
+    [],
+  );
+
   // Clicking "Drive" in the sidebar returns to the folder list from
   // wherever the user is — a folder, a nested subfolder, a remote drive.
   //
@@ -1594,23 +1620,34 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const syncedMembership = useSharedDriveMembership(
     browsedSharedDrive ? null : openDriveLabel,
   );
+  // A granted FOLDER (folder roles) has no membership at all: its role and
+  // frozen state come from the grant this account holds.
+  const openFolderGrant = useFolderGrantForLabel(openDriveLabel);
   const openDriveFrozen = Boolean(
-    browsedSharedDrive
-      ? browsedMembership.membership?.frozen
-      : syncedMembership.membership?.frozen,
+    openFolderGrant.isGrant
+      ? openFolderGrant.grant?.frozen
+      : browsedSharedDrive
+        ? browsedMembership.membership?.frozen
+        : syncedMembership.membership?.frozen,
   );
   // The role this account holds on the open drive, for the refusal wording.
-  const openDriveRole = browsedSharedDrive
-    ? browsedMembership.membership
-      ? parseDriveRole(browsedMembership.membership.role)
+  const openDriveRole = openFolderGrant.isGrant
+    ? openFolderGrant.grant
+      ? parseDriveRole(openFolderGrant.grant.role)
       : null
-    : syncedDriveRole;
+    : browsedSharedDrive
+      ? browsedMembership.membership
+        ? parseDriveRole(browsedMembership.membership.role)
+        : null
+      : syncedDriveRole;
   const openDriveWriteRefusal = driveWriteRefusal(openDriveRole, {
     frozen: openDriveFrozen,
   });
 
   const openDriveCanWrite = openDriveFrozen
     ? false
+    : openFolderGrant.isGrant
+      ? canWriteToDrive({ isOwner: false, role: openDriveRole ?? undefined })
     : browsedSharedDrive
       ? canWriteToDrive({
           isOwner: false,
@@ -1979,6 +2016,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -1998,6 +2036,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -2013,6 +2052,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );

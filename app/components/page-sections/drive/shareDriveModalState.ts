@@ -195,3 +195,44 @@ export function formatJoinedDate(rfc3339: string): string | null {
   const month = d.toLocaleString("en-US", { month: "short" });
   return `${month} ${d.getDate()}, ${d.getFullYear()}`;
 }
+
+/** One person in the Folder access list, with every folder they hold. */
+export interface FolderGrantHolder {
+  memberSs58: string;
+  memberName?: string;
+  memberEmail?: string;
+  /** Their role; `reader` unless the server speaks folder roles. */
+  role: string;
+  folders: string[];
+  createdAt: string;
+}
+
+/**
+ * Group folder grants by holder, so one person with two folders is one row
+ * and one remove target. Keyed by ss58, the identity; the name is display
+ * only. Folders sorted for a stable row.
+ */
+export function groupFolderGrantsByHolder(
+  grants: readonly DriveFolderGrantInfo[],
+): FolderGrantHolder[] {
+  const byHolder = new Map<string, FolderGrantHolder>();
+  for (const g of grants) {
+    const existing = byHolder.get(g.memberSs58);
+    if (existing) {
+      if (!existing.folders.includes(g.pathPrefix)) existing.folders.push(g.pathPrefix);
+      existing.memberName ??= g.memberName;
+      existing.memberEmail ??= g.memberEmail;
+      if (!existing.createdAt || g.createdAt < existing.createdAt) existing.createdAt = g.createdAt;
+    } else {
+      byHolder.set(g.memberSs58, {
+        memberSs58: g.memberSs58,
+        memberName: g.memberName,
+        memberEmail: g.memberEmail,
+        role: g.role,
+        folders: [g.pathPrefix],
+        createdAt: g.createdAt,
+      });
+    }
+  }
+  return [...byHolder.values()].map((h) => ({ ...h, folders: [...h.folders].sort() }));
+}

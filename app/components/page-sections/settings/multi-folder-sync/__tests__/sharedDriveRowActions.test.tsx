@@ -2,7 +2,10 @@
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
 
-import { buildSharedDriveActions } from "../sharedDriveRowActions";
+import {
+  buildFolderGrantActions,
+  buildSharedDriveActions,
+} from "../sharedDriveRowActions";
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
 
 const MEMBERSHIP: DriveMembershipInfo = {
@@ -80,5 +83,15 @@ describe("a shared-drive row's actions", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(onSyncLocally).toHaveBeenCalledTimes(1);
     expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a shared folder row", () => {
+  it("offers Open and Leave, and never syncing to this computer", () => {
+    expect(titles(buildFolderGrantActions({ onOpen: vi.fn(), onLeave: vi.fn() }))).toEqual([
+      "Open",
+      "Leave folder",
+    ]);
+    expect(titles(buildFolderGrantActions({ onLeave: vi.fn() }))).toEqual(["Leave folder"]);
   });
 });
