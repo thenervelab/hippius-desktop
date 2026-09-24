@@ -32,18 +32,28 @@ Decisions (2026-09-23):
 
 - Fragment `#k=` = **derived file key**, never drive entropy.
 - Response must echo `path_prefix` or refuse (old server = whole-drive mint).
-- Always reader / single-use / ≤30 days.
+- Always single-use / at most 30 days; Viewer, or Editor where the server
+  allows writer folder grants.
+- A folder is only ever minted through `create_folder_invite`, which requires
+  the path; the drive command takes no folder.
 
 ## Folder roles (behind `FOLDER_ROLES_ENABLED`, staging only)
 
-Folder grants open to the full role set (Viewer, Editor, Manager). The server
-API is not published; the desktop builds against an assumed contract kept in
-ONE place, the module doc of `src-tauri/src/shared_drives/folder_roles.rs`,
-and every surface is gated on the lane flag AND `capabilities.folder_grant_roles`.
+Follows HCFS #475 (not merged yet), kept in ONE place: the module doc of
+`src-tauri/src/shared_drives/folder_roles.rs`. Folder roles are Viewer and
+Editor only; Manager is not a folder role. Inside the flag nothing waits on a
+capability: the UI is always there and the server's refusals read as "coming
+soon" (folder invites off, Editor off, email off), so each piece lights up on
+its own. `folder_grant_writes` is a hint only.
 
-- Owner / manager: role picker and email option on Share folder, Folder
-  access list with names, role, change role, change folders, remove.
+- Owner / drive Manager: Viewer / Editor picker and the email option on Share
+  folder; Folder access list with names and role, Change folders (keeps the
+  role) and Remove. No role change for a holder: remove and invite again.
 - Holder: granted folders in Shared with me as their own rows, browsed
   remotely rooted at the grant (`grant:` browse label, `rooted_path` in Rust),
-  role-based actions, Leave. Joining stays in the console.
+  Open and Leave. An Editor may upload, add folders, rename and share by link
+  inside the folder; the desktop has no remote delete. Joining stays in the
+  console.
 - Out of scope: syncing a granted folder to disk.
+- After #475 merges, bump the hcfs pin: it changes `hcfs-client`'s sync flow
+  to materialize files at the server `relative_path`.

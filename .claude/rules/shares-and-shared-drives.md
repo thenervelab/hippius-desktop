@@ -146,23 +146,40 @@ Deliberate, documented where they bite: no folder-entity materialization on memb
 
 **Caution**: `recent_uploads.rs`'s `hash_to_drive` map still keys drives by the label-derived hash — safe ONLY because member drives are excluded from the search surfaces in v1. If member drives ever reach search/recent-uploads, that map must move to the identity columns or member hits will mis-join.
 
-### Folder roles (assumed until HCFS publishes them)
+### Folder roles (HCFS #475, not merged yet)
 
-`shared_drives/folder_roles.rs` holds the WHOLE assumed contract in its module doc
-(capability `folder_grant_roles`, role-bearing folder invites, email folder invites, the
-grant role PATCH, holders writing like members, the derived-key assumption). Keep it
-there: the day the real API lands is one reconcile. Without the capability every path
-behaves as before (reader, one use, at most 30 days). Listings are normalised before
-parsing (`default_missing_grant_roles`) so a grant without `role` reads as a Viewer
-instead of failing the whole membership listing.
+`shared_drives/folder_roles.rs` holds the WHOLE contract in its module doc (capabilities
+`folder_grants` / `folder_grant_writes`, Viewer or Editor folder invites, the exact refusal
+messages, no holder role change, what a writer holder may do). Keep it there: the day #475
+merges is one reconcile, plus an hcfs pin bump (it moves `sync_flow` to the server
+`relative_path`).
+
+**A folder share can never become a whole-drive invite.** A folder mints only through
+`create_folder_invite` (path REQUIRED, planned by `plan_folder_invite` before any request;
+the drive command takes no folder). No folder request, link or mail, is sent to a server
+whose capabilities lack the `folder_grants` KEY (`folder_grants_known`): such a server
+ignores `path_prefix` and would mint or mail a whole-drive invite. A mint that does not
+echo the folder is revoked and refused. FE: the dialog treats `pathPrefix`'s PRESENCE as
+"folder" and never calls the drive command for one; the manage panel's invite is always
+whole-drive. Pinned by `a_folder_invite_can_never_go_out_as_a_drive_invite` and
+`tests/shared_drive_folder_roles_mock.rs`.
+
+**Refusals are "coming soon", mapped in Rust.** The server words them as `400 bad_request`
+plus a message, so `classify_folder_invite_refusal` / `classify_folder_email_refusal`
+match the message EXACTLY and return `NotReady(FolderInvitesUnavailable |
+FolderEditorInvitesUnavailable | FolderEmailInvitesUnavailable)`; `503` mail-off is
+`EmailInvitesUnavailable`. The FE dispatches on the subkind only.
+
+Manager is not a folder role: `grant_role` reads it (and anything unknown) as `reader`,
+so a holder is never manageable and there is no folder-Manager panel (`in_scope` in Rust is
+dormant). Listings are normalised before parsing (`default_missing_grant_roles`).
 
 A granted folder is browsed under `grant:<owner>~<hash>~<hex(path)>` (mirrored by
 `sharedDriveLabel.ts::makeFolderGrantLabel`). It resolves to the owner's identity like a
 `shared:` label, and `identity::rooted_path(label, rel)` puts the grant in front of every
 view-relative path: browse, upload, new folder, rename, share by link, folder invites.
 That join lives in ONE function so no IPC addresses a same-named folder at the drive
-root. A folder Manager's panel is scoped in Rust (`in_scope`) to invites and holders at
-or below the grant. FE gate: `FOLDER_ROLES_ENABLED` (staging only) AND the capability.
+root. FE gate: `FOLDER_ROLES_ENABLED` (staging only) alone.
 
 ## Folder share via link (live browsable)
 
