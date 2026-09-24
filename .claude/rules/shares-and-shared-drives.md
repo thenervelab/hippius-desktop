@@ -159,10 +159,21 @@ merges is one reconcile, plus an hcfs pin bump (it moves `sync_flow` to the serv
 the drive command takes no folder). No folder request, link or mail, is sent to a server
 whose capabilities lack the `folder_grants` KEY (`folder_grants_known`): such a server
 ignores `path_prefix` and would mint or mail a whole-drive invite. A mint that does not
-echo the folder is revoked and refused. FE: the dialog treats `pathPrefix`'s PRESENCE as
+echo the folder is revoked and refused. FE: the Share dialog treats `pathPrefix`'s PRESENCE as
 "folder" and never calls the drive command for one; the manage panel's invite is always
 whole-drive. Pinned by `a_folder_invite_can_never_go_out_as_a_drive_invite` and
 `tests/shared_drive_folder_roles_mock.rs`.
+
+**The Share dialog keeps the two invite kinds apart** (`drive/share-dialog/`, opened by
+setting `shareDialogAtom`). "Invite people" calls only `email_drive_invite` (the address
+checked as typed by `check_invite_email`, the same `validate_invite_email` rule the send
+applies; expiry left to Rust's default); "Share a link" calls only `create_drive_invite` /
+`create_folder_invite` and describes the result from the `role` / `expiresInSecs` /
+`maxUses` the mint returns, which are what was SENT after Rust's defaults and caps. One
+mixed form let a typed address silently turn a link into an email invite. Refusals route
+on the subkind to inline notices (`shareDialogState.ts::noticeForError`), never a toast.
+Each success bumps `driveInvitesVersionAtom`, which reloads an open Links tab. Pinned by
+`share-dialog/__tests__/ShareDialog.test.tsx`.
 
 **Refusals are "coming soon", mapped in Rust.** The server words them as `400 bad_request`
 plus a message, so `classify_folder_invite_refusal` / `classify_folder_email_refusal`

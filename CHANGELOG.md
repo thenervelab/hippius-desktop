@@ -17,6 +17,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Sharing a drive or folder happens in one Share dialog**, with inviting
+  someone by email and creating a link as two separate steps, so typing an
+  address never turns a link into an invitation by mistake. Problems are
+  explained right where they happen, and the dialog stays open so you can
+  invite several people in a row.
 - **Storage and plan banners on Overview use a button on the right**
   (Upgrade, See storage plans, Top up). Drive keeps an underlined text
   link under the banner copy so it does not duplicate the plan-chip
@@ -43,7 +48,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **Share one folder as a Viewer or Editor** (internal test builds only for now), by a single-use link or by email. People you share a folder with see it under Shared with me, can open it without seeing anything above it, and can do what their role allows. Whatever the server does not offer yet (single-folder sharing, Editor on a folder, email invites) says "coming soon" instead of disappearing.
 - **Editors and Managers can share a folder by link from a drive someone else owns.** Viewers and frozen drives do not see the option.
-- **Invite people to a shared drive by email.** Owners and managers can send a single-use invitation from the invite dialog, see where each one is on the Links tab, and approve it once the person opens it.
+- **Invite people to a shared drive by email.** Owners and managers can send a single-use invitation from the Share dialog, see where each one is on the Links tab, and approve it once the person opens it.
 - **Shared drives show people by name.** Members, invite links, Shared with me, the Added by column and File Details name each person, with their full address and email on hover.
 - **Drive remembers how many rows you chose.** Pick 50 per page and it stays 50
   — in other folders, after visiting another page, and next time you open the
