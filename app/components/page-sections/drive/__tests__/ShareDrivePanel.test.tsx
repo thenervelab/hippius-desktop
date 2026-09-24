@@ -14,6 +14,7 @@ import type { ReactNode } from "react";
 
 import ShareDriveModal from "../ShareDrivePanel";
 import {
+  createDriveInviteDialogAtom,
   serverCapabilitiesAtom,
   shareDriveModalAtom,
   type ShareDriveModalTarget,
@@ -89,7 +90,6 @@ const changeDriveMemberRoleMock = vi.fn();
 const listDriveInvitesMock = vi.fn();
 const revokeDriveInviteMock = vi.fn();
 const approveEmailInviteMock = vi.fn();
-const changeFolderGrantRoleMock = vi.fn();
 const replaceFolderGrantsMock = vi.fn();
 
 /** A stable member address, so the role assertions read for themselves. */
@@ -108,7 +108,6 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     listDriveInvites: (...args: unknown[]) => listDriveInvitesMock(...args),
     revokeDriveInvite: (...args: unknown[]) => revokeDriveInviteMock(...args),
     approveEmailInvite: (...args: unknown[]) => approveEmailInviteMock(...args),
-    changeFolderGrantRole: (...args: unknown[]) => changeFolderGrantRoleMock(...args),
     replaceFolderGrants: (...args: unknown[]) => replaceFolderGrantsMock(...args),
   };
 });
@@ -612,14 +611,14 @@ describe("mailed invitations on the links tab", () => {
   });
 });
 
-describe("folder access with roles (folder roles, staging only)", () => {
+describe("folder access (HCFS #475: no role change for a holder)", () => {
   const CAPS = {
     shares: true,
     folder_shares: true,
     folder_share_revoke_by_hash: true,
     share_owner_wrap: true,
     folder_grants: true,
-    folder_grant_roles: true,
+    folder_grant_writes: true,
   };
   const HOLDER = "5HolderAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -654,22 +653,16 @@ describe("folder access with roles (folder roles, staging only)", () => {
     expect(screen.getByText(/Clients\/ACME, Clients\/Beta/)).toBeInTheDocument();
   });
 
-  it("changes a holder's role through the grant route", async () => {
-    changeFolderGrantRoleMock.mockResolvedValue(undefined);
+  it("offers no role change for a holder, and says how to change access", async () => {
     renderWith({ label: "team-docs", folderName: "team-docs" });
     await screen.findByText("Ada");
-    fireEvent.click(screen.getByRole("button", { name: "Change role" }));
-    fireEvent.click(screen.getByRole("radio", { name: /Editor/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Save role" }));
-    await waitFor(() =>
-      expect(changeFolderGrantRoleMock).toHaveBeenCalledWith("team-docs", HOLDER, "writer", undefined),
-    );
-  });
-
-  it("offers no role change on a server without folder roles", async () => {
-    renderWith({ label: "team-docs", folderName: "team-docs" }, { ...CAPS, folder_grant_roles: false });
-    await screen.findByText("Ada");
     expect(screen.queryByRole("button", { name: "Change role" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("To change their access, remove them and invite them again."),
+    ).toBeInTheDocument();
+    // Change folders (keeps the role) and Remove stay.
+    expect(screen.getByRole("button", { name: "Change folders" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove access" })).toBeInTheDocument();
   });
 
   it("narrows a holder to fewer folders, keeping at least one", async () => {
@@ -684,20 +677,21 @@ describe("folder access with roles (folder roles, staging only)", () => {
     );
   });
 
-  it("from inside a grant, lists only the folder's holders and never the drive's members", async () => {
-    const grantLabel = "grant:5Owner~abc~436c69656e7473";
-    renderWith({
-      label: grantLabel,
-      folderName: "Clients",
-      ownerSs58: "5Owner",
-      folderHash: "abc",
-      folderScope: "Clients",
-    });
-    expect(await screen.findByText("Ada")).toBeInTheDocument();
-    expect(listDriveMembersMock).not.toHaveBeenCalled();
-    expect(listDriveFolderGrantsMock).toHaveBeenCalledWith(grantLabel, {
-      ownerSs58: "5Owner",
-      folderHash: "abc",
-    });
+  // The panel manages the WHOLE drive: its invite is a whole-drive invite
+  // and never carries a folder, so nothing from here can be mistaken for one.
+  it("opens a whole-drive invite, never a folder one", async () => {
+    const store = createStore();
+    store.set(serverCapabilitiesAtom, CAPS);
+    store.set(shareDriveModalAtom, { label: "team-docs", folderName: "team-docs" });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByRole("button", { name: "Invite more people" }));
+    const opened = store.get(createDriveInviteDialogAtom);
+    expect(opened).toEqual({ label: "team-docs", folderName: "team-docs", ownerSs58: undefined, folderHash: undefined });
+    expect(opened && "pathPrefix" in opened).toBe(false);
   });
 });

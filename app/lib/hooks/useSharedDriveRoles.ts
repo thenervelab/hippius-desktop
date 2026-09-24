@@ -11,7 +11,9 @@ import {
   writableMemberDriveLabels,
 } from "@/app/lib/shared-drives/driveRowSharing";
 import { parseFolderGrantLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
-import { folderRolesEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { FOLDER_ROLES_ENABLED } from "@/app/lib/featureFlags";
+import { folderShareInviteOffered } from "@/app/lib/utils/folderGrantGating";
 import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import {
   isSharedDrivesUnavailable,
@@ -171,31 +173,29 @@ export function useWritableMemberDriveLabels(): ReadonlySet<string> {
 }
 
 /**
- * Labels of what this account MANAGES in somebody else's drives (Manager,
- * not frozen), whole drives and granted folders alike.
+ * Labels of the drives this account MANAGES in somebody else's name
+ * (Manager, not frozen). Whole drives only: a folder is never managed by
+ * its holder, since Manager is not a folder role (HCFS #475).
  */
 export function useManageableMemberDriveLabels(): ReadonlySet<string> {
   const memberships = useSharedDriveMemberships();
-  const { grants } = useMyFolderGrants();
-  return useMemo(
-    () => manageableMemberDriveLabels(memberships, grants),
-    [memberships, grants],
-  );
+  return useMemo(() => manageableMemberDriveLabels(memberships), [memberships]);
 }
 
 export const MY_FOLDER_GRANTS_QUERY_KEY = "my-folder-grants";
 const EMPTY_GRANTS: readonly MyFolderGrantInfo[] = [];
 
 /**
- * The folders shared WITH this account (folder grants), once folder roles are
- * on. Off, or on a server without them, this is empty and nothing is fetched,
- * so the whole-drive surfaces behave exactly as before.
+ * The folders shared WITH this account (folder grants), behind the folder
+ * roles flag. Off, this is empty and nothing is fetched; on a server without
+ * folder grants the listing is simply empty.
  */
 export function useMyFolderGrants(): {
   grants: readonly MyFolderGrantInfo[];
   isSettled: boolean;
 } {
-  const enabled = useAtomValue(folderRolesEnabledAtom);
+  // The flag alone: inside it nothing waits on a capability.
+  const enabled = FOLDER_ROLES_ENABLED;
   const { data, isFetched } = useQuery({
     queryKey: [MY_FOLDER_GRANTS_QUERY_KEY],
     queryFn: async () => {
@@ -236,4 +236,15 @@ export function useFolderGrantForLabel(label: string | null | undefined): {
     [grants, parsed],
   );
   return { grant, isGrant: parsed !== null, isSettled };
+}
+
+/**
+ * Whether a folder row may offer "Share folder" as a live action: always
+ * inside the folder-roles flag (the server's refusal reads "coming soon"),
+ * otherwise only once the server advertises folder grants (the older
+ * read-only folder sharing). See `folderShareInviteOffered`.
+ */
+export function useFolderShareInviteOffered(): boolean {
+  const caps = useAtomValue(serverCapabilitiesAtom);
+  return folderShareInviteOffered(FOLDER_ROLES_ENABLED, caps);
 }

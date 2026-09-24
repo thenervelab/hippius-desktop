@@ -179,15 +179,15 @@ export interface FolderGrantRow {
 }
 
 /**
- * Labels (local, `shared:` and `grant:`) of what this account MANAGES in
- * somebody else's drives: a Manager role, not frozen. Drives the folder
- * "Share folder" item and "Manage access" for a folder Manager.
+ * Labels (local and `shared:`) of the drives this account MANAGES in
+ * somebody else's name: a Manager role, not frozen. Drives the folder "Share
+ * folder" item there. Never a `grant:` label: Manager is not a folder role
+ * (HCFS #475), so a folder holder never manages the folder.
  */
 export function manageableMemberDriveLabels(
   memberships: Parameters<typeof writableMemberDriveLabels>[0],
-  folderGrants: readonly FolderGrantRow[] = [],
 ): ReadonlySet<string> {
-  return memberLabelsWhere(memberships, folderGrants, (role) => role === "manager");
+  return memberLabelsWhere(memberships, [], (role) => role === "manager");
 }
 
 function memberLabelsWhere(

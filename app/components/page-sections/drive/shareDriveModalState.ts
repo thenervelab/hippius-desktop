@@ -29,7 +29,30 @@ export type InviteState =
   // The mint plan gate: the owner's plan does not include shared drives. A
   // terminal upgrade state, not an error — its own copy and CTA, no retry.
   | { kind: "notEntitled" }
+  // The server has folder invites off (or predates them): sharing a single
+  // folder is coming soon. Terminal, never a fallback to a drive invite.
+  | { kind: "folderComingSoon" }
   | { kind: "error"; message: string };
+
+/**
+ * A "coming soon" shown inline beside the choice it is about, keyed by the
+ * structured refusal Rust returned (never by the message text).
+ */
+export type ComingSoonNotice = "email" | "folderEmail" | "folderEditor";
+
+/**
+ * The words for each "coming soon". The same sentences are the Rust
+ * `NotReadyKind` Display texts (`src-tauri/src/error.rs`); a test pins the
+ * two together so neither side can reword alone.
+ */
+export const COMING_SOON_COPY: Record<ComingSoonNotice | "folder", string> = {
+  email: "Email invites are coming soon. For now, copy the invite link and send it yourself.",
+  folderEmail:
+    "Email invites for a single folder are coming soon. For now, copy the invite link and send it yourself.",
+  folderEditor:
+    "Editor access for a single folder is coming soon. You can share it as view only for now.",
+  folder: "Sharing a single folder is coming soon.",
+};
 
 /**
  * Members-tab data lifecycle. `idle` means the tab has never been opened
@@ -166,6 +189,30 @@ export const EMAIL_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> = 
   "writer",
 ];
 
+/**
+ * Roles a FOLDER may be shared with: Viewer and Editor. Manager is not a
+ * folder role (HCFS #475). Mirrors `folder_roles::FOLDER_ROLES` in Rust.
+ */
+export const FOLDER_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> = [
+  "reader",
+  "writer",
+];
+
+/**
+ * Lifetimes a folder invite may carry: at most 30 days (the server's cap),
+ * so "Never expires" is not offered. Always single use, so there is no uses
+ * choice at all.
+ */
+export const FOLDER_INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> =
+  INVITE_TTL_OPTIONS.filter((o) => o.secs <= 30 * 24 * 60 * 60);
+
+/** Keep a picked lifetime inside what a folder invite allows. */
+export function clampFolderInviteTtl(secs: number): number {
+  return FOLDER_INVITE_TTL_OPTIONS.some((o) => o.secs === secs)
+    ? secs
+    : DEFAULT_INVITE_TTL_SECS;
+}
+
 /** Keep a picked lifetime inside what an emailed invitation allows. */
 export function clampEmailInviteTtl(secs: number): number {
   return EMAIL_INVITE_TTL_OPTIONS.some((o) => o.secs === secs)
@@ -201,7 +248,7 @@ export interface FolderGrantHolder {
   memberSs58: string;
   memberName?: string;
   memberEmail?: string;
-  /** Their role; `reader` unless the server speaks folder roles. */
+  /** Their role: `reader` (Viewer) or `writer` (Editor). */
   role: string;
   folders: string[];
   createdAt: string;

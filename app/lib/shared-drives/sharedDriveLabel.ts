@@ -99,7 +99,7 @@ export function sharedDriveTargetArgs(label: string | null | undefined): {
  * Marks a FOLDER GRANT browse label: one folder of somebody else's drive,
  * browsed rooted at that folder so nothing above it is reachable. Mirrors
  * `GRANT_BROWSE_PREFIX` in Rust's `sync/drive/identity.rs` (a Rust test reads
- * this constant). Folder roles are assumed until HCFS publishes them.
+ * this constant). Folder roles follow HCFS #475 (not merged yet).
  */
 const FOLDER_GRANT_LABEL_PREFIX = "grant:";
 

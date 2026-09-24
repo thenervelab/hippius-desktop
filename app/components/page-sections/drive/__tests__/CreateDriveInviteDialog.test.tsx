@@ -62,6 +62,7 @@ vi.mock("@/app/lib/featureFlags", () => ({
 // The modal's only side effects are the sharedDrives wrappers; mocking the
 // wrapper module (not raw invoke) keeps the tests on the modal's contract.
 const createDriveInviteMock = vi.fn();
+const createFolderInviteMock = vi.fn();
 const listDriveMembersMock = vi.fn();
 const removeDriveMemberMock = vi.fn();
 const changeDriveMemberRoleMock = vi.fn();
@@ -76,6 +77,7 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   return {
     ...original,
     createDriveInvite: (...args: unknown[]) => createDriveInviteMock(...args),
+    createFolderInvite: (...args: unknown[]) => createFolderInviteMock(...args),
     listDriveMembers: (...args: unknown[]) => listDriveMembersMock(...args),
     removeDriveMember: (...args: unknown[]) => removeDriveMemberMock(...args),
     changeDriveMemberRole: (...args: unknown[]) =>
@@ -227,7 +229,7 @@ describe("create invite dialog", () => {
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
 
-    await screen.findByText(/Shared drives need Plus, Max, or Scale/);
+    await screen.findByText("Sharing needs a Plus, Max or Scale plan");
     // An upgrade state, not an error: no generic error copy, no retry.
     expect(screen.queryByText("Couldn't create invite link")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
@@ -351,7 +353,7 @@ describe("a plan that does not include shared drives", () => {
     planState.included = false;
     renderModal();
 
-    await screen.findByText(/Shared drives need Plus, Max, or Scale/);
+    await screen.findByText("Sharing needs a Plus, Max or Scale plan");
     expect(createDriveInviteMock).not.toHaveBeenCalled();
     // No form to fill in: the answer is the same whatever they pick.
     expect(screen.queryByRole("button", { name: "Create invite link" })).not.toBeInTheDocument();
@@ -360,7 +362,7 @@ describe("a plan that does not include shared drives", () => {
   it("names the plans that do include it", async () => {
     planState.included = false;
     renderModal();
-    const prompt = await screen.findByText(/Shared drives need/);
+    const prompt = await screen.findByText(/Sharing needs/);
     expect(prompt.textContent).toMatch(/Plus/);
     expect(prompt.textContent).toMatch(/Max/);
     expect(prompt.textContent).toMatch(/Scale/);
@@ -388,14 +390,24 @@ describe("invite by email", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Invite by email" }));
   }
 
-  it("is not offered until the server says it can send mail", async () => {
+  // Never hidden on the mail probe: the option is always there, and a probe
+  // that already knows there is no mail says so inline, before anyone types.
+  it("is always offered, and says email is coming soon when the probe knows", async () => {
     renderModal();
     await waitFor(() => expect(emailInvitesAvailableMock).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: "Invite by email" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create invite link" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Invite by email" }));
+    expect(
+      await screen.findByText(
+        "Email invites are coming soon. For now, copy the invite link and send it yourself.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "ada@example.com" },
+    });
+    expect(screen.getByRole("button", { name: "Send invitation" })).toBeDisabled();
   });
 
-  it("is never offered for a folder invite", async () => {
+  it("is not offered for a folder invite without the folder-roles flag", async () => {
     emailInvitesAvailableMock.mockResolvedValue(true);
     const store = createStore();
     store.set(createDriveInviteDialogAtom, {
@@ -440,20 +452,43 @@ describe("invite by email", () => {
     expect(screen.queryByText("Never expires")).not.toBeInTheDocument();
   });
 
-  it("hides the option when the server turns out to have no mail service", async () => {
+  it("says email is coming soon, inline, when the server has no mail service", async () => {
     emailDriveInviteMock.mockRejectedValue({
       kind: "NotReady",
       subkind: "EMAIL_INVITES_UNAVAILABLE",
-      message: "Inviting by email is not available yet.",
+      message: "Email invites are coming soon. For now, copy the invite link and send it yourself.",
     });
     await openEmailMode();
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
       target: { value: "ada@example.com" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send invitation" }));
-    await waitFor(() => expect(toastInfoMock).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: "Invite by email" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Email invites are coming soon. For now, copy the invite link and send it yourself.",
+      ),
+    ).toBeInTheDocument();
+    // The option stays, and nothing reads as an error.
+    expect(screen.getByRole("button", { name: "Invite by email" })).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't send the invitation")).not.toBeInTheDocument();
+    expect(toastInfoMock).not.toHaveBeenCalled();
+    // Copy link still works from here.
+    fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
     expect(screen.getByRole("button", { name: "Create invite link" })).toBeInTheDocument();
+  });
+
+  it("keeps the send failures Rust worded (502)", async () => {
+    emailDriveInviteMock.mockRejectedValue({
+      kind: "Validation",
+      message: "The invitation email could not be sent, so the invite was cancelled. Try again.",
+    });
+    await openEmailMode();
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "ada@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send invitation" }));
+    expect(await screen.findByText(/could not be sent/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 
   it("shows the rate limit Rust worded, with the wait", async () => {
@@ -477,19 +512,25 @@ describe("invite by email", () => {
   });
 });
 
-describe("folder invites with roles (folder roles, staging only)", () => {
+describe("folder invites (HCFS #475)", () => {
   const CAPS = {
     shares: true,
     folder_shares: true,
     folder_share_revoke_by_hash: true,
     share_owner_wrap: true,
-    folder_grants: true,
-    folder_grant_roles: true,
+    // Production today: the server knows folder invites and has them off.
+    folder_grants: false,
+    folder_grant_writes: false,
+  };
+  const COMING_SOON = {
+    folder: { kind: "NotReady", subkind: "FOLDER_INVITES_UNAVAILABLE", message: "x" },
+    editor: { kind: "NotReady", subkind: "FOLDER_EDITOR_INVITES_UNAVAILABLE", message: "x" },
+    email: { kind: "NotReady", subkind: "FOLDER_EMAIL_INVITES_UNAVAILABLE", message: "x" },
   };
 
-  function renderFolder(caps: typeof CAPS | null = CAPS, pathPrefix = "Clients/ACME") {
+  function renderFolder(pathPrefix = "Clients/ACME") {
     const store = createStore();
-    store.set(serverCapabilitiesAtom, caps);
+    store.set(serverCapabilitiesAtom, CAPS);
     store.set(createDriveInviteDialogAtom, {
       label: "team-docs",
       folderName: "ACME",
@@ -502,56 +543,107 @@ describe("folder invites with roles (folder roles, staging only)", () => {
     );
   }
 
-  it("stays view-only and single use without the flag", async () => {
-    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+  it("mints through the folder command only, view-only without the flag", async () => {
+    createFolderInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
     renderFolder();
     expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
     expect(screen.getByText(/view-only, single-use link/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
     await waitFor(() =>
-      expect(createDriveInviteMock).toHaveBeenCalledWith(
-        "team-docs",
-        expect.objectContaining({ role: "reader", pathPrefix: "Clients/ACME" }),
-      ),
+      expect(createFolderInviteMock).toHaveBeenCalledWith("team-docs", "Clients/ACME", {
+        expiresInSecs: 7 * 24 * 60 * 60,
+        role: "reader",
+        target: undefined,
+      }),
     );
+    expect(createDriveInviteMock).not.toHaveBeenCalled();
   });
 
-  it("stays view-only with the flag on a server without folder roles", () => {
-    folderRolesFlag.on = true;
-    renderFolder({ ...CAPS, folder_grant_roles: false });
-    expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
+  // The folder path's PRESENCE makes it a folder invite. An empty one still
+  // goes to the folder command, which refuses it, and never becomes a
+  // whole-drive invite.
+  it("never falls back to a whole-drive invite, even with an empty folder path", async () => {
+    createFolderInviteMock.mockRejectedValue({ kind: "Validation", message: "A folder invite needs a folder path." });
+    renderFolder("");
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    await waitFor(() => expect(createFolderInviteMock).toHaveBeenCalledWith("team-docs", "", expect.anything()));
+    expect(createDriveInviteMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/needs a folder path/)).toBeInTheDocument();
+    expect(screen.queryByText(/join this drive/)).not.toBeInTheDocument();
   });
 
-  it("offers the drive's role picker and mints the chosen role", async () => {
+  it("with the flag, offers Viewer and Editor only, whatever the server advertises", () => {
     folderRolesFlag.on = true;
-    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+    renderFolder();
+    fireEvent.click(screen.getByLabelText("Invite role"));
+    expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Manager")).not.toBeInTheDocument();
+  });
+
+  it("offers no lifetime past 30 days and no uses choice", () => {
+    folderRolesFlag.on = true;
+    renderFolder();
+    fireEvent.click(screen.getByLabelText("Invite expires"));
+    expect(screen.queryByText("Never expires")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/uses/i)).not.toBeInTheDocument();
+  });
+
+  it("mints the chosen Editor role for the folder", async () => {
+    folderRolesFlag.on = true;
+    createFolderInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
     renderFolder();
     chooseRole("Editor");
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
     await waitFor(() =>
-      expect(createDriveInviteMock).toHaveBeenCalledWith(
+      expect(createFolderInviteMock).toHaveBeenCalledWith(
         "team-docs",
-        expect.objectContaining({ role: "writer", pathPrefix: "Clients/ACME" }),
+        "Clients/ACME",
+        expect.objectContaining({ role: "writer" }),
       ),
     );
   });
 
-  it("caps a folder Manager invite like a drive Manager invite", async () => {
+  it("says single-folder sharing is coming soon when the server has it off", async () => {
     folderRolesFlag.on = true;
-    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+    createFolderInviteMock.mockRejectedValue(COMING_SOON.folder);
     renderFolder();
-    chooseRole("Manager");
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
-    await waitFor(() => expect(createDriveInviteMock).toHaveBeenCalled());
-    const [, opts] = createDriveInviteMock.mock.calls[0];
-    expect(opts).toMatchObject({ role: "manager", maxUses: 1 });
-    expect(opts.expiresInSecs).toBeLessThanOrEqual(24 * 60 * 60);
+    expect(await screen.findByText("Sharing a single folder is coming soon.")).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't create invite link")).not.toBeInTheDocument();
+    expect(createDriveInviteMock).not.toHaveBeenCalled();
   });
 
-  it("can mail a folder invitation, naming the folder", async () => {
+  it("says Editor on one folder is coming soon, and keeps the form", async () => {
+    folderRolesFlag.on = true;
+    createFolderInviteMock.mockRejectedValue(COMING_SOON.editor);
+    renderFolder();
+    chooseRole("Editor");
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    expect(
+      await screen.findByText(
+        "Editor access for a single folder is coming soon. You can share it as view only for now.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create invite link" })).toBeInTheDocument();
+    // Picking Viewer clears the note.
+    chooseRole("Viewer");
+    expect(screen.queryByText(/Editor access for a single folder/)).not.toBeInTheDocument();
+  });
+
+  it("shows the upgrade prompt when the plan cannot share", async () => {
+    folderRolesFlag.on = true;
+    createFolderInviteMock.mockRejectedValue(NOT_ENTITLED);
+    renderFolder();
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    expect(await screen.findByText("Sharing needs a Plus, Max or Scale plan")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+    expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
+  });
+
+  it("offers email for a folder and says it is coming soon when refused", async () => {
     folderRolesFlag.on = true;
     emailInvitesAvailableMock.mockResolvedValue(true);
-    emailDriveInviteMock.mockResolvedValue({ inviteId: "i1" });
+    emailDriveInviteMock.mockRejectedValue(COMING_SOON.email);
     renderFolder();
     fireEvent.click(await screen.findByRole("button", { name: "Invite by email" }));
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
@@ -562,14 +654,29 @@ describe("folder invites with roles (folder roles, staging only)", () => {
       expect(emailDriveInviteMock).toHaveBeenCalledWith(
         "team-docs",
         "ada@example.com",
-        expect.objectContaining({ pathPrefix: "Clients/ACME" }),
+        expect.objectContaining({ pathPrefix: "Clients/ACME", role: "reader" }),
       ),
     );
+    expect(
+      await screen.findByText(
+        "Email invites for a single folder are coming soon. For now, copy the invite link and send it yourself.",
+      ),
+    ).toBeInTheDocument();
   });
 
-  it("titles an invite from inside a grant with the folder's name, not a slash", () => {
-    folderRolesFlag.on = true;
-    renderFolder(CAPS, "/");
-    expect(screen.getByText(/"ACME"/)).toBeInTheDocument();
+  it("says the finished link is for this folder and works once", async () => {
+    installClipboard();
+    createFolderInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e" });
+    renderFolder();
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+    const copy = await screen.findByText(/This link works once/);
+    expect(copy.textContent).toMatch(/this folder, and only this folder/);
+    expect(screen.queryByText(/join the drive/)).not.toBeInTheDocument();
+  });
+
+  it("titles the dialog with the folder", () => {
+    renderFolder();
+    expect(screen.getByText("Share folder")).toBeInTheDocument();
+    expect(screen.getByText(/"Clients\/ACME"/)).toBeInTheDocument();
   });
 });

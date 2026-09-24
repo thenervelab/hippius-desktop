@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Folder grants held by this account (folder roles, staging only): fetched
-// only with the flag AND the server capability, and found by `grant:` label.
+// with the flag, never waiting on a capability, and found by `grant:` label.
 import React, { type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
@@ -40,7 +40,7 @@ const GRANT = {
   createdAt: "",
 };
 
-function wrapper(roles: boolean) {
+function wrapper(writes: boolean) {
   const store = createStore();
   store.set(serverCapabilitiesAtom, {
     shares: true,
@@ -48,7 +48,7 @@ function wrapper(roles: boolean) {
     folder_share_revoke_by_hash: true,
     share_owner_wrap: true,
     folder_grants: true,
-    folder_grant_roles: roles,
+    folder_grant_writes: writes,
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -78,11 +78,10 @@ describe("useFolderGrantForLabel", () => {
     expect(result.current.isGrant).toBe(false);
   });
 
-  it("fetches nothing on a server without folder roles", async () => {
+  it("does not wait on a capability: the listing is the answer", async () => {
     const { result } = renderHook(() => useWritableMemberDriveLabels(), { wrapper: wrapper(false) });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(listMyFolderGrantsMock).not.toHaveBeenCalled();
-    expect(result.current.size).toBe(0);
+    await waitFor(() => expect(listMyFolderGrantsMock).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.has(makeFolderGrantLabel(GRANT))).toBe(true));
   });
 
   it("fetches nothing with the lane flag off", async () => {

@@ -45,10 +45,11 @@ export interface ServerCapabilities {
   /** `POST /v1/folder-shares` takes `owner_ss58` (hcfs #458). */
   member_folder_shares?: boolean;
   /**
-   * Folder grants carry Viewer, Editor and Manager (assumed until HCFS
-   * publishes folder roles). Absent means reader-only folder grants.
+   * Editor folder invites are accepted (HCFS #475). A HINT only: an Editor
+   * folder invite is still offered and sent without it, and a refusal reads
+   * "coming soon".
    */
-  folder_grant_roles?: boolean;
+  folder_grant_writes?: boolean;
 }
 
 /**

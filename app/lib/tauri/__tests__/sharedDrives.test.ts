@@ -1,6 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const invokeMock = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+
 import {
+  createDriveInvite,
+  createFolderInvite,
   isEmailInvitesUnavailable,
+  isFolderEditorInvitesUnavailable,
+  isFolderEmailInvitesUnavailable,
+  isFolderInvitesUnavailable,
   isSharedDrivesNotEntitled,
   isSharedDrivesUnavailable,
 } from "@/lib/tauri/sharedDrives";
@@ -76,5 +85,49 @@ describe("isEmailInvitesUnavailable", () => {
       }),
     ).toBe(false);
     expect(isEmailInvitesUnavailable(null)).toBe(false);
+  });
+});
+
+describe("the folder coming-soon refusals", () => {
+  const err = (subkind: string) => ({ kind: "NotReady", subkind, message: "the same words" });
+
+  it("each matches its own subkind and nothing else", () => {
+    const matchers = {
+      FOLDER_INVITES_UNAVAILABLE: isFolderInvitesUnavailable,
+      FOLDER_EDITOR_INVITES_UNAVAILABLE: isFolderEditorInvitesUnavailable,
+      FOLDER_EMAIL_INVITES_UNAVAILABLE: isFolderEmailInvitesUnavailable,
+      EMAIL_INVITES_UNAVAILABLE: isEmailInvitesUnavailable,
+    };
+    for (const [subkind, matches] of Object.entries(matchers)) {
+      for (const other of Object.keys(matchers)) {
+        expect(matches(err(other)), `${subkind} vs ${other}`).toBe(subkind === other);
+      }
+    }
+  });
+});
+
+describe("invite commands", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue({ inviteUrl: "u" });
+  });
+
+  it("sends a folder invite to its own command, folder required", async () => {
+    await createFolderInvite("team-docs", "Clients/ACME", { role: "writer", expiresInSecs: 60 });
+    expect(invokeMock).toHaveBeenCalledWith("create_folder_invite", {
+      label: "team-docs",
+      pathPrefix: "Clients/ACME",
+      expiresInSecs: 60,
+      role: "writer",
+      ownerSs58: null,
+      folderHash: null,
+    });
+  });
+
+  it("never sends a folder with a drive invite", async () => {
+    await createDriveInvite("team-docs", { role: "reader" });
+    const [command, args] = invokeMock.mock.calls[0];
+    expect(command).toBe("create_drive_invite");
+    expect(args).not.toHaveProperty("pathPrefix");
   });
 });

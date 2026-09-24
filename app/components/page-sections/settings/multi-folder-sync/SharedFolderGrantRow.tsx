@@ -1,11 +1,12 @@
 "use client";
 
-// One FOLDER shared with this account (folder roles, assumed until HCFS
-// publishes them): its own row in "Shared with me", beside the whole drives.
-// It names the folder, the drive it lives in and who owns it, carries the
-// role chip, and offers Open (rooted at the folder), Manage access for a
-// folder Manager, and Leave. No "Sync to this computer": syncing a granted
-// folder to disk is not supported.
+// One FOLDER shared with this account (folder roles, HCFS #475): its own row
+// in "Shared with me", beside the whole drives. It names the folder, the
+// drive it lives in and who owns it, carries the role chip (Viewer or
+// Editor), and offers Open (rooted at the folder) and Leave. No Manage
+// access: Manager is not a folder role, so a holder never manages the folder.
+// No "Sync to this computer": syncing a granted folder to disk is not
+// supported.
 
 import React from "react";
 
@@ -24,17 +25,14 @@ import { folderGrantRowView } from "./sharedWithMeState";
 export default function SharedFolderGrantRow({
   grant,
   onOpen,
-  onManageAccess,
   onLeave,
 }: {
   grant: MyFolderGrantInfo;
   onOpen?: () => void;
-  onManageAccess?: () => void;
   onLeave: () => void;
 }) {
   const view = folderGrantRowView(grant);
   const role = parseDriveRole(grant.role);
-  const canManage = role === "manager" && !grant.frozen;
 
   return (
     <div
@@ -91,17 +89,6 @@ export default function SharedFolderGrantRow({
           <AccountLabel ss58={grant.ownerSs58} name={grant.ownerName} />
         </div>
       </div>
-
-      {canManage && onManageAccess && (
-        <Button
-          variant="ghost"
-          size="auto"
-          onClick={onManageAccess}
-          className="row-action-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-primary-50 px-2.5 text-xs font-medium text-primary-50 transition-colors hover:bg-primary-50/10 dark:border-primary-brand-dark dark:text-primary-brand-dark dark:hover:bg-primary-50/15"
-        >
-          Manage access
-        </Button>
-      )}
 
       <TableActionMenu dropdownTitle="" items={buildFolderGrantActions({ onOpen, onLeave })}>
         <Button

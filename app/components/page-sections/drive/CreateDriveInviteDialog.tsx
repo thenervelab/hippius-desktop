@@ -9,7 +9,7 @@
 // Putting the wizard inside the list surface made both worse.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check } from "lucide-react";
 import { toast } from "sonner";
@@ -20,18 +20,21 @@ import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Select } from "@/components/ui/select/Select";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/utils/errorUtils";
-import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   createDriveInviteDialogAtom,
-  folderRolesEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import {
   createDriveInvite,
+  createFolderInvite,
   emailDriveInvite,
   emailInvitesAvailable,
   isEmailInvitesUnavailable,
+  isFolderEditorInvitesUnavailable,
+  isFolderEmailInvitesUnavailable,
+  isFolderInvitesUnavailable,
   isSharedDrivesNotEntitled,
   isSharedDrivesUnavailable,
 } from "@/app/lib/tauri/sharedDrives";
@@ -46,13 +49,18 @@ import {
   type DriveRole,
 } from "@/app/lib/shared-drives/roles";
 import {
+  COMING_SOON_COPY,
   DEFAULT_INVITE_TTL_SECS,
   EMAIL_INVITE_ROLES,
   EMAIL_INVITE_TTL_OPTIONS,
+  FOLDER_INVITE_ROLES,
+  FOLDER_INVITE_TTL_OPTIONS,
   NEVER_EXPIRES_SECS,
   clampEmailInviteTtl,
+  clampFolderInviteTtl,
   clampInviteTtl,
   inviteTtlOptionsFor,
+  type ComingSoonNotice,
   type InviteState,
 } from "./shareDriveModalState";
 import { BILLING_ROUTE } from "@/app/lib/routes";
@@ -78,19 +86,26 @@ export default function CreateDriveInviteDialog() {
   // "Link" mints a copyable URL; "Email" has the server mail the invitation.
   const [mode, setMode] = useState<InviteMode>("link");
   const [email, setEmail] = useState("");
-  // `null` until the server has been asked. The Email option only appears on
-  // a confirmed `true`, so a server without mail never shows a control that
-  // always fails.
-  const [emailAvailable, setEmailAvailable] = useState<boolean | null>(null);
+  // A "coming soon" the server (or the mail probe) gave for what is on the
+  // form right now. Inline, beside the choice it is about; cleared when that
+  // choice changes.
+  const [notice, setNotice] = useState<ComingSoonNotice | null>(null);
+  // The mail probe, as a HINT only: the Email option is always offered, and a
+  // known "no mail here" just says so before anyone types an address.
+  const [emailHint, setEmailHint] = useState<boolean | null>(null);
   const autoCopiedRef = useRef(false);
   const label = target?.label ?? null;
-  const pathPrefix = target?.pathPrefix?.trim() || null;
-  const isFolderInvite = Boolean(pathPrefix);
-  // Folder collaboration with roles (staging flag + server capability): a
-  // folder invite gets the same role picker and email option as a drive's.
-  // Off, a folder invite stays view-only and single use, exactly as before.
-  const folderRolesEnabled = useAtomValue(folderRolesEnabledAtom);
+  // A FOLDER invite is decided by the key being present, never by its value:
+  // an empty folder path goes to the folder command (which refuses it) rather
+  // than quietly turning into a whole-drive invite.
+  const isFolderInvite = target?.pathPrefix !== undefined;
+  const pathPrefix = isFolderInvite ? (target?.pathPrefix ?? "").trim() : null;
+  // Folder collaboration (the staging-only flag): a folder invite gets the
+  // Viewer / Editor picker and the email option. Off, a folder invite stays
+  // view-only, link-only and single use, exactly as before.
+  const folderRolesEnabled = FOLDER_ROLES_ENABLED;
   const folderRoles = isFolderInvite && folderRolesEnabled;
+  const emailOffered = !isFolderInvite || folderRoles;
   const currentLabelRef = useRef<string | null>(null);
   currentLabelRef.current = label;
 
@@ -113,6 +128,7 @@ export default function CreateDriveInviteDialog() {
       setInviteRole(isFolderInvite ? "reader" : "writer");
       setMode("link");
       setEmail("");
+      setNotice(null);
       autoCopiedRef.current = false;
     }
     // `undefined` while the plan is still loading: the dialog opens on the
@@ -128,62 +144,77 @@ export default function CreateDriveInviteDialog() {
     [target?.ownerSs58, target?.folderHash],
   );
 
-  // Ask once per open whether this server can mail invitations. A folder
-  // invite can be mailed only with folder roles (the server refuses
-  // `path_prefix` on that route otherwise).
+  // Ask once per open whether this server can mail invitations (a hint).
   useEffect(() => {
-    setEmailAvailable(null);
-    if (!label || (isFolderInvite && !folderRoles)) return;
+    setEmailHint(null);
+    if (!label || !emailOffered) return;
     let cancelled = false;
     emailInvitesAvailable(label, driveTarget)
       .then((available) => {
-        if (!cancelled) setEmailAvailable(available);
+        if (!cancelled) setEmailHint(available);
       })
       .catch(() => {
-        if (!cancelled) setEmailAvailable(false);
+        // Unknown stays unknown: sending is still the real answer.
       });
     return () => {
       cancelled = true;
     };
-  }, [label, isFolderInvite, folderRoles, driveTarget]);
+  }, [label, emailOffered, driveTarget]);
+
+  // Whatever the server refused, as a "coming soon" beside the choice, or a
+  // terminal state. Rust decides the kind; this only routes it.
+  const handleRefusal = useCallback((err: unknown): boolean => {
+    if (isEmailInvitesUnavailable(err)) {
+      setEmailHint(false);
+      setNotice("email");
+    } else if (isFolderEmailInvitesUnavailable(err)) {
+      setNotice("folderEmail");
+    } else if (isFolderEditorInvitesUnavailable(err)) {
+      setNotice("folderEditor");
+    } else if (isFolderInvitesUnavailable(err)) {
+      setInvite({ kind: "folderComingSoon" });
+      return true;
+    } else if (isSharedDrivesUnavailable(err)) {
+      setInvite({ kind: "unavailable" });
+      return true;
+    } else if (isSharedDrivesNotEntitled(err)) {
+      setInvite({ kind: "notEntitled" });
+      return true;
+    } else {
+      return false;
+    }
+    setInvite({ kind: "choosing" });
+    return true;
+  }, []);
 
   const sendEmailInvite = useCallback(async () => {
     if (!label) return;
     const labelAtCall = label;
     setInvite({ kind: "running" });
+    setNotice(null);
     try {
       const role = inviteRole === "manager" ? "writer" : inviteRole;
       await emailDriveInvite(labelAtCall, email, {
         role,
         expiresInSecs: clampEmailInviteTtl(ttlSecs),
         target: driveTarget,
-        ...(isFolderInvite && pathPrefix ? { pathPrefix } : {}),
+        ...(isFolderInvite && pathPrefix !== null ? { pathPrefix } : {}),
       });
       if (labelAtCall !== currentLabelRef.current) return;
       setInvite({ kind: "emailSent", email: email.trim() });
       void invalidateOwnedDriveSharing(queryClient);
     } catch (err) {
       if (labelAtCall !== currentLabelRef.current) return;
-      if (isEmailInvitesUnavailable(err)) {
-        // The server has no mail service after all: take the option away
-        // and fall back to a link, rather than leave a control that fails.
-        setEmailAvailable(false);
-        setMode("link");
-        setInvite({ kind: "choosing" });
-        toast.info("Inviting by email is not available yet. Create a link instead.");
-      } else if (isSharedDrivesUnavailable(err)) {
-        setInvite({ kind: "unavailable" });
-      } else if (isSharedDrivesNotEntitled(err)) {
-        setInvite({ kind: "notEntitled" });
-      } else {
+      if (!handleRefusal(err)) {
         // Rust words the rate limit (with the wait) and the failed send.
         setInvite({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [label, email, inviteRole, ttlSecs, driveTarget, queryClient, isFolderInvite, pathPrefix]);
+  }, [label, email, inviteRole, ttlSecs, driveTarget, queryClient, isFolderInvite, pathPrefix, handleRefusal]);
 
   const handleModeChange = useCallback((next: InviteMode) => {
     setMode(next);
+    setNotice(null);
     if (next === "email") {
       // A Manager invite has to be a link, and a mailed one cannot outlive
       // thirty days: snap both so the form never describes a refusal.
@@ -196,31 +227,35 @@ export default function CreateDriveInviteDialog() {
     if (!label) return;
     const labelAtCall = label;
     setInvite({ kind: "running" });
+    setNotice(null);
     autoCopiedRef.current = false;
     try {
-      // A manager invite is capped by the server at one use and 24 hours, and
-      // exceeding either is a 400. Clamping here (and again in Rust) means the
-      // link the user gets is the link the form described, rather than a
-      // rejection after the fact — matching console `createDriveInvite`.
-      // Folder invites are always reader / single-use / ≤30 days in Rust.
-      const role: DriveRole = isFolderInvite && !folderRoles ? "reader" : inviteRole;
-      const isManager = role === "manager";
-      const folderTtl = isFolderInvite ? Math.min(ttlSecs, 30 * 24 * 60 * 60) : ttlSecs;
-      const effectiveTtl = isManager
-        ? Math.min(folderTtl, MANAGER_INVITE_MAX_SECONDS)
-        : folderTtl;
-      const link = await createDriveInvite(labelAtCall, {
-        expiresInSecs: effectiveTtl,
-        ...(isManager ? { maxUses: MANAGER_INVITE_MAX_USES } : {}),
-        role,
-        pathPrefix: pathPrefix ?? undefined,
-        // Named only for a drive shared with this account that is not synced
-        // here; an own drive's label resolves on its own.
-        target:
-          target?.ownerSs58 && target?.folderHash
-            ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
-            : undefined,
-      });
+      let link;
+      if (isFolderInvite) {
+        // One person, one folder, at most 30 days: Rust owns the policy and
+        // refuses an empty folder. Never the drive command.
+        link = await createFolderInvite(labelAtCall, pathPrefix ?? "", {
+          expiresInSecs: clampFolderInviteTtl(ttlSecs),
+          role: folderRoles && inviteRole === "writer" ? "writer" : "reader",
+          target: driveTarget,
+        });
+      } else {
+        // A manager invite is capped by the server at one use and 24 hours,
+        // and exceeding either is a 400. Clamping here (and again in Rust)
+        // means the link the user gets is the link the form described,
+        // rather than a rejection after the fact (console parity).
+        const isManager = inviteRole === "manager";
+        link = await createDriveInvite(labelAtCall, {
+          expiresInSecs: isManager
+            ? Math.min(ttlSecs, MANAGER_INVITE_MAX_SECONDS)
+            : ttlSecs,
+          ...(isManager ? { maxUses: MANAGER_INVITE_MAX_USES } : {}),
+          role: inviteRole,
+          // Named only for a drive shared with this account that is not
+          // synced here; an own drive's label resolves on its own.
+          target: driveTarget,
+        });
+      }
       if (labelAtCall !== currentLabelRef.current) return;
       setInvite({ kind: "done", inviteUrl: link.inviteUrl });
       // The drive is shared from this moment: its row grows the badge and
@@ -228,11 +263,7 @@ export default function CreateDriveInviteDialog() {
       void invalidateOwnedDriveSharing(queryClient);
     } catch (err) {
       if (labelAtCall !== currentLabelRef.current) return;
-      if (isSharedDrivesUnavailable(err)) {
-        setInvite({ kind: "unavailable" });
-      } else if (isSharedDrivesNotEntitled(err)) {
-        setInvite({ kind: "notEntitled" });
-      } else {
+      if (!handleRefusal(err)) {
         setInvite({ kind: "error", message: errorMessage(err) });
       }
     }
@@ -241,18 +272,23 @@ export default function CreateDriveInviteDialog() {
     ttlSecs,
     inviteRole,
     queryClient,
-    target?.ownerSs58,
-    target?.folderHash,
+    driveTarget,
     pathPrefix,
     isFolderInvite,
     folderRoles,
+    handleRefusal,
   ]);
 
   const handleRoleChange = useCallback((role: DriveRole) => {
     setInviteRole(role);
+    setNotice((n) => (n === "folderEditor" ? null : n));
     // Choosing Manager with a wider lifetime already selected must snap the
     // picker, not leave a value the mint would quietly replace (console).
     setTtlSecs((secs) => clampInviteTtl(role, secs));
+  }, []);
+
+  const handleEmailChange = useCallback((next: string) => {
+    setEmail(next);
   }, []);
 
   useEffect(() => {
@@ -288,10 +324,8 @@ export default function CreateDriveInviteDialog() {
     return inviteDriveDisplayName(match?.displayLabel, target.label);
   })();
 
-  // "/" is the root of a folder grant being managed from inside it; the
-  // folder's own name says more than a slash.
-  const folderTitle =
-    pathPrefix === "/" ? (target?.folderName ?? null) : pathPrefix;
+  // The folder's path says where it is; its own name when the path is empty.
+  const folderTitle = pathPrefix || target?.folderName || null;
 
   if (!SHARED_DRIVES_ENABLED || !target) return null;
 
@@ -302,7 +336,7 @@ export default function CreateDriveInviteDialog() {
       title={
         <span className="mx-auto flex w-full min-w-0 max-w-full flex-col items-center gap-0.5 px-2">
           <span className="shrink-0">
-            {isFolderInvite ? "Share folder from" : "Invite to"}
+            {isFolderInvite ? "Share folder" : "Invite to"}
           </span>
           <span
             className="block w-full min-w-0 truncate"
@@ -334,9 +368,11 @@ export default function CreateDriveInviteDialog() {
           folderRoles={folderRoles}
           mode={mode}
           onModeChange={handleModeChange}
-          emailAvailable={emailAvailable === true && (!isFolderInvite || folderRoles)}
+          emailOffered={emailOffered}
+          emailKnownUnavailable={emailHint === false}
+          notice={notice}
           email={email}
-          onEmailChange={setEmail}
+          onEmailChange={handleEmailChange}
           onSendEmail={() => void sendEmailInvite()}
           onMint={() => void mintInvite()}
           onRetry={() => setInvite({ kind: "choosing" })}
@@ -349,6 +385,34 @@ export default function CreateDriveInviteDialog() {
 
 type InviteMode = "link" | "email";
 
+/**
+ * A "coming soon" said inline, in the dialogs' existing amber notice recipe
+ * (the migration prompt's), so it reads as a note about the choice beside it
+ * rather than as an error.
+ */
+export function ComingSoonInlineNotice({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      role="status"
+      className={cn(
+        "flex items-start gap-2 rounded-lg border border-warning-50/40 bg-warning-50/10 p-3 dark:border-warning-50/35 dark:bg-warning-50/[0.12]",
+        className,
+      )}
+    >
+      <Icons.InfoCircle className="mt-0.5 size-4 shrink-0 text-warning-50" />
+      <p className="min-w-0 break-words text-xs leading-5 text-grey-40 dark:text-grey-dark-700">
+        {children}
+      </p>
+    </div>
+  );
+}
+
 function InviteTab({
   state,
   ttlSecs,
@@ -359,7 +423,9 @@ function InviteTab({
   folderRoles = false,
   mode,
   onModeChange,
-  emailAvailable,
+  emailOffered,
+  emailKnownUnavailable,
+  notice,
   email,
   onEmailChange,
   onSendEmail,
@@ -373,11 +439,15 @@ function InviteTab({
   role: DriveRole;
   onRoleChange: (role: DriveRole) => void;
   folderInvite?: boolean;
-  /** A folder invite with the full role set (folder roles on). */
+  /** A folder invite with the Viewer / Editor picker (folder roles on). */
   folderRoles?: boolean;
   mode: InviteMode;
   onModeChange: (mode: InviteMode) => void;
-  emailAvailable: boolean;
+  /** Whether "Invite by email" is offered at all (never hidden on a probe). */
+  emailOffered: boolean;
+  /** The mail probe already said this server cannot send mail. */
+  emailKnownUnavailable: boolean;
+  notice: ComingSoonNotice | null;
   email: string;
   onEmailChange: (email: string) => void;
   onSendEmail: () => void;
@@ -388,11 +458,18 @@ function InviteTab({
   const neverExpires = ttlSecs === NEVER_EXPIRES_SECS;
 
   if (state.kind === "done") {
-    return <InviteDone inviteUrl={state.inviteUrl} neverExpires={neverExpires} onClose={onClose} />;
+    return (
+      <InviteDone
+        inviteUrl={state.inviteUrl}
+        neverExpires={neverExpires}
+        folderInvite={folderInvite}
+        onClose={onClose}
+      />
+    );
   }
 
   if (state.kind === "emailSent") {
-    return <EmailInviteSent email={state.email} onClose={onClose} />;
+    return <EmailInviteSent email={state.email} folderInvite={folderInvite} onClose={onClose} />;
   }
 
   if (state.kind === "unavailable") {
@@ -401,6 +478,19 @@ function InviteTab({
 
   if (state.kind === "notEntitled") {
     return <SharedDrivesNotEntitledNotice onClose={onClose} />;
+  }
+
+  if (state.kind === "folderComingSoon") {
+    return (
+      <div>
+        <ComingSoonInlineNotice className="mb-6">
+          {COMING_SOON_COPY.folder}
+        </ComingSoonInlineNotice>
+        <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={secondaryButtonClass}>
+          Close
+        </Button>
+      </div>
+    );
   }
 
   if (state.kind === "error") {
@@ -428,20 +518,33 @@ function InviteTab({
   }
 
   const running = state.kind === "running";
-  const byEmail = emailAvailable && mode === "email";
+  const byEmail = emailOffered && mode === "email";
+  // What the email field says about mail on this server: the refusal the
+  // server gave, else the probe's hint.
+  const emailNotice: ComingSoonNotice | null =
+    notice === "email" || notice === "folderEmail"
+      ? notice
+      : byEmail && emailKnownUnavailable
+        ? "email"
+        : null;
   // Folder invites without roles are always Viewer; with them, the picker.
   const pickRole = !folderInvite || folderRoles;
-  const managerCapped = pickRole && !byEmail && role === "manager";
+  const managerCapped = !folderInvite && !byEmail && role === "manager";
   const ttlOptions = byEmail
     ? EMAIL_INVITE_TTL_OPTIONS
-    : inviteTtlOptionsFor(pickRole ? role : "reader").filter(
-        (o) => !folderInvite || o.secs !== NEVER_EXPIRES_SECS,
-      );
-  const roleOptions = byEmail ? EMAIL_INVITE_ROLES : DRIVE_ROLES;
+    : folderInvite
+      ? FOLDER_INVITE_TTL_OPTIONS
+      : inviteTtlOptionsFor(role);
+  const roleOptions = folderInvite
+    ? FOLDER_INVITE_ROLES
+    : byEmail
+      ? EMAIL_INVITE_ROLES
+      : DRIVE_ROLES;
   const emailReady = email.trim().length > 0;
+  const sendBlocked = running || !emailReady || emailNotice === "email";
   return (
     <div>
-      {emailAvailable ? (
+      {emailOffered ? (
         <div className="mb-5">
           <SegmentedControl<InviteMode>
             ariaLabel="How to invite"
@@ -473,15 +576,21 @@ function InviteTab({
             value={email}
             onChange={(e) => onEmailChange(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && emailReady && !running) onSendEmail();
+              if (e.key === "Enter" && !sendBlocked) onSendEmail();
             }}
             wrapperClassName="min-h-[44px] py-2.5 sm:min-h-[44px]"
             className="text-sm"
           />
-          <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-            We email them a single-use invitation. Once they open it, approve
-            them from the Links tab so they can join.
-          </p>
+          {emailNotice ? (
+            <ComingSoonInlineNotice className="mt-1">
+              {COMING_SOON_COPY[emailNotice]}
+            </ComingSoonInlineNotice>
+          ) : (
+            <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
+              We email them a single-use invitation. Once they open it, approve
+              them from the Links tab so they can join.
+            </p>
+          )}
         </div>
       ) : null}
       {!pickRole ? (
@@ -504,12 +613,17 @@ function InviteTab({
             }))}
           />
           <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-            {driveRoleDescription(role)}
+            {folderInvite ? folderRoleDescription(role) : driveRoleDescription(role)}
           </p>
           {managerCapped ? (
             <p className="text-xs text-grey-50 dark:text-grey-dark-600">
               Manager links are single use and expire in 24 hours.
             </p>
+          ) : null}
+          {notice === "folderEditor" ? (
+            <ComingSoonInlineNotice className="mt-1">
+              {COMING_SOON_COPY.folderEditor}
+            </ComingSoonInlineNotice>
           ) : null}
         </div>
       )}
@@ -529,9 +643,9 @@ function InviteTab({
           {byEmail
             ? `Only the person who opens the email can use it, as ${driveRoleLabel(role)}, and only until it expires.`
             : folderInvite
-            ? `Anyone with the link can join this folder as ${folderRoles ? driveRoleLabel(role) : "a viewer"} until the link expires. They see this folder and what is inside it, nothing above it. Share it only with people you trust.`
+            ? `The link works once: the first person who opens it joins this folder as ${pickRole ? driveRoleLabel(role) : "a viewer"}, until it expires. They see this folder and what is inside it, nothing above it.`
             : managerCapped
-              ? "A manager link can only be used once and expires within 24 hours — managers can invite and remove people, so the link itself is short-lived."
+              ? "A manager link can only be used once and expires within 24 hours. Managers can invite and remove people, so the link itself is short-lived."
               : neverExpires
                 ? `Anyone with the link can join this drive as ${driveRoleLabel(role)} for as long as the link exists. Share it only with people you trust.`
                 : `Anyone with the link can join this drive as ${driveRoleLabel(role)} until the link expires. Share it only with people you trust.`}
@@ -544,7 +658,7 @@ function InviteTab({
             type="button"
             variant="primary"
             size="auto"
-            disabled={running || !emailReady}
+            disabled={sendBlocked}
             onClick={onSendEmail}
             className={primaryButtonClass}
           >
@@ -570,13 +684,22 @@ function InviteTab({
   );
 }
 
+/** What a folder role lets its holder do: only inside this folder. */
+function folderRoleDescription(role: DriveRole): string {
+  return role === "writer"
+    ? "Can open, download, add, rename and delete files in this folder."
+    : "Can open and download files in this folder.";
+}
+
 function InviteDone({
   inviteUrl,
   neverExpires,
+  folderInvite,
   onClose,
 }: {
   inviteUrl: string;
   neverExpires: boolean;
+  folderInvite: boolean;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -600,9 +723,11 @@ function InviteDone({
   return (
     <div>
       <p className="mb-4 text-center text-xs text-grey-50 dark:text-grey-dark-600">
-        {neverExpires
-          ? "This link never expires — anyone who has it can join the drive. "
-          : "Anyone with this link can join the drive until it expires. "}
+        {folderInvite
+          ? "This link works once: the first person who opens it joins this folder, and only this folder, until it expires. "
+          : neverExpires
+            ? "This link never expires. Anyone who has it can join the drive. "
+            : "Anyone with this link can join the drive until it expires. "}
         {/* The old copy sent people to Members to "revoke access", which only
             removes someone who already joined and does nothing about a link
             still circulating. Now that links can be revoked, say so. */}
@@ -652,7 +777,15 @@ function InviteDone({
 }
 
 /** A mailed invitation went out. There is no link to copy: only the mail has it. */
-function EmailInviteSent({ email, onClose }: { email: string; onClose: () => void }) {
+function EmailInviteSent({
+  email,
+  folderInvite,
+  onClose,
+}: {
+  email: string;
+  folderInvite: boolean;
+  onClose: () => void;
+}) {
   return (
     <div>
       <div className="mb-3 flex justify-center">
@@ -665,8 +798,8 @@ function EmailInviteSent({ email, onClose }: { email: string; onClose: () => voi
       </p>
       <p className="mb-6 break-words text-center text-xs text-grey-50 dark:text-grey-dark-600">
         We emailed {email}. When they open it, it shows up in the Links tab
-        waiting for your approval. Approving hands them the drive key so they
-        can join.
+        waiting for your approval. Approving lets them join{" "}
+        {folderInvite ? "this folder" : "the drive"}.
       </p>
       <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={secondaryButtonClass}>
         Done
@@ -689,12 +822,12 @@ function SharedDrivesUnavailableNotice({ onClose }: { onClose: () => void }) {
 }
 
 // The mint plan gate (`SHARED_DRIVES_NOT_ENTITLED`): the drive owner's plan
-// does not include shared drives. An upgrade prompt, not an error — no retry,
-// no toast. Shown only to owners (the "Share drive…" surface is owner-only).
+// does not include sharing. An upgrade prompt, not an error: no retry, no
+// toast. The same for a drive and a folder invite.
 //
 // The CTA goes to the in-app Subscription Plans page, the same destination
 // every other Drive upgrade prompt uses (`InsufficientCreditsDialog`, the
-// files empty state, the plan chip) — not the console, where the user would
+// files empty state, the plan chip), not the console, where the user would
 // have to sign in again to change a plan the app can change itself.
 function SharedDrivesNotEntitledNotice({ onClose }: { onClose: () => void }) {
   const router = useRouter();
@@ -706,10 +839,10 @@ function SharedDrivesNotEntitledNotice({ onClose }: { onClose: () => void }) {
   return (
     <div>
       <p className="mb-1.5 pt-2 text-center text-sm font-medium text-grey-30 dark:text-grey-dark-700">
-        Shared drives need Plus, Max, or Scale
+        Sharing needs a Plus, Max or Scale plan
       </p>
       <p className="mb-6 text-center text-xs text-grey-50 dark:text-grey-dark-600">
-        Upgrade your plan to invite people into your drives. Anyone
+        Upgrade your plan to share drives and folders. Anyone
         you&apos;ve already shared with keeps their access.
       </p>
       <div className="flex flex-col gap-3">

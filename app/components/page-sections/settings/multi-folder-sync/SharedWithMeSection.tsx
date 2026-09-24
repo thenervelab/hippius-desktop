@@ -62,7 +62,6 @@ import {
   MY_FOLDER_GRANTS_QUERY_KEY,
   useMyFolderGrants,
 } from "@/app/lib/hooks/useSharedDriveRoles";
-import { makeFolderGrantLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 import type { ShareDriveModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
 
 interface SharedWithMeSectionProps {
@@ -423,7 +422,6 @@ export function SharedWithMeSection({
         })}
         {folderGrants.map((grant) => {
           const view = folderGrantRowView(grant);
-          const grantLabel = makeFolderGrantLabel(grant);
           return (
             <SharedFolderGrantRow
               key={view.key}
@@ -436,20 +434,6 @@ export function SharedWithMeSection({
                         folderHash: grant.folderHash,
                         pathPrefix: view.path,
                         folderName: view.folderName,
-                      })
-                  : undefined
-              }
-              onManageAccess={
-                onManageAccess
-                  ? () =>
-                      onManageAccess({
-                        // The grant label scopes every manage call to the
-                        // folder; the identity names the owner's drive.
-                        label: grantLabel,
-                        folderName: view.folderName,
-                        ownerSs58: grant.ownerSs58,
-                        folderHash: grant.folderHash,
-                        folderScope: view.path,
                       })
                   : undefined
               }

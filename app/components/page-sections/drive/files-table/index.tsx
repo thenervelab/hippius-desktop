@@ -36,10 +36,8 @@ import {
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   createDriveInviteDialogAtom,
-  folderGrantsFeatureEnabledAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
-  folderRolesEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -67,8 +65,9 @@ import {
   useManageableMemberDriveLabels,
   useMemberDriveLabels,
   useWritableMemberDriveLabels,
+  useFolderShareInviteOffered,
 } from "@/app/lib/hooks/useSharedDriveRoles";
-import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
@@ -628,16 +627,19 @@ const FilesTable: FC<FilesTableProps> = memo(
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
     const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
-    const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
+    // "Share folder" is live: always behind the folder-roles flag, else once
+    // the server advertises folder grants.
+    const folderGrantsEnabled = useFolderShareInviteOffered();
     // Which of this listing's rows sit in a drive shared WITH this account.
     const memberDriveLabels = useMemberDriveLabels();
     // Whether a folder in one of those drives may be shared by link: an
     // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
     const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
     const writableMemberDriveLabels = useWritableMemberDriveLabels();
-    // With folder roles on: where this account is a Manager in somebody
-    // else's drive (or granted folder), so it may share a folder there too.
-    const folderRolesEnabled = useAtomValue(folderRolesEnabledAtom);
+    // With folder roles on: drives somebody else owns where this account is a
+    // Manager, so it may share a folder there too. Never a granted folder:
+    // Manager is not a folder role.
+    const folderRolesEnabled = FOLDER_ROLES_ENABLED;
     const manageableMemberDriveLabels = useManageableMemberDriveLabels();
     const manageableLabels = folderRolesEnabled
       ? manageableMemberDriveLabels

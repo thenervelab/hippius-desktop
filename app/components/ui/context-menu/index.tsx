@@ -22,6 +22,7 @@ import {
   useManageableMemberDriveLabels,
   useMemberDriveLabels,
   useWritableMemberDriveLabels,
+  useFolderShareInviteOffered,
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
@@ -38,13 +39,11 @@ import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
 import {
   createDriveInviteDialogAtom,
-  folderGrantsFeatureEnabledAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
-  folderRolesEnabledAtom,
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
-import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 
 interface ContextMenuProps {
@@ -74,6 +73,14 @@ interface ContextMenuProps {
    * of mid-sync files.
    */
   onRename?: (file: FormattedUserFile) => void;
+  /**
+   * The drive-relative folder the listing is showing (the table's
+   * `currentSubfolderPath`). A folder row may carry only its basename, so
+   * "Share folder" resolves its path against this, the same way "Share via
+   * link" does; without it a nested folder would resolve to a same-named
+   * folder at the drive root.
+   */
+  basePath?: string | null;
 }
 
 export default function FileContextMenu({
@@ -87,13 +94,16 @@ export default function FileContextMenu({
   onFileDownload,
   onShareFile,
   onRename,
+  basePath,
 }: ContextMenuProps) {
   const [mounted, setMounted] = useState(false);
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
-  const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
+  // "Share folder" is live: always behind the folder-roles flag, else once
+  // the server advertises folder grants.
+  const folderInvitesOffered = useFolderShareInviteOffered();
   const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
@@ -101,7 +111,7 @@ export default function FileContextMenu({
   // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
   const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
-  const folderRolesEnabled = useAtomValue(folderRolesEnabledAtom);
+  const folderRolesEnabled = FOLDER_ROLES_ENABLED;
   const manageableMemberDriveLabels = useManageableMemberDriveLabels();
 
   useEffect(() => {
@@ -292,7 +302,7 @@ export default function FileContextMenu({
             && file.isFolder
             && canShareFolderGrant(
               file,
-              folderGrantsEnabled,
+              folderInvitesOffered,
               memberDriveLabels,
               folderRolesEnabled ? manageableMemberDriveLabels : undefined,
             ) && (
@@ -300,7 +310,7 @@ export default function FileContextMenu({
                 className={menuItemClass}
                 onClick={() => {
                   if (!file.label) return;
-                  const pathPrefix = folderGrantPathPrefix(file, "");
+                  const pathPrefix = folderGrantPathPrefix(file, basePath);
                   if (!pathPrefix) return;
                   setInviteDialogTarget({
                     label: file.label,
@@ -317,7 +327,7 @@ export default function FileContextMenu({
 
           {file.isFolder
             && SHARED_DRIVES_ENABLED
-            && folderGrantsEnabled === false
+            && !folderInvitesOffered
             && !isMemberDriveLabel(file.label, memberDriveLabels) && (
               <button
                 className={cn(menuItemClass, "opacity-60 cursor-not-allowed")}

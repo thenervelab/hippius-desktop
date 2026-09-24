@@ -150,19 +150,19 @@ export const VM_VPN_ENABLED = false;
 export const SHARED_DRIVES_ENABLED = enabledFrom("beta");
 
 /**
- * Folder collaboration with roles: Viewer, Editor and Manager on one folder
- * of a drive, instead of read-only folder grants.
+ * Folder collaboration: share ONE folder of a drive as Viewer or Editor, by
+ * link or by email, and let an Editor holder write inside it.
  *
- * The HCFS API is agreed but NOT published, so the desktop is built against
- * an assumed contract (documented in one place, the module doc of
- * `src-tauri/src/shared_drives/folder_roles.rs`). Two gates stand in front of
- * every surface: this flag, and the server advertising
- * `capabilities.folder_grant_roles` (`folderRolesEnabledAtom`). With either
- * off, whole-drive sharing and read-only folder grants work exactly as
- * before.
+ * Built against HCFS #475 (not merged yet), documented in one place: the
+ * module doc of `src-tauri/src/shared_drives/folder_roles.rs`. Inside this
+ * flag nothing is hidden on a server capability: "Share folder" is always
+ * offered to owners and drive Managers, and whatever the server refuses
+ * (folder invites off, Editor off, email off) reads as "coming soon", so each
+ * piece lights up on its own when the server turns it on. With the flag off,
+ * folder sharing stays the read-only, capability-gated version.
  *
  * **Staging only** (`enabledFrom("staging")`): off in beta and production
- * until the server contract is published and checked against this build.
+ * until #475 merges and is checked against this build.
  */
 export const FOLDER_ROLES_ENABLED = enabledFrom("staging");
 

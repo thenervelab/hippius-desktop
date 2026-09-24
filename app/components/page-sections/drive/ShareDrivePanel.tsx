@@ -34,13 +34,11 @@ import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   createDriveInviteDialogAtom,
   folderGrantsFeatureEnabledAtom,
-  folderRolesEnabledAtom,
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
   approveEmailInvite,
   changeDriveMemberRole,
-  changeFolderGrantRole,
   replaceFolderGrants,
   isSharedDrivesUnavailable,
   listDriveInvites,
@@ -183,11 +181,6 @@ export default function ShareDrivePanel() {
 
   const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
   const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
-  const folderRolesEnabled = useAtomValue(folderRolesEnabledAtom);
-  // Managing from INSIDE a folder grant (a folder Manager): only that
-  // folder's holders and links, never the drive's members. Rust scopes the
-  // listings by the `grant:` label; this decides what the panel draws.
-  const folderScope = target?.folderScope ?? null;
 
   // Members first: it is what someone opens this for once the drive is
   // already shared, which is the only state it opens in.
@@ -226,10 +219,7 @@ export default function ShareDrivePanel() {
     setMembers({ kind: "loading" });
     try {
       const [rows, grants] = await Promise.all([
-        // A folder Manager has no view of the drive's members.
-        folderScope
-          ? Promise.resolve([] as DriveMemberInfo[])
-          : listDriveMembers(driveLabel, driveTarget),
+        listDriveMembers(driveLabel, driveTarget),
         folderGrantsEnabled
           ? listDriveFolderGrants(driveLabel, driveTarget).catch(() => [])
           : Promise.resolve([] as DriveFolderGrantInfo[]),
@@ -245,7 +235,7 @@ export default function ShareDrivePanel() {
         setMembers({ kind: "error", message: errorMessage(err) });
       }
     }
-  }, [driveTarget, folderGrantsEnabled, folderScope]);
+  }, [driveTarget, folderGrantsEnabled]);
 
   const loadInvites = useCallback(async (driveLabel: string) => {
     setInvites({ kind: "loading" });
@@ -367,22 +357,6 @@ export default function ShareDrivePanel() {
     [label, loadMembers, queryClient, driveTarget],
   );
 
-  const changeGrantRole = useCallback(
-    async (memberSs58: string, role: DriveRole) => {
-      if (!label) return;
-      const labelAtCall = label;
-      try {
-        await changeFolderGrantRole(labelAtCall, memberSs58, role, driveTarget);
-        toast.success(`Role changed to ${driveRoleLabel(role)}`);
-        await loadMembers(labelAtCall);
-      } catch (err) {
-        if (labelAtCall !== currentLabelRef.current) return;
-        toast.error(`Could not change role: ${errorMessage(err)}`);
-      }
-    },
-    [label, loadMembers, driveTarget],
-  );
-
   const changeGrantFolders = useCallback(
     async (memberSs58: string, folders: string[]) => {
       if (!label) return;
@@ -412,9 +386,7 @@ export default function ShareDrivePanel() {
               Share access
             </p>
             <p className="mt-0.5 min-w-0 truncate text-[13px] text-black-900/40 dark:text-white/40">
-              {folderScope
-                ? target.folderName
-                : inviteDriveDisplayName(target.folderName, target.label)}
+              {inviteDriveDisplayName(target.folderName, target.label)}
             </p>
           </div>
           <button
@@ -461,15 +433,9 @@ export default function ShareDrivePanel() {
             }
             onRemove={(ss58) => void removeMember(ss58)}
             onChangeRole={(ss58, role) => void changeRole(ss58, role)}
-            onChangeGrantRole={
-              folderRolesEnabled
-                ? (ss58, role) => void changeGrantRole(ss58, role)
-                : undefined
-            }
             onChangeGrantFolders={(ss58, folders) =>
               void changeGrantFolders(ss58, folders)
             }
-            folderScope={folderScope}
             onCreateInvite={() => {
               if (!target) return;
               // Close the panel as the dialog opens. They are two surfaces for
@@ -478,11 +444,15 @@ export default function ShareDrivePanel() {
               // panel's own overlay on small screens, where the panel sits
               // above FramedDialog's layer.
               setTarget(null);
-              // From inside a folder grant the invite is to that folder:
-              // "/" is its root, which Rust roots at the grant.
-              setInviteDialogTarget(
-                folderScope ? { ...target, pathPrefix: "/" } : target,
-              );
+              // This panel manages the WHOLE drive, so its invite is a
+              // whole-drive invite. A folder is shared from the folder's own
+              // "Share folder" item, never from here.
+              setInviteDialogTarget({
+                label: target.label,
+                folderName: target.folderName,
+                ownerSs58: target.ownerSs58,
+                folderHash: target.folderHash,
+              });
             }}
           />
         )}
@@ -814,19 +784,14 @@ function MembersTab({
   driveName,
   onRemove,
   onChangeRole,
-  onChangeGrantRole,
   onChangeGrantFolders,
-  folderScope,
   onCreateInvite,
 }: {
   state: MembersState;
   driveName: string;
   onRemove: (memberSs58: string) => void;
   onChangeRole: (memberSs58: string, role: DriveRole) => void;
-  /** Present only with folder roles on. */
-  onChangeGrantRole?: (memberSs58: string, role: DriveRole) => void;
   onChangeGrantFolders: (memberSs58: string, folders: string[]) => void;
-  folderScope: string | null;
   onCreateInvite: () => void;
 }) {
   const view = getMembersView(state);
@@ -858,9 +823,7 @@ function MembersTab({
     return (
       <div className="min-h-0 flex-1 py-6 text-center">
         <p className="mb-4 text-sm text-grey-50 dark:text-grey-dark-600">
-          {folderScope
-            ? "No one else has access to this folder yet."
-            : "No one has joined this drive yet."}
+          No one has joined this drive yet.
         </p>
         <InviteButton onClick={onCreateInvite} />
       </div>
@@ -889,15 +852,20 @@ function MembersTab({
         ))}
         {grantsByHolder.length > 0 ? (
           <div className="mt-4">
-            <p className="mb-2 px-0.5 text-[11px] font-medium uppercase tracking-wide text-grey-50 dark:text-grey-dark-600">
+            <p className="mb-1 px-0.5 text-[11px] font-medium uppercase tracking-wide text-grey-50 dark:text-grey-dark-600">
               Folder access
+            </p>
+            {/* There is no way to change a folder holder's role (HCFS
+                #475), so the list says what to do instead of offering a
+                control the server would refuse. */}
+            <p className="mb-2 px-0.5 text-[11px] text-grey-50 dark:text-grey-dark-600">
+              {FOLDER_ACCESS_CHANGE_HINT}
             </p>
             {grantsByHolder.map((holder) => (
               <FolderGrantRow
                 key={holder.memberSs58}
                 holder={holder}
                 onRemove={onRemove}
-                onChangeRole={onChangeGrantRole}
                 onChangeFolders={onChangeGrantFolders}
               />
             ))}
@@ -908,39 +876,32 @@ function MembersTab({
   );
 }
 
+/** How a folder holder's access changes: there is no role change for one. */
+export const FOLDER_ACCESS_CHANGE_HINT =
+  "To change their access, remove them and invite them again.";
+
 /**
  * One grant holder in the Folder access section: who, which folders, their
- * role (Viewer unless the server speaks folder roles), and what can be done.
+ * role (Viewer or Editor), and what can be done. There is no Change role: the
+ * server has no route for it (HCFS #475). Change folders keeps their role;
  * Remove uses the same DELETE as a full member, clearing every folder they
  * hold on this drive.
  */
 function FolderGrantRow({
   holder,
   onRemove,
-  onChangeRole,
   onChangeFolders,
 }: {
   holder: FolderGrantHolder;
   onRemove: (memberSs58: string) => void;
-  /** Present only with folder roles on. */
-  onChangeRole?: (memberSs58: string, role: DriveRole) => void;
   onChangeFolders: (memberSs58: string, folders: string[]) => void;
 }) {
-  const [dialog, setDialog] = useState<"none" | "role" | "folders" | "remove">("none");
+  const [dialog, setDialog] = useState<"none" | "folders" | "remove">("none");
   const who = accountDisplayName(holder.memberSs58, holder.memberName);
   const role = parseDriveRole(holder.role);
   const folders = holder.folders;
 
   const items = [
-    ...(onChangeRole
-      ? [
-          {
-            icon: <UserRoundPen className="size-4" />,
-            itemTitle: "Change role",
-            onItemClick: () => setDialog("role"),
-          },
-        ]
-      : []),
     // Narrowing someone to fewer folders; adding a folder is a new invite.
     ...(folders.length > 1
       ? [
@@ -1000,15 +961,6 @@ function FolderGrantRow({
         </Button>
       </TableActionMenu>
 
-      {dialog === "role" && onChangeRole && (
-        <ChangeRoleDialog
-          who={who}
-          currentRole={role}
-          place="folder"
-          onClose={() => setDialog("none")}
-          onConfirm={(next) => onChangeRole(holder.memberSs58, next)}
-        />
-      )}
       {dialog === "folders" && (
         <ChangeFoldersDialog
           who={who}
@@ -1170,23 +1122,17 @@ function InviteButton({
 function ChangeRoleDialog({
   who,
   currentRole,
-  place = "drive",
   onClose,
   onConfirm,
 }: {
   who: string;
   currentRole: DriveRole;
-  /** A drive member, or a folder grant holder (folder roles). */
-  place?: "drive" | "folder";
   onClose: () => void;
   onConfirm: (role: DriveRole) => void;
 }) {
   const current = currentRole;
   const [role, setRole] = useState<DriveRole>(current);
-  // The link-revocation side effects are the drive server's documented
-  // behaviour; nothing is known yet about folders, so nothing is claimed.
-  const demotionWarning =
-    place === "drive" ? driveRoleDemotionWarning(current, role) : null;
+  const demotionWarning = driveRoleDemotionWarning(current, role);
 
   return (
     <FramedDialog
@@ -1199,7 +1145,7 @@ function ChangeRoleDialog({
     >
       <div className="font-geist">
         <p className="mb-5 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-          What {who} can do in this {place}.
+          What {who} can do in this drive.
         </p>
 
         <div className="mb-6 flex flex-col gap-2">

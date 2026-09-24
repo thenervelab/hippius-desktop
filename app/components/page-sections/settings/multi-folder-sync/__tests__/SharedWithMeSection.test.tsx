@@ -380,7 +380,7 @@ describe("folders shared with me (folder roles)", () => {
     folder_share_revoke_by_hash: true,
     share_owner_wrap: true,
     folder_grants: true,
-    folder_grant_roles: true,
+    folder_grant_writes: true,
   };
   const GRANT = {
     ownerSs58: OWNER,
@@ -388,7 +388,7 @@ describe("folders shared with me (folder roles)", () => {
     folderHash: "0123456789abcdef",
     displayLabel: "team-docs",
     pathPrefix: "Clients/ACME",
-    role: "manager",
+    role: "writer",
     createdAt: "2026-08-20T00:00:00Z",
   };
 
@@ -409,7 +409,7 @@ describe("folders shared with me (folder roles)", () => {
     expect(await screen.findByText("ACME")).toBeInTheDocument();
     expect(screen.getByText("In team-docs")).toBeInTheDocument();
     expect(screen.getByText("Grace")).toBeInTheDocument();
-    expect(screen.getByText("Manager")).toBeInTheDocument();
+    expect(screen.getByText("Editor")).toBeInTheDocument();
     // Never offered: syncing a granted folder to disk is out of scope.
     expect(screen.queryByText("Sync to this computer")).not.toBeInTheDocument();
   });
@@ -426,21 +426,10 @@ describe("folders shared with me (folder roles)", () => {
     });
   });
 
-  it("lets a folder Manager manage access scoped to the folder", async () => {
-    const onManageAccess = vi.fn();
-    render(<SharedWithMeSection onManageAccess={onManageAccess} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Manage access" }));
-    expect(onManageAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "grant:5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty~0123456789abcdef~436c69656e74732f41434d45",
-        folderScope: "Clients/ACME",
-        ownerSs58: OWNER,
-      }),
-    );
-  });
-
-  it("offers no Manage access to a folder Editor", async () => {
-    listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, role: "writer" }]);
+  // Manager is not a folder role (HCFS #475): a holder never manages the
+  // folder, whatever role the listing claims.
+  it("offers no Manage access on a shared folder", async () => {
+    listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, role: "manager" }]);
     render(<SharedWithMeSection onManageAccess={vi.fn()} />);
     await screen.findByText("ACME");
     expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();

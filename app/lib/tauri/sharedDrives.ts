@@ -114,11 +114,6 @@ export async function createDriveInvite(
     maxUses?: number;
     role?: DriveRole;
     target?: DriveTarget;
-    /**
-     * Drive-relative folder for a folder invite. When set, Rust forces
-     * reader / single-use / ≤30 days and puts the derived file key in `#k=`.
-     */
-    pathPrefix?: string;
   },
 ): Promise<DriveInviteLink> {
   return invoke<DriveInviteLink>("create_drive_invite", {
@@ -126,7 +121,35 @@ export async function createDriveInvite(
     expiresInSecs: opts?.expiresInSecs,
     maxUses: opts?.maxUses,
     role: opts?.role,
-    pathPrefix: opts?.pathPrefix ?? null,
+    ...targetArgs(opts?.target),
+  });
+}
+
+/**
+ * Mint a FOLDER invite link: one person, one folder, at most 30 days. A
+ * separate command from {@link createDriveInvite} on purpose: the folder is
+ * required, and Rust refuses an empty one before anything is sent, so sharing
+ * a folder can never come back as a whole-drive invite.
+ *
+ * Refusals to match (structured, never by message): the folder coming-soon
+ * kinds ({@link isFolderInvitesUnavailable},
+ * {@link isFolderEditorInvitesUnavailable}) and the plan gate
+ * ({@link isSharedDrivesNotEntitled}).
+ */
+export async function createFolderInvite(
+  label: string,
+  pathPrefix: string,
+  opts?: {
+    expiresInSecs?: number;
+    role?: Exclude<DriveRole, "manager">;
+    target?: DriveTarget;
+  },
+): Promise<DriveInviteLink> {
+  return invoke<DriveInviteLink>("create_folder_invite", {
+    label,
+    pathPrefix,
+    expiresInSecs: opts?.expiresInSecs,
+    role: opts?.role,
     ...targetArgs(opts?.target),
   });
 }
@@ -456,8 +479,8 @@ export async function emailDriveInvite(
     expiresInSecs?: number;
     target?: DriveTarget;
     /**
-     * A folder to invite into (folder roles, assumed until HCFS publishes
-     * them). Rust refuses it on a server without `folder_grant_roles`.
+     * A folder to invite into. The server refuses to mail a folder invite
+     * for now, which comes back as {@link isFolderEmailInvitesUnavailable}.
      */
     pathPrefix?: string;
   },
@@ -473,8 +496,9 @@ export async function emailDriveInvite(
 }
 
 /**
- * Whether this server can send invitations by email. Asked without sending
- * one; `false` hides the option rather than offering a control that fails.
+ * Whether this server can send invitations by email, asked without sending
+ * one. A HINT only: the option is always offered, and `false` lets the dialog
+ * say "coming soon" before the user types an address.
  */
 export async function emailInvitesAvailable(
   label: string,
@@ -503,9 +527,24 @@ export async function approveEmailInvite(
   });
 }
 
-/** The server has no mail service: hide "Invite by email", never toast it. */
+/** The server has no mail service: say email invites are coming soon. */
 export function isEmailInvitesUnavailable(error: unknown): boolean {
   return isNotReady(error, "EMAIL_INVITES_UNAVAILABLE");
+}
+
+/** Folder invites are off on this server: sharing one folder is coming soon. */
+export function isFolderInvitesUnavailable(error: unknown): boolean {
+  return isNotReady(error, "FOLDER_INVITES_UNAVAILABLE");
+}
+
+/** Editor folder invites are off: Editor on one folder is coming soon. */
+export function isFolderEditorInvitesUnavailable(error: unknown): boolean {
+  return isNotReady(error, "FOLDER_EDITOR_INVITES_UNAVAILABLE");
+}
+
+/** A folder invite cannot be mailed yet: email for one folder is coming soon. */
+export function isFolderEmailInvitesUnavailable(error: unknown): boolean {
+  return isNotReady(error, "FOLDER_EMAIL_INVITES_UNAVAILABLE");
 }
 
 /** One folder shared WITH this account (a folder grant it holds). */
@@ -517,7 +556,7 @@ export interface MyFolderGrantInfo {
   displayLabel: string;
   /** The granted folder, drive-relative. */
   pathPrefix: string;
-  /** `reader` unless the server speaks folder roles. */
+  /** `reader` (Viewer) or `writer` (Editor); anything else reads as Viewer. */
   role: string;
   createdAt: string;
   frozen?: boolean;
@@ -531,22 +570,4 @@ export interface MyFolderGrantInfo {
  */
 export async function listMyFolderGrants(): Promise<MyFolderGrantInfo[]> {
   return invoke<MyFolderGrantInfo[]>("list_my_folder_grants");
-}
-
-/**
- * Change a folder grant holder's role (folder roles, assumed until HCFS
- * publishes them). Refusals come back as `Validation`, worded for the user.
- */
-export async function changeFolderGrantRole(
-  label: string,
-  memberSs58: string,
-  role: DriveRole,
-  target?: DriveTarget,
-): Promise<void> {
-  await invoke<void>("change_folder_grant_role", {
-    label,
-    memberSs58,
-    role,
-    ...targetArgs(target),
-  });
 }

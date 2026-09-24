@@ -13,6 +13,9 @@ import {
   EMAIL_INVITE_ROLES,
   EMAIL_INVITE_TTL_OPTIONS,
   clampEmailInviteTtl,
+  clampFolderInviteTtl,
+  FOLDER_INVITE_ROLES,
+  FOLDER_INVITE_TTL_OPTIONS,
   groupFolderGrantsByHolder,
 } from "../shareDriveModalState";
 import { MANAGER_INVITE_MAX_SECONDS } from "@/app/lib/shared-drives/roles";
@@ -138,5 +141,33 @@ describe("groupFolderGrantsByHolder", () => {
       createdAt: "2026-01-15",
     });
     expect(rows[1]).toMatchObject({ memberSs58: "5B", memberName: "Bo", folders: ["x"] });
+  });
+});
+
+// The "coming soon" sentences are the Rust `NotReadyKind` Display texts too.
+// Neither side may reword alone: the FE shows these for a probe hint, Rust
+// sends the same words as the refusal's message.
+describe("COMING_SOON_COPY", () => {
+  it("matches the Rust refusal texts word for word", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const rust = readFileSync(join(process.cwd(), "src-tauri/src/error.rs"), "utf8");
+    const { COMING_SOON_COPY } = await import("../shareDriveModalState");
+    for (const [kind, text] of Object.entries(COMING_SOON_COPY)) {
+      expect(rust.includes(`"${text}"`), `${kind}: ${text}`).toBe(true);
+    }
+  });
+});
+
+describe("folder invite choices", () => {
+  it("are Viewer or Editor, never Manager", () => {
+    expect([...FOLDER_INVITE_ROLES]).toEqual(["reader", "writer"]);
+  });
+
+  it("never outlive 30 days, and default to 7", () => {
+    expect(FOLDER_INVITE_TTL_OPTIONS.every((o) => o.secs <= 30 * 24 * 60 * 60)).toBe(true);
+    expect(FOLDER_INVITE_TTL_OPTIONS.some((o) => o.secs === NEVER_EXPIRES_SECS)).toBe(false);
+    expect(clampFolderInviteTtl(NEVER_EXPIRES_SECS)).toBe(DEFAULT_INVITE_TTL_SECS);
+    expect(clampFolderInviteTtl(24 * 60 * 60)).toBe(24 * 60 * 60);
   });
 });

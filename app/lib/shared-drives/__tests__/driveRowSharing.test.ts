@@ -200,12 +200,17 @@ describe("folder grants in the label sets", () => {
   it("adds a granted folder's grant: label where its role allows", () => {
     const writable = writableMemberDriveLabels([], [grant("writer"), grant("reader")]);
     expect([...writable]).toEqual(["grant:5Owner~h~436c69656e74732f777269746572"]);
-    const manageable = manageableMemberDriveLabels([], [grant("manager"), grant("writer")]);
-    expect(manageable.size).toBe(1);
-    expect([...manageable][0].startsWith("grant:5Owner~h~")).toBe(true);
+  });
+
+  it("never makes a granted folder manageable: Manager is not a folder role", () => {
+    const manageable = manageableMemberDriveLabels([
+      { ownerSs58: "5Owner", folderHash: "h", role: "manager", localLabel: null },
+    ]);
+    expect([...manageable]).toEqual(["shared:5Owner~h"]);
+    expect([...manageable].some((l) => l.startsWith("grant:"))).toBe(false);
   });
 
   it("leaves a frozen grant out", () => {
-    expect(writableMemberDriveLabels([], [grant("manager", { frozen: true })]).size).toBe(0);
+    expect(writableMemberDriveLabels([], [grant("writer", { frozen: true })]).size).toBe(0);
   });
 });
