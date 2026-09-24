@@ -9,7 +9,7 @@
 // After a mint it shows the link (key hidden), what it grants from what Rust
 // actually sent, and ways to make another or revoke this one.
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Check, Globe, Link2 } from "lucide-react";
 import { Button, Icons } from "@/components/ui";
 import { Select } from "@/components/ui/select/Select";
@@ -43,6 +43,8 @@ import {
 
 const COPIED_MS = 2000;
 const TEXT_ACTION = "text-xs font-medium hover:underline";
+/** The small muted label above a select, as in the other drive dialogs. */
+const FIELD_LABEL = "text-xs font-medium text-grey-50 dark:text-grey-dark-600";
 
 export function GeneralAccessSection({
   label,
@@ -71,6 +73,8 @@ export function GeneralAccessSection({
   const [notice, setNotice] = useState<SectionNotice | null>(null);
   const [created, setCreated] = useState<DriveInviteLink | null>(null);
   const [revoked, setRevoked] = useState(false);
+  const roleId = useId();
+  const ttlId = useId();
 
   const roleOptions: readonly DriveRole[] = folder
     ? folderRoles
@@ -176,39 +180,52 @@ export function GeneralAccessSection({
                 </p>
               </div>
               {/* One row that never wraps: two compact selects at fixed
-                  widths and the button at its natural width, all 34px
-                  tall. The breakpoints key off this column (a container
-                  query), not the window, so the dialog at its normal width
-                  always gets the row. Only a narrow column stacks: the
-                  selects side by side over a full-width button, then each
-                  control on its own line at the narrowest. */}
+                  widths, each under a small label, and the button at its
+                  natural width, all 34px tall and bottom-aligned so the
+                  button lines up with the selects rather than the labels.
+                  The breakpoints key off this column (a container query),
+                  not the window, so the dialog at its normal width always
+                  gets the row. Only a narrow column stacks: the selects side
+                  by side over a full-width button, then each control on its
+                  own line at the narrowest. A label always travels with its
+                  select. */}
               <div
                 data-testid="general-access-controls"
-                className="flex flex-col gap-2 @md:flex-row @md:flex-nowrap @md:items-center"
+                className="flex flex-col gap-2 @md:flex-row @md:flex-nowrap @md:items-end"
               >
                 <div className="flex flex-col gap-2 @xs:flex-row @md:contents">
-                  <Select
-                    ariaLabel="Link access"
-                    value={role}
-                    onValueChange={(value) => handleRoleChange(value as DriveRole)}
-                    options={roleOptions.map((r) => ({
-                      label: driveRoleLabel(r),
-                      value: r,
-                      description: driveRoleDescription(r),
-                    }))}
-                    size="compact"
-                    minimal
-                    className="min-w-0 @xs:flex-1 @md:w-[120px] @md:flex-none"
-                  />
-                  <Select
-                    ariaLabel="Link expires"
-                    value={String(ttlSecs)}
-                    onValueChange={(value) => setTtlSecs(Number(value))}
-                    options={ttlOptions.map(({ label: text, secs }) => ({ label: text, value: String(secs) }))}
-                    size="compact"
-                    minimal
-                    className="min-w-0 @xs:flex-1 @md:w-[140px] @md:flex-none"
-                  />
+                  <div className="flex min-w-0 flex-col gap-1.5 @xs:flex-1 @md:w-[120px] @md:flex-none">
+                    <label htmlFor={roleId} className={FIELD_LABEL}>
+                      Access
+                    </label>
+                    <Select
+                      id={roleId}
+                      ariaLabel="Link access"
+                      value={role}
+                      onValueChange={(value) => handleRoleChange(value as DriveRole)}
+                      options={roleOptions.map((r) => ({
+                        label: driveRoleLabel(r),
+                        value: r,
+                        description: driveRoleDescription(r),
+                      }))}
+                      size="compact"
+                      minimal
+                    />
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-1.5 @xs:flex-1 @md:w-[140px] @md:flex-none">
+                    <label htmlFor={ttlId} className={FIELD_LABEL}>
+                      Link expires
+                    </label>
+                    <Select
+                      id={ttlId}
+                      ariaLabel="Link expires"
+                      value={String(ttlSecs)}
+                      onValueChange={(value) => setTtlSecs(Number(value))}
+                      options={ttlOptions.map(({ label: text, secs }) => ({ label: text, value: String(secs) }))}
+                      size="compact"
+                      minimal
+                    />
+                  </div>
                 </div>
                 <Button
                   type="button"

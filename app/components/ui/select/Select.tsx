@@ -31,6 +31,8 @@ export interface SelectProps {
   itemClassName?: string;
   valueClassName?: string;
   ariaLabel?: string;
+  /** Put on the trigger so a visible `<label htmlFor>` can name the select. */
+  id?: string;
   "aria-invalid"?: boolean | "true" | "false";
   /**
    * `compact`: a 32px trigger with 13px text and a small chevron, and a
@@ -74,6 +76,7 @@ const Select = React.forwardRef<
       itemClassName,
       valueClassName,
       ariaLabel,
+      id,
       "aria-invalid": ariaInvalid,
       size = "default",
       chrome = "field",
@@ -95,6 +98,7 @@ const Select = React.forwardRef<
         >
           <SelectPrimitive.Trigger
             ref={ref}
+            id={id}
             aria-label={ariaLabel ?? placeholder}
             aria-invalid={ariaInvalid}
             className={cn(

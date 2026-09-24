@@ -433,15 +433,45 @@ describe("General access", () => {
     expect(rowClasses).toEqual(expect.arrayContaining(["@md:flex-row", "@md:flex-nowrap"]));
     expect(row.className).not.toMatch(/(^|\s)(\S+:)?flex-wrap(\s|$)/);
     expect(row.parentElement?.closest(".\\@container")).not.toBeNull();
-    expect(access.parentElement?.parentElement?.className).toContain("@md:contents");
+    // Each select sits in a field (label over select) inside the selects'
+    // group, which dissolves into the row at that width.
+    const accessField = access.parentElement?.parentElement;
+    const expiresField = expires.parentElement?.parentElement;
+    expect(accessField?.parentElement?.className).toContain("@md:contents");
+    expect(expiresField?.parentElement).toBe(accessField?.parentElement);
+
+    // Bottom-aligned, so the button lines up with the selects, not the labels.
+    expect(rowClasses).toContain("@md:items-end");
 
     // Compact fixed widths for the selects, natural width for the button.
-    expect(access.parentElement?.className).toContain("@md:w-[120px]");
-    expect(access.parentElement?.className).toContain("@md:flex-none");
-    expect(expires.parentElement?.className).toContain("@md:w-[140px]");
-    expect(expires.parentElement?.className).toContain("@md:flex-none");
+    expect(accessField?.className).toContain("@md:w-[120px]");
+    expect(accessField?.className).toContain("@md:flex-none");
+    expect(expiresField?.className).toContain("@md:w-[140px]");
+    expect(expiresField?.className).toContain("@md:flex-none");
     expect(create.className).toContain("@md:w-auto");
     expect(create.className).toContain("h-[34px]");
+  });
+
+  it("labels the access and expiry selects and ties each label to its select", () => {
+    renderDialog();
+    const row = screen.getByTestId("general-access-controls");
+    const access = screen.getByLabelText("Link access");
+    const expires = screen.getByLabelText("Link expires");
+
+    const accessLabel = screen.getByText("Access", { selector: "label" });
+    const expiresLabel = screen.getByText("Link expires", { selector: "label" });
+    expect(access.id).not.toBe("");
+    expect(expires.id).not.toBe("");
+    expect(accessLabel).toHaveAttribute("for", access.id);
+    expect(expiresLabel).toHaveAttribute("for", expires.id);
+    expect(screen.getByLabelText("Access", { selector: "button" })).toBe(access);
+
+    // The labels travel with their selects, inside the one row container.
+    expect(accessLabel.parentElement).toContainElement(access);
+    expect(expiresLabel.parentElement).toContainElement(expires);
+    for (const el of [accessLabel, expiresLabel, access, expires, screen.getByRole("button", { name: "Create link" })]) {
+      expect(row).toContainElement(el);
+    }
   });
 
   it("says anyone with a drive link can join", () => {
