@@ -78,10 +78,13 @@ import {
   HolderRow,
   LinkRow,
   PanelSkeleton,
+  ShowAllRows,
 } from "./access-panel/AccessPanelRows";
 import type { FolderRole } from "./access-panel/ChangeFoldersDialog";
 import {
   ACCESS_PANEL_COPY,
+  PANEL_GROUP_CAP,
+  capRows,
   isOnlyOwner,
   memberMeta,
   panelSubline,
@@ -445,6 +448,9 @@ function PanelContent({
   onUnlock: () => void;
   actions: RowActions;
 }) {
+  // Each group draws its first rows and a "Show all N" for the rest.
+  const [allPending, setAllPending] = useState(false);
+  const [allLinks, setAllLinks] = useState(false);
   if (state.kind === "loading") return <PanelSkeleton withLinks={expectManage} />;
   if (state.kind === "unavailable") {
     return (
@@ -487,6 +493,8 @@ function PanelContent({
     );
   }
 
+  const pending = capRows(panel.pendingInvites, allPending);
+  const links = capRows(panel.links, allLinks);
   return (
     <>
       <PeopleGroup panel={panel} folder={folder} owner={owner} onShare={onShare} busy={busy} rowError={rowError} actions={actions} />
@@ -494,7 +502,7 @@ function PanelContent({
         <section aria-labelledby="access-pending">
           <GroupHeader id="access-pending" title="Pending invites" count={panel.pendingInvites.length} />
           <ul>
-            {panel.pendingInvites.map((invite) => {
+            {pending.shown.map((invite) => {
               const who = invite.recipientEmail ?? "this invitation";
               const left = pendingLeft(invite.expiresInSecs);
               return (
@@ -518,6 +526,9 @@ function PanelContent({
               );
             })}
           </ul>
+          {pending.hidden > 0 ? (
+            <ShowAllRows total={panel.pendingInvites.length} onClick={() => setAllPending(true)} />
+          ) : null}
         </section>
       ) : null}
       {panel.canManage ? (
@@ -534,7 +545,7 @@ function PanelContent({
             </InlineNotice>
           ) : null}
           <ul>
-            {panel.links.map((link) => (
+            {links.shown.map((link) => (
               <RowItem key={link.inviteId} id={link.inviteId} rowError={rowError}>
                 <LinkRow
                   link={link}
@@ -547,6 +558,7 @@ function PanelContent({
               </RowItem>
             ))}
           </ul>
+          {links.hidden > 0 ? <ShowAllRows total={panel.links.length} onClick={() => setAllLinks(true)} /> : null}
           <EndedLinks links={panel.inactiveLinks} />
         </section>
       ) : null}
@@ -571,6 +583,14 @@ function PeopleGroup({
   rowError: { key: string; message: string } | null;
   actions: RowActions;
 }) {
+  const [all, setAll] = useState(false);
+  // Members and folder holders share one cap, and a few holders always make
+  // it in so a long member list does not hide every folder tag. The owner is
+  // always drawn.
+  const holderQuota = Math.min(panel.folderHolders.length, Math.max(5, PANEL_GROUP_CAP - panel.members.length));
+  const members = capRows(panel.members, all, PANEL_GROUP_CAP - holderQuota);
+  const holders = capRows(panel.folderHolders, all, holderQuota);
+  const hidden = members.hidden + holders.hidden;
   return (
     <section aria-labelledby="access-people">
       <GroupHeader
@@ -581,7 +601,7 @@ function PeopleGroup({
       />
       <ul>
         <li>{owner}</li>
-        {panel.members.map((m) => {
+        {members.shown.map((m) => {
           const who = accountDisplayName(m.memberSs58, m.memberName);
           return (
             <RowItem key={m.memberSs58} id={m.memberSs58} rowError={rowError}>
@@ -596,7 +616,7 @@ function PeopleGroup({
             </RowItem>
           );
         })}
-        {panel.folderHolders.map((h) => {
+        {holders.shown.map((h) => {
           const who = accountDisplayName(h.memberSs58, h.memberName);
           return (
             <RowItem key={`holder:${h.memberSs58}`} id={h.memberSs58} rowError={rowError}>
@@ -611,6 +631,7 @@ function PeopleGroup({
           );
         })}
       </ul>
+      {hidden > 0 ? <ShowAllRows total={peopleCount(panel)} onClick={() => setAll(true)} /> : null}
       {/* There is no role change for a folder holder (HCFS #475), so the
           list says what to do instead of offering a control the server
           would refuse. */}

@@ -160,6 +160,19 @@ export function endedLinksLine(count: number): string {
   return `${count} expired or revoked link${count === 1 ? "" : "s"}`;
 }
 
+/**
+ * How many rows a group draws before "Show all N". A big drive has 100
+ * people and 100 links; drawing every row (each with a role select and its
+ * dialogs) up front makes the panel slow to open for rows few will scroll to.
+ */
+export const PANEL_GROUP_CAP = 25;
+
+/** The rows a group draws now, and how many wait behind "Show all". */
+export function capRows<T>(rows: readonly T[], expanded: boolean, cap: number = PANEL_GROUP_CAP): { shown: T[]; hidden: number } {
+  if (expanded || rows.length <= cap) return { shown: [...rows], hidden: 0 };
+  return { shown: rows.slice(0, cap), hidden: rows.length - cap };
+}
+
 /** Copy for the panel. One place, shared with the tests. */
 export const ACCESS_PANEL_COPY = {
   changesApply: "Changes apply right away.",

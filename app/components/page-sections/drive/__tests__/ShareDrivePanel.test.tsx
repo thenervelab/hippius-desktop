@@ -570,3 +570,41 @@ describe("a drive shared with you", () => {
     await waitFor(() => expect(store.get(shareDriveModalAtom)).toBeNull());
   });
 });
+
+describe("a big drive", () => {
+  // The Share dev tools' "Big drive" preset: 60 people (54 members and 6
+  // folder holders), 6 pending invites, 45 working links and 15 ended ones.
+  async function bigDrive() {
+    const { buildFixture, fixtureAccessPanel } = await import("../share-dialog/shareFixture");
+    const { DEFAULT_SETTINGS, applyPreset } = await import("../share-dialog/shareDevToolsSettings");
+    const now = Date.parse("2026-09-25T12:00:00Z");
+    return fixtureAccessPanel(buildFixture(applyPreset(DEFAULT_SETTINGS, "big"), null, now), false, now);
+  }
+
+  it("counts every group in full", async () => {
+    listAccessPanelMock.mockResolvedValue(await bigDrive());
+    renderPanel();
+    expect(await screen.findByRole("heading", { name: "People 61" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Pending invites 6" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Links 45 active" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /15 expired or revoked links/ })).toBeInTheDocument();
+  });
+
+  it("draws the first rows of each group, with the folder holders among them, and the rest on Show all", async () => {
+    listAccessPanelMock.mockResolvedValue(await bigDrive());
+    renderPanel();
+    const people = within(await waitFor(() => group(/^People/)));
+    // 20 members and 5 of the 6 holders, so folder tags are in view.
+    expect(people.getAllByRole("combobox", { name: /^Role for/ })).toHaveLength(20);
+    expect(people.getAllByRole("button", { name: "Change folders" })).toHaveLength(5);
+    fireEvent.click(people.getByRole("button", { name: "Show all 61" }));
+    expect(people.getAllByRole("combobox", { name: /^Role for/ })).toHaveLength(54);
+    expect(people.getAllByRole("button", { name: "Change folders" })).toHaveLength(6);
+    expect(people.queryByRole("button", { name: /^Show all/ })).not.toBeInTheDocument();
+
+    const links = within(group(/^Links/));
+    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(25);
+    fireEvent.click(links.getByRole("button", { name: "Show all 45" }));
+    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(45);
+  });
+});

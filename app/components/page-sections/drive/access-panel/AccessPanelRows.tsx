@@ -21,6 +21,7 @@ import { driveRoleLabel, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { truncateInviteUrl } from "@/app/lib/shared-drives/inviteLink";
 import {
   ACCESS_PANEL_COPY,
+  capRows,
   endedLinksLine,
   holderFolderTag,
   linkCreator,
@@ -383,7 +384,9 @@ function EndedLinkRow({ link }: { link: AccessPanelLink }) {
 /** Links that no longer work, folded into one line until opened. */
 export function EndedLinks({ links }: { links: AccessPanelLink[] }) {
   const [open, setOpen] = useState(false);
+  const [all, setAll] = useState(false);
   if (links.length === 0) return null;
+  const { shown, hidden } = capRows(links, all);
   return (
     <div>
       <button
@@ -399,15 +402,33 @@ export function EndedLinks({ links }: { links: AccessPanelLink[] }) {
         <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} aria-hidden />
       </button>
       {open ? (
-        <ul>
-          {links.map((l) => (
-            <li key={l.inviteId}>
-              <EndedLinkRow link={l} />
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul>
+            {shown.map((l) => (
+              <li key={l.inviteId}>
+                <EndedLinkRow link={l} />
+              </li>
+            ))}
+          </ul>
+          {hidden > 0 ? <ShowAllRows total={links.length} onClick={() => setAll(true)} /> : null}
+        </>
       ) : null}
     </div>
+  );
+}
+
+/** Under a capped group: draws the rest of it. */
+export function ShowAllRows({ total, onClick }: { total: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-expanded={false}
+      onClick={onClick}
+      className="flex w-full items-center justify-center gap-1 rounded-lg py-2 text-xs font-medium text-primary-50 transition-colors hover:bg-grey-90/60 dark:text-primary-brand-dark dark:hover:bg-white/5"
+    >
+      Show all {total}
+      <ChevronDown className="size-3.5" aria-hidden />
+    </button>
   );
 }
 

@@ -4,6 +4,7 @@
 import { describe, it, expect } from "vitest";
 import type { AccessPanel, AccessPanelLink } from "@/app/lib/tauri/sharedDrives";
 import {
+  capRows,
   durationWords,
   endedLinksLine,
   holderFolderTag,
@@ -143,5 +144,19 @@ describe("empty", () => {
     expect(isOnlyOwner({ ...empty, links: [link()] })).toBe(false);
     // An ended link is not access.
     expect(isOnlyOwner({ ...empty, inactiveLinks: [link({ status: "revoked" })] })).toBe(true);
+  });
+});
+
+describe("capRows", () => {
+  const rows = Array.from({ length: 30 }, (_, i) => i);
+
+  it("draws everything up to the cap", () => {
+    expect(capRows(rows.slice(0, 25), false)).toEqual({ shown: rows.slice(0, 25), hidden: 0 });
+  });
+
+  it("holds the rest behind Show all until expanded", () => {
+    expect(capRows(rows, false)).toEqual({ shown: rows.slice(0, 25), hidden: 5 });
+    expect(capRows(rows, true)).toEqual({ shown: rows, hidden: 0 });
+    expect(capRows(rows, false, 0)).toEqual({ shown: [], hidden: 30 });
   });
 });
