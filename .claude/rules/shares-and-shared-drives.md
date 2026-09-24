@@ -64,6 +64,34 @@ KNOWN GAP: after a rotation the member seal is stranded under the OLD drive pass
 
 Phase 3 console must copy the KAT vectors verbatim (`grant_passphrase_is_pinned`, `open_grant_frozen_blob_is_pinned` — the frozen blob is the cross-rev data-loss guard). Argon2id is ~1.5s: callers on the runtime MUST `spawn_blocking` seal/open (the `recovery.rs::run_kdf` pattern).
 
+### Two roles, and only the owner manages
+
+The client offers Viewer (`reader`) and Editor (`writer`) only: `WIRE_ROLES` in
+`shared_drives/commands.rs` and `DRIVE_ROLES` in `app/lib/shared-drives/roles.ts`. The server
+still knows `manager`; this client never sends it. `require_offered_role` refuses it as
+Validation "Viewer or Editor only." in the link mint, the emailed invite and the role change,
+before the session or the network is touched, and the HTTP helpers refuse it again. A
+`manager` the server still returns is an Editor for display AND permissions:
+`drive_role_from_wire` maps it to `writer` in every listing (members, memberships, invites,
+`fold_share_access`, `fold_access_panel`, `member_access_for`), so the webview never sees
+it; `parseDriveRole` maps it to `writer` too, because its unknown-role rule (Viewer) would
+take away upload.
+
+Only a drive's OWNER changes access. Every access change (mint, email, approve, revoke,
+remove a member, change a role, change folders, list invites) resolves through
+`resolve_owned_target`, which refuses a drive this account does not own (`OWNER_ONLY`)
+before any key is read or request made; naming this account as the owner is an own drive.
+Reads a member may make (who has access, the panel, members, folder grants) go through
+`resolve_access_target` and name the owner with `member_owner` (`?owner=`); a member's
+Share dialog and panel never ask for invites. No write sends `?owner=` or `owner_ss58`.
+`can_manage` (panel) and `canManageDrive` (FE) are owner only, whatever the member's role,
+so a former Manager sees the read-only panel ("Shared with you by … · you are an Editor"),
+Leave, and "Who has access" on the header mark. Editors keep their public folder links
+(`create_member_folder_share`). Pinned by `access_changes_are_owner_only` and
+`a_manager_role_is_refused_before_anything_else` in `tests/shared_drive_wiring.rs`,
+`a_manager_role_is_refused_before_any_request` (mock server), and the `access_panel.rs`
+and `roles.test.ts` tests.
+
 The invite URL is assembled IN RUST (`create_drive_invite`): token + entropy exist nowhere else — not in logs (no-secret-log pin in `tests/shared_drive_wiring.rs`), not in another IPC. Invite policy defaults (7d / 50 uses) live in Rust (`resolve_invite_policy`); `http_create_invite` takes non-Option values so no call path can send an omitted field. The FE expiry presets (`shareDriveModalState.ts::INVITE_TTL_OPTIONS`) include "Never expires", sent as the hcfs server's 100-year lifetime cap (`NEVER_EXPIRES_SECS` = 100\*365\*24\*3600 — it must equal the server's `MAX_EXPIRES_SECS` exactly, or the preset 400s at mint time); an OMITTED lifetime still resolves to the finite 7-day default.
 
 Invites are listed and revoked by id (`list_drive_invites` / `revoke_drive_invite`; the panel reads them through `list_access_panel`); the desktop never persists a minted token, and revoking a link is distinct from removing a member (the link still circulating vs. someone already in). **The drive list's badge comes from ONE IPC, `list_owned_drive_sharing`**, which fans out members + invites per own drive and folds them in Rust (`fold_drive_sharing`: a drive is omitted only when BOTH listings fail; unknown is not private). The FE hook `useOwnedDriveSharing` is a TanStack query keyed on the sorted label set; every mint / revoke / remove / re-role calls `invalidateOwnedDriveSharing`. It was a hand-rolled effect whose deps included the labels array, so every drive-page re-render cancelled the fetch in flight and the badge never drew Do not put a per-render array in a fetch effect's deps. `leave_shared_drive` ALWAYS sends `?owner=` (the bare server fallback deletes ALL same-hash memberships) and proceeds to local removal on a domain 404 (owner removed us first). Feature-off servers answer a bare 404 on these routes, mapped by `classify_error_status` to `NotReady(SharedDrivesUnavailable)` so the FE hides the surface instead of erroring.
@@ -102,7 +130,7 @@ Two rules it exists to hold, both of which failed while there were copies of it:
    shared drive was encrypted with the owner's key and signed with one derived from the
    uploader's master. Nothing local fails when they disagree.
 2. **It reads the drive password WITH the session mnemonic.** The mint's own copy passed
-   `None`, so an encrypted password could not be opened and a manager could not mint at all.
+   `None`, so an encrypted password could not be opened and the mint failed outright.
 
 It is derived ONCE per upload, never per file: the grant path is Argon2id, so per-file
 derivation cost seconds apiece.
@@ -142,7 +170,7 @@ Desktop routing: `classify_sync_error` (`tauri_bridge.rs`) checks the marker BEF
 
 ### v1 scope cuts
 
-Deliberate, documented where they bite: no folder-entity materialization on member drives (empty folders from the owner don't appear on member devices; files sync fully), no member migration/selective-sync-exclusions surfaces (member FOLDER links are allowed for Editors and Managers, see "Member mint"), membership fetch is FE-on-demand, never wired into `restore_session` (the login path's hang-proof timeout discipline is not risked for a listing), and the files-page stats join leaves member rows blank.
+Deliberate, documented where they bite: no folder-entity materialization on member drives (empty folders from the owner don't appear on member devices; files sync fully), no member migration/selective-sync-exclusions surfaces (member FOLDER links are allowed for Editors, see "Member mint"), membership fetch is FE-on-demand, never wired into `restore_session` (the login path's hang-proof timeout discipline is not risked for a listing), and the files-page stats join leaves member rows blank.
 
 **Caution**: `recent_uploads.rs`'s `hash_to_drive` map still keys drives by the label-derived hash — safe ONLY because member drives are excluded from the search surfaces in v1. If member drives ever reach search/recent-uploads, that map must move to the identity columns or member hits will mis-join.
 
@@ -220,9 +248,10 @@ match the message EXACTLY and return `NotReady(FolderInvitesUnavailable |
 FolderEditorInvitesUnavailable | FolderEmailInvitesUnavailable)`; `503` mail-off is
 `EmailInvitesUnavailable`. The FE dispatches on the subkind only.
 
-Manager is not a folder role: `grant_role` reads it (and anything unknown) as `reader`,
-so a holder is never manageable and there is no folder-Manager panel (`in_scope` in Rust is
-dormant). Listings are normalised before parsing (`default_missing_grant_roles`).
+Manager is not a folder role: `grant_role` reads it (and anything unknown) as `reader`, so a
+holder is never manageable. `in_scope` only narrows `list_drive_folder_grants` when read
+from inside a granted folder. Listings are normalised before parsing
+(`default_missing_grant_roles`).
 
 A granted folder is browsed under `grant:<owner>~<hash>~<hex(path)>` (mirrored by
 `sharedDriveLabel.ts::makeFolderGrantLabel`). It resolves to the owner's identity like a
@@ -247,7 +276,7 @@ The file key comes from the canonical `sync::remote::encryption_key_for_label` c
 
 ### Member mint (hcfs #458)
 
-A folder in somebody else's drive goes through `create_member_folder_share`: `capabilities.member_folder_shares` first, then this account's access from `/v1/drive-memberships` (`member_access_for`: the whole-drive membership, else a folder grant that COVERS the path), refused locally unless Editor or Manager and not frozen (`member_folder_share_refusal`, the server answers a Viewer with the same 404 as a stranger). hcfs-client's `create_folder_share` cannot send `owner_ss58`, so the POST is a direct reqwest call with the same four metadata fields plus the owner; the keystore put, compensating revoke, origin row and owner wrap mirror the owner path. The key is still `encryption_key_for_label` (owner's seal or this account's grant), never this account's master. FE: `offersShareAction` shows the item on a member drive only with the capability and a label in `useWritableMemberDriveLabels()`; hidden, not disabled, otherwise.
+A folder in somebody else's drive goes through `create_member_folder_share`: `capabilities.member_folder_shares` first, then this account's access from `/v1/drive-memberships` (`member_access_for`: the whole-drive membership, else a folder grant that COVERS the path), refused locally unless Editor and not frozen (`member_folder_share_refusal`; a wire `manager` reads as `writer` in `member_access_for`, and the gate still accepts `manager` as a write role; the server answers a Viewer with the same 404 as a stranger). hcfs-client's `create_folder_share` cannot send `owner_ss58`, so the POST is a direct reqwest call with the same four metadata fields plus the owner; the keystore put, compensating revoke, origin row and owner wrap mirror the owner path. The key is still `encryption_key_for_label` (owner's seal or this account's grant), never this account's master. FE: `offersShareAction` shows the item on a member drive only with the capability and a label in `useWritableMemberDriveLabels()`; hidden, not disabled, otherwise.
 
 ### Capability gate
 
