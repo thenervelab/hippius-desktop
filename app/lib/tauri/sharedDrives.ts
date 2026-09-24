@@ -266,7 +266,19 @@ export interface DriveInviteInfo {
    * tab must show it, or a folder invite reads as access to everything.
    */
   pathPrefix?: string;
+  /** Where a MAILED invitation was sent; absent on a link invite. */
+  recipientEmail?: string;
+  /**
+   * How far a mailed invitation has got. `sent`: waiting for the recipient to
+   * open it. `awaiting_seal`: opened, waiting for an owner or manager to
+   * approve. `sealed`: approved, waiting for them to join. Absent on a link.
+   */
+  emailStatus?: EmailInviteStatus;
+  /** The account that claimed a mailed invitation, once it was opened. */
+  requesterSs58?: string;
 }
+
+export type EmailInviteStatus = "sent" | "awaiting_seal" | "sealed";
 
 /** The live invites for an OWN drive. */
 export async function listDriveInvites(
@@ -427,4 +439,65 @@ export function isSharedDrivesUnavailable(error: unknown): boolean {
  */
 export function isSharedDrivesNotEntitled(error: unknown): boolean {
   return isNotReady(error, "SHARED_DRIVES_NOT_ENTITLED");
+}
+
+/**
+ * Invite `email` into a drive and have the server send the invitation.
+ *
+ * Viewer or Editor only (a Manager invite has to be a link), single use,
+ * between one hour and thirty days; Rust refuses anything else by name.
+ * Returns only the new invite's id: the token exists only in the mail.
+ */
+export async function emailDriveInvite(
+  label: string,
+  email: string,
+  opts?: {
+    role?: Exclude<DriveRole, "manager">;
+    expiresInSecs?: number;
+    target?: DriveTarget;
+  },
+): Promise<{ inviteId: string }> {
+  return invoke<{ inviteId: string }>("email_drive_invite", {
+    label,
+    email,
+    role: opts?.role ?? null,
+    expiresInSecs: opts?.expiresInSecs ?? null,
+    ...targetArgs(opts?.target),
+  });
+}
+
+/**
+ * Whether this server can send invitations by email. Asked without sending
+ * one; `false` hides the option rather than offering a control that fails.
+ */
+export async function emailInvitesAvailable(
+  label: string,
+  target?: DriveTarget,
+): Promise<boolean> {
+  return invoke<boolean>("email_invites_available", {
+    label,
+    ...targetArgs(target),
+  });
+}
+
+/**
+ * Approve a mailed invitation that is `awaiting_seal`: Rust re-reads the row,
+ * seals the drive key to the recipient's published key and posts it.
+ * `already_sealed` means somebody approved it first.
+ */
+export async function approveEmailInvite(
+  label: string,
+  inviteId: string,
+  target?: DriveTarget,
+): Promise<{ status: "sealed" | "already_sealed" }> {
+  return invoke<{ status: "sealed" | "already_sealed" }>("approve_email_invite", {
+    label,
+    inviteId,
+    ...targetArgs(target),
+  });
+}
+
+/** The server has no mail service: hide "Invite by email", never toast it. */
+export function isEmailInvitesUnavailable(error: unknown): boolean {
+  return isNotReady(error, "EMAIL_INVITES_UNAVAILABLE");
 }

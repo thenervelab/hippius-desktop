@@ -37,6 +37,7 @@ import {
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
+  approveEmailInvite,
   changeDriveMemberRole,
   isSharedDrivesUnavailable,
   listDriveInvites,
@@ -266,6 +267,28 @@ export default function ShareDrivePanel() {
     [label, loadInvites, queryClient, driveTarget],
   );
 
+  const approveInvite = useCallback(
+    async (inviteId: string) => {
+      if (!label) return;
+      const labelAtCall = label;
+      try {
+        const result = await approveEmailInvite(labelAtCall, inviteId, driveTarget);
+        toast.success(
+          result.status === "already_sealed"
+            ? "Already approved"
+            : "Approved. They can join now.",
+        );
+        await loadInvites(labelAtCall);
+      } catch (err) {
+        if (labelAtCall !== currentLabelRef.current) return;
+        toast.error(`Could not approve: ${errorMessage(err)}`);
+        // The row may have moved on (approved elsewhere, key replaced).
+        await loadInvites(labelAtCall);
+      }
+    },
+    [label, loadInvites, driveTarget],
+  );
+
   // Same lazy rule as members: the tab pays for its own listing.
   useEffect(() => {
     if (!label || tab !== "links") return;
@@ -376,6 +399,7 @@ export default function ShareDrivePanel() {
           <LinksTab
             state={invites}
             onRevoke={(id) => void revokeInvite(id)}
+            onApprove={(id) => approveInvite(id)}
             onClose={() => setTarget(null)}
             viewerSs58={polkadotAddress}
           />
@@ -461,11 +485,13 @@ export default function ShareDrivePanel() {
 function LinksTab({
   state,
   onRevoke,
+  onApprove,
   onClose,
   viewerSs58,
 }: {
   state: InvitesState;
   onRevoke: (inviteId: string) => void;
+  onApprove: (inviteId: string) => Promise<void>;
   onClose: () => void;
   viewerSs58?: string | null;
 }) {
@@ -501,6 +527,7 @@ function LinksTab({
           key={invite.inviteId}
           invite={invite}
           onRevoke={onRevoke}
+          onApprove={onApprove}
           viewerSs58={viewerSs58}
         />
       ))}
@@ -511,12 +538,15 @@ function LinksTab({
 function InviteRow({
   invite,
   onRevoke,
+  onApprove,
   viewerSs58,
 }: {
   invite: DriveInviteInfo;
   onRevoke: (inviteId: string) => void;
+  onApprove: (inviteId: string) => Promise<void>;
   viewerSs58?: string | null;
 }) {
+  const [approving, setApproving] = useState(false);
   // The same two-step inline confirm the member row uses: revoking is
   // irreversible and the row is small.
   const [confirming, setConfirming] = useState(false);
@@ -553,6 +583,12 @@ function InviteRow({
                 can mint, a drive's links no longer all come from one person,
                 and "who let them in" is a question the list has to answer. */}
           </p>
+          {view.email ? (
+            <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
+              {view.email.recipient ?? "Address no longer on file"}
+              {view.live ? ` · ${view.email.stage}` : ""}
+            </p>
+          ) : null}
           {view.mintedBy && (
             <AccountLabel
               ss58={view.mintedBy}
@@ -605,6 +641,25 @@ function InviteRow({
           </span>
         )}
       </div>
+
+      {/* The one step a mailed invitation needs from this side: the
+          recipient opened it and published a key, and approving seals the
+          drive key to it. Full width under the row so it never competes with
+          Revoke for the panel's few pixels. */}
+      {view.email?.canApprove ? (
+        <Button
+          variant="primary"
+          size="auto"
+          disabled={approving}
+          onClick={() => {
+            setApproving(true);
+            void onApprove(invite.inviteId).finally(() => setApproving(false));
+          }}
+          className="mt-2 h-8 w-full rounded-[6px] text-xs font-medium"
+        >
+          {approving ? "Approving…" : "Approve so they can join"}
+        </Button>
+      ) : null}
 
       {/* Console parity: sealed + valid → link field (ready / locked).
           Revoked / pre-seal-back rows omit it. Never render `#k=`. */}

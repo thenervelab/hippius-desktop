@@ -209,6 +209,9 @@ fn management_commands_route_through_a_named_gate() {
         "pub async fn list_drive_invites(",
         "pub async fn revoke_drive_invite(",
         "pub async fn list_owned_drive_sharing(",
+        "pub async fn email_drive_invite(",
+        "pub async fn email_invites_available(",
+        "pub async fn approve_email_invite(",
     ] {
         let body = fn_body(&src, command);
         assert!(
@@ -511,6 +514,9 @@ fn every_management_command_passes_the_delegated_owner() {
         "pub async fn change_drive_member_role",
         "pub async fn remove_drive_member",
         "pub async fn create_drive_invite",
+        "pub async fn email_drive_invite",
+        "pub async fn email_invites_available",
+        "pub async fn approve_email_invite",
     ] {
         let body = fn_body(&src, sig);
         assert!(
@@ -655,4 +661,22 @@ fn the_folder_key_is_derived_once_per_upload_not_per_file() {
             "{sig} must derive the folder key exactly once"
         );
     }
+}
+
+/// An approval seals the DRIVE's key, resolved through the same funnel the
+/// link mint uses. Deriving it from the caller's own master would admit a
+/// manager's recipient to a drive whose files they cannot decrypt.
+#[test]
+fn approve_email_invite_seals_the_drives_key() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn approve_email_invite(");
+    assert!(body.contains("folder_phrase_for_label("), "the drive key must come from the key funnel");
+    assert!(
+        !body.contains("derive_folder_mnemonic"),
+        "never derive the drive key from the caller's master"
+    );
+    assert!(
+        body.contains("seal_invite_key("),
+        "the key is sealed to the recipient, not sent in the clear"
+    );
 }

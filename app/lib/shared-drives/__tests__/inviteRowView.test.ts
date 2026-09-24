@@ -139,3 +139,36 @@ describe("who minted a link", () => {
     expect(inviteRowView({ ...base, mintedBy: "5Someone" }).mintedBy).toBe("5Someone");
   });
 });
+
+describe("inviteRowView for mailed invitations", () => {
+  const mailed = { ...base, maxUses: 1, useCount: 0, recipientEmail: "ada@example.com" };
+
+  it("says who it went to instead of a use count", () => {
+    const view = inviteRowView({ ...mailed, emailStatus: "sent" }, NOW);
+    expect(view.summary).toBe("Editor · by email");
+    expect(view.email).toEqual({
+      recipient: "ada@example.com",
+      stage: "Sent, not opened yet",
+      canApprove: false,
+    });
+  });
+
+  it("offers approval only while the recipient is waiting for it", () => {
+    expect(inviteRowView({ ...mailed, emailStatus: "awaiting_seal" }, NOW).email?.canApprove).toBe(true);
+    expect(inviteRowView({ ...mailed, emailStatus: "sealed" }, NOW).email?.canApprove).toBe(false);
+    expect(
+      inviteRowView({ ...mailed, emailStatus: "awaiting_seal", revoked: true, valid: false }, NOW).email
+        ?.canApprove,
+    ).toBe(false);
+  });
+
+  it("leaves a link invite alone, and ignores a stage it does not know", () => {
+    expect(inviteRowView(base, NOW).email).toBeNull();
+    expect(inviteRowView({ ...mailed, emailStatus: "bounced" }, NOW).email).toBeNull();
+  });
+
+  it("keeps the row usable when the address was swept", () => {
+    const view = inviteRowView({ ...mailed, recipientEmail: undefined, emailStatus: "sealed" }, NOW);
+    expect(view.email?.recipient).toBeNull();
+  });
+});

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isEmailInvitesUnavailable,
   isSharedDrivesNotEntitled,
   isSharedDrivesUnavailable,
 } from "@/lib/tauri/sharedDrives";
@@ -55,5 +56,25 @@ describe("isSharedDrivesNotEntitled", () => {
   it("returns false for non-errors", () => {
     expect(isSharedDrivesNotEntitled(null)).toBe(false);
     expect(isSharedDrivesNotEntitled({ kind: "Auth", message: "nope" })).toBe(false);
+  });
+});
+
+describe("isEmailInvitesUnavailable", () => {
+  it("matches the no-mail-service refusal by subkind only", () => {
+    expect(
+      isEmailInvitesUnavailable({
+        kind: "NotReady",
+        subkind: "EMAIL_INVITES_UNAVAILABLE",
+        message: "reworded",
+      }),
+    ).toBe(true);
+    expect(
+      isEmailInvitesUnavailable({
+        kind: "NotReady",
+        subkind: "SHARED_DRIVES_UNAVAILABLE",
+        message: "Inviting by email is not available yet.",
+      }),
+    ).toBe(false);
+    expect(isEmailInvitesUnavailable(null)).toBe(false);
   });
 });

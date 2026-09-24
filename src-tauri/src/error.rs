@@ -182,6 +182,11 @@ pub enum NotReadyKind {
     /// generic auth error. Distinct from [`Self::SharedDrivesUnavailable`]
     /// (feature off, bare 404): here the feature is on and the routes exist.
     SharedDrivesNotEntitled,
+    /// The server cannot send drive invitations by email (`503
+    /// email_invites_unavailable`: no mail service configured). The FE hides
+    /// the "Invite by email" option on this rather than offering a control
+    /// that always fails; link invites are unaffected.
+    EmailInvitesUnavailable,
 }
 
 impl NotReadyKind {
@@ -209,6 +214,7 @@ impl NotReadyKind {
             Self::VpnNotConnected => "VPN_NOT_CONNECTED",
             Self::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
             Self::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
+            Self::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
         }
     }
 }
@@ -264,6 +270,9 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::SharedDrivesNotEntitled => {
                 write!(f, "Shared drives need a Plus, Max, or Scale plan.")
+            }
+            Self::EmailInvitesUnavailable => {
+                write!(f, "Inviting by email is not available yet.")
             }
         }
     }
@@ -721,6 +730,7 @@ mod tests {
                 NotReadyKind::VpnNotConnected => "VPN_NOT_CONNECTED",
                 NotReadyKind::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
                 NotReadyKind::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
+                NotReadyKind::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
             }
         }
         for kind in [
@@ -743,6 +753,7 @@ mod tests {
             NotReadyKind::VpnNotConnected,
             NotReadyKind::SharedDrivesUnavailable,
             NotReadyKind::SharedDrivesNotEntitled,
+            NotReadyKind::EmailInvitesUnavailable,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");

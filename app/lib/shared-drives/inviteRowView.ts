@@ -17,7 +17,24 @@ export interface InviteRowView {
    * is noise. It earns its place once a manager can mint too.
    */
   mintedBy: string | null;
+  /**
+   * For a MAILED invitation: who it went to and how far it has got. Null on
+   * a link invite. `canApprove` is decided by the stage alone, never by the
+   * recipient's key being present (it stays after approval too).
+   */
+  email: {
+    recipient: string | null;
+    stage: string;
+    canApprove: boolean;
+  } | null;
 }
+
+/** How each mailed-invite stage reads on the row. */
+const EMAIL_STAGE_LABELS: Record<string, string> = {
+  sent: "Sent, not opened yet",
+  awaiting_seal: "Opened, waiting for your approval",
+  sealed: "Approved, waiting for them to join",
+};
 
 /**
  * The server's own 100-year cap, which is how "never expires" is expressed on
@@ -51,6 +68,8 @@ export function inviteRowView(
     valid: boolean;
     mintedBy?: string;
     pathPrefix?: string | null;
+    recipientEmail?: string | null;
+    emailStatus?: string | null;
   },
   now: Date = new Date(),
   /** The reader's own address, so their own links say nothing extra. */
@@ -60,7 +79,14 @@ export function inviteRowView(
   const folderBit = invite.pathPrefix?.trim()
     ? ` · ${invite.pathPrefix.trim()}`
     : "";
-  const summary = `${role}${folderBit} · ${invite.useCount} of ${invite.maxUses} used`;
+  const mailed = invite.emailStatus
+    ? EMAIL_STAGE_LABELS[invite.emailStatus] ?? null
+    : null;
+  // A mailed invitation is single use and addressed to one person, so "0 of
+  // 1 used" says nothing; who it went to is the useful half.
+  const summary = mailed
+    ? `${role}${folderBit} · by email`
+    : `${role}${folderBit} · ${invite.useCount} of ${invite.maxUses} used`;
 
   const never = isSentinelExpiry(invite.expiresAt, now);
   const expiryDate = new Date(invite.expiresAt);
@@ -98,6 +124,16 @@ export function inviteRowView(
     live: invite.valid && deadReason === null,
     deadReason,
     mintedBy: !minter || minter === viewerSs58 ? null : minter,
+    email: mailed
+      ? {
+          recipient: invite.recipientEmail?.trim() || null,
+          stage: mailed,
+          canApprove:
+            invite.emailStatus === "awaiting_seal" &&
+            invite.valid &&
+            deadReason === null,
+        }
+      : null,
   };
 }
 

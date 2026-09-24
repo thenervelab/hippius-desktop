@@ -10,6 +10,9 @@ import {
   NEVER_EXPIRES_SECS,
   clampInviteTtl,
   inviteTtlOptionsFor,
+  EMAIL_INVITE_ROLES,
+  EMAIL_INVITE_TTL_OPTIONS,
+  clampEmailInviteTtl,
 } from "../shareDriveModalState";
 import { MANAGER_INVITE_MAX_SECONDS } from "@/app/lib/shared-drives/roles";
 
@@ -96,5 +99,24 @@ describe("formatJoinedDate", () => {
 
   it("returns null for an unparseable timestamp", () => {
     expect(formatJoinedDate("not-a-date")).toBeNull();
+  });
+});
+
+describe("emailed invitation choices", () => {
+  it("never offers a lifetime the server refuses for a mailed invite", () => {
+    expect(EMAIL_INVITE_TTL_OPTIONS.some((o) => o.secs === NEVER_EXPIRES_SECS)).toBe(false);
+    for (const o of EMAIL_INVITE_TTL_OPTIONS) {
+      expect(o.secs).toBeGreaterThanOrEqual(60 * 60);
+      expect(o.secs).toBeLessThanOrEqual(30 * 24 * 60 * 60);
+    }
+  });
+
+  it("offers Viewer and Editor only", () => {
+    expect([...EMAIL_INVITE_ROLES]).toEqual(["reader", "writer"]);
+  });
+
+  it("snaps a link-only lifetime back to the default", () => {
+    expect(clampEmailInviteTtl(NEVER_EXPIRES_SECS)).toBe(DEFAULT_INVITE_TTL_SECS);
+    expect(clampEmailInviteTtl(24 * 60 * 60)).toBe(24 * 60 * 60);
   });
 });

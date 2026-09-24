@@ -75,6 +75,7 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "which",
+ "x25519-dalek",
  "zeroize",
  "zip",
  "zxcvbn",

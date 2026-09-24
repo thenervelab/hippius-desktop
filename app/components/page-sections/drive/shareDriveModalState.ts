@@ -23,6 +23,8 @@ export type InviteState =
   | { kind: "choosing" }
   | { kind: "running" }
   | { kind: "done"; inviteUrl: string }
+  // A mailed invitation: there is no link to show, only who it went to.
+  | { kind: "emailSent"; email: string }
   | { kind: "unavailable" }
   // The mint plan gate: the owner's plan does not include shared drives. A
   // terminal upgrade state, not an error — its own copy and CTA, no retry.
@@ -145,6 +147,30 @@ export function clampInviteTtl(role: DriveRole, secs: number): number {
   return allowed.some((o) => o.secs === secs)
     ? secs
     : (allowed[allowed.length - 1]?.secs ?? DEFAULT_INVITE_TTL_SECS);
+}
+
+/**
+ * Lifetimes a MAILED invitation may carry. The server takes one hour to
+ * thirty days, so "Never expires" is not offered (Rust refuses it by name).
+ */
+export const EMAIL_INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> =
+  INVITE_TTL_OPTIONS.filter((o) => o.secs <= 30 * 24 * 60 * 60);
+
+/**
+ * Roles an emailed invitation may confer. A Manager invite has to be a link:
+ * the server caps those at a day, and a mailed one would expire before it
+ * could be approved.
+ */
+export const EMAIL_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> = [
+  "reader",
+  "writer",
+];
+
+/** Keep a picked lifetime inside what an emailed invitation allows. */
+export function clampEmailInviteTtl(secs: number): number {
+  return EMAIL_INVITE_TTL_OPTIONS.some((o) => o.secs === secs)
+    ? secs
+    : DEFAULT_INVITE_TTL_SECS;
 }
 
 /**

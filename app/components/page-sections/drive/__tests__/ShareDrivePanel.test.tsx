@@ -80,6 +80,7 @@ const removeDriveMemberMock = vi.fn();
 const changeDriveMemberRoleMock = vi.fn();
 const listDriveInvitesMock = vi.fn();
 const revokeDriveInviteMock = vi.fn();
+const approveEmailInviteMock = vi.fn();
 
 /** A stable member address, so the role assertions read for themselves. */
 const MEMBER = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
@@ -96,6 +97,7 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
       changeDriveMemberRoleMock(...args),
     listDriveInvites: (...args: unknown[]) => listDriveInvitesMock(...args),
     revokeDriveInvite: (...args: unknown[]) => revokeDriveInviteMock(...args),
+    approveEmailInvite: (...args: unknown[]) => approveEmailInviteMock(...args),
   };
 });
 
@@ -541,5 +543,59 @@ describe("account names", () => {
     expect(screen.queryByText("grace@example.com")).toBeNull();
     openMemberMenu(MEMBER, "Remove from drive");
     expect(await screen.findByText(/Remove Grace Hopper from/)).toBeInTheDocument();
+  });
+});
+
+describe("mailed invitations on the links tab", () => {
+  const mailed = {
+    inviteId: "mail1",
+    role: "writer",
+    expiresAt: "2126-09-12T12:00:00Z",
+    maxUses: 1,
+    useCount: 0,
+    revoked: false,
+    valid: true,
+    createdAt: "2026-09-17T12:00:00Z",
+    recipientEmail: "ada@example.com",
+  };
+
+  it("shows who it went to and offers Approve only once they opened it", async () => {
+    listDriveMembersMock.mockResolvedValue([]);
+    listDriveInvitesMock.mockResolvedValue([
+      { ...mailed, emailStatus: "awaiting_seal" },
+      { ...mailed, inviteId: "mail2", recipientEmail: "bo@example.com", emailStatus: "sent" },
+    ]);
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    expect(await screen.findByText(/ada@example.com · Opened, waiting for your approval/)).toBeInTheDocument();
+    expect(screen.getByText(/bo@example.com · Sent, not opened yet/)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Approve so they can join" })).toHaveLength(1);
+  });
+
+  it("approves by id and refetches, so the row moves on", async () => {
+    listDriveMembersMock.mockResolvedValue([]);
+    listDriveInvitesMock
+      .mockResolvedValueOnce([{ ...mailed, emailStatus: "awaiting_seal" }])
+      .mockResolvedValueOnce([{ ...mailed, emailStatus: "sealed" }]);
+    approveEmailInviteMock.mockResolvedValue({ status: "sealed" });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Approve so they can join" }));
+    await waitFor(() =>
+      expect(approveEmailInviteMock).toHaveBeenCalledWith("team-docs", "mail1", undefined),
+    );
+    expect(await screen.findByText(/Approved, waiting for them to join/)).toBeInTheDocument();
+    expect(toastSuccessMock).toHaveBeenCalled();
+  });
+
+  it("surfaces a refused approval and re-reads the row", async () => {
+    listDriveMembersMock.mockResolvedValue([]);
+    listDriveInvitesMock.mockResolvedValue([{ ...mailed, emailStatus: "awaiting_seal" }]);
+    approveEmailInviteMock.mockRejectedValue({ kind: "Validation", message: "The invitation changed" });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Approve so they can join" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+    expect(listDriveInvitesMock).toHaveBeenCalledTimes(2);
   });
 });

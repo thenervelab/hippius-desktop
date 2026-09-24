@@ -61,6 +61,8 @@ const changeDriveMemberRoleMock = vi.fn();
 const listDriveInvitesMock = vi.fn();
 const revokeDriveInviteMock = vi.fn();
 const listMyDriveMembershipsMock = vi.fn().mockResolvedValue([]);
+const emailInvitesAvailableMock = vi.fn().mockResolvedValue(false);
+const emailDriveInviteMock = vi.fn();
 
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
@@ -75,13 +77,17 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     revokeDriveInvite: (...args: unknown[]) => revokeDriveInviteMock(...args),
     listMyDriveMemberships: (...args: unknown[]) =>
       listMyDriveMembershipsMock(...args),
+    emailInvitesAvailable: (...args: unknown[]) =>
+      emailInvitesAvailableMock(...args),
+    emailDriveInvite: (...args: unknown[]) => emailDriveInviteMock(...args),
   };
 });
 
 const toastErrorMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
+const toastInfoMock = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({
-  toast: { success: toastSuccessMock, error: toastErrorMock },
+  toast: { success: toastSuccessMock, error: toastErrorMock, info: toastInfoMock },
 }));
 
 // `next/dynamic` wraps boring-avatars; a plain stub avoids lazy-loading
@@ -129,6 +135,7 @@ beforeEach(() => {
   planState.included = true;
   vi.clearAllMocks();
   flagState.sharedDrivesEnabled = true;
+  emailInvitesAvailableMock.mockResolvedValue(false);
 });
 
 
@@ -363,5 +370,101 @@ describe("a plan that does not include shared drives", () => {
     planState.included = true;
     renderModal();
     expect(await screen.findByRole("button", { name: "Create invite link" })).toBeInTheDocument();
+  });
+});
+
+describe("invite by email", () => {
+  async function openEmailMode() {
+    emailInvitesAvailableMock.mockResolvedValue(true);
+    renderModal();
+    fireEvent.click(await screen.findByRole("button", { name: "Invite by email" }));
+  }
+
+  it("is not offered until the server says it can send mail", async () => {
+    renderModal();
+    await waitFor(() => expect(emailInvitesAvailableMock).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Invite by email" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create invite link" })).toBeInTheDocument();
+  });
+
+  it("is never offered for a folder invite", async () => {
+    emailInvitesAvailableMock.mockResolvedValue(true);
+    const store = createStore();
+    store.set(createDriveInviteDialogAtom, {
+      label: "team-docs",
+      folderName: "Clients",
+      pathPrefix: "Clients",
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider store={store}>{(<CreateDriveInviteDialog />) as ReactNode}</Provider>
+      </QueryClientProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(emailInvitesAvailableMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Invite by email" })).not.toBeInTheDocument();
+  });
+
+  it("sends to the typed address as the chosen role and says so", async () => {
+    emailDriveInviteMock.mockResolvedValue({ inviteId: "i1" });
+    await openEmailMode();
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "ada@example.com" },
+    });
+    chooseRole("Viewer");
+    fireEvent.click(screen.getByRole("button", { name: "Send invitation" }));
+    await waitFor(() =>
+      expect(emailDriveInviteMock).toHaveBeenCalledWith("team-docs", "ada@example.com", {
+        role: "reader",
+        expiresInSecs: 7 * 24 * 60 * 60,
+        target: undefined,
+      }),
+    );
+    expect(await screen.findByText("Invitation sent")).toBeInTheDocument();
+    expect(screen.getByText(/We emailed ada@example.com/)).toBeInTheDocument();
+  });
+
+  it("offers Viewer and Editor only, and no lifetime past 30 days", async () => {
+    await openEmailMode();
+    fireEvent.click(screen.getByLabelText("Invite role"));
+    expect(screen.queryByText("Manager")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Invite expires"));
+    expect(screen.queryByText("Never expires")).not.toBeInTheDocument();
+  });
+
+  it("hides the option when the server turns out to have no mail service", async () => {
+    emailDriveInviteMock.mockRejectedValue({
+      kind: "NotReady",
+      subkind: "EMAIL_INVITES_UNAVAILABLE",
+      message: "Inviting by email is not available yet.",
+    });
+    await openEmailMode();
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "ada@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send invitation" }));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Invite by email" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create invite link" })).toBeInTheDocument();
+  });
+
+  it("shows the rate limit Rust worded, with the wait", async () => {
+    emailDriveInviteMock.mockRejectedValue({
+      kind: "NotReady",
+      subkind: "RATE_LIMITED",
+      message: "Too many invitations sent recently. Try again in 3 minutes.",
+    });
+    await openEmailMode();
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
+      target: { value: "ada@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send invitation" }));
+    expect(await screen.findByText(/Try again in 3 minutes/)).toBeInTheDocument();
+    expect(screen.getByText("Couldn't send the invitation")).toBeInTheDocument();
+  });
+
+  it("will not send without an address", async () => {
+    await openEmailMode();
+    expect(screen.getByRole("button", { name: "Send invitation" })).toBeDisabled();
   });
 });

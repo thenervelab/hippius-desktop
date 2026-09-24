@@ -578,6 +578,38 @@ pub struct DriveInviteInfo {
     /// tab must show it, or a folder invite reads as access to everything.
     #[serde(default, alias = "path_prefix", skip_serializing_if = "Option::is_none")]
     pub path_prefix: Option<String>,
+    /// Where a MAILED invitation was sent (hcfs #459). Absent on a link
+    /// invite, on an expired mailed one (the sweep erases it), and for a
+    /// caller who may not read the row's management data.
+    #[serde(default, alias = "recipient_email", skip_serializing_if = "Option::is_none")]
+    pub recipient_email: Option<String>,
+    /// How far a mailed invitation has got: `sent`, `awaiting_seal` or
+    /// `sealed`. Anything else is dropped by [`normalize_email_fields`], so
+    /// the FE only ever sees the three it knows. The approve action keys on
+    /// this, never on `requester_pubkey` being present.
+    #[serde(default, alias = "email_status", skip_serializing_if = "Option::is_none")]
+    pub email_status: Option<String>,
+    /// The account that claimed a mailed invitation. Shown on the row so an
+    /// owner can see who they are approving.
+    #[serde(default, alias = "requester_ss58", skip_serializing_if = "Option::is_none")]
+    pub requester_ss58: Option<String>,
+    /// The recipient's ephemeral X25519 key. Read from the server for the
+    /// approve path only; never serialized to the FE, which approves by id
+    /// and lets Rust re-read the row.
+    #[serde(default, alias = "requester_pubkey", skip_serializing)]
+    pub requester_pubkey: Option<String>,
+}
+
+/// The mailed-invite stages this build understands.
+pub(crate) const EMAIL_STATUSES: [&str; 3] = ["sent", "awaiting_seal", "sealed"];
+
+/// Trim the mailed-invite fields and drop a stage this build does not know,
+/// the console's `isEmailStatus` rule. A blank email is absent, not an empty
+/// line on the row.
+fn normalize_email_fields(invite: &mut DriveInviteInfo) {
+    invite.recipient_email = present_text(invite.recipient_email.take());
+    invite.requester_ss58 = present_text(invite.requester_ss58.take());
+    invite.email_status = invite.email_status.take().filter(|s| EMAIL_STATUSES.contains(&s.as_str()));
 }
 
 #[derive(Debug, Deserialize)]
@@ -1468,11 +1500,435 @@ pub async fn list_drive_invites(
         }
         // Never leave ciphertext on the FE wire.
         invite.sealed_token = None;
+        normalize_email_fields(invite);
     }
 
     let live = invites.iter().filter(|i| i.valid && !i.revoked).count();
     info!(label = %label, count = invites.len(), live, "Listed drive invites");
     Ok(invites)
+}
+
+// ─── Emailed invites (hcfs #459), owner/manager side ───────────────────────
+//
+// The recipient side (open the mail, publish a key, join) lives in the
+// console. The desktop mints a mailed invitation, shows its progress on the
+// Links tab, and approves it by sealing the drive key to the recipient.
+
+/// Bounds the server enforces on a mailed invitation's lifetime.
+pub(crate) const EMAIL_INVITE_MIN_SECS: u64 = 60 * 60;
+pub(crate) const EMAIL_INVITE_MAX_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// A validated emailed-invite request, ready for the wire.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EmailInvitePolicy {
+    pub email: String,
+    pub role: String,
+    pub expires_in_secs: u64,
+}
+
+/// Validate what the dialog asked for, before any network call.
+///
+/// Rules are the server's, refused here by name so the dialog can say which
+/// one: one address; Viewer or Editor only (a Manager invite has to be a
+/// link, because the server caps those at a day and a mailed one would
+/// expire before anyone could approve it); a lifetime between one hour and
+/// thirty days, defaulting to the ordinary seven.
+pub(crate) fn resolve_email_invite(email: &str, role: Option<String>, expires_in_secs: Option<u64>) -> Result<EmailInvitePolicy> {
+    let email = email.trim();
+    // Deliberately loose: the server is the authority on what it can mail.
+    // This only stops the obvious slip of a name or a blank field.
+    let looks_like_address = email.len() <= 254
+        && !email.contains(char::is_whitespace)
+        && email
+            .split_once('@')
+            .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.'));
+    if !looks_like_address {
+        return Err(AppError::Validation("Enter one email address, like name@example.com.".into()));
+    }
+    let role = role.unwrap_or_else(|| "writer".to_string());
+    match role.as_str() {
+        "reader" | "writer" => {}
+        "manager" => {
+            return Err(AppError::Validation(
+                "A Manager invite has to be a link. Invite them as an Editor by email and change their role after they join.".into(),
+            ));
+        }
+        other => {
+            return Err(AppError::Validation(format!("Unknown drive role: {other}. Expected reader or writer.")));
+        }
+    }
+    let expires_in_secs = expires_in_secs.unwrap_or(DEFAULT_INVITE_EXPIRES_IN_SECS);
+    if !(EMAIL_INVITE_MIN_SECS..=EMAIL_INVITE_MAX_SECS).contains(&expires_in_secs) {
+        return Err(AppError::Validation(
+            "An emailed invitation must expire between 1 hour and 30 days from now.".into(),
+        ));
+    }
+    Ok(EmailInvitePolicy {
+        email: email.to_string(),
+        role,
+        expires_in_secs,
+    })
+}
+
+/// Map a failed `POST /v1/drive-invites/email`.
+///
+/// Three outcomes need their own words, each matched on status or slug and
+/// never on the English message:
+/// - 503 `email_invites_unavailable`: no mail service; the FE hides the option.
+/// - 429 `rate_limited`: too many invitations; say how long to wait.
+/// - 502 `mail_send_failed`: the server could not send it and has already
+///   revoked the invite, so trying again is safe and is what we say.
+fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: Option<u64>, body: &str) -> AppError {
+    #[derive(serde::Deserialize, Default)]
+    struct Envelope {
+        #[serde(default)]
+        error: String,
+        #[serde(default)]
+        retry_after_secs: Option<u64>,
+    }
+    let envelope: Envelope = serde_json::from_str(body).unwrap_or_default();
+    let code = status.as_u16();
+    if code == 503 || envelope.error == "email_invites_unavailable" {
+        return AppError::NotReady(NotReadyKind::EmailInvitesUnavailable);
+    }
+    if code == 429 || envelope.error == "rate_limited" {
+        let wait = envelope.retry_after_secs.or(retry_after_header);
+        return AppError::NotReady(NotReadyKind::RateLimited {
+            message: rate_limited_message(wait),
+        });
+    }
+    if code == 502 || envelope.error == "mail_send_failed" {
+        return AppError::Validation("The invitation email could not be sent, so the invite was cancelled. Try again.".into());
+    }
+    classify_error_status(status, body)
+}
+
+/// "Try again in N minutes" for a rate-limited mint, rounded UP so the user is
+/// never told a time at which the server will still refuse them.
+fn rate_limited_message(retry_after_secs: Option<u64>) -> String {
+    match retry_after_secs {
+        Some(secs) if secs >= 3600 => {
+            let hours = secs.div_ceil(3600);
+            format!(
+                "Too many invitations sent recently. Try again in {hours} hour{}.",
+                if hours == 1 { "" } else { "s" }
+            )
+        }
+        Some(secs) if secs >= 60 => {
+            let minutes = secs.div_ceil(60);
+            format!(
+                "Too many invitations sent recently. Try again in {minutes} minute{}.",
+                if minutes == 1 { "" } else { "s" }
+            )
+        }
+        Some(secs) => format!("Too many invitations sent recently. Try again in {} seconds.", secs.max(1)),
+        None => "Too many invitations sent recently. Try again later.".into(),
+    }
+}
+
+/// The body of `POST /v1/drive-invites/email`. `path_prefix` is only ever
+/// set by the folder-roles path (`folder_roles`), behind its capability.
+#[derive(Debug, Serialize)]
+pub struct EmailInviteBody<'a> {
+    pub folder_hash: &'a str,
+    pub email: &'a str,
+    pub role: &'a str,
+    pub expires_in_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_ss58: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_prefix: Option<&'a str>,
+}
+
+/// `POST /v1/drive-invites/email`. Returns the new invite's id; the token
+/// exists only in the message, by design.
+pub async fn http_email_invite(http: &reqwest::Client, base_url: &str, bearer: &str, body: &EmailInviteBody<'_>) -> Result<String> {
+    let resp = http
+        .post(format!("{}/v1/drive-invites/email", base_url.trim_end_matches('/')))
+        .header("Authorization", format!("Bearer {bearer}"))
+        .json(body)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("email-invite request failed: {e}")))?;
+
+    let status = resp.status();
+    let retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_email_invite_error(status, retry_after, &text));
+    }
+    #[derive(Deserialize)]
+    struct Minted {
+        invite_id: String,
+    }
+    let minted: Minted = serde_json::from_str(&text).map_err(|e| AppError::Hcfs(format!("email-invite response did not parse: {e}")))?;
+    Ok(minted.invite_id)
+}
+
+/// Result of a mailed-invite mint. No link: the token is only in the mail.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailInviteResult {
+    pub invite_id: String,
+}
+
+/// Invite someone into a drive by email (owner, or a manager naming the owner).
+#[tauri::command]
+pub async fn email_drive_invite(
+    app: tauri::AppHandle,
+    label: String,
+    email: String,
+    role: Option<String>,
+    expires_in_secs: Option<u64>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<EmailInviteResult> {
+    let policy = resolve_email_invite(&email, role, expires_in_secs)?;
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+
+    let invite_id = http_email_invite(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &EmailInviteBody {
+            folder_hash: &identity.wire_folder_hash,
+            email: &policy.email,
+            role: &policy.role,
+            expires_in_secs: policy.expires_in_secs,
+            owner_ss58: delegated_owner(&identity),
+            path_prefix: None,
+        },
+    )
+    .await?;
+
+    // The address is not logged: it is personal data and the id is enough to
+    // correlate with the server.
+    info!(label = %label, folder_hash = %identity.wire_folder_hash, invite_id = %invite_id, "Drive invite emailed");
+    Ok(EmailInviteResult { invite_id })
+}
+
+/// Whether this server can send invitations by email, asked without sending
+/// one. The route answers 503 before validating anything when mail is not
+/// configured, so an empty address tells the two apart: 503 (or a feature-off
+/// 404) is "not yet", a 400 about the address is "yes". Nothing is minted.
+#[tauri::command]
+pub async fn email_invites_available(app: tauri::AppHandle, label: String, owner_ss58: Option<String>, folder_hash: Option<String>) -> Result<bool> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let probe = http_email_invite(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &EmailInviteBody {
+            folder_hash: &identity.wire_folder_hash,
+            email: "",
+            role: "reader",
+            expires_in_secs: DEFAULT_INVITE_EXPIRES_IN_SECS,
+            owner_ss58: delegated_owner(&identity),
+            path_prefix: None,
+        },
+    )
+    .await;
+    Ok(email_probe_says_available(&probe))
+}
+
+/// The probe's verdict, pure so it is testable. Only the two "no mail here"
+/// answers read as unavailable; anything else (the expected 400 about the
+/// empty address, or even an unexpected success) means the route is live.
+fn email_probe_says_available(probe: &Result<String>) -> bool {
+    !matches!(
+        probe,
+        Err(AppError::NotReady(
+            NotReadyKind::EmailInvitesUnavailable | NotReadyKind::SharedDrivesUnavailable
+        ))
+    )
+}
+
+/// What a `PUT .../sealed-key` came back as.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SealKeyPut {
+    Sealed,
+    /// 409: somebody approved it first. The state the user wanted.
+    AlreadySealed,
+    /// 404: the recipient replaced their key since the row was read (or the
+    /// invite expired or was spent). Re-read the row before trying again.
+    Stale,
+}
+
+/// `PUT /v1/drives/{folder_hash}/invites/{invite_id}/sealed-key`.
+#[allow(clippy::too_many_arguments)] // one request's worth of wire fields
+pub async fn http_put_sealed_key(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    invite_id: &str,
+    sealed_key: &str,
+    sealed_for: &str,
+    owner: Option<&str>,
+) -> Result<SealKeyPut> {
+    let resp = http
+        .put(with_owner(
+            &format!(
+                "{}/v1/drives/{}/invites/{}/sealed-key",
+                base_url.trim_end_matches('/'),
+                folder_hash,
+                invite_id
+            ),
+            owner,
+        )?)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .json(&serde_json::json!({ "sealed_key": sealed_key, "sealed_for": sealed_for }))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("seal-key request failed: {e}")))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    match status.as_u16() {
+        200..=299 => Ok(SealKeyPut::Sealed),
+        409 => Ok(SealKeyPut::AlreadySealed),
+        // A mounted route's 404 is "stale"; a bare 404 is a feature-off
+        // server, which is not something re-reading the row can fix.
+        404 if !body.trim().is_empty() => Ok(SealKeyPut::Stale),
+        _ => Err(classify_error_status(status, &body)),
+    }
+}
+
+/// What an approve needs from the invite row: who to seal to, and which key
+/// the row's link would have carried.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ApprovableInvite {
+    pub requester_pubkey: String,
+    pub path_prefix: Option<String>,
+}
+
+/// Find the row and check it is waiting for approval.
+///
+/// Decided by `email_status`, NOT by `requester_pubkey` being present: the key
+/// stays on the row after sealing too, and offering an already-sealed row for
+/// sealing again earns a 409.
+pub(crate) fn approvable_invite(invites: &[DriveInviteInfo], invite_id: &str) -> Result<ApprovableInvite> {
+    let row = invites
+        .iter()
+        .find(|i| i.invite_id == invite_id)
+        .ok_or_else(|| AppError::NotFound("This invitation no longer exists.".into()))?;
+    match row.email_status.as_deref() {
+        Some("awaiting_seal") => {}
+        Some("sealed") => return Err(AppError::Validation("This invitation has already been approved.".into())),
+        Some("sent") => {
+            return Err(AppError::Validation(
+                "They have not opened the invitation yet. You can approve it once they do.".into(),
+            ));
+        }
+        _ => return Err(AppError::Validation("Only an emailed invitation can be approved.".into())),
+    }
+    let requester_pubkey = row
+        .requester_pubkey
+        .clone()
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| AppError::Validation("This invitation is not ready to approve yet. Refresh and try again.".into()))?;
+    Ok(ApprovableInvite {
+        requester_pubkey,
+        path_prefix: row.path_prefix.clone(),
+    })
+}
+
+/// Outcome of an approve, for the toast.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveInviteResult {
+    /// `sealed`, or `already_sealed` when somebody approved it first.
+    pub status: String,
+}
+
+/// Approve an emailed invitation: seal the DRIVE's key to the recipient's
+/// published key and hand the blob to the server.
+///
+/// The sealed secret is resolved exactly like the link mint resolves it
+/// (`folder_phrase_for_label`: this account's master for an own drive, the
+/// owner's seal or this manager's grant for a member drive), never derived
+/// from the caller's own master for somebody else's drive.
+///
+/// A 404 means the recipient replaced their key after the row was read; the
+/// row is re-read once and sealed again for the new key.
+#[tauri::command]
+pub async fn approve_email_invite(
+    app: tauri::AppHandle,
+    label: String,
+    invite_id: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<ApproveInviteResult> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let http = state.api_client.clone();
+    let owner = delegated_owner(&identity);
+
+    // Resolve the key material once; both attempts seal the same drive key.
+    let phrase = {
+        let _recovery_guard = state.recovery_lock.lock().await;
+        let mnemonic = crate::sync::remote::session_mnemonic(&state)?;
+        crate::sync::remote::folder_phrase_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await?
+    };
+
+    for attempt in 0..2 {
+        let invites = http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner).await?;
+        let row = approvable_invite(&invites, &invite_id)?;
+        let key = sealed_invite_payload(&phrase, row.path_prefix.is_some())?;
+        let sealed = super::invite_key::seal_invite_key(key.as_ref(), &row.requester_pubkey, &invite_id)
+            .map_err(|e| AppError::Crypto(format!("could not seal the drive key: {e}")))?;
+        match http_put_sealed_key(
+            &http,
+            &ctx.base_url,
+            &ctx.bearer,
+            &identity.wire_folder_hash,
+            &invite_id,
+            &sealed,
+            &row.requester_pubkey,
+            owner,
+        )
+        .await?
+        {
+            SealKeyPut::Sealed => {
+                info!(label = %label, invite_id = %invite_id, "Emailed invite approved");
+                return Ok(ApproveInviteResult { status: "sealed".into() });
+            }
+            SealKeyPut::AlreadySealed => {
+                return Ok(ApproveInviteResult {
+                    status: "already_sealed".into(),
+                });
+            }
+            SealKeyPut::Stale if attempt == 0 => {
+                info!(invite_id = %invite_id, "Recipient key changed before the seal landed; re-reading the invite");
+            }
+            SealKeyPut::Stale => {}
+        }
+    }
+    Err(AppError::Validation(
+        "The invitation changed while it was being approved. Refresh the list and try again.".into(),
+    ))
+}
+
+/// The 32 bytes an approval seals: the drive's folder-key ENTROPY for a
+/// whole-drive invite, the DERIVED file key for a folder invite. The same
+/// split the link mint makes, so a recipient ends up holding exactly what a
+/// link would have handed them.
+fn sealed_invite_payload(phrase: &Zeroizing<String>, folder_invite: bool) -> Result<Zeroizing<[u8; 32]>> {
+    if folder_invite {
+        Ok(Zeroizing::new(crate::sync::remote::encryption_key_from_phrase(phrase)?))
+    } else {
+        grant::entropy_from_phrase(phrase)
+    }
 }
 
 /// What one drive row needs to know about its own sharing.
@@ -2234,6 +2690,10 @@ mod tests {
             invite_url: None,
             link_available: false,
             path_prefix: None,
+            recipient_email: None,
+            email_status: None,
+            requester_ss58: None,
+            requester_pubkey: None,
         }
     }
 
@@ -2493,5 +2953,170 @@ mod tests {
                 .map(String::from)
                 .collect::<std::collections::BTreeSet<_>>(),
         );
+    }
+
+    // ── Emailed invites ───────────────────────────────────────────────────
+
+    #[test]
+    fn email_invite_policy_accepts_viewer_and_editor_within_the_window() {
+        let p = resolve_email_invite("  ada@example.com ", Some("reader".into()), Some(3600)).expect("ok");
+        assert_eq!(p.email, "ada@example.com");
+        assert_eq!(p.role, "reader");
+        assert_eq!(p.expires_in_secs, 3600);
+
+        let p = resolve_email_invite("ada@example.com", None, None).expect("defaults");
+        assert_eq!(p.role, "writer", "the dialog's default role");
+        assert_eq!(p.expires_in_secs, DEFAULT_INVITE_EXPIRES_IN_SECS);
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS)).is_ok());
+    }
+
+    #[test]
+    fn email_invite_policy_refuses_manager_by_name() {
+        let err = resolve_email_invite("ada@example.com", Some("manager".into()), None).expect_err("manager");
+        assert!(format!("{err}").contains("has to be a link"), "{err}");
+    }
+
+    #[test]
+    fn email_invite_policy_refuses_out_of_window_lifetimes() {
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MIN_SECS - 1)).is_err());
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS + 1)).is_err());
+        // The link dialog's "Never expires" preset must not slip through.
+        assert!(resolve_email_invite("ada@example.com", None, Some(100 * 365 * 24 * 3600)).is_err());
+    }
+
+    #[test]
+    fn email_invite_policy_refuses_what_is_not_one_address() {
+        for bad in [
+            "",
+            "   ",
+            "ada",
+            "ada@",
+            "@example.com",
+            "ada@example",
+            "a b@example.com",
+            "ada@.com",
+            "a@b.c,d@e.f g",
+        ] {
+            assert!(resolve_email_invite(bad, None, None).is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn rate_limited_message_rounds_up() {
+        assert!(rate_limited_message(Some(61)).contains("2 minutes"));
+        assert!(rate_limited_message(Some(60)).contains("1 minute."));
+        assert!(rate_limited_message(Some(3601)).contains("2 hours"));
+        assert!(rate_limited_message(Some(5)).contains("5 seconds"));
+        assert!(rate_limited_message(None).contains("later"));
+    }
+
+    #[test]
+    fn email_errors_map_on_status_and_slug() {
+        use reqwest::StatusCode;
+        assert!(matches!(
+            classify_email_invite_error(StatusCode::SERVICE_UNAVAILABLE, None, ""),
+            AppError::NotReady(NotReadyKind::EmailInvitesUnavailable)
+        ));
+        assert!(matches!(
+            classify_email_invite_error(StatusCode::TOO_MANY_REQUESTS, Some(30), r#"{"error":"rate_limited","message":"x"}"#),
+            AppError::NotReady(NotReadyKind::RateLimited { .. })
+        ));
+        assert!(matches!(
+            classify_email_invite_error(StatusCode::BAD_GATEWAY, None, r#"{"error":"mail_send_failed","message":"x"}"#),
+            AppError::Validation(_)
+        ));
+        // Everything else keeps the shared-drive mapping.
+        assert!(matches!(
+            classify_email_invite_error(StatusCode::NOT_FOUND, None, ""),
+            AppError::NotReady(NotReadyKind::SharedDrivesUnavailable)
+        ));
+        assert!(matches!(
+            classify_email_invite_error(StatusCode::FORBIDDEN, None, r#"{"error":"shared_drives_not_entitled","message":"x"}"#),
+            AppError::NotReady(NotReadyKind::SharedDrivesNotEntitled)
+        ));
+    }
+
+    #[test]
+    fn the_probe_hides_email_only_when_the_server_says_no_mail() {
+        assert!(!email_probe_says_available(&Err(AppError::NotReady(
+            NotReadyKind::EmailInvitesUnavailable
+        ))));
+        assert!(!email_probe_says_available(&Err(AppError::NotReady(
+            NotReadyKind::SharedDrivesUnavailable
+        ))));
+        assert!(email_probe_says_available(&Err(AppError::Hcfs("400 invalid email".into()))));
+        assert!(email_probe_says_available(&Ok("unexpected".into())));
+    }
+
+    fn mailed(id: &str, status: Option<&str>, pubkey: Option<&str>) -> DriveInviteInfo {
+        DriveInviteInfo {
+            invite_id: id.into(),
+            email_status: status.map(str::to_string),
+            requester_pubkey: pubkey.map(str::to_string),
+            ..invite(true, false)
+        }
+    }
+
+    #[test]
+    fn approve_is_decided_by_status_not_by_the_key_being_present() {
+        let rows = [
+            mailed("waiting", Some("awaiting_seal"), Some("PUB")),
+            // The key stays on the row after sealing; offering it again 409s.
+            mailed("done", Some("sealed"), Some("PUB")),
+            mailed("unopened", Some("sent"), None),
+            mailed("link", None, None),
+        ];
+        assert_eq!(
+            approvable_invite(&rows, "waiting").expect("approvable"),
+            ApprovableInvite {
+                requester_pubkey: "PUB".into(),
+                path_prefix: None
+            }
+        );
+        assert!(matches!(approvable_invite(&rows, "done"), Err(AppError::Validation(_))));
+        assert!(matches!(approvable_invite(&rows, "unopened"), Err(AppError::Validation(_))));
+        assert!(matches!(approvable_invite(&rows, "link"), Err(AppError::Validation(_))));
+        assert!(matches!(approvable_invite(&rows, "gone"), Err(AppError::NotFound(_))));
+        assert!(approvable_invite(&[mailed("x", Some("awaiting_seal"), Some("  "))], "x").is_err());
+    }
+
+    #[test]
+    fn unknown_email_stages_and_blank_addresses_never_reach_the_ui() {
+        let mut row = DriveInviteInfo {
+            recipient_email: Some("  ".into()),
+            email_status: Some("bounced".into()),
+            requester_ss58: Some(" 5Ada ".into()),
+            ..invite(true, false)
+        };
+        normalize_email_fields(&mut row);
+        assert_eq!(row.recipient_email, None);
+        assert_eq!(row.email_status, None);
+        assert_eq!(row.requester_ss58.as_deref(), Some("5Ada"));
+        for known in EMAIL_STATUSES {
+            let mut row = DriveInviteInfo {
+                email_status: Some(known.into()),
+                ..invite(true, false)
+            };
+            normalize_email_fields(&mut row);
+            assert_eq!(row.email_status.as_deref(), Some(known));
+        }
+    }
+
+    /// An approval seals what a link would have carried: entropy for a whole
+    /// drive, the derived file key for a folder.
+    #[test]
+    fn the_sealed_payload_matches_the_link_mint() {
+        let phrase = Zeroizing::new(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        let drive = sealed_invite_payload(&phrase, false).expect("drive");
+        assert_eq!(*drive, *grant::entropy_from_phrase(&phrase).unwrap());
+        let folder = sealed_invite_payload(&phrase, true).expect("folder");
+        assert_eq!(*folder, crate::sync::remote::encryption_key_from_phrase(&phrase).unwrap());
+        assert_ne!(*drive, *folder, "the two keys must not be confused");
     }
 }

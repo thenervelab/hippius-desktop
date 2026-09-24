@@ -135,6 +135,10 @@ hostname = "0.4"
 zeroize = "1"
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
+# Emailed drive invites: a manager seals the drive key to the recipient's
+# ephemeral X25519 key (`shared_drives::invite_key`). Already in the graph
+# through the chat stack; `static_secrets` lets the KAT inject its secret.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 argon2 = "0.5"
 bip39 = { version = "2.2", features = ["rand"] }
 zxcvbn = { version = "3", default-features = false }
