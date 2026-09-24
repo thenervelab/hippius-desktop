@@ -90,20 +90,71 @@ export function describeCreatedLink(link: {
   ].join(" · ");
 }
 
-/** The warning under the link choices, by what the link can do. */
-export function linkWarning(params: {
+/**
+ * The one line under "Invite link", by what the link can do. A folder link
+ * and a manager link are single use; the words say so before it is made.
+ */
+export function generalAccessNote(params: {
   folder: boolean;
   role: DriveRole;
   neverExpires: boolean;
 }): string {
-  if (params.folder) {
-    return "Works once, for the first person who opens it. Share it only with someone you trust with this folder.";
-  }
+  if (params.folder) return "Works once, for the first person who opens it.";
   if (params.role === "manager") {
-    return "A manager link can only be used once and expires within 24 hours. Managers can invite and remove people, so the link itself is short-lived.";
+    return "Works once and expires within 24 hours. Managers can invite and remove people.";
   }
-  if (params.neverExpires) {
-    return "Anyone with the link can join for as long as it exists. Share it only with people you trust.";
-  }
-  return "Anyone with the link can join until it expires. Share it only with people you trust.";
+  if (params.neverExpires) return "Anyone with the link can join for as long as it exists.";
+  return "Anyone with the link can join until it expires.";
 }
+
+/** "expires in 6 days", "expires today", or null for an unreadable date. */
+export function expiresInLabel(expiresAt: string, now: Date = new Date()): string | null {
+  const ts = Date.parse(expiresAt);
+  if (Number.isNaN(ts)) return null;
+  const ms = ts - now.getTime();
+  if (ms <= 0) return "expired";
+  const days = Math.ceil(ms / (24 * 60 * 60 * 1000));
+  if (days <= 1) return ms < 12 * 60 * 60 * 1000 ? "expires today" : "expires tomorrow";
+  return `expires in ${days} days`;
+}
+
+/** How far an emailed invitation has got, as its row says it. */
+const PENDING_STAGE: Record<string, string> = {
+  sent: "Invite sent",
+  awaiting_seal: "Needs your approval",
+  sealed: "Approved, not joined yet",
+};
+
+/** "Invite sent · expires in 6 days" for a pending emailed invitation. */
+export function pendingInviteMeta(
+  invite: { emailStatus?: string | null; expiresAt: string },
+  now: Date = new Date(),
+): string {
+  const stage = PENDING_STAGE[invite.emailStatus ?? ""] ?? "Invite sent";
+  const expiry = expiresInLabel(invite.expiresAt, now);
+  return expiry ? `${stage} · ${expiry}` : stage;
+}
+
+/** "1 person has access", "4 people have access". */
+export function peopleHaveAccess(count: number): string {
+  return count === 1 ? "1 person has access" : `${count} people have access`;
+}
+
+/**
+ * Rows the People list shows at most. With more, the last row becomes
+ * "+ N more · Manage access", which opens the panel.
+ */
+export const PEOPLE_MAX_ROWS = 6;
+
+/** The line under a row whose change Rust refused. */
+export function couldNotChangeAccess(who: string, reason: string): string {
+  const why = reason.trim();
+  return why ? `Couldn't change access for ${who}. ${why}` : `Couldn't change access for ${who}.`;
+}
+
+/**
+ * The line a folder's people list ends with. There is no role change for a
+ * folder holder (HCFS #475), so the list says what to do instead.
+ */
+export const FOLDER_ACCESS_HINT =
+  "To change someone\u2019s access to this folder, remove them and invite them again.";

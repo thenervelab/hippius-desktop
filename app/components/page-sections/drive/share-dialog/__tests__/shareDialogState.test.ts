@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
+  couldNotChangeAccess,
   describeLinkLifetime,
   describeLinkUses,
+  expiresInLabel,
+  generalAccessNote,
   noticeForError,
+  peopleHaveAccess,
+  pendingInviteMeta,
 } from "../shareDialogState";
 import { COMING_SOON_COPY, NEVER_EXPIRES_SECS } from "../../shareDriveModalState";
 
@@ -59,5 +64,52 @@ describe("noticeForError", () => {
 
   it("does not read a coming-soon out of an error's message", () => {
     expect(noticeForError({ kind: "Hcfs", message: "Sharing a single folder is coming soon." }).kind).toBe("error");
+  });
+});
+
+describe("generalAccessNote", () => {
+  it("says what the link can do before it is made", () => {
+    expect(generalAccessNote({ folder: true, role: "writer", neverExpires: false })).toBe(
+      "Works once, for the first person who opens it.",
+    );
+    expect(generalAccessNote({ folder: false, role: "manager", neverExpires: false })).toMatch(/^Works once and expires within 24 hours/);
+    expect(generalAccessNote({ folder: false, role: "writer", neverExpires: true })).toBe(
+      "Anyone with the link can join for as long as it exists.",
+    );
+    expect(generalAccessNote({ folder: false, role: "reader", neverExpires: false })).toBe(
+      "Anyone with the link can join until it expires.",
+    );
+  });
+});
+
+describe("pending invite rows", () => {
+  const now = new Date("2026-09-24T12:00:00Z");
+
+  it("counts days left, rounding up, and says today and tomorrow", () => {
+    expect(expiresInLabel("2026-09-30T12:00:00Z", now)).toBe("expires in 6 days");
+    expect(expiresInLabel("2026-09-30T13:00:00Z", now)).toBe("expires in 7 days");
+    expect(expiresInLabel("2026-09-24T18:00:00Z", now)).toBe("expires today");
+    expect(expiresInLabel("2026-09-25T11:00:00Z", now)).toBe("expires tomorrow");
+    expect(expiresInLabel("2026-09-20T00:00:00Z", now)).toBe("expired");
+    expect(expiresInLabel("not a date", now)).toBeNull();
+  });
+
+  it("names the stage, and approval when it is needed", () => {
+    expect(pendingInviteMeta({ emailStatus: "sent", expiresAt: "2026-09-30T12:00:00Z" }, now)).toBe(
+      "Invite sent · expires in 6 days",
+    );
+    expect(pendingInviteMeta({ emailStatus: "awaiting_seal", expiresAt: "x" }, now)).toBe("Needs your approval");
+  });
+});
+
+describe("row copy", () => {
+  it("says who could not be changed, and why", () => {
+    expect(couldNotChangeAccess("Ann", "Try again later.")).toBe("Couldn't change access for Ann. Try again later.");
+    expect(couldNotChangeAccess("Ann", " ")).toBe("Couldn't change access for Ann.");
+  });
+
+  it("counts people", () => {
+    expect(peopleHaveAccess(1)).toBe("1 person has access");
+    expect(peopleHaveAccess(4)).toBe("4 people have access");
   });
 });

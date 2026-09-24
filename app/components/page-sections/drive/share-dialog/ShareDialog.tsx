@@ -1,73 +1,76 @@
 "use client";
 
-// The Share dialog, for a drive or one folder in it.
-//
-// Two different server actions, kept visibly apart because they are
-// independent on the server and people read a single mixed form as one:
+// The Share dialog, for a drive or one folder in it. Top to bottom:
 //
 //   1. Invite people: an EMAIL invite (`email_drive_invite`), Viewer or
 //      Editor, single use, bound to the recipient.
-//   2. Share a link: a LINK invite (`create_drive_invite`, or
+//   2. People with access: the owner, members (with a working role select)
+//      or folder holders, and emailed invitations still waiting, from one
+//      Rust fold (`list_share_access`). "Manage access" opens the panel.
+//   3. General access: a LINK invite (`create_drive_invite`, or
 //      `create_folder_invite` for a folder), usable by whoever holds it.
 //
-// Each section has its own button, its own result and its own inline
-// messages, and neither can call the other's command. The dialog stays open
-// after either, so several people can be invited in one go; Done closes it.
+// Invite and link are separate controls with separate commands: a typed
+// address can never turn a link into an email invite, or the reverse. The
+// dialog stays open after each, so several people can be invited in one go;
+// Done closes it.
 
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useAtom, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
-import { Button, Icons } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   driveInvitesVersionAtom,
   shareDialogAtom,
+  shareDriveModalAtom,
+  type ShareDriveModalTarget,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { useSharedDriveMemberships } from "@/app/lib/hooks/useSharedDriveRoles";
 import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
 import { parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
+import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { InvitePeopleSection } from "./InvitePeopleSection";
-import { ShareLinkSection } from "./ShareLinkSection";
+import { PeopleWithAccessSection } from "./PeopleWithAccessSection";
+import { GeneralAccessSection } from "./GeneralAccessSection";
 import { NotEntitledNotice } from "./SectionNoticeView";
+import { useShareAccess } from "./useShareAccess";
+import { shareAccessApiFor } from "./shareAccessApi";
+import { peopleHaveAccess } from "./shareDialogState";
+
+const DIVIDER = <hr className="my-5 border-grey-80 dark:border-white/10" />;
 
 export default function ShareDialog() {
   const [target, setTarget] = useAtom(shareDialogAtom);
+  const close = useCallback(() => setTarget(null), [setTarget]);
+  if (!SHARED_DRIVES_ENABLED || !target) return null;
+  // Remount for each target so nothing from the previous drive (a typed
+  // address, a finished link, a message, a loaded list) carries over.
+  const key = `${target.label}|${target.pathPrefix ?? "\u0000"}|${target.ownerSs58 ?? ""}`;
+  return <ShareDialogBody key={key} target={target} close={close} />;
+}
+
+function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; close: () => void }) {
   const bumpInvites = useSetAtom(driveInvitesVersionAtom);
+  const openManagePanel = useSetAtom(shareDriveModalAtom);
   const queryClient = useQueryClient();
   const router = useRouter();
   const planIncludesSharing = useSharedDrivesInPlan();
   const memberships = useSharedDriveMemberships();
 
-  const close = useCallback(() => setTarget(null), [setTarget]);
-
   const driveTarget = useMemo(
     () =>
-      target?.ownerSs58 && target?.folderHash
+      target.ownerSs58 && target.folderHash
         ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
         : undefined,
-    [target?.ownerSs58, target?.folderHash],
+    [target.ownerSs58, target.folderHash],
   );
-
-  // Both sections report here: the drive list's badge and an open Links tab
-  // pick the new invite up without a reopen.
-  const onShared = useCallback(() => {
-    void invalidateOwnedDriveSharing(queryClient);
-    bumpInvites((n) => n + 1);
-  }, [queryClient, bumpInvites]);
-
-  // The in-app plans page, like every other Drive upgrade prompt.
-  const upgrade = useCallback(() => {
-    close();
-    router.push(BILLING_ROUTE);
-  }, [close, router]);
-
-  if (!SHARED_DRIVES_ENABLED || !target) return null;
 
   // A FOLDER is decided by the key being present, never by its value: an
   // empty folder path goes to the folder command (which refuses it) rather
@@ -78,31 +81,76 @@ export default function ShareDialog() {
   // exactly as before; with it, email and Editor are offered too.
   const folderRoles = folder && FOLDER_ROLES_ENABLED;
   const emailOffered = !folder || folderRoles;
+  const blocked = planIncludesSharing === false;
 
-  const name = folder
-    ? pathPrefix || target.folderName || "this folder"
-    : driveDisplayName(target, memberships);
+  // Real commands, or the dev-only preview fixture; decided once per open.
+  const [api] = useState(() => shareAccessApiFor(folder));
+  const access = useShareAccess({
+    api,
+    label: target.label,
+    pathPrefix,
+    target: driveTarget,
+    enabled: !blocked,
+  });
 
-  // Remount the sections for each target so nothing from the previous drive
-  // (a typed address, a finished link, a message) carries over.
-  const sectionKey = `${target.label}|${pathPrefix ?? ""}|${target.ownerSs58 ?? ""}`;
+  // Every change reports here: the drive list's badge and an open Links tab
+  // pick it up without a reopen, and the people list reloads in place.
+  const { reload, retry } = access;
+  const onChanged = useCallback(() => {
+    void invalidateOwnedDriveSharing(queryClient);
+    bumpInvites((n) => n + 1);
+  }, [queryClient, bumpInvites]);
+  const onSent = useCallback(() => {
+    onChanged();
+    void reload();
+  }, [onChanged, reload]);
+
+  // The in-app plans page, like every other Drive upgrade prompt.
+  const upgrade = useCallback(() => {
+    close();
+    router.push(BILLING_ROUTE);
+  }, [close, router]);
+
+  const membership = findMembership(target, memberships);
+  const driveName = driveDisplayName(target, membership);
+  const folderPath = pathPrefix?.replace(/^\/+|\/+$/g, "") ?? null;
+  const name = folder ? folderPath || target.folderName || "this folder" : driveName;
+
+  // Manage access is the drive's panel either way: folder holders are listed
+  // there under Folder access. The panel and this dialog are two surfaces for
+  // one drive, so this one closes as the panel opens.
+  const manage = useCallback(() => {
+    close();
+    openManagePanel({
+      label: target.label,
+      folderName: driveName,
+      ownerSs58: target.ownerSs58,
+      folderHash: target.folderHash,
+    });
+  }, [close, openManagePanel, target.label, target.ownerSs58, target.folderHash, driveName]);
+
+  const subtitle = folder
+    ? `${folderPath || name} in ${driveName}`
+    : access.state.kind === "ready"
+      ? `Drive · ${peopleHaveAccess(1 + access.state.access.members.length)}`
+      : "Drive";
 
   return (
     <FramedDialog
       open
       onClose={close}
-      title={
-        <span className="mx-auto block w-full min-w-0 max-w-full truncate px-6" title={name}>
-          Share “{name}”
+      headerLayout="leading"
+      title={<span title={name}>Share “{name}”</span>}
+      subtitle={
+        <span className="block truncate" title={subtitle}>
+          {subtitle}
         </span>
       }
-      titleClassName="w-full min-w-0 overflow-hidden"
-      icon={<Icons.Link className="size-4 text-white" />}
-      maxWidth="max-w-[640px]"
-      contentClassName="min-w-0 overflow-hidden sm:max-w-[520px]"
+      maxWidth="max-w-[720px]"
+      contentClassName="min-w-0 sm:px-6 sm:pt-5"
     >
-      <div className="mt-4 font-geist" key={sectionKey}>
-        {planIncludesSharing === false ? (
+      <div className="font-geist">
+        {blocked ? (
           // A plan without sharing opens straight into the upgrade prompt
           // rather than a form the server would refuse. The surface is not
           // hidden from them: this is where they learn it exists.
@@ -115,18 +163,31 @@ export default function ShareDialog() {
                   label={target.label}
                   pathPrefix={pathPrefix}
                   target={driveTarget}
-                  onSent={onShared}
+                  onSent={onSent}
                   onUpgrade={upgrade}
                 />
-                <hr className="my-5 border-grey-80 dark:border-white/10" />
+                {DIVIDER}
               </>
             ) : null}
-            <ShareLinkSection
+            <PeopleWithAccessSection
+              api={api}
+              state={access.state}
+              folder={folderPath}
+              label={target.label}
+              target={driveTarget}
+              ownerName={membership?.ownerName}
+              reload={reload}
+              retry={retry}
+              onChanged={onChanged}
+              onManage={manage}
+            />
+            {DIVIDER}
+            <GeneralAccessSection
               label={target.label}
               pathPrefix={pathPrefix}
               folderRoles={folderRoles}
               target={driveTarget}
-              onCreated={onShared}
+              onCreated={onChanged}
               onUpgrade={upgrade}
             />
           </>
@@ -135,10 +196,10 @@ export default function ShareDialog() {
         <div className="mt-6 flex justify-end">
           <Button
             type="button"
-            variant="defaultStable"
+            variant="primary"
             size="auto"
             onClick={close}
-            className="h-[38px] w-full rounded-[8px] px-6 text-sm font-medium sm:w-auto"
+            className="h-[38px] w-full rounded-[8px] px-6 text-sm font-medium sm:w-auto sm:min-w-[96px]"
           >
             Done
           </Button>
@@ -148,25 +209,35 @@ export default function ShareDialog() {
   );
 }
 
-/**
- * The drive's human name. A `shared:…` browse label is a wire id, never a
- * title: resolve it from memberships, else say "this drive".
- */
-function driveDisplayName(
-  target: { label: string; folderName: string; ownerSs58?: string; folderHash?: string },
-  memberships: ReadonlyArray<{ ownerSs58: string; folderHash: string; displayLabel: string }>,
-): string {
-  const preferred = inviteDriveDisplayName(target.folderName, target.label);
-  if (preferred !== "this drive") return preferred;
+/** The membership this dialog's drive is, when it is somebody else's. */
+function findMembership(
+  target: ShareDriveModalTarget,
+  memberships: readonly DriveMembershipInfo[],
+): DriveMembershipInfo | undefined {
   const identity =
     parseSharedDriveLabel(target.label) ??
-    parseSharedDriveLabel(target.folderName) ??
     (target.ownerSs58 && target.folderHash
       ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
       : null);
-  if (!identity) return preferred;
-  const match = memberships.find(
-    (m) => m.ownerSs58 === identity.ownerSs58 && m.folderHash === identity.folderHash,
-  );
-  return inviteDriveDisplayName(match?.displayLabel, target.label);
+  if (identity) {
+    return memberships.find(
+      (m) => m.ownerSs58 === identity.ownerSs58 && m.folderHash === identity.folderHash,
+    );
+  }
+  return memberships.find((m) => m.localLabel === target.label);
+}
+
+/**
+ * The drive's human name. A `shared:…` browse label is a wire id, never a
+ * title. For a folder target `folderName` is the FOLDER, so only the label
+ * and the membership can name the drive.
+ */
+function driveDisplayName(
+  target: ShareDriveModalTarget,
+  membership: DriveMembershipInfo | undefined,
+): string {
+  const folder = target.pathPrefix !== undefined;
+  const preferred = inviteDriveDisplayName(folder ? undefined : target.folderName, target.label);
+  if (preferred !== "this drive") return preferred;
+  return inviteDriveDisplayName(membership?.displayLabel, target.label);
 }

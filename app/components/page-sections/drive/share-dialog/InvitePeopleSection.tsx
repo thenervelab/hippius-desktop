@@ -19,7 +19,8 @@ import {
   type DriveTarget,
   type InviteEmailCheck,
 } from "@/app/lib/tauri/sharedDrives";
-import { driveRoleLabel } from "@/app/lib/shared-drives/roles";
+import { driveRoleDescription, driveRoleLabel } from "@/app/lib/shared-drives/roles";
+import { UserPlus } from "lucide-react";
 import { COMING_SOON_COPY, EMAIL_INVITE_ROLES } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
 import { SectionNoticeView } from "./SectionNoticeView";
@@ -136,6 +137,8 @@ export function InvitePeopleSection({
   }, [send]);
 
   const mailOff = mailKnownOff && notice === null;
+  // Composing once the field holds anything; clearing it folds the row away.
+  const composing = email.trim().length > 0;
   const blocked = sending || !check.valid || mailKnownOff;
   const invalidMessage = showCheck && !check.valid ? check.message : undefined;
 
@@ -148,7 +151,7 @@ export function InvitePeopleSection({
         Invite people
       </h3>
       <form
-        className="flex flex-col gap-2 @md:flex-row @md:items-start"
+        className="flex flex-col gap-2 @xs:flex-row @xs:items-start"
         onSubmit={(e) => {
           e.preventDefault();
           void send(role);
@@ -161,7 +164,7 @@ export function InvitePeopleSection({
             type="email"
             inputMode="email"
             autoComplete="email"
-            placeholder="name@example.com"
+            placeholder="Add people by email"
             value={email}
             onChange={(e) => handleEmailChange(e.target.value)}
             onBlur={() => {
@@ -169,33 +172,42 @@ export function InvitePeopleSection({
             }}
             aria-invalid={invalidMessage ? true : undefined}
             aria-describedby={invalidMessage ? "share-invite-email-error" : undefined}
-            wrapperClassName="min-h-[44px] py-2.5 sm:min-h-[44px]"
-            className="text-sm"
+            startAdornment={<UserPlus className="size-4" aria-hidden />}
+            wrapperClassName="min-h-[34px] items-center gap-2 px-3 py-1.5 shadow-none sm:min-h-[34px] sm:items-center dark:shadow-none"
+            className="text-[13px] leading-5 tracking-normal sm:tracking-normal"
           />
         </div>
-        <div className="flex gap-2">
-          <Select
-            ariaLabel="Invite role"
-            value={role}
-            onValueChange={(value) => {
-              setRole(value as EmailRole);
-              setNotice((n) => (n?.kind === "folderEditor" ? null : n));
-            }}
-            options={EMAIL_INVITE_ROLES.map((r) => ({ label: driveRoleLabel(r), value: r }))}
-            className="w-[120px] shrink-0 @md:w-[112px]"
-            triggerClassName="min-h-[44px] py-2.5 sm:min-h-[44px] px-3"
-            valueClassName="text-sm"
-          />
-          <Button
-            type="submit"
-            variant="primary"
-            size="auto"
-            disabled={blocked}
-            className="h-[44px] flex-1 whitespace-nowrap rounded-[8px] px-4 text-sm font-medium @md:flex-none"
-          >
-            {sending ? "Sending…" : "Send invite"}
-          </Button>
-        </div>
+        {/* The role and the button appear only once there is an address to
+            send to: at rest the section is one field, like any share sheet. */}
+        {composing ? (
+          <div className="flex gap-2">
+            <Select
+              ariaLabel="Invite role"
+              value={role}
+              onValueChange={(value) => {
+                setRole(value as EmailRole);
+                setNotice((n) => (n?.kind === "folderEditor" ? null : n));
+              }}
+              options={EMAIL_INVITE_ROLES.map((r) => ({
+                label: driveRoleLabel(r),
+                value: r,
+                description: driveRoleDescription(r),
+              }))}
+              size="compact"
+              minimal
+              className="w-[96px] shrink-0"
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              size="auto"
+              disabled={blocked}
+              className="h-[34px] flex-1 whitespace-nowrap rounded-[8px] px-3.5 text-[13px] font-medium @xs:flex-none"
+            >
+              {sending ? "Sending…" : "Send invite"}
+            </Button>
+          </div>
+        ) : null}
       </form>
 
       {invalidMessage ? (
@@ -204,16 +216,18 @@ export function InvitePeopleSection({
         </p>
       ) : null}
 
-      <div className="mt-2 flex flex-col gap-1">
-        <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-          They get their own invite that only works for them.
-        </p>
-        {folder ? null : (
+      {composing ? (
+        <div className="mt-2 flex flex-col gap-1">
           <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-            To add a Manager, invite them as an Editor, then change their role in Members.
+            They get their own invite that only works for them.
           </p>
-        )}
-      </div>
+          {folder ? null : (
+            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+              To add a Manager, invite them as an Editor, then change their role below.
+            </p>
+          )}
+        </div>
+      ) : null}
 
       {sentTo ? (
         <InlineNotice tone="success" className="mt-3">
