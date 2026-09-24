@@ -330,6 +330,9 @@ describe("members tab", () => {
     // Picking the menu item only opens the confirm; nothing is removed yet.
     openMemberMenu(member.memberSs58, "Remove from drive");
     expect(removeDriveMemberMock).not.toHaveBeenCalled();
+    // The confirmation names the DRIVE, never the member's raw address.
+    const confirmText = await screen.findByText(/Remove this member from/);
+    expect(confirmText.textContent).not.toContain(member.memberSs58);
 
     fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
     await waitFor(() =>
@@ -519,5 +522,24 @@ describe("managing a drive that is not synced here", () => {
     await waitFor(() =>
       expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", MEMBER, TARGET),
     );
+  });
+});
+
+describe("account names", () => {
+  it("names a member and the confirmation by display name when the server sent one", async () => {
+    const member = {
+      memberSs58: MEMBER,
+      role: "writer",
+      createdAt: "2026-08-20T00:00:00Z",
+      memberName: "Grace Hopper",
+      memberEmail: "grace@example.com",
+    };
+    listDriveMembersMock.mockResolvedValue([member]);
+    renderModal();
+    expect(await screen.findByText("Grace Hopper")).toBeInTheDocument();
+    // Email is hover-only.
+    expect(screen.queryByText("grace@example.com")).toBeNull();
+    openMemberMenu(MEMBER, "Remove from drive");
+    expect(await screen.findByText(/Remove Grace Hopper from/)).toBeInTheDocument();
   });
 });

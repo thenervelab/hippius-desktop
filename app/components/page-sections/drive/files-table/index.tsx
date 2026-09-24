@@ -1384,6 +1384,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                     <UploaderCell
                       uploadedBy={file.uploadedBy}
                       uploadedByName={file.uploadedByName}
+                      uploadedByEmail={file.uploadedByEmail}
                       isFolder={file.isFolder}
                       sessionSs58={sessionSs58}
                       driveOwnerSs58={ownerSs58}

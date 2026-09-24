@@ -217,6 +217,7 @@ fn map_search_hit_to_entry(
         // not reach UploaderCell as a blank name (it falls back to "Owner").
         uploaded_by: hit.file.uploaded_by.clone().filter(|s| !s.is_empty()),
         uploaded_by_name: hit.file.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        uploaded_by_email: crate::sync::remote::present_email(hit.file.uploaded_by_email.as_deref()),
     })
 }
 
@@ -683,6 +684,7 @@ mod tests {
         assert_eq!(entry.file_id, "0".repeat(64));
         assert_eq!(entry.uploaded_by, None);
         assert_eq!(entry.uploaded_by_name, None);
+        assert_eq!(entry.uploaded_by_email, None, "an absent key means unknown");
     }
 
     /// Regression: Added-by filter uses `/search_files`, and UploaderCell
@@ -706,11 +708,13 @@ mod tests {
             "file_name": "report.pdf",
             "uploaded_by": "5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb",
             "uploaded_by_name": "  Grace Hopper  ",
+            "uploaded_by_email": " grace@example.com ",
         });
         let hit: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
         let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
         assert_eq!(entry.uploaded_by.as_deref(), Some("5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb"));
         assert_eq!(entry.uploaded_by_name.as_deref(), Some("Grace Hopper"));
+        assert_eq!(entry.uploaded_by_email.as_deref(), Some("grace@example.com"));
     }
 
     #[test]

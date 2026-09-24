@@ -169,6 +169,7 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
             <UploaderCell
               uploadedBy={file.uploadedBy}
               uploadedByName={file.uploadedByName}
+              uploadedByEmail={file.uploadedByEmail}
               sessionSs58={polkadotAddress ?? undefined}
               driveOwnerSs58={driveOwnerSs58}
             />

@@ -25,7 +25,7 @@ import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { buildSharedDriveActions } from "./sharedDriveRowActions";
 import { SettingsCard } from "../SettingsCard";
-import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
+import AccountLabel from "@/components/page-sections/drive/AccountLabel";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRowDate } from "@/components/page-sections/drive/folder-list/formatRowDate";
 import { RowDot as Dot } from "@/components/page-sections/drive/folder-list/RowDot";
@@ -302,21 +302,21 @@ export function SharedWithMeSection({
                     </>
                   )}
                 </div>
-                <p
-                  className="ml-6 mt-1 truncate font-geist text-[13px] font-medium text-[#0A0A0A]/40 dark:text-white/40"
-                  title={membership.ownerSs58}
-                >
-                  Shared by {accountDisplayName(membership.ownerSs58, membership.ownerName)}
+                <div className="ml-6 mt-1 flex min-w-0 items-center gap-1 font-geist text-[13px] font-medium text-[#0A0A0A]/40 dark:text-white/40">
+                  <span className="shrink-0">Shared by</span>
+                  <AccountLabel
+                    ss58={membership.ownerSs58}
+                    name={membership.ownerName}
+                  />
                   {/* Zero and absent both draw nothing — never fake "0 members"
                       off a missing count (console OwnerCell parity). */}
                   {membership.memberCount ? (
-                    <span>
-                      {" "}
+                    <span className="shrink-0 whitespace-nowrap">
                       · {membership.memberCount}{" "}
                       {membership.memberCount === 1 ? "member" : "members"}
                     </span>
                   ) : null}
-                </p>
+                </div>
               </div>
 
               {/* Managing access is a manager's likely next action, so it

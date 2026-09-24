@@ -25,6 +25,7 @@ import { FramedDialog } from "@/components/ui/FramedDialog";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import DriveRoleChip from "./DriveRoleChip";
+import AccountLabel from "./AccountLabel";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
@@ -61,7 +62,10 @@ import {
   parseDriveRole,
   type DriveRole,
 } from "@/app/lib/shared-drives/roles";
-import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
+import {
+  accountDisplayName,
+  presentText,
+} from "@/app/lib/shared-drives/accountLabel";
 import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import {
@@ -548,18 +552,16 @@ function InviteRow({
             {/* Only somebody ELSE's link says who made it. Now that a manager
                 can mint, a drive's links no longer all come from one person,
                 and "who let them in" is a question the list has to answer. */}
-            {view.mintedBy && (
-              <>
-                {" "}
-                · by{" "}
-                {accountDisplayName(
-                  view.mintedBy,
-                  invite.mintedByName,
-                  14,
-                )}
-              </>
-            )}
           </p>
+          {view.mintedBy && (
+            <AccountLabel
+              ss58={view.mintedBy}
+              name={invite.mintedByName}
+              maxChars={14}
+              prefix="Created by "
+              className="text-[11px] text-grey-50 dark:text-grey-dark-600"
+            />
+          )}
         </div>
 
         {view.live ? (
@@ -787,6 +789,7 @@ function MembersTab({
                 key={ss58}
                 memberSs58={ss58}
                 memberName={info.name}
+                memberEmail={info.email}
                 folders={info.folders}
                 createdAt={info.createdAt}
                 onRemove={onRemove}
@@ -806,12 +809,14 @@ function MembersTab({
 function FolderGrantRow({
   memberSs58,
   memberName,
+  memberEmail,
   folders,
   createdAt,
   onRemove,
 }: {
   memberSs58: string;
   memberName?: string;
+  memberEmail?: string;
   folders: string[];
   createdAt: string;
   onRemove: (memberSs58: string) => void;
@@ -829,9 +834,12 @@ function FolderGrantRow({
           colors={["#92A1C6", "#146A7C", "#F0AB3D", "#C271B4", "#C20D90"]}
         />
         <div className="min-w-0">
-          <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
-            {who}
-          </p>
+          <AccountLabel
+            ss58={memberSs58}
+            name={memberName}
+            email={memberEmail}
+            className="text-xs font-medium text-grey-10 dark:text-white"
+          />
           <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
             {folders.join(", ")}
             {createdAt ? ` · ${formatJoinedDate(createdAt)}` : ""}
@@ -1041,12 +1049,12 @@ function MemberRow({
             <Avatar name={member.memberSs58} size={28} variant="pixel" />
           </div>
           <div className="min-w-0">
-            <p
-              className="truncate font-mono text-xs text-grey-10 dark:text-white"
-              title={member.memberSs58}
-            >
-              {accountDisplayName(member.memberSs58, member.memberName)}
-            </p>
+            <AccountLabel
+              ss58={member.memberSs58}
+              name={member.memberName}
+              email={member.memberEmail}
+              className="text-xs text-grey-10 dark:text-white"
+            />
             <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
               {/* The role reads as a chip here too, so a member list and a
                   drive list say access the same way. An unknown role
@@ -1112,11 +1120,21 @@ function MemberRow({
         confirmVariant="destructive"
         confirmButtonClassName="text-white"
         button="Remove"
-        text={`Remove this member from "${driveName}"?`}
+        text={`Remove ${memberConfirmName(member)} from "${driveName}"?`}
         helperText="They lose access on their next request. Files already downloaded to their device stay there, and any invite link still circulating keeps working — revoke it in the Links tab."
       />
     </>
   );
+}
+
+/**
+ * How the remove confirmation names the person: their name when the server
+ * sent one, otherwise "this member". Never the raw ss58: the sentence is
+ * about the DRIVE they are leaving, and an address there reads as the thing
+ * being removed.
+ */
+export function memberConfirmName(member: { memberName?: string }): string {
+  return presentText(member.memberName) ?? "this member";
 }
 
 function SharedDrivesUnavailableNotice({ onClose }: { onClose: () => void }) {

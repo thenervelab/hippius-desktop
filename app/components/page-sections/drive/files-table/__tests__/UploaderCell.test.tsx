@@ -83,3 +83,19 @@ describe("UploaderCell", () => {
     );
   });
 });
+
+describe("UploaderCell attribution keys", () => {
+  it("renders the name, never the email, when both keys are present", () => {
+    render(
+      <UploaderCell
+        uploadedBy={OTHER}
+        uploadedByName="Grace Hopper"
+        uploadedByEmail="grace@example.com"
+        sessionSs58={VIEWER}
+        driveOwnerSs58={OWNER}
+      />,
+    );
+    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.queryByText("grace@example.com")).toBeNull();
+  });
+});

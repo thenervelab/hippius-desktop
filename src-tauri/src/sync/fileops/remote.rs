@@ -899,6 +899,13 @@ pub(crate) struct BrowsePage {
     pub has_more: bool,
 }
 
+/// An attribution email as the UI may show it: trimmed, and absent rather
+/// than blank. Same rule as the name beside it, so a whitespace email never
+/// reaches a tooltip as an empty line. Shared by the browse and search mappers.
+pub(crate) fn present_email(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 pub(crate) fn append_browse_page(
     folders: &mut Vec<super::files::FileEntry>,
     files: &mut Vec<super::files::FileEntry>,
@@ -926,6 +933,7 @@ pub(crate) fn append_browse_page(
             // A folder is not uploaded by anyone; its contents are.
             uploaded_by: None,
             uploaded_by_name: None,
+            uploaded_by_email: None,
         });
     }
     for f in page_files {
@@ -960,6 +968,7 @@ pub(crate) fn append_browse_page(
             // as a blank "uploaded by".
             uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
             uploaded_by_name: f.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            uploaded_by_email: present_email(f.uploaded_by_email.as_deref()),
         });
     }
 }
@@ -1378,10 +1387,12 @@ mod tests {
         let attributed = hcfs_shared::network::RemoteFileEntry {
             uploaded_by: Some("5Member".to_string()),
             uploaded_by_name: Some("Ada".to_string()),
+            uploaded_by_email: Some("  ada@example.com ".to_string()),
             ..browse_file(Some("theirs.png"), None, 1, 10, 10)
         };
         let blank = hcfs_shared::network::RemoteFileEntry {
             uploaded_by: Some(String::new()),
+            uploaded_by_email: Some("   ".to_string()),
             ..browse_file(Some("blank.png"), None, 1, 10, 10)
         };
         let unattributed = browse_file(Some("old.png"), None, 1, 10, 10);
@@ -1400,10 +1411,14 @@ mod tests {
 
         assert_eq!(files[0].uploaded_by.as_deref(), Some("5Member"));
         assert_eq!(files[0].uploaded_by_name.as_deref(), Some("Ada"));
+        assert_eq!(files[0].uploaded_by_email.as_deref(), Some("ada@example.com"), "email is trimmed");
         assert_eq!(files[1].uploaded_by, None, "an empty ss58 is unattributed, not a blank name");
+        assert_eq!(files[1].uploaded_by_email, None, "a blank email is absent, not an empty line");
+        assert_eq!(files[2].uploaded_by_email, None, "absent key means unknown");
         assert_eq!(files[2].uploaded_by, None);
         assert_eq!(folders[0].uploaded_by, None, "a folder is not uploaded by anyone");
         assert_eq!(folders[0].uploaded_by_name, None, "a folder is not uploaded by anyone");
+        assert_eq!(folders[0].uploaded_by_email, None, "a folder is not uploaded by anyone");
     }
 
     /// Wire pin: `FileEntry` is serialized with no `rename_all`, so the FE
