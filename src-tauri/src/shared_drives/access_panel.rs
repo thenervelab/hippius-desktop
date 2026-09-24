@@ -3,7 +3,8 @@
 //! The panel is one scrolling list grouped as People, Pending invites and
 //! Links. Everything it shows is decided here so the webview only draws:
 //!
-//! - who is in it: the owner, whole-drive members (a drive panel), and folder
+//! - who is in it: the owner, whole-drive members (on a folder panel too:
+//!   they can open every folder), and folder
 //!   holders. A drive panel lists EVERY holder on the drive, tagged with the
 //!   folder they hold; a folder panel lists the holders of a grant at or above
 //!   the folder (nearest grant wins, as in the Share dialog's fold). Only the
@@ -25,7 +26,7 @@ use chrono::{DateTime, Utc};
 use hcfs_shared::network::{DriveGrantHolderEntry, DriveMembersResponse};
 use serde::Serialize;
 
-use super::commands::{DriveInviteInfo, ShareAccessMember, present_text as present};
+use super::commands::{DriveInviteInfo, present_text as present};
 use super::folder_grant_path::prefix_covers;
 use super::folder_roles::grant_role;
 
@@ -43,8 +44,9 @@ pub struct AccessPanel {
     pub your_role: Option<String>,
     /// Owner or Manager: may invite, change roles, remove and see links.
     pub can_manage: bool,
-    /// Whole-drive members, this account first. Empty on a folder panel.
-    pub members: Vec<ShareAccessMember>,
+    /// Whole-drive members, this account first. A folder panel lists them
+    /// too, since the whole drive includes the folder.
+    pub members: Vec<AccessPanelMember>,
     /// Folder holders, this account first. See the module doc for which.
     pub folder_holders: Vec<AccessPanelHolder>,
     /// Emailed invitations still waiting.
@@ -57,6 +59,21 @@ pub struct AccessPanel {
     pub links_locked: bool,
     /// People with whole-drive access (a folder panel says they can open it).
     pub drive_member_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessPanelMember {
+    pub member_ss58: String,
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_email: Option<String>,
+    /// RFC 3339 join time, for the row's "Joined" line when there is no email.
+    pub created_at: String,
+    /// This account: its own role is not changeable here (a manager leaves).
+    pub is_you: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -301,21 +318,18 @@ pub(crate) fn fold_access_panel(
 
     let your_member_role = listing.members.iter().find(|m| m.member_ss58 == account_id).map(|m| m.role.clone());
 
-    let mut members: Vec<ShareAccessMember> = if folder.is_some() {
-        Vec::new()
-    } else {
-        listing
-            .members
-            .into_iter()
-            .map(|m| ShareAccessMember {
-                is_you: m.member_ss58 == account_id,
-                member_ss58: m.member_ss58,
-                role: m.role,
-                member_name: present(m.member_name),
-                member_email: present(m.member_email),
-            })
-            .collect()
-    };
+    let mut members: Vec<AccessPanelMember> = listing
+        .members
+        .into_iter()
+        .map(|m| AccessPanelMember {
+            is_you: m.member_ss58 == account_id,
+            member_ss58: m.member_ss58,
+            role: m.role,
+            member_name: present(m.member_name),
+            member_email: present(m.member_email),
+            created_at: m.created_at,
+        })
+        .collect();
     // Stable: this account first, everyone else in the server's order.
     members.sort_by_key(|m| !m.is_you);
 
@@ -414,7 +428,8 @@ mod tests {
     fn a_folder_panel_lists_holders_at_or_above_it_by_the_nearest_grant() {
         let panel = fold_access_panel("5Owner", "5Owner", Some("Clients/ACME"), listing(), Vec::new(), false, now());
         assert_eq!(panel.your_role.as_deref(), Some("owner"));
-        assert!(panel.members.is_empty());
+        let whole_drive: Vec<&str> = panel.members.iter().map(|m| m.member_ss58.as_str()).collect();
+        assert_eq!(whole_drive, ["5Ann", "5Me"], "whole-drive members can open the folder too");
         assert_eq!(panel.drive_member_count, 2);
         let holders: Vec<(&str, &str, &str)> = panel
             .folder_holders
@@ -540,7 +555,10 @@ mod tests {
                 "ownerIsYou": true,
                 "yourRole": "owner",
                 "canManage": true,
-                "members": [],
+                "members": [
+                    {"memberSs58": "5Ann", "role": "writer", "memberName": "Ann", "createdAt": "t", "isYou": false},
+                    {"memberSs58": "5Me", "role": "manager", "createdAt": "t", "isYou": false},
+                ],
                 "folderHolders": [{
                     "memberSs58": "5Bo", "memberName": "Bo", "isYou": false, "role": "reader",
                     "pathPrefix": "Work", "folders": ["Clients", "Clients/ACME", "Work"],
