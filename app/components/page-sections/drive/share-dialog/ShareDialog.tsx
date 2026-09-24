@@ -116,9 +116,9 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
   const folderPath = pathPrefix?.replace(/^\/+|\/+$/g, "") ?? null;
   const name = folder ? folderPath || target.folderName || "this folder" : driveName;
 
-  // Manage access is the drive's panel either way: folder holders are listed
-  // there under Folder access. The panel and this dialog are two surfaces for
-  // one drive, so this one closes as the panel opens.
+  // Manage access opens the panel for what this dialog shares: the drive, or
+  // this folder (its holders, invitations and links). The panel and this
+  // dialog are two surfaces for one thing, so this one closes as it opens.
   const manage = useCallback(() => {
     close();
     openManagePanel({
@@ -126,8 +126,9 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
       folderName: driveName,
       ownerSs58: target.ownerSs58,
       folderHash: target.folderHash,
+      ...(pathPrefix !== null ? { pathPrefix } : {}),
     });
-  }, [close, openManagePanel, target.label, target.ownerSs58, target.folderHash, driveName]);
+  }, [close, openManagePanel, target.label, target.ownerSs58, target.folderHash, driveName, pathPrefix]);
 
   const subtitle = folder
     ? `${folderPath || name} in ${driveName}`
@@ -210,7 +211,7 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
 }
 
 /** The membership this dialog's drive is, when it is somebody else's. */
-function findMembership(
+export function findMembership(
   target: ShareDriveModalTarget,
   memberships: readonly DriveMembershipInfo[],
 ): DriveMembershipInfo | undefined {
@@ -232,7 +233,7 @@ function findMembership(
  * title. For a folder target `folderName` is the FOLDER, so only the label
  * and the membership can name the drive.
  */
-function driveDisplayName(
+export function driveDisplayName(
   target: ShareDriveModalTarget,
   membership: DriveMembershipInfo | undefined,
 ): string {

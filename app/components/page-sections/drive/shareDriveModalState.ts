@@ -3,11 +3,6 @@
 // unit-testable without a render. Tested in
 // `__tests__/shareDriveModalState.test.ts`.
 
-import type {
-  DriveInviteInfo,
-  DriveMemberInfo,
-  DriveFolderGrantInfo,
-} from "@/app/lib/tauri/sharedDrives";
 import {
   MANAGER_INVITE_MAX_SECONDS,
   type DriveRole,
@@ -53,73 +48,6 @@ export const COMING_SOON_COPY: Record<ComingSoonNotice | "folder", string> = {
     "Editor access for a single folder is coming soon. You can share it as view only for now.",
   folder: "Sharing a single folder is coming soon.",
 };
-
-/**
- * Members-tab data lifecycle. `idle` means the tab has never been opened
- * this session — the fetch is lazy so minting an invite costs no member
- * listing round-trip.
- */
-export type MembersState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | {
-      kind: "ready";
-      members: DriveMemberInfo[];
-      /** Folder-grant holders; empty when the server omits them. */
-      folderGrants: DriveFolderGrantInfo[];
-    }
-  | { kind: "unavailable" }
-  | { kind: "error"; message: string };
-
-export type InvitesState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; invites: DriveInviteInfo[] }
-  | { kind: "unavailable" }
-  | { kind: "error"; message: string };
-
-/**
- * Same five-state shape as members, deliberately: both tabs load the same way
- * against the same server, so one reader can learn one shape.
- */
-export function getInvitesView(state: InvitesState): MembersView {
-  switch (state.kind) {
-    case "loading":
-    case "idle":
-      return "loading";
-    case "unavailable":
-      return "unavailable";
-    case "error":
-      return "error";
-    default:
-      return state.invites.length === 0 ? "empty" : "rows";
-  }
-}
-
-export type MembersView = "loading" | "rows" | "empty" | "unavailable" | "error";
-
-/**
- * Which members-tab body renders. `idle` maps to `loading` — by the time
- * anything is on screen the activation effect has started the fetch, and
- * rendering a skeleton for the one frame in between beats a flash of the
- * empty state.
- */
-export function getMembersView(state: MembersState): MembersView {
-  switch (state.kind) {
-    case "idle":
-    case "loading":
-      return "loading";
-    case "ready": {
-      const hasPeople =
-        state.members.length > 0 || state.folderGrants.length > 0;
-      return hasPeople ? "rows" : "empty";
-    }
-    case "unavailable":
-      return "unavailable";
-    case "error":
-      return "error";
-  }
-}
 
 /**
  * "Never expires", expressed as the hcfs server's 100-year lifetime cap —
@@ -241,45 +169,4 @@ export function formatJoinedDate(rfc3339: string): string | null {
   const d = new Date(ts);
   const month = d.toLocaleString("en-US", { month: "short" });
   return `${month} ${d.getDate()}, ${d.getFullYear()}`;
-}
-
-/** One person in the Folder access list, with every folder they hold. */
-export interface FolderGrantHolder {
-  memberSs58: string;
-  memberName?: string;
-  memberEmail?: string;
-  /** Their role: `reader` (Viewer) or `writer` (Editor). */
-  role: string;
-  folders: string[];
-  createdAt: string;
-}
-
-/**
- * Group folder grants by holder, so one person with two folders is one row
- * and one remove target. Keyed by ss58, the identity; the name is display
- * only. Folders sorted for a stable row.
- */
-export function groupFolderGrantsByHolder(
-  grants: readonly DriveFolderGrantInfo[],
-): FolderGrantHolder[] {
-  const byHolder = new Map<string, FolderGrantHolder>();
-  for (const g of grants) {
-    const existing = byHolder.get(g.memberSs58);
-    if (existing) {
-      if (!existing.folders.includes(g.pathPrefix)) existing.folders.push(g.pathPrefix);
-      existing.memberName ??= g.memberName;
-      existing.memberEmail ??= g.memberEmail;
-      if (!existing.createdAt || g.createdAt < existing.createdAt) existing.createdAt = g.createdAt;
-    } else {
-      byHolder.set(g.memberSs58, {
-        memberSs58: g.memberSs58,
-        memberName: g.memberName,
-        memberEmail: g.memberEmail,
-        role: g.role,
-        folders: [g.pathPrefix],
-        createdAt: g.createdAt,
-      });
-    }
-  }
-  return [...byHolder.values()].map((h) => ({ ...h, folders: [...h.folders].sort() }));
 }

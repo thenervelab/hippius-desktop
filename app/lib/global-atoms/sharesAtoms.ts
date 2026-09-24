@@ -169,7 +169,8 @@ export type ShareDriveModalTarget = {
    * drive-relative path: its PRESENCE decides, not its value. Every folder
    * surface sets it, and the dialog then only ever calls the folder command,
    * which refuses an empty path; it never falls back to a whole-drive
-   * invite. Absent = whole-drive invite.
+   * invite. Absent = whole-drive invite. On the Manage access panel it
+   * scopes the panel to that folder the same way.
    */
   pathPrefix?: string;
 };

@@ -908,7 +908,7 @@ describe("People with access", () => {
     expect(await within(peopleSection()).findByText("ada@example.com")).toBeInTheDocument();
   });
 
-  it("opens the manage panel for the same drive and closes the dialog", async () => {
+  it("opens the manage panel for the same folder and closes the dialog", async () => {
     const store = renderDialog(folderTarget());
     fireEvent.click(screen.getByRole("button", { name: "Manage access" }));
     expect(store.get(shareDialogAtom)).toBeNull();
@@ -917,7 +917,16 @@ describe("People with access", () => {
       folderName: "team-docs",
       ownerSs58: undefined,
       folderHash: undefined,
+      pathPrefix: "Clients/ACME",
     });
+  });
+
+  it("opens the drive's panel from a drive dialog, with no folder", async () => {
+    const store = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Manage access" }));
+    const opened = store.get(shareDriveModalAtom);
+    expect(opened).toMatchObject({ label: "team-docs" });
+    expect(opened && "pathPrefix" in opened).toBe(false);
   });
 
   it("says a server without shared drives is not ready, and never shows a toast", async () => {

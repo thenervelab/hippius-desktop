@@ -112,6 +112,15 @@ describe("the drive header's sharing mark", () => {
     expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
   });
 
+  // The same panel opens read only for them: who else is in the drive, and
+  // the way to leave it.
+  it("lets a member see who has access, in the same panel", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([MEMBERSHIP]);
+    const store = renderMark();
+    (await screen.findByRole("button", { name: "Who has access" })).click();
+    await waitFor(() => expect(store.get(shareDriveModalAtom)).toMatchObject({ label: "team-docs" }));
+  });
+
   // Asking the owner-only listing about somebody else's drive is a refusal
   // waiting to happen, so it is never asked.
   it("never asks the owner-only listing about a member drive", async () => {

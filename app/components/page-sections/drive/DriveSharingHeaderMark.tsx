@@ -86,10 +86,9 @@ export default function DriveSharingHeaderMark({
       </span>
       )}
 
-      {/* Owners, and managers on a drive they do not own. A Viewer or Editor
-          sees the badge and their role, which is the whole of what the drive
-          means for them here. */}
-      {canManage && (
+      {/* Owners and managers manage access. A Viewer or Editor opens the
+          same panel read only: who else is in the drive, and Leave. */}
+      {canManage || withMe ? (
         <Button
           variant="ghost"
           size="auto"
@@ -110,9 +109,9 @@ export default function DriveSharingHeaderMark({
           }
           className="h-7 flex-shrink-0 rounded-md border border-primary-50 px-2.5 text-xs font-medium text-primary-50 transition-colors hover:bg-primary-50/10 dark:border-primary-brand-dark dark:text-primary-brand-dark dark:hover:bg-primary-50/15"
         >
-          Manage access
+          {canManage ? "Manage access" : "Who has access"}
         </Button>
-      )}
+      ) : null}
     </div>
   );
 }

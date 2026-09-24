@@ -5,7 +5,6 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_INVITE_TTL_SECS,
   formatJoinedDate,
-  getMembersView,
   INVITE_TTL_OPTIONS,
   NEVER_EXPIRES_SECS,
   clampInviteTtl,
@@ -16,48 +15,8 @@ import {
   clampFolderInviteTtl,
   FOLDER_INVITE_ROLES,
   FOLDER_INVITE_TTL_OPTIONS,
-  groupFolderGrantsByHolder,
 } from "../shareDriveModalState";
 import { MANAGER_INVITE_MAX_SECONDS } from "@/app/lib/shared-drives/roles";
-
-describe("getMembersView", () => {
-  it("maps idle and loading to the skeleton", () => {
-    expect(getMembersView({ kind: "idle" })).toBe("loading");
-    expect(getMembersView({ kind: "loading" })).toBe("loading");
-  });
-
-  it("splits ready into empty vs rows", () => {
-    expect(getMembersView({ kind: "ready", members: [], folderGrants: [] })).toBe(
-      "empty",
-    );
-    expect(
-      getMembersView({
-        kind: "ready",
-        members: [{ memberSs58: "5X", role: "writer", createdAt: "2026-08-20T00:00:00Z" }],
-        folderGrants: [],
-      }),
-    ).toBe("rows");
-    expect(
-      getMembersView({
-        kind: "ready",
-        members: [],
-        folderGrants: [
-          {
-            memberSs58: "5Y",
-            pathPrefix: "Work",
-            role: "reader",
-            createdAt: "2026-09-23T00:00:00Z",
-          },
-        ],
-      }),
-    ).toBe("rows");
-  });
-
-  it("keeps unavailable distinct from error — one degrades quietly, one surfaces", () => {
-    expect(getMembersView({ kind: "unavailable" })).toBe("unavailable");
-    expect(getMembersView({ kind: "error", message: "boom" })).toBe("error");
-  });
-});
 
 describe("INVITE_TTL_OPTIONS", () => {
   it("includes the display default (7 days) and only positive lifetimes", () => {
@@ -125,28 +84,6 @@ describe("emailed invitation choices", () => {
   });
 });
 
-describe("groupFolderGrantsByHolder", () => {
-  it("makes one row per person, keyed by ss58, with every folder", () => {
-    const rows = groupFolderGrantsByHolder([
-      { memberSs58: "5A", pathPrefix: "b", role: "writer", createdAt: "2026-02-01" },
-      { memberSs58: "5B", pathPrefix: "x", role: "reader", createdAt: "2026-01-01", memberName: "Bo" },
-      { memberSs58: "5A", pathPrefix: "a", role: "writer", createdAt: "2026-01-15", memberName: "Ada" },
-    ]);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({
-      memberSs58: "5A",
-      memberName: "Ada",
-      folders: ["a", "b"],
-      role: "writer",
-      createdAt: "2026-01-15",
-    });
-    expect(rows[1]).toMatchObject({ memberSs58: "5B", memberName: "Bo", folders: ["x"] });
-  });
-});
-
-// The "coming soon" sentences are the Rust `NotReadyKind` Display texts too.
-// Neither side may reword alone: the FE shows these for a probe hint, Rust
-// sends the same words as the refusal's message.
 describe("COMING_SOON_COPY", () => {
   it("matches the Rust refusal texts word for word", async () => {
     const { readFileSync } = await import("node:fs");

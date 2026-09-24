@@ -1,29 +1,35 @@
-// State coverage for the sharing panel (members + links management): flag
-// OFF renders nothing; the members tab's loading / rows / empty /
-// unavailable views and the two-step remove; the Links tab's rows, its empty
-// state (which opens the Share dialog) and its reload after a new share.
+// The Manage access panel: one scrolling list grouped as People, Pending
+// invites and Links, from one Rust fold (`list_access_panel`). Covers the
+// header for an owner and for someone the drive is shared with, the groups
+// and their counts, the empty and loading states, pessimistic changes on
+// every row kind, locked links, the Share dialog hand-off, and Leave.
 
 import React from "react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act, configure, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
-import ShareDriveModal from "../ShareDrivePanel";
+import ShareDrivePanel from "../ShareDrivePanel";
 import {
   driveInvitesVersionAtom,
   shareDialogAtom,
-  serverCapabilitiesAtom,
   shareDriveModalAtom,
   type ShareDriveModalTarget,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import type {
+  AccessPanel,
+  AccessPanelHolder,
+  AccessPanelLink,
+  AccessPanelMember,
+  DriveMembershipInfo,
+} from "@/app/lib/tauri/sharedDrives";
 
-// Flip the flag per test — the modal reads it at render time.
-// The panel slides inline on large screens and overlays below; jsdom has no
-// matchMedia, and these tests are about the tabs rather than the shell, so
-// they run in the inline shape.
+configure({ asyncUtilTimeout: 3000 });
+
+// jsdom has no matchMedia; the panel runs in its inline shape.
 vi.mock("@/app/lib/hooks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/lib/hooks")>();
   return {
@@ -39,22 +45,13 @@ vi.mock("@/app/lib/hooks", async (importOriginal) => {
   };
 });
 
-const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
-// The overflow menu is Radix-backed and does not open under jsdom's pointer
-// emulation. These tests are about what the row DOES with its two actions,
-// not about Radix, so the shell renders its items as plain buttons and the
-// behaviour underneath is exercised for real.
+// The overflow menus are Radix dropdowns that do not open under jsdom's
+// pointer emulation; their items render as plain buttons so what each item
+// DOES is exercised for real.
 vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
   __esModule: true,
-  default: ({
-    items,
-    children,
-  }: {
-    items: { itemTitle: React.ReactNode; onItemClick?: () => void }[];
-    children: React.ReactNode;
-  }) => (
+  default: ({ items }: { items: { itemTitle: React.ReactNode; onItemClick?: () => void }[] }) => (
     <div>
-      {children}
       {items.map((item, i) => (
         <button key={i} type="button" onClick={() => item.onItemClick?.()}>
           {item.itemTitle}
@@ -64,731 +61,495 @@ vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
   ),
 }));
 
-// The panel reads the signed-in address so a link the reader minted
-// themselves does not say so on every row.
-vi.mock("@/app/lib/wallet-auth-context", () => ({
-  useWalletAuth: () => ({ polkadotAddress: "5Me" }),
-}));
-
-const folderRolesFlag = vi.hoisted(() => ({ on: false }));
+const flags = vi.hoisted(() => ({ sharedDrives: true }));
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
-    return flagState.sharedDrivesEnabled;
+    return flags.sharedDrives;
   },
-  get FOLDER_ROLES_ENABLED() {
-    return folderRolesFlag.on;
-  },
+  FOLDER_ROLES_ENABLED: true,
 }));
 
-// The modal's only side effects are the sharedDrives wrappers; mocking the
-// wrapper module (not raw invoke) keeps the tests on the modal's contract.
-const createDriveInviteMock = vi.fn();
-const listDriveMembersMock = vi.fn();
-const listDriveFolderGrantsMock = vi.fn();
-const removeDriveMemberMock = vi.fn();
-const changeDriveMemberRoleMock = vi.fn();
-const listDriveInvitesMock = vi.fn();
-const revokeDriveInviteMock = vi.fn();
-const approveEmailInviteMock = vi.fn();
-const replaceFolderGrantsMock = vi.fn();
+vi.mock("@/app/lib/hooks/api/useStorageOverview", () => ({
+  STORAGE_OVERVIEW_QUERY_KEY: "storage-overview",
+  useStorageOverview: () => ({ data: { source: "subscription", plan: { name: "Plus" } } }),
+}));
 
-/** A stable member address, so the role assertions read for themselves. */
-const MEMBER = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+const unlockMock = vi.hoisted(() => vi.fn());
+vi.mock("@/app/lib/hooks/useUnlockFlow", () => ({
+  useUnlockFlow: () => ({ unlock: unlockMock, busy: false, isOAuth: true }),
+}));
+
+const memberships = vi.hoisted(() => ({ list: [] as DriveMembershipInfo[] }));
+vi.mock("@/app/lib/hooks/useSharedDriveRoles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/lib/hooks/useSharedDriveRoles")>();
+  return { ...actual, useSharedDriveMemberships: () => memberships.list };
+});
+
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
+
+vi.mock("next/dynamic", () => ({
+  default: () => {
+    const Stub = () => <span data-testid="avatar" />;
+    return Stub;
+  },
+}));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
+const listAccessPanelMock = vi.fn();
+const changeRoleMock = vi.fn();
+const removeMock = vi.fn();
+const revokeMock = vi.fn();
+const approveMock = vi.fn();
+const replaceFoldersMock = vi.fn();
+const leaveMock = vi.fn();
+const leaveByIdentityMock = vi.fn();
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
   return {
     ...original,
-    createDriveInvite: (...args: unknown[]) => createDriveInviteMock(...args),
-    listDriveMembers: (...args: unknown[]) => listDriveMembersMock(...args),
-    listDriveFolderGrants: (...args: unknown[]) =>
-      listDriveFolderGrantsMock(...args),
-    removeDriveMember: (...args: unknown[]) => removeDriveMemberMock(...args),
-    changeDriveMemberRole: (...args: unknown[]) =>
-      changeDriveMemberRoleMock(...args),
-    listDriveInvites: (...args: unknown[]) => listDriveInvitesMock(...args),
-    revokeDriveInvite: (...args: unknown[]) => revokeDriveInviteMock(...args),
-    approveEmailInvite: (...args: unknown[]) => approveEmailInviteMock(...args),
-    replaceFolderGrants: (...args: unknown[]) => replaceFolderGrantsMock(...args),
+    listAccessPanel: (...a: unknown[]) => listAccessPanelMock(...a),
+    changeDriveMemberRole: (...a: unknown[]) => changeRoleMock(...a),
+    removeDriveMember: (...a: unknown[]) => removeMock(...a),
+    revokeDriveInvite: (...a: unknown[]) => revokeMock(...a),
+    approveEmailInvite: (...a: unknown[]) => approveMock(...a),
+    replaceFolderGrants: (...a: unknown[]) => replaceFoldersMock(...a),
+    leaveSharedDrive: (...a: unknown[]) => leaveMock(...a),
+    leaveSharedDriveByIdentity: (...a: unknown[]) => leaveByIdentityMock(...a),
+    listMyDriveMemberships: vi.fn().mockResolvedValue([]),
   };
 });
 
-const toastErrorMock = vi.hoisted(() => vi.fn());
-const toastSuccessMock = vi.hoisted(() => vi.fn());
-vi.mock("sonner", () => ({
-  toast: { success: toastSuccessMock, error: toastErrorMock },
-}));
+const ME = "5MeAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const OWNER = "5OwnerBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const ANN = "5AnnCccccccccccccccccccccccccccccccccccccccccccccc";
+const BO = "5BoDddddddddddddddddddddddddddddddddddddddddddddd";
 
-// `next/dynamic` wraps boring-avatars; a plain stub avoids lazy-loading
-// timing in jsdom.
-vi.mock("next/dynamic", () => ({
-  default: () => {
-    const Stub = ({ name }: { name?: string }) => <span data-testid="avatar" data-name={name} />;
-    Stub.displayName = "AvatarStub";
-    return Stub;
-  },
-}));
+const DAY = 86_400;
 
-// The upgrade CTA navigates to the in-app plans page.
-const push = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push }),
-}));
+function member(over: Partial<AccessPanelMember> = {}): AccessPanelMember {
+  return { memberSs58: ANN, role: "writer", memberName: "Ann", isYou: false, createdAt: "2026-08-20T12:00:00Z", ...over };
+}
 
-const UNAVAILABLE = { kind: "NotReady", subkind: "SHARED_DRIVES_UNAVAILABLE", message: "off" };
+function holder(over: Partial<AccessPanelHolder> = {}): AccessPanelHolder {
+  return {
+    memberSs58: BO,
+    memberName: "Bo",
+    isYou: false,
+    role: "reader",
+    pathPrefix: "Clients/ACME",
+    folders: ["Clients/ACME", "Work"],
+    ...over,
+  };
+}
 
+function link(over: Partial<AccessPanelLink> = {}): AccessPanelLink {
+  return {
+    inviteId: "l1",
+    role: "writer",
+    mintedBy: ME,
+    mintedByYou: true,
+    useCount: 12,
+    maxUses: 50,
+    singleUse: false,
+    usagePercent: 24,
+    status: "active",
+    expiresAt: "2026-09-29T12:00:00Z",
+    neverExpires: false,
+    expiresInSecs: 5 * DAY,
+    inviteUrl: "https://console.hippius.com/invite/tok_abcdefgh#k=SECRETKEY",
+    linkAvailable: true,
+    ...over,
+  };
+}
 
-function renderModal(target: { label: string; folderName: string } | null = { label: "team-docs", folderName: "team-docs" }) {
+function panel(over: Partial<AccessPanel> = {}): AccessPanel {
+  return {
+    ownerSs58: ME,
+    ownerIsYou: true,
+    yourRole: "owner",
+    canManage: true,
+    members: [],
+    folderHolders: [],
+    pendingInvites: [],
+    links: [],
+    inactiveLinks: [],
+    linksLocked: false,
+    driveMemberCount: 0,
+    ...over,
+  };
+}
+
+const full = () =>
+  panel({
+    members: [member()],
+    folderHolders: [holder()],
+    pendingInvites: [
+      {
+        inviteId: "p1",
+        role: "reader",
+        mintedBy: ME,
+        expiresAt: "2026-10-01T00:00:00Z",
+        maxUses: 1,
+        useCount: 0,
+        revoked: false,
+        valid: true,
+        createdAt: "t",
+        recipientEmail: "mia@example.com",
+        emailStatus: "awaiting_seal",
+        expiresInSecs: 6 * DAY,
+      },
+    ],
+    links: [link()],
+    driveMemberCount: 1,
+  });
+
+function renderPanel(target: ShareDriveModalTarget | null = { label: "team-docs", folderName: "team-docs" }) {
   const store = createStore();
   store.set(shareDriveModalAtom, target);
-  // The surface invalidates the drive list's sharing query on a mutation,
-  // so it reads the query client.
-  return render(
+  render(
     <QueryClientProvider client={new QueryClient()}>
-      <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
+      <Provider store={store}>{(<ShareDrivePanel />) as ReactNode}</Provider>
     </QueryClientProvider>,
   );
+  return store;
+}
+
+/** A loaded group's section; throws until it is on screen, for `waitFor`. */
+function group(name: RegExp): HTMLElement {
+  const section = screen.getByRole("heading", { name }).closest("section");
+  if (!section) throw new Error("group not loaded yet");
+  return section as HTMLElement;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  flagState.sharedDrivesEnabled = true;
-  listDriveFolderGrantsMock.mockResolvedValue([]);
+  flags.sharedDrives = true;
+  memberships.list = [];
+  listAccessPanelMock.mockResolvedValue(full());
 });
 
-
-
-
-/** Open a member row's overflow menu and pick one of its two items. */
-function openMemberMenu(_memberSs58: string, item: "Change role" | "Remove from drive") {
-  fireEvent.click(screen.getByRole("button", { name: item }));
-}
-
-/**
- * Drive the Change role dialog through to Save. The role commits on Save,
- * never on selection — picking is not deciding.
- */
-function changeMemberRoleTo(memberSs58: string, optionLabel: string) {
-  openMemberMenu(memberSs58, "Change role");
-  fireEvent.click(screen.getByRole("radio", { name: new RegExp(optionLabel) }));
-  fireEvent.click(screen.getByRole("button", { name: "Save role" }));
-}
-
-describe("flag gating", () => {
-  it("renders nothing while SHARED_DRIVES_ENABLED is off, even with a target set", () => {
-    flagState.sharedDrivesEnabled = false;
-    renderModal();
-    expect(screen.queryByText(/Share "team-docs"/)).not.toBeInTheDocument();
+describe("gating", () => {
+  it("renders nothing while the flag is off, even with a target", () => {
+    flags.sharedDrives = false;
+    renderPanel();
+    expect(screen.queryByText("team-docs")).not.toBeInTheDocument();
   });
 
   it("renders nothing with no target", () => {
-    renderModal(null);
-    expect(screen.queryByText(/Share "team-docs"/)).not.toBeInTheDocument();
+    renderPanel(null);
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
   });
 });
 
-describe("members tab", () => {
-  it("loads members on open, since that is the tab the panel starts on", async () => {
-    listDriveMembersMock.mockResolvedValue([
-      {
-        memberSs58: "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
-        role: "writer",
-        createdAt: "2026-08-20T00:00:00Z",
-      },
-    ]);
-
-    renderModal();
-
-    // Members is the default tab: the panel only opens on a drive that is
-    // already shared, so "who is in it" is the question being asked.
-    // The row reads the role people recognise, not the wire spelling. "Editor"
-    // appears twice by design -- the row's label and the picker's option -- so
-    // this asserts the wire word is absent rather than counting matches.
-    await waitFor(() =>
-      expect(screen.getAllByText(/Editor/).length).toBeGreaterThan(0),
-    );
-    expect(screen.queryByText(/writer/)).not.toBeInTheDocument();
-    // An own drive resolves by label and names no wire identity; passing one
-    // would address somebody else's namespace.
-    expect(listDriveMembersMock).toHaveBeenCalledWith("team-docs", undefined);
+describe("an owner's drive", () => {
+  it("asks Rust once for the drive, with no folder and no wire identity", async () => {
+    renderPanel();
+    await screen.findByText("Ann");
+    expect(listAccessPanelMock).toHaveBeenCalledWith("team-docs", null, undefined);
   });
 
-  it("offers every role in the dialog, starting on the one the member has", async () => {
-    listDriveMembersMock.mockResolvedValue([
-      { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
-    ]);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByRole("button", { name: "Change role" });
-    openMemberMenu(MEMBER, "Change role");
-
-    // Radios (console parity): every role and its description is visible at
-    // once; the member's current role starts checked.
-    expect(await screen.findByRole("radio", { name: /Editor/ })).toBeChecked();
-    for (const label of ["Viewer", "Editor", "Manager"]) {
-      expect(screen.getByRole("radio", { name: new RegExp(label) })).toBeInTheDocument();
-    }
+  it("shows skeleton rows while loading, never a spinner", () => {
+    listAccessPanelMock.mockReturnValue(new Promise(() => {}));
+    renderPanel();
+    expect(screen.getByRole("status", { name: "Loading access" })).toBeInTheDocument();
   });
 
-  // Picking a role used to commit it. A mis-click then changed what somebody
-  // could do to the drive, with a toast as the only notice.
-  it("does not change the role until Save is pressed", async () => {
-    listDriveMembersMock.mockResolvedValue([
-      { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
-    ]);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByRole("button", { name: "Change role" });
-    openMemberMenu(MEMBER, "Change role");
-
-    fireEvent.click(await screen.findByRole("radio", { name: /Manager/ }));
-    expect(changeDriveMemberRoleMock).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Save role" }));
-    await waitFor(() => expect(changeDriveMemberRoleMock).toHaveBeenCalled());
+  it("says whose drive it is and the plan it is on", async () => {
+    renderPanel();
+    expect(await screen.findByText("Your drive · Plus plan")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "team-docs" })).toBeInTheDocument();
   });
 
-  // Saving the role somebody already has is a round-trip that changes nothing.
-  it("offers no Save until a different role is picked", async () => {
-    listDriveMembersMock.mockResolvedValue([
-      { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
-    ]);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByRole("button", { name: "Change role" });
-    openMemberMenu(MEMBER, "Change role");
-
-    expect(await screen.findByRole("button", { name: "Save role" })).toBeDisabled();
+  it("groups people, pending invites and links, with counts", async () => {
+    renderPanel();
+    await screen.findByText("Ann");
+    expect(screen.getByRole("heading", { name: "People 3" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Pending invites 1" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Links 1 active" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
-  it("changes a role and refetches, so the row reflects the server", async () => {
-    listDriveMembersMock.mockResolvedValue([
-      { memberSs58: MEMBER, role: "writer", createdAt: "2026-08-20T00:00:00Z" },
-    ]);
-    changeDriveMemberRoleMock.mockResolvedValue(undefined);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByRole("button", { name: "Change role" });
-    changeMemberRoleTo(MEMBER, "Manager");
-
-    await waitFor(() =>
-      expect(changeDriveMemberRoleMock).toHaveBeenCalledWith(
-        "team-docs",
-        MEMBER,
-        "manager",
-        undefined,
-      ),
-    );
-    // Refetched rather than patched in place: the server is the authority on
-    // what the role became, and a demotion has side effects (revoked invites)
-    // this row cannot infer.
-    await waitFor(() => expect(listDriveMembersMock).toHaveBeenCalledTimes(2));
+  it("lists a folder holder with the people, tagged with their folder", async () => {
+    renderPanel();
+    const people = within(await waitFor(() => group(/^People/)));
+    expect(people.getByText("Bo")).toBeInTheDocument();
+    expect(people.getByText("Clients/ACME +1")).toBeInTheDocument();
+    expect(people.getByText("Viewer")).toBeInTheDocument();
+    expect(people.getByRole("button", { name: "Change folders" })).toBeInTheDocument();
+    // A member's second line is their email, else when they joined.
+    expect(people.getByText("Joined Aug 20, 2026")).toBeInTheDocument();
   });
 
-  // The backend's refusals are written for the user -- "you cannot change your
-  // own role", the named role, the manager caps -- so they must reach them.
-  it("surfaces the backend's refusal verbatim", async () => {
-    listDriveMembersMock.mockResolvedValue([
-      { memberSs58: MEMBER, role: "manager", createdAt: "2026-08-20T00:00:00Z" },
-    ]);
-    changeDriveMemberRoleMock.mockRejectedValue({
-      kind: "Validation",
-      message: "You cannot change your own role. Leave the drive instead.",
-    });
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByRole("button", { name: "Change role" });
-    changeMemberRoleTo(MEMBER, "Viewer");
-
-    await waitFor(() =>
-      expect(toastErrorMock).toHaveBeenCalledWith(
-        expect.stringContaining("You cannot change your own role"),
-      ),
-    );
-  });
-
-  it("shows the empty state when nobody joined yet", async () => {
-    listDriveMembersMock.mockResolvedValue([]);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByText(/No one has joined this drive yet/);
-  });
-
-  it("degrades quietly when the server is feature-off", async () => {
-    listDriveMembersMock.mockRejectedValue(UNAVAILABLE);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByText(/aren't available on your server yet/);
-  });
-
-  it("removes a member only after the confirm dialog, then refetches", async () => {
-    const member = {
-      memberSs58: "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
-      role: "writer",
-      createdAt: "2026-08-20T00:00:00Z",
-    };
-    listDriveMembersMock.mockResolvedValueOnce([member]).mockResolvedValueOnce([]);
-    removeDriveMemberMock.mockResolvedValue(undefined);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Members" }));
-    await screen.findByRole("button", { name: "Remove from drive" });
-
-    // Picking the menu item only opens the confirm; nothing is removed yet.
-    openMemberMenu(member.memberSs58, "Remove from drive");
-    expect(removeDriveMemberMock).not.toHaveBeenCalled();
-    // The confirmation names the DRIVE, never the member's raw address.
-    const confirmText = await screen.findByText(/Remove this member from/);
-    expect(confirmText.textContent).not.toContain(member.memberSs58);
-
-    fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
-    await waitFor(() =>
-      expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", member.memberSs58, undefined),
-    );
-    await screen.findByText(/No one has joined this drive yet/);
-  });
-});
-
-describe("links tab", () => {
-  const liveInvite = {
-    inviteId: "abc123",
-    role: "writer",
-    expiresAt: "2126-09-12T12:00:00Z",
-    maxUses: 50,
-    useCount: 2,
-    revoked: false,
-    valid: true,
-    createdAt: "2026-09-17T12:00:00Z",
-    linkAvailable: true,
-    inviteUrl: "https://console.example.com/invite/tok_abcdefgh#k=SECRETKEY",
-  };
-
-  it("lists links only when the tab is opened", async () => {
-    listDriveInvitesMock.mockResolvedValue([liveInvite]);
-
-    renderModal();
-    expect(listDriveInvitesMock).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    await screen.findByText(/Editor · 2 of 50 used/);
-    expect(listDriveInvitesMock).toHaveBeenCalledWith("team-docs", undefined);
-  });
-
-  it("shows a truncated copyable URL without the #k= fragment", async () => {
+  it("describes a link by its role, maker, usage and expiry, with the key hidden", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
-    listDriveInvitesMock.mockResolvedValue([liveInvite]);
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    expect(links.getByText("Editor link")).toBeInTheDocument();
+    expect(links.getByText(/by You/)).toBeInTheDocument();
+    expect(links.getByText("12 of 50 used · Expires in 5 days")).toBeInTheDocument();
+    expect(links.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "24");
+    expect(links.queryByText(/SECRETKEY/)).not.toBeInTheDocument();
+    fireEvent.click(links.getByRole("button", { name: "Copy invite link" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(link().inviteUrl));
+  });
 
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-
-    const copyBtn = await screen.findByRole("button", { name: "Copy invite link" });
-    expect(copyBtn).toHaveTextContent("https://console.example.com/invite/tok_abcd…");
-    expect(copyBtn).not.toHaveTextContent("SECRETKEY");
-    expect(copyBtn).not.toHaveTextContent("#k=");
-
-    fireEvent.click(copyBtn);
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(liveInvite.inviteUrl),
+  it("says whether a single-use link was used, with no bar", async () => {
+    listAccessPanelMock.mockResolvedValue(
+      panel({ links: [link({ singleUse: true, maxUses: 1, useCount: 0, usagePercent: 0, role: "manager" })] }),
     );
+    renderPanel();
+    expect(await screen.findByText("Single use, not used yet · Expires in 5 days")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
-  it("shows a locked stand-in when the blob is present but did not open", async () => {
-    listDriveInvitesMock.mockResolvedValue([
-      { ...liveInvite, inviteUrl: undefined },
-    ]);
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    expect(await screen.findByLabelText("Link locked")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
-  });
-
-  it("omits the link field on revoked rows", async () => {
-    listDriveInvitesMock.mockResolvedValue([
-      {
-        ...liveInvite,
-        revoked: true,
-        valid: false,
-        linkAvailable: false,
-        inviteUrl: undefined,
-      },
-    ]);
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    expect(await screen.findByText("Revoked")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Link locked")).not.toBeInTheDocument();
-  });
-
-  // The whole point: a minted link could not be killed at all before this.
-  it("revokes a link after the inline confirm, then refetches", async () => {
-    listDriveInvitesMock.mockResolvedValue([liveInvite]);
-    revokeDriveInviteMock.mockResolvedValue(undefined);
-
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
-
-    // One click arms, a second commits -- revoking cannot be undone.
-    expect(revokeDriveInviteMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm revoke" }));
-
-    await waitFor(() =>
-      expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "abc123", undefined),
+  it("folds ended links into one line until opened", async () => {
+    listAccessPanelMock.mockResolvedValue(
+      panel({
+        links: [link()],
+        inactiveLinks: [
+          link({ inviteId: "x1", status: "revoked", inviteUrl: undefined, linkAvailable: false }),
+          link({ inviteId: "x2", status: "expired", inviteUrl: undefined, linkAvailable: false }),
+        ],
+      }),
     );
-    await waitFor(() => expect(listDriveInvitesMock).toHaveBeenCalledTimes(2));
+    renderPanel();
+    const line = await screen.findByRole("button", { name: /2 expired or revoked links/ });
+    expect(screen.queryByText(/^Revoked/)).not.toBeInTheDocument();
+    fireEvent.click(line);
+    expect(screen.getByText(/^Revoked ·/)).toBeInTheDocument();
+    expect(screen.getByText(/^Expired ·/)).toBeInTheDocument();
   });
 
-  it("calls a 100-year expiry what it is", async () => {
-    listDriveInvitesMock.mockResolvedValue([liveInvite]);
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    expect(await screen.findByText("Never expires")).toBeInTheDocument();
-  });
-
-  // A dead link needs no action; a disabled Revoke would imply otherwise.
-  it("offers no action on a revoked link, and says why", async () => {
-    listDriveInvitesMock.mockResolvedValue([
-      { ...liveInvite, revoked: true, valid: false, linkAvailable: false },
-    ]);
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-
-    expect(await screen.findByText("Revoked")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Revoke" })).not.toBeInTheDocument();
-  });
-
-  // There is no Invite tab: the empty state opens the Share dialog for this
-  // drive, as a whole-drive share.
-  it("opens the Share dialog from the empty Links tab", async () => {
-    listDriveInvitesMock.mockResolvedValue([]);
-    listDriveMembersMock.mockResolvedValue([]);
-    const store = createStore();
-    store.set(shareDriveModalAtom, { label: "team-docs", folderName: "team-docs" });
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
-      </QueryClientProvider>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    expect(await screen.findByText(/No invites or links yet/)).toBeInTheDocument();
-    expect(screen.queryByText(/Invite tab/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Share drive" }));
+  it("shows the empty state when only the owner has access, and it opens the Share dialog", async () => {
+    listAccessPanelMock.mockResolvedValue(panel());
+    const store = renderPanel();
+    expect(await screen.findByText("Only you have access")).toBeInTheDocument();
+    expect(
+      screen.getByText("Invite people by email or create a link to share this drive."),
+    ).toBeInTheDocument();
+    fireEvent.click(within(screen.getByText("Only you have access").parentElement!).getByRole("button", { name: "Share" }));
     const opened = store.get(shareDialogAtom);
     expect(opened).toEqual({ label: "team-docs", folderName: "team-docs", ownerSs58: undefined, folderHash: undefined });
     expect(opened && "pathPrefix" in opened).toBe(false);
-    // The panel steps aside for the dialog.
     expect(store.get(shareDriveModalAtom)).toBeNull();
   });
 
-  // The Share dialog bumps a version on every invite or link it makes; an
-  // open Links tab lists it again without being reopened.
-  it("reloads the Links tab when the Share dialog makes something new", async () => {
-    listDriveInvitesMock.mockResolvedValue([]);
-    const store = createStore();
-    store.set(shareDriveModalAtom, { label: "team-docs", folderName: "team-docs" });
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
-      </QueryClientProvider>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    await screen.findByText(/No invites or links yet/);
-    expect(listDriveInvitesMock).toHaveBeenCalledTimes(1);
-    act(() => {
-      store.set(driveInvitesVersionAtom, (n) => n + 1);
-    });
-    await waitFor(() => expect(listDriveInvitesMock).toHaveBeenCalledTimes(2));
+  it("offers Invite, New link and Share, which all open the whole-drive Share dialog", async () => {
+    for (const name of ["Invite", "New link", "Share"]) {
+      const store = renderPanel();
+      await screen.findAllByText("Ann");
+      fireEvent.click(screen.getAllByRole("button", { name }).at(-1)!);
+      expect(store.get(shareDialogAtom)).toMatchObject({ label: "team-docs" });
+      expect(store.get(shareDriveModalAtom)).toBeNull();
+      document.body.innerHTML = "";
+    }
   });
 
-  it("degrades quietly on a feature-off server", async () => {
-    listDriveInvitesMock.mockRejectedValue({
-      kind: "NotReady",
-      subkind: "SHARED_DRIVES_UNAVAILABLE",
-    });
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    await waitFor(() => expect(listDriveInvitesMock).toHaveBeenCalled());
-    expect(toastErrorMock).not.toHaveBeenCalled();
-  });
-});
-
-// A manager may hold a drive they never synced here. The manage calls used to
-// resolve a local `sync_paths` row such a drive does not have, and the lenient
-// fallback then answers with THIS account's namespace: managing the wrong
-// drive rather than failing.
-describe("managing a drive that is not synced here", () => {
-  const TARGET = { ownerSs58: "5Owner", folderHash: "abc123" };
-
-  function renderUnsynced() {
-    const store = createStore();
-    store.set(shareDriveModalAtom, {
-      label: "team-docs",
-      folderName: "team-docs",
-      ...TARGET,
-    });
-    return render(
-      <QueryClientProvider client={new QueryClient()}>
-        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
-      </QueryClientProvider>,
-    );
-  }
-
-  it("names the owner's drive when listing members", async () => {
-    listDriveMembersMock.mockResolvedValue([]);
-    renderUnsynced();
-    await waitFor(() =>
-      expect(listDriveMembersMock).toHaveBeenCalledWith("team-docs", TARGET),
-    );
+  it("says changes apply right away in the footer", async () => {
+    renderPanel();
+    expect(await screen.findByText("Changes apply right away.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Leave/ })).not.toBeInTheDocument();
   });
 
-  it("names it when listing links", async () => {
-    listDriveMembersMock.mockResolvedValue([]);
-    listDriveInvitesMock.mockResolvedValue([]);
-    renderUnsynced();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    await waitFor(() =>
-      expect(listDriveInvitesMock).toHaveBeenCalledWith("team-docs", TARGET),
-    );
+  it("reads the list again when the Share dialog makes something", async () => {
+    const store = renderPanel();
+    await screen.findByText("Ann");
+    act(() => store.set(driveInvitesVersionAtom, (n) => n + 1));
+    await waitFor(() => expect(listAccessPanelMock).toHaveBeenCalledTimes(2));
   });
 
-  it("names it when removing a member", async () => {
-    const member = { memberSs58: MEMBER, role: "writer", createdAt: "" };
-    listDriveMembersMock.mockResolvedValue([member]);
-    removeDriveMemberMock.mockResolvedValue(undefined);
+  it("says a server without shared drives is not ready", async () => {
+    listAccessPanelMock.mockRejectedValue({ kind: "NotReady", subkind: "SHARED_DRIVES_UNAVAILABLE", message: "off" });
+    renderPanel();
+    expect(await screen.findByText("Shared drives aren't available on your server yet.")).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
 
-    renderUnsynced();
-    await screen.findByRole("button", { name: "Remove from drive" });
-    openMemberMenu(MEMBER, "Remove from drive");
-    fireEvent.click(await screen.findByRole("button", { name: /Remove/ }));
-
-    await waitFor(() =>
-      expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", MEMBER, TARGET),
-    );
+  it("offers Try again after a failed load", async () => {
+    listAccessPanelMock.mockRejectedValueOnce({ kind: "Hcfs", message: "boom" });
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Ann")).toBeInTheDocument();
   });
 });
 
-describe("account names", () => {
-  it("names a member and the confirmation by display name when the server sent one", async () => {
-    const member = {
-      memberSs58: MEMBER,
-      role: "writer",
-      createdAt: "2026-08-20T00:00:00Z",
-      memberName: "Grace Hopper",
-      memberEmail: "grace@example.com",
-    };
-    listDriveMembersMock.mockResolvedValue([member]);
-    renderModal();
-    expect(await screen.findByText("Grace Hopper")).toBeInTheDocument();
-    // Email is hover-only.
-    expect(screen.queryByText("grace@example.com")).toBeNull();
-    openMemberMenu(MEMBER, "Remove from drive");
-    expect(await screen.findByText(/Remove Grace Hopper from/)).toBeInTheDocument();
-  });
-});
-
-describe("mailed invitations on the links tab", () => {
-  const mailed = {
-    inviteId: "mail1",
-    role: "writer",
-    expiresAt: "2126-09-12T12:00:00Z",
-    maxUses: 1,
-    useCount: 0,
-    revoked: false,
-    valid: true,
-    createdAt: "2026-09-17T12:00:00Z",
-    recipientEmail: "ada@example.com",
-  };
-
-  it("shows who it went to and offers Approve only once they opened it", async () => {
-    listDriveMembersMock.mockResolvedValue([]);
-    listDriveInvitesMock.mockResolvedValue([
-      { ...mailed, emailStatus: "awaiting_seal" },
-      { ...mailed, inviteId: "mail2", recipientEmail: "bo@example.com", emailStatus: "sent" },
-    ]);
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    expect(await screen.findByText(/ada@example.com · Opened, waiting for your approval/)).toBeInTheDocument();
-    expect(screen.getByText(/bo@example.com · Sent, not opened yet/)).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Approve so they can join" })).toHaveLength(1);
+describe("changes are pessimistic", () => {
+  it("changes a role through the row's select, saying Saving until Rust answers", async () => {
+    let finish: () => void = () => {};
+    changeRoleMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
+    renderPanel();
+    await screen.findByText("Ann");
+    fireEvent.click(screen.getByLabelText("Role for Ann"));
+    fireEvent.click(screen.getAllByText("Manager").at(-1)!);
+    await waitFor(() => expect(changeRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", undefined));
+    expect(screen.getByText("Saving…")).toBeInTheDocument();
+    listAccessPanelMock.mockResolvedValue(panel({ members: [member({ role: "manager" })] }));
+    finish();
+    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Manager"));
+    expect(screen.queryByText("Saving…")).not.toBeInTheDocument();
   });
 
-  it("approves by id and refetches, so the row moves on", async () => {
-    listDriveMembersMock.mockResolvedValue([]);
-    listDriveInvitesMock
-      .mockResolvedValueOnce([{ ...mailed, emailStatus: "awaiting_seal" }])
-      .mockResolvedValueOnce([{ ...mailed, emailStatus: "sealed" }]);
-    approveEmailInviteMock.mockResolvedValue({ status: "sealed" });
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve so they can join" }));
-    await waitFor(() =>
-      expect(approveEmailInviteMock).toHaveBeenCalledWith("team-docs", "mail1", undefined),
-    );
-    expect(await screen.findByText(/Approved, waiting for them to join/)).toBeInTheDocument();
-    expect(toastSuccessMock).toHaveBeenCalled();
+  it("leaves a refused change as it was and says why on the row", async () => {
+    removeMock.mockRejectedValue({ kind: "Validation", message: "Not allowed." });
+    renderPanel();
+    await screen.findByText("Bo");
+    fireEvent.click(screen.getByRole("button", { name: "Remove access" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("Couldn't change access for Bo. Not allowed.")).toBeInTheDocument();
+    expect(screen.getByText("Bo")).toBeInTheDocument();
   });
 
-  it("surfaces a refused approval and re-reads the row", async () => {
-    listDriveMembersMock.mockResolvedValue([]);
-    listDriveInvitesMock.mockResolvedValue([{ ...mailed, emailStatus: "awaiting_seal" }]);
-    approveEmailInviteMock.mockRejectedValue({ kind: "Validation", message: "The invitation changed" });
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve so they can join" }));
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
-    expect(listDriveInvitesMock).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("folder access (HCFS #475: no role change for a holder)", () => {
-  const CAPS = {
-    shares: true,
-    folder_shares: true,
-    folder_share_revoke_by_hash: true,
-    share_owner_wrap: true,
-    folder_grants: true,
-    folder_grant_writes: true,
-  };
-  const HOLDER = "5HolderAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
-  function renderWith(target: ShareDriveModalTarget, caps: typeof CAPS | null = CAPS) {
-    const store = createStore();
-    store.set(serverCapabilitiesAtom, caps);
-    store.set(shareDriveModalAtom, target);
-    return render(
-      <QueryClientProvider client={new QueryClient()}>
-        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
-      </QueryClientProvider>,
-    );
-  }
-
-  beforeEach(() => {
-    folderRolesFlag.on = true;
-    listDriveMembersMock.mockResolvedValue([]);
-    listDriveFolderGrantsMock.mockResolvedValue([
-      { memberSs58: HOLDER, pathPrefix: "Clients/ACME", role: "reader", createdAt: "2026-08-20T00:00:00Z", memberName: "Ada" },
-      { memberSs58: HOLDER, pathPrefix: "Clients/Beta", role: "reader", createdAt: "2026-08-21T00:00:00Z" },
-    ]);
+  it("revokes a link only after asking, saying Revoking meanwhile", async () => {
+    let finish: () => void = () => {};
+    revokeMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    fireEvent.click(links.getByRole("button", { name: "Revoke" }));
+    expect(revokeMock).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "l1", undefined));
+    expect(await screen.findByText("Revoking…")).toBeInTheDocument();
+    listAccessPanelMock.mockResolvedValue(panel({ members: [member()] }));
+    finish();
+    await waitFor(() => expect(screen.queryByText("Editor link")).not.toBeInTheDocument());
   });
 
-  afterEach(() => {
-    folderRolesFlag.on = false;
+  it("offers Approve only on an invitation that needs it, with its stage as a pill", async () => {
+    approveMock.mockResolvedValue({ status: "sealed" });
+    renderPanel();
+    const pending = within(await waitFor(() => group(/^Pending invites/)));
+    expect(pending.getByText("Needs approval")).toBeInTheDocument();
+    expect(pending.getByText("Viewer · 6 days left")).toBeInTheDocument();
+    fireEvent.click(pending.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(approveMock).toHaveBeenCalledWith("team-docs", "p1", undefined));
   });
 
-  it("shows each holder once, by name, with their role and folders", async () => {
-    renderWith({ label: "team-docs", folderName: "team-docs" });
-    expect(await screen.findByText("Ada")).toBeInTheDocument();
-    expect(screen.getByText("Viewer")).toBeInTheDocument();
-    expect(screen.getByText(/Clients\/ACME, Clients\/Beta/)).toBeInTheDocument();
+  it("cancels an invitation", async () => {
+    revokeMock.mockResolvedValue(undefined);
+    renderPanel();
+    await screen.findByText("mia@example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel invite to mia@example.com" }));
+    await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "p1", undefined));
   });
 
-  it("offers no role change for a holder, and says how to change access", async () => {
-    renderWith({ label: "team-docs", folderName: "team-docs" });
-    await screen.findByText("Ada");
-    expect(screen.queryByRole("button", { name: "Change role" })).not.toBeInTheDocument();
-    expect(
-      screen.getByText("To change their access, remove them and invite them again."),
-    ).toBeInTheDocument();
-    // Change folders (keeps the role) and Remove stay.
-    expect(screen.getByRole("button", { name: "Change folders" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove access" })).toBeInTheDocument();
-  });
-
-  const replaced = (pathPrefixes: string[], roles: string[]) => ({ memberSs58: HOLDER, pathPrefixes, roles });
-
-  it("narrows a holder to fewer folders, keeping at least one, with no role sent", async () => {
-    replaceFolderGrantsMock.mockResolvedValue(replaced(["Clients/ACME"], ["reader"]));
-    renderWith({ label: "team-docs", folderName: "team-docs" });
-    await screen.findByText("Ada");
+  it("changes a holder's folders and reads the list again", async () => {
+    replaceFoldersMock.mockResolvedValue({ memberSs58: BO, pathPrefixes: ["Clients/ACME"], roles: ["reader"] });
+    renderPanel();
+    await screen.findByText("Bo");
     fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Clients/Beta" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
     await waitFor(() =>
-      expect(replaceFolderGrantsMock).toHaveBeenCalledWith("team-docs", HOLDER, ["Clients/ACME"], {
+      expect(replaceFoldersMock).toHaveBeenCalledWith("team-docs", BO, ["Clients/ACME"], {
         role: undefined,
         target: undefined,
       }),
     );
+    await waitFor(() => expect(listAccessPanelMock).toHaveBeenCalledTimes(2));
   });
+});
 
-  it("adds a folder with the chosen access, keeping the ones they hold", async () => {
-    replaceFolderGrantsMock.mockResolvedValue(
-      replaced(["Clients/ACME", "Clients/Beta", "Work"], ["reader", "reader", "writer"]),
-    );
-    renderWith({ label: "team-docs", folderName: "team-docs" });
-    await screen.findByText("Ada");
-    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
-    fireEvent.change(screen.getByLabelText("Folder to add"), { target: { value: "Work" } });
-    fireEvent.click(screen.getByLabelText("Access to the added folder"));
-    fireEvent.click(screen.getAllByText("Editor").at(-1)!);
-    fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
-    await waitFor(() =>
-      expect(replaceFolderGrantsMock).toHaveBeenCalledWith(
-        "team-docs",
-        HOLDER,
-        ["Clients/ACME", "Clients/Beta", "Work"],
-        { role: "writer", target: undefined },
-      ),
-    );
-  });
-
-  it("says Editor on a folder is coming soon and can add it as view only", async () => {
-    replaceFolderGrantsMock
-      .mockRejectedValueOnce({ kind: "NotReady", subkind: "FOLDER_EDITOR_INVITES_UNAVAILABLE", message: "x" })
-      .mockResolvedValueOnce(replaced(["Clients/ACME", "Clients/Beta", "Work"], ["reader", "reader", "reader"]));
-    renderWith({ label: "team-docs", folderName: "team-docs" });
-    await screen.findByText("Ada");
-    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
-    fireEvent.change(screen.getByLabelText("Folder to add"), { target: { value: "Work" } });
-    fireEvent.click(screen.getByLabelText("Access to the added folder"));
-    fireEvent.click(screen.getAllByText("Editor").at(-1)!);
-    fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
+describe("locked links", () => {
+  it("says so and offers the unlock flow on the blurred field", async () => {
+    listAccessPanelMock.mockResolvedValue(panel({ links: [link({ inviteUrl: undefined })], linksLocked: true }));
+    renderPanel();
     expect(
-      await screen.findByText("Editor access for a single folder is coming soon. You can share it as view only for now."),
+      await screen.findByText("Links are locked. Enter your unlock password to show and copy them."),
     ).toBeInTheDocument();
-    // The dialog stays open with what was typed.
-    expect(screen.getByLabelText("Folder to add")).toHaveValue("Work");
-    fireEvent.click(screen.getByRole("button", { name: "Add as view only" }));
-    await waitFor(() => expect(replaceFolderGrantsMock).toHaveBeenCalledTimes(2));
-    expect(replaceFolderGrantsMock.mock.calls[1][3]).toEqual({ role: "reader", target: undefined });
-    await waitFor(() => expect(screen.queryByLabelText("Folder to add")).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    expect(unlockMock).toHaveBeenCalled();
+  });
+});
+
+describe("a folder", () => {
+  const target = { label: "team-docs", folderName: "team-docs", pathPrefix: "Clients/ACME" };
+
+  it("asks about exactly the folder and names the drive it is in", async () => {
+    renderPanel(target);
+    expect(await screen.findByText("Folder in team-docs")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Clients/ACME" })).toBeInTheDocument();
+    expect(listAccessPanelMock).toHaveBeenCalledWith("team-docs", "Clients/ACME", undefined);
   });
 
-  it("shows Rust's reason inline when a folder path is refused", async () => {
-    replaceFolderGrantsMock.mockRejectedValueOnce({
-      kind: "Validation",
-      message: "Folder path contains an illegal component.",
+  it("says whole-drive members have the whole drive, and how to change a holder's access", async () => {
+    renderPanel(target);
+    expect(await screen.findByText("Has the whole drive")).toBeInTheDocument();
+    expect(
+      screen.getByText("To change someone’s access to this folder, remove them and invite them again."),
+    ).toBeInTheDocument();
+  });
+
+  it("shares the folder, never the drive", async () => {
+    const store = renderPanel(target);
+    await screen.findByText("Ann");
+    fireEvent.click(screen.getByRole("button", { name: "New link" }));
+    expect(store.get(shareDialogAtom)).toMatchObject({ label: "team-docs", pathPrefix: "Clients/ACME" });
+  });
+});
+
+describe("a drive shared with you", () => {
+  const sharedWithMe = (role: string) =>
+    panel({
+      ownerSs58: OWNER,
+      ownerIsYou: false,
+      yourRole: role,
+      canManage: false,
+      members: [member({ memberSs58: ME, memberName: "Me", role, isYou: true }), member()],
     });
-    renderWith({ label: "team-docs", folderName: "team-docs" });
-    await screen.findByText("Ada");
-    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
-    fireEvent.change(screen.getByLabelText("Folder to add"), { target: { value: "a/../b" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
-    expect(await screen.findByText("Folder path contains an illegal component.")).toBeInTheDocument();
+
+  beforeEach(() => {
+    memberships.list = [
+      {
+        ownerSs58: OWNER,
+        ownerName: "Olive",
+        folderHash: "abc123",
+        displayLabel: "team-docs",
+        role: "writer",
+        createdAt: "t",
+        syncedLocally: true,
+        localLabel: "team-docs",
+        frozen: true,
+        frozenUntil: null,
+      },
+    ];
   });
 
-  // The panel manages the WHOLE drive: its invite is a whole-drive invite
-  // and never carries a folder, so nothing from here can be mistaken for one.
-  it("opens a whole-drive invite, never a folder one", async () => {
-    const store = createStore();
-    store.set(serverCapabilitiesAtom, CAPS);
-    store.set(shareDriveModalAtom, { label: "team-docs", folderName: "team-docs" });
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
-      </QueryClientProvider>,
-    );
-    await screen.findByText("Ada");
-    fireEvent.click(screen.getByRole("button", { name: "Invite more people" }));
-    const opened = store.get(shareDialogAtom);
-    expect(opened).toEqual({ label: "team-docs", folderName: "team-docs", ownerSs58: undefined, folderHash: undefined });
-    expect(opened && "pathPrefix" in opened).toBe(false);
+  it("names the owner and your role, and shows everyone read only", async () => {
+    listAccessPanelMock.mockResolvedValue(sharedWithMe("writer"));
+    renderPanel();
+    expect(await screen.findByText("Shared with you by Olive · you are an Editor")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Role for Ann")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^Links/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Invite" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+  });
+
+  it("says when the drive is frozen", async () => {
+    listAccessPanelMock.mockResolvedValue(sharedWithMe("writer"));
+    renderPanel();
+    expect(await screen.findByText("This drive is frozen. Files can be opened but not changed.")).toBeInTheDocument();
+  });
+
+  it("gives anyone but the owner the read-only list and Leave, never Share", async () => {
+    listAccessPanelMock.mockResolvedValue(sharedWithMe("reader"));
+    renderPanel();
+    expect(await screen.findByText("Shared with you by Olive · you are a Viewer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave drive" })).toBeInTheDocument();
+    expect(screen.queryByText("Changes apply right away.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^Pending invites/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves only after the confirmation, removing the synced drive too", async () => {
+    listAccessPanelMock.mockResolvedValue(sharedWithMe("reader"));
+    leaveMock.mockResolvedValue(undefined);
+    const store = renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Leave drive" }));
+    expect(leaveMock).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Leave drive" }));
+    await waitFor(() => expect(leaveMock).toHaveBeenCalledWith("team-docs"));
+    await waitFor(() => expect(store.get(shareDriveModalAtom)).toBeNull());
   });
 });
