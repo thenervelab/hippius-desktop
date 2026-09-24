@@ -194,8 +194,7 @@ mod tests {
     /// never a parse error — same deployment-skew story as folder_shares.
     #[test]
     fn missing_folder_grants_field_defaults_to_false() {
-        let caps: ServerCapabilities =
-            serde_json::from_str(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
+        let caps: ServerCapabilities = serde_json::from_str(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
         assert!(!caps.folder_grants);
     }
 }

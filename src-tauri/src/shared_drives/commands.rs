@@ -231,15 +231,10 @@ fn classify_error_status(status: reqwest::StatusCode, body: &str) -> AppError {
     // Folder-grant mint / replace: some files under the folder have paths the
     // server cannot trust to place them there. Match the slug, never English.
     if status.as_u16() == 409 && envelope.as_ref().is_some_and(|env| env.error == "folder_paths_unreliable") {
-        return AppError::Validation(
-            "Some files in this folder need repair before it can be shared.".into(),
-        );
+        return AppError::Validation("Some files in this folder need repair before it can be shared.".into());
     }
     if status.as_u16() == 409 && envelope.as_ref().is_some_and(|env| env.error == "overlapping_folder_grant") {
-        return AppError::Validation(
-            "This person already has access to this folder, a folder inside it, or a folder around it."
-                .into(),
-        );
+        return AppError::Validation("This person already has access to this folder, a folder inside it, or a folder around it.".into());
     }
     if status.as_u16() == 409 && envelope.as_ref().is_some_and(|env| env.error == "already_member") {
         return AppError::Validation("This person already has access to the whole drive.".into());
@@ -1009,6 +1004,7 @@ pub(crate) async fn open_grant_entropy_inner(
 /// (never drive entropy), and a response that does not echo the prefix is
 /// refused. Gated on `capabilities.folder_grants`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC surface: invite fields + optional folder path_prefix
 pub async fn create_drive_invite(
     app: tauri::AppHandle,
     label: String,
@@ -1028,11 +1024,9 @@ pub async fn create_drive_invite(
         None => None,
     };
     if folder_prefix.is_some() {
-        let caps = crate::shares::capabilities::fetch_capabilities(&*state, &ctx.account_id).await?;
+        let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
         if !caps.folder_grants {
-            return Err(AppError::Validation(
-                "Folder sharing is not enabled on this server.".into(),
-            ));
+            return Err(AppError::Validation("Folder sharing is not enabled on this server.".into()));
         }
     }
 
@@ -1169,7 +1163,7 @@ pub async fn list_drive_folder_grants(
     let ctx = api_ctx(&state).await?;
     let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
-    let caps = crate::shares::capabilities::fetch_capabilities(&*state, &ctx.account_id).await?;
+    let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
     if !caps.folder_grants {
         return Ok(Vec::new());
     }
@@ -1211,11 +1205,9 @@ pub async fn replace_folder_grants(
     let ctx = api_ctx(&state).await?;
     let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
-    let caps = crate::shares::capabilities::fetch_capabilities(&*state, &ctx.account_id).await?;
+    let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
     if !caps.folder_grants {
-        return Err(AppError::Validation(
-            "Folder sharing is not enabled on this server.".into(),
-        ));
+        return Err(AppError::Validation("Folder sharing is not enabled on this server.".into()));
     }
 
     let mut normalized = Vec::with_capacity(path_prefixes.len());
@@ -1224,8 +1216,7 @@ pub async fn replace_folder_grants(
     }
     if normalized.is_empty() {
         return Err(AppError::Validation(
-            "At least one folder is required. To remove every grant, remove the person instead."
-                .into(),
+            "At least one folder is required. To remove every grant, remove the person instead.".into(),
         ));
     }
 
@@ -1260,12 +1251,7 @@ pub async fn http_replace_folder_grants(
 ) -> Result<hcfs_shared::network::ReplaceFolderGrantsResponse> {
     let resp = http
         .put(with_owner(
-            &format!(
-                "{}/v1/drives/{}/grants/{}",
-                base_url.trim_end_matches('/'),
-                folder_hash,
-                member_ss58
-            ),
+            &format!("{}/v1/drives/{}/grants/{}", base_url.trim_end_matches('/'), folder_hash, member_ss58),
             owner,
         )?)
         .header("Authorization", format!("Bearer {bearer}"))
@@ -1310,7 +1296,7 @@ pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolder
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
 
-    let caps = crate::shares::capabilities::fetch_capabilities(&*state, &ctx.account_id).await?;
+    let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
     if !caps.folder_grants {
         return Ok(Vec::new());
     }

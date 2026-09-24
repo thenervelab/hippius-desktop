@@ -35,18 +35,14 @@ pub fn folder_grant_path_prefix(relative_path: &str) -> Result<String> {
     // which would let `a/./b` through as `a/b`.
     for segment in nfc.split('/') {
         if segment.is_empty() || segment == "." || segment == ".." {
-            return Err(AppError::Validation(
-                "Folder path contains an illegal component.".into(),
-            ));
+            return Err(AppError::Validation("Folder path contains an illegal component.".into()));
         }
     }
     for component in Path::new(&nfc).components() {
         match component {
             Component::Normal(_) => {}
             _ => {
-                return Err(AppError::Validation(
-                    "Folder path contains an illegal component.".into(),
-                ));
+                return Err(AppError::Validation("Folder path contains an illegal component.".into()));
             }
         }
     }

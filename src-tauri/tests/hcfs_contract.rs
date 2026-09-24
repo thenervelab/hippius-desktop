@@ -339,10 +339,7 @@ fn create_drive_invite_request_wire_pinned() {
         path_prefix: Some("Clients/ACME".into()),
     };
     let folder_json = serde_json::to_value(&folder).expect("serialize folder");
-    assert_eq!(
-        folder_json.get("path_prefix").and_then(|v| v.as_str()),
-        Some("Clients/ACME")
-    );
+    assert_eq!(folder_json.get("path_prefix").and_then(|v| v.as_str()), Some("Clients/ACME"));
 
     // Both limits are `#[serde(default)]`: a body carrying only folder_hash
     // must deserialize with the server-default sentinels (None).
@@ -366,8 +363,7 @@ fn create_drive_invite_response_wire_pinned() {
         "CreateDriveInviteResponse must omit path_prefix when absent"
     );
 
-    let folder: CreateDriveInviteResponse =
-        serde_json::from_str(r#"{"invite_token":"tok_abc","path_prefix":"Clients/ACME"}"#).expect("deserialize");
+    let folder: CreateDriveInviteResponse = serde_json::from_str(r#"{"invite_token":"tok_abc","path_prefix":"Clients/ACME"}"#).expect("deserialize");
     assert_eq!(folder.path_prefix.as_deref(), Some("Clients/ACME"));
 }
 
@@ -423,10 +419,7 @@ fn accept_drive_invite_request_wire_pinned() {
         path_prefix: Some("Clients/ACME".into()),
     };
     let folder_json = serde_json::to_value(&folder).expect("serialize");
-    assert_eq!(
-        folder_json.get("path_prefix").and_then(|v| v.as_str()),
-        Some("Clients/ACME")
-    );
+    assert_eq!(folder_json.get("path_prefix").and_then(|v| v.as_str()), Some("Clients/ACME"));
 }
 
 /// `already_owner` is the field that replaced the earlier `already` bool: it

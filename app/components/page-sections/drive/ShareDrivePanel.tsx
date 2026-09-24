@@ -839,6 +839,7 @@ function FolderGrantRow({
         </div>
       </div>
       <TableActionMenu
+        dropdownTitle=""
         items={[
           {
             icon: <Icons.Trash className="size-4" />,
@@ -846,7 +847,16 @@ function FolderGrantRow({
             onItemClick: () => setConfirmOpen(true),
           },
         ]}
-      />
+      >
+        <Button
+          variant="ghost"
+          size="auto"
+          aria-label={`Actions for ${memberSs58}`}
+          className="h-7 w-7 shrink-0 rounded-md p-0 text-grey-70 transition-colors hover:bg-grey-90 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white"
+        >
+          <Icons.EllipsisVertical className="size-[18px]" />
+        </Button>
+      </TableActionMenu>
       <ConfirmationDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
