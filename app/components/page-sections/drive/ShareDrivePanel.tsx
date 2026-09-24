@@ -1,11 +1,12 @@
-// Owner-side management modal for a shared drive: mint invite links and
-// list/remove members. Opened via `shareDriveModalAtom` (the
+// Owner-side management panel for a shared drive: who is in it and which
+// invites and links are live. Opened via `shareDriveModalAtom` (the
 // `ShareFileModal` singleton pattern — mounted once in the pages layout,
 // any surface opens it by setting the atom). Own drives only: the
 // "Share drive…" menu item is hidden for member rows and the backend
 // refuses a member label as `Validation`.
 //
-// Invite minting lives in `CreateDriveInviteDialog` (a separate dialog).
+// Inviting and making links live in the Share dialog
+// (`share-dialog/ShareDialog`), a separate surface.
 // This panel's Links tab lists invites the server still holds, opens sealed
 // tokens in Rust, and offers copy / revoke — console parity for seal-back.
 
@@ -32,7 +33,8 @@ import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharin
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
-  createDriveInviteDialogAtom,
+  driveInvitesVersionAtom,
+  shareDialogAtom,
   folderGrantsFeatureEnabledAtom,
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -179,8 +181,11 @@ export default function ShareDrivePanel() {
   const { polkadotAddress } = useWalletAuth();
   const { isDesktop, isLargeDesktop } = useBreakpoint();
 
-  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
+  const setShareDialogTarget = useSetAtom(shareDialogAtom);
   const folderGrantsEnabled = useAtomValue(folderGrantsFeatureEnabledAtom);
+  // Bumped by the Share dialog on every invite or link it makes.
+  const invitesVersion = useAtomValue(driveInvitesVersionAtom);
+  const seenInvitesVersion = useRef(invitesVersion);
 
   // Members first: it is what someone opens this for once the drive is
   // already shared, which is the only state it opens in.
@@ -292,6 +297,14 @@ export default function ShareDrivePanel() {
     [label, loadInvites, driveTarget],
   );
 
+  // Something new was shared: drop the listing so the Links tab loads it
+  // again (now if it is open, on its next activation otherwise).
+  useEffect(() => {
+    if (seenInvitesVersion.current === invitesVersion) return;
+    seenInvitesVersion.current = invitesVersion;
+    setInvites({ kind: "idle" });
+  }, [invitesVersion]);
+
   // Same lazy rule as members: the tab pays for its own listing.
   useEffect(() => {
     if (!label || tab !== "links") return;
@@ -376,6 +389,23 @@ export default function ShareDrivePanel() {
   const onClose = () => setTarget(null);
   const open = Boolean(SHARED_DRIVES_ENABLED && target);
 
+  const openShareDialog = () => {
+    if (!target) return;
+    // Close the panel as the dialog opens. They are two surfaces for one
+    // drive, and sharing does not need the list behind it -- which also
+    // avoids the dialog opening underneath the panel's own overlay on small
+    // screens, where the panel sits above FramedDialog's layer.
+    setTarget(null);
+    // This panel manages the WHOLE drive, so it shares the whole drive. A
+    // folder is shared from the folder's own "Share folder" item, never here.
+    setShareDialogTarget({
+      label: target.label,
+      folderName: target.folderName,
+      ownerSs58: target.ownerSs58,
+      folderHash: target.folderHash,
+    });
+  };
+
   // Body first, so the inline panel and the small-screen overlay render
   // exactly the same thing and cannot drift.
   const body = target ? (
@@ -420,6 +450,7 @@ export default function ShareDrivePanel() {
             onRevoke={(id) => void revokeInvite(id)}
             onApprove={(id) => approveInvite(id)}
             onClose={() => setTarget(null)}
+            onShare={openShareDialog}
             viewerSs58={polkadotAddress}
           />
         ) : (
@@ -436,24 +467,7 @@ export default function ShareDrivePanel() {
             onChangeGrantFolders={(ss58, folders) =>
               void changeGrantFolders(ss58, folders)
             }
-            onCreateInvite={() => {
-              if (!target) return;
-              // Close the panel as the dialog opens. They are two surfaces for
-              // one drive, and a focused mint does not need the list behind
-              // it -- which also avoids the dialog opening underneath the
-              // panel's own overlay on small screens, where the panel sits
-              // above FramedDialog's layer.
-              setTarget(null);
-              // This panel manages the WHOLE drive, so its invite is a
-              // whole-drive invite. A folder is shared from the folder's own
-              // "Share folder" item, never from here.
-              setInviteDialogTarget({
-                label: target.label,
-                folderName: target.folderName,
-                ownerSs58: target.ownerSs58,
-                folderHash: target.folderHash,
-              });
-            }}
+            onCreateInvite={openShareDialog}
           />
         )}
       </div>
@@ -517,12 +531,15 @@ function LinksTab({
   onRevoke,
   onApprove,
   onClose,
+  onShare,
   viewerSs58,
 }: {
   state: InvitesState;
   onRevoke: (inviteId: string) => void;
   onApprove: (inviteId: string) => Promise<void>;
   onClose: () => void;
+  /** Opens the Share dialog for this drive. */
+  onShare: () => void;
   viewerSs58?: string | null;
 }) {
   const view = getInvitesView(state);
@@ -543,9 +560,21 @@ function LinksTab({
 
   if (view === "empty") {
     return (
-      <p className="min-h-0 flex-1 py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-        No invite links yet. Create one from the Invite tab.
-      </p>
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-3 py-6 text-center">
+        <p className="text-sm text-grey-50 dark:text-grey-dark-600">
+          No invites or links yet. Invite someone by email or create a link from
+          Share.
+        </p>
+        <Button
+          type="button"
+          variant="primary"
+          size="auto"
+          onClick={onShare}
+          className="h-[34px] rounded-[8px] px-4 text-[13px] font-medium"
+        >
+          Share drive
+        </Button>
+      </div>
     );
   }
 
@@ -1082,12 +1111,11 @@ function ChangeFoldersDialog({
 }
 
 /**
- * The one way into the mint flow, which is a dialog rather than a tab.
+ * The way into the Share dialog, which is a dialog rather than a tab.
  *
- * The label follows the drive's state. "Create invite link" is right for a
- * drive nobody has joined -- it names the artefact, which is the thing that
- * does not exist yet. Once people are in, the artefact is not the point any
- * more and the same words read as though the earlier link had failed.
+ * The label follows the drive's state: "Share drive" for a drive nobody has
+ * joined, "Invite more people" once people are in, where the first words
+ * would read as though the earlier share had failed.
  */
 function InviteButton({
   onClick,
@@ -1104,7 +1132,7 @@ function InviteButton({
       onClick={onClick}
       className="h-[34px] w-full rounded-[8px] text-[13px] font-medium"
     >
-      {hasMembers ? "Invite more people" : "Create invite link"}
+      {hasMembers ? "Invite more people" : "Share drive"}
     </Button>
   );
 }

@@ -10,7 +10,7 @@ import OfflineBanner from "@/components/ui/OfflineBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
 import ShareDrivePanel from "../components/page-sections/drive/ShareDrivePanel";
-import CreateDriveInviteDialog from "../components/page-sections/drive/CreateDriveInviteDialog";
+import ShareDialog from "../components/page-sections/drive/share-dialog/ShareDialog";
 
 /**
  * Distance the content's left margin changes between the expanded and collapsed
@@ -126,7 +126,7 @@ export default function ResponsiveContent({
       </main>
       <FileDetailsPanel />
       <ShareDrivePanel />
-      <CreateDriveInviteDialog />
+      <ShareDialog />
     </div>
   );
 }

@@ -165,7 +165,7 @@ export type ShareDriveModalTarget = {
   ownerSs58?: string;
   folderHash?: string;
   /**
-   * Makes the create-invite dialog a **folder invite** for this
+   * Makes the Share dialog a **folder invite** for this
    * drive-relative path: its PRESENCE decides, not its value. Every folder
    * surface sets it, and the dialog then only ever calls the folder command,
    * which refuses an empty path; it never falls back to a whole-drive
@@ -177,13 +177,17 @@ export type ShareDriveModalTarget = {
 export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);
 
 /**
- * The drive whose "create invite link" dialog is open.
+ * The drive or folder whose Share dialog is open (`share-dialog/ShareDialog`).
  *
- * Separate from the panel so minting keeps its own focused surface. The panel
+ * Separate from the panel so sharing keeps its own focused surface. The panel
  * is for managing what already exists -- who is in the drive, which links are
- * live -- and a mint is a short, decision-shaped flow that ends in a link to
- * copy. Putting it in the panel made a list surface carry a wizard.
+ * live -- and inviting someone or making a link is a short, decision-shaped
+ * flow. Putting it in the panel made a list surface carry a wizard.
  */
-export const createDriveInviteDialogAtom = atom<ShareDriveModalTarget | null>(
-  null,
-);
+export const shareDialogAtom = atom<ShareDriveModalTarget | null>(null);
+
+/**
+ * Bumped whenever the Share dialog sends an invite or creates a link, so an
+ * open Links tab lists it without the panel having to be reopened.
+ */
+export const driveInvitesVersionAtom = atom(0);

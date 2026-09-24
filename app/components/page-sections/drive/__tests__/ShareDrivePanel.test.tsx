@@ -1,12 +1,11 @@
-// State coverage for `ShareDriveModal` (owner invite mint + members
-// management): flag OFF renders nothing; the invite machine's
-// choosing → running → done (auto-copy) and → error / unavailable
-// terminals; the members tab's loading / rows / empty / unavailable
-// views and the two-step remove.
+// State coverage for the sharing panel (members + links management): flag
+// OFF renders nothing; the members tab's loading / rows / empty /
+// unavailable views and the two-step remove; the Links tab's rows, its empty
+// state (which opens the Share dialog) and its reload after a new share.
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -14,7 +13,8 @@ import type { ReactNode } from "react";
 
 import ShareDriveModal from "../ShareDrivePanel";
 import {
-  createDriveInviteDialogAtom,
+  driveInvitesVersionAtom,
+  shareDialogAtom,
   serverCapabilitiesAtom,
   shareDriveModalAtom,
   type ShareDriveModalTarget,
@@ -464,11 +464,47 @@ describe("links tab", () => {
     expect(screen.queryByRole("button", { name: "Revoke" })).not.toBeInTheDocument();
   });
 
-  it("points at the Invite tab when there are no links", async () => {
+  // There is no Invite tab: the empty state opens the Share dialog for this
+  // drive, as a whole-drive share.
+  it("opens the Share dialog from the empty Links tab", async () => {
     listDriveInvitesMock.mockResolvedValue([]);
-    renderModal();
+    listDriveMembersMock.mockResolvedValue([]);
+    const store = createStore();
+    store.set(shareDriveModalAtom, { label: "team-docs", folderName: "team-docs" });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
+      </QueryClientProvider>,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    expect(await screen.findByText(/No invite links yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No invites or links yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/Invite tab/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Share drive" }));
+    const opened = store.get(shareDialogAtom);
+    expect(opened).toEqual({ label: "team-docs", folderName: "team-docs", ownerSs58: undefined, folderHash: undefined });
+    expect(opened && "pathPrefix" in opened).toBe(false);
+    // The panel steps aside for the dialog.
+    expect(store.get(shareDriveModalAtom)).toBeNull();
+  });
+
+  // The Share dialog bumps a version on every invite or link it makes; an
+  // open Links tab lists it again without being reopened.
+  it("reloads the Links tab when the Share dialog makes something new", async () => {
+    listDriveInvitesMock.mockResolvedValue([]);
+    const store = createStore();
+    store.set(shareDriveModalAtom, { label: "team-docs", folderName: "team-docs" });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider store={store}>{(<ShareDriveModal />) as ReactNode}</Provider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    await screen.findByText(/No invites or links yet/);
+    expect(listDriveInvitesMock).toHaveBeenCalledTimes(1);
+    act(() => {
+      store.set(driveInvitesVersionAtom, (n) => n + 1);
+    });
+    await waitFor(() => expect(listDriveInvitesMock).toHaveBeenCalledTimes(2));
   });
 
   it("degrades quietly on a feature-off server", async () => {
@@ -690,7 +726,7 @@ describe("folder access (HCFS #475: no role change for a holder)", () => {
     );
     await screen.findByText("Ada");
     fireEvent.click(screen.getByRole("button", { name: "Invite more people" }));
-    const opened = store.get(createDriveInviteDialogAtom);
+    const opened = store.get(shareDialogAtom);
     expect(opened).toEqual({ label: "team-docs", folderName: "team-docs", ownerSs58: undefined, folderHash: undefined });
     expect(opened && "pathPrefix" in opened).toBe(false);
   });

@@ -25,6 +25,15 @@ import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
  */
 export interface DriveInviteLink {
   inviteUrl: string;
+  /**
+   * What was actually sent, after Rust applied its defaults and the manager
+   * and folder caps. The Share dialog describes the new link from these, so
+   * it never quotes a lifetime or a uses count the server was not asked for.
+   */
+  role: DriveRole;
+  expiresInSecs: number;
+  /** 1 for a folder or a manager link. */
+  maxUses: number;
 }
 
 /** One row of the owner-side members table. */
@@ -525,6 +534,23 @@ export async function approveEmailInvite(
     inviteId,
     ...targetArgs(target),
   });
+}
+
+/** Rust's as-you-type verdict on an invite address. */
+export interface InviteEmailCheck {
+  /** Whether "Send invite" may be pressed. */
+  valid: boolean;
+  /** What to say under the field; absent while it is empty or valid. */
+  message?: string;
+}
+
+/**
+ * Check a typed invite address with the same rule the send applies
+ * (`validate_invite_email` in Rust). No network call, so the dialog can ask
+ * on every change.
+ */
+export async function checkInviteEmail(email: string): Promise<InviteEmailCheck> {
+  return invoke<InviteEmailCheck>("check_invite_email", { email });
 }
 
 /** The server has no mail service: say email invites are coming soon. */

@@ -38,7 +38,7 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
 import {
-  createDriveInviteDialogAtom,
+  shareDialogAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
@@ -104,7 +104,7 @@ export default function FileContextMenu({
   // "Share folder" is live: always behind the folder-roles flag, else once
   // the server advertises folder grants.
   const folderInvitesOffered = useFolderShareInviteOffered();
-  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
+  const setInviteDialogTarget = useSetAtom(shareDialogAtom);
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
   // Whether a folder in one of those drives may be shared by link: an

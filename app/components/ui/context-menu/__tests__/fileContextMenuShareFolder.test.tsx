@@ -32,7 +32,7 @@ vi.mock("@/app/lib/hooks/useSharedDriveRoles", async (importOriginal) => {
 
 import FileContextMenu from "../index";
 import {
-  createDriveInviteDialogAtom,
+  shareDialogAtom,
   serverCapabilitiesAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
@@ -83,7 +83,7 @@ describe("right-click Share folder", () => {
   it("opens a folder invite for the folder clicked, resolved against the open view", async () => {
     const store = open("Trips/2026");
     fireEvent.click(await screen.findByText("Share folder"));
-    expect(store.get(createDriveInviteDialogAtom)).toEqual({
+    expect(store.get(shareDialogAtom)).toEqual({
       label: "mine",
       folderName: "Photos",
       pathPrefix: "Trips/2026/Photos",

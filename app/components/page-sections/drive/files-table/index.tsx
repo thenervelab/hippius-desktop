@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
-  createDriveInviteDialogAtom,
+  shareDialogAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
@@ -645,7 +645,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       ? manageableMemberDriveLabels
       : undefined;
     const setShareModalFile = useSetAtom(shareModalFileAtom);
-    const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
+    const setInviteDialogTarget = useSetAtom(shareDialogAtom);
     const setRenameModalFile = useSetAtom(renameModalFileAtom);
     const enableFolderExpander = !isRecentFiles;
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.

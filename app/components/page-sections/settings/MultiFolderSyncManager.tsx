@@ -5,7 +5,7 @@ import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import {
-  createDriveInviteDialogAtom,
+  shareDialogAtom,
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { useQueryClient } from "@tanstack/react-query";
@@ -80,7 +80,7 @@ function openTarget(row: FolderRow): string {
   const sharedDriveRoles = useSharedDriveRoles();
   const sharedDrivesInPlan = useSharedDrivesInPlan();
   const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
-  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
+  const setInviteDialogTarget = useSetAtom(shareDialogAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
