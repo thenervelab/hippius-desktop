@@ -472,6 +472,7 @@ fn main() {
             crate::shared_drives::commands::list_drive_folder_grants,
             crate::shared_drives::commands::replace_folder_grants,
             crate::shared_drives::commands::list_share_access,
+            crate::shared_drives::commands::list_access_panel,
             crate::shared_drives::commands::create_folder_invite,
             crate::shared_drives::commands::remove_drive_member,
             crate::shared_drives::commands::change_drive_member_role,

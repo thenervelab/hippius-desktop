@@ -111,7 +111,7 @@ fn resolve_invite_policy(expires_in_secs: Option<u64>, max_uses: Option<u32>) ->
 
 /// Keep a real display string; drop blank/whitespace so the FE never draws a
 /// gap where an ss58 fallback belonged (hcfs #455 / console `presentText`).
-fn present_text(value: Option<String>) -> Option<String> {
+pub(crate) fn present_text(value: Option<String>) -> Option<String> {
     value.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
@@ -1474,6 +1474,69 @@ pub async fn list_share_access(
     ))
 }
 
+/// Everything the Manage access panel shows for a drive, or for one folder of
+/// it, folded by [`super::access_panel::fold_access_panel`]: people (members
+/// and folder holders), emailed invitations still waiting, and link invites
+/// split into working and ended, with their sealed links opened here.
+///
+/// The member listing is required (any member of the drive may read it); the
+/// invite listing is manager-only on the server and best effort here, so a
+/// Viewer or Editor gets the people and no links rather than an error.
+#[tauri::command]
+pub async fn list_access_panel(
+    app: tauri::AppHandle,
+    label: String,
+    path_prefix: Option<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<super::access_panel::AccessPanel> {
+    let folder = match path_prefix {
+        Some(path) => Some(super::folder_grant_path::folder_grant_path_prefix(&crate::sync::identity::rooted_path(
+            &label, &path,
+        ))?),
+        None => None,
+    };
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let http = state.api_client.clone();
+    let owner = delegated_owner(&identity);
+
+    let (listing, invites) = tokio::join!(
+        http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+        http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+    );
+    let listing = listing?;
+    let mut invites = invites.unwrap_or_else(|e| {
+        // Expected for a Viewer or Editor: invites are management surface.
+        debug!(label = %label, error = %e, "Access panel: invite listing unavailable; links omitted");
+        Vec::new()
+    });
+    let key_unavailable = open_invite_links(&state, &ctx.account_id, &label, &identity, &mut invites).await;
+    // From inside a folder grant, only the invites to that folder or below.
+    let scope = crate::sync::identity::folder_grant_browse(&label).map(|(_, root)| root);
+    invites.retain(|i| in_scope(scope.as_deref(), i.path_prefix.as_deref()));
+
+    let panel = super::access_panel::fold_access_panel(
+        &ctx.account_id,
+        &identity.wire_ss58,
+        folder.as_deref(),
+        listing,
+        invites,
+        key_unavailable,
+        chrono::Utc::now(),
+    );
+    info!(
+        label = %label,
+        members = panel.members.len(),
+        holders = panel.folder_holders.len(),
+        links = panel.links.len(),
+        links_locked = panel.links_locked,
+        "Listed access panel"
+    );
+    Ok(panel)
+}
+
 /// One folder grant on a drive, owner/manager view (no grant blob).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1816,6 +1879,78 @@ pub async fn change_drive_member_role(
     Ok(())
 }
 
+/// Open each invite's sealed token under the drive key and attach the rebuilt
+/// `invite_url`, then strip the ciphertext and normalise the mailed fields.
+///
+/// Rows without a blob (pre-seal-back, revoked, or not readable by this
+/// caller) leave `link_available` false; a blob that will not open leaves it
+/// true and `invite_url` empty (the locked field). The key is read only when
+/// some row has a blob: for a folder grant it is an Argon2id open.
+///
+/// Returns true when a sealed link could not be opened because the drive key
+/// is not available in this session (the panel then asks to unlock).
+async fn open_invite_links(
+    state: &AppState,
+    account_id: &str,
+    label: &str,
+    identity: &crate::sync::identity::DriveIdentity,
+    invites: &mut [DriveInviteInfo],
+) -> bool {
+    let any_sealed = invites
+        .iter()
+        .any(|i| i.valid && i.sealed_token.as_deref().is_some_and(|s| !s.is_empty()));
+    // Folder invites are sealed under the derived file key; whole-drive under
+    // folder-mnemonic entropy. Failure is not fatal to the listing: rows keep
+    // their metadata and show the locked link field.
+    let (entropy, file_key) = if any_sealed {
+        let _recovery_guard = state.recovery_lock.lock().await;
+        let mnemonic = crate::sync::remote::session_mnemonic(state).ok();
+        match mnemonic {
+            Some(mnemonic) => {
+                match crate::sync::remote::drive_key_material_for_label(state, account_id, label, &mnemonic, identity).await {
+                    Ok(crate::sync::remote::DriveKeyMaterial::Phrase(phrase)) => {
+                        let entropy = grant::entropy_from_phrase(&phrase).ok();
+                        let file_key = crate::sync::remote::encryption_key_from_phrase(&phrase).ok().map(Zeroizing::new);
+                        (entropy, file_key)
+                    }
+                    // A folder grant holder can open folder invites only.
+                    Ok(crate::sync::remote::DriveKeyMaterial::FileKey(key)) => (None, Some(key)),
+                    Err(_) => (None, None),
+                }
+            }
+            None => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+
+    let console_base = crate::shares::commands::console_base_url();
+    let mut key_unavailable = false;
+    for invite in invites.iter_mut() {
+        let sealed = invite.sealed_token.as_deref().filter(|s| !s.is_empty());
+        invite.link_available = sealed.is_some() && invite.valid;
+        invite.invite_url = None;
+        let open_key: Option<&[u8; 32]> = if invite.path_prefix.is_some() {
+            file_key.as_deref()
+        } else {
+            entropy.as_deref()
+        };
+        match (sealed, open_key) {
+            (Some(sealed), Some(key)) => {
+                if let Some(token) = super::invite_token::open_invite_token(key, &invite.invite_id, sealed) {
+                    invite.invite_url = Some(build_invite_url(&console_base, &token, key));
+                }
+            }
+            (Some(_), None) if invite.link_available => key_unavailable = true,
+            _ => {}
+        }
+        // Never leave ciphertext on the FE wire.
+        invite.sealed_token = None;
+        normalize_email_fields(invite);
+    }
+    key_unavailable
+}
+
 /// List the live invites for a drive this account owns.
 ///
 /// Opens each row's sealed token under the drive key and attaches a rebuilt
@@ -1843,49 +1978,7 @@ pub async fn list_drive_invites(
     )
     .await?;
 
-    // Drive key for opening sealed tokens. Folder invites are sealed under
-    // the derived file key; whole-drive under folder-mnemonic entropy.
-    // Failure is not fatal to the listing — rows keep their metadata and
-    // show the locked link field.
-    let (entropy, file_key) = {
-        let _recovery_guard = state.recovery_lock.lock().await;
-        let mnemonic = crate::sync::remote::session_mnemonic(&state).ok();
-        match mnemonic {
-            Some(mnemonic) => {
-                match crate::sync::remote::drive_key_material_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await {
-                    Ok(crate::sync::remote::DriveKeyMaterial::Phrase(phrase)) => {
-                        let entropy = grant::entropy_from_phrase(&phrase).ok();
-                        let file_key = crate::sync::remote::encryption_key_from_phrase(&phrase).ok().map(Zeroizing::new);
-                        (entropy, file_key)
-                    }
-                    // A folder grant holder can open folder invites only.
-                    Ok(crate::sync::remote::DriveKeyMaterial::FileKey(key)) => (None, Some(key)),
-                    Err(_) => (None, None),
-                }
-            }
-            None => (None, None),
-        }
-    };
-
-    let console_base = crate::shares::commands::console_base_url();
-    for invite in &mut invites {
-        let sealed = invite.sealed_token.as_deref().filter(|s| !s.is_empty());
-        invite.link_available = sealed.is_some() && invite.valid;
-        invite.invite_url = None;
-        let open_key: Option<&[u8; 32]> = if invite.path_prefix.is_some() {
-            file_key.as_deref()
-        } else {
-            entropy.as_deref()
-        };
-        if let (Some(sealed), Some(key)) = (sealed, open_key)
-            && let Some(token) = super::invite_token::open_invite_token(key, &invite.invite_id, sealed)
-        {
-            invite.invite_url = Some(build_invite_url(&console_base, &token, key));
-        }
-        // Never leave ciphertext on the FE wire.
-        invite.sealed_token = None;
-        normalize_email_fields(invite);
-    }
+    open_invite_links(&state, &ctx.account_id, &label, &identity, &mut invites).await;
 
     // From inside a folder grant, only the invites to that folder or below.
     let scope = crate::sync::identity::folder_grant_browse(&label).map(|(_, root)| root);

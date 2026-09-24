@@ -207,6 +207,7 @@ fn management_commands_route_through_a_named_gate() {
         "pub async fn remove_drive_member(",
         "pub async fn change_drive_member_role(",
         "pub async fn list_drive_invites(",
+        "pub async fn list_access_panel(",
         "pub async fn revoke_drive_invite(",
         "pub async fn list_owned_drive_sharing(",
         "pub async fn email_drive_invite(",
@@ -275,11 +276,18 @@ fn a_folder_invite_can_never_go_out_as_a_drive_invite() {
 #[test]
 fn list_drive_invites_opens_sealed_tokens() {
     let src = shared_drive_commands_src();
-    let body = fn_body(&src, "pub async fn list_drive_invites(");
+    let helper = fn_body(&src, "async fn open_invite_links(");
     assert!(
-        body.contains("open_invite_token") && body.contains("build_invite_url"),
-        "list_drive_invites must open sealed tokens and attach invite_url"
+        helper.contains("open_invite_token") && helper.contains("build_invite_url"),
+        "open_invite_links must open sealed tokens and attach invite_url"
     );
+    assert!(helper.contains("sealed_token = None"), "no ciphertext reaches the FE");
+    // Both listings that show a link go through it: the Links rows and the
+    // access panel.
+    for command in ["pub async fn list_drive_invites(", "pub async fn list_access_panel("] {
+        let body = fn_body(&src, command);
+        assert!(body.contains("open_invite_links("), "{command} must open sealed links");
+    }
 }
 
 /// Storage on a shared drive bills the OWNER: `add_shared_drive` must not
@@ -543,6 +551,7 @@ fn every_management_command_passes_the_delegated_owner() {
     for sig in [
         "pub async fn list_drive_members",
         "pub async fn list_drive_invites",
+        "pub async fn list_access_panel",
         "pub async fn revoke_drive_invite",
         "pub async fn change_drive_member_role",
         "pub async fn remove_drive_member",

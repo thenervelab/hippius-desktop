@@ -8,6 +8,7 @@
 //! module never touches the engine directly beyond calling its public
 //! add/remove/init entry points.
 
+pub mod access_panel;
 pub mod commands;
 pub mod folder_grant_path;
 pub mod folder_roles;
