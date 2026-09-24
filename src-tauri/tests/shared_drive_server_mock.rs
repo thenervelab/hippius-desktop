@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 
 use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::shared_drives::commands::{
-    MemberDriveInstall, MintInvite, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
+    MemberDriveInstall, MintInvite, http_change_member_role, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
 };
 use tauri_project_lib::shared_drives::grant;
 use tauri_project_lib::shared_drives::invite_token::invite_id_for_token;
@@ -211,6 +211,60 @@ async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
         .await
         .expect_err("bad bearer must fail");
     assert!(matches!(err, AppError::Auth(_)), "got {err:?}");
+}
+
+/// `manager` never reaches the wire. The mint and the role change refuse it
+/// as "Viewer or Editor only" before any request, so a server that would
+/// accept it never gets the chance: the recorder sees nothing.
+#[tokio::test]
+async fn a_manager_role_is_refused_before_any_request() {
+    let hits: Arc<Mutex<u32>> = Arc::default();
+    let (mint_hits, patch_hits) = (hits.clone(), hits.clone());
+    let base = serve(
+        Router::new()
+            .route(
+                "/v1/drive-invites",
+                post(move || async move {
+                    *mint_hits.lock().unwrap() += 1;
+                    Json(serde_json::json!({ "invite_token": "tok" }))
+                }),
+            )
+            .route(
+                "/v1/drives/{hash}/members/{member}",
+                axum::routing::patch(move || async move {
+                    *patch_hits.lock().unwrap() += 1;
+                    StatusCode::NO_CONTENT
+                }),
+            ),
+    )
+    .await;
+    let http = reqwest::Client::new();
+
+    let err = http_create_invite(
+        &http,
+        &base,
+        BEARER,
+        MintInvite {
+            role: "manager",
+            ..mint_args(WIRE_HASH)
+        },
+    )
+    .await
+    .expect_err("a manager link is never minted");
+    assert!(matches!(&err, AppError::Validation(m) if m == "Viewer or Editor only."), "got {err:?}");
+
+    let err = http_change_member_role(&http, &base, BEARER, WIRE_HASH, "5Member", "manager")
+        .await
+        .expect_err("nobody is made a manager");
+    assert!(matches!(&err, AppError::Validation(m) if m == "Viewer or Editor only."), "got {err:?}");
+
+    assert_eq!(*hits.lock().unwrap(), 0, "nothing reached the server");
+
+    // The same calls with Editor do go out, so the zero above is the refusal.
+    http_change_member_role(&http, &base, BEARER, WIRE_HASH, "5Member", "writer")
+        .await
+        .expect("an Editor role change is sent");
+    assert_eq!(*hits.lock().unwrap(), 1);
 }
 
 #[tokio::test]
@@ -704,7 +758,6 @@ fn mint_args(folder_hash: &str) -> MintInvite<'_> {
         expires_in_secs: 3600,
         max_uses: 5,
         role: "writer",
-        owner: None,
         path_prefix: None,
     }
 }

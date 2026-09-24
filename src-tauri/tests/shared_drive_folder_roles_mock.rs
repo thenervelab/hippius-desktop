@@ -38,7 +38,6 @@ fn folder_mint<'a>(role: &'a str, path_prefix: Option<&'a str>) -> MintInvite<'a
         expires_in_secs: 3600,
         max_uses: 1,
         role,
-        owner: Some("5Owner"),
         path_prefix,
     }
 }
@@ -77,7 +76,10 @@ async fn a_folder_invite_is_single_use_and_carries_the_folder_and_role() {
     assert_eq!(sent["role"], "writer");
     assert_eq!(sent["max_uses"], 1);
     assert_eq!(sent["path_prefix"], "Clients/ACME");
-    assert_eq!(sent["owner_ss58"], "5Owner");
+    assert!(
+        sent.get("owner_ss58").is_none_or(serde_json::Value::is_null),
+        "only the owner mints, so nobody is named"
+    );
 }
 
 #[tokio::test]
@@ -208,7 +210,6 @@ async fn a_mailed_folder_invite_refused_reads_as_folder_email_coming_soon() {
             email: "a@example.com",
             role: "reader",
             expires_in_secs: 86_400,
-            owner_ss58: None,
             path_prefix: Some("Clients"),
         },
     )
@@ -286,7 +287,6 @@ async fn adding_a_folder_sends_its_role_and_reads_back_each_stored_role() {
         "5Holder",
         &["Clients/ACME".to_string(), "Work".to_string()],
         Some("writer"),
-        None,
     )
     .await
     .expect("replace");
@@ -313,18 +313,9 @@ async fn narrowing_folders_sends_no_role() {
         }),
     ))
     .await;
-    http_replace_folder_grants(
-        &reqwest::Client::new(),
-        &base,
-        BEARER,
-        "hash",
-        "5Holder",
-        &["Work".to_string()],
-        None,
-        None,
-    )
-    .await
-    .expect("replace");
+    http_replace_folder_grants(&reqwest::Client::new(), &base, BEARER, "hash", "5Holder", &["Work".to_string()], None)
+        .await
+        .expect("replace");
     assert!(bodies.lock().unwrap()[0].get("role").is_none());
 }
 
@@ -351,7 +342,6 @@ async fn a_refused_folder_replace_reads_as_coming_soon() {
             "5Holder",
             &["Work".to_string()],
             Some("writer"),
-            Some("5Owner"),
         )
         .await
         .expect_err("refused");

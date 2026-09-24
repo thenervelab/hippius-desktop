@@ -970,8 +970,8 @@ pub async fn create_folder_share_inner(
     // resolves to member identity and is refused just below.
     let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, folder_label).await?;
 
-    // A folder in somebody else's drive (hcfs #458): an Editor or Manager
-    // may share it by link, naming the owner on the POST. Gated on the
+    // A folder in somebody else's drive (hcfs #458): an Editor may share it
+    // by link, naming the owner on the POST. Gated on the
     // server knowing `owner_ss58` there (`member_folder_shares`) AND on this
     // account's write access, both checked before any key is touched. The
     // key is the drive's DERIVED file key through the same funnel below, which
@@ -1041,9 +1041,12 @@ pub async fn create_folder_share_inner(
 ///
 /// Pure so the rule is testable without a server: the server needs to know
 /// `owner_ss58` on the mint (`member_folder_shares`), and admits only an
-/// Editor or a Manager of a drive that is not frozen (it answers a Viewer
-/// with the same 404 as a stranger, so saying why here is the only place it
-/// gets said).
+/// Editor of a drive that is not frozen (it answers a Viewer with the same
+/// 404 as a stranger, so saying why here is the only place it gets said).
+///
+/// `manager` is still accepted as a write role here: [`member_access_for`]
+/// maps it to `writer` already, and the server may still return it for a
+/// member made one before this client dropped the role.
 pub(crate) fn member_folder_share_refusal(member_folder_shares: bool, access: Option<(&str, bool)>) -> Option<&'static str> {
     if !member_folder_shares {
         return Some("Sharing a folder from someone else's drive needs a newer server.");
@@ -1052,14 +1055,15 @@ pub(crate) fn member_folder_share_refusal(member_folder_shares: bool, access: Op
         None => Some("You are no longer a member of this drive."),
         Some((_, true)) => Some("This drive is frozen, so nothing in it can be shared right now."),
         Some(("writer" | "manager", false)) => None,
-        Some(_) => Some("Only Editors and Managers can share a folder from this drive by link."),
+        Some(_) => Some("Only Editors can share a folder from this drive by link."),
     }
 }
 
 /// This account's role on a drive it does not own, and whether the drive is
 /// frozen, from the memberships listing. A whole-drive membership wins; a
 /// folder grant counts only when it covers `path_prefix` (a grant holder's
-/// role is `reader` unless the server says otherwise).
+/// role is `reader` unless the server says otherwise). A whole-drive
+/// `manager`, which the server may still return, reads as `writer`.
 pub(crate) fn member_access_for(
     memberships: &hcfs_shared::network::DriveMembershipsResponse,
     owner_ss58: &str,
@@ -1071,7 +1075,7 @@ pub(crate) fn member_access_for(
         .iter()
         .find(|m| m.owner_ss58 == owner_ss58 && m.folder_hash == folder_hash)
     {
-        return Some((m.role.clone(), m.frozen));
+        return Some((crate::shared_drives::commands::drive_role_from_wire(&m.role), m.frozen));
     }
     memberships
         .folder_grants
@@ -1145,9 +1149,9 @@ pub(crate) async fn http_create_member_folder_share(
 fn map_member_folder_share_status(status: u16, body: &str) -> AppError {
     let enveloped = serde_json::from_str::<serde_json::Value>(body).is_ok_and(|v| v.get("error").is_some());
     match status {
-        404 if enveloped => AppError::Validation(
-            "This folder could not be shared. You need to be an Editor or Manager of the drive, and the folder must still exist.".into(),
-        ),
+        404 if enveloped => {
+            AppError::Validation("This folder could not be shared. You need to be an Editor of the drive, and the folder must still exist.".into())
+        }
         404 => AppError::Validation("Folder sharing is not enabled on this server.".into()),
         401 | 403 => AppError::Auth(format!("folder-share mint rejected (status {status})")),
         _ => AppError::Hcfs(format!("folder-share mint failed (status {status})")),
@@ -2587,11 +2591,25 @@ mod tests {
         assert_eq!(member_access_for(&resp, "5Other", "h1", "any"), None, "hash alone never matches");
     }
 
+    /// A member the server still calls `manager` keeps an Editor's folder
+    /// link: the role reads as `writer` before the gate sees it.
+    #[test]
+    fn a_wire_manager_shares_a_folder_as_an_editor() {
+        let resp = memberships(serde_json::json!({
+            "memberships": [{"owner_ss58":"5O","folder_hash":"h1","role":"manager","grant_blob":"","display_label":"d","created_at":"t"}],
+            "folder_grants": []
+        }));
+        let access = member_access_for(&resp, "5O", "h1", "any");
+        assert_eq!(access, Some(("writer".into(), false)));
+        let (role, frozen) = access.expect("member");
+        assert_eq!(member_folder_share_refusal(true, Some((role.as_str(), frozen))), None);
+    }
+
     #[test]
     fn a_refused_member_mint_is_worded_for_the_user() {
         assert!(matches!(
             map_member_folder_share_status(404, r#"{"error":"folder_not_found","message":"x"}"#),
-            AppError::Validation(m) if m.contains("Editor or Manager")
+            AppError::Validation(m) if m.contains("Editor of the drive") && !m.contains("Manager")
         ));
         assert!(matches!(map_member_folder_share_status(404, ""), AppError::Validation(m) if m.contains("not enabled")));
         assert!(matches!(map_member_folder_share_status(403, ""), AppError::Auth(_)));

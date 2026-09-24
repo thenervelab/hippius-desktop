@@ -1,4 +1,4 @@
-//! Emailed drive invites (hcfs #459), owner/manager side, against a mock
+//! Emailed drive invites (hcfs #459), owner side, against a mock
 //! axum server: the mint body, the three error mappings the dialog words
 //! differently, the listing's mailed-invite fields, and the seal-back PUT's
 //! outcomes. The crypto itself is pinned by the KAT in
@@ -30,13 +30,12 @@ async fn serve(router: Router) -> String {
     format!("http://{addr}")
 }
 
-fn body<'a>(email: &'a str, owner: Option<&'a str>) -> EmailInviteBody<'a> {
+fn body(email: &str) -> EmailInviteBody<'_> {
     EmailInviteBody {
         folder_hash: HASH,
         email,
         role: "writer",
         expires_in_secs: 7 * 24 * 3600,
-        owner_ss58: owner,
         path_prefix: None,
     }
 }
@@ -55,7 +54,7 @@ async fn email_mint_sends_the_fields_and_returns_only_an_id() {
     ))
     .await;
 
-    let id = http_email_invite(&reqwest::Client::new(), &base, BEARER, &body("ada@example.com", Some("5Owner")))
+    let id = http_email_invite(&reqwest::Client::new(), &base, BEARER, &body("ada@example.com"))
         .await
         .expect("mint");
     assert_eq!(id, "abc123");
@@ -65,27 +64,38 @@ async fn email_mint_sends_the_fields_and_returns_only_an_id() {
     assert_eq!(sent["email"], "ada@example.com");
     assert_eq!(sent["role"], "writer");
     assert_eq!(sent["expires_in_secs"], 7 * 24 * 3600);
-    assert_eq!(sent["owner_ss58"], "5Owner", "a manager names the owner");
+    assert!(sent.get("owner_ss58").is_none(), "only the owner invites, so nobody is named");
     assert!(sent.get("max_uses").is_none(), "a mailed invite is single use; no max_uses");
     assert!(sent.get("path_prefix").is_none(), "no folder unless asked");
 }
 
+/// `manager` is never mailed: the role is refused before any request, so
+/// the server never sees it, whoever builds the body.
 #[tokio::test]
-async fn an_owner_mint_names_nobody() {
-    let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
-    let rec = seen.clone();
+async fn a_manager_email_invite_is_refused_before_any_request() {
+    let hits: Arc<Mutex<u32>> = Arc::default();
+    let rec = hits.clone();
     let base = serve(Router::new().route(
         "/v1/drive-invites/email",
-        post(move |Json(b): Json<serde_json::Value>| async move {
-            rec.lock().unwrap().push(b);
+        post(move || async move {
+            *rec.lock().unwrap() += 1;
             Json(serde_json::json!({ "invite_id": "x" }))
         }),
     ))
     .await;
-    http_email_invite(&reqwest::Client::new(), &base, BEARER, &body("ada@example.com", None))
-        .await
-        .expect("mint");
-    assert!(seen.lock().unwrap()[0].get("owner_ss58").is_none());
+    let err = http_email_invite(
+        &reqwest::Client::new(),
+        &base,
+        BEARER,
+        &EmailInviteBody {
+            role: "manager",
+            ..body("ada@example.com")
+        },
+    )
+    .await
+    .expect_err("manager is not offered");
+    assert!(matches!(&err, AppError::Validation(m) if m == "Viewer or Editor only."), "got {err:?}");
+    assert_eq!(*hits.lock().unwrap(), 0, "nothing reached the server");
 }
 
 async fn failing(status: StatusCode, json: serde_json::Value, retry_after: Option<&'static str>) -> AppError {
@@ -100,7 +110,7 @@ async fn failing(status: StatusCode, json: serde_json::Value, retry_after: Optio
         }),
     ))
     .await;
-    http_email_invite(&reqwest::Client::new(), &base, BEARER, &body("ada@example.com", None))
+    http_email_invite(&reqwest::Client::new(), &base, BEARER, &body("ada@example.com"))
         .await
         .expect_err("must fail")
 }
@@ -175,7 +185,7 @@ async fn the_listing_carries_the_mailed_invite_fields() {
         }),
     ))
     .await;
-    let rows = http_list_invites(&reqwest::Client::new(), &base, BEARER, HASH, None).await.expect("list");
+    let rows = http_list_invites(&reqwest::Client::new(), &base, BEARER, HASH).await.expect("list");
     assert_eq!(rows[0].recipient_email.as_deref(), Some("ada@example.com"));
     assert_eq!(rows[0].email_status.as_deref(), Some("awaiting_seal"));
     assert_eq!(rows[0].requester_pubkey.as_deref(), Some("e06Qm75//kTEZaIgA31gjuNYl9Me+XLwf3SJLLD3PxM="));
@@ -211,20 +221,19 @@ async fn seal_back_outcomes() {
     ))
     .await;
     let http = reqwest::Client::new();
-    let put = |id: &'static str, owner: Option<&'static str>| {
+    let put = |id: &'static str| {
         let http = http.clone();
         let base = base.clone();
-        async move { http_put_sealed_key(&http, &base, BEARER, HASH, id, "blob", "pubkey", owner).await }
+        async move { http_put_sealed_key(&http, &base, BEARER, HASH, id, "blob", "pubkey").await }
     };
 
-    assert_eq!(put("ok", Some("5Owner")).await.unwrap(), SealKeyPut::Sealed);
-    assert_eq!(put("dup", None).await.unwrap(), SealKeyPut::AlreadySealed);
-    assert_eq!(put("stale", None).await.unwrap(), SealKeyPut::Stale);
-    assert!(put("bare", None).await.is_err(), "a bare 404 is a feature-off server, not a stale row");
+    assert_eq!(put("ok").await.unwrap(), SealKeyPut::Sealed);
+    assert_eq!(put("dup").await.unwrap(), SealKeyPut::AlreadySealed);
+    assert_eq!(put("stale").await.unwrap(), SealKeyPut::Stale);
+    assert!(put("bare").await.is_err(), "a bare 404 is a feature-off server, not a stale row");
 
     let seen = queries.lock().unwrap();
-    assert_eq!(seen[0].1.as_deref(), Some("owner=5Owner"), "delegated seal names the owner");
+    assert_eq!(seen[0].1, None, "only the owner approves, so nobody is named");
     assert_eq!(seen[0].2["sealed_key"], "blob");
     assert_eq!(seen[0].2["sealed_for"], "pubkey", "sealed_for echoes the exact requester key");
-    assert_eq!(seen[1].1, None);
 }

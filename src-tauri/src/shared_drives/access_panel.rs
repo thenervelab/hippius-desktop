@@ -7,8 +7,8 @@
 //!   they can open every folder), and folder
 //!   holders. A drive panel lists EVERY holder on the drive, tagged with the
 //!   folder they hold; a folder panel lists the holders of a grant at or above
-//!   the folder (nearest grant wins, as in the Share dialog's fold). Only the
-//!   owner and managers are sent folder grants by the server.
+//!   the folder (nearest grant wins, as in the Share dialog's fold). The
+//!   server sends folder grants to the owner.
 //! - emailed invitations still waiting: every live one on a drive panel
 //!   (folder ones carry their folder), exactly that folder's on a folder panel.
 //! - links: link invites (not emailed) split into active and ended, with the
@@ -19,6 +19,8 @@
 //!   asks for the unlock password instead of showing a broken field.
 //! - what the viewer is here (`your_role`, and `can_manage`, which is the
 //!   owner only), so the header and footer never guess from a second listing.
+//! - roles as this client shows them: a `manager` the server still returns
+//!   reads as `writer` (`drive_role_from_wire`), so the webview never sees it.
 //!
 //! Pure: the command fetches, opens sealed links, and hands the rows here.
 
@@ -26,7 +28,7 @@ use chrono::{DateTime, Utc};
 use hcfs_shared::network::{DriveGrantHolderEntry, DriveMembersResponse};
 use serde::Serialize;
 
-use super::commands::{DriveInviteInfo, present_text as present};
+use super::commands::{DriveInviteInfo, drive_role_from_wire, present_text as present};
 use super::folder_grant_path::prefix_covers;
 use super::folder_roles::grant_role;
 
@@ -73,7 +75,7 @@ pub struct AccessPanelMember {
     pub member_email: Option<String>,
     /// RFC 3339 join time, for the row's "Joined" line when there is no email.
     pub created_at: String,
-    /// This account: its own role is not changeable here (a manager leaves).
+    /// This account: its own role is not changeable here (a member leaves).
     pub is_you: bool,
 }
 
@@ -119,7 +121,7 @@ pub enum LinkStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AccessPanelLink {
     pub invite_id: String,
-    /// `reader`, `writer` or `manager`.
+    /// `reader` or `writer` (an older `manager` link reads as `writer`).
     pub role: String,
     /// The folder of a folder link; absent for a whole-drive link.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,7 +208,7 @@ fn panel_link(invite: DriveInviteInfo, account_id: &str, now: DateTime<Utc>) -> 
         link_available: active && invite.link_available,
         invite_url: if active { invite.invite_url } else { None },
         invite_id: invite.invite_id,
-        role: invite.role,
+        role: drive_role_from_wire(&invite.role),
         path_prefix: invite.path_prefix.filter(|p| !p.trim_matches('/').is_empty()),
         minted_by: invite.minted_by,
         minted_by_name: invite.minted_by_name,
@@ -287,6 +289,10 @@ fn split_invites(
         if invite.email_status.is_some() {
             if invite.valid && !invite.revoked {
                 let expires_in_secs = seconds_until(&invite.expires_at, now);
+                let invite = DriveInviteInfo {
+                    role: drive_role_from_wire(&invite.role),
+                    ..invite
+                };
                 pending_invites.push(AccessPanelInvite { invite, expires_in_secs });
             }
             continue;
@@ -317,7 +323,11 @@ pub(crate) fn fold_access_panel(
     let owner_is_you = owner_ss58 == account_id;
     let drive_member_count = listing.members.len();
 
-    let your_member_role = listing.members.iter().find(|m| m.member_ss58 == account_id).map(|m| m.role.clone());
+    let your_member_role = listing
+        .members
+        .iter()
+        .find(|m| m.member_ss58 == account_id)
+        .map(|m| drive_role_from_wire(&m.role));
 
     let mut members: Vec<AccessPanelMember> = listing
         .members
@@ -325,7 +335,7 @@ pub(crate) fn fold_access_panel(
         .map(|m| AccessPanelMember {
             is_you: m.member_ss58 == account_id,
             member_ss58: m.member_ss58,
-            role: m.role,
+            role: drive_role_from_wire(&m.role),
             member_name: present(m.member_name),
             member_email: present(m.member_email),
             created_at: m.created_at,
@@ -343,8 +353,8 @@ pub(crate) fn fold_access_panel(
     } else {
         folder_holders.iter().find(|h| h.is_you).map(|h| h.role.clone())
     };
-    // Owner only. Delegated management is being withdrawn from the product,
-    // so a member's role, whatever the wire says, never opens the controls.
+    // Owner only: only a drive's owner invites and removes people, so a
+    // member's role (a former Manager's included) never opens the controls.
     let can_manage = owner_is_you;
 
     let (pending_invites, links, inactive_links) = split_invites(account_id, folder, invites, now);
@@ -407,8 +417,9 @@ mod tests {
     fn a_drive_panel_lists_members_and_every_holder_tagged_with_a_folder() {
         let panel = fold_access_panel("5Me", "5Owner", None, listing(), Vec::new(), false, now());
         assert!(!panel.owner_is_you);
-        assert_eq!(panel.your_role.as_deref(), Some("manager"));
-        assert!(!panel.can_manage, "only the owner manages, whatever a member's wire role");
+        assert_eq!(panel.your_role.as_deref(), Some("writer"), "a former Manager is told they are an Editor");
+        assert!(!panel.can_manage, "only the owner manages, a former Manager included");
+        assert!(panel.members.iter().all(|m| m.role != "manager"), "the webview never receives manager");
         let people: Vec<&str> = panel.members.iter().map(|m| m.member_ss58.as_str()).collect();
         assert_eq!(people, ["5Me", "5Ann"], "you first, then the server's order");
         assert_eq!(panel.members[1].member_name.as_deref(), Some("Ann"));
@@ -451,6 +462,19 @@ mod tests {
         assert!(panel.folder_holders[0].is_you);
     }
 
+    /// Only the owner manages. Every other account, whatever its role on the
+    /// drive or a folder of it, and a former Manager in particular, reads.
+    #[test]
+    fn nobody_but_the_owner_can_manage() {
+        for viewer in ["5Me", "5Ann", "5Bo", "5Cy", "5Stranger"] {
+            for folder in [None, Some("Clients/ACME")] {
+                let panel = fold_access_panel(viewer, "5Owner", folder, listing(), Vec::new(), false, now());
+                assert!(!panel.can_manage, "{viewer} on {folder:?} must not manage");
+            }
+        }
+        assert!(fold_access_panel("5Owner", "5Owner", None, listing(), Vec::new(), false, now()).can_manage);
+    }
+
     #[test]
     fn links_are_split_into_working_and_ended_with_reasons() {
         let invites = vec![
@@ -486,6 +510,10 @@ mod tests {
                 serde_json::json!({"expires_at": "2126-09-12T12:00:00Z", "minted_by": "5Sara", "minted_by_name": "Sara"}),
             ),
             invite("once", serde_json::json!({"max_uses": 1, "use_count": 0, "role": "manager"})),
+            invite(
+                "mail",
+                serde_json::json!({"email_status": "sent", "recipient_email": "a@b.c", "role": "manager"}),
+            ),
         ];
         let panel = fold_access_panel("5Me", "5Owner", None, listing(), invites, false, now());
         let live = &panel.links[0];
@@ -497,6 +525,8 @@ mod tests {
         let once = &panel.links[2];
         assert!(once.single_use);
         assert_eq!(once.usage_percent, 0);
+        assert_eq!(once.role, "writer", "an older manager link reads as Editor");
+        assert_eq!(panel.pending_invites[0].invite.role, "writer", "so does an older manager invitation");
     }
 
     #[test]
@@ -560,7 +590,7 @@ mod tests {
                 "canManage": true,
                 "members": [
                     {"memberSs58": "5Ann", "role": "writer", "memberName": "Ann", "createdAt": "t", "isYou": false},
-                    {"memberSs58": "5Me", "role": "manager", "createdAt": "t", "isYou": false},
+                    {"memberSs58": "5Me", "role": "writer", "createdAt": "t", "isYou": false},
                 ],
                 "folderHolders": [{
                     "memberSs58": "5Bo", "memberName": "Bo", "isYou": false, "role": "reader",

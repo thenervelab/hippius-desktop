@@ -4,7 +4,7 @@
 //! A link invite carries the drive key in its `#k=` fragment, which never
 //! reaches a server. A MAILED invite cannot: the server composes the message,
 //! so the mail carries only the token. The recipient's client publishes an
-//! ephemeral X25519 public key on the invite (`key-request`), and a manager's
+//! ephemeral X25519 public key on the invite (`key-request`), and the owner's
 //! client (this module) seals the drive key to it.
 //!
 //! Byte-compatible with the console's `src/lib/shared-drives/invite-key-seal.ts`;
@@ -22,9 +22,9 @@
 //!   padded base64, the whole JSON standard padded base64.
 //!
 //! The entropy sealed here must be the DRIVE's (resolved like the link mint
-//! resolves it), never derived from the sealing manager's own master: a
-//! manager's mnemonic derives a different folder key, and sealing that would
-//! admit the recipient to a drive whose files they cannot decrypt.
+//! resolves it), never re-derived by the sealer by hand: a key derived from
+//! the wrong mnemonic is a different folder key, and sealing that would admit
+//! the recipient to a drive whose files they cannot decrypt.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -186,7 +186,7 @@ mod tests {
 
     // Copied VERBATIM from the console's `invite-key-seal.test.ts` (computed
     // there independently of either client). Never regenerate these: a
-    // mismatch means a manager on one client seals a key a recipient on the
+    // mismatch means an owner on one client seals a key a recipient on the
     // other cannot open.
     const KAT_TOKEN: &str = "tok_kat_v1";
     const KAT_INVITE_ID: &str = "c14bc14a2dff24a67a9525cc620f92a188aacbdf37a8354cccfc4c862fba3484";
