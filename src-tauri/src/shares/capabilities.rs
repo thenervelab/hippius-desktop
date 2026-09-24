@@ -60,6 +60,11 @@ pub struct ServerCapabilities {
     /// (hcfs #458). Absent on older servers, which read that mint under the
     /// caller's own account and find nothing.
     pub member_folder_shares: bool,
+    /// Folder grants carry the full role set (Viewer, Editor, Manager)
+    /// instead of read-only. NOT PUBLISHED by HCFS yet: see
+    /// `shared_drives::folder_roles` for the assumed contract. Absent or
+    /// false keeps folder grants reader-only and single-use, exactly as today.
+    pub folder_grant_roles: bool,
 }
 
 /// Hit `<base>/v1/capabilities` once. 404 collapses to a
@@ -161,7 +166,7 @@ mod tests {
     #[test]
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true}"#,
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_roles":true}"#,
         )
         .expect("parse");
         assert!(caps.shares);
@@ -170,6 +175,7 @@ mod tests {
         assert!(caps.share_owner_wrap);
         assert!(caps.folder_grants);
         assert!(caps.member_folder_shares);
+        assert!(caps.folder_grant_roles);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -179,6 +185,7 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "folder_grant_roles",
                 "folder_grants",
                 "folder_share_revoke_by_hash",
                 "folder_shares",
@@ -196,6 +203,7 @@ mod tests {
         assert!(!old.share_owner_wrap);
         assert!(!old.folder_grants);
         assert!(!old.member_folder_shares, "an older server never claims member folder shares");
+        assert!(!old.folder_grant_roles, "folder roles stay off until a server says otherwise");
     }
 
     /// A pre-folder-grants server omits the field; that must read as unavailable,

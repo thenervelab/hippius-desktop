@@ -477,7 +477,7 @@ fn a_delegated_mint_takes_the_owners_sealed_folder_key() {
     let body = fn_body(&shared_drive_commands_src(), "pub async fn create_drive_invite");
 
     assert!(
-        body.contains("folder_phrase_for_label"),
+        body.contains("drive_key_material_for_label"),
         "the mint must take its folder key from the one resolver that knows all three sources"
     );
 
@@ -574,8 +574,8 @@ fn upload_and_rename_take_both_keys_from_one_folder_phrase() {
         let src = std::fs::read_to_string(format!("{}{file}", env!("CARGO_MANIFEST_DIR"))).unwrap_or_else(|e| panic!("read {file}: {e}"));
 
         assert!(
-            src.contains("folder_phrase_for_label"),
-            "{file} must take its folder phrase from the one resolver that knows about member drives"
+            src.contains("drive_key_material_for_label"),
+            "{file} must take its keys from the one resolver that knows about member drives"
         );
         assert!(
             !src.contains("signing_key_for_folder(&mnemonic, label)"),
@@ -646,8 +646,8 @@ fn the_folder_key_is_derived_once_per_upload_not_per_file() {
 
     let per_file = fn_body(&src, "pub(crate) async fn upload_to_remote_folder_with_progress");
     assert!(
-        !per_file.contains("folder_phrase_for_label"),
-        "the per-file path must take the phrase, not derive it"
+        !per_file.contains("drive_key_material_for_label"),
+        "the per-file path must take the keys, not derive them"
     );
 
     for sig in [
@@ -656,7 +656,7 @@ fn the_folder_key_is_derived_once_per_upload_not_per_file() {
     ] {
         let body = fn_body(&src, sig);
         assert_eq!(
-            body.matches("folder_phrase_for_label").count(),
+            body.matches("drive_key_material_for_label").count(),
             1,
             "{sig} must derive the folder key exactly once"
         );
@@ -670,7 +670,10 @@ fn the_folder_key_is_derived_once_per_upload_not_per_file() {
 fn approve_email_invite_seals_the_drives_key() {
     let src = shared_drive_commands_src();
     let body = fn_body(&src, "pub async fn approve_email_invite(");
-    assert!(body.contains("folder_phrase_for_label("), "the drive key must come from the key funnel");
+    assert!(
+        body.contains("drive_key_material_for_label("),
+        "the drive key must come from the key funnel"
+    );
     assert!(
         !body.contains("derive_folder_mnemonic"),
         "never derive the drive key from the caller's master"

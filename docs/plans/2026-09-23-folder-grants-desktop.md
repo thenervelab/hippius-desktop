@@ -33,3 +33,17 @@ Decisions (2026-09-23):
 - Fragment `#k=` = **derived file key**, never drive entropy.
 - Response must echo `path_prefix` or refuse (old server = whole-drive mint).
 - Always reader / single-use / ≤30 days.
+
+## Folder roles (behind `FOLDER_ROLES_ENABLED`, staging only)
+
+Folder grants open to the full role set (Viewer, Editor, Manager). The server
+API is not published; the desktop builds against an assumed contract kept in
+ONE place, the module doc of `src-tauri/src/shared_drives/folder_roles.rs`,
+and every surface is gated on the lane flag AND `capabilities.folder_grant_roles`.
+
+- Owner / manager: role picker and email option on Share folder, Folder
+  access list with names, role, change role, change folders, remove.
+- Holder: granted folders in Shared with me as their own rows, browsed
+  remotely rooted at the grant (`grant:` browse label, `rooted_path` in Rust),
+  role-based actions, Leave. Joining stays in the console.
+- Out of scope: syncing a granted folder to disk.

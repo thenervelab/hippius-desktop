@@ -57,6 +57,10 @@ export function makeSharedDriveLabel(identity: SharedDriveIdentity): string {
 export function parseSharedDriveLabel(
   label: string | null | undefined,
 ): SharedDriveIdentity | null {
+  // A folder grant is a folder of somebody else's drive: the same wire
+  // identity, so every drive-scoped call addresses the right namespace.
+  const grant = parseFolderGrantLabel(label);
+  if (grant) return { ownerSs58: grant.ownerSs58, folderHash: grant.folderHash };
   if (!label || !label.startsWith(SHARED_DRIVE_LABEL_PREFIX)) return null;
   const rest = label.slice(SHARED_DRIVE_LABEL_PREFIX.length);
   const at = rest.indexOf(SHARED_DRIVE_LABEL_SEPARATOR);
@@ -89,4 +93,71 @@ export function sharedDriveTargetArgs(label: string | null | undefined): {
     ownerSs58: identity?.ownerSs58 ?? null,
     folderHash: identity?.folderHash ?? null,
   };
+}
+
+/**
+ * Marks a FOLDER GRANT browse label: one folder of somebody else's drive,
+ * browsed rooted at that folder so nothing above it is reachable. Mirrors
+ * `GRANT_BROWSE_PREFIX` in Rust's `sync/drive/identity.rs` (a Rust test reads
+ * this constant). Folder roles are assumed until HCFS publishes them.
+ */
+const FOLDER_GRANT_LABEL_PREFIX = "grant:";
+
+export interface FolderGrantIdentity extends SharedDriveIdentity {
+  /** The granted folder, drive-relative, no surrounding slashes. */
+  pathPrefix: string;
+}
+
+function toHex(text: string): string {
+  return Array.from(new TextEncoder().encode(text), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+function fromHex(hex: string): string | null {
+  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+    return null;
+  }
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The label a granted folder is browsed under. The folder path is hex so the
+ * label keeps the no-slash rule every browse label lives by; Rust joins the
+ * path in front of every drive-relative path the views send.
+ */
+export function makeFolderGrantLabel(identity: FolderGrantIdentity): string {
+  const path = identity.pathPrefix.replace(/^\/+|\/+$/g, "");
+  return `${FOLDER_GRANT_LABEL_PREFIX}${identity.ownerSs58}${SHARED_DRIVE_LABEL_SEPARATOR}${identity.folderHash}${SHARED_DRIVE_LABEL_SEPARATOR}${toHex(path)}`;
+}
+
+/** The drive and folder a grant label names, or `null` for anything else. */
+export function parseFolderGrantLabel(
+  label: string | null | undefined,
+): FolderGrantIdentity | null {
+  if (!label || !label.startsWith(FOLDER_GRANT_LABEL_PREFIX)) return null;
+  const parts = label
+    .slice(FOLDER_GRANT_LABEL_PREFIX.length)
+    .split(SHARED_DRIVE_LABEL_SEPARATOR);
+  if (parts.length !== 3) return null;
+  const [ownerSs58, folderHash, pathHex] = parts;
+  const pathPrefix = fromHex(pathHex);
+  if (!ownerSs58 || !folderHash || !pathPrefix) return null;
+  if (pathPrefix.split("/").some((s) => s === "" || s === "." || s === "..")) {
+    return null;
+  }
+  return { ownerSs58, folderHash, pathPrefix };
+}
+
+/** Whether a label names one granted folder rather than a whole drive. */
+export function isFolderGrantLabel(label: string | null | undefined): boolean {
+  return parseFolderGrantLabel(label) !== null;
 }

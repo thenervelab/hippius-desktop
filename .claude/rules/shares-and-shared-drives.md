@@ -84,12 +84,16 @@ from the app when they are wrong:
 - `add_shared_drive` still has no member-side credit gate at all (the init funnel's member
   skip and the server 402 are the authorities).
 
-### The folder key: one resolver, three sources
+### The folder key: one resolver, four sources
 
-`remote::folder_phrase_for_label` is the ONLY place that answers "where does this
+`remote::drive_key_material_for_label` is the ONLY place that answers "where does this
 drive's key live": this account's master for an own drive, the owner-sealed
-`enc_mnemonic.json` for a member drive synced here, and this account's own grant for
-one that was never synced. Uploads, renames and the invite mint all take it from there.
+`enc_mnemonic.json` for a member drive synced here, this account's own grant for
+one that was never synced, and (last) a FOLDER grant on the drive, which opens to the
+derived file key only. It returns `DriveKeyMaterial::{Phrase, FileKey}`; `encryption_key()`
+and `signing_key()` read both from the one value, and `into_phrase()` refuses a folder
+grant holder by name, so a whole-drive invite can never carry a folder holder's key.
+Uploads, renames, previews and the invite mint all take it from there.
 
 Two rules it exists to hold, both of which failed while there were copies of it:
 
@@ -141,6 +145,24 @@ Desktop routing: `classify_sync_error` (`tauri_bridge.rs`) checks the marker BEF
 Deliberate, documented where they bite: no folder-entity materialization on member drives (empty folders from the owner don't appear on member devices; files sync fully), no member migration/selective-sync-exclusions surfaces (member FOLDER links are allowed for Editors and Managers, see "Member mint"), membership fetch is FE-on-demand — never wired into `restore_session` (the login path's hang-proof timeout discipline is not risked for a listing) — and the files-page stats join leaves member rows blank.
 
 **Caution**: `recent_uploads.rs`'s `hash_to_drive` map still keys drives by the label-derived hash — safe ONLY because member drives are excluded from the search surfaces in v1. If member drives ever reach search/recent-uploads, that map must move to the identity columns or member hits will mis-join.
+
+### Folder roles (assumed until HCFS publishes them)
+
+`shared_drives/folder_roles.rs` holds the WHOLE assumed contract in its module doc
+(capability `folder_grant_roles`, role-bearing folder invites, email folder invites, the
+grant role PATCH, holders writing like members, the derived-key assumption). Keep it
+there: the day the real API lands is one reconcile. Without the capability every path
+behaves as before (reader, one use, at most 30 days). Listings are normalised before
+parsing (`default_missing_grant_roles`) so a grant without `role` reads as a Viewer
+instead of failing the whole membership listing.
+
+A granted folder is browsed under `grant:<owner>~<hash>~<hex(path)>` (mirrored by
+`sharedDriveLabel.ts::makeFolderGrantLabel`). It resolves to the owner's identity like a
+`shared:` label, and `identity::rooted_path(label, rel)` puts the grant in front of every
+view-relative path: browse, upload, new folder, rename, share by link, folder invites.
+That join lives in ONE function so no IPC addresses a same-named folder at the drive
+root. A folder Manager's panel is scoped in Rust (`in_scope`) to invites and holders at
+or below the grant. FE gate: `FOLDER_ROLES_ENABLED` (staging only) AND the capability.
 
 ## Folder share via link (live browsable)
 

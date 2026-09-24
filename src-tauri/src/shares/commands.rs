@@ -954,7 +954,10 @@ pub async fn create_folder_share_inner(
     choice: ShareChoice,
 ) -> Result<ShareLink> {
     let pool = state.pool()?;
-    let path_prefix = folder_share_path_prefix(relative_path)?;
+    // Rooted at a folder grant's folder when the label is one; the grant's
+    // path is part of the share's server-side identity.
+    let rooted = crate::sync::identity::rooted_path(folder_label, relative_path);
+    let path_prefix = folder_share_path_prefix(&rooted)?;
 
     require_folder_shares_supported(state, account_id).await?;
 

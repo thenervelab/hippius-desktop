@@ -195,6 +195,9 @@ const SHARED_BROWSE_SEPARATOR: char = '~';
 /// resolution rather than being guessed at, and the caller-side validators
 /// refuse it outright.
 pub fn shared_drive_browse_identity(label: &str) -> Option<DriveIdentity> {
+    if let Some((identity, _root)) = folder_grant_browse(label) {
+        return Some(identity);
+    }
     let rest = label.strip_prefix(SHARED_BROWSE_PREFIX)?;
     let (owner, hash) = rest.split_once(SHARED_BROWSE_SEPARATOR)?;
     if owner.is_empty() || hash.is_empty() {
@@ -205,6 +208,54 @@ pub fn shared_drive_browse_identity(label: &str) -> Option<DriveIdentity> {
         wire_folder_hash: hash.to_string(),
         is_member: true,
     })
+}
+
+/// Prefix marking a FOLDER GRANT browse label: one folder of somebody else's
+/// drive, browsed rooted at that folder (folder roles, assumed until HCFS
+/// publishes them; see `shared_drives::folder_roles`). Mirrors
+/// `FOLDER_GRANT_LABEL_PREFIX` in `sharedDriveLabel.ts`.
+const GRANT_BROWSE_PREFIX: &str = "grant:";
+
+/// The wire identity AND the granted folder a folder-grant browse label names.
+///
+/// Shape: `grant:<owner>~<hash>~<hex of the folder path>`. The path is hex so
+/// the label keeps the no-slash rule every browse label lives by. Any part
+/// missing, or a path that is not valid hex UTF-8 or would escape the drive,
+/// is `None`, never a guess: falling back would browse above the grant.
+pub fn folder_grant_browse(label: &str) -> Option<(DriveIdentity, String)> {
+    let rest = label.strip_prefix(GRANT_BROWSE_PREFIX)?;
+    let mut parts = rest.split(SHARED_BROWSE_SEPARATOR);
+    let (owner, hash, root_hex) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() || owner.is_empty() || hash.is_empty() || root_hex.is_empty() {
+        return None;
+    }
+    let root = String::from_utf8(hex::decode(root_hex).ok()?).ok()?;
+    let root = crate::shared_drives::folder_grant_path::folder_grant_path_prefix(&root).ok()?;
+    Some((
+        DriveIdentity {
+            wire_ss58: owner.to_string(),
+            wire_folder_hash: hash.to_string(),
+            is_member: true,
+        },
+        root,
+    ))
+}
+
+/// A drive-relative path as the SERVER stores it, for a label that may be
+/// rooted at a granted folder.
+///
+/// Every remote IPC takes paths relative to what the user is looking at. For
+/// an ordinary drive that is the drive root and nothing changes; for a folder
+/// grant it is the granted folder, so the grant's path is put in front. This
+/// is the one place that join happens, so no IPC can forget it and address a
+/// folder of the same name at the drive root.
+pub fn rooted_path(label: &str, relative: &str) -> String {
+    let relative = relative.trim_matches('/');
+    match folder_grant_browse(label) {
+        Some((_, root)) if relative.is_empty() => root,
+        Some((_, root)) => format!("{root}/{relative}"),
+        None => relative.to_string(),
+    }
 }
 
 /// The local `sync_paths` row (label + sync root) already syncing a given
@@ -323,6 +374,53 @@ mod tests {
     fn the_browse_label_format_contains_no_slash() {
         assert!(!SHARED_BROWSE_PREFIX.contains('/'));
         assert_ne!(SHARED_BROWSE_SEPARATOR, '/');
+    }
+
+    #[test]
+    fn a_folder_grant_label_names_the_drive_and_the_folder() {
+        let label = format!("grant:5Owner~abc123~{}", hex::encode("Clients/ACME"));
+        let (id, root) = folder_grant_browse(&label).expect("grant label");
+        assert_eq!((id.wire_ss58.as_str(), id.wire_folder_hash.as_str()), ("5Owner", "abc123"));
+        assert!(id.is_member, "a grant is always somebody else's drive");
+        assert_eq!(root, "Clients/ACME");
+        // Every label-keyed path resolves it like a shared drive.
+        assert_eq!(shared_drive_browse_identity(&label).expect("identity").wire_ss58, "5Owner");
+    }
+
+    #[test]
+    fn a_broken_grant_label_is_never_guessed_at() {
+        for label in [
+            "grant:5Owner~abc123".to_string(),
+            "grant:~abc123~61".to_string(),
+            "grant:5Owner~~61".to_string(),
+            "grant:5Owner~abc123~zz".to_string(),
+            format!("grant:5Owner~abc123~{}", hex::encode("../escape")),
+            format!("grant:5Owner~abc123~{}", hex::encode("")),
+            format!("grant:5Owner~abc123~{}~extra", hex::encode("a")),
+        ] {
+            assert!(folder_grant_browse(&label).is_none(), "{label} must not resolve");
+        }
+    }
+
+    #[test]
+    fn paths_are_rooted_at_the_grant_and_nowhere_else() {
+        let grant = format!("grant:5Owner~abc123~{}", hex::encode("Clients/ACME"));
+        assert_eq!(rooted_path(&grant, ""), "Clients/ACME");
+        assert_eq!(rooted_path(&grant, "/2026/q1/"), "Clients/ACME/2026/q1");
+        assert_eq!(
+            rooted_path("shared:5Owner~abc123", "/2026/"),
+            "2026",
+            "a whole drive is rooted at its root"
+        );
+        assert_eq!(rooted_path("team-docs", "Trips"), "Trips");
+    }
+
+    #[test]
+    fn the_grant_label_format_matches_the_frontend() {
+        let ts = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../app/lib/shared-drives/sharedDriveLabel.ts"))
+            .expect("read sharedDriveLabel.ts");
+        assert!(ts.contains(&format!("FOLDER_GRANT_LABEL_PREFIX = \"{GRANT_BROWSE_PREFIX}\"")));
+        assert!(!GRANT_BROWSE_PREFIX.contains('/'));
     }
 
     /// The format is one contract with the frontend, which builds these
