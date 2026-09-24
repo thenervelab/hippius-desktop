@@ -175,10 +175,18 @@ export function GeneralAccessSection({
                   {generalAccessNote({ folder, role, neverExpires: ttlSecs === NEVER_EXPIRES_SECS })}
                 </p>
               </div>
-              {/* One row of compact controls, the button the same height;
-                  stacked full width when the dialog is narrow. */}
-              <div className="flex flex-col gap-2 @sm:flex-row @sm:items-center">
-                <div className="flex gap-2 @sm:contents">
+              {/* One row that never wraps: two compact selects at fixed
+                  widths and the button at its natural width, all 34px
+                  tall. The breakpoints key off this column (a container
+                  query), not the window, so the dialog at its normal width
+                  always gets the row. Only a narrow column stacks: the
+                  selects side by side over a full-width button, then each
+                  control on its own line at the narrowest. */}
+              <div
+                data-testid="general-access-controls"
+                className="flex flex-col gap-2 @md:flex-row @md:flex-nowrap @md:items-center"
+              >
+                <div className="flex flex-col gap-2 @xs:flex-row @md:contents">
                   <Select
                     ariaLabel="Link access"
                     value={role}
@@ -190,7 +198,7 @@ export function GeneralAccessSection({
                     }))}
                     size="compact"
                     minimal
-                    className="min-w-0 flex-1 @sm:w-[104px] @sm:flex-none"
+                    className="min-w-0 @xs:flex-1 @md:w-[120px] @md:flex-none"
                   />
                   <Select
                     ariaLabel="Link expires"
@@ -199,7 +207,7 @@ export function GeneralAccessSection({
                     options={ttlOptions.map(({ label: text, secs }) => ({ label: text, value: String(secs) }))}
                     size="compact"
                     minimal
-                    className="min-w-0 flex-1 @sm:w-[132px] @sm:flex-none"
+                    className="min-w-0 @xs:flex-1 @md:w-[140px] @md:flex-none"
                   />
                 </div>
                 <Button
@@ -208,7 +216,7 @@ export function GeneralAccessSection({
                   size="auto"
                   disabled={running}
                   onClick={() => void mint(role)}
-                  className="h-[34px] w-full shrink-0 gap-1.5 rounded-[8px] px-3.5 text-[13px] font-medium @sm:ml-auto @sm:w-auto"
+                  className="h-[34px] w-full shrink-0 gap-1.5 whitespace-nowrap rounded-[8px] px-3.5 text-[13px] font-medium @md:ml-auto @md:w-auto"
                 >
                   <Icons.Link className="size-3.5" />
                   {running ? "Creating link…" : "Create link"}

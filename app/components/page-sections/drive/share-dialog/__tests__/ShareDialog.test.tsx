@@ -419,6 +419,31 @@ describe("General access", () => {
     expect(screen.getByRole("button", { name: "Create link" })).toBeInTheDocument();
   });
 
+  it("keeps access, expiry and Create link on one non-wrapping row at dialog width", () => {
+    renderDialog();
+    const row = screen.getByTestId("general-access-controls");
+    const access = screen.getByLabelText("Link access");
+    const expires = screen.getByLabelText("Link expires");
+    const create = screen.getByRole("button", { name: "Create link" });
+    for (const control of [access, expires, create]) expect(row).toContainElement(control);
+
+    // The row is keyed to the dialog column (a container query), never wraps,
+    // and the selects' own group dissolves into it at that width.
+    const rowClasses = row.className.split(/\s+/);
+    expect(rowClasses).toEqual(expect.arrayContaining(["@md:flex-row", "@md:flex-nowrap"]));
+    expect(row.className).not.toMatch(/(^|\s)(\S+:)?flex-wrap(\s|$)/);
+    expect(row.parentElement?.closest(".\\@container")).not.toBeNull();
+    expect(access.parentElement?.parentElement?.className).toContain("@md:contents");
+
+    // Compact fixed widths for the selects, natural width for the button.
+    expect(access.parentElement?.className).toContain("@md:w-[120px]");
+    expect(access.parentElement?.className).toContain("@md:flex-none");
+    expect(expires.parentElement?.className).toContain("@md:w-[140px]");
+    expect(expires.parentElement?.className).toContain("@md:flex-none");
+    expect(create.className).toContain("@md:w-auto");
+    expect(create.className).toContain("h-[34px]");
+  });
+
   it("says anyone with a drive link can join", () => {
     renderDialog();
     expect(screen.getByText("Invite link")).toBeInTheDocument();
