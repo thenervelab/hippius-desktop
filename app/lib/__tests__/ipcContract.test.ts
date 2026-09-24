@@ -259,6 +259,7 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
       "list_drive_folder_grants",
       "replace_folder_grants",
       "list_share_access",
+      "list_access_panel",
       "list_my_folder_grants",
       "remove_drive_member",
       "list_my_drive_memberships",

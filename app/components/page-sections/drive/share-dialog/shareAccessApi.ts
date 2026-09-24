@@ -1,14 +1,15 @@
-// Where the Share dialog's "People with access" reads and writes: the real
-// Rust commands, or, on a dev or staging build only, a preview fixture of
-// fake people so the list can be looked at with 0 to 30 rows, slow answers
-// and refusals without a server that has them.
+// Where the Share dialog's "People with access" and the Manage access panel
+// read and write: the real Rust commands, or, on a dev or staging build only,
+// a preview fixture of fake people and links so both can be looked at with 0
+// to 30 rows, slow answers and refusals without a server that has them.
 //
 // The fixture is switched on per machine from the devtools console:
 //
-//   localStorage.setItem("hippius:share-dialog-fixture", "12")  // 0..30 people
-//   localStorage.removeItem("hippius:share-dialog-fixture")     // back to real
+//   localStorage.setItem("hippius:share-dialog-fixture", "12")         // 0..30 people
+//   localStorage.setItem("hippius:share-dialog-fixture", "12 locked")  // links locked
+//   localStorage.removeItem("hippius:share-dialog-fixture")            // back to real
 //
-// and read when a Share dialog opens. It can never run on a beta or
+// and read when a Share dialog or the panel opens. It can never run on a beta or
 // production build: `SHARE_FIXTURE_AVAILABLE` is false there at build time, so
 // the key is ignored. Nothing it does reaches Rust or the server.
 
@@ -16,9 +17,14 @@ import { enabledFrom } from "@/app/lib/buildChannel";
 import {
   approveEmailInvite,
   changeDriveMemberRole,
+  listAccessPanel,
   listShareAccess,
   removeDriveMember,
+  replaceFolderGrants,
   revokeDriveInvite,
+  type AccessPanel,
+  type AccessPanelHolder,
+  type AccessPanelLink,
   type DriveInviteInfo,
   type DriveTarget,
   type ShareAccess,
@@ -31,6 +37,16 @@ export interface ShareAccessApi {
   remove(label: string, memberSs58: string, target?: DriveTarget): Promise<void>;
   revoke(label: string, inviteId: string, target?: DriveTarget): Promise<void>;
   approve(label: string, inviteId: string, target?: DriveTarget): Promise<unknown>;
+  /** The Manage access panel's listing (`list_access_panel`). */
+  listPanel(label: string, pathPrefix: string | null, target?: DriveTarget): Promise<AccessPanel>;
+  /** Change folders: `role` applies to folders being added. */
+  replaceFolders(
+    label: string,
+    memberSs58: string,
+    folders: string[],
+    role: "reader" | "writer" | undefined,
+    target?: DriveTarget,
+  ): Promise<unknown>;
 }
 
 export const realShareAccessApi: ShareAccessApi = {
@@ -39,6 +55,9 @@ export const realShareAccessApi: ShareAccessApi = {
   remove: removeDriveMember,
   revoke: revokeDriveInvite,
   approve: approveEmailInvite,
+  listPanel: listAccessPanel,
+  replaceFolders: (label, memberSs58, folders, role, target) =>
+    replaceFolderGrants(label, memberSs58, folders, { role, target }),
 };
 
 /** Dev and staging builds only; false at build time on beta and production. */
@@ -66,10 +85,25 @@ export function shareFixtureSize(
   return Math.max(0, Math.min(MAX_FIXTURE_PEOPLE, n));
 }
 
-/** The API a dialog opened now should use. */
+/** Whether the fixture's links should be drawn locked ("12 locked"). */
+export function shareFixtureLocked(
+  available: boolean = SHARE_FIXTURE_AVAILABLE,
+  read: () => string | null = () => window.localStorage.getItem(SHARE_FIXTURE_KEY),
+): boolean {
+  if (!available) return false;
+  try {
+    return (read() ?? "").includes("locked");
+  } catch {
+    return false;
+  }
+}
+
+/** The API a dialog or panel opened now should use. */
 export function shareAccessApiFor(folder: boolean): ShareAccessApi {
   const size = shareFixtureSize();
-  return size === null ? realShareAccessApi : fixtureShareAccessApi(size, folder);
+  return size === null
+    ? realShareAccessApi
+    : fixtureShareAccessApi(size, folder, { linksLocked: shareFixtureLocked() });
 }
 
 const NAMES = [
@@ -156,8 +190,126 @@ function refuses(id: string): boolean {
 
 const REFUSAL = { kind: "Validation", message: "The preview server refused this change (fixture)." };
 
-export function fixtureShareAccessApi(size: number, folder: boolean): ShareAccessApi {
+const DAY_SECS = 86_400;
+const FIXTURE_FOLDERS = ["Clients/ACME", "Design", "Finance/2026"];
+
+/** Fake folder holders for a drive panel: about one in four people. */
+function fixtureDriveHolders(size: number): AccessPanelHolder[] {
+  return Array.from({ length: Math.floor(size / 4) }, (_, i) => {
+    const name = i % 3 === 2 ? undefined : NAMES[(i + 5) % NAMES.length];
+    const folders = FIXTURE_FOLDERS.slice(0, 1 + (i % 2)).sort();
+    return {
+      memberSs58: fakeSs58(500 + i),
+      memberName: name,
+      memberEmail: name ? `${name.split(" ")[0].toLowerCase()}@example.org` : undefined,
+      isYou: false,
+      role: i % 2 ? "writer" : "reader",
+      pathPrefix: folders[0],
+      folders,
+    };
+  });
+}
+
+/** On a folder panel: a couple of people who have the whole drive. */
+function fixtureWholeDriveMembers(count: number): ShareAccess["members"] {
+  return Array.from({ length: Math.min(2, Math.floor(count / 3)) }, (_, i) => ({
+    memberSs58: fakeSs58(700 + i),
+    memberName: NAMES[(i + 8) % NAMES.length],
+    role: i ? "manager" : "writer",
+    isYou: false,
+  }));
+}
+
+/** Fake links: a few working ones of each shape, and some that ended. */
+function fixtureLinks(size: number, folder: boolean, locked: boolean): AccessPanelLink[] {
+  if (size === 0) return [];
+  const url = (i: number) => `https://console.hippius.com/invite/fixture${i}tok3n#k=fixture-key`;
+  const base = (i: number, extra: Partial<AccessPanelLink>): AccessPanelLink => ({
+    inviteId: `fixture-link-${i}`,
+    role: "writer",
+    mintedBy: i % 2 ? fakeSs58(3) : fakeSs58(999),
+    mintedByName: i % 2 ? NAMES[0] : undefined,
+    mintedByYou: i % 2 === 0,
+    useCount: 0,
+    maxUses: 50,
+    singleUse: false,
+    usagePercent: 0,
+    status: "active",
+    expiresAt: new Date(Date.now() + 5 * DAY_SECS * 1000).toISOString(),
+    neverExpires: false,
+    expiresInSecs: 5 * DAY_SECS,
+    inviteUrl: locked ? undefined : url(i),
+    linkAvailable: true,
+    ...(folder ? { pathPrefix: "fixture" } : {}),
+    ...extra,
+  });
+  const active: AccessPanelLink[] = folder
+    ? [base(0, { role: "reader", maxUses: 1, singleUse: true, expiresInSecs: 29 * DAY_SECS })]
+    : [
+        base(0, { useCount: 12, usagePercent: 24 }),
+        base(1, { role: "reader", useCount: 3, usagePercent: 6, neverExpires: true, expiresInSecs: null }),
+        base(2, { role: "manager", maxUses: 1, singleUse: true, expiresInSecs: 20 * 3600 }),
+      ].slice(0, 1 + Math.floor(size / 6));
+  const ended: AccessPanelLink[] = Array.from({ length: Math.floor(size / 8) }, (_, i) =>
+    base(10 + i, {
+      status: (["revoked", "expired", "used_up"] as const)[i % 3],
+      expiresInSecs: null,
+      inviteUrl: undefined,
+      linkAvailable: false,
+    }),
+  );
+  return [...active, ...ended];
+}
+
+/** The panel's listing, built from the same fake people as the dialog. */
+export function fixtureAccessPanel(
+  access: ShareAccess,
+  links: AccessPanelLink[],
+  driveHolders: AccessPanelHolder[],
+  folder: boolean,
+  linksLocked: boolean,
+): AccessPanel {
+  const now = Date.now();
+  const active = links.filter((l) => l.status === "active");
+  return {
+    ownerSs58: access.ownerSs58,
+    ownerIsYou: access.ownerIsYou,
+    yourRole: access.ownerIsYou ? "owner" : null,
+    canManage: access.ownerIsYou,
+    members: (folder ? fixtureWholeDriveMembers(access.driveMemberCount) : access.members).map((m) => ({
+      ...m,
+      createdAt: "2026-08-20T10:00:00Z",
+    })),
+    folderHolders: folder
+      ? access.folderHolders.map((h) => ({
+          memberSs58: h.memberSs58,
+          memberName: h.memberName,
+          memberEmail: h.memberEmail,
+          isYou: false,
+          role: h.role,
+          pathPrefix: h.pathPrefix,
+          folders: [h.pathPrefix, ...FIXTURE_FOLDERS.slice(0, h.otherFolderCount)].sort(),
+        }))
+      : driveHolders,
+    pendingInvites: access.pendingInvites.map((i) => ({
+      ...i,
+      expiresInSecs: Math.round((Date.parse(i.expiresAt) - now) / 1000),
+    })),
+    links: active,
+    inactiveLinks: links.filter((l) => l.status !== "active"),
+    linksLocked: linksLocked && active.some((l) => l.linkAvailable),
+    driveMemberCount: access.driveMemberCount,
+  };
+}
+
+export function fixtureShareAccessApi(
+  size: number,
+  folder: boolean,
+  options: { linksLocked?: boolean } = {},
+): ShareAccessApi {
   let state = fixtureShareAccess(size, folder);
+  let links = fixtureLinks(size, folder, Boolean(options.linksLocked));
+  let driveHolders = fixtureDriveHolders(size);
   const act = async (id: string, change: () => void) => {
     await latency();
     if (refuses(id)) throw REFUSAL;
@@ -179,10 +331,14 @@ export function fixtureShareAccessApi(size: number, folder: boolean): ShareAcces
           members: state.members.filter((m) => m.memberSs58 !== ss58),
           folderHolders: state.folderHolders.filter((h) => h.memberSs58 !== ss58),
         };
+        driveHolders = driveHolders.filter((h) => h.memberSs58 !== ss58);
       }),
     revoke: (_label, id) =>
       act(id, () => {
         state = { ...state, pendingInvites: state.pendingInvites.filter((i) => i.inviteId !== id) };
+        links = links.map((l) =>
+          l.inviteId === id ? { ...l, status: "revoked", inviteUrl: undefined, linkAvailable: false, expiresInSecs: null } : l,
+        );
       }),
     approve: (_label, id) =>
       act(id, () => {
@@ -190,6 +346,17 @@ export function fixtureShareAccessApi(size: number, folder: boolean): ShareAcces
           ...state,
           pendingInvites: state.pendingInvites.map((i) => (i.inviteId === id ? { ...i, emailStatus: "sealed" } : i)),
         };
+      }),
+    async listPanel() {
+      await latency();
+      return structuredClone(fixtureAccessPanel(state, links, driveHolders, folder, Boolean(options.linksLocked)));
+    },
+    replaceFolders: (_label, ss58, folders) =>
+      act(ss58, () => {
+        const sorted = [...folders].sort();
+        driveHolders = driveHolders.map((h) =>
+          h.memberSs58 === ss58 ? { ...h, folders: sorted, pathPrefix: sorted[0] ?? h.pathPrefix } : h,
+        );
       }),
   };
 }

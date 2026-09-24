@@ -233,6 +233,104 @@ export async function listShareAccess(
   });
 }
 
+/** A whole-drive member in the Manage access panel. */
+export interface AccessPanelMember extends ShareAccessMember {
+  /** RFC 3339 join time. */
+  createdAt: string;
+}
+
+/** A folder holder in the Manage access panel, with every folder they hold. */
+export interface AccessPanelHolder {
+  memberSs58: string;
+  memberName?: string;
+  memberEmail?: string;
+  isYou: boolean;
+  /** `reader` or `writer`, of the grant named by `pathPrefix`. */
+  role: string;
+  /** The folder the row is tagged with (see `access_panel.rs`). */
+  pathPrefix: string;
+  /** Every folder they hold on this drive, sorted. */
+  folders: string[];
+}
+
+/** An emailed invitation still waiting, as the panel lists it. */
+export interface AccessPanelInvite extends DriveInviteInfo {
+  /** Seconds until it expires, counted in Rust; null for an unreadable date. */
+  expiresInSecs: number | null;
+}
+
+/** Why a link does or does not work, decided in Rust. */
+export type AccessPanelLinkStatus = "active" | "revoked" | "expired" | "used_up";
+
+/** One link invite in the panel. */
+export interface AccessPanelLink {
+  inviteId: string;
+  role: string;
+  /** The folder of a folder link; absent for a whole-drive link. */
+  pathPrefix?: string;
+  /** Who made it; empty when the server has no provenance for it. */
+  mintedBy: string;
+  mintedByName?: string;
+  mintedByYou: boolean;
+  useCount: number;
+  maxUses: number;
+  singleUse: boolean;
+  /** 0 to 100. */
+  usagePercent: number;
+  status: AccessPanelLinkStatus;
+  expiresAt: string;
+  neverExpires: boolean;
+  /** Seconds left on an active, expiring link; null otherwise. */
+  expiresInSecs: number | null;
+  /**
+   * The full link when it opened here. A drive-access capability: copy it,
+   * never show the part after `#`, never log it.
+   */
+  inviteUrl?: string;
+  /** A sealed copy exists, so the row has a link field. */
+  linkAvailable: boolean;
+}
+
+/**
+ * Everything the Manage access panel shows, folded in Rust
+ * (`list_access_panel`, `shared_drives/access_panel.rs`).
+ */
+export interface AccessPanel {
+  ownerSs58: string;
+  ownerIsYou: boolean;
+  /** `owner`, a member role, or a folder grant role; null when unknown. */
+  yourRole: string | null;
+  /** Owner or Manager. */
+  canManage: boolean;
+  /** Whole-drive members, you first. A folder panel lists them too. */
+  members: AccessPanelMember[];
+  folderHolders: AccessPanelHolder[];
+  pendingInvites: AccessPanelInvite[];
+  /** Links that still work. */
+  links: AccessPanelLink[];
+  /** Links that no longer work: expired, used up or revoked. */
+  inactiveLinks: AccessPanelLink[];
+  /** Working links exist that only the unlock password can show. */
+  linksLocked: boolean;
+  driveMemberCount: number;
+}
+
+/**
+ * The Manage access panel's data for a drive, or for one folder of it when
+ * `pathPrefix` is present.
+ */
+export async function listAccessPanel(
+  label: string,
+  pathPrefix: string | null,
+  target?: DriveTarget,
+): Promise<AccessPanel> {
+  return invoke<AccessPanel>("list_access_panel", {
+    label,
+    pathPrefix,
+    ...targetArgs(target),
+  });
+}
+
 /** One folder grant on a drive (owner/manager view). */
 export interface DriveFolderGrantInfo {
   memberSs58: string;

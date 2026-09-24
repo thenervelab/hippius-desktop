@@ -7,6 +7,7 @@ import {
   SHARE_FIXTURE_AVAILABLE,
   fixtureShareAccess,
   fixtureShareAccessApi,
+  shareFixtureLocked,
   shareFixtureSize,
 } from "../shareAccessApi";
 
@@ -84,5 +85,60 @@ describe("fixtureShareAccessApi", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("the panel fixture", () => {
+  it("lists people, holders, pending invites and links for a drive", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = fixtureShareAccessApi(24, false);
+      const listed = api.listPanel("x", null);
+      await vi.advanceTimersByTimeAsync(2000);
+      const panel = await listed;
+      expect(panel.canManage).toBe(true);
+      expect(panel.members.length).toBeGreaterThan(0);
+      expect(panel.folderHolders.length).toBe(6);
+      expect(panel.pendingInvites.every((i) => typeof i.expiresInSecs === "number")).toBe(true);
+      expect(panel.links.length).toBe(3);
+      expect(panel.inactiveLinks.length).toBe(3);
+      expect(panel.linksLocked).toBe(false);
+      expect(panel.links.every((l) => l.inviteUrl)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("can draw the links locked", async () => {
+    vi.useFakeTimers();
+    try {
+      const listed = fixtureShareAccessApi(12, false, { linksLocked: true }).listPanel("x", null);
+      await vi.advanceTimersByTimeAsync(2000);
+      const panel = await listed;
+      expect(panel.linksLocked).toBe(true);
+      expect(panel.links.some((l) => l.inviteUrl)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("has nothing but the owner at zero", async () => {
+    vi.useFakeTimers();
+    try {
+      const listed = fixtureShareAccessApi(0, true).listPanel("x", "fixture");
+      await vi.advanceTimersByTimeAsync(2000);
+      const panel = await listed;
+      expect(panel.members).toHaveLength(0);
+      expect(panel.folderHolders).toHaveLength(0);
+      expect(panel.links).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads the locked switch only where the fixture is allowed", () => {
+    expect(shareFixtureLocked(false, () => "12 locked")).toBe(false);
+    expect(shareFixtureLocked(true, () => "12 locked")).toBe(true);
+    expect(shareFixtureLocked(true, () => "12")).toBe(false);
   });
 });

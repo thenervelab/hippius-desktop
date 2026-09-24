@@ -59,7 +59,41 @@ const ROLE_TEXT = "shrink-0 text-xs text-grey-50 dark:text-grey-dark-600";
 const SMALL_BUTTON = "h-8 shrink-0 rounded-[6px] px-3 text-xs font-medium";
 
 /** What a row is waiting on, while a change is on the wire. */
-type Busy = "saving" | "removing";
+export type Busy = "saving" | "removing" | "revoking";
+
+/**
+ * Pessimistic row changes, shared by this section and the Manage access
+ * panel: mark the row, run the command, read the list again, and only then
+ * let the row show the result. A refusal leaves the row as it was, with the
+ * reason under it. Other rows stay usable meanwhile.
+ */
+export function useRowChanges(onChanged: () => void, reload: () => Promise<void>) {
+  const [busy, setBusy] = useState<Record<string, Busy>>({});
+  const [rowError, setRowError] = useState<{ key: string; message: string } | null>(null);
+
+  const run = useCallback(
+    async (key: string, who: string, kind: Busy, action: () => Promise<unknown>) => {
+      setBusy((b) => ({ ...b, [key]: kind }));
+      setRowError((e) => (e?.key === key ? null : e));
+      try {
+        await action();
+        onChanged();
+        await reload();
+      } catch (err) {
+        setRowError({ key, message: couldNotChangeAccess(who, errorMessage(err)) });
+      } finally {
+        setBusy((b) => {
+          const next = { ...b };
+          delete next[key];
+          return next;
+        });
+      }
+    },
+    [onChanged, reload],
+  );
+
+  return { busy, rowError, run };
+}
 
 export function PeopleWithAccessSection({
   api,
@@ -88,36 +122,12 @@ export function PeopleWithAccessSection({
   /** Opens the manage panel for this drive. */
   onManage: () => void;
 }) {
-  const [busy, setBusy] = useState<Record<string, Busy>>({});
-  const [rowError, setRowError] = useState<{ key: string; message: string } | null>(null);
+  const { busy, rowError, run } = useRowChanges(onChanged, reload);
 
   const access = state.kind === "ready" ? state.access : null;
   const count = access
     ? 1 + access.members.length + access.folderHolders.length + access.pendingInvites.length
     : null;
-
-  // One change: mark the row, run the command, read the list again, and only
-  // then let the row show the result. A refusal leaves the row as it was.
-  const run = useCallback(
-    async (key: string, who: string, kind: Busy, action: () => Promise<unknown>) => {
-      setBusy((b) => ({ ...b, [key]: kind }));
-      setRowError((e) => (e?.key === key ? null : e));
-      try {
-        await action();
-        onChanged();
-        await reload();
-      } catch (err) {
-        setRowError({ key, message: couldNotChangeAccess(who, errorMessage(err)) });
-      } finally {
-        setBusy((b) => {
-          const next = { ...b };
-          delete next[key];
-          return next;
-        });
-      }
-    },
-    [onChanged, reload],
-  );
 
   const rows: Array<{ key: string; node: React.ReactNode }> = [];
   if (access) {
@@ -260,17 +270,23 @@ export function PeopleWithAccessSection({
   );
 }
 
+const BUSY_WORD: Record<Busy, string> = {
+  saving: "Saving…",
+  removing: "Removing…",
+  revoking: "Revoking…",
+};
+
 /** The small spinner and word a row shows while its change is on the wire. */
-function BusyLabel({ busy }: { busy: Busy }) {
+export function BusyLabel({ busy }: { busy: Busy }) {
   return (
     <span role="status" className="inline-flex shrink-0 items-center gap-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
       <Loader2 className="size-3.5 animate-spin" aria-hidden />
-      {busy === "removing" ? "Removing…" : "Saving…"}
+      {BUSY_WORD[busy]}
     </span>
   );
 }
 
-function PersonAvatar({ ss58 }: { ss58: string }) {
+export function PersonAvatar({ ss58 }: { ss58: string }) {
   return (
     <div className="size-8 shrink-0 overflow-hidden rounded-full">
       <Avatar name={ss58} size={32} variant="marble" colors={["#92A1C6", "#146A7C", "#F0AB3D", "#C271B4", "#C20D90"]} />
@@ -278,7 +294,7 @@ function PersonAvatar({ ss58 }: { ss58: string }) {
   );
 }
 
-function OwnerRow({ ss58, isYou, name }: { ss58: string; isYou: boolean; name?: string }) {
+export function OwnerRow({ ss58, isYou, name }: { ss58: string; isYou: boolean; name?: string }) {
   return (
     <div className={ROW}>
       <PersonAvatar ss58={ss58} />
@@ -291,16 +307,22 @@ function OwnerRow({ ss58, isYou, name }: { ss58: string; isYou: boolean; name?: 
   );
 }
 
-function MemberRow({
+export function MemberRow({
   member,
   busy,
   onChangeRole,
   onRemove,
+  readOnly = false,
+  meta,
 }: {
   member: ShareAccessMember;
   busy?: Busy;
   onChangeRole: (role: DriveRole) => void;
   onRemove: () => void;
+  /** Someone who cannot manage the drive sees the role as text. */
+  readOnly?: boolean;
+  /** The line under the name; the email when omitted. */
+  meta?: React.ReactNode;
 }) {
   const role = parseDriveRole(member.role);
   const [pending, setPending] = useState<"none" | "remove" | DriveRole>("none");
@@ -330,10 +352,14 @@ function MemberRow({
           />
           {member.isYou ? <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">(you)</span> : null}
         </div>
-        {member.memberEmail ? <p className={META}>{member.memberEmail}</p> : null}
+        {meta !== undefined ? (
+          meta ? <p className={META}>{meta}</p> : null
+        ) : member.memberEmail ? (
+          <p className={META}>{member.memberEmail}</p>
+        ) : null}
       </div>
       {busy ? <BusyLabel busy={busy} /> : null}
-      {member.isYou ? (
+      {member.isYou || readOnly ? (
         // Nobody changes their own role; a manager leaves instead.
         <span className={ROLE_TEXT}>{driveRoleLabel(role)}</span>
       ) : busy === "removing" ? null : (
@@ -461,16 +487,22 @@ function HolderRow({
   );
 }
 
-function PendingRow({
+export function PendingRow({
   invite,
   busy,
   onCancel,
   onApprove,
+  meta,
 }: {
   invite: DriveInviteInfo;
   busy?: Busy;
   onCancel: () => void;
   onApprove: () => void;
+  /**
+   * The line under the address, in place of the dialog's stage and expiry
+   * words (the Manage access panel draws a stage pill and a folder tag).
+   */
+  meta?: React.ReactNode;
 }) {
   // Approval is the one step a mailed invitation needs from this side: the
   // recipient opened it, and approving seals the drive key to them.
@@ -494,12 +526,20 @@ function PendingRow({
         <p className="truncate text-sm text-grey-10 dark:text-white" title={address}>
           {address}
         </p>
-        <p className={cn(META, needsApproval && "text-warning-50 dark:text-warning-50")}>
-          {pendingInviteMeta(invite)}
-          <span className="@sm:hidden"> · {driveRoleLabel(parseDriveRole(invite.role))}</span>
-        </p>
+        {meta !== undefined ? (
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
+            {meta}
+          </div>
+        ) : (
+          <p className={cn(META, needsApproval && "text-warning-50 dark:text-warning-50")}>
+            {pendingInviteMeta(invite)}
+            <span className="@sm:hidden"> · {driveRoleLabel(parseDriveRole(invite.role))}</span>
+          </p>
+        )}
       </div>
-      <span className={cn(ROLE_TEXT, "hidden @sm:inline")}>{driveRoleLabel(parseDriveRole(invite.role))}</span>
+      {meta !== undefined ? null : (
+        <span className={cn(ROLE_TEXT, "hidden @sm:inline")}>{driveRoleLabel(parseDriveRole(invite.role))}</span>
+      )}
       {busy ? (
         <BusyLabel busy={busy} />
       ) : (
@@ -526,7 +566,7 @@ function PendingRow({
 }
 
 /** Rows shaped like the real ones, so the list does not jump when it lands. */
-function PeopleSkeleton() {
+export function PeopleSkeleton() {
   return (
     <div role="status" aria-busy="true" aria-label="Loading people with access">
       <span className="sr-only">Loading people with access…</span>
