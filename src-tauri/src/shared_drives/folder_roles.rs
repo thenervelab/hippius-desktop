@@ -1,6 +1,6 @@
 //! Folder collaboration: Viewer or Editor on ONE folder of a drive.
 //!
-//! # Follows HCFS PR #475 (`feat/folder-grant-writers`, not merged yet)
+//! # Follows HCFS PR #475 (merged; the hcfs pin is at its merge commit)
 //!
 //! Everything below mirrors that PR's API. It is kept in this one module so
 //! the day it merges (or changes) there is one place to reconcile. Every
@@ -25,6 +25,11 @@
 //!    - "writer folder invites are not enabled": Editor while writes are off
 //!      (a server without #475 says "a folder invite is always a reader
 //!      invite" instead).
+//!    - "a folder invite is a reader or writer invite", "a folder invite is
+//!      single-use" and "expires_in_secs exceeds the folder invite maximum of
+//!      30 days": requests the desktop never sends (its plan refuses them
+//!      first), mapped to a worded `Validation` so a drifted caller still reads
+//!      a sentence rather than a raw server string.
 //!
 //!    The response echoes `path_prefix`; a mint without the echo is revoked
 //!    and refused (it would be a whole-drive invite).
@@ -35,22 +40,30 @@
 //! 4. **Listings carry the role.** `folder_grants[]` rows carry `role`; a
 //!    missing, blank or unknown role (`manager` included) reads as `reader`.
 //! 5. **No role change for a holder.** There is no route to change a folder
-//!    holder's role. Changing their folders stays
-//!    `PUT /v1/drives/{fh}/grants/{member_ss58}` `{ path_prefixes }` (keeps
-//!    the role), and removing stays `DELETE /v1/drives/{fh}/members/{member}`.
-//!    To change someone's access: remove them and invite them again.
+//!    holder's role. Changing their folders is
+//!    `PUT /v1/drives/{fh}/grants/{member_ss58}` `{ path_prefixes, role? }`:
+//!    a folder they already hold keeps its role, and `role` (`reader` when
+//!    omitted, `writer` refused with "writer folder grants are not enabled"
+//!    while writes are off) applies only to folders the call ADDS. It answers
+//!    `{ member_ss58, path_prefixes, roles }`, `roles` in the prefixes' order.
+//!    Removing stays `DELETE /v1/drives/{fh}/members/{member}`. To change
+//!    someone's access to a folder they hold: remove them and invite them again.
 //! 6. **What a writer holder may do**, strictly inside the folder: upload
 //!    (single-shot and chunked), delete, rename, register and unregister
 //!    directories, `POST /can_upload`, and mint a public folder link at or
 //!    under the folder. Nothing else (`register_relative_paths` included).
-//!    Only the owner or a full drive Manager mints folder invites.
+//!    Only the owner or a full drive Manager mints folder invites. All of it
+//!    only while `folder_grant_writes` is on: a stored writer grant cannot
+//!    write once the flag is off, so the desktop offers write controls on a
+//!    grant only when both hold (`grant_can_write`).
 //! 7. **The holder's key.** A grant blob opens to the folder's DERIVED file
 //!    key (the same `seed[..32]` bytes the drive's phrase yields), never the
 //!    drive's mnemonic entropy.
 //!
-//! #475 also changes `hcfs-client`'s sync flow to materialize a file at the
-//! server's `relative_path`. The desktop's hcfs pin must be bumped after it
-//! merges; it is deliberately not bumped against the open PR.
+//! #475 also changes `hcfs-client`'s sync flow: a download lands at the
+//! decrypted path when it hashes to the file id, else at the server's
+//! `relative_path` when that does, so a writer who seals a misleading path
+//! cannot place a file outside what the server recorded.
 //!
 //! Joining a folder stays in the console: the desktop opens the console's
 //! invite URL. Syncing a granted folder to disk is out of scope; holders
@@ -86,6 +99,14 @@ pub fn grant_role(raw: Option<&str>) -> String {
     }
 }
 
+/// Whether a folder grant lets its holder change files: an Editor grant, on
+/// a server with `folder_grant_writes` on, and not frozen. The server refuses
+/// a writer grant's writes while the flag is off, so write controls on it
+/// would only ever fail.
+pub fn grant_can_write(role: &str, writes_on: bool, frozen: bool) -> bool {
+    role == "writer" && writes_on && !frozen
+}
+
 /// A validated folder role: `reader` when omitted, `reader` or `writer`
 /// otherwise. A Manager folder invite is refused by name rather than sent.
 pub fn resolve_folder_role(role: Option<String>) -> Result<String> {
@@ -93,7 +114,7 @@ pub fn resolve_folder_role(role: Option<String>) -> Result<String> {
     if FOLDER_ROLES.contains(&role.as_str()) {
         Ok(role)
     } else {
-        Err(AppError::Validation("A folder can be shared with Viewer or Editor access only.".into()))
+        Err(AppError::Validation(FOLDER_ROLE_ONLY.into()))
     }
 }
 
@@ -164,9 +185,35 @@ pub fn classify_folder_invite_refusal(status: reqwest::StatusCode, body: &str) -
         "writer folder invites are not enabled" | "a folder invite is always a reader invite" => {
             Some(AppError::NotReady(NotReadyKind::FolderEditorInvitesUnavailable))
         }
+        "a folder invite is a reader or writer invite" => Some(AppError::Validation(FOLDER_ROLE_ONLY.into())),
+        "a folder invite is single-use" => Some(AppError::Validation(
+            "A folder invite works once, for one person. Create another link for the next person.".into(),
+        )),
+        "expires_in_secs exceeds the folder invite maximum of 30 days" => {
+            Some(AppError::Validation("A folder invite can last at most 30 days.".into()))
+        }
         _ => None,
     }
 }
+
+/// Map a refused folder-grant replace (`PUT /v1/drives/{fh}/grants/{member}`).
+/// Same exact-message rule as the mint: folder grants off reads as "sharing a
+/// folder is coming soon", an Editor folder while writes are off as "Editor
+/// for a folder is coming soon".
+pub fn classify_folder_grant_refusal(status: reqwest::StatusCode, body: &str) -> Option<AppError> {
+    if status.as_u16() != 400 {
+        return None;
+    }
+    match bad_request_message(body)?.as_str() {
+        "folder grants are not enabled" => Some(AppError::NotReady(NotReadyKind::FolderInvitesUnavailable)),
+        "writer folder grants are not enabled" => Some(AppError::NotReady(NotReadyKind::FolderEditorInvitesUnavailable)),
+        "a folder grant is a reader or writer grant" => Some(AppError::Validation(FOLDER_ROLE_ONLY.into())),
+        _ => None,
+    }
+}
+
+/// The one sentence for "Manager (or anything else) is not a folder role".
+const FOLDER_ROLE_ONLY: &str = "A folder can be shared with Viewer or Editor access only.";
 
 /// Map a refused folder EMAIL invite (assumption 3).
 pub fn classify_folder_email_refusal(status: reqwest::StatusCode, body: &str) -> Option<AppError> {
@@ -270,8 +317,20 @@ mod tests {
                 Some(AppError::NotReady(NotReadyKind::FolderEditorInvitesUnavailable))
             ));
         }
+        // What the desktop never sends still reads as a sentence, not a raw
+        // server string, and never as a "coming soon".
+        for msg in [
+            "a folder invite is a reader or writer invite",
+            "a folder invite is single-use",
+            "expires_in_secs exceeds the folder invite maximum of 30 days",
+        ] {
+            assert!(
+                matches!(classify_folder_invite_refusal(bad, &body(msg)), Some(AppError::Validation(_))),
+                "{msg}"
+            );
+        }
         // Anything else falls through to the generic mapping.
-        assert!(classify_folder_invite_refusal(bad, &body("a folder invite is single-use")).is_none());
+        assert!(classify_folder_invite_refusal(bad, &body("path_prefix must be a valid drive-relative folder path")).is_none());
         assert!(
             classify_folder_invite_refusal(bad, &body("folder invites are not enabled yet")).is_none(),
             "exact, not substring"
@@ -288,6 +347,36 @@ mod tests {
             Some(AppError::NotReady(NotReadyKind::FolderEmailInvitesUnavailable))
         ));
         assert!(classify_folder_email_refusal(StatusCode::BAD_REQUEST, &body("email is invalid")).is_none());
+    }
+
+    #[test]
+    fn folder_grant_replace_refusals_map_by_exact_message() {
+        let bad = StatusCode::BAD_REQUEST;
+        assert!(matches!(
+            classify_folder_grant_refusal(bad, &body("writer folder grants are not enabled")),
+            Some(AppError::NotReady(NotReadyKind::FolderEditorInvitesUnavailable))
+        ));
+        assert!(matches!(
+            classify_folder_grant_refusal(bad, &body("folder grants are not enabled")),
+            Some(AppError::NotReady(NotReadyKind::FolderInvitesUnavailable))
+        ));
+        assert!(matches!(
+            classify_folder_grant_refusal(bad, &body("a folder grant is a reader or writer grant")),
+            Some(AppError::Validation(_))
+        ));
+        assert!(classify_folder_grant_refusal(bad, &body("writer folder grants are not enabled yet")).is_none());
+        assert!(classify_folder_grant_refusal(StatusCode::NOT_FOUND, &body("writer folder grants are not enabled")).is_none());
+    }
+
+    #[test]
+    fn a_grant_writes_only_as_an_editor_with_writes_on_and_not_frozen() {
+        assert!(grant_can_write("writer", true, false));
+        assert!(
+            !grant_can_write("writer", false, false),
+            "the server refuses a writer grant's writes while off"
+        );
+        assert!(!grant_can_write("writer", true, true), "a frozen owner takes no uploads");
+        assert!(!grant_can_write("reader", true, false));
     }
 
     #[test]

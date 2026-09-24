@@ -9,7 +9,7 @@ use axum::{
     extract::Path,
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -17,7 +17,8 @@ use tokio::net::TcpListener;
 
 use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::shared_drives::commands::{
-    EmailInviteBody, MintInvite, http_create_invite, http_email_invite, http_list_members, http_list_memberships,
+    EmailInviteBody, MintInvite, ReplacedFolderGrants, http_create_invite, http_email_invite, http_list_members, http_list_memberships,
+    http_replace_folder_grants,
 };
 
 const BEARER: &str = "test-bearer-token";
@@ -255,4 +256,110 @@ async fn listings_whose_grants_omit_the_role_still_parse_as_viewers() {
     assert_eq!(members.folder_grants[0].role, "reader");
     assert_eq!(members.folder_grants[0].member_name.as_deref(), Some("Ada"));
     assert_eq!(members.folder_grants[1].role, "writer");
+}
+
+/// Adding a folder to a holder sends the role for the ADDED folders and reads
+/// back the role the server stored for each folder, in the prefixes' order.
+#[tokio::test]
+async fn adding_a_folder_sends_its_role_and_reads_back_each_stored_role() {
+    let bodies: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::default();
+    let rec = bodies.clone();
+    let base = serve(Router::new().route(
+        "/v1/drives/{hash}/grants/{member}",
+        put(
+            move |Path((_hash, member)): Path<(String, String)>, Json(b): Json<serde_json::Value>| async move {
+                rec.lock().unwrap().push((member.clone(), b));
+                Json(serde_json::json!({
+                    "member_ss58": member,
+                    "path_prefixes": ["Clients/ACME", "Work"],
+                    "roles": ["reader", "writer"],
+                }))
+            },
+        ),
+    ))
+    .await;
+    let resp = http_replace_folder_grants(
+        &reqwest::Client::new(),
+        &base,
+        BEARER,
+        "hash",
+        "5Holder",
+        &["Clients/ACME".to_string(), "Work".to_string()],
+        Some("writer"),
+        None,
+    )
+    .await
+    .expect("replace");
+    let (member, sent) = bodies.lock().unwrap()[0].clone();
+    assert_eq!(member, "5Holder");
+    assert_eq!(sent["role"], "writer");
+    assert_eq!(sent["path_prefixes"], serde_json::json!(["Clients/ACME", "Work"]));
+
+    let replaced: ReplacedFolderGrants = resp.into();
+    assert_eq!(replaced.path_prefixes, ["Clients/ACME", "Work"]);
+    assert_eq!(replaced.roles, ["reader", "writer"], "an existing folder kept its role");
+}
+
+/// No role means the server's default (Viewer); the field is not sent at all.
+#[tokio::test]
+async fn narrowing_folders_sends_no_role() {
+    let bodies: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let rec = bodies.clone();
+    let base = serve(Router::new().route(
+        "/v1/drives/{hash}/grants/{member}",
+        put(move |Json(b): Json<serde_json::Value>| async move {
+            rec.lock().unwrap().push(b);
+            Json(serde_json::json!({ "member_ss58": "5Holder", "path_prefixes": ["Work"], "roles": ["writer"] }))
+        }),
+    ))
+    .await;
+    http_replace_folder_grants(
+        &reqwest::Client::new(),
+        &base,
+        BEARER,
+        "hash",
+        "5Holder",
+        &["Work".to_string()],
+        None,
+        None,
+    )
+    .await
+    .expect("replace");
+    assert!(bodies.lock().unwrap()[0].get("role").is_none());
+}
+
+/// An Editor folder while the server has writer grants off is the Editor
+/// coming-soon kind, and folder grants off is folder sharing coming soon.
+#[tokio::test]
+async fn a_refused_folder_replace_reads_as_coming_soon() {
+    for (message, want_editor) in [("writer folder grants are not enabled", true), ("folder grants are not enabled", false)] {
+        let base = serve(Router::new().route(
+            "/v1/drives/{hash}/grants/{member}",
+            put(move || async move {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "bad_request", "message": message })),
+                )
+            }),
+        ))
+        .await;
+        let err = http_replace_folder_grants(
+            &reqwest::Client::new(),
+            &base,
+            BEARER,
+            "hash",
+            "5Holder",
+            &["Work".to_string()],
+            Some("writer"),
+            Some("5Owner"),
+        )
+        .await
+        .expect_err("refused");
+        let got = match err {
+            AppError::NotReady(NotReadyKind::FolderEditorInvitesUnavailable) => true,
+            AppError::NotReady(NotReadyKind::FolderInvitesUnavailable) => false,
+            other => panic!("{message}: unexpected {other:?}"),
+        };
+        assert_eq!(got, want_editor, "{message}");
+    }
 }

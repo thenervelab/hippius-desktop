@@ -134,6 +134,9 @@ fn present_member_count(count: u64) -> Option<u32> {
 #[serde(rename_all = "camelCase")]
 pub struct DriveInviteLink {
     pub invite_url: String,
+    /// The server's id for the new invite (the blake3 hash of its token, never
+    /// the token), so the Share dialog can revoke the link it just made.
+    pub invite_id: String,
     /// `reader`, `writer` or `manager`.
     pub role: String,
     pub expires_in_secs: u64,
@@ -1255,6 +1258,7 @@ async fn mint_invite_link(
     );
     Ok(DriveInviteLink {
         invite_url,
+        invite_id: minted.invite_id.clone(),
         role: role_owned,
         expires_in_secs,
         max_uses,
@@ -1297,6 +1301,177 @@ pub async fn list_drive_members(
             member_email: present_text(m.member_email),
         })
         .collect())
+}
+
+/// Everyone with access to what the Share dialog is sharing, folded in Rust
+/// so the dialog never decides who belongs to a drive or a folder.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareAccess {
+    /// The drive's owner, who is never in `members`.
+    pub owner_ss58: String,
+    pub owner_is_you: bool,
+    /// Whole-drive members. Drive target only; empty for a folder.
+    pub members: Vec<ShareAccessMember>,
+    /// Folder target only: one row per person holding a grant at or above
+    /// the folder (so a holder of `Clients` has access to `Clients/ACME`).
+    pub folder_holders: Vec<ShareAccessHolder>,
+    /// Emailed invitations still waiting for this target: whole-drive ones for
+    /// a drive, ones for exactly this folder for a folder. Live only.
+    pub pending_invites: Vec<DriveInviteInfo>,
+    /// People with whole-drive access, so a folder dialog can say that they
+    /// can open the folder too.
+    pub drive_member_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareAccessMember {
+    pub member_ss58: String,
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_email: Option<String>,
+    /// This account: its own role is not changeable here (a manager leaves).
+    pub is_you: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareAccessHolder {
+    pub member_ss58: String,
+    /// `reader` or `writer`, of the grant that gives them this folder.
+    pub role: String,
+    /// That grant's folder: this one, or a folder it sits inside.
+    pub path_prefix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_email: Option<String>,
+    /// Folders on this drive they hold besides that one. Removing their access
+    /// removes those too, and the confirmation has to say so.
+    pub other_folder_count: usize,
+}
+
+/// Fold the member listing and the invite listing into what one Share dialog
+/// shows. `folder` is the drive-relative folder being shared, `None` for the
+/// whole drive. Pure, so the membership rules are unit-tested.
+pub(crate) fn fold_share_access(
+    account_id: &str,
+    owner_ss58: &str,
+    folder: Option<&str>,
+    listing: DriveMembersResponse,
+    invites: Vec<DriveInviteInfo>,
+) -> ShareAccess {
+    use super::folder_grant_path::prefix_covers;
+
+    let drive_member_count = listing.members.len();
+    let members = if folder.is_some() {
+        Vec::new()
+    } else {
+        listing
+            .members
+            .into_iter()
+            .map(|m| ShareAccessMember {
+                is_you: m.member_ss58 == account_id,
+                member_ss58: m.member_ss58,
+                role: m.role,
+                member_name: present_text(m.member_name),
+                member_email: present_text(m.member_email),
+            })
+            .collect()
+    };
+
+    let mut folder_holders: Vec<ShareAccessHolder> = Vec::new();
+    if let Some(folder) = folder {
+        for grant in &listing.folder_grants {
+            if !prefix_covers(&grant.path_prefix, folder) {
+                continue;
+            }
+            let held = listing.folder_grants.iter().filter(|g| g.member_ss58 == grant.member_ss58).count();
+            let row = ShareAccessHolder {
+                member_ss58: grant.member_ss58.clone(),
+                role: super::folder_roles::grant_role(Some(&grant.role)),
+                path_prefix: grant.path_prefix.clone(),
+                member_name: present_text(grant.member_name.clone()),
+                member_email: present_text(grant.member_email.clone()),
+                other_folder_count: held.saturating_sub(1),
+            };
+            match folder_holders.iter_mut().find(|h| h.member_ss58 == row.member_ss58) {
+                // Two grants cover the folder (a parent and the folder itself):
+                // the nearer one is the one that describes their access here.
+                Some(existing) if row.path_prefix.len() > existing.path_prefix.len() => *existing = row,
+                Some(_) => {}
+                None => folder_holders.push(row),
+            }
+        }
+    }
+
+    let pending_invites = invites
+        .into_iter()
+        .filter(|i| i.valid && !i.revoked && i.email_status.is_some())
+        .filter(|i| match (folder, i.path_prefix.as_deref().map(|p| p.trim_matches('/'))) {
+            (None, None) => true,
+            (None, Some(p)) => p.is_empty(),
+            (Some(f), Some(p)) => p == f,
+            (Some(_), None) => false,
+        })
+        .collect();
+
+    ShareAccess {
+        owner_is_you: owner_ss58 == account_id,
+        owner_ss58: owner_ss58.to_string(),
+        members,
+        folder_holders,
+        pending_invites,
+        drive_member_count,
+    }
+}
+
+/// Who has access to a drive, or to one folder of it, for the Share dialog's
+/// "People with access" list. `path_prefix` present means a folder (rooted
+/// at a browsed grant like every other folder path). The member listing is
+/// required; the invite listing is best effort, since a list of people is
+/// still right without the pending ones.
+#[tauri::command]
+pub async fn list_share_access(
+    app: tauri::AppHandle,
+    label: String,
+    path_prefix: Option<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<ShareAccess> {
+    let folder = match path_prefix {
+        Some(path) => Some(super::folder_grant_path::folder_grant_path_prefix(&crate::sync::identity::rooted_path(
+            &label, &path,
+        ))?),
+        None => None,
+    };
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let http = state.api_client.clone();
+    let owner = delegated_owner(&identity);
+
+    let (listing, invites) = tokio::join!(
+        http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+        http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+    );
+    let listing = listing?;
+    let mut invites = invites.unwrap_or_else(|e| {
+        warn!(label = %label, error = %e, "Share dialog: invite listing failed; pending invites omitted");
+        Vec::new()
+    });
+    invites.iter_mut().for_each(normalize_email_fields);
+
+    Ok(fold_share_access(
+        &ctx.account_id,
+        &identity.wire_ss58,
+        folder.as_deref(),
+        listing,
+        invites,
+    ))
 }
 
 /// One folder grant on a drive, owner/manager view (no grant blob).
@@ -1368,35 +1543,56 @@ pub(crate) fn in_scope(scope: Option<&str>, row_path: Option<&str>) -> bool {
     }
 }
 
-/// Replace the folders a grant holder may read
-/// (`PUT /v1/drives/{fh}/grants/{ss58}`).
+/// A holder's folders after a replace, as the server stored them. `roles` is
+/// in the same order as `path_prefixes`: a folder they already held keeps its
+/// role, and only the folders this call added took the requested one.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacedFolderGrants {
+    pub member_ss58: String,
+    pub path_prefixes: Vec<String>,
+    pub roles: Vec<String>,
+}
+
+impl From<hcfs_shared::network::ReplaceFolderGrantsResponse> for ReplacedFolderGrants {
+    fn from(resp: hcfs_shared::network::ReplaceFolderGrantsResponse) -> Self {
+        Self {
+            member_ss58: resp.member_ss58,
+            path_prefixes: resp.path_prefixes,
+            // Read defensively, like every other grant role: an unknown role
+            // is a Viewer, never more.
+            roles: resp.roles.iter().map(|r| super::folder_roles::grant_role(Some(r))).collect(),
+        }
+    }
+}
+
+/// Replace the folders a grant holder may reach
+/// (`PUT /v1/drives/{fh}/grants/{ss58}`): add folders, or narrow to fewer.
+///
+/// `role` applies only to folders this call ADDS (`reader` when omitted); a
+/// folder the holder already has keeps its role on the server. `manager` and
+/// anything else are refused here by name. An Editor folder while the server
+/// has writer grants off comes back as `NotReady(FolderEditorInvitesUnavailable)`.
 #[tauri::command]
 pub async fn replace_folder_grants(
     app: tauri::AppHandle,
     label: String,
     member_ss58: String,
     path_prefixes: Vec<String>,
+    role: Option<String>,
     owner_ss58: Option<String>,
     folder_hash: Option<String>,
-) -> Result<Vec<String>> {
+) -> Result<ReplacedFolderGrants> {
+    let (normalized, role) = plan_folder_grant_replace(&path_prefixes, role)?;
+
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
     let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
-    if !caps.folder_grants {
-        return Err(AppError::Validation("Folder sharing is not enabled on this server.".into()));
-    }
-
-    let mut normalized = Vec::with_capacity(path_prefixes.len());
-    for raw in &path_prefixes {
-        normalized.push(super::folder_grant_path::folder_grant_path_prefix(raw)?);
-    }
-    if normalized.is_empty() {
-        return Err(AppError::Validation(
-            "At least one folder is required. To remove every grant, remove the person instead.".into(),
-        ));
-    }
+    // Same guard as the mint: a server that does not know folder grants has
+    // no such route, so say "coming soon" rather than send.
+    super::folder_roles::require_server_knows_folder_invites(&caps)?;
 
     let resp = http_replace_folder_grants(
         &state.api_client.clone(),
@@ -1405,6 +1601,7 @@ pub async fn replace_folder_grants(
         &identity.wire_folder_hash,
         &member_ss58,
         &normalized,
+        role.as_deref(),
         delegated_owner(&identity),
     )
     .await?;
@@ -1414,10 +1611,34 @@ pub async fn replace_folder_grants(
         count = resp.path_prefixes.len(),
         "Folder grants replaced"
     );
-    Ok(resp.path_prefixes)
+    Ok(resp.into())
+}
+
+/// Validate a replace before any request: every folder a legal drive-relative
+/// path, at least one, no duplicates, and the role for added folders Viewer or
+/// Editor. `None` role stays `None` so the server applies its own default.
+pub(crate) fn plan_folder_grant_replace(path_prefixes: &[String], role: Option<String>) -> Result<(Vec<String>, Option<String>)> {
+    let mut normalized: Vec<String> = Vec::with_capacity(path_prefixes.len());
+    for raw in path_prefixes {
+        let folder = super::folder_grant_path::folder_grant_path_prefix(raw)?;
+        if !normalized.contains(&folder) {
+            normalized.push(folder);
+        }
+    }
+    if normalized.is_empty() {
+        return Err(AppError::Validation(
+            "At least one folder is required. To remove every grant, remove the person instead.".into(),
+        ));
+    }
+    let role = match role {
+        Some(r) => Some(super::folder_roles::resolve_folder_role(Some(r))?),
+        None => None,
+    };
+    Ok((normalized, role))
 }
 
 /// `PUT /v1/drives/{folder_hash}/grants/{member_ss58}`.
+#[allow(clippy::too_many_arguments)]
 pub async fn http_replace_folder_grants(
     http: &reqwest::Client,
     base_url: &str,
@@ -1425,6 +1646,7 @@ pub async fn http_replace_folder_grants(
     folder_hash: &str,
     member_ss58: &str,
     path_prefixes: &[String],
+    role: Option<&str>,
     owner: Option<&str>,
 ) -> Result<hcfs_shared::network::ReplaceFolderGrantsResponse> {
     let resp = http
@@ -1435,6 +1657,7 @@ pub async fn http_replace_folder_grants(
         .header("Authorization", format!("Bearer {bearer}"))
         .json(&hcfs_shared::network::ReplaceFolderGrantsRequest {
             path_prefixes: path_prefixes.to_vec(),
+            role: role.map(str::to_string),
         })
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -1444,6 +1667,9 @@ pub async fn http_replace_folder_grants(
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
+        if let Some(err) = super::folder_roles::classify_folder_grant_refusal(status, &body) {
+            return Err(err);
+        }
         return Err(classify_error_status(status, &body));
     }
     serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("replace-folder-grants response did not parse: {e}")))
@@ -1461,6 +1687,10 @@ pub struct MyFolderGrantInfo {
     pub path_prefix: String,
     pub role: String,
     pub created_at: String,
+    /// Whether this account may change files in the folder: an Editor grant,
+    /// writer grants on at the server, and the owner not frozen. Decided here
+    /// so the frontend never combines role and capability itself.
+    pub can_write: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub frozen: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1483,16 +1713,20 @@ pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolder
     Ok(resp
         .folder_grants
         .into_iter()
-        .map(|g| MyFolderGrantInfo {
-            owner_ss58: g.owner_ss58,
-            owner_name: present_text(g.owner_name),
-            folder_hash: g.folder_hash,
-            display_label: g.display_label,
-            path_prefix: g.path_prefix,
-            role: super::folder_roles::grant_role(Some(&g.role)),
-            created_at: g.created_at,
-            frozen: g.frozen,
-            frozen_until: present_text(g.frozen_until),
+        .map(|g| {
+            let role = super::folder_roles::grant_role(Some(&g.role));
+            MyFolderGrantInfo {
+                can_write: super::folder_roles::grant_can_write(&role, caps.folder_grant_writes, g.frozen),
+                owner_ss58: g.owner_ss58,
+                owner_name: present_text(g.owner_name),
+                folder_hash: g.folder_hash,
+                display_label: g.display_label,
+                path_prefix: g.path_prefix,
+                role,
+                created_at: g.created_at,
+                frozen: g.frozen,
+                frozen_until: present_text(g.frozen_until),
+            }
         })
         .collect())
 }
@@ -3292,6 +3526,7 @@ mod tests {
     fn drive_invite_link_wire_keys_are_pinned() {
         let link = DriveInviteLink {
             invite_url: "https://console.example/invite/t#k=x".into(),
+            invite_id: "abc123".into(),
             role: "reader".into(),
             expires_in_secs: 3600,
             max_uses: 1,
@@ -3301,10 +3536,165 @@ mod tests {
             json,
             serde_json::json!({
                 "inviteUrl": "https://console.example/invite/t#k=x",
+                "inviteId": "abc123",
                 "role": "reader",
                 "expiresInSecs": 3600,
                 "maxUses": 1,
             })
+        );
+    }
+
+    fn access_listing() -> DriveMembersResponse {
+        serde_json::from_value(serde_json::json!({
+            "members": [
+                {"member_ss58": "5Me", "role": "manager", "created_at": "t"},
+                {"member_ss58": "5Ann", "role": "writer", "created_at": "t", "member_name": " Ann ", "member_email": ""},
+            ],
+            "folder_grants": [
+                {"member_ss58": "5Bo", "path_prefix": "Clients", "role": "reader", "created_at": "t"},
+                {"member_ss58": "5Bo", "path_prefix": "Clients/ACME", "role": "writer", "created_at": "t"},
+                {"member_ss58": "5Bo", "path_prefix": "Work", "role": "reader", "created_at": "t"},
+                {"member_ss58": "5Cy", "path_prefix": "Clients/ACME Photos", "role": "writer", "created_at": "t"},
+                {"member_ss58": "5Di", "path_prefix": "Clients/ACME/2026", "role": "reader", "created_at": "t"},
+            ],
+        }))
+        .expect("listing")
+    }
+
+    fn mailed_invite(id: &str, path: Option<&str>, status: Option<&str>, valid: bool) -> DriveInviteInfo {
+        serde_json::from_value(serde_json::json!({
+            "invite_id": id, "role": "reader", "expires_at": "2026-10-01T00:00:00Z", "max_uses": 1,
+            "use_count": 0, "revoked": false, "valid": valid, "created_at": "t",
+            "path_prefix": path, "email_status": status, "recipient_email": "a@example.com",
+        }))
+        .expect("invite")
+    }
+
+    #[test]
+    fn a_drive_dialog_lists_members_and_its_own_pending_emails() {
+        let invites = vec![
+            mailed_invite("drive-mail", None, Some("awaiting_seal"), true),
+            mailed_invite("folder-mail", Some("Clients/ACME"), Some("sent"), true),
+            mailed_invite("a-link", None, None, true),
+            mailed_invite("dead-mail", None, Some("sent"), false),
+        ];
+        let access = fold_share_access("5Me", "5Owner", None, access_listing(), invites);
+        assert_eq!(access.owner_ss58, "5Owner");
+        assert!(!access.owner_is_you, "a manager is not the owner");
+        let people: Vec<(&str, bool)> = access.members.iter().map(|m| (m.member_ss58.as_str(), m.is_you)).collect();
+        assert_eq!(people, [("5Me", true), ("5Ann", false)]);
+        assert_eq!(access.members[1].member_name.as_deref(), Some("Ann"));
+        assert_eq!(access.members[1].member_email, None, "a blank email is absent");
+        assert!(access.folder_holders.is_empty(), "holders are not drive members");
+        let pending: Vec<&str> = access.pending_invites.iter().map(|i| i.invite_id.as_str()).collect();
+        assert_eq!(pending, ["drive-mail"], "only live emailed whole-drive invites");
+    }
+
+    #[test]
+    fn a_folder_dialog_lists_whoever_holds_it_or_a_folder_around_it() {
+        let invites = vec![
+            mailed_invite("drive-mail", None, Some("sent"), true),
+            mailed_invite("folder-mail", Some("Clients/ACME"), Some("sent"), true),
+            mailed_invite("other-folder", Some("Work"), Some("sent"), true),
+        ];
+        let access = fold_share_access("5Owner", "5Owner", Some("Clients/ACME"), access_listing(), invites);
+        assert!(access.owner_is_you);
+        assert!(access.members.is_empty());
+        assert_eq!(access.drive_member_count, 2);
+        let holders: Vec<(&str, &str, &str, usize)> = access
+            .folder_holders
+            .iter()
+            .map(|h| (h.member_ss58.as_str(), h.role.as_str(), h.path_prefix.as_str(), h.other_folder_count))
+            .collect();
+        // 5Bo holds Clients and Clients/ACME: the nearer grant describes them.
+        // 5Cy's "ACME Photos" is a sibling, and 5Di's grant is below the folder.
+        assert_eq!(holders, [("5Bo", "writer", "Clients/ACME", 2)]);
+        let pending: Vec<&str> = access.pending_invites.iter().map(|i| i.invite_id.as_str()).collect();
+        assert_eq!(pending, ["folder-mail"]);
+    }
+
+    #[test]
+    fn share_access_wire_keys_are_pinned() {
+        let access = fold_share_access("5Owner", "5Owner", Some("Clients"), access_listing(), Vec::new());
+        let json = serde_json::to_value(&access).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "ownerSs58": "5Owner",
+                "ownerIsYou": true,
+                "members": [],
+                "folderHolders": [{
+                    "memberSs58": "5Bo", "role": "reader", "pathPrefix": "Clients", "otherFolderCount": 2,
+                }],
+                "pendingInvites": [],
+                "driveMemberCount": 2,
+            })
+        );
+        let drive = fold_share_access("5Owner", "5Owner", None, access_listing(), Vec::new());
+        assert_eq!(
+            serde_json::to_value(&drive.members[0]).expect("serialize"),
+            serde_json::json!({ "memberSs58": "5Me", "role": "manager", "isYou": false })
+        );
+    }
+
+    /// The FE reads the replace result by these keys (`ReplacedFolderGrants`
+    /// in `sharedDrives.ts`), and an unknown stored role reads as a Viewer.
+    #[test]
+    fn replaced_folder_grants_wire_keys_are_pinned() {
+        let replaced: ReplacedFolderGrants = hcfs_shared::network::ReplaceFolderGrantsResponse {
+            member_ss58: "5H".into(),
+            path_prefixes: vec!["A".into(), "B".into()],
+            roles: vec!["writer".into(), "manager".into()],
+        }
+        .into();
+        assert_eq!(
+            serde_json::to_value(&replaced).expect("serialize"),
+            serde_json::json!({ "memberSs58": "5H", "pathPrefixes": ["A", "B"], "roles": ["writer", "reader"] })
+        );
+    }
+
+    /// `canWrite` is the one field the FE gates grant write controls on.
+    #[test]
+    fn my_folder_grant_info_wire_keys_are_pinned() {
+        let info = MyFolderGrantInfo {
+            owner_ss58: "5O".into(),
+            owner_name: None,
+            folder_hash: "h".into(),
+            display_label: "d".into(),
+            path_prefix: "Work".into(),
+            role: "writer".into(),
+            created_at: "t".into(),
+            can_write: true,
+            frozen: false,
+            frozen_until: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&info).expect("serialize"),
+            serde_json::json!({
+                "ownerSs58": "5O",
+                "folderHash": "h",
+                "displayLabel": "d",
+                "pathPrefix": "Work",
+                "role": "writer",
+                "createdAt": "t",
+                "canWrite": true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_folder_replace_is_planned_before_any_request() {
+        let (folders, role) = plan_folder_grant_replace(&["/Work/".into(), "Clients/ACME".into(), "Work".into()], Some("writer".into())).unwrap();
+        assert_eq!(folders, ["Work", "Clients/ACME"], "normalised and de-duplicated");
+        assert_eq!(role.as_deref(), Some("writer"));
+        let (_, role) = plan_folder_grant_replace(&["Work".into()], None).unwrap();
+        assert_eq!(role, None, "no role: the server keeps its Viewer default");
+        assert!(plan_folder_grant_replace(&[], None).is_err(), "removing everything is Remove access");
+        assert!(plan_folder_grant_replace(&["".into()], None).is_err(), "never the whole drive");
+        assert!(plan_folder_grant_replace(&["a/../b".into()], None).is_err());
+        assert!(
+            plan_folder_grant_replace(&["Work".into()], Some("manager".into())).is_err(),
+            "manager is not a folder role"
         );
     }
 
