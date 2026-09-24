@@ -26,6 +26,7 @@ import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { buildSharedDriveActions } from "./sharedDriveRowActions";
 import { SettingsCard } from "../SettingsCard";
 import AccountLabel from "@/components/page-sections/drive/AccountLabel";
+import { frozenNotice } from "@/app/lib/shared-drives/writeRefusal";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRowDate } from "@/components/page-sections/drive/folder-list/formatRowDate";
 import { RowDot as Dot } from "@/components/page-sections/drive/folder-list/RowDot";
@@ -259,11 +260,7 @@ export function SharedWithMeSection({
                   {membership.frozen && (
                     <span
                       className="flex-shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-grey-50 dark:text-grey-dark-600"
-                      title={
-                        membership.frozenUntil
-                          ? `Frozen until ${membership.frozenUntil}`
-                          : "This drive is frozen — uploads are refused"
-                      }
+                      title={frozenNotice(membership.frozenUntil)}
                     >
                       Frozen
                     </span>

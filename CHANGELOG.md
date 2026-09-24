@@ -26,6 +26,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A frozen shared drive now says until when in plain words**, instead of a raw timestamp.
 - **Sync Queue when storage is full (HTTP 402).** Failed uploads say
   "Storage full. Upgrade your plan or free up space." instead of
   "Server error (402). Please try again." Credits-exhausted failures still
