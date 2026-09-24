@@ -1,120 +1,127 @@
-//! Folder collaboration with roles: Viewer, Editor and Manager on ONE folder
-//! of a drive, instead of today's read-only folder grants.
+//! Folder collaboration: Viewer or Editor on ONE folder of a drive.
 //!
-//! # Assumed until HCFS publishes folder roles
+//! # Follows HCFS PR #475 (`feat/folder-grant-writers`, not merged yet)
 //!
-//! The server side is agreed but NOT published. Everything below is built
-//! against this assumed contract, kept in this one module so the day the real
-//! API lands there is one place to reconcile. Every desktop surface that
-//! depends on it is gated on the `FOLDER_ROLES_ENABLED` lane flag (staging
-//! only) AND on the capability in (1); with either off the desktop behaves
-//! exactly as before (reader-only, single-use folder invites).
+//! Everything below mirrors that PR's API. It is kept in this one module so
+//! the day it merges (or changes) there is one place to reconcile. Every
+//! desktop surface that depends on it is behind the `FOLDER_ROLES_ENABLED`
+//! lane flag (staging only). Inside the flag nothing is hidden on a server
+//! capability: the request is sent and a refusal becomes a "coming soon"
+//! message, so each piece lights up on its own when the server turns it on.
 //!
-//! 1. **Capability.** `GET /v1/capabilities` carries `folder_grant_roles:
-//!    bool` beside `folder_grants`. Absent or false means reader-only grants.
-//! 2. **Folder invite mint.** `POST /v1/drive-invites` accepts
-//!    `{ folder_hash, path_prefix, role: reader|writer|manager,
-//!    expires_in_secs?, max_uses?, owner_ss58? }` and echoes `path_prefix`.
-//!    The desktop keeps the folder lifetime cap of 30 days, sends one use
-//!    unless the caller asks for more, and caps a Manager folder invite like
-//!    a Manager drive invite (one use, 24 hours).
-//! 3. **Email folder invite.** `POST /v1/drive-invites/email` accepts
-//!    `path_prefix` with role `reader|writer` (a Manager is a link only, as
-//!    for whole drives). Approving one seals the folder's DERIVED file key,
-//!    the same bytes a folder link's `#k=` carries.
-//! 4. **Listings carry the role.** `GET /v1/drive-memberships`
-//!    `folder_grants[]` entries carry `role`; a missing or empty role reads
-//!    as `reader`. `GET /v1/drives/{fh}/members` `folder_grants[]` entries
-//!    carry `member_name`, `member_email`, `path_prefix` and `role`.
-//! 5. **Change a holder's role.** `PATCH /v1/drives/{fh}/grants/{member_ss58}`
-//!    with `{ role }`, plus `?owner=` when delegated. Changing folders stays
-//!    `PUT /v1/drives/{fh}/grants/{member_ss58}` `{ path_prefixes }`, and
-//!    removing stays `DELETE /v1/drives/{fh}/members/{member_ss58}`.
-//! 6. **Holders write like members.** A grant holder uploads, creates
-//!    folders, renames and shares by link through the same routes as a drive
-//!    member, naming the owner, and the server confines them to the granted
-//!    folder. A folder Manager mints folder invites and manages holders at or
-//!    below their own grant.
-//! 7. **The holder's key.** A grant blob opens (like a membership grant) to
-//!    the folder's DERIVED file key, not the drive's mnemonic entropy. That
-//!    key encrypts files and paths and, being the same `seed[..32]` bytes the
-//!    drive's phrase yields, also signs manifests.
+//! 1. **Capabilities.** `GET /v1/capabilities` carries `folder_grants` (folder
+//!    invites at all) and `folder_grant_writes` (Editor folder invites). The
+//!    desktop reads `folder_grant_writes` as a HINT only. It does require the
+//!    `folder_grants` KEY to be present before sending any folder request
+//!    (`ServerCapabilities::folder_grants_known`): a server that predates
+//!    folder invites ignores `path_prefix` and would mint, or mail, a
+//!    whole-drive invite instead.
+//! 2. **Folder invite mint.** `POST /v1/drive-invites` with `path_prefix`.
+//!    Always single use (`max_uses` other than 1 is a 400), expiry capped at
+//!    30 days (default 7). `role` is `reader` or `writer`; `manager` is never
+//!    a folder role (400). Refusals, all `400 bad_request` and told apart only
+//!    by message, which is matched EXACTLY in Rust, never on the frontend:
+//!    - "folder invites are not enabled": folder grants off.
+//!    - "writer folder invites are not enabled": Editor while writes are off
+//!      (a server without #475 says "a folder invite is always a reader
+//!      invite" instead).
+//!
+//!    The response echoes `path_prefix`; a mint without the echo is revoked
+//!    and refused (it would be a whole-drive invite).
+//! 3. **Email folder invite.** `POST /v1/drive-invites/email` with
+//!    `path_prefix` is still refused ("folder invites cannot be mailed yet;
+//!    mint a link instead"). The desktop sends it anyway, behind (1), so it
+//!    works without a desktop change once the server accepts it.
+//! 4. **Listings carry the role.** `folder_grants[]` rows carry `role`; a
+//!    missing, blank or unknown role (`manager` included) reads as `reader`.
+//! 5. **No role change for a holder.** There is no route to change a folder
+//!    holder's role. Changing their folders stays
+//!    `PUT /v1/drives/{fh}/grants/{member_ss58}` `{ path_prefixes }` (keeps
+//!    the role), and removing stays `DELETE /v1/drives/{fh}/members/{member}`.
+//!    To change someone's access: remove them and invite them again.
+//! 6. **What a writer holder may do**, strictly inside the folder: upload
+//!    (single-shot and chunked), delete, rename, register and unregister
+//!    directories, `POST /can_upload`, and mint a public folder link at or
+//!    under the folder. Nothing else (`register_relative_paths` included).
+//!    Only the owner or a full drive Manager mints folder invites.
+//! 7. **The holder's key.** A grant blob opens to the folder's DERIVED file
+//!    key (the same `seed[..32]` bytes the drive's phrase yields), never the
+//!    drive's mnemonic entropy.
+//!
+//! #475 also changes `hcfs-client`'s sync flow to materialize a file at the
+//! server's `relative_path`. The desktop's hcfs pin must be bumped after it
+//! merges; it is deliberately not bumped against the open PR.
 //!
 //! Joining a folder stays in the console: the desktop opens the console's
 //! invite URL. Syncing a granted folder to disk is out of scope; holders
 //! browse it remotely, rooted at the grant.
 
-use crate::error::{AppError, Result};
+use crate::error::{AppError, NotReadyKind, Result};
 use crate::shares::capabilities::ServerCapabilities;
 
-use super::commands::{MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES, WIRE_ROLES};
-use super::folder_grant_path::{FOLDER_INVITE_MAX_SECS, FOLDER_INVITE_MAX_USES, apply_folder_invite_policy, folder_grant_path_prefix};
+use super::folder_grant_path::{FOLDER_INVITE_MAX_SECS, FOLDER_INVITE_MAX_USES, folder_grant_path_prefix};
 
-/// Whether this server speaks folder roles (assumption 1). Folder roles need
-/// folder grants underneath them; a server claiming one without the other is
-/// read as not supporting roles.
-pub fn folder_roles_supported(caps: &ServerCapabilities) -> bool {
-    caps.folder_grants && caps.folder_grant_roles
+/// The roles a folder may be shared with: Viewer and Editor. `manager` is not
+/// a folder role (#475 refuses it). Kept in step with `FOLDER_ROLES` on the FE.
+pub const FOLDER_ROLES: [&str; 2] = ["reader", "writer"];
+
+/// Refuse any folder request to a server that does not know folder invites
+/// (assumption 1). Such a server ignores `path_prefix`, so the request would
+/// become a whole-drive invite; the user is told it is coming soon instead.
+pub fn require_server_knows_folder_invites(caps: &ServerCapabilities) -> Result<()> {
+    if caps.folder_grants_known {
+        Ok(())
+    } else {
+        Err(AppError::NotReady(NotReadyKind::FolderInvitesUnavailable))
+    }
 }
 
-/// The role a grant row names, read defensively (assumption 4): missing or
-/// blank is `reader`, and an unknown word degrades to `reader` too, never to
-/// management. Kept in step with `parseDriveRole` on the FE.
+/// The role a grant row names, read defensively (assumption 4): missing,
+/// blank or unknown is `reader`, and `manager` is too, never management.
+/// Kept in step with `parseDriveRole` on the FE.
 pub fn grant_role(raw: Option<&str>) -> String {
     match raw.map(str::trim) {
-        Some(role) if WIRE_ROLES.contains(&role) => role.to_string(),
+        Some(role) if FOLDER_ROLES.contains(&role) => role.to_string(),
         _ => "reader".to_string(),
     }
 }
 
-/// Resolve what a folder invite is minted as.
-///
-/// Without folder roles this is exactly the old policy: reader, one use, at
-/// most thirty days, whatever the caller asked for. With them (assumption 2)
-/// the role is the caller's (default `reader`), one use unless they ask for
-/// more, still at most thirty days, and a Manager invite is capped like a
-/// Manager drive invite.
-pub fn resolve_folder_invite_policy(roles: bool, role: Option<String>, expires_in_secs: u64, max_uses: Option<u32>) -> Result<(u64, u32, String)> {
-    if !roles {
-        let (secs, uses, role) = apply_folder_invite_policy(expires_in_secs);
-        return Ok((secs, uses, role.to_string()));
-    }
+/// A validated folder role: `reader` when omitted, `reader` or `writer`
+/// otherwise. A Manager folder invite is refused by name rather than sent.
+pub fn resolve_folder_role(role: Option<String>) -> Result<String> {
     let role = role.unwrap_or_else(|| "reader".to_string());
-    if !WIRE_ROLES.contains(&role.as_str()) {
-        return Err(AppError::Validation(format!(
-            "Unknown folder role: {role}. Expected one of reader, writer, manager."
-        )));
-    }
-    let secs = expires_in_secs.min(FOLDER_INVITE_MAX_SECS);
-    let uses = max_uses.unwrap_or(FOLDER_INVITE_MAX_USES).max(1);
-    let (secs, uses) = if role == "manager" {
-        (secs.min(MANAGER_INVITE_MAX_SECS), uses.min(MANAGER_INVITE_MAX_USES))
+    if FOLDER_ROLES.contains(&role.as_str()) {
+        Ok(role)
     } else {
-        (secs, uses)
-    };
-    Ok((secs, uses, role))
+        Err(AppError::Validation("A folder can be shared with Viewer or Editor access only.".into()))
+    }
 }
 
-/// Gate and normalise a folder email invite (assumption 3). Refused by name
-/// on a server without folder roles, where the route would 400 the field.
-pub fn require_folder_email_invites(caps: &ServerCapabilities, raw_path_prefix: &str) -> Result<String> {
-    if !folder_roles_supported(caps) {
-        return Err(AppError::Validation("Inviting to a folder by email needs a newer server.".into()));
-    }
-    folder_grant_path_prefix(raw_path_prefix)
+/// What a folder invite is minted as (assumption 2).
+#[derive(Debug, PartialEq, Eq)]
+pub struct FolderInvitePlan {
+    /// Drive-relative, never empty: an empty prefix would be the whole drive.
+    pub path_prefix: String,
+    pub role: String,
+    pub expires_in_secs: u64,
+    /// Always 1.
+    pub max_uses: u32,
 }
 
-/// Validate a role change for a folder grant holder.
-pub fn validate_grant_role_change(caps: &ServerCapabilities, role: &str) -> Result<()> {
-    if !folder_roles_supported(caps) {
-        return Err(AppError::Validation("Changing folder roles needs a newer server.".into()));
-    }
-    if !WIRE_ROLES.contains(&role) {
-        return Err(AppError::Validation(format!(
-            "Unknown folder role: {role}. Expected one of reader, writer, manager."
-        )));
-    }
-    Ok(())
+/// Plan a folder invite from the view-relative path the user picked.
+///
+/// `rooted_path` is the drive-relative path (already rooted at a grant when
+/// browsing one). An empty or illegal path is refused BEFORE any request, so
+/// a folder invite can never go out without a folder.
+pub fn plan_folder_invite(rooted_path: &str, role: Option<String>, expires_in_secs: u64) -> Result<FolderInvitePlan> {
+    let path_prefix = folder_grant_path_prefix(rooted_path)?;
+    let role = resolve_folder_role(role)?;
+    Ok(FolderInvitePlan {
+        path_prefix,
+        role,
+        expires_in_secs: expires_in_secs.min(FOLDER_INVITE_MAX_SECS),
+        max_uses: FOLDER_INVITE_MAX_USES,
+    })
 }
 
 /// Fill a missing or blank `role` on every `folder_grants[]` entry of a
@@ -144,110 +151,148 @@ pub fn default_missing_grant_roles(body: &str) -> String {
     if changed { value.to_string() } else { body.to_string() }
 }
 
-/// `PATCH /v1/drives/{folder_hash}/grants/{member_ss58}` with `{ role }`
-/// (assumption 5). `owner` is `Some` when a delegated manager calls.
-pub async fn http_change_folder_grant_role(
-    http: &reqwest::Client,
-    base_url: &str,
-    bearer: &str,
-    folder_hash: &str,
-    member_ss58: &str,
-    role: &str,
-    owner: Option<&str>,
-) -> Result<()> {
-    let mut url = reqwest::Url::parse(&format!(
-        "{}/v1/drives/{}/grants/{}",
-        base_url.trim_end_matches('/'),
-        folder_hash,
-        member_ss58
-    ))
-    .map_err(|e| AppError::Hcfs(format!("invalid grant-role URL: {e}")))?;
-    if let Some(owner) = owner {
-        url.query_pairs_mut().append_pair("owner", owner);
+/// Map a refused FOLDER invite mint (assumption 2). The server words these
+/// as `400 bad_request` with a message, so the message is matched exactly
+/// here, once, and the frontend dispatches on the structured kind.
+pub fn classify_folder_invite_refusal(status: reqwest::StatusCode, body: &str) -> Option<AppError> {
+    if status.as_u16() != 400 {
+        return None;
     }
-    let resp = http
-        .patch(url)
-        .header("Authorization", format!("Bearer {bearer}"))
-        .json(&serde_json::json!({ "role": role }))
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| AppError::Hcfs(format!("change-grant-role request failed: {e}")))?;
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(super::commands::classify_error_status(status, &body));
+    let envelope = bad_request_message(body)?;
+    match envelope.as_str() {
+        "folder invites are not enabled" => Some(AppError::NotReady(NotReadyKind::FolderInvitesUnavailable)),
+        "writer folder invites are not enabled" | "a folder invite is always a reader invite" => {
+            Some(AppError::NotReady(NotReadyKind::FolderEditorInvitesUnavailable))
+        }
+        _ => None,
     }
-    Ok(())
+}
+
+/// Map a refused folder EMAIL invite (assumption 3).
+pub fn classify_folder_email_refusal(status: reqwest::StatusCode, body: &str) -> Option<AppError> {
+    if status.as_u16() != 400 {
+        return None;
+    }
+    match bad_request_message(body)?.as_str() {
+        "folder invites cannot be mailed yet; mint a link instead" => Some(AppError::NotReady(NotReadyKind::FolderEmailInvitesUnavailable)),
+        _ => None,
+    }
+}
+
+/// The message of a `{"error":"bad_request","message":...}` body.
+fn bad_request_message(body: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        error: String,
+        message: String,
+    }
+    let env: Envelope = serde_json::from_str(body).ok()?;
+    (env.error == "bad_request").then_some(env.message)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::StatusCode;
 
-    fn caps(folder_grants: bool, roles: bool) -> ServerCapabilities {
-        ServerCapabilities {
-            folder_grants,
-            folder_grant_roles: roles,
-            ..ServerCapabilities::default()
-        }
+    fn body(message: &str) -> String {
+        serde_json::json!({ "error": "bad_request", "message": message }).to_string()
     }
 
     #[test]
-    fn roles_need_folder_grants_underneath() {
-        assert!(folder_roles_supported(&caps(true, true)));
-        assert!(!folder_roles_supported(&caps(true, false)));
-        assert!(!folder_roles_supported(&caps(false, true)));
+    fn a_folder_request_needs_a_server_that_knows_folder_invites() {
+        let old = ServerCapabilities::default();
+        assert!(matches!(
+            require_server_knows_folder_invites(&old),
+            Err(AppError::NotReady(NotReadyKind::FolderInvitesUnavailable))
+        ));
+        let off = ServerCapabilities {
+            folder_grants_known: true,
+            ..ServerCapabilities::default()
+        };
+        assert!(
+            require_server_knows_folder_invites(&off).is_ok(),
+            "off is refused BY the server, which is safe"
+        );
     }
 
     #[test]
     fn a_grant_role_degrades_to_reader() {
         assert_eq!(grant_role(Some("writer")), "writer");
-        assert_eq!(grant_role(Some("manager")), "manager");
+        assert_eq!(grant_role(Some("reader")), "reader");
+        assert_eq!(grant_role(Some("manager")), "reader", "manager is not a folder role");
         assert_eq!(grant_role(None), "reader");
         assert_eq!(grant_role(Some("  ")), "reader");
         assert_eq!(grant_role(Some("owner")), "reader", "never management by accident");
     }
 
     #[test]
-    fn without_roles_a_folder_invite_is_exactly_what_it_was() {
-        // Whatever the caller asks for, today's server gets reader / 1 / <=30d.
-        let (secs, uses, role) = resolve_folder_invite_policy(false, Some("manager".into()), 100 * 365 * 86_400, Some(50)).unwrap();
-        assert_eq!((secs, uses, role.as_str()), (FOLDER_INVITE_MAX_SECS, 1, "reader"));
+    fn a_folder_invite_is_viewer_or_editor_single_use_and_at_most_thirty_days() {
+        let plan = plan_folder_invite("/Clients/ACME/", Some("writer".into()), 3600).unwrap();
+        assert_eq!(
+            plan,
+            FolderInvitePlan {
+                path_prefix: "Clients/ACME".into(),
+                role: "writer".into(),
+                expires_in_secs: 3600,
+                max_uses: 1,
+            }
+        );
+        let plan = plan_folder_invite("Clients", None, 100 * 365 * 86_400).unwrap();
+        assert_eq!(plan.role, "reader", "Viewer unless asked");
+        assert_eq!(plan.expires_in_secs, FOLDER_INVITE_MAX_SECS, "folder invites never outlive 30 days");
+        assert!(
+            plan_folder_invite("Clients", Some("manager".into()), 3600).is_err(),
+            "manager is refused, not narrowed"
+        );
+        assert!(plan_folder_invite("Clients", Some("admin".into()), 3600).is_err());
+    }
+
+    /// The guard that keeps a folder share from ever becoming a whole-drive
+    /// invite: no folder, no request.
+    #[test]
+    fn a_folder_invite_without_a_folder_is_refused_before_any_request() {
+        for path in ["", "/", "//", "a/../b", "./a"] {
+            assert!(plan_folder_invite(path, None, 3600).is_err(), "{path:?} must not become a drive invite");
+        }
     }
 
     #[test]
-    fn with_roles_the_caller_picks_within_the_caps() {
-        let (secs, uses, role) = resolve_folder_invite_policy(true, Some("writer".into()), 3600, None).unwrap();
-        assert_eq!((secs, uses, role.as_str()), (3600, 1, "writer"), "single use unless asked");
-        let (_, uses, _) = resolve_folder_invite_policy(true, Some("reader".into()), 3600, Some(5)).unwrap();
-        assert_eq!(uses, 5);
-        let (secs, _, _) = resolve_folder_invite_policy(true, None, 100 * 365 * 86_400, None).unwrap();
-        assert_eq!(secs, FOLDER_INVITE_MAX_SECS, "folder invites never outlive 30 days");
-        let (secs, uses, role) = resolve_folder_invite_policy(true, Some("manager".into()), 7 * 86_400, Some(9)).unwrap();
-        assert_eq!((secs, uses, role.as_str()), (MANAGER_INVITE_MAX_SECS, 1, "manager"));
-        assert!(resolve_folder_invite_policy(true, Some("admin".into()), 3600, None).is_err());
-        let (_, uses, _) = resolve_folder_invite_policy(true, None, 3600, Some(0)).unwrap();
-        assert_eq!(uses, 1, "zero uses is never sent");
+    fn folder_invite_refusals_map_by_exact_message() {
+        let bad = StatusCode::BAD_REQUEST;
+        assert!(matches!(
+            classify_folder_invite_refusal(bad, &body("folder invites are not enabled")),
+            Some(AppError::NotReady(NotReadyKind::FolderInvitesUnavailable))
+        ));
+        for msg in ["writer folder invites are not enabled", "a folder invite is always a reader invite"] {
+            assert!(matches!(
+                classify_folder_invite_refusal(bad, &body(msg)),
+                Some(AppError::NotReady(NotReadyKind::FolderEditorInvitesUnavailable))
+            ));
+        }
+        // Anything else falls through to the generic mapping.
+        assert!(classify_folder_invite_refusal(bad, &body("a folder invite is single-use")).is_none());
+        assert!(
+            classify_folder_invite_refusal(bad, &body("folder invites are not enabled yet")).is_none(),
+            "exact, not substring"
+        );
+        assert!(classify_folder_invite_refusal(StatusCode::FORBIDDEN, &body("folder invites are not enabled")).is_none());
+        let other_slug = serde_json::json!({"error":"forbidden","message":"folder invites are not enabled"}).to_string();
+        assert!(classify_folder_invite_refusal(bad, &other_slug).is_none());
     }
 
     #[test]
-    fn folder_email_invites_need_roles_and_a_folder() {
-        assert!(require_folder_email_invites(&caps(true, false), "Clients").is_err());
-        assert_eq!(require_folder_email_invites(&caps(true, true), "/Clients/ACME/").unwrap(), "Clients/ACME");
-        assert!(require_folder_email_invites(&caps(true, true), "").is_err(), "never the whole drive");
-    }
-
-    #[test]
-    fn a_role_change_needs_roles_and_a_known_role() {
-        assert!(validate_grant_role_change(&caps(true, false), "writer").is_err());
-        assert!(validate_grant_role_change(&caps(true, true), "writer").is_ok());
-        assert!(validate_grant_role_change(&caps(true, true), "owner").is_err());
+    fn a_refused_folder_email_maps_to_coming_soon() {
+        assert!(matches!(
+            classify_folder_email_refusal(StatusCode::BAD_REQUEST, &body("folder invites cannot be mailed yet; mint a link instead")),
+            Some(AppError::NotReady(NotReadyKind::FolderEmailInvitesUnavailable))
+        ));
+        assert!(classify_folder_email_refusal(StatusCode::BAD_REQUEST, &body("email is invalid")).is_none());
     }
 
     #[test]
     fn missing_grant_roles_read_as_reader_and_nothing_else_moves() {
-        let body = r#"{"memberships":[{"role":"writer"}],"folder_grants":[{"path_prefix":"a"},{"path_prefix":"b","role":""},{"path_prefix":"c","role":"manager"},{"path_prefix":"d","role":null}]}"#;
+        let body = r#"{"memberships":[{"role":"writer"}],"folder_grants":[{"path_prefix":"a"},{"path_prefix":"b","role":""},{"path_prefix":"c","role":"writer"},{"path_prefix":"d","role":null}]}"#;
         let fixed: serde_json::Value = serde_json::from_str(&default_missing_grant_roles(body)).unwrap();
         let roles: Vec<&str> = fixed["folder_grants"]
             .as_array()
@@ -255,7 +300,7 @@ mod tests {
             .iter()
             .map(|g| g["role"].as_str().unwrap())
             .collect();
-        assert_eq!(roles, ["reader", "reader", "manager", "reader"]);
+        assert_eq!(roles, ["reader", "reader", "writer", "reader"]);
         assert_eq!(fixed["memberships"][0]["role"], "writer", "whole-drive rows are untouched");
 
         let untouched = r#"{"memberships":[]}"#;

@@ -89,8 +89,8 @@ pub(crate) async fn upload_target_identity(
 ///
 /// A drive's keys all descend from its folder mnemonic, and anyone with
 /// access to the WHOLE drive holds that phrase. A folder grant holder holds
-/// less: only the folder's DERIVED file key (folder roles, assumed until HCFS
-/// publishes them; see `shared_drives::folder_roles`, assumption 7). The
+/// less: only the folder's DERIVED file key (folder roles, following HCFS
+/// #475; see `shared_drives::folder_roles`, assumption 7). The
 /// derived key is `seed(phrase)[..32]`, which is both the file-encryption key
 /// and the manifest signing secret, so a holder can read and write inside the
 /// folder but can never produce the drive's entropy for a whole-drive invite.

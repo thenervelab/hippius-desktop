@@ -211,8 +211,8 @@ pub fn shared_drive_browse_identity(label: &str) -> Option<DriveIdentity> {
 }
 
 /// Prefix marking a FOLDER GRANT browse label: one folder of somebody else's
-/// drive, browsed rooted at that folder (folder roles, assumed until HCFS
-/// publishes them; see `shared_drives::folder_roles`). Mirrors
+/// drive, browsed rooted at that folder (folder roles, following HCFS #475;
+/// see `shared_drives::folder_roles`). Mirrors
 /// `FOLDER_GRANT_LABEL_PREFIX` in `sharedDriveLabel.ts`.
 const GRANT_BROWSE_PREFIX: &str = "grant:";
 

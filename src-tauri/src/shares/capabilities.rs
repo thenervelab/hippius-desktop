@@ -60,11 +60,31 @@ pub struct ServerCapabilities {
     /// (hcfs #458). Absent on older servers, which read that mint under the
     /// caller's own account and find nothing.
     pub member_folder_shares: bool,
-    /// Folder grants carry the full role set (Viewer, Editor, Manager)
-    /// instead of read-only. NOT PUBLISHED by HCFS yet: see
-    /// `shared_drives::folder_roles` for the assumed contract. Absent or
-    /// false keeps folder grants reader-only and single-use, exactly as today.
-    pub folder_grant_roles: bool,
+    /// Writer (Editor) folder invites are accepted
+    /// (`HCFS_FEATURE_FOLDER_GRANT_WRITES`, HCFS #475). A HINT only: the
+    /// desktop still sends an Editor folder invite without it and turns the
+    /// server's refusal into "coming soon", so the option lights up on its
+    /// own the day the server turns it on. See `shared_drives::folder_roles`.
+    pub folder_grant_writes: bool,
+    /// Whether the response carried a `folder_grants` key AT ALL, true or
+    /// false. Not a server field: set by [`parse_capabilities`].
+    ///
+    /// A server that knows folder invites refuses one it cannot honour. One
+    /// that predates them ignores `path_prefix` and mints (or MAILS) a
+    /// whole-drive invite in its place, so no folder request is sent to a
+    /// server that does not know the key. Never serialized to the FE.
+    #[serde(skip)]
+    pub folder_grants_known: bool,
+}
+
+/// Parse a `/v1/capabilities` body, recording whether the server knows about
+/// folder grants at all (see [`ServerCapabilities::folder_grants_known`]).
+pub fn parse_capabilities(body: &str) -> Result<ServerCapabilities> {
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("capabilities parse failed: {e}")))?;
+    let known = value.get("folder_grants").is_some_and(serde_json::Value::is_boolean);
+    let mut caps: ServerCapabilities = serde_json::from_value(value).map_err(|e| AppError::Hcfs(format!("capabilities parse failed: {e}")))?;
+    caps.folder_grants_known = known;
+    Ok(caps)
 }
 
 /// Hit `<base>/v1/capabilities` once. 404 collapses to a
@@ -90,9 +110,8 @@ async fn fetch_one(client: &reqwest::Client, base: &str) -> Result<ServerCapabil
             body: resp.text().await.unwrap_or_default(),
         });
     }
-    resp.json::<ServerCapabilities>()
-        .await
-        .map_err(|e| AppError::Hcfs(format!("capabilities parse failed: {e}")))
+    let body = resp.text().await.map_err(|e| AppError::Hcfs(format!("capabilities read failed: {e}")))?;
+    parse_capabilities(&body)
 }
 
 /// Fetch the capabilities of the configured HCFS server for this
@@ -166,7 +185,7 @@ mod tests {
     #[test]
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_roles":true}"#,
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true}"#,
         )
         .expect("parse");
         assert!(caps.shares);
@@ -175,7 +194,7 @@ mod tests {
         assert!(caps.share_owner_wrap);
         assert!(caps.folder_grants);
         assert!(caps.member_folder_shares);
-        assert!(caps.folder_grant_roles);
+        assert!(caps.folder_grant_writes);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -185,7 +204,7 @@ mod tests {
         assert_eq!(
             keys,
             [
-                "folder_grant_roles",
+                "folder_grant_writes",
                 "folder_grants",
                 "folder_share_revoke_by_hash",
                 "folder_shares",
@@ -203,7 +222,7 @@ mod tests {
         assert!(!old.share_owner_wrap);
         assert!(!old.folder_grants);
         assert!(!old.member_folder_shares, "an older server never claims member folder shares");
-        assert!(!old.folder_grant_roles, "folder roles stay off until a server says otherwise");
+        assert!(!old.folder_grant_writes, "writer folder invites stay off until a server says otherwise");
     }
 
     /// A pre-folder-grants server omits the field; that must read as unavailable,
@@ -212,5 +231,19 @@ mod tests {
     fn missing_folder_grants_field_defaults_to_false() {
         let caps: ServerCapabilities = serde_json::from_str(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
         assert!(!caps.folder_grants);
+    }
+
+    /// A server that predates folder invites ignores `path_prefix` and would
+    /// mint a whole-drive invite; one that knows them and has them off
+    /// refuses. Only the key's presence tells the two apart.
+    #[test]
+    fn folder_grants_known_tracks_the_key_not_its_value() {
+        let old = parse_capabilities(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
+        assert!(!old.folder_grants_known, "no key: the server predates folder invites");
+        let off = parse_capabilities(r#"{"shares":true,"folder_grants":false}"#).expect("parse");
+        assert!(off.folder_grants_known && !off.folder_grants, "key present and off: it refuses");
+        let on = parse_capabilities(r#"{"folder_grants":true,"folder_grant_writes":false}"#).expect("parse");
+        assert!(on.folder_grants_known && on.folder_grants && !on.folder_grant_writes);
+        assert!(parse_capabilities("not json").is_err());
     }
 }

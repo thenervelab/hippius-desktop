@@ -294,6 +294,13 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
         owner,
         path_prefix,
     } = mint;
+    // `Some("")` would read as a folder invite here and as no folder at all
+    // on the wire. Refused before anything is sent.
+    if path_prefix.is_some_and(|p| p.trim_matches('/').is_empty()) {
+        return Err(AppError::Validation(
+            "A folder invite needs a folder path; it cannot cover the whole drive.".into(),
+        ));
+    }
     let req = CreateDriveInviteRequest {
         folder_hash: folder_hash.to_string(),
         // A MANAGER mints for the drive's OWNER, and names them here rather
@@ -321,6 +328,13 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
+        // A folder mint's refusals ("coming soon") are told apart by message;
+        // the folder module owns that mapping.
+        if path_prefix.is_some()
+            && let Some(err) = super::folder_roles::classify_folder_invite_refusal(status, &body)
+        {
+            return Err(err);
+        }
         return Err(classify_error_status(status, &body));
     }
     // Prefer a local shape: hcfs-shared's `CreateDriveInviteResponse` may
@@ -335,25 +349,22 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
         path_prefix: Option<String>,
     }
     let parsed: MintBody = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("create-invite response did not parse: {e}")))?;
-    // A folder mint MUST see its path_prefix echoed. An older server that
-    // ignored the field minted a whole-drive invite; putting a folder key
-    // (or drive entropy) in that link would be wrong both ways.
-    if let Some(asked) = path_prefix {
-        match parsed.path_prefix.as_deref() {
-            Some(echoed) if echoed == asked => {}
-            _ => {
-                return Err(AppError::Validation(
-                    "This server minted a whole-drive invite instead of a folder invite. \
-                     Folder sharing needs a newer HCFS build."
-                        .into(),
-                ));
-            }
-        }
-    }
     let invite_id = parsed
         .invite_id
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| super::invite_token::invite_id_for_token(&parsed.invite_token));
+    // A folder mint MUST see its path_prefix echoed. A server that ignored the
+    // field minted a WHOLE-DRIVE invite: its token never leaves this function,
+    // it is revoked on the spot (best effort), and the user is told folder
+    // sharing is coming soon. Never handed back as if it were the folder's.
+    if let Some(asked) = path_prefix
+        && parsed.path_prefix.as_deref() != Some(asked)
+    {
+        if let Err(e) = http_revoke_invite(http, base_url, bearer, folder_hash, &invite_id, owner).await {
+            warn!(error = %e, "could not revoke a whole-drive invite minted in place of a folder invite");
+        }
+        return Err(AppError::NotReady(NotReadyKind::FolderInvitesUnavailable));
+    }
     Ok(MintedInvite {
         token: parsed.invite_token,
         invite_id,
@@ -1072,18 +1083,25 @@ pub(crate) fn pick_member_grant<'a>(
         .ok_or_else(|| AppError::Validation("You are no longer a member of this drive.".into()))
 }
 
-/// Mint an invite link for an OWN drive (or a folder of it).
+/// What an invite link admits to.
+enum InviteScope {
+    /// The whole drive. `max_uses` is the caller's (policy default otherwise).
+    Drive { max_uses: Option<u32> },
+    /// One folder, by its VIEW-relative path (rooted at a grant when the
+    /// label browses one). Never empty once planned.
+    Folder { path: String },
+}
+
+/// Mint an invite link for a WHOLE drive this account owns or manages.
 ///
 /// The link is assembled here, in Rust: the invite token and the fragment
-/// key exist nowhere else — not in logs, not in another IPC response —
+/// key exist nowhere else -- not in logs, not in another IPC response --
 /// and the FE only copies the finished URL to the clipboard.
 ///
-/// When `path_prefix` is set this is a **folder invite**: always reader /
-/// single-use / ≤30 days, the fragment carries the **derived file key**
-/// (never drive entropy), and a response that does not echo the prefix is
-/// refused. Gated on `capabilities.folder_grants`.
+/// A folder is never shared through this command: that is
+/// [`create_folder_invite`], which cannot send a request without a folder.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)] // IPC surface: invite fields + optional folder path_prefix
+#[allow(clippy::too_many_arguments)] // IPC surface: invite fields + the drive target
 pub async fn create_drive_invite(
     app: tauri::AppHandle,
     label: String,
@@ -1092,29 +1110,88 @@ pub async fn create_drive_invite(
     role: Option<String>,
     owner_ss58: Option<String>,
     folder_hash: Option<String>,
-    path_prefix: Option<String>,
+) -> Result<DriveInviteLink> {
+    // A granted folder is not the drive; minting the drive from inside one
+    // would hand out more than this account holds.
+    if crate::sync::identity::folder_grant_browse(&label).is_some() {
+        return Err(AppError::Validation("From a shared folder you can only share that folder.".into()));
+    }
+    let state = app.state::<AppState>();
+    mint_invite_link(
+        &state,
+        &label,
+        owner_ss58,
+        folder_hash,
+        expires_in_secs,
+        role,
+        InviteScope::Drive { max_uses },
+    )
+    .await
+}
+
+/// Mint a FOLDER invite link: one person, one folder, at most 30 days.
+///
+/// `path_prefix` is required and validated before any request, so a folder
+/// share can never go out as a whole-drive invite; the fragment carries the
+/// folder's DERIVED file key (never drive entropy), and a response that does
+/// not echo the folder is revoked and refused (`folder_roles`). Refusals the
+/// server words as "not enabled" come back as structured "coming soon" kinds.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC surface: invite fields + the drive target
+pub async fn create_folder_invite(
+    app: tauri::AppHandle,
+    label: String,
+    path_prefix: String,
+    expires_in_secs: Option<u64>,
+    role: Option<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
 ) -> Result<DriveInviteLink> {
     let state = app.state::<AppState>();
-    let ctx = api_ctx(&state).await?;
-    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    mint_invite_link(
+        &state,
+        &label,
+        owner_ss58,
+        folder_hash,
+        expires_in_secs,
+        role,
+        InviteScope::Folder { path: path_prefix },
+    )
+    .await
+}
 
-    // A folder Manager browses rooted at their grant, so the path the view
-    // sends is relative to it; `rooted_path` puts the grant in front (and is
-    // the identity for an ordinary drive).
-    let folder_prefix = match path_prefix {
-        Some(raw) => Some(super::folder_grant_path::folder_grant_path_prefix(&crate::sync::identity::rooted_path(
-            &label, &raw,
-        ))?),
-        None => None,
-    };
-    let mut folder_roles = false;
-    if folder_prefix.is_some() {
-        let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
-        if !caps.folder_grants {
-            return Err(AppError::Validation("Folder sharing is not enabled on this server.".into()));
+/// The one mint funnel behind both invite commands.
+async fn mint_invite_link(
+    state: &AppState,
+    label: &str,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+    expires_in_secs: Option<u64>,
+    role: Option<String>,
+    scope: InviteScope,
+) -> Result<DriveInviteLink> {
+    let ctx = api_ctx(state).await?;
+    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, label, owner_ss58, folder_hash).await?;
+
+    // Resolve the policy BEFORE touching the key or the network: a folder
+    // with no path is refused here, not sent.
+    let (secs, _) = resolve_invite_policy(expires_in_secs, None);
+    let (folder_prefix, expires_in_secs, max_uses, role_owned) = match scope {
+        InviteScope::Folder { path } => {
+            // `rooted_path` puts a browsed grant in front (identity for an
+            // ordinary drive).
+            let plan = super::folder_roles::plan_folder_invite(&crate::sync::identity::rooted_path(label, &path), role, secs)?;
+            let caps = crate::shares::capabilities::fetch_capabilities(state, &ctx.account_id).await?;
+            super::folder_roles::require_server_knows_folder_invites(&caps)?;
+            (Some(plan.path_prefix), plan.expires_in_secs, plan.max_uses, plan.role)
         }
-        folder_roles = super::folder_roles::folder_roles_supported(&caps);
-    }
+        InviteScope::Drive { max_uses } => {
+            let (secs, uses) = resolve_invite_policy(expires_in_secs, max_uses);
+            let role = resolve_invite_role(role)?;
+            let (secs, uses) = apply_manager_invite_caps(&role, secs, uses);
+            (None, secs, uses, role)
+        }
+    };
 
     // Fragment key material. Whole-drive invites carry folder-mnemonic
     // ENTROPY; folder invites carry the DERIVED file key (`seed[..32]`).
@@ -1123,21 +1200,9 @@ pub async fn create_drive_invite(
     // a folder invite carries and never enough for a whole-drive one.
     let fragment_key: Zeroizing<[u8; 32]> = {
         let _recovery_guard = state.recovery_lock.lock().await;
-        let mnemonic = crate::sync::remote::session_mnemonic(&state)?;
-        let material = crate::sync::remote::drive_key_material_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await?;
+        let mnemonic = crate::sync::remote::session_mnemonic(state)?;
+        let material = crate::sync::remote::drive_key_material_for_label(state, &ctx.account_id, label, &mnemonic, &identity).await?;
         sealed_invite_payload(material, folder_prefix.is_some())?
-    };
-
-    let (expires_in_secs, max_uses, role_owned) = if folder_prefix.is_some() {
-        // Reader-only and single-use unless the server speaks folder roles
-        // (`folder_roles`, assumed until HCFS publishes them).
-        let (secs, _) = resolve_invite_policy(expires_in_secs, None);
-        super::folder_roles::resolve_folder_invite_policy(folder_roles, role, secs, max_uses)?
-    } else {
-        let (secs, uses) = resolve_invite_policy(expires_in_secs, max_uses);
-        let role = resolve_invite_role(role)?;
-        let (secs, uses) = apply_manager_invite_caps(&role, secs, uses);
-        (secs, uses, role)
     };
 
     let http = state.api_client.clone();
@@ -1336,42 +1401,6 @@ pub async fn replace_folder_grants(
         "Folder grants replaced"
     );
     Ok(resp.path_prefixes)
-}
-
-/// Change a folder grant holder's role (Viewer, Editor, Manager).
-///
-/// Folder roles are assumed until HCFS publishes them
-/// (`shared_drives::folder_roles`): refused by name on a server without the
-/// capability, so the UI can say why instead of surfacing a 404.
-#[tauri::command]
-pub async fn change_folder_grant_role(
-    app: tauri::AppHandle,
-    label: String,
-    member_ss58: String,
-    role: String,
-    owner_ss58: Option<String>,
-    folder_hash: Option<String>,
-) -> Result<()> {
-    let state = app.state::<AppState>();
-    let ctx = api_ctx(&state).await?;
-    let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
-    let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
-    super::folder_roles::validate_grant_role_change(&caps, &role)?;
-    if member_ss58 == ctx.account_id {
-        return Err(AppError::Validation("You cannot change your own role. Leave the folder instead.".into()));
-    }
-    super::folder_roles::http_change_folder_grant_role(
-        &state.api_client.clone(),
-        &ctx.base_url,
-        &ctx.bearer,
-        &identity.wire_folder_hash,
-        &member_ss58,
-        &role,
-        delegated_owner(&identity),
-    )
-    .await?;
-    info!(label = %label, folder_hash = %identity.wire_folder_hash, role = %role, "Folder grant role changed");
-    Ok(())
 }
 
 /// `PUT /v1/drives/{folder_hash}/grants/{member_ss58}`.
@@ -1685,7 +1714,9 @@ pub(crate) fn resolve_email_invite(email: &str, role: Option<String>, expires_in
 ///
 /// Three outcomes need their own words, each matched on status or slug and
 /// never on the English message:
-/// - 503 `email_invites_unavailable`: no mail service; the FE hides the option.
+/// - 503 `email_invites_unavailable`: no mail service; the FE says email
+///   invites are coming soon.
+/// - 400 on a folder: folder invites cannot be mailed yet (`folder_roles`).
 /// - 429 `rate_limited`: too many invitations; say how long to wait.
 /// - 502 `mail_send_failed`: the server could not send it and has already
 ///   revoked the invite, so trying again is safe and is what we say.
@@ -1701,6 +1732,9 @@ fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: 
     let code = status.as_u16();
     if code == 503 || envelope.error == "email_invites_unavailable" {
         return AppError::NotReady(NotReadyKind::EmailInvitesUnavailable);
+    }
+    if let Some(err) = super::folder_roles::classify_folder_email_refusal(status, body) {
+        return err;
     }
     if code == 429 || envelope.error == "rate_limited" {
         let wait = envelope.retry_after_secs.or(retry_after_header);
@@ -1738,7 +1772,7 @@ fn rate_limited_message(retry_after_secs: Option<u64>) -> String {
 }
 
 /// The body of `POST /v1/drive-invites/email`. `path_prefix` is only ever
-/// set by the folder-roles path (`folder_roles`), behind its capability.
+/// set for a folder (`folder_roles`), and only to a server that knows it.
 #[derive(Debug, Serialize)]
 pub struct EmailInviteBody<'a> {
     pub folder_hash: &'a str,
@@ -1806,14 +1840,18 @@ pub async fn email_drive_invite(
     let ctx = api_ctx(&state).await?;
     let identity = resolve_manage_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
-    // A folder email invite is part of folder roles (assumed until HCFS
-    // publishes them). The server refuses `path_prefix` on this route today,
-    // so it is only sent once the capability says the server knows it.
+    // A folder email invite (`folder_roles`, assumption 3). The server
+    // refuses `path_prefix` on this route today; the request is still sent so
+    // it works the day that changes, and the refusal reads "coming soon". A
+    // server that does not know folder invites would ignore the field and
+    // mail a WHOLE-DRIVE invite, so nothing is sent to one.
     let folder_prefix = match path_prefix {
         Some(raw) => {
-            let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
             let relative = crate::sync::identity::rooted_path(&label, &raw);
-            Some(super::folder_roles::require_folder_email_invites(&caps, &relative)?)
+            let prefix = super::folder_grant_path::folder_grant_path_prefix(&relative)?;
+            let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
+            super::folder_roles::require_server_knows_folder_invites(&caps)?;
+            Some(prefix)
         }
         None => None,
     };

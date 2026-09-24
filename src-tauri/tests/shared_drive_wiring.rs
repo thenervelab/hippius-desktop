@@ -202,7 +202,7 @@ fn leave_shared_drive_always_passes_the_owner_param() {
 fn management_commands_route_through_a_named_gate() {
     let src = shared_drive_commands_src();
     for command in [
-        "pub async fn create_drive_invite(",
+        "async fn mint_invite_link(",
         "pub async fn list_drive_members(",
         "pub async fn remove_drive_member(",
         "pub async fn change_drive_member_role(",
@@ -230,11 +230,44 @@ fn management_commands_route_through_a_named_gate() {
 #[test]
 fn create_drive_invite_seals_the_token_back() {
     let src = shared_drive_commands_src();
-    let body = fn_body(&src, "pub async fn create_drive_invite(");
+    let body = fn_body(&src, "async fn mint_invite_link(");
     assert!(
         body.contains("seal_invite_token") && body.contains("http_put_sealed_token"),
         "create_drive_invite must park the sealed token so the Links tab can rebuild URLs"
     );
+}
+
+/// Both invite commands mint through the ONE funnel, so the gates above hold
+/// for folder invites too, and sharing a folder can never be a whole-drive
+/// invite: the folder command's path is required (not an `Option`) and is
+/// planned, which refuses an empty one, before any request goes out.
+#[test]
+fn a_folder_invite_can_never_go_out_as_a_drive_invite() {
+    let src = shared_drive_commands_src();
+    let drive = fn_body(&src, "pub async fn create_drive_invite(");
+    let folder = fn_body(&src, "pub async fn create_folder_invite(");
+    assert!(drive.contains("mint_invite_link(") && drive.contains("InviteScope::Drive"));
+    assert!(folder.contains("mint_invite_link(") && folder.contains("InviteScope::Folder"));
+    assert!(
+        !drive.contains("path_prefix"),
+        "the drive command takes no folder: one command, one kind of invite"
+    );
+
+    let sig_start = src.find("pub async fn create_folder_invite(").expect("folder command");
+    let sig = &src[sig_start..sig_start + src[sig_start..].find('{').expect("body")];
+    assert!(sig.contains("path_prefix: String,"), "the folder is required, never optional");
+
+    let funnel = fn_body(&src, "async fn mint_invite_link(");
+    let plan = funnel.find("plan_folder_invite(").expect("the folder is planned");
+    let request = funnel.find("http_create_invite(").expect("then minted");
+    assert!(plan < request, "the folder path is validated before any request");
+    assert!(
+        funnel.contains("require_server_knows_folder_invites"),
+        "a server that would ignore the folder is never sent one"
+    );
+    // The same for a MAILED folder invite, which has no echo to check.
+    let email = fn_body(&src, "pub async fn email_drive_invite(");
+    assert!(email.contains("require_server_knows_folder_invites"));
 }
 
 /// Opening sealed tokens on list is what puts a copyable URL on each Links
@@ -474,7 +507,7 @@ fn revoked_latch_clears_ride_the_existing_teardown_edges() {
 /// refactored away.
 #[test]
 fn a_delegated_mint_takes_the_owners_sealed_folder_key() {
-    let body = fn_body(&shared_drive_commands_src(), "pub async fn create_drive_invite");
+    let body = fn_body(&shared_drive_commands_src(), "async fn mint_invite_link(");
 
     assert!(
         body.contains("drive_key_material_for_label"),
@@ -513,7 +546,7 @@ fn every_management_command_passes_the_delegated_owner() {
         "pub async fn revoke_drive_invite",
         "pub async fn change_drive_member_role",
         "pub async fn remove_drive_member",
-        "pub async fn create_drive_invite",
+        "async fn mint_invite_link(",
         "pub async fn email_drive_invite",
         "pub async fn email_invites_available",
         "pub async fn approve_email_invite",
@@ -539,7 +572,7 @@ fn management_commands_admit_a_delegated_manager() {
         "pub async fn list_drive_invites",
         "pub async fn revoke_drive_invite",
         "pub async fn change_drive_member_role",
-        "pub async fn create_drive_invite",
+        "async fn mint_invite_link(",
     ] {
         let body = fn_body(&src, sig);
         assert!(

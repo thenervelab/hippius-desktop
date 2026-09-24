@@ -14,8 +14,6 @@ use unicode_normalization::UnicodeNormalization;
 pub const FOLDER_INVITE_MAX_SECS: u64 = 30 * 24 * 60 * 60;
 /// Folder invites are always single-use.
 pub const FOLDER_INVITE_MAX_USES: u32 = 1;
-/// Folder invites are always reader.
-pub const FOLDER_INVITE_ROLE: &str = "reader";
 
 /// Normalize and validate an untrusted drive-relative folder path into the
 /// `path_prefix` a folder invite / grant uses.
@@ -61,11 +59,6 @@ pub fn prefix_covers(granted: &str, path: &str) -> bool {
     path == granted || path.strip_prefix(granted).is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// Clamp invite policy for a folder mint: always reader / 1 use / ≤30 days.
-pub fn apply_folder_invite_policy(expires_in_secs: u64) -> (u64, u32, &'static str) {
-    (expires_in_secs.min(FOLDER_INVITE_MAX_SECS), FOLDER_INVITE_MAX_USES, FOLDER_INVITE_ROLE)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,15 +101,5 @@ mod tests {
         assert!(!prefix_covers("Trip", "Trip Photos"), "segment boundary, not a string prefix");
         assert!(!prefix_covers("Clients/ACME", ""), "never the whole drive");
         assert!(!prefix_covers("", "anything"), "an empty grant covers nothing");
-    }
-
-    #[test]
-    fn folder_invite_policy_clamps() {
-        let (secs, uses, role) = apply_folder_invite_policy(100 * 365 * 24 * 3600);
-        assert_eq!(secs, FOLDER_INVITE_MAX_SECS);
-        assert_eq!(uses, 1);
-        assert_eq!(role, "reader");
-        let (secs, _, _) = apply_folder_invite_policy(3600);
-        assert_eq!(secs, 3600);
     }
 }
