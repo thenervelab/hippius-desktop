@@ -66,6 +66,7 @@ import {
   useRowChanges,
 } from "./share-dialog/PeopleWithAccessSection";
 import { shareAccessApiFor, type ShareAccessApi } from "./share-dialog/shareAccessApi";
+import { useReloadOnShareDevToolsChange } from "./share-dialog/shareDevToolsSettings";
 import { FOLDER_ACCESS_HINT, SHARED_DRIVES_UNAVAILABLE_COPY } from "./share-dialog/shareDialogState";
 import { driveDisplayName, findMembership } from "./share-dialog/ShareDialog";
 import { useAccessPanel, type AccessPanelState } from "./access-panel/useAccessPanel";
@@ -181,9 +182,11 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
     [target.ownerSs58, target.folderHash],
   );
 
-  // Real commands, or the dev-only preview fixture; decided once per open.
+  // Real commands, or (dev and staging only) the Share dev tools' fake data,
+  // which the API decides per call; the list starts over when those change.
   const [api] = useState<ShareAccessApi>(() => shareAccessApiFor(folder));
   const { state, reload, retry } = useAccessPanel({ api, label: target.label, pathPrefix, target: driveTarget });
+  useReloadOnShareDevToolsChange(retry);
 
   // The Share dialog bumps this on every invite or link it makes.
   const invitesVersion = useAtomValue(driveInvitesVersionAtom);

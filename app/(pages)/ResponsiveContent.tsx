@@ -11,6 +11,8 @@ import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
 import ShareDrivePanel from "../components/page-sections/drive/ShareDrivePanel";
 import ShareDialog from "../components/page-sections/drive/share-dialog/ShareDialog";
+import ShareDevTools from "../components/page-sections/drive/share-dialog/ShareDevTools";
+import { SHARE_FIXTURE_AVAILABLE } from "../components/page-sections/drive/share-dialog/shareDevToolsSettings";
 
 /**
  * Distance the content's left margin changes between the expanded and collapsed
@@ -127,6 +129,8 @@ export default function ResponsiveContent({
       <FileDetailsPanel />
       <ShareDrivePanel />
       <ShareDialog />
+      {/* Dev and staging builds only; false at build time elsewhere. */}
+      {SHARE_FIXTURE_AVAILABLE ? <ShareDevTools /> : null}
     </div>
   );
 }

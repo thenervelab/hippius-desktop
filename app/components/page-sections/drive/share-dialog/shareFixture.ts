@@ -86,7 +86,7 @@ export function fakeSs58(i: number): string {
 function slug(name: string): string {
   return name
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z]+/g, ".")
     .replace(/^\.|\.$/g, "");
@@ -259,7 +259,15 @@ export function fixtureShareAccess(store: FixtureStore, folder: boolean): ShareA
   return {
     ownerSs58: store.ownerSs58,
     ownerIsYou: true,
-    members: folder ? [] : store.members.map(({ createdAt: _createdAt, ...m }) => m),
+    members: folder
+      ? []
+      : store.members.map((m) => ({
+          memberSs58: m.memberSs58,
+          memberName: m.memberName,
+          memberEmail: m.memberEmail,
+          role: m.role,
+          isYou: m.isYou,
+        })),
     folderHolders: folder
       ? store.holders.map((h) => ({
           memberSs58: h.memberSs58,

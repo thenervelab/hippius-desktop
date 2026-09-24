@@ -42,6 +42,7 @@ import { GeneralAccessSection } from "./GeneralAccessSection";
 import { NotEntitledNotice } from "./SectionNoticeView";
 import { useShareAccess } from "./useShareAccess";
 import { shareAccessApiFor } from "./shareAccessApi";
+import { useReloadOnShareDevToolsChange } from "./shareDevToolsSettings";
 import { peopleHaveAccess } from "./shareDialogState";
 
 const DIVIDER = <hr className="my-5 border-grey-80 dark:border-white/10" />;
@@ -83,7 +84,8 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
   const emailOffered = !folder || folderRoles;
   const blocked = planIncludesSharing === false;
 
-  // Real commands, or the dev-only preview fixture; decided once per open.
+  // Real commands, or (dev and staging only) the Share dev tools' fake data,
+  // which the API decides per call; the list starts over when those change.
   const [api] = useState(() => shareAccessApiFor(folder));
   const access = useShareAccess({
     api,
@@ -96,6 +98,10 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
   // Every change reports here: the drive list's badge and an open Links tab
   // pick it up without a reopen, and the people list reloads in place.
   const { reload, retry } = access;
+  const restart = useCallback(() => {
+    if (!blocked) retry();
+  }, [blocked, retry]);
+  useReloadOnShareDevToolsChange(restart);
   const onChanged = useCallback(() => {
     void invalidateOwnedDriveSharing(queryClient);
     bumpInvites((n) => n + 1);

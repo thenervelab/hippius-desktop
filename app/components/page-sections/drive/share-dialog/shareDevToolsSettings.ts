@@ -10,6 +10,7 @@
 // Pure apart from the storage and the window event, so the gate, the presets
 // and the clamping are tested without a render.
 
+import { useEffect } from "react";
 import { enabledFrom } from "@/app/lib/buildChannel";
 
 /** Dev and staging builds only; false at build time on beta and production. */
@@ -218,4 +219,13 @@ export function subscribeShareDevSettings(onChange: () => void): () => void {
   if (!SHARE_FIXTURE_AVAILABLE || typeof window === "undefined") return () => {};
   window.addEventListener(SHARE_DEVTOOLS_EVENT, onChange);
   return () => window.removeEventListener(SHARE_DEVTOOLS_EVENT, onChange);
+}
+
+/**
+ * Start a surface over from its skeleton whenever the dev tools change, so a
+ * Share dialog or panel already open follows them. Does nothing on a build
+ * without the tools.
+ */
+export function useReloadOnShareDevToolsChange(restart: () => void): void {
+  useEffect(() => subscribeShareDevSettings(restart), [restart]);
 }
