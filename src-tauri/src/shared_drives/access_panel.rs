@@ -24,6 +24,8 @@
 //!
 //! Pure: the command fetches, opens sealed links, and hands the rows here.
 
+use std::cmp::Reverse;
+
 use chrono::{DateTime, Utc};
 use hcfs_shared::network::{DriveGrantHolderEntry, DriveMembersResponse};
 use serde::Serialize;
@@ -47,16 +49,18 @@ pub struct AccessPanel {
     /// The drive's owner: may invite, change roles, remove and see links.
     /// Everyone else reads the people list and may leave.
     pub can_manage: bool,
-    /// Whole-drive members, this account first. A folder panel lists them
-    /// too, since the whole drive includes the folder.
+    /// Whole-drive members, this account first, then the most recently
+    /// joined. A folder panel lists them too, since the whole drive includes
+    /// the folder.
     pub members: Vec<AccessPanelMember>,
     /// Folder holders, this account first. See the module doc for which.
     pub folder_holders: Vec<AccessPanelHolder>,
-    /// Emailed invitations still waiting.
+    /// Emailed invitations still waiting, newest first.
     pub pending_invites: Vec<AccessPanelInvite>,
-    /// Link invites that still work, in the server's order.
+    /// Link invites that still work, most recently created first.
     pub links: Vec<AccessPanelLink>,
-    /// Link invites that no longer work: expired, used up or revoked.
+    /// Link invites that no longer work (expired, used up or revoked), most
+    /// recently created first.
     pub inactive_links: Vec<AccessPanelLink>,
     /// Active links exist that only the unlock password can show.
     pub links_locked: bool,
@@ -160,6 +164,12 @@ fn in_panel(folder: Option<&str>, path: Option<&str>) -> bool {
         None => true,
         Some(f) => path == Some(f),
     }
+}
+
+/// Sort key for "newest first": a later time sorts earlier, and a time that
+/// does not parse sorts after every one that does (stable among themselves).
+fn newest_first(created_at: &str) -> Reverse<Option<DateTime<Utc>>> {
+    Reverse(DateTime::parse_from_rfc3339(created_at).ok().map(|t| t.with_timezone(&Utc)))
 }
 
 fn seconds_until(expires_at: &str, now: DateTime<Utc>) -> Option<i64> {
@@ -276,9 +286,12 @@ fn fold_holders(account_id: &str, folder: Option<&str>, grants: &[DriveGrantHold
 fn split_invites(
     account_id: &str,
     folder: Option<&str>,
-    invites: Vec<DriveInviteInfo>,
+    mut invites: Vec<DriveInviteInfo>,
     now: DateTime<Utc>,
 ) -> (Vec<AccessPanelInvite>, Vec<AccessPanelLink>, Vec<AccessPanelLink>) {
+    // Newest first in every group: the panel draws the first few rows of each,
+    // and the invitation or link just made is the one being looked for.
+    invites.sort_by_key(|i| newest_first(&i.created_at));
     let mut pending_invites = Vec::new();
     let mut links = Vec::new();
     let mut inactive_links = Vec::new();
@@ -341,8 +354,10 @@ pub(crate) fn fold_access_panel(
             created_at: m.created_at,
         })
         .collect();
-    // Stable: this account first, everyone else in the server's order.
-    members.sort_by_key(|m| !m.is_you);
+    // This account first, then the most recently joined: the panel draws the
+    // first few people, and the newest are the ones being checked on. Stable,
+    // so equal or unreadable join times keep the server's order.
+    members.sort_by_key(|m| (!m.is_you, newest_first(&m.created_at)));
 
     let folder_holders = fold_holders(account_id, folder, &listing.folder_grants);
 
@@ -499,6 +514,47 @@ mod tests {
         assert!(panel.inactive_links.iter().all(|l| !l.link_available && l.invite_url.is_none()));
         let pending: Vec<&str> = panel.pending_invites.iter().map(|p| p.invite.invite_id.as_str()).collect();
         assert_eq!(pending, ["mail"], "an emailed invite is pending, never a link");
+    }
+
+    /// The panel draws the first few rows of each group, so each group comes
+    /// newest first: you, then the most recently joined; the newest
+    /// invitation; the most recently made link. An unreadable time goes last.
+    #[test]
+    fn every_group_comes_newest_first() {
+        let listing: DriveMembersResponse = serde_json::from_value(serde_json::json!({
+            "members": [
+                {"member_ss58": "5Old", "role": "reader", "created_at": "2026-01-01T00:00:00Z"},
+                {"member_ss58": "5Odd", "role": "reader", "created_at": "t"},
+                {"member_ss58": "5New", "role": "reader", "created_at": "2026-09-01T00:00:00Z"},
+                {"member_ss58": "5Me", "role": "reader", "created_at": "2025-01-01T00:00:00Z"},
+                {"member_ss58": "5Mid", "role": "reader", "created_at": "2026-05-01T00:00:00Z"},
+            ],
+            "folder_grants": [],
+        }))
+        .expect("listing");
+        let invites = vec![
+            invite("link-old", serde_json::json!({"created_at": "2026-09-01T00:00:00Z"})),
+            invite("link-new", serde_json::json!({"created_at": "2026-09-20T00:00:00Z"})),
+            invite(
+                "mail-old",
+                serde_json::json!({"email_status": "sent", "created_at": "2026-09-02T00:00:00Z"}),
+            ),
+            invite(
+                "mail-new",
+                serde_json::json!({"email_status": "sent", "created_at": "2026-09-22T00:00:00Z"}),
+            ),
+            invite("ended-old", serde_json::json!({"revoked": true, "created_at": "2026-08-01T00:00:00Z"})),
+            invite("ended-new", serde_json::json!({"revoked": true, "created_at": "2026-08-09T00:00:00Z"})),
+        ];
+        let panel = fold_access_panel("5Me", "5Owner", None, listing, invites, false, now());
+        let people: Vec<&str> = panel.members.iter().map(|m| m.member_ss58.as_str()).collect();
+        assert_eq!(people, ["5Me", "5New", "5Mid", "5Old", "5Odd"]);
+        let pending: Vec<&str> = panel.pending_invites.iter().map(|p| p.invite.invite_id.as_str()).collect();
+        assert_eq!(pending, ["mail-new", "mail-old"]);
+        let links: Vec<&str> = panel.links.iter().map(|l| l.invite_id.as_str()).collect();
+        assert_eq!(links, ["link-new", "link-old"]);
+        let ended: Vec<&str> = panel.inactive_links.iter().map(|l| l.invite_id.as_str()).collect();
+        assert_eq!(ended, ["ended-new", "ended-old"]);
     }
 
     #[test]
