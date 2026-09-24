@@ -4,7 +4,7 @@
 // in "Shared with me", beside the whole drives. It names the folder, the
 // drive it lives in and who owns it, carries the role chip (Viewer or
 // Editor), and offers Open (rooted at the folder) and Leave. No Manage
-// access: Manager is not a folder role, so a holder never manages the folder.
+// access: only the owner manages, so a holder never manages the folder.
 // No "Sync to this computer": syncing a granted folder to disk is not
 // supported.
 

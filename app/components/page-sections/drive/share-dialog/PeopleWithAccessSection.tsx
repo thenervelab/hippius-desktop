@@ -135,6 +135,9 @@ export function PeopleWithAccessSection({
       key: "owner",
       node: <OwnerRow ss58={access.ownerSs58} isYou={access.ownerIsYou} name={ownerName} />,
     });
+    // Only the owner changes access (Rust refuses anyone else), so on
+    // somebody else's drive every row is read only.
+    const readOnly = !access.ownerIsYou;
     // You first after the owner, then everyone else in the order Rust sent.
     const members = [...access.members].sort((a, b) => Number(b.isYou) - Number(a.isYou));
     for (const m of members) {
@@ -144,6 +147,7 @@ export function PeopleWithAccessSection({
         node: (
           <MemberRow
             member={m}
+            readOnly={readOnly}
             busy={busy[m.memberSs58]}
             onChangeRole={(role) =>
               void run(m.memberSs58, who, "saving", () => api.changeRole(label, m.memberSs58, role, target))
@@ -161,6 +165,7 @@ export function PeopleWithAccessSection({
           <HolderRow
             holder={h}
             folder={folder ?? ""}
+            readOnly={readOnly}
             busy={busy[h.memberSs58]}
             onRemove={() => void run(h.memberSs58, who, "removing", () => api.remove(label, h.memberSs58, target))}
           />
@@ -360,7 +365,7 @@ export function MemberRow({
       </div>
       {busy ? <BusyLabel busy={busy} /> : null}
       {member.isYou || readOnly ? (
-        // Nobody changes their own role; a manager leaves instead.
+        // Nobody changes their own role; a member leaves instead.
         <span className={ROLE_TEXT}>{driveRoleLabel(role)}</span>
       ) : busy === "removing" ? null : (
         <Select
@@ -420,11 +425,14 @@ function HolderRow({
   folder,
   busy,
   onRemove,
+  readOnly = false,
 }: {
   holder: ShareAccessHolder;
   folder: string;
   busy?: Busy;
   onRemove: () => void;
+  /** Someone who cannot manage the drive sees no Remove. */
+  readOnly?: boolean;
 }) {
   const [confirming, setConfirming] = useState(false);
   const who = accountDisplayName(holder.memberSs58, holder.memberName);
@@ -450,7 +458,7 @@ function HolderRow({
       <span className={ROLE_TEXT}>{role}</span>
       {busy ? (
         <BusyLabel busy={busy} />
-      ) : (
+      ) : readOnly ? null : (
         <Button
           type="button"
           variant="defaultStable"

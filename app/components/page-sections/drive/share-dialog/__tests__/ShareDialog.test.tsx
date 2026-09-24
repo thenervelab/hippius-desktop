@@ -285,16 +285,13 @@ describe("Invite people", () => {
     expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
   });
 
-  it("offers Viewer and Editor only, and says how to add a Manager", async () => {
+  it("offers Viewer and Editor only, and never mentions Managers", async () => {
     renderDialog();
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByLabelText("Invite role"));
     expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("option", { name: "Manager" })).not.toBeInTheDocument();
-    expect(
-      screen.getByText("To add a Manager, invite them as an Editor, then change their role below."),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
     expect(screen.getByText("They get their own invite that only works for them.")).toBeInTheDocument();
   });
 
@@ -499,24 +496,16 @@ describe("General access", () => {
     expect(store.get(driveInvitesVersionAtom)).toBe(2);
   });
 
-  it("offers Viewer, Editor and Manager for a drive, and keeps Manager's limits", () => {
+  it("offers Viewer and Editor only for a drive link, with every lifetime", () => {
     renderDialog();
-    choose("Link access", "Manager");
-    expect(screen.getByLabelText("Link expires")).toHaveTextContent("24 hours");
-    expect(screen.getByText(/Works once and expires within 24 hours/)).toBeInTheDocument();
-  });
-
-  it("describes a manager link as single use, from what Rust sent", async () => {
-    createDriveInviteMock.mockResolvedValue({
-      inviteUrl: "https://x/invite/t#k=e",
-      role: "manager",
-      expiresInSecs: 24 * 60 * 60,
-      maxUses: 1,
-    });
-    renderDialog();
-    choose("Link access", "Manager");
-    fireEvent.click(screen.getByRole("button", { name: "Create link" }));
-    expect(await screen.findByText("Manager · Expires in 24 hours · Single use")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Link access"));
+    expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByText("Viewer").at(-1)!);
+    // Picking a role never narrows the lifetime: no role is capped any more.
+    choose("Link expires", "Never expires");
+    expect(screen.getByLabelText("Link expires")).toHaveTextContent("Never expires");
+    expect(screen.queryByText(/Works once and expires within 24 hours/)).not.toBeInTheDocument();
   });
 
   const LINK_CASES: Array<[string, unknown, string]> = [
@@ -618,8 +607,7 @@ describe("a folder target", () => {
     flags.folderRoles = true;
     emailDriveInviteMock.mockResolvedValue({ inviteId: "i1" });
     renderDialog(folderTarget());
-    // No Manager hint for a folder: Manager is not a folder role.
-    expect(screen.queryByText(/To add a Manager/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
     await waitFor(() =>
@@ -725,38 +713,49 @@ describe("People with access", () => {
     await waitFor(() => expect(listShareAccessMock).toHaveBeenCalledWith("team-docs", "Clients/ACME", undefined));
   });
 
+  const annAsViewer = () =>
+    access({ members: [{ memberSs58: ANN, role: "reader", memberName: "Ann", isYou: false }] });
+
+  it("offers Viewer and Editor only in a member's role picker", async () => {
+    listShareAccessMock.mockResolvedValue(withAnn());
+    renderDialog();
+    await screen.findByText("Ann");
+    fireEvent.click(screen.getByLabelText("Role for Ann"));
+    expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Remove access").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+  });
+
   it("changes a role only once Rust has, saying Saving meanwhile", async () => {
-    listShareAccessMock.mockResolvedValueOnce(withAnn());
+    listShareAccessMock.mockResolvedValueOnce(annAsViewer());
     let finish: () => void = () => {};
     changeDriveMemberRoleMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
     const store = renderDialog();
     await screen.findByText("Ann");
-    choose("Role for Ann", "Manager");
-    await waitFor(() => expect(changeDriveMemberRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", undefined));
+    choose("Role for Ann", "Editor");
+    await waitFor(() => expect(changeDriveMemberRoleMock).toHaveBeenCalledWith("team-docs", ANN, "writer", undefined));
     // Not shown as done while the server has not answered.
     expect(screen.getByText("Saving…")).toBeInTheDocument();
-    expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Editor");
+    expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Viewer");
     expect(screen.getByLabelText("Role for Ann")).toBeDisabled();
 
-    listShareAccessMock.mockResolvedValue(
-      access({ members: [{ memberSs58: ANN, role: "manager", memberName: "Ann", isYou: false }] }),
-    );
+    listShareAccessMock.mockResolvedValue(withAnn());
     finish();
-    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Manager"));
+    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Editor"));
     expect(screen.queryByText("Saving…")).not.toBeInTheDocument();
     expect(store.get(driveInvitesVersionAtom)).toBe(1);
   });
 
   it("leaves a refused role change as it was and says why, inline", async () => {
-    listShareAccessMock.mockResolvedValue(withAnn());
-    changeDriveMemberRoleMock.mockRejectedValue({ kind: "Validation", message: "Managers cannot promote to Manager." });
+    listShareAccessMock.mockResolvedValue(annAsViewer());
+    changeDriveMemberRoleMock.mockRejectedValue({ kind: "Validation", message: "The server refused the change." });
     renderDialog();
     await screen.findByText("Ann");
-    choose("Role for Ann", "Manager");
+    choose("Role for Ann", "Editor");
     expect(
-      await within(peopleSection()).findByText("Couldn't change access for Ann. Managers cannot promote to Manager."),
+      await within(peopleSection()).findByText("Couldn't change access for Ann. The server refused the change."),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Editor");
+    expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Viewer");
     expect(screen.getByLabelText("Role for Ann")).toBeEnabled();
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -799,12 +798,31 @@ describe("People with access", () => {
 
   it("never offers a role change on your own row", async () => {
     listShareAccessMock.mockResolvedValue(
-      access({ ownerSs58: ANN, ownerIsYou: false, members: [{ memberSs58: ME, role: "manager", isYou: true }] }),
+      access({ ownerSs58: ANN, ownerIsYou: false, members: [{ memberSs58: ME, role: "writer", isYou: true }] }),
     );
     renderDialog({ label: "team-docs", folderName: "team-docs", ownerSs58: ANN, folderHash: "abc" });
     await screen.findByText("(you)");
     expect(screen.queryByLabelText(/Role for/)).not.toBeInTheDocument();
-    expect(within(peopleSection()).getByText("Manager")).toBeInTheDocument();
+    expect(within(peopleSection()).getByText("Editor")).toBeInTheDocument();
+  });
+
+  // Only the owner changes access. On somebody else's drive nobody's row is
+  // editable, a former Manager's view included.
+  it("shows everyone read only on a drive you do not own", async () => {
+    listShareAccessMock.mockResolvedValue(
+      access({
+        ownerSs58: ANN,
+        ownerIsYou: false,
+        members: [
+          { memberSs58: ME, role: "writer", isYou: true },
+          { memberSs58: "5Other", memberName: "Other", role: "reader", isYou: false },
+        ],
+      }),
+    );
+    renderDialog({ label: "team-docs", folderName: "team-docs", ownerSs58: ANN, folderHash: "abc" });
+    await screen.findByText("Other");
+    expect(screen.queryByLabelText(/Role for/)).not.toBeInTheDocument();
+    expect(within(peopleSection()).getByText("Viewer")).toBeInTheDocument();
   });
 
   it("lists folder holders with their role as text, Remove, and how to change access", async () => {
@@ -887,7 +905,7 @@ describe("People with access", () => {
         ownerIsYou: false,
         members: [
           { memberSs58: "5Other", memberName: "Other", role: "reader", isYou: false },
-          { memberSs58: ME, memberName: "Me", role: "manager", isYou: true },
+          { memberSs58: ME, memberName: "Me", role: "writer", isYou: true },
         ],
       }),
     );

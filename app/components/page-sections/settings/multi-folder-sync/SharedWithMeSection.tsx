@@ -62,7 +62,6 @@ import {
   MY_FOLDER_GRANTS_QUERY_KEY,
   useMyFolderGrants,
 } from "@/app/lib/hooks/useSharedDriveRoles";
-import type { ShareDriveModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
 
 interface SharedWithMeSectionProps {
   /**
@@ -81,11 +80,6 @@ interface SharedWithMeSectionProps {
     folderHash: string;
     displayLabel: string;
   }) => void;
-  /**
-   * Open the manage-access panel for a drive this account manages. Offered
-   * only on a drive synced here — the manage IPCs resolve a local label.
-   */
-  onManageAccess?: (target: ShareDriveModalTarget) => void;
   /**
    * Open a FOLDER shared with this account (folder roles), rooted at that
    * folder. Omitted where there is nowhere to browse to.
@@ -107,7 +101,6 @@ interface SharedWithMeSectionProps {
 export function SharedWithMeSection({
   onDriveAdded,
   onOpenDrive,
-  onManageAccess,
   onOpenFolderGrant,
 }: SharedWithMeSectionProps) {
   const queryClient = useQueryClient();
@@ -237,8 +230,9 @@ export function SharedWithMeSection({
         {memberships.map((membership) => {
           const key = `${membership.ownerSs58}:${membership.folderHash}`;
           const action = getMembershipRowAction(membership);
+          // A former Manager reads as an Editor here. Nobody manages a drive
+          // shared with them: only its owner invites and removes people.
           const role = parseDriveRole(membership.role);
-          const canManage = role === "manager";
           const stats = statsByDrive.get(sharedDriveStatsKey(membership));
           return (
             <div
@@ -355,39 +349,6 @@ export function SharedWithMeSection({
                   ) : null}
                 </div>
               </div>
-
-              {/* Managing access is a manager's likely next action, so it
-                  gets a control of its own rather than a place in the
-                  overflow -- the treatment an own shared drive's row has. */}
-              {/* No longer conditional on a local copy: the manage calls
-                  address the drive by its wire identity, so a manager can
-                  manage one they have never synced here. */}
-              {canManage && onManageAccess && (
-                <Button
-                  variant="ghost"
-                  size="auto"
-                  onClick={() =>
-                    onManageAccess({
-                      // A synced drive resolves by its local label; one that
-                      // is not names its wire identity instead.
-                      label:
-                        action.kind === "synced"
-                          ? action.localLabel
-                          : membership.displayLabel,
-                      folderName: membership.displayLabel,
-                      ...(action.kind === "synced"
-                        ? {}
-                        : {
-                            ownerSs58: membership.ownerSs58,
-                            folderHash: membership.folderHash,
-                          }),
-                    })
-                  }
-                  className="row-action-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-primary-50 px-2.5 text-xs font-medium text-primary-50 transition-colors hover:bg-primary-50/10 dark:border-primary-brand-dark dark:text-primary-brand-dark dark:hover:bg-primary-50/15"
-                >
-                  Manage access
-                </Button>
-              )}
 
               <TableActionMenu
                 dropdownTitle=""

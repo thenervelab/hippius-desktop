@@ -266,7 +266,7 @@ describe("every surface that offers Share via link consults the gate", () => {
   });
 });
 
-describe("offersShareAction: an Editor or Manager in someone else's drive (hcfs #458)", () => {
+describe("offersShareAction: an Editor in someone else's drive (hcfs #458)", () => {
   const BROWSED = "shared:5DSQAMf3JVb3VyuXwqWUx3tj6aX6EX9f5p1UDJYh5TMdSK63~263bad4ad83e395a";
   const writable = new Set([BROWSED, "team"]);
 

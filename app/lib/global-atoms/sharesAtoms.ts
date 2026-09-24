@@ -82,7 +82,7 @@ export const folderGrantsFeatureEnabledAtom = atom((get) => {
 });
 
 /**
- * Whether an Editor or Manager may share a folder by link inside a drive
+ * Whether an Editor may share a folder by link inside a drive
  * somebody else owns (`capabilities.member_folder_shares`, hcfs #458).
  * `null` capabilities collapse to `false`.
  */
@@ -156,10 +156,12 @@ export type ShareDriveModalTarget = {
    * The drive's WIRE identity, when it is one shared with this account that
    * is not synced here.
    *
-   * A manager may hold a drive they never synced. The manage IPCs resolve a
+   * A member may hold a drive they never synced. The access IPCs resolve a
    * local `sync_paths` row such a drive does not have, and the lenient
-   * fallback then answers with THIS account's namespace — managing the wrong
+   * fallback then answers with THIS account's namespace, reading the wrong
    * drive rather than failing. Naming the identity is what addresses theirs.
+   * Such a drive only ever opens the read-only Who has access panel: Rust
+   * refuses every access change on a drive this account does not own.
    * Absent for an own drive, where the label resolves.
    */
   ownerSs58?: string;

@@ -15,7 +15,7 @@ import { driveRoleLabel, type DriveRole } from "@/app/lib/shared-drives/roles";
 import { FOLDER_INVITE_ROLES } from "../shareDriveModalState";
 
 /** Viewer or Editor: the roles a folder can be granted with. */
-export type FolderRole = Exclude<DriveRole, "manager">;
+export type FolderRole = DriveRole;
 
 /** Replace a holder's folders; `role` applies to folders being added. */
 export type ChangeGrantFolders = (memberSs58: string, folders: string[], role?: FolderRole) => Promise<void>;

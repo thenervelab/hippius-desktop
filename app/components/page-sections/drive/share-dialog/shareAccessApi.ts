@@ -127,7 +127,7 @@ export function fixtureShareAccess(size: number, folder: boolean): ShareAccess {
   const people = Math.max(0, size);
   const pendingCount = Math.floor(people / 3);
   const memberCount = people - pendingCount;
-  const roles: DriveRole[] = ["reader", "writer", "manager"];
+  const roles: DriveRole[] = ["reader", "writer"];
   const rows = Array.from({ length: memberCount }, (_, i) => {
     // Every fourth person has no name on file: the row shows a short ss58.
     const named = i % 4 !== 3;
@@ -136,7 +136,7 @@ export function fixtureShareAccess(size: number, folder: boolean): ShareAccess {
       memberSs58: fakeSs58(i),
       memberName: name,
       memberEmail: name ? `${name.split(" ")[0].toLowerCase()}@example.com` : undefined,
-      role: roles[i % 3],
+      role: roles[i % 2],
     };
   });
   const statuses = ["sent", "awaiting_seal", "sealed"] as const;
@@ -215,7 +215,7 @@ function fixtureWholeDriveMembers(count: number): ShareAccess["members"] {
   return Array.from({ length: Math.min(2, Math.floor(count / 3)) }, (_, i) => ({
     memberSs58: fakeSs58(700 + i),
     memberName: NAMES[(i + 8) % NAMES.length],
-    role: i ? "manager" : "writer",
+    role: i ? "reader" : "writer",
     isYou: false,
   }));
 }
@@ -248,7 +248,7 @@ function fixtureLinks(size: number, folder: boolean, locked: boolean): AccessPan
     : [
         base(0, { useCount: 12, usagePercent: 24 }),
         base(1, { role: "reader", useCount: 3, usagePercent: 6, neverExpires: true, expiresInSecs: null }),
-        base(2, { role: "manager", maxUses: 1, singleUse: true, expiresInSecs: 20 * 3600 }),
+        base(2, { role: "reader", maxUses: 1, singleUse: true, useCount: 0, expiresInSecs: 20 * 3600 }),
       ].slice(0, 1 + Math.floor(size / 6));
   const ended: AccessPanelLink[] = Array.from({ length: Math.floor(size / 8) }, (_, i) =>
     base(10 + i, {

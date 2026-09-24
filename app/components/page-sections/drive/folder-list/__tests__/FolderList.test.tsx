@@ -98,10 +98,10 @@ describe("shared drives in the list", () => {
     render(
       <FolderList
         rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
-        rolesByLabel={new Map([["team-docs", "manager" as const]])}
+        rolesByLabel={new Map([["team-docs", "writer" as const]])}
       />,
     );
-    expect(screen.getByText("Manager")).toBeInTheDocument();
+    expect(screen.getByText("Editor")).toBeInTheDocument();
   });
 
   // Rows and roles come from different sources. Showing "Shared" alone beats
@@ -123,11 +123,11 @@ describe("shared drives in the list", () => {
     render(
       <FolderList
         rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
-        rolesByLabel={new Map([["a-different-drive", "manager" as const]])}
+        rolesByLabel={new Map([["a-different-drive", "writer" as const]])}
       />,
     );
     expect(screen.getByText("Shared")).toBeInTheDocument();
-    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Editor/)).not.toBeInTheDocument();
   });
 
   it("names the owner in the badge tooltip", () => {
@@ -226,6 +226,20 @@ describe("Manage access on the row", () => {
     expect(
       screen.queryByRole("button", { name: "Manage access" }),
     ).not.toBeInTheDocument();
+  });
+
+  // Only the owner manages. A former Manager is an Editor now, and the role
+  // never brings the button back.
+  it.each(["reader", "writer"] as const)("stays hidden on somebody else's drive for a %s", (role) => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+        rolesByLabel={new Map([["team-docs", role]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 5, liveInviteCount: 0, totalInviteCount: 0 }]])}
+        onManageAccess={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
   });
 
   // Opening the sharing surface is not opening the drive.

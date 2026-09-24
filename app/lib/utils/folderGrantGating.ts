@@ -14,25 +14,20 @@ import {
 } from "@/app/lib/utils/folderShareGating";
 
 /**
- * Whether a folder row may offer "Share folder": an own drive, or one this
- * account MANAGES (a drive Manager). Never an Editor or Viewer, and never a
- * granted folder: only the owner or a full drive Manager mints folder
- * invites. `folderInvitesOffered` is {@link folderShareInviteOffered}.
+ * Whether a folder row may offer "Share folder": an own drive only. Only a
+ * drive's owner invites people, so never a drive shared with this account
+ * (whatever its role there) and never a granted folder. Rust refuses the
+ * same (`resolve_owned_target`). `folderInvitesOffered` is
+ * {@link folderShareInviteOffered}.
  */
 export function canShareFolderGrant(
   file: FormattedUserFile,
   folderInvitesOffered: boolean,
   memberDriveLabels?: ReadonlySet<string>,
-  /**
-   * With folder roles on: labels of drives somebody else owns where this
-   * account is a Manager, not frozen.
-   */
-  manageableMemberLabels?: ReadonlySet<string>,
 ): boolean {
   if (!file.isFolder) return false;
   if (!folderInvitesOffered) return false;
-  if (!isMemberDriveLabel(file.label, memberDriveLabels)) return true;
-  return Boolean(file.label && manageableMemberLabels?.has(file.label));
+  return !isMemberDriveLabel(file.label, memberDriveLabels);
 }
 
 /**

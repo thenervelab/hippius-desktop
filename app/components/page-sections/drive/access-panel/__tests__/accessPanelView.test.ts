@@ -62,10 +62,10 @@ describe("header", () => {
     expect(panelSubline({ ...base, folder: true, planName: "Plus plan" })).toBe("Folder in Archive");
   });
 
-  it("tells anyone else, a Manager included, whose drive it is and what they are", () => {
+  it("tells anyone else, a former Manager included, whose drive it is and what they are", () => {
     const base = { folder: false, ownerIsYou: false, driveName: "Archive", ownerName: "Ahmad Rao", planName: "Plus plan" };
     expect(panelSubline({ ...base, yourRole: "writer" })).toBe("Shared with you by Ahmad Rao · you are an Editor");
-    expect(panelSubline({ ...base, yourRole: "manager" })).toBe("Shared with you by Ahmad Rao · you are a Manager");
+    expect(panelSubline({ ...base, yourRole: "manager" })).toBe("Shared with you by Ahmad Rao · you are an Editor");
     expect(panelSubline({ ...base, folder: true, yourRole: "reader" })).toBe(
       "Shared with you by Ahmad Rao · you are a Viewer",
     );
@@ -76,7 +76,7 @@ describe("header", () => {
     expect(planLabel("Plus")).toBe("Plus plan");
     expect(planLabel("Free plan")).toBe("Free plan");
     expect(planLabel("  ")).toBeNull();
-    expect(rolePhrase("manager")).toBe("a Manager");
+    expect(rolePhrase("manager")).toBe("an Editor");
   });
 });
 

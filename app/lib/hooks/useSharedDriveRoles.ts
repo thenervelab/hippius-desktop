@@ -6,7 +6,6 @@ import { useQuery } from "@tanstack/react-query";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { useAtomValue } from "jotai";
 import {
-  manageableMemberDriveLabels,
   rolesByLocalLabel,
   writableMemberDriveLabels,
 } from "@/app/lib/shared-drives/driveRowSharing";
@@ -158,9 +157,9 @@ export function useMemberDriveLabels(): ReadonlySet<string> {
 
 /**
  * Labels of the drives shared with this account that it may WRITE to: an
- * Editor or Manager role on a drive that is not frozen. Both spellings of a
- * drive are in the set, its local label when synced here and its
- * `shared:<owner>~<hash>` browse label, so a row from either view is answered
+ * Editor role (a former Manager reads as one) on a drive that is not frozen.
+ * Both spellings of a drive are in the set, its local label when synced here
+ * and its `shared:<owner>~<hash>` browse label, so a row from either view is answered
  * without the caller knowing which it is. The server re-checks every write.
  */
 export function useWritableMemberDriveLabels(): ReadonlySet<string> {
@@ -170,16 +169,6 @@ export function useWritableMemberDriveLabels(): ReadonlySet<string> {
     () => writableMemberDriveLabels(memberships, grants),
     [memberships, grants],
   );
-}
-
-/**
- * Labels of the drives this account MANAGES in somebody else's name
- * (Manager, not frozen). Whole drives only: a folder is never managed by
- * its holder, since Manager is not a folder role (HCFS #475).
- */
-export function useManageableMemberDriveLabels(): ReadonlySet<string> {
-  const memberships = useSharedDriveMemberships();
-  return useMemo(() => manageableMemberDriveLabels(memberships), [memberships]);
 }
 
 export const MY_FOLDER_GRANTS_QUERY_KEY = "my-folder-grants";

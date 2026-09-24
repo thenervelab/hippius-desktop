@@ -217,6 +217,23 @@ describe("rows", () => {
   });
 });
 
+// Only the owner manages a drive. A member the server still calls a Manager
+// is an Editor here, and gets Leave and nothing to manage with.
+describe("a former Manager", () => {
+  it.each([false, true])("reads as an Editor with no Manage access (synced here: %s)", async (synced) => {
+    listMyDriveMembershipsMock.mockResolvedValue([
+      membership({ role: "manager", syncedLocally: synced, localLabel: synced ? "team-docs" : null }),
+    ]);
+    render(<SharedWithMeSection />);
+
+    await screen.findByText("team-docs");
+    expect(screen.getByText(/Editor/)).toBeInTheDocument();
+    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Leave/ })).toBeInTheDocument();
+  });
+});
+
 describe("sync locally", () => {
   it("routes picker → add_shared_drive → onDriveAdded, remembering the browse dir", async () => {
     listMyDriveMembershipsMock
@@ -426,11 +443,11 @@ describe("folders shared with me (folder roles)", () => {
     });
   });
 
-  // Manager is not a folder role (HCFS #475): a holder never manages the
-  // folder, whatever role the listing claims.
+  // Only the owner manages: a holder never manages the folder, whatever role
+  // the listing claims.
   it("offers no Manage access on a shared folder", async () => {
     listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, role: "manager" }]);
-    render(<SharedWithMeSection onManageAccess={vi.fn()} />);
+    render(<SharedWithMeSection />);
     await screen.findByText("ACME");
     expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
   });

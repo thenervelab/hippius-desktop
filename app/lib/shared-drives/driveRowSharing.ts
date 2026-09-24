@@ -151,7 +151,8 @@ export function rolesByLocalLabel(
 
 /**
  * The labels (local and browse) of every shared drive this account may write
- * to: Editor or Manager, and not frozen. See `useWritableMemberDriveLabels`.
+ * to: Editor (a former Manager reads as one), and not frozen. See
+ * `useWritableMemberDriveLabels`.
  */
 export function writableMemberDriveLabels(
   memberships: readonly {
@@ -176,18 +177,6 @@ export interface FolderGrantRow {
   pathPrefix: string;
   role: string;
   frozen?: boolean;
-}
-
-/**
- * Labels (local and `shared:`) of the drives this account MANAGES in
- * somebody else's name: a Manager role, not frozen. Drives the folder "Share
- * folder" item there. Never a `grant:` label: Manager is not a folder role
- * (HCFS #475), so a folder holder never manages the folder.
- */
-export function manageableMemberDriveLabels(
-  memberships: Parameters<typeof writableMemberDriveLabels>[0],
-): ReadonlySet<string> {
-  return memberLabelsWhere(memberships, [], (role) => role === "manager");
 }
 
 function memberLabelsWhere(

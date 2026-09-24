@@ -19,7 +19,6 @@ import {
   FOLDER_GRANT_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderGrantGating";
 import {
-  useManageableMemberDriveLabels,
   useMemberDriveLabels,
   useWritableMemberDriveLabels,
   useFolderShareInviteOffered,
@@ -43,7 +42,7 @@ import {
   memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
-import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 
 interface ContextMenuProps {
@@ -108,11 +107,9 @@ export default function FileContextMenu({
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
   // Whether a folder in one of those drives may be shared by link: an
-  // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
+  // Editor, on a server that takes `owner_ss58` (hcfs #458).
   const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
-  const folderRolesEnabled = FOLDER_ROLES_ENABLED;
-  const manageableMemberDriveLabels = useManageableMemberDriveLabels();
 
   useEffect(() => {
     setMounted(true);
@@ -297,15 +294,10 @@ export default function FileContextMenu({
               </button>
             )}
 
-          {/* Share folder: a folder invite. Join is console-only. */}
+          {/* Share folder: a folder invite, own drives only. Join is console-only. */}
           {SHARED_DRIVES_ENABLED
             && file.isFolder
-            && canShareFolderGrant(
-              file,
-              folderInvitesOffered,
-              memberDriveLabels,
-              folderRolesEnabled ? manageableMemberDriveLabels : undefined,
-            ) && (
+            && canShareFolderGrant(file, folderInvitesOffered, memberDriveLabels) && (
               <button
                 className={menuItemClass}
                 onClick={() => {

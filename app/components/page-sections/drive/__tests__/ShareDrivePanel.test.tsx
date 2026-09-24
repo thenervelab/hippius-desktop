@@ -297,7 +297,7 @@ describe("an owner's drive", () => {
 
   it("says whether a single-use link was used, with no bar", async () => {
     listAccessPanelMock.mockResolvedValue(
-      panel({ links: [link({ singleUse: true, maxUses: 1, useCount: 0, usagePercent: 0, role: "manager" })] }),
+      panel({ links: [link({ singleUse: true, maxUses: 1, useCount: 0, usagePercent: 0, role: "reader" })] }),
     );
     renderPanel();
     expect(await screen.findByText("Single use, not used yet · Expires in 5 days")).toBeInTheDocument();
@@ -382,12 +382,16 @@ describe("changes are pessimistic", () => {
     renderPanel();
     await screen.findByText("Ann");
     fireEvent.click(screen.getByLabelText("Role for Ann"));
-    fireEvent.click(screen.getAllByText("Manager").at(-1)!);
-    await waitFor(() => expect(changeRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", undefined));
+    // Viewer and Editor only: nobody is made a Manager.
+    expect(screen.queryByText("Manager")).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByText("Viewer").at(-1)!);
+    // A demotion is confirmed first.
+    fireEvent.click(await screen.findByRole("button", { name: "Change role" }));
+    await waitFor(() => expect(changeRoleMock).toHaveBeenCalledWith("team-docs", ANN, "reader", undefined));
     expect(screen.getByText("Saving…")).toBeInTheDocument();
-    listAccessPanelMock.mockResolvedValue(panel({ members: [member({ role: "manager" })] }));
+    listAccessPanelMock.mockResolvedValue(panel({ members: [member({ role: "reader" })] }));
     finish();
-    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Manager"));
+    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Viewer"));
     expect(screen.queryByText("Saving…")).not.toBeInTheDocument();
   });
 
@@ -525,6 +529,19 @@ describe("a drive shared with you", () => {
     expect(screen.queryByRole("heading", { name: /^Links/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Invite" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+  });
+
+  // A former Manager: Rust sends `writer` and `canManage: false`. Should a
+  // `manager` ever arrive, it still reads as an Editor, never a Viewer.
+  it("tells a former Manager they are an Editor, read only, with Leave", async () => {
+    memberships.list = [{ ...memberships.list[0], role: "manager", frozen: false }];
+    listAccessPanelMock.mockResolvedValue(sharedWithMe("manager"));
+    renderPanel();
+    expect(await screen.findByText("Shared with you by Olive · you are an Editor")).toBeInTheDocument();
+    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Role for Ann")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Invite" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave drive" })).toBeInTheDocument();
   });
 
   it("says when the drive is frozen", async () => {

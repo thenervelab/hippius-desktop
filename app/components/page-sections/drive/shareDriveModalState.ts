@@ -3,10 +3,7 @@
 // unit-testable without a render. Tested in
 // `__tests__/shareDriveModalState.test.ts`.
 
-import {
-  MANAGER_INVITE_MAX_SECONDS,
-  type DriveRole,
-} from "@/app/lib/shared-drives/roles";
+import { DRIVE_ROLES, type DriveRole } from "@/app/lib/shared-drives/roles";
 
 /**
  * Invite-tab lifecycle. Mirrors `ShareFileModal`'s machine minus progress
@@ -69,38 +66,6 @@ export const INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> 
 ];
 
 /**
- * The lifetimes a link of this role may actually carry.
- *
- * A manager invite is hard-capped by the server at 24 hours, and both the
- * Rust mint and the console clamp anything wider. Offering "7 days" /
- * "Never expires" for a manager would still mint a working link, but the
- * done dialog would describe the lifetime the user picked rather than the
- * one that was sent — so the chooser stops offering them (console
- * `inviteTtlOptionsFor`).
- */
-export function inviteTtlOptionsFor(
-  role: DriveRole,
-): ReadonlyArray<{ label: string; secs: number }> {
-  return role === "manager"
-    ? INVITE_TTL_OPTIONS.filter((o) => o.secs <= MANAGER_INVITE_MAX_SECONDS)
-    : INVITE_TTL_OPTIONS;
-}
-
-/**
- * Pull a chosen lifetime back inside what the role allows.
- *
- * Needed because the role is picked after the lifetime: choosing Manager
- * with "30 days" already selected must move the selection, not leave a
- * value on screen that the mint would quietly replace.
- */
-export function clampInviteTtl(role: DriveRole, secs: number): number {
-  const allowed = inviteTtlOptionsFor(role);
-  return allowed.some((o) => o.secs === secs)
-    ? secs
-    : (allowed[allowed.length - 1]?.secs ?? DEFAULT_INVITE_TTL_SECS);
-}
-
-/**
  * Lifetimes a MAILED invitation may carry. The server takes one hour to
  * thirty days, so "Never expires" is not offered (Rust refuses it by name).
  */
@@ -108,23 +73,16 @@ export const EMAIL_INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: numb
   INVITE_TTL_OPTIONS.filter((o) => o.secs <= 30 * 24 * 60 * 60);
 
 /**
- * Roles an emailed invitation may confer. A Manager invite has to be a link:
- * the server caps those at a day, and a mailed one would expire before it
- * could be approved.
+ * Roles an emailed invitation may confer: Viewer and Editor, the same two a
+ * link offers. Rust refuses anything else before a request.
  */
-export const EMAIL_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> = [
-  "reader",
-  "writer",
-];
+export const EMAIL_INVITE_ROLES: ReadonlyArray<DriveRole> = DRIVE_ROLES;
 
 /**
- * Roles a FOLDER may be shared with: Viewer and Editor. Manager is not a
- * folder role (HCFS #475). Mirrors `folder_roles::FOLDER_ROLES` in Rust.
+ * Roles a FOLDER may be shared with: Viewer and Editor. Mirrors
+ * `folder_roles::FOLDER_ROLES` in Rust.
  */
-export const FOLDER_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> = [
-  "reader",
-  "writer",
-];
+export const FOLDER_INVITE_ROLES: ReadonlyArray<DriveRole> = DRIVE_ROLES;
 
 /**
  * Lifetimes a folder invite may carry: at most 30 days (the server's cap),

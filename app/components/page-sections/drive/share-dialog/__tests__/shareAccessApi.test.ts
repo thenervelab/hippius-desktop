@@ -62,6 +62,25 @@ describe("fixtureShareAccess", () => {
   });
 });
 
+describe("the preview fixture's roles", () => {
+  // The fixture stands in for Rust, which never sends `manager` to the UI.
+  it("never draws a Manager, in the dialog or the panel", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const folder of [false, true]) {
+        const api = fixtureShareAccessApi(30, folder);
+        const listedAccess = api.list("x", folder ? "Work" : null);
+        const listedPanel = api.listPanel("x", folder ? "Work" : null);
+        await vi.advanceTimersByTimeAsync(2000);
+        const text = JSON.stringify([await listedAccess, await listedPanel]);
+        expect(text).not.toMatch(/manager/i);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("fixtureShareAccessApi", () => {
   it("applies a change after a delay, or refuses it for some rows", async () => {
     vi.useFakeTimers();
@@ -72,7 +91,7 @@ describe("fixtureShareAccessApi", () => {
       const members = (await listed).members;
       const outcomes = await Promise.all(
         members.map(async (m) => {
-          const p = api.changeRole("x", m.memberSs58, "manager").then(
+          const p = api.changeRole("x", m.memberSs58, "writer").then(
             () => "ok",
             () => "refused",
           );

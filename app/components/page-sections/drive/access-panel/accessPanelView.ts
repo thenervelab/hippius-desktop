@@ -31,7 +31,7 @@ export function durationWords(secs: number): string {
   return "less than an hour";
 }
 
-/** "a Viewer", "an Editor", "a Manager". */
+/** "a Viewer", "an Editor" (a wire `manager` reads as an Editor). */
 export function rolePhrase(role: string): string {
   const label = driveRoleLabel(parseDriveRole(role));
   return /^[AEIOU]/.test(label) ? `an ${label}` : `a ${label}`;
@@ -47,8 +47,9 @@ export function planLabel(name: string | null | undefined): string | null {
 /**
  * The line under the panel's title.
  *
- * By ownership, not by role: a Manager on somebody else's drive is told whose
- * drive it is, and the plan belongs to that owner, so it is never quoted.
+ * By ownership, not by role: anyone on somebody else's drive is told whose
+ * drive it is and their role there, and the plan belongs to that owner, so it
+ * is never quoted.
  */
 export function panelSubline(params: {
   folder: boolean;

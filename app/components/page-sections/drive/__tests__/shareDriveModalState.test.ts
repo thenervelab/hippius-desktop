@@ -7,8 +7,6 @@ import {
   formatJoinedDate,
   INVITE_TTL_OPTIONS,
   NEVER_EXPIRES_SECS,
-  clampInviteTtl,
-  inviteTtlOptionsFor,
   EMAIL_INVITE_ROLES,
   EMAIL_INVITE_TTL_OPTIONS,
   clampEmailInviteTtl,
@@ -16,7 +14,6 @@ import {
   FOLDER_INVITE_ROLES,
   FOLDER_INVITE_TTL_OPTIONS,
 } from "../shareDriveModalState";
-import { MANAGER_INVITE_MAX_SECONDS } from "@/app/lib/shared-drives/roles";
 
 describe("INVITE_TTL_OPTIONS", () => {
   it("includes the display default (7 days) and only positive lifetimes", () => {
@@ -30,28 +27,6 @@ describe("INVITE_TTL_OPTIONS", () => {
     // preset into a 400 at mint time.
     expect(NEVER_EXPIRES_SECS).toBe(100 * 365 * 24 * 60 * 60);
     expect(INVITE_TTL_OPTIONS.some((o) => o.secs === NEVER_EXPIRES_SECS)).toBe(true);
-  });
-});
-
-describe("inviteTtlOptionsFor / clampInviteTtl", () => {
-  it("restricts a manager invite to the 24-hour preset", () => {
-    const secs = inviteTtlOptionsFor("manager").map((o) => o.secs);
-    expect(secs).toEqual([MANAGER_INVITE_MAX_SECONDS]);
-  });
-
-  it("leaves reader and writer presets uncapped", () => {
-    expect(inviteTtlOptionsFor("writer")).toEqual(INVITE_TTL_OPTIONS);
-    expect(inviteTtlOptionsFor("reader")).toEqual(INVITE_TTL_OPTIONS);
-  });
-
-  it("snaps an over-wide selection when the role becomes manager", () => {
-    expect(clampInviteTtl("manager", DEFAULT_INVITE_TTL_SECS)).toBe(
-      MANAGER_INVITE_MAX_SECONDS,
-    );
-    expect(clampInviteTtl("manager", NEVER_EXPIRES_SECS)).toBe(
-      MANAGER_INVITE_MAX_SECONDS,
-    );
-    expect(clampInviteTtl("writer", NEVER_EXPIRES_SECS)).toBe(NEVER_EXPIRES_SECS);
   });
 });
 
@@ -97,7 +72,7 @@ describe("COMING_SOON_COPY", () => {
 });
 
 describe("folder invite choices", () => {
-  it("are Viewer or Editor, never Manager", () => {
+  it("are Viewer or Editor", () => {
     expect([...FOLDER_INVITE_ROLES]).toEqual(["reader", "writer"]);
   });
 
