@@ -11,6 +11,11 @@
 //   Links              working links with usage, expiry, maker and the link
 //                      itself; ended ones folded into one line.
 //
+// A big drive has 100 people and 100 links, so the main view draws only each
+// group's first rows, with a jump bar above the list and "Show all N …"
+// under a group; the full list of one group opens in place of the main one,
+// with search, filter chips and a windowed list (`access-panel/AccessPanelViews`).
+//
 // Everything in it comes from one Rust fold (`list_access_panel`); every
 // change is pessimistic, like the Share dialog's rows, which it reuses.
 // Inviting and making links happen in the Share dialog (`shareDialogAtom`);
@@ -18,8 +23,8 @@
 
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
@@ -56,44 +61,48 @@ import { parseFolderGrantLabel, parseSharedDriveLabel } from "@/app/lib/shared-d
 import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
 import { frozenNotice } from "@/app/lib/shared-drives/writeRefusal";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { cn } from "@/lib/utils";
 
 import { InlineNotice } from "./share-dialog/InlineNotice";
-import {
-  MemberRow,
-  OwnerRow,
-  PendingRow,
-  useRowChanges,
-} from "./share-dialog/PeopleWithAccessSection";
+import { useRowChanges } from "./share-dialog/PeopleWithAccessSection";
 import { shareAccessApiFor, type ShareAccessApi } from "./share-dialog/shareAccessApi";
 import { useReloadOnShareDevToolsChange } from "./share-dialog/shareDevToolsSettings";
 import { FOLDER_ACCESS_HINT, SHARED_DRIVES_UNAVAILABLE_COPY } from "./share-dialog/shareDialogState";
 import { driveDisplayName, findMembership } from "./share-dialog/ShareDialog";
 import { useAccessPanel, type AccessPanelState } from "./access-panel/useAccessPanel";
+import { EmptyAccess, EndedLinks, GroupHeader, PanelSkeleton, ShowAllGroup } from "./access-panel/AccessPanelRows";
 import {
-  EmptyAccess,
-  EndedLinks,
-  FolderTag,
-  GroupHeader,
-  HolderRow,
-  LinkRow,
-  PanelSkeleton,
-  ShowAllRows,
-} from "./access-panel/AccessPanelRows";
-import type { FolderRole } from "./access-panel/ChangeFoldersDialog";
+  FullViewHeader,
+  FullViewList,
+  LinkItem,
+  PanelSearch,
+  PendingItem,
+  PersonItem,
+  SummaryBar,
+  type FullViewState,
+  type RowActions,
+  type RowContext,
+  type SummaryItem,
+} from "./access-panel/AccessPanelViews";
 import {
   ACCESS_PANEL_COPY,
-  PANEL_GROUP_CAP,
-  capRows,
+  MAIN_SEARCH_MIN_PEOPLE,
+  PANEL_GROUP_PREVIEW,
+  SEARCH_PLACEHOLDER,
   isOnlyOwner,
-  memberMeta,
+  linkMatches,
+  noMatchLine,
+  normalizeQuery,
+  panelPeople,
   panelSubline,
   peopleCount,
-  pendingLeft,
-  pendingStage,
+  pendingMatches,
+  personKey,
+  personMatches,
   planLabel,
+  type LinksFilter,
+  type PanelGroup,
+  type PanelPerson,
 } from "./access-panel/accessPanelView";
-import { driveRoleLabel, parseDriveRole } from "@/app/lib/shared-drives/roles";
 
 /** Wider than File Details' 305: this panel holds lists, not labels. */
 const PANEL_WIDTH_PX = 360;
@@ -287,6 +296,101 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
     }
   }, [target, membership, title, queryClient, refreshSyncPaths, onClose, folder]);
 
+  const actions = useMemo<RowActions>(
+    () => ({
+      changeRole: (ss58, who, role) =>
+        void run(ss58, who, "saving", () => api.changeRole(target.label, ss58, role, driveTarget)),
+      remove: (ss58, who) => void run(ss58, who, "removing", () => api.remove(target.label, ss58, driveTarget)),
+      revoke: (id, who) => void run(id, who, "revoking", () => api.revoke(target.label, id, driveTarget)),
+      cancel: (id, who) => void run(id, who, "removing", () => api.revoke(target.label, id, driveTarget)),
+      approve: (id, who) => void run(id, who, "saving", () => api.approve(target.label, id, driveTarget)),
+      // Throws on refusal: the dialog shows why and stays open.
+      changeFolders: async (ss58, folders, role) => {
+        await api.replaceFolders(target.label, ss58, folders, role, driveTarget);
+        toast.success("Folders updated");
+        onChanged();
+        await reload();
+      },
+    }),
+    [run, api, target.label, driveTarget, onChanged, reload],
+  );
+  const ctx: RowContext | null = panel
+    ? {
+        panel,
+        folder,
+        busy,
+        rowError,
+        actions,
+        locked: panel.linksLocked,
+        unlocking,
+        onUnlock: () => void unlock(),
+      }
+    : null;
+  const people = useMemo(() => (panel ? panelPeople(panel, membership?.ownerName) : []), [panel, membership?.ownerName]);
+
+  // The main view's search, which the full view starts from.
+  const [mainQuery, setMainQuery] = useState("");
+  // A full view replaces the list with one group, all of it. The Share
+  // dialog's "+N more" row opens the panel straight on the people.
+  const [fullView, setFullView] = useState<FullViewState | null>(() =>
+    target.openOn === "people" ? { group: "people", query: "", peopleFilter: "all", linksFilter: "active" } : null,
+  );
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Where the main list was, so Back returns to it rather than the top.
+  const mainScrollTop = useRef(0);
+  const restoreMainScroll = useRef(false);
+  const openFullView = useCallback(
+    (group: PanelGroup, linksFilter: LinksFilter = "active") => {
+      mainScrollTop.current = scrollRef.current?.scrollTop ?? 0;
+      setFullView({ group, query: mainQuery, peopleFilter: "all", linksFilter });
+    },
+    [mainQuery],
+  );
+  const closeFullView = useCallback(() => {
+    restoreMainScroll.current = true;
+    setFullView(null);
+  }, []);
+  const viewGroup = fullView?.group ?? null;
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    if (viewGroup) {
+      scroller.scrollTop = 0;
+    } else if (restoreMainScroll.current) {
+      restoreMainScroll.current = false;
+      scroller.scrollTop = mainScrollTop.current;
+    }
+  }, [viewGroup]);
+
+  // The jump bar: scroll the list to a group, move focus to its heading and
+  // mark it for a moment so the eye finds where it landed.
+  const reducedMotion = useReducedMotion();
+  const [flash, setFlash] = useState<PanelGroup | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+  const jump = useCallback(
+    (group: PanelGroup) => {
+      const scroller = scrollRef.current;
+      const heading = document.getElementById(GROUP_HEADING_ID[group]);
+      if (!scroller || !heading) return;
+      const top = heading.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 12;
+      const behavior: ScrollBehavior = reducedMotion ? "auto" : "smooth";
+      if (typeof scroller.scrollTo === "function") scroller.scrollTo({ top: Math.max(0, top), behavior });
+      else scroller.scrollTop = Math.max(0, top);
+      heading.focus({ preventScroll: true });
+      setFlash(group);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setFlash(null), JUMP_HIGHLIGHT_MS);
+    },
+    [reducedMotion],
+  );
+  const summary = panel ? summaryItems(panel, people, mainQuery) : null;
+
   const canManage = panel ? panel.canManage : expectManage;
   const sharedWithMe = panel ? !panel.ownerIsYou : Boolean(membership);
 
@@ -324,36 +428,34 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
         ) : null}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-        <PanelContent
-          state={state}
-          folder={folder}
-          expectManage={expectManage}
-          ownerName={membership?.ownerName}
-          retry={retry}
-          onShare={openShareDialog}
-          busy={busy}
-          rowError={rowError}
-          locked={Boolean(panel?.linksLocked)}
-          unlocking={unlocking}
-          onUnlock={() => void unlock()}
-          actions={{
-            changeRole: (ss58, who, role) =>
-              void run(ss58, who, "saving", () => api.changeRole(target.label, ss58, role, driveTarget)),
-            remove: (ss58, who) =>
-              void run(ss58, who, "removing", () => api.remove(target.label, ss58, driveTarget)),
-            revoke: (id, who) => void run(id, who, "revoking", () => api.revoke(target.label, id, driveTarget)),
-            cancel: (id, who) => void run(id, who, "removing", () => api.revoke(target.label, id, driveTarget)),
-            approve: (id, who) => void run(id, who, "saving", () => api.approve(target.label, id, driveTarget)),
-            // Throws on refusal: the dialog shows why and stays open.
-            changeFolders: async (ss58, folders, role) => {
-              await api.replaceFolders(target.label, ss58, folders, role, driveTarget);
-              toast.success("Folders updated");
-              onChanged();
-              await reload();
-            },
-          }}
+      {panel && summary && !fullView ? <SummaryBar items={summary} onJump={jump} /> : null}
+      {panel && fullView ? (
+        <FullViewHeader
+          view={fullView}
+          total={groupTotal(panel, fullView.group)}
+          onBack={closeFullView}
+          onChange={setFullView}
         />
+      ) : null}
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+        {ctx && fullView ? (
+          <FullViewList view={fullView} people={people} ctx={ctx} scrollRef={scrollRef} onChange={setFullView} />
+        ) : (
+          <PanelContent
+            state={state}
+            folder={folder}
+            expectManage={expectManage}
+            retry={retry}
+            onShare={openShareDialog}
+            ctx={ctx}
+            people={people}
+            query={mainQuery}
+            onQuery={setMainQuery}
+            flash={flash}
+            onShowAll={openFullView}
+          />
+        )}
       </div>
 
       {state.kind === "ready" || state.kind === "loading" ? (
@@ -412,45 +514,69 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
   );
 }
 
-type RowActions = {
-  changeRole: (ss58: string, who: string, role: ReturnType<typeof parseDriveRole>) => void;
-  remove: (ss58: string, who: string) => void;
-  revoke: (inviteId: string, who: string) => void;
-  cancel: (inviteId: string, who: string) => void;
-  approve: (inviteId: string, who: string) => void;
-  changeFolders: (ss58: string, folders: string[], role?: FolderRole) => Promise<void>;
+/** The heading each group's jump lands on. */
+const GROUP_HEADING_ID: Record<PanelGroup, string> = {
+  people: "access-people",
+  pending: "access-pending",
+  links: "access-links",
 };
+
+/** How long a group's heading stays marked after a jump. */
+const JUMP_HIGHLIGHT_MS = 1200;
+
+/** Everyone or everything in a group, whatever the search. */
+function groupTotal(panel: AccessPanel, group: PanelGroup): number {
+  if (group === "people") return peopleCount(panel);
+  if (group === "pending") return panel.pendingInvites.length;
+  return panel.links.length;
+}
+
+/**
+ * The jump bar's items, or null when there is nothing to jump between. The
+ * owner gets one per group with rows (only when there is more than one);
+ * anyone else only reads the people, so theirs is just "People N". While the
+ * main search has text the counts are its matches, and a group with none
+ * drops out, as it does from the list.
+ */
+function summaryItems(panel: AccessPanel, people: PanelPerson[], query: string): SummaryItem[] | null {
+  const peopleShown = people.filter((p) => personMatches(p, query)).length;
+  if (!panel.canManage) return peopleShown > 0 ? [{ group: "people", count: peopleShown }] : null;
+  if (isOnlyOwner(panel)) return null;
+  const items: SummaryItem[] = [
+    { group: "people", count: peopleShown },
+    { group: "pending", count: panel.pendingInvites.filter((i) => pendingMatches(i, query)).length },
+    { group: "links", count: panel.links.filter((l) => linkMatches(l, query)).length },
+  ];
+  const endedMatch = panel.inactiveLinks.some((l) => linkMatches(l, query));
+  const withRows = items.filter((i) => i.count > 0 || (i.group === "links" && endedMatch));
+  return withRows.length > 1 ? withRows : null;
+}
 
 function PanelContent({
   state,
   folder,
   expectManage,
-  ownerName,
   retry,
   onShare,
-  busy,
-  rowError,
-  locked,
-  unlocking,
-  onUnlock,
-  actions,
+  ctx,
+  people,
+  query,
+  onQuery,
+  flash,
+  onShowAll,
 }: {
   state: AccessPanelState;
   folder: boolean;
   expectManage: boolean;
-  ownerName?: string;
   retry: () => void;
   onShare: () => void;
-  busy: Record<string, ReturnType<typeof useRowChanges>["busy"][string]>;
-  rowError: { key: string; message: string } | null;
-  locked: boolean;
-  unlocking: boolean;
-  onUnlock: () => void;
-  actions: RowActions;
+  ctx: RowContext | null;
+  people: PanelPerson[];
+  query: string;
+  onQuery: (next: string) => void;
+  flash: PanelGroup | null;
+  onShowAll: (group: PanelGroup, linksFilter?: LinksFilter) => void;
 }) {
-  // Each group draws its first rows and a "Show all N" for the rest.
-  const [allPending, setAllPending] = useState(false);
-  const [allLinks, setAllLinks] = useState(false);
   if (state.kind === "loading") return <PanelSkeleton withLinks={expectManage} />;
   if (state.kind === "unavailable") {
     return (
@@ -459,7 +585,7 @@ function PanelContent({
       </InlineNotice>
     );
   }
-  if (state.kind === "error") {
+  if (state.kind === "error" || !ctx) {
     return (
       <InlineNotice
         tone="error"
@@ -476,210 +602,125 @@ function PanelContent({
           </Button>
         }
       >
-        {state.message}
+        {state.kind === "error" ? state.message : ""}
       </InlineNotice>
     );
   }
 
-  const panel = state.panel;
-  const owner = <OwnerRow ss58={panel.ownerSs58} isYou={panel.ownerIsYou} name={ownerName} />;
+  const panel = ctx.panel;
   if (isOnlyOwner(panel)) {
     return (
       <>
         <GroupHeader id="access-people" title="People" count={1} />
-        {owner}
+        <PersonItem person={people[0]} ctx={ctx} />
         <EmptyAccess folder={folder} onShare={onShare} />
       </>
     );
   }
 
-  const pending = capRows(panel.pendingInvites, allPending);
-  const links = capRows(panel.links, allLinks);
+  // Typing in the main search filters every group at once; each still draws
+  // its first rows, and "Show all" opens the full view on the same search.
+  const searching = normalizeQuery(query) !== "";
+  const peopleShown = people.filter((p) => personMatches(p, query));
+  const pendingShown = panel.canManage ? panel.pendingInvites.filter((i) => pendingMatches(i, query)) : [];
+  const linksShown = panel.canManage ? panel.links.filter((l) => linkMatches(l, query)) : [];
+  const endedShown = panel.canManage ? panel.inactiveLinks.filter((l) => linkMatches(l, query)) : [];
+  const nothing =
+    searching && peopleShown.length + pendingShown.length + linksShown.length + endedShown.length === 0;
+
   return (
     <>
-      <PeopleGroup panel={panel} folder={folder} owner={owner} onShare={onShare} busy={busy} rowError={rowError} actions={actions} />
-      {panel.canManage && panel.pendingInvites.length > 0 ? (
-        <section aria-labelledby="access-pending">
-          <GroupHeader id="access-pending" title="Pending invites" count={panel.pendingInvites.length} />
+      {peopleCount(panel) > MAIN_SEARCH_MIN_PEOPLE ? (
+        <PanelSearch
+          value={query}
+          onChange={onQuery}
+          label={SEARCH_PLACEHOLDER.main}
+          placeholder={SEARCH_PLACEHOLDER.main}
+          className="mt-3"
+        />
+      ) : null}
+      {nothing ? (
+        <p role="status" className="px-1 py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+          {noMatchLine(query)}
+        </p>
+      ) : null}
+
+      {peopleShown.length > 0 ? (
+        <section aria-labelledby="access-people">
+          <GroupHeader
+            id="access-people"
+            title="People"
+            count={peopleCount(panel)}
+            highlighted={flash === "people"}
+            action={panel.canManage ? { label: "Invite", onClick: onShare } : undefined}
+          />
           <ul>
-            {pending.shown.map((invite) => {
-              const who = invite.recipientEmail ?? "this invitation";
-              const left = pendingLeft(invite.expiresInSecs);
-              return (
-                <RowItem key={invite.inviteId} id={invite.inviteId} rowError={rowError}>
-                  <PendingRow
-                    invite={invite}
-                    busy={busy[invite.inviteId]}
-                    onCancel={() => actions.cancel(invite.inviteId, who)}
-                    onApprove={() => actions.approve(invite.inviteId, who)}
-                    meta={
-                      <>
-                        <StagePill status={invite.emailStatus} />
-                        {invite.pathPrefix ? <FolderTag>{invite.pathPrefix}</FolderTag> : null}
-                        <span className="min-w-0 truncate">
-                          {[driveRoleLabel(parseDriveRole(invite.role)), left].filter(Boolean).join(" · ")}
-                        </span>
-                      </>
-                    }
-                  />
-                </RowItem>
-              );
-            })}
+            {peopleShown.slice(0, PANEL_GROUP_PREVIEW).map((person) => (
+              <li key={personKey(person)}>
+                <PersonItem person={person} ctx={ctx} />
+              </li>
+            ))}
           </ul>
-          {pending.hidden > 0 ? (
-            <ShowAllRows total={panel.pendingInvites.length} onClick={() => setAllPending(true)} />
+          {peopleShown.length > PANEL_GROUP_PREVIEW ? (
+            <ShowAllGroup group="people" total={peopleShown.length} onClick={() => onShowAll("people")} />
+          ) : null}
+          {/* There is no role change for a folder holder (HCFS #475), so the
+              list says what to do instead of offering a control the server
+              would refuse. */}
+          {panel.canManage && folder && panel.folderHolders.length > 0 ? (
+            <p className="mt-1 px-0.5 text-xs text-grey-50 dark:text-grey-dark-600">{FOLDER_ACCESS_HINT}</p>
           ) : null}
         </section>
       ) : null}
-      {panel.canManage ? (
+
+      {pendingShown.length > 0 ? (
+        <section aria-labelledby="access-pending">
+          <GroupHeader
+            id="access-pending"
+            title="Pending invites"
+            count={panel.pendingInvites.length}
+            highlighted={flash === "pending"}
+          />
+          <ul>
+            {pendingShown.slice(0, PANEL_GROUP_PREVIEW).map((invite) => (
+              <li key={invite.inviteId}>
+                <PendingItem invite={invite} ctx={ctx} />
+              </li>
+            ))}
+          </ul>
+          {pendingShown.length > PANEL_GROUP_PREVIEW ? (
+            <ShowAllGroup group="pending" total={pendingShown.length} onClick={() => onShowAll("pending")} />
+          ) : null}
+        </section>
+      ) : null}
+
+      {panel.canManage && (!searching || linksShown.length + endedShown.length > 0) ? (
         <section aria-labelledby="access-links">
           <GroupHeader
             id="access-links"
             title="Links"
             count={`${panel.links.length} active`}
+            highlighted={flash === "links"}
             action={{ label: "New link", onClick: onShare }}
           />
-          {locked ? (
+          {ctx.locked && linksShown.length > 0 ? (
             <InlineNotice tone="info" className="mb-1">
               {ACCESS_PANEL_COPY.linksLocked}
             </InlineNotice>
           ) : null}
           <ul>
-            {links.shown.map((link) => (
-              <RowItem key={link.inviteId} id={link.inviteId} rowError={rowError}>
-                <LinkRow
-                  link={link}
-                  busy={busy[link.inviteId]}
-                  locked={locked}
-                  unlocking={unlocking}
-                  onUnlock={onUnlock}
-                  onRevoke={() => actions.revoke(link.inviteId, "this link")}
-                />
-              </RowItem>
+            {linksShown.slice(0, PANEL_GROUP_PREVIEW).map((link) => (
+              <li key={link.inviteId}>
+                <LinkItem link={link} ctx={ctx} />
+              </li>
             ))}
           </ul>
-          {links.hidden > 0 ? <ShowAllRows total={panel.links.length} onClick={() => setAllLinks(true)} /> : null}
-          <EndedLinks links={panel.inactiveLinks} />
+          {linksShown.length > PANEL_GROUP_PREVIEW ? (
+            <ShowAllGroup group="links" total={linksShown.length} onClick={() => onShowAll("links")} />
+          ) : null}
+          <EndedLinks links={endedShown} onShowAll={() => onShowAll("links", "ended")} />
         </section>
       ) : null}
     </>
-  );
-}
-
-function PeopleGroup({
-  panel,
-  folder,
-  owner,
-  onShare,
-  busy,
-  rowError,
-  actions,
-}: {
-  panel: AccessPanel;
-  folder: boolean;
-  owner: React.ReactNode;
-  onShare: () => void;
-  busy: Record<string, ReturnType<typeof useRowChanges>["busy"][string]>;
-  rowError: { key: string; message: string } | null;
-  actions: RowActions;
-}) {
-  const [all, setAll] = useState(false);
-  // Members and folder holders share one cap, and a few holders always make
-  // it in so a long member list does not hide every folder tag. The owner is
-  // always drawn.
-  const holderQuota = Math.min(panel.folderHolders.length, Math.max(5, PANEL_GROUP_CAP - panel.members.length));
-  const members = capRows(panel.members, all, PANEL_GROUP_CAP - holderQuota);
-  const holders = capRows(panel.folderHolders, all, holderQuota);
-  const hidden = members.hidden + holders.hidden;
-  return (
-    <section aria-labelledby="access-people">
-      <GroupHeader
-        id="access-people"
-        title="People"
-        count={peopleCount(panel)}
-        action={panel.canManage ? { label: "Invite", onClick: onShare } : undefined}
-      />
-      <ul>
-        <li>{owner}</li>
-        {members.shown.map((m) => {
-          const who = accountDisplayName(m.memberSs58, m.memberName);
-          return (
-            <RowItem key={m.memberSs58} id={m.memberSs58} rowError={rowError}>
-              <MemberRow
-                member={m}
-                busy={busy[m.memberSs58]}
-                readOnly={!panel.canManage}
-                meta={memberMeta(m, folder)}
-                onChangeRole={(role) => actions.changeRole(m.memberSs58, who, role)}
-                onRemove={() => actions.remove(m.memberSs58, who)}
-              />
-            </RowItem>
-          );
-        })}
-        {holders.shown.map((h) => {
-          const who = accountDisplayName(h.memberSs58, h.memberName);
-          return (
-            <RowItem key={`holder:${h.memberSs58}`} id={h.memberSs58} rowError={rowError}>
-              <HolderRow
-                holder={h}
-                busy={busy[h.memberSs58]}
-                canManage={panel.canManage}
-                onRemove={() => actions.remove(h.memberSs58, who)}
-                onChangeFolders={(next, role) => actions.changeFolders(h.memberSs58, next, role)}
-              />
-            </RowItem>
-          );
-        })}
-      </ul>
-      {hidden > 0 ? <ShowAllRows total={peopleCount(panel)} onClick={() => setAll(true)} /> : null}
-      {/* There is no role change for a folder holder (HCFS #475), so the
-          list says what to do instead of offering a control the server
-          would refuse. */}
-      {panel.canManage && folder && panel.folderHolders.length > 0 ? (
-        <p className="mt-1 px-0.5 text-xs text-grey-50 dark:text-grey-dark-600">{FOLDER_ACCESS_HINT}</p>
-      ) : null}
-    </section>
-  );
-}
-
-/** A list row with its refusal, if its last change was refused, under it. */
-function RowItem({
-  id,
-  rowError,
-  children,
-}: {
-  id: string;
-  rowError: { key: string; message: string } | null;
-  children: React.ReactNode;
-}) {
-  return (
-    <li>
-      {children}
-      {rowError?.key === id ? (
-        <InlineNotice tone="error" className="mb-2">
-          {rowError.message}
-        </InlineNotice>
-      ) : null}
-    </li>
-  );
-}
-
-/** How far an emailed invitation has got, as a small pill. */
-function StagePill({ status }: { status?: string }) {
-  const needsApproval = status === "awaiting_seal";
-  const approved = status === "sealed";
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center rounded-full px-1.5 text-[11px] font-semibold leading-[18px]",
-        needsApproval
-          ? "bg-warning-50/15 text-warning-50"
-          : approved
-            ? "bg-success-100 text-success-40 dark:bg-success-50/15 dark:text-success-50"
-            : "bg-primary-50/10 text-primary-50 dark:bg-primary-50/15 dark:text-primary-brand-dark",
-      )}
-    >
-      {pendingStage(status)}
-    </span>
   );
 }

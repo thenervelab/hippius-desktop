@@ -161,17 +161,149 @@ export function endedLinksLine(count: number): string {
 }
 
 /**
- * How many rows a group draws before "Show all N". A big drive has 100
- * people and 100 links; drawing every row (each with a role select and its
- * dialogs) up front makes the panel slow to open for rows few will scroll to.
+ * How many rows each group draws in the panel's main view before its
+ * "Show all" row. A big drive has 100 people and 100 links; five of each
+ * keeps every group, and the jump bar above them, on one screen, and the
+ * whole list lives one tap away in the group's full view.
  */
-export const PANEL_GROUP_CAP = 25;
+export const PANEL_GROUP_PREVIEW = 5;
+
+/** More people than this and the main view offers a search field. */
+export const MAIN_SEARCH_MIN_PEOPLE = 10;
 
 /** The rows a group draws now, and how many wait behind "Show all". */
-export function capRows<T>(rows: readonly T[], expanded: boolean, cap: number = PANEL_GROUP_CAP): { shown: T[]; hidden: number } {
+export function capRows<T>(rows: readonly T[], expanded: boolean, cap: number = PANEL_GROUP_PREVIEW): { shown: T[]; hidden: number } {
   if (expanded || rows.length <= cap) return { shown: [...rows], hidden: 0 };
   return { shown: rows.slice(0, cap), hidden: rows.length - cap };
 }
+
+/** The panel's three groups, as the jump bar and the full views name them. */
+export type PanelGroup = "people" | "pending" | "links";
+
+/** One row of the People group. */
+export type PanelPerson =
+  | { kind: "owner"; ss58: string; isYou: boolean; name?: string }
+  | { kind: "member"; member: AccessPanelMember }
+  | { kind: "holder"; holder: AccessPanelHolder };
+
+function personIsYou(p: PanelPerson): boolean {
+  if (p.kind === "owner") return p.isYou;
+  return p.kind === "member" ? p.member.isYou : p.holder.isYou;
+}
+
+/** A stable key for a person's row (a holder can share an ss58 with nobody). */
+export function personKey(p: PanelPerson): string {
+  if (p.kind === "owner") return "owner";
+  return p.kind === "member" ? p.member.memberSs58 : `holder:${p.holder.memberSs58}`;
+}
+
+/**
+ * The People group in drawing order: the owner, you, then everyone else as
+ * Rust sent them (members most recently joined first, then folder holders).
+ * Only arranges the rows Rust already ordered; decides nothing.
+ */
+export function panelPeople(panel: AccessPanel, ownerName?: string): PanelPerson[] {
+  const owner: PanelPerson = { kind: "owner", ss58: panel.ownerSs58, isYou: panel.ownerIsYou, name: ownerName };
+  const rest: PanelPerson[] = [
+    ...panel.members.map((member): PanelPerson => ({ kind: "member", member })),
+    ...panel.folderHolders.map((holder): PanelPerson => ({ kind: "holder", holder })),
+  ];
+  return [owner, ...rest.filter(personIsYou), ...rest.filter((p) => !personIsYou(p))];
+}
+
+/** A search as typed, ready to compare: trimmed and lower case. */
+export function normalizeQuery(query: string): string {
+  return query.trim().toLowerCase();
+}
+
+function anyIncludes(q: string, fields: Array<string | null | undefined>): boolean {
+  return fields.some((f) => typeof f === "string" && f.toLowerCase().includes(q));
+}
+
+/** Whether a person matches a search, by name, email or address. */
+export function personMatches(p: PanelPerson, query: string): boolean {
+  const q = normalizeQuery(query);
+  if (!q) return true;
+  if (p.kind === "owner") return anyIncludes(q, [p.name, p.ss58]);
+  const who = p.kind === "member" ? p.member : p.holder;
+  return anyIncludes(q, [who.memberName, who.memberEmail, who.memberSs58]);
+}
+
+/** Whether an emailed invitation matches a search, by its address. */
+export function pendingMatches(invite: { recipientEmail?: string }, query: string): boolean {
+  const q = normalizeQuery(query);
+  return !q || anyIncludes(q, [invite.recipientEmail]);
+}
+
+/** Whether a link matches a search, by who made it or the role it gives. */
+export function linkMatches(link: AccessPanelLink, query: string): boolean {
+  const q = normalizeQuery(query);
+  if (!q) return true;
+  return anyIncludes(q, [linkTitle(link), linkCreator(link), link.mintedByName, link.mintedBy]);
+}
+
+/** The People full view's filter chips. */
+export type PeopleFilter = "all" | "viewer" | "editor" | "folder";
+export const PEOPLE_FILTERS: ReadonlyArray<{ id: PeopleFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "viewer", label: "Viewer" },
+  { id: "editor", label: "Editor" },
+  { id: "folder", label: "Folder access" },
+];
+
+/** Whether a person is in a People chip. The owner is only in All. */
+export function personInFilter(p: PanelPerson, filter: PeopleFilter): boolean {
+  if (filter === "all") return true;
+  if (p.kind === "owner") return false;
+  if (filter === "folder") return p.kind === "holder";
+  const role = parseDriveRole(p.kind === "member" ? p.member.role : p.holder.role);
+  return filter === "viewer" ? role === "reader" : role === "writer";
+}
+
+/** The Links full view's filter chips. */
+export type LinksFilter = "active" | "ended";
+export const LINKS_FILTERS: ReadonlyArray<{ id: LinksFilter; label: string }> = [
+  { id: "active", label: "Active" },
+  { id: "ended", label: "Ended" },
+];
+
+/** A group's name in the jump bar and the full view's sub-header. */
+export const GROUP_TITLE: Record<PanelGroup, string> = {
+  people: "People",
+  pending: "Pending invites",
+  links: "Links",
+};
+
+/** The jump bar's short name for a group. */
+export const GROUP_SHORT: Record<PanelGroup, string> = {
+  people: "People",
+  pending: "Pending",
+  links: "Links",
+};
+
+/** "Show all 82 people", "Show all 6 pending invites", "Show all 45 links". */
+export function showAllLabel(group: PanelGroup, total: number): string {
+  const noun =
+    group === "people"
+      ? total === 1 ? "person" : "people"
+      : group === "pending"
+        ? `pending invite${total === 1 ? "" : "s"}`
+        : `link${total === 1 ? "" : "s"}`;
+  return `Show all ${total} ${noun}`;
+}
+
+/** The empty line when a search matches nothing. */
+export function noMatchLine(query: string): string {
+  return `No one matches “${query.trim()}”`;
+}
+
+/** The search field's placeholder in each view. */
+export const SEARCH_PLACEHOLDER: Record<PanelGroup | "main", string> = {
+  main: "Search people, invites and links",
+  people: "Search by name, email or address",
+  pending: "Search by email",
+  links: "Search by creator or role",
+};
 
 /** Copy for the panel. One place, shared with the tests. */
 export const ACCESS_PANEL_COPY = {

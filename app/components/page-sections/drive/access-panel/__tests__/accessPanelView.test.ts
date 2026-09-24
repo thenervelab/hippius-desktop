@@ -2,9 +2,20 @@
 // here is a change there too.
 
 import { describe, it, expect } from "vitest";
-import type { AccessPanel, AccessPanelLink } from "@/app/lib/tauri/sharedDrives";
+import type { AccessPanel, AccessPanelHolder, AccessPanelLink, AccessPanelMember } from "@/app/lib/tauri/sharedDrives";
 import {
+  PANEL_GROUP_PREVIEW,
+  SEARCH_PLACEHOLDER,
   capRows,
+  linkMatches,
+  noMatchLine,
+  panelPeople,
+  pendingMatches,
+  personInFilter,
+  personKey,
+  personMatches,
+  showAllLabel,
+  type PanelPerson,
   durationWords,
   endedLinksLine,
   holderFolderTag,
@@ -150,13 +161,92 @@ describe("empty", () => {
 describe("capRows", () => {
   const rows = Array.from({ length: 30 }, (_, i) => i);
 
-  it("draws everything up to the cap", () => {
-    expect(capRows(rows.slice(0, 25), false)).toEqual({ shown: rows.slice(0, 25), hidden: 0 });
+  it("draws a group's first five rows in the main view", () => {
+    expect(PANEL_GROUP_PREVIEW).toBe(5);
+    expect(capRows(rows.slice(0, 5), false)).toEqual({ shown: rows.slice(0, 5), hidden: 0 });
+    expect(capRows(rows, false)).toEqual({ shown: rows.slice(0, 5), hidden: 25 });
   });
 
-  it("holds the rest behind Show all until expanded", () => {
-    expect(capRows(rows, false)).toEqual({ shown: rows.slice(0, 25), hidden: 5 });
+  it("draws everything when expanded, and takes another cap", () => {
     expect(capRows(rows, true)).toEqual({ shown: rows, hidden: 0 });
     expect(capRows(rows, false, 0)).toEqual({ shown: [], hidden: 30 });
+  });
+});
+
+describe("the People group's order", () => {
+  const member = (ss58: string, isYou = false, extra: Partial<AccessPanelMember> = {}): AccessPanelMember => ({
+    memberSs58: ss58,
+    role: "reader",
+    isYou,
+    createdAt: "t",
+    ...extra,
+  });
+  const holder = (ss58: string, isYou = false): AccessPanelHolder => ({
+    memberSs58: ss58,
+    isYou,
+    role: "writer",
+    pathPrefix: "Work",
+    folders: ["Work"],
+  });
+
+  it("is the owner, you, then members as Rust sent them, then folder holders", () => {
+    const panel = { ...empty, members: [member("5New"), member("5Old")], folderHolders: [holder("5Bo")] };
+    expect(panelPeople(panel, "Olive").map(personKey)).toEqual(["owner", "5New", "5Old", "holder:5Bo"]);
+    expect(panelPeople(panel, "Olive")[0]).toMatchObject({ kind: "owner", name: "Olive" });
+  });
+
+  it("puts you right after the owner, whether you are a member or hold a folder", () => {
+    const asMember = { ...empty, members: [member("5New"), member("5Me", true)] };
+    expect(panelPeople(asMember).map(personKey)).toEqual(["owner", "5Me", "5New"]);
+    const asHolder = { ...empty, members: [member("5New")], folderHolders: [holder("5Me", true)] };
+    expect(panelPeople(asHolder).map(personKey)).toEqual(["owner", "holder:5Me", "5New"]);
+  });
+});
+
+describe("search and filters", () => {
+  const sara: PanelPerson = {
+    kind: "member",
+    member: { memberSs58: "5SaraAddr", memberName: "Sara Khan", memberEmail: "sara@acme.io", role: "writer", isYou: false, createdAt: "t" },
+  };
+  const bo: PanelPerson = {
+    kind: "holder",
+    holder: { memberSs58: "5BoAddr", memberName: "Bo", isYou: false, role: "reader", pathPrefix: "Work", folders: ["Work"] },
+  };
+  const owner: PanelPerson = { kind: "owner", ss58: "5OwnerAddr", isYou: true, name: "Olive" };
+
+  it("finds a person by name, email or address, ignoring case and spaces around", () => {
+    expect(personMatches(sara, "  SARA ")).toBe(true);
+    expect(personMatches(sara, "acme.io")).toBe(true);
+    expect(personMatches(sara, "5saraaddr")).toBe(true);
+    expect(personMatches(sara, "bo")).toBe(false);
+    expect(personMatches(owner, "olive")).toBe(true);
+    expect(personMatches(owner, "5owner")).toBe(true);
+    expect(personMatches(bo, "")).toBe(true);
+  });
+
+  it("sorts people into the chips: the owner only in All, holders under Folder access and their role", () => {
+    expect([owner, sara, bo].filter((p) => personInFilter(p, "all"))).toHaveLength(3);
+    expect([owner, sara, bo].filter((p) => personInFilter(p, "editor"))).toEqual([sara]);
+    expect([owner, sara, bo].filter((p) => personInFilter(p, "viewer"))).toEqual([bo]);
+    expect([owner, sara, bo].filter((p) => personInFilter(p, "folder"))).toEqual([bo]);
+  });
+
+  it("finds an invitation by its address, and a link by maker or role", () => {
+    expect(pendingMatches({ recipientEmail: "mia@example.com" }, "MIA")).toBe(true);
+    expect(pendingMatches({}, "mia")).toBe(false);
+    expect(linkMatches(link(), "sara")).toBe(true);
+    expect(linkMatches(link(), "editor")).toBe(true);
+    expect(linkMatches(link(), "viewer")).toBe(false);
+    expect(linkMatches(link({ mintedByYou: true }), "you")).toBe(true);
+  });
+
+  it("words Show all and the empty search, with no em dash", () => {
+    expect(showAllLabel("people", 82)).toBe("Show all 82 people");
+    expect(showAllLabel("pending", 6)).toBe("Show all 6 pending invites");
+    expect(showAllLabel("links", 45)).toBe("Show all 45 links");
+    expect(noMatchLine(" zed ")).toBe("No one matches “zed”");
+    for (const words of [showAllLabel("people", 2), noMatchLine("x"), ...Object.values(SEARCH_PLACEHOLDER)]) {
+      expect(words).not.toContain("\u2014");
+    }
   });
 });

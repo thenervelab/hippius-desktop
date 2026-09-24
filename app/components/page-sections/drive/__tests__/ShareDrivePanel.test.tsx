@@ -2,7 +2,10 @@
 // invites and Links, from one Rust fold (`list_access_panel`). Covers the
 // header for an owner and for someone the drive is shared with, the groups
 // and their counts, the empty and loading states, pessimistic changes on
-// every row kind, locked links, the Share dialog hand-off, and Leave.
+// every row kind, locked links, the Share dialog hand-off, and Leave; and, for
+// a big drive, rows that cut long words short beside a fixed role slot, the
+// jump bar, five rows a group with "Show all", and the full view's search,
+// chips, windowed list and actions (the Share dev tools' Big and Huge presets).
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -571,40 +574,258 @@ describe("a drive shared with you", () => {
   });
 });
 
-describe("a big drive", () => {
-  // The Share dev tools' "Big drive" preset: 60 people (54 members and 6
-  // folder holders), 6 pending invites, 45 working links and 15 ended ones.
-  async function bigDrive() {
-    const { buildFixture, fixtureAccessPanel } = await import("../share-dialog/shareFixture");
-    const { DEFAULT_SETTINGS, applyPreset } = await import("../share-dialog/shareDevToolsSettings");
-    const now = Date.parse("2026-09-25T12:00:00Z");
-    return fixtureAccessPanel(buildFixture(applyPreset(DEFAULT_SETTINGS, "big"), null, now), false, now);
-  }
+// The Share dev tools' presets, as the panel receives them.
+async function presetPanel(id: "big" | "huge", over: Partial<AccessPanel> = {}): Promise<AccessPanel> {
+  const { buildFixture, fixtureAccessPanel } = await import("../share-dialog/shareFixture");
+  const { DEFAULT_SETTINGS, applyPreset } = await import("../share-dialog/shareDevToolsSettings");
+  const now = Date.parse("2026-09-25T12:00:00Z");
+  return { ...fixtureAccessPanel(buildFixture(applyPreset(DEFAULT_SETTINGS, id), null, now), false, now), ...over };
+}
 
-  it("counts every group in full", async () => {
-    listAccessPanelMock.mockResolvedValue(await bigDrive());
+/** The rows of the full view's windowed list. */
+function fullList(name: string): HTMLElement {
+  return screen.getByRole("list", { name });
+}
+
+describe("rows never run under the role", () => {
+  const LONG = "Srinivasa Ramanujan Aiyangar Venkataraghavan";
+
+  it("cuts a long name and email short, with the role in a fixed slot of its own", async () => {
+    listAccessPanelMock.mockResolvedValue(
+      panel({ members: [member({ memberName: LONG, memberEmail: "srinivasa.ramanujan@research.example.com" })] }),
+    );
+    renderPanel();
+    const name = await screen.findByText(LONG);
+    expect(name).toHaveClass("truncate");
+    // The words column takes what is left and clips, so nothing can paint
+    // under the select beside it.
+    expect(name.closest(".flex-1")).toHaveClass("min-w-0", "overflow-hidden");
+    expect(screen.getByText("srinivasa.ramanujan@research.example.com")).toHaveClass("truncate");
+    const slot = screen.getByLabelText(`Role for ${LONG}`).closest("span.shrink-0");
+    expect(slot).toHaveClass("w-[98px]", "shrink-0");
+    // The owner's role sits in a slot of the same width, so the column lines up.
+    expect(screen.getByText("Owner").parentElement).toHaveClass("w-[98px]", "shrink-0");
+  });
+
+  it("offers the full name, email and address to keyboard and screen reader users", async () => {
+    listAccessPanelMock.mockResolvedValue(panel({ members: [member({ memberName: LONG, memberEmail: "sr@example.com" })] }));
+    renderPanel();
+    const name = await screen.findByText(LONG);
+    const trigger = name.parentElement!;
+    expect(trigger).toHaveAttribute("tabindex", "0");
+    expect(trigger).toHaveTextContent(`${LONG}, sr@example.com, address ${ANN}`);
+  });
+
+  it("cuts a long folder tag and a long pending address short too", async () => {
+    const folder = "Clients/ACME Corporation International/2026 Quarterly Reports/Final versions";
+    const address = "invitee.with.a.rather.long.address@research-and-development.example.com";
+    listAccessPanelMock.mockResolvedValue(
+      panel({
+        folderHolders: [holder({ pathPrefix: folder, folders: [folder] })],
+        pendingInvites: [{ ...full().pendingInvites[0], recipientEmail: address }],
+      }),
+    );
+    renderPanel();
+    const tag = await screen.findByText(folder);
+    expect(tag).toHaveClass("truncate");
+    expect(tag.parentElement).toHaveClass("max-w-[65%]");
+    expect(screen.getByText(address)).toHaveClass("truncate");
+    expect(screen.getByText(address)).toHaveAttribute("title", address);
+  });
+});
+
+describe("a big drive", () => {
+  it("counts every group in full, in the headers and the jump bar", async () => {
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
     renderPanel();
     expect(await screen.findByRole("heading", { name: "People 61" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Pending invites 6" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Links 45 active" })).toBeInTheDocument();
+    const bar = within(screen.getByRole("navigation", { name: "Jump to a group" }));
+    expect(bar.getAllByRole("button").map((b) => b.textContent)).toEqual(["People61", "Pending6", "Links45"]);
     expect(screen.getByRole("button", { name: /15 expired or revoked links/ })).toBeInTheDocument();
   });
 
-  it("draws the first rows of each group, with the folder holders among them, and the rest on Show all", async () => {
-    listAccessPanelMock.mockResolvedValue(await bigDrive());
+  it("draws five rows a group, then Show all with the group's full count", async () => {
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
     renderPanel();
     const people = within(await waitFor(() => group(/^People/)));
-    // 20 members and 5 of the 6 holders, so folder tags are in view.
-    expect(people.getAllByRole("combobox", { name: /^Role for/ })).toHaveLength(20);
-    expect(people.getAllByRole("button", { name: "Change folders" })).toHaveLength(5);
-    fireEvent.click(people.getByRole("button", { name: "Show all 61" }));
-    expect(people.getAllByRole("combobox", { name: /^Role for/ })).toHaveLength(54);
-    expect(people.getAllByRole("button", { name: "Change folders" })).toHaveLength(6);
-    expect(people.queryByRole("button", { name: /^Show all/ })).not.toBeInTheDocument();
-
+    // The owner and four more; every row with a role select is a member.
+    expect(people.getAllByRole("listitem")).toHaveLength(5);
+    expect(people.getByRole("button", { name: "Show all 61 people" })).toBeInTheDocument();
+    const pending = within(group(/^Pending invites/));
+    expect(pending.getAllByRole("listitem")).toHaveLength(5);
+    expect(pending.getByRole("button", { name: "Show all 6 pending invites" })).toBeInTheDocument();
     const links = within(group(/^Links/));
-    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(25);
-    fireEvent.click(links.getByRole("button", { name: "Show all 45" }));
-    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(45);
+    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(5);
+    expect(links.getByRole("button", { name: "Show all 45 links" })).toBeInTheDocument();
+  });
+
+  it("jumps to a group from the bar: scrolls, focuses its heading and marks it for a moment", async () => {
+    const scrollTo = vi.fn();
+    const original = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = scrollTo;
+    try {
+      listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+      renderPanel();
+      await screen.findByRole("heading", { name: "Links 45 active" });
+      const bar = within(screen.getByRole("navigation", { name: "Jump to a group" }));
+      fireEvent.click(bar.getByRole("button", { name: "Links 45" }));
+      expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: "smooth" }));
+      const heading = screen.getByRole("heading", { name: "Links 45 active" });
+      expect(heading).toHaveFocus();
+      expect(heading.parentElement).toHaveAttribute("data-highlighted", "true");
+      await waitFor(() => expect(heading.parentElement).not.toHaveAttribute("data-highlighted"), { timeout: 2500 });
+    } finally {
+      HTMLElement.prototype.scrollTo = original;
+    }
+  });
+
+  it("filters every group at once from the main search", async () => {
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    renderPanel();
+    const search = await screen.findByRole("searchbox", { name: "Search people, invites and links" });
+    fireEvent.change(search, { target: { value: "invitee3@" } });
+    expect(screen.getByText("invitee3@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("invitee1@example.com")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^People/ })).not.toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "zzzz" } });
+    expect(screen.getByText("No one matches “zzzz”")).toBeInTheDocument();
+  });
+
+  it("opens a group's full view, lists it all behind search and chips, and goes back", async () => {
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Show all 61 people" }));
+    expect(screen.getByRole("heading", { name: "People 61" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Jump to a group" })).not.toBeInTheDocument();
+    const search = screen.getByRole("searchbox", { name: "Search people" });
+
+    // Folder access: the six folder holders, and nobody else.
+    fireEvent.click(screen.getByRole("button", { name: "Folder access" }));
+    expect(screen.getByRole("button", { name: "Folder access" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(fullList("People")).getAllByRole("listitem")).toHaveLength(6);
+    expect(within(fullList("People")).getAllByRole("button", { name: "Change folders" })).toHaveLength(6);
+
+    // A search by email narrows it; one that matches nothing says so.
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    fireEvent.change(search, { target: { value: "sara.khan0@" } });
+    expect(within(fullList("People")).getAllByRole("listitem")).toHaveLength(1);
+    fireEvent.change(search, { target: { value: "nobody-here" } });
+    expect(screen.getByText("No one matches “nobody-here”")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("navigation", { name: "Jump to a group" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show all 61 people" })).toBeInTheDocument();
+  });
+
+  it("changes a role from the full view, saying Saving until Rust answers", async () => {
+    let finish: () => void = () => {};
+    changeRoleMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
+    const big = await presetPanel("big");
+    listAccessPanelMock.mockResolvedValue(big);
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Show all 61 people" }));
+    const search = screen.getByRole("searchbox", { name: "Search people" });
+    // Someone past the first five rows of the main view.
+    const target = big.members[40];
+    fireEvent.change(search, { target: { value: target.memberSs58 } });
+    const select = within(fullList("People")).getByRole("combobox");
+    fireEvent.click(select);
+    const next = target.role === "writer" ? "Viewer" : "Editor";
+    fireEvent.click(screen.getAllByText(next).at(-1)!);
+    if (next === "Viewer") fireEvent.click(await screen.findByRole("button", { name: "Change role" }));
+    await waitFor(() => expect(changeRoleMock).toHaveBeenCalledWith("team-docs", target.memberSs58, next === "Viewer" ? "reader" : "writer", undefined));
+    expect(screen.getByText("Saving…")).toBeInTheDocument();
+    finish();
+    await waitFor(() => expect(screen.queryByText("Saving…")).not.toBeInTheDocument());
+    // Still in the full view, on the same search.
+    expect(screen.getByRole("searchbox", { name: "Search people" })).toHaveValue(target.memberSs58);
+  });
+
+  it("revokes a link from the Links full view, and lists ended links under Ended", async () => {
+    revokeMock.mockReturnValue(new Promise<void>(() => {}));
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Show all 45 links" }));
+    const list = within(fullList("Links"));
+    fireEvent.click(list.getAllByRole("button", { name: "Revoke" })[0]);
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "fixture-link-0", undefined));
+    expect(await screen.findByText("Revoking…")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ended" }));
+    expect(within(fullList("Links")).getAllByText(/^(Revoked|Expired|All uses taken) ·/).length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search links" }), { target: { value: "nobody" } });
+    expect(screen.getByText("No one matches “nobody”")).toBeInTheDocument();
+  });
+
+  it("searches pending invitations by email in their full view", async () => {
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Show all 6 pending invites" }));
+    expect(within(fullList("Pending invites")).getAllByRole("listitem")).toHaveLength(6);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search pending invites" }), { target: { value: "invitee4" } });
+    expect(within(fullList("Pending invites")).getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Viewer" })).not.toBeInTheDocument();
+  });
+
+  it("opens straight on the people when the Share dialog's more row asked for it", async () => {
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    renderPanel({ label: "team-docs", folderName: "team-docs", openOn: "people" });
+    expect(await screen.findByRole("list", { name: "People" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+  });
+});
+
+describe("the Huge preset", () => {
+  it("renders every group without errors and draws only a window of a 100-row list", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      listAccessPanelMock.mockResolvedValue(await presetPanel("huge"));
+      renderPanel();
+      expect(await screen.findByRole("heading", { name: "People 101" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show all 50 pending invites" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show all 100 links" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Show all 101 people" }));
+      const rows = within(fullList("People")).getAllByRole("listitem");
+      expect(rows.length).toBeGreaterThan(5);
+      expect(rows.length).toBeLessThan(101);
+      expect(rows[0]).toHaveAttribute("aria-setsize", "101");
+      // A person far down the list is one search away.
+      fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), { target: { value: "Srinivasa" } });
+      expect(within(fullList("People")).getAllByText("Srinivasa Ramanujan Aiyangar Venkataraghavan").length).toBeGreaterThan(0);
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
+describe("the jump bar for someone the drive is shared with", () => {
+  it("shows only People, with no pending invites or links to jump to", async () => {
+    memberships.list = [
+      {
+        ownerSs58: OWNER,
+        ownerName: "Olive",
+        folderHash: "abc123",
+        displayLabel: "team-docs",
+        role: "reader",
+        createdAt: "t",
+        syncedLocally: true,
+        localLabel: "team-docs",
+        frozen: false,
+        frozenUntil: null,
+      },
+    ];
+    const big = await presetPanel("big", { ownerSs58: OWNER, ownerIsYou: false, yourRole: "reader", canManage: false });
+    listAccessPanelMock.mockResolvedValue(big);
+    renderPanel();
+    const bar = within(await screen.findByRole("navigation", { name: "Jump to a group" }));
+    expect(bar.getAllByRole("button").map((b) => b.textContent)).toEqual(["People61"]);
+    expect(screen.queryByRole("heading", { name: /^Pending invites/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show all 61 people" }));
+    expect(within(fullList("People")).queryByRole("combobox")).not.toBeInTheDocument();
   });
 });

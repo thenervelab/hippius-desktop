@@ -5,7 +5,7 @@
 // Share dialog's (`share-dialog/PeopleWithAccessSection`), reused as they are.
 
 import React, { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Clock, Folder, FolderPen, Link2, Lock, Plus, Users } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, Clock, Folder, FolderPen, Link2, Lock, Plus, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons, Skeleton } from "@/components/ui";
@@ -13,7 +13,15 @@ import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import { cn } from "@/lib/utils";
 import AccountLabel from "../AccountLabel";
-import { BusyLabel, PersonAvatar, type Busy } from "../share-dialog/PeopleWithAccessSection";
+import {
+  BusyLabel,
+  PersonAvatar,
+  ROLE_SLOT,
+  ROLE_TEXT,
+  ROW,
+  TEXT_COLUMN,
+  type Busy,
+} from "../share-dialog/PeopleWithAccessSection";
 import ChangeFoldersDialog, { type FolderRole } from "./ChangeFoldersDialog";
 import type { AccessPanelHolder, AccessPanelLink } from "@/app/lib/tauri/sharedDrives";
 import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
@@ -21,6 +29,7 @@ import { driveRoleLabel, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { truncateInviteUrl } from "@/app/lib/shared-drives/inviteLink";
 import {
   ACCESS_PANEL_COPY,
+  PANEL_GROUP_PREVIEW,
   capRows,
   endedLinksLine,
   holderFolderTag,
@@ -29,11 +38,12 @@ import {
   linkMeta,
   linkTitle,
   linkUsage,
+  showAllLabel,
+  type PanelGroup,
 } from "./accessPanelView";
 
-export const PANEL_ROW = "flex min-h-[48px] min-w-0 items-center gap-3 py-2";
+export const PANEL_ROW = ROW;
 const MUTED = "text-xs text-grey-50 dark:text-grey-dark-600";
-const ROLE_TEXT = "shrink-0 text-xs text-grey-50 dark:text-grey-dark-600";
 const ICON_TILE =
   "flex size-8 shrink-0 items-center justify-center rounded-[9px] border border-grey-80 bg-grey-90/60 text-grey-50 dark:border-white/10 dark:bg-white/5 dark:text-grey-dark-600";
 const MENU_BUTTON =
@@ -45,15 +55,30 @@ export function GroupHeader({
   title,
   count,
   action,
+  highlighted = false,
 }: {
   id: string;
   title: string;
   count?: React.ReactNode;
   action?: { label: string; onClick: () => void };
+  /** Briefly marked after the jump bar scrolled here, so the eye lands on it. */
+  highlighted?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 pb-1 pt-4">
-      <h3 id={id} className="text-xs font-semibold uppercase tracking-[0.04em] text-grey-50 dark:text-grey-dark-600">
+    <div
+      data-highlighted={highlighted || undefined}
+      className={cn(
+        "-mx-1.5 mt-3 flex items-center justify-between gap-2 rounded-md px-1.5 pb-1 pt-1 transition-colors duration-500",
+        highlighted && "bg-primary-50/10 dark:bg-primary-brand-dark/15",
+      )}
+    >
+      <h3
+        id={id}
+        // A jump from the bar moves focus here, so a keyboard or screen
+        // reader user lands where the eye does.
+        tabIndex={-1}
+        className="min-w-0 truncate text-xs font-semibold uppercase tracking-[0.04em] text-grey-50 outline-none dark:text-grey-dark-600"
+      >
         {title}
         {count !== undefined ? <span className="ml-1.5 font-medium">{count}</span> : null}
       </h3>
@@ -71,12 +96,12 @@ export function GroupHeader({
   );
 }
 
-/** The small dashed tag naming the folder a row is about. */
+/** The small dashed tag naming the folder a row is about; a long path is cut short. */
 export function FolderTag({ children, title }: { children: React.ReactNode; title?: string }) {
   return (
     <span
-      title={title}
-      className="inline-flex min-w-0 max-w-[70%] shrink-0 items-center gap-1 rounded-md border border-dashed border-grey-80 px-1.5 text-[11px] leading-[18px] text-grey-50 dark:border-white/15 dark:text-grey-dark-600"
+      title={title ?? (typeof children === "string" ? children : undefined)}
+      className="inline-flex min-w-0 max-w-[65%] shrink-0 items-center gap-1 rounded-md border border-dashed border-grey-80 px-1.5 text-[11px] leading-[18px] text-grey-50 dark:border-white/15 dark:text-grey-dark-600"
     >
       <Folder className="size-3 shrink-0" aria-hidden />
       <span className="truncate">{children}</span>
@@ -105,44 +130,57 @@ export function HolderRow({
   return (
     <div className={cn(PANEL_ROW, busy === "removing" && "opacity-60")} aria-busy={busy ? true : undefined}>
       <PersonAvatar ss58={holder.memberSs58} />
-      <div className="min-w-0 flex-1">
+      <div className={TEXT_COLUMN}>
         <div className="flex min-w-0 items-baseline gap-1.5">
           <AccountLabel
             ss58={holder.memberSs58}
             name={holder.memberName}
             email={holder.memberEmail}
+            focusable
             className="text-sm text-grey-10 dark:text-white"
           />
           {holder.isYou ? <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">(you)</span> : null}
         </div>
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
           <FolderTag title={folders.join(", ")}>{holderFolderTag(holder)}</FolderTag>
-          {holder.memberEmail ? <span className={cn(MUTED, "min-w-0 truncate")}>{holder.memberEmail}</span> : null}
+          {holder.memberEmail ? (
+            <span className={cn(MUTED, "min-w-0 truncate")} title={holder.memberEmail}>
+              {holder.memberEmail}
+            </span>
+          ) : null}
         </div>
       </div>
-      {busy ? <BusyLabel busy={busy} /> : <span className={ROLE_TEXT}>{driveRoleLabel(parseDriveRole(holder.role))}</span>}
-      {canManage && !busy && !holder.isYou ? (
-        <TableActionMenu
-          dropdownTitle=""
-          items={[
-            {
-              icon: <FolderPen className="size-4" />,
-              itemTitle: "Change folders",
-              onItemClick: () => setDialog("folders"),
-            },
-            {
-              icon: <Icons.Trash className="size-4" />,
-              itemTitle: "Remove access",
-              variant: "destructive",
-              onItemClick: () => setDialog("remove"),
-            },
-          ]}
-        >
-          <Button variant="ghost" size="auto" aria-label={`Actions for ${who}`} className={MENU_BUTTON}>
-            <Icons.EllipsisVertical className="size-[18px]" />
-          </Button>
-        </TableActionMenu>
-      ) : null}
+      {/* The role and its menu share the members' role slot, so the role
+          words line up with theirs down the list. */}
+      <span className={ROLE_SLOT}>
+        {busy ? (
+          <BusyLabel busy={busy} className="pl-2.5" />
+        ) : (
+          <span className={ROLE_TEXT}>{driveRoleLabel(parseDriveRole(holder.role))}</span>
+        )}
+        {canManage && !busy && !holder.isYou ? (
+          <TableActionMenu
+            dropdownTitle=""
+            items={[
+              {
+                icon: <FolderPen className="size-4" />,
+                itemTitle: "Change folders",
+                onItemClick: () => setDialog("folders"),
+              },
+              {
+                icon: <Icons.Trash className="size-4" />,
+                itemTitle: "Remove access",
+                variant: "destructive",
+                onItemClick: () => setDialog("remove"),
+              },
+            ]}
+          >
+            <Button variant="ghost" size="auto" aria-label={`Actions for ${who}`} className={MENU_BUTTON}>
+              <Icons.EllipsisVertical className="size-[18px]" />
+            </Button>
+          </TableActionMenu>
+        ) : null}
+      </span>
 
       {dialog === "folders" ? (
         <ChangeFoldersDialog who={who} folders={folders} onClose={() => setDialog("none")} onConfirm={onChangeFolders} />
@@ -291,15 +329,17 @@ export function LinkRow({
       <span aria-hidden className={ICON_TILE}>
         <Link2 className="size-4" />
       </span>
-      <div className="grid min-w-0 flex-1 gap-1.5">
+      <div className="grid min-w-0 flex-1 gap-1.5 overflow-hidden">
         <div className="min-w-0">
-          <p className="truncate text-sm text-grey-10 dark:text-white">
+          <p className="truncate text-sm text-grey-10 dark:text-white" title={creator ? `${title} · by ${creator}` : title}>
             {title}
             {creator ? <span className="text-xs text-grey-50 dark:text-grey-dark-600"> · by {creator}</span> : null}
           </p>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
             {link.pathPrefix ? <FolderTag>{link.pathPrefix}</FolderTag> : null}
-            <span className={cn(MUTED, "min-w-0 break-words")}>{linkMeta(link)}</span>
+            <span className={cn(MUTED, "min-w-0 truncate")} title={linkMeta(link)}>
+              {linkMeta(link)}
+            </span>
           </div>
         </div>
         {link.singleUse ? null : (
@@ -362,17 +402,17 @@ export function LinkRow({
 }
 
 /** A link that no longer works: what it was, and why it stopped. */
-function EndedLinkRow({ link }: { link: AccessPanelLink }) {
+export function EndedLinkRow({ link }: { link: AccessPanelLink }) {
   return (
     <div className="flex min-w-0 items-center gap-3 py-2 opacity-80">
       <span aria-hidden className={ICON_TILE}>
         <Link2 className="size-4" />
       </span>
-      <div className="min-w-0 flex-1">
+      <div className={TEXT_COLUMN}>
         <p className="truncate text-sm text-grey-30 dark:text-grey-dark-700">{linkTitle(link)}</p>
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
           {link.pathPrefix ? <FolderTag>{link.pathPrefix}</FolderTag> : null}
-          <span className={cn(MUTED, "min-w-0 truncate")}>
+          <span className={cn(MUTED, "min-w-0 truncate")} title={`${linkEndedLabel(link.status)} · ${linkUsage(link)}`}>
             {linkEndedLabel(link.status)} · {linkUsage(link)}
           </span>
         </div>
@@ -381,12 +421,14 @@ function EndedLinkRow({ link }: { link: AccessPanelLink }) {
   );
 }
 
-/** Links that no longer work, folded into one line until opened. */
-export function EndedLinks({ links }: { links: AccessPanelLink[] }) {
+/**
+ * Links that no longer work, folded into one line until opened. Opened, it
+ * shows the first few; the rest are in the Links full view's Ended list.
+ */
+export function EndedLinks({ links, onShowAll }: { links: AccessPanelLink[]; onShowAll: () => void }) {
   const [open, setOpen] = useState(false);
-  const [all, setAll] = useState(false);
   if (links.length === 0) return null;
-  const { shown, hidden } = capRows(links, all);
+  const { shown, hidden } = capRows(links, false, PANEL_GROUP_PREVIEW);
   return (
     <div>
       <button
@@ -410,26 +452,32 @@ export function EndedLinks({ links }: { links: AccessPanelLink[] }) {
               </li>
             ))}
           </ul>
-          {hidden > 0 ? <ShowAllRows total={links.length} onClick={() => setAll(true)} /> : null}
+          {hidden > 0 ? (
+            <ShowAllButton label={`Show all ${links.length} ended links`} onClick={onShowAll} />
+          ) : null}
         </>
       ) : null}
     </div>
   );
 }
 
-/** Under a capped group: draws the rest of it. */
-export function ShowAllRows({ total, onClick }: { total: number; onClick: () => void }) {
+/** Under a group's first rows: opens the group's full view. */
+export function ShowAllButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button
       type="button"
-      aria-expanded={false}
       onClick={onClick}
-      className="flex w-full items-center justify-center gap-1 rounded-lg py-2 text-xs font-medium text-primary-50 transition-colors hover:bg-grey-90/60 dark:text-primary-brand-dark dark:hover:bg-white/5"
+      className="flex w-full min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-2 text-left text-xs font-medium text-primary-50 transition-colors hover:bg-grey-90/60 dark:text-primary-brand-dark dark:hover:bg-white/5"
     >
-      Show all {total}
-      <ChevronDown className="size-3.5" aria-hidden />
+      <span className="min-w-0 truncate">{label}</span>
+      <ArrowRight className="size-3.5 shrink-0" aria-hidden />
     </button>
   );
+}
+
+/** "Show all 82 people →" under a group in the main view. */
+export function ShowAllGroup({ group, total, onClick }: { group: PanelGroup; total: number; onClick: () => void }) {
+  return <ShowAllButton label={showAllLabel(group, total)} onClick={onClick} />;
 }
 
 /** Only the owner has access: say so, and offer the Share dialog. */
