@@ -239,9 +239,16 @@ with `list_drive_invites`), which also reports a missing drive key; the panel th
 "Links are locked…" and routes Unlock through `useUnlockFlow` (the sync banner's flow),
 reading the list again once the recovery dialog closes. Rows reuse the Share dialog's
 `MemberRow` / `PendingRow` / `useRowChanges`, so changes are pessimistic in both. The
-dev fixture covers the panel too. Each group draws 25 rows and "Show all N" for the rest
-(`capRows`), a few folder holders always among the People shown; counts stay complete. Pinned by
-`access_panel.rs` unit and wire tests and `drive/__tests__/ShareDrivePanel.test.tsx`.
+dev fixture covers the panel too. Each group comes newest first from Rust (you, then most
+recently joined; invitations and links most recently created) and the main view draws its first
+`PANEL_GROUP_PREVIEW` (5) rows, a jump bar (owner only, when more than one group has rows; a member
+sees "People N") and "Show all N …", which opens that group's full view in place of the list:
+search, filter chips and a windowed list (`useWindowedRows`; no virtualization dependency), with the
+same pessimistic actions because busy and refusal state live above both views. Searching and
+filtering there is presentation over rows Rust already sent. Every person row is avatar, a
+`min-w-0 overflow-hidden` words column whose lines truncate, and a fixed 98px role slot
+(`ROLE_SLOT`), so a long name cannot run under the role select. Pinned by `access_panel.rs` unit
+and wire tests and `drive/__tests__/ShareDrivePanel.test.tsx`.
 
 **Refusals are "coming soon", mapped in Rust.** The server words them as `400 bad_request`
 plus a message, so `classify_folder_invite_refusal` / `classify_folder_email_refusal`
