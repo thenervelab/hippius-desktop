@@ -220,9 +220,9 @@ drive or folder. Role change, remove, cancel and approve are PESSIMISTIC: the ro
 refusal leaves the row as it was with "Couldn't change access for <name>. <reason>". A
 demotion is confirmed first (the server revokes links as part of it). Six rows at most,
 then "+ N more · Manage access" to the panel. A dev and staging only preview fixture
-(`shareAccessApi.ts`, `localStorage["hippius:share-dialog-fixture"] = "0".."30"`) stands in
-for these commands with fake people, latency and refusals; it is off at build time on beta
-and production. Pinned by `share-dialog/__tests__/ShareDialog.test.tsx` and the
+(`shareAccessApi.ts` + `shareFixture.ts`, driven by the Share dev tools panel, see
+`frontend.md`) stands in for these commands with fake people, links, latency and refusals;
+it is off at build time on beta and production. Pinned by `share-dialog/__tests__/ShareDialog.test.tsx` and the
 `fold_share_access` unit tests.
 
 **The Manage access panel is one list, from one Rust fold** (`ShareDrivePanel.tsx` +
@@ -239,7 +239,8 @@ with `list_drive_invites`), which also reports a missing drive key; the panel th
 "Links are locked…" and routes Unlock through `useUnlockFlow` (the sync banner's flow),
 reading the list again once the recovery dialog closes. Rows reuse the Share dialog's
 `MemberRow` / `PendingRow` / `useRowChanges`, so changes are pessimistic in both. The
-dev fixture covers the panel too (`"12 locked"` draws locked links). Pinned by
+dev fixture covers the panel too. Each group draws 25 rows and "Show all N" for the rest
+(`capRows`), a few folder holders always among the People shown; counts stay complete. Pinned by
 `access_panel.rs` unit and wire tests and `drive/__tests__/ShareDrivePanel.test.tsx`.
 
 **Refusals are "coming soon", mapped in Rust.** The server words them as `400 bad_request`
