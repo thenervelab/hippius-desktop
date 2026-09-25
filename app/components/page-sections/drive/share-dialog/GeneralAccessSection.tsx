@@ -28,8 +28,9 @@ import {
   DEFAULT_INVITE_TTL_SECS,
   FOLDER_INVITE_ROLES,
   FOLDER_INVITE_TTL_OPTIONS,
-  INVITE_TTL_OPTIONS,
   NEVER_EXPIRES_SECS,
+  clampInviteTtl,
+  inviteTtlOptionsFor,
 } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
 import { SectionNoticeView } from "./SectionNoticeView";
@@ -86,7 +87,7 @@ export function GeneralAccessSection({
       ? FOLDER_INVITE_ROLES
       : ["reader"]
     : DRIVE_ROLES;
-  const ttlOptions = folder ? FOLDER_INVITE_TTL_OPTIONS : INVITE_TTL_OPTIONS;
+  const ttlOptions = folder ? FOLDER_INVITE_TTL_OPTIONS : inviteTtlOptionsFor(role);
 
   const mint = useCallback(
     async (asRole: DriveRole) => {
@@ -102,7 +103,7 @@ export function GeneralAccessSection({
               role: asRole === "writer" ? "writer" : "reader",
               target,
             })
-          : // Rust applies the defaults and refuses any role but Viewer or Editor.
+          : // Rust applies the defaults and the manager caps.
             await createDriveInvite(label, { expiresInSecs: ttlSecs, role: asRole, target });
         setCreated(link);
         onCreated();
@@ -138,10 +139,16 @@ export function GeneralAccessSection({
     }
   }, [created, running, label, target, onCreated]);
 
-  const handleRoleChange = useCallback((next: DriveRole) => {
-    setRole(next);
-    setNotice((n) => (n?.kind === "folderEditor" ? null : n));
-  }, []);
+  const handleRoleChange = useCallback(
+    (next: DriveRole) => {
+      setRole(next);
+      setNotice((n) => (n?.kind === "folderEditor" ? null : n));
+      // Picking Manager with a wider lifetime selected must move the
+      // selection to 24 hours, not leave one on screen Rust would cap.
+      if (!folder) setTtlSecs((secs) => clampInviteTtl(next, secs));
+    },
+    [folder],
+  );
 
   return (
     <section aria-labelledby="share-general-access">

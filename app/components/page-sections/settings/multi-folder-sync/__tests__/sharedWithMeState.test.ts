@@ -65,8 +65,8 @@ describe("getMembershipRowAction", () => {
 });
 
 // The row printed the wire word raw, so a drive shared with you announced
-// itself as "writer". The wire vocabulary is reader/writer; every surface a
-// person reads says Viewer/Editor.
+// itself as "writer". The wire vocabulary is reader/writer/manager; every
+// surface a person reads says Viewer/Editor/Manager.
 describe("the Shared with me row's role", () => {
   it("never shows a wire word", () => {
     const source = readFileSync(

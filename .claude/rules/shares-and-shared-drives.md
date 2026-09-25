@@ -89,33 +89,62 @@ KNOWN GAP: after a rotation the member seal is stranded under the OLD drive pass
 
 Phase 3 console must copy the KAT vectors verbatim (`grant_passphrase_is_pinned`, `open_grant_frozen_blob_is_pinned` — the frozen blob is the cross-rev data-loss guard). Argon2id is ~1.5s: callers on the runtime MUST `spawn_blocking` seal/open (the `recovery.rs::run_kdf` pattern).
 
-### Two roles, and only the owner manages
+### Three drive roles, and the owner or a Manager manages
 
-The client offers Viewer (`reader`) and Editor (`writer`) only: `WIRE_ROLES` in
-`shared_drives/commands.rs` and `DRIVE_ROLES` in `app/lib/shared-drives/roles.ts`. The server
-still knows `manager`; this client never sends it. `require_offered_role` refuses it as
-Validation "Viewer or Editor only." in the link mint, the emailed invite and the role change,
-before the session or the network is touched, and the HTTP helpers refuse it again. A
-`manager` the server still returns is an Editor for display AND permissions:
-`drive_role_from_wire` maps it to `writer` in every listing (members, memberships, invites,
-`fold_share_access`, `fold_access_panel`, `member_access_for`), so the webview never sees
-it; `parseDriveRole` maps it to `writer` too, because its unknown-role rule (Viewer) would
-take away upload.
+A whole drive is shared as Viewer (`reader`), Editor (`writer`) or Manager (`manager`):
+`WIRE_ROLES` in `shared_drives/commands.rs` and `DRIVE_ROLES` in
+`app/lib/shared-drives/roles.ts`. A FOLDER is Viewer or Editor only (`FOLDER_ROLES`,
+`FOLDER_INVITE_ROLES`): the server refuses `manager` on a folder invite and a grant, and
+`grant_role` reads it as `reader`. An emailed invitation is Viewer or Editor too
+(`resolve_email_invite` refuses Manager by name; the server 400s it because its one-day cap
+would expire before the key is delivered): the dialog says "invite them as an Editor, then
+change their role". `drive_role_from_wire` keeps the three roles and reads anything else as
+`reader` in every listing (members, memberships, invites, `fold_share_access`,
+`fold_access_panel`, `member_access_for`); `parseDriveRole` does the same on the FE.
 
-Only a drive's OWNER changes access. Every access change (mint, email, approve, revoke,
-remove a member, change a role, change folders, list invites) resolves through
-`resolve_owned_target`, which refuses a drive this account does not own (`OWNER_ONLY`)
-before any key is read or request made; naming this account as the owner is an own drive.
-Reads a member may make (who has access, the panel, members, folder grants) go through
-`resolve_access_target` and name the owner with `member_owner` (`?owner=`); a member's
-Share dialog and panel never ask for invites. No write sends `?owner=` or `owner_ss58`.
-`can_manage` (panel) and `canManageDrive` (FE) are owner only, whatever the member's role,
-so a former Manager sees the read-only panel ("Shared with you by … · you are an Editor"),
-Leave, and "Who has access" on the header mark. Editors keep their public folder links
-(`create_member_folder_share`). Pinned by `access_changes_are_owner_only` and
-`a_manager_role_is_refused_before_anything_else` in `tests/shared_drive_wiring.rs`,
-`a_manager_role_is_refused_before_any_request` (mock server), and the `access_panel.rs`
-and `roles.test.ts` tests.
+What the server lets a Manager do (hcfs `hcfs-server/src/drives/routes.rs`,
+`resolve_drive_manager` with `ManagementRequirement::ManagesMembers`, and
+`docs/public/api/shared-drives.md`): mint whole-drive links of any role, Manager included
+(capped at 1 use and 24 hours, over-cap is a 400, `MANAGER_USES_CAP` /
+`MANAGER_EXPIRES_CAP_SECS`), mint folder invites, email Viewer/Editor invitations, change
+anyone's role but their own (to Manager too, and another Manager's), remove members and
+folder holders, change a holder's folders, list and revoke invites by id, and seal an
+emailed invitation's key (any Manager). Always by naming the owner: `owner_ss58` in a mint
+body, `?owner=` on every other route. Not theirs: sealed links and recipient addresses of
+invites someone else minted (owner and minter only), their own role, and the owner (no
+member row). The mint's plan gate reads the OWNER's plan.
+
+This client follows that. The rule "may this account manage" lives in ONE Rust function,
+`manages_drive(is_member, role)` (owner always, a member only as `manager`), asked by
+`fold_access_panel` (`can_manage`), `fold_share_access` (`can_manage`, which the Share dialog
+reads to show rows read only) and `auto_seal::seal_targets`; the FE mirror is
+`canManageDrive`. Every access change resolves through `resolve_managed_target` and names the
+owner with `member_owner` (mint, email, approve, revoke, remove, change role, change folders,
+list invites); the server decides the role (its refusal is the uniform 404). Reads go
+through `resolve_access_target`. `refuse_targeting_the_owner` keeps the owner from being
+removed or re-roled. `apply_manager_invite_caps` clamps a Manager link to 1 use and 24 hours
+before the request; the General access row offers only "24 hours" for Manager and says
+"Works once and expires within 24 hours. Managers can invite and remove people."
+`list_access_panel` asks for invites on a member drive only when the member listing says this
+account is a Manager. The sharing marks (`list_owned_drive_sharing`,
+`list_owned_folder_sharing`) stay owner-only (`resolve_own_drive`).
+
+Entry points for a Manager match the owner's: the drive list row and "Shared with me" row
+show "Manage access" (and a "Manage access" item in the Shared with me row menu, passed only
+to a Manager), the drive header shows the role chip, "Shared with N" from the membership's
+`member_count` (hidden below `sm`), and "Manage access"; "Share drive…" and folder "Share"
+follow `canManageDrive` / `manageableMemberDriveLabels`. A Viewer or Editor gets the role,
+"Who has access" (the read-only panel) and Leave; the Share dialog shows them People with
+access alone. Plan gate: `sharingGate` asks this account's plan only on an own drive
+(`owner` is `ownerIsYou`, never `canManage`); on a managed drive the owner's plan decides and
+only the server's 403 `shared_drives_not_entitled` shows the upgrade card. Pinned by
+`management_commands_route_through_the_manager_gate`,
+`the_owner_or_manager_rule_lives_in_one_place`,
+`manager_invites_are_links_within_the_server_caps` (`tests/shared_drive_wiring.rs`),
+`a_manager_names_the_owner_on_every_management_call` (mock server), the `commands.rs`,
+`access_panel.rs` and `auto_seal.rs` unit tests, and `ShareDialog.test.tsx`,
+`ShareDrivePanel.test.tsx`, `DriveSharingHeaderMark.test.tsx`,
+`SharedWithMeSection.test.tsx`.
 
 The invite URL is assembled IN RUST (`create_drive_invite`): token + entropy exist nowhere else — not in logs (no-secret-log pin in `tests/shared_drive_wiring.rs`), not in another IPC. Invite policy defaults (7d / 50 uses) live in Rust (`resolve_invite_policy`); `http_create_invite` takes non-Option values so no call path can send an omitted field. The FE expiry presets (`shareDriveModalState.ts::INVITE_TTL_OPTIONS`) include "Never expires", sent as the hcfs server's 100-year lifetime cap (`NEVER_EXPIRES_SECS` = 100\*365\*24\*3600 — it must equal the server's `MAX_EXPIRES_SECS` exactly, or the preset 400s at mint time); an OMITTED lifetime still resolves to the finite 7-day default.
 
@@ -263,19 +292,23 @@ flush right: `ROLE_SLOT` is `justify-end`, `ROLE_TEXT` right-aligned, the quiet 
 pulled right by its own padding (`FLUSH_SELECT`), and a folder holder's Remove (red text,
 `DANGER_TEXT_BUTTON`) comes after the role, last.
 
-**Emailed invitations are approved automatically while the owner is signed in**
+**Emailed invitations are approved automatically while an owner or a Manager is signed in**
 (`shared_drives/auto_seal.rs`). An opened invitation (`awaiting_seal` with a
 `requester_pubkey`) is sealed and PUT by a Rust background task, the same way Approve
 does it: keys from `invite_seal_keys`, sealed and posted by `seal_invite_row` (derived
 file key for a row with `path_prefix`, entropy otherwise), the only two helpers
 `approve_email_invite` uses too. Safe without a click because the server lets only the
-invited mailbox publish the key (HCFS #480). Rules: OWN drives only (`/list_folders` in
-this account's namespace, each through `resolve_owned_target` naming this account);
+invited mailbox publish the key (HCFS #480). Rules: drives this account owns
+(`/list_folders` in its namespace) or manages (`/v1/drive-memberships` with role
+`manager`), chosen by `seal_targets` through `manages_drive`; a managed drive's invites are
+listed and sealed with `?owner=` (`member_owner`), and its key comes from the owner's seal or
+this account's grant through the same `invite_seal_keys` funnel;
 NEVER prompts (no session mnemonic is a quiet pass, `recovery_lock` is `try_lock`ed);
-plan gate `fetch_can_share_drives` (same inputs and rule as `get_storage_overview`,
-cached 10 min, re-read on a nudge); one attempt per `(invite_id, pubkey)`, forgotten on
+plan gate `fetch_can_share_drives` for OWN drives only (same inputs and rule as
+`get_storage_overview`, cached 10 min, re-read on a nudge; a managed drive follows its
+owner's plan, which only the server knows); one attempt per `(invite_id, pubkey)`, forgotten on
 stale or transient failure; folder rows only when the FE passes `FOLDER_ROLES_ENABLED`.
-Cadence (`next_delay`, pure): 15 s while any owned drive has an emailed invitation `sent`
+Cadence (`next_delay`, pure): 15 s while any owned or managed drive has an emailed invitation `sent`
 or `awaiting_seal`, 3 min otherwise or when unavailable, errors back off 30 s doubling to
 5 min. Started by `InviteAutoSealListener` (protected layout, behind
 `SHARED_DRIVES_ENABLED`), stopped by `logout_full` and on unmount, ends itself when the
@@ -285,7 +318,7 @@ open. Each delivery emits `shared-drive:invite-key-delivered`; the listener toas
 `driveInvitesVersionAtom` and `inviteKeyDeliveredVersionAtom` (the Share dialog reloads
 on it) and invalidates the sharing badges. The row copy is "Opened · they join while the
 app is open" (panel pill "Opened"), with Approve kept as the fallback. Pinned by the
-`auto_seal` unit tests and `automatic_delivery_uses_the_approve_path_and_the_owner_gate`.
+`auto_seal` unit tests and `automatic_delivery_uses_the_approve_path_and_the_manager_gate`.
 
 **The Manage access panel is one list, from one Rust fold** (`ShareDrivePanel.tsx` +
 `drive/access-panel/`, `list_access_panel` in `shared_drives/access_panel.rs`), for a
@@ -295,8 +328,8 @@ folder holders tagged with their folder; a folder panel lists whole-drive member
 maker; ended ones folded into one line). Link status, usage percent, never-expires
 and seconds left are decided in Rust against the clock; TypeScript only words them
 (`accessPanelView.ts`, words shared with the console's panel). `can_manage` is the
-OWNER only: everyone else gets the people read only and Leave, and somebody else's
-drive is never asked for invites. Sealed links open through `open_invite_links` (shared
+owner or a whole-drive Manager (`manages_drive`): everyone else gets the people read only
+and Leave, and a drive they do not manage is never asked for invites. Sealed links open through `open_invite_links` (shared
 with `list_drive_invites`), which also reports a missing drive key; the panel then shows
 "Links are locked…" and routes Unlock through `useUnlockFlow` (the sync banner's flow),
 reading the list again once the recovery dialog closes. Rows reuse the Share dialog's
@@ -354,7 +387,7 @@ The file key comes from the canonical `sync::remote::encryption_key_for_label` c
 
 ### Member mint (hcfs #458)
 
-A folder in somebody else's drive goes through `create_member_folder_share`: `capabilities.member_folder_shares` first, then this account's access from `/v1/drive-memberships` (`member_access_for`: the whole-drive membership, else a folder grant that COVERS the path), refused locally unless Editor and not frozen (`member_folder_share_refusal`; a wire `manager` reads as `writer` in `member_access_for`, and the gate still accepts `manager` as a write role; the server answers a Viewer with the same 404 as a stranger). hcfs-client's `create_folder_share` cannot send `owner_ss58`, so the POST is a direct reqwest call with the same four metadata fields plus the owner; the keystore put, compensating revoke, origin row and owner wrap mirror the owner path. The key is still `encryption_key_for_label` (owner's seal or this account's grant), never this account's master. FE: `offersShareAction` shows the item on a member drive only with the capability and a label in `useWritableMemberDriveLabels()`; hidden, not disabled, otherwise.
+A folder in somebody else's drive goes through `create_member_folder_share`: `capabilities.member_folder_shares` first, then this account's access from `/v1/drive-memberships` (`member_access_for`: the whole-drive membership, else a folder grant that COVERS the path), refused locally unless Editor or Manager and not frozen (`member_folder_share_refusal`; the server answers a Viewer with the same 404 as a stranger). hcfs-client's `create_folder_share` cannot send `owner_ss58`, so the POST is a direct reqwest call with the same four metadata fields plus the owner; the keystore put, compensating revoke, origin row and owner wrap mirror the owner path. The key is still `encryption_key_for_label` (owner's seal or this account's grant), never this account's master. FE: `offersShareAction` shows the item on a member drive only with the capability and a label in `useWritableMemberDriveLabels()`; hidden, not disabled, otherwise.
 
 ### Capability gate
 

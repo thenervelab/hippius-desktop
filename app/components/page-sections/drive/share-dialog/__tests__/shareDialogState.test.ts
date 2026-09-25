@@ -77,22 +77,13 @@ describe("generalAccessNote", () => {
     expect(generalAccessNote({ folder: true, role: "writer", neverExpires: false })).toBe(
       "Works once, for the first person who opens it.",
     );
+    expect(generalAccessNote({ folder: false, role: "manager", neverExpires: false })).toMatch(/^Works once and expires within 24 hours/);
     expect(generalAccessNote({ folder: false, role: "writer", neverExpires: true })).toBe(
       "Anyone with the link can join for as long as it exists.",
     );
     expect(generalAccessNote({ folder: false, role: "reader", neverExpires: false })).toBe(
       "Anyone with the link can join until it expires.",
     );
-  });
-
-  it("never mentions Managers: only the owner invites and removes people", () => {
-    for (const role of ["reader", "writer"] as const) {
-      for (const folder of [false, true]) {
-        for (const neverExpires of [false, true]) {
-          expect(generalAccessNote({ folder, role, neverExpires })).not.toMatch(/manager/i);
-        }
-      }
-    }
   });
 });
 

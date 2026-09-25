@@ -51,6 +51,19 @@ describe("a shared-drive row's actions", () => {
     expect(titles(build({ isSynced: true }))).not.toContain("Sync to this computer");
   });
 
+  // Only a Manager is handed the manage handler; the item follows it, just
+  // before Leave.
+  it("offers Manage access only when the row may manage the drive", () => {
+    const onManageAccess = vi.fn();
+    const items = build({ role: "manager", onManageAccess });
+    const ts = titles(items);
+    expect(ts).toContain("Manage access");
+    expect(ts.indexOf("Manage access")).toBe(ts.length - 2);
+    items.find((i) => String(i.itemTitle) === "Manage access")?.onItemClick?.();
+    expect(onManageAccess).toHaveBeenCalled();
+    expect(titles(build())).not.toContain("Manage access");
+  });
+
   it("always offers leaving, as the destructive item", () => {
     const items = build();
     const leave = items.at(-1);

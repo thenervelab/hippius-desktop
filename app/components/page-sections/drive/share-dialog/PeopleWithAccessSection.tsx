@@ -191,9 +191,9 @@ export function PeopleWithAccessSection({
       key: "owner",
       node: <OwnerRow ss58={access.ownerSs58} isYou={access.ownerIsYou} name={ownerName} />,
     });
-    // Only the owner changes access (Rust refuses anyone else), so on
-    // somebody else's drive every row is read only.
-    const readOnly = !access.ownerIsYou;
+    // The owner and a whole-drive Manager change access (Rust decides
+    // `canManage`); everyone else sees every row read only.
+    const readOnly = !access.canManage;
     // You first after the owner, then everyone else in the order Rust sent.
     const members = [...access.members].sort((a, b) => Number(b.isYou) - Number(a.isYou));
     for (const m of members) {

@@ -126,23 +126,40 @@ describe("plan gating", () => {
   });
 });
 
-// Only the owner invites and removes people. A member of somebody else's
-// drive is never offered the mint, a former Manager included: the menu keys on
-// member-ness alone and takes no role at all.
-describe("a member of somebody else's drive", () => {
+// The desktop minted Manager invites it could not then honour: every manage
+// surface was owner-only, so a Manager had to use the console.
+describe("a manager on somebody else's drive", () => {
   const member = { ownerSs58: "5Owner" };
 
-  it("is never offered the mint", () => {
+  it("is offered the mint", () => {
+    const plan = resolveFolderMenuPlan(member, {
+      sharedDrivesEnabled: true,
+      role: "manager",
+    });
+    expect(plan.showShareDrive).toBe(true);
+  });
+
+  it.each(["reader", "writer"] as const)("is not offered it as a %s", (role) => {
+    const plan = resolveFolderMenuPlan(member, { sharedDrivesEnabled: true, role });
+    expect(plan.showShareDrive).toBe(false);
+  });
+
+  // Until the role arrives a member drive looks role-less; offering the mint
+  // on a guess would show a Viewer a control the server refuses.
+  it("is offered nothing while the role is unknown", () => {
     const plan = resolveFolderMenuPlan(member, { sharedDrivesEnabled: true });
     expect(plan.showShareDrive).toBe(false);
   });
 
-  it("is not offered it whatever the plan says", () => {
+  // A manager invites on the OWNER's drive, against the owner's plan, so
+  // holding them to this account's plan refuses what the server allows.
+  it("is not held to this account's plan", () => {
     const plan = resolveFolderMenuPlan(member, {
       sharedDrivesEnabled: true,
-      planSupportsSharedDrives: true,
+      role: "manager",
+      planSupportsSharedDrives: false,
     });
-    expect(plan.showShareDrive).toBe(false);
+    expect(plan.showShareDrive).toBe(true);
   });
 
   // An owner on a Starter plan still is.
@@ -154,8 +171,12 @@ describe("a member of somebody else's drive", () => {
     expect(plan.showShareDrive).toBe(true);
   });
 
-  it("cannot delete the owner's folder from the server, and leaves rather than removes", () => {
-    const plan = resolveFolderMenuPlan(member, { sharedDrivesEnabled: true });
+  // Member protections key on ownerSs58 alone, never on the role.
+  it("still cannot delete the owner's folder from the server", () => {
+    const plan = resolveFolderMenuPlan(member, {
+      sharedDrivesEnabled: true,
+      role: "manager",
+    });
     expect(plan.showDeleteFromServer).toBe(false);
     expect(plan.showExclusions).toBe(false);
     expect(plan.removeIsLeave).toBe(true);

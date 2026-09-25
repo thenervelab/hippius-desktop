@@ -26,6 +26,7 @@ vi.mock("@/app/lib/hooks/useSharedDriveRoles", async (importOriginal) => {
     ...actual,
     useMemberDriveLabels: () => empty,
     useWritableMemberDriveLabels: () => empty,
+    useManageableMemberDriveLabels: () => empty,
   };
 });
 

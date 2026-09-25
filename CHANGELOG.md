@@ -17,11 +17,19 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Shared drives are available in every release, not only beta.** Plus, Max
+  and Scale plans can share a drive and invite people from the released app,
+  and the plan cards no longer mark the shared team drive as coming soon.
 - **Sharing drives and folders is part of the Plus, Max and Scale plans.** On
   Free and Starter, the Share dialog and Manage access show a short note with
   an "Upgrade plan" button in place of inviting people or creating links. You
   can still see who has access and remove people or links.
-- **Shared drives have two roles, Viewer and Editor.** Only the owner invites and removes people.
+- **Shared drives have three roles again: Viewer, Editor and Manager.** A
+  Manager can invite people by link or email, change roles, remove people,
+  revoke links and let emailed invitations through, on a drive they do not
+  own, from the same Share dialog, Manage access and drive header the owner
+  uses. A Manager link works once and expires within 24 hours. A folder is
+  still shared as Viewer or Editor, and the owner always keeps their access.
 - **Sharing a drive or folder happens in one Share dialog**, with inviting
   someone by email and creating a link as two separate steps, so typing an
   address never turns a link into an invitation by mistake. Problems are
@@ -32,8 +40,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   role or remove them right there, approve an emailed invitation that is
   waiting for you, and revoke a link you just made.
 - **People you invite by email join without waiting for you.** Once they
-  open the invitation, the app approves it on its own while you are signed
-  in, and tells you "{name} can join {drive}." Approve is still there if they
+  open the invitation, the app approves it on its own while you (or a Manager
+  of the drive) are signed in, and tells you "{name} can join {drive}." Approve is still there if they
   are waiting while the app is closed or locked.
 - **Manage access is one list** instead of tabs: the people who have the
   drive or folder, invitations still waiting, and every link with how often

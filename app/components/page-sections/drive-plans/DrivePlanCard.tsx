@@ -77,14 +77,12 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
   const isInert = action === "current" || action === "none" || action === "default";
   const isCancel = action === "cancel";
   const storage = formatPlanStorage(plan.storage_bytes);
-  // Shared drives are part of these plans but are not switched on yet, so
-  // the line is greyed rather than removed: the plan does include it, it
-  // just cannot be used yet. Drop `pending` when the feature ships.
-  const features = [
+  // `pending` greys a line and explains it as coming soon, for a perk a
+  // plan includes before it can be used. Shared drives are live, so their
+  // line reads as available.
+  const features: { label: string; pending?: boolean }[] = [
     { label: "Automatic renewal" },
-    ...(hasSharedTeamDrive(plan)
-      ? [{ label: "Shared team drive", pending: true }]
-      : []),
+    ...(hasSharedTeamDrive(plan) ? [{ label: "Shared team drive" }] : []),
     {
       label: plan.is_free
         ? "Upgrade whenever you need more"

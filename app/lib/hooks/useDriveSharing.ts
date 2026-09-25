@@ -32,9 +32,10 @@ export interface DriveSharing {
   /**
    * Whether the viewer may manage who has access — invite, remove, re-role.
    *
-   * The owner only, once the drive is actually shared. A member of somebody
-   * else's drive never may, whatever its role there (a former Manager
-   * included): Rust refuses every such change, and the panel opens read only.
+   * An owner may, once the drive is actually shared. A MANAGER may too, on a
+   * drive they do not own: the server admits a delegated manager by name
+   * (`?owner=`), and refusing them here is what made the desktop mint Manager
+   * invites it could not then honour.
    */
   canManage: boolean;
   /**
@@ -51,6 +52,12 @@ export interface DriveSharing {
    * Viewer.
    */
   canWrite: boolean;
+  /**
+   * People on a drive shared WITH this account, owner excluded, when the
+   * membership listing says (`member_count`). `null` for an own drive and
+   * when unknown: never draw "0 people" from absence.
+   */
+  memberCount: number | null;
 }
 
 const NOT_SHARED: DriveSharing = {
@@ -59,6 +66,7 @@ const NOT_SHARED: DriveSharing = {
   role: null,
   canManage: false,
   canWrite: true,
+  memberCount: null,
 };
 
 /**
@@ -92,14 +100,20 @@ export function useDriveSharing(label: string | null | undefined): DriveSharing 
       sharing,
       isShared: sharing.isShared,
       role,
-      // An owner with nothing shared has nothing to manage yet.
-      canManage: canManageDrive({ isOwner: !membership }) && isDriveShared(own),
+      canManage: canManageDrive({
+        isOwner: !membership,
+        role: role ?? undefined,
+      })
+        // An owner with nothing shared has nothing to manage; a manager
+        // always does, since being one means the drive is already shared.
+        && (Boolean(membership) || isDriveShared(own)),
       canWrite: canWriteToDrive({
         // No membership row means this account owns the drive -- or the
         // listing has not answered yet, which reads the same way on purpose.
         isOwner: !membership,
         role: role ?? undefined,
       }),
+      memberCount: membership?.memberCount ?? null,
     };
   }, [label, membership, own]);
 }

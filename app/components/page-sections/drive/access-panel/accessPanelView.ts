@@ -18,7 +18,7 @@ import { driveRoleLabel, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { expiresInWords, timeLeftWords } from "@/app/lib/shared-drives/timeLeft";
 import { formatJoinedDate } from "../shareDriveModalState";
 
-/** "a Viewer", "an Editor" (a wire `manager` reads as an Editor). */
+/** "a Viewer", "an Editor", "a Manager". */
 export function rolePhrase(role: string): string {
   const label = driveRoleLabel(parseDriveRole(role));
   return /^[AEIOU]/.test(label) ? `an ${label}` : `a ${label}`;
@@ -34,9 +34,8 @@ export function planLabel(name: string | null | undefined): string | null {
 /**
  * The line under the panel's title.
  *
- * By ownership, not by role: anyone on somebody else's drive is told whose
- * drive it is and their role there, and the plan belongs to that owner, so it
- * is never quoted.
+ * By ownership, not by role: a Manager on somebody else's drive is told whose
+ * drive it is, and the plan belongs to that owner, so it is never quoted.
  */
 export function panelSubline(params: {
   folder: boolean;

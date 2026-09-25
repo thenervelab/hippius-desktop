@@ -53,7 +53,7 @@
 //!    (single-shot and chunked), delete, rename, register and unregister
 //!    directories, `POST /can_upload`, and mint a public folder link at or
 //!    under the folder. Nothing else (`register_relative_paths` included).
-//!    Only the drive's owner mints folder invites. All of it
+//!    Only the owner or a full drive Manager mints folder invites. All of it
 //!    only while `folder_grant_writes` is on: a stored writer grant cannot
 //!    write once the flag is off, so the desktop offers write controls on a
 //!    grant only when both hold (`grant_can_write`).
@@ -91,10 +91,7 @@ pub fn require_server_knows_folder_invites(caps: &ServerCapabilities) -> Result<
 }
 
 /// The role a grant row names, read defensively (assumption 4): missing,
-/// blank or unknown is `reader`, and `manager` is too: it is not a folder
-/// role, and a folder grant is never read as more than the server allows a
-/// holder. (A whole-drive `manager` is different: it reads as `writer`, see
-/// `commands::drive_role_from_wire`.)
+/// blank or unknown is `reader`, and `manager` is too, never management.
 /// Kept in step with `parseDriveRole` on the FE.
 pub fn grant_role(raw: Option<&str>) -> String {
     match raw.map(str::trim) {

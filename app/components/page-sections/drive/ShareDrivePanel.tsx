@@ -52,6 +52,7 @@ import {
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
+import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { useUnlockFlow } from "@/app/lib/hooks/useUnlockFlow";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
@@ -295,9 +296,13 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
   }, [onClose, setShareDialogTarget, folder, folderPath, pathPrefix, target]);
 
   const panel = state.kind === "ready" ? state.panel : null;
-  // Before the listing lands, whether links will show is a guess: only the
-  // owner manages, and a drive with no membership row is this account's own.
-  const expectManage = !membership;
+  // Before the listing lands, whether links will show is a guess from the
+  // membership: a drive with no membership row is this account's own, and a
+  // Manager manages somebody else's. The panel's `canManage` (Rust) wins.
+  const expectManage = canManageDrive({
+    isOwner: !membership,
+    role: membership ? parseDriveRole(membership.role) : undefined,
+  });
   const ownerName =
     membership?.ownerName?.trim() || (panel ? accountDisplayName(panel.ownerSs58) : "the owner");
   const subline = panel
@@ -361,10 +366,13 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
     }),
     [run, target.label, driveTarget, onChanged, reload, onNotEntitled],
   );
-  // Only the owner adds people, so the gate is about the owner's plan.
+  // Adding people follows the OWNER's plan. On an own drive that is this
+  // account's plan; on a drive this account manages for somebody else it is
+  // the owner's, which only the server knows (its 403 still shows the card),
+  // so this account's own plan never puts an upgrade card there.
   const gate = sharingGate({
     planAllows,
-    owner: panel ? panel.canManage : expectManage,
+    owner: panel ? panel.ownerIsYou : !membership,
     refusedByServer,
   });
   const ctx: RowContext | null = panel

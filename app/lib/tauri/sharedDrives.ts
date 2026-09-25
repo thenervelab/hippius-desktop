@@ -28,13 +28,13 @@ export interface DriveInviteLink {
   /** The server's id for the new invite, so it can be revoked right away. */
   inviteId: string;
   /**
-   * What was actually sent, after Rust applied its defaults and the folder
-   * caps. The Share dialog describes the new link from these, so
+   * What was actually sent, after Rust applied its defaults and the manager
+   * and folder caps. The Share dialog describes the new link from these, so
    * it never quotes a lifetime or a uses count the server was not asked for.
    */
   role: DriveRole;
   expiresInSecs: number;
-  /** Always 1 for a folder link. */
+  /** 1 for a folder or a manager link. */
   maxUses: number;
 }
 
@@ -46,7 +46,7 @@ export interface DriveMemberInfo {
   createdAt: string;
   /** Display name (hcfs #455); absent when unknown. */
   memberName?: string;
-  /** Email, only disclosed to the drive's owner. */
+  /** Email, only for owner/managers of the same drive. */
   memberEmail?: string;
 }
 
@@ -87,9 +87,8 @@ export interface AddSharedDriveResult {
 }
 
 /**
- * Mint an invite link for an OWN drive. `label` is the local drive label;
- * the backend refuses a member drive's label as `Validation` (only the
- * owner can mint).
+ * Mint an invite link for a drive this account owns or manages. `label` is
+ * the local drive label; a Manager names the owner's drive with `target`.
  *
  * Omitted options fall through to the RUST policy defaults (7 days / 50
  * uses — `shared_drives/commands.rs::resolve_invite_policy`), so the
@@ -98,21 +97,19 @@ export interface AddSharedDriveResult {
  * (`shareDriveModalState.ts::DEFAULT_INVITE_TTL_SECS`).
  */
 /**
- * Which drive an access call addresses when there is no local label.
+ * Which drive a manage call addresses when there is no local label.
  *
- * A member may hold a drive they never synced here; the label-keyed path
+ * A manager may hold a drive they never synced here; the label-keyed path
  * resolves a `sync_paths` row such a drive does not have, and the lenient
  * fallback then answers with THIS account's namespace. Naming the wire
- * identity is how the reads (who has access, the panel) address the right
- * drive. Every access change on such a drive is refused in Rust: only the
- * owner invites and removes people.
+ * identity is how those calls address the right drive.
  */
 export interface DriveTarget {
   ownerSs58?: string | null;
   folderHash?: string | null;
 }
 
-/** The identity args every access IPC accepts, normalised to nulls. */
+/** The identity args every manage IPC accepts, normalised to nulls. */
 function targetArgs(target?: DriveTarget) {
   return {
     ownerSs58: target?.ownerSs58 ?? null,
@@ -154,7 +151,7 @@ export async function createFolderInvite(
   pathPrefix: string,
   opts?: {
     expiresInSecs?: number;
-    role?: DriveRole;
+    role?: Exclude<DriveRole, "manager">;
     target?: DriveTarget;
   },
 ): Promise<DriveInviteLink> {
@@ -209,6 +206,11 @@ export interface ShareAccessHolder {
 export interface ShareAccess {
   ownerSs58: string;
   ownerIsYou: boolean;
+  /**
+   * This account may change who has access: the owner, or a whole-drive
+   * Manager (Rust's `manages_drive`). Everyone else sees the rows read only.
+   */
+  canManage: boolean;
   /** Whole-drive members; empty for a folder. */
   members: ShareAccessMember[];
   /** Folder holders; empty for a drive. */
@@ -302,7 +304,7 @@ export interface AccessPanel {
   ownerIsYou: boolean;
   /** `owner`, a member role, or a folder grant role; null when unknown. */
   yourRole: string | null;
-  /** The owner only; everyone else reads the panel. */
+  /** Owner or Manager. */
   canManage: boolean;
   /** Whole-drive members, you first. A folder panel lists them too. */
   members: AccessPanelMember[];
@@ -333,7 +335,7 @@ export async function listAccessPanel(
   });
 }
 
-/** One folder grant on a drive, as its owner sees it. */
+/** One folder grant on a drive (owner/manager view). */
 export interface DriveFolderGrantInfo {
   memberSs58: string;
   pathPrefix: string;
@@ -380,7 +382,7 @@ export async function replaceFolderGrants(
   memberSs58: string,
   pathPrefixes: string[],
   opts?: {
-    role?: DriveRole;
+    role?: Exclude<DriveRole, "manager">;
     target?: DriveTarget;
   },
 ): Promise<ReplacedFolderGrants> {
@@ -410,15 +412,17 @@ export async function removeDriveMember(
 }
 
 /**
- * Change a member's role on an OWN drive: Viewer or Editor.
+ * Change a member's role on an OWN drive.
  *
  * The new role binds on the member's very next request, so nothing here has
- * to warn about propagation. Refusals come back as `Validation` and are
- * worth surfacing verbatim: targeting yourself (a member leaves instead), a
- * role other than Viewer or Editor, and a drive this account does not own.
+ * to warn about propagation. Two refusals come back as `Validation` and are
+ * worth surfacing verbatim: targeting yourself (a manager leaves rather than
+ * demoting themself) and a role outside the server's vocabulary.
  *
  * A downward change is sticky: the server revokes the invite that admitted
- * the member when that link still outranks the new role.
+ * the member when that link still outranks the new role, and demoting a
+ * manager revokes every live invite they minted, so a spare link cannot
+ * re-escalate them.
  */
 export async function changeDriveMemberRole(
   label: string,
@@ -444,8 +448,8 @@ export interface DriveInviteInfo {
   inviteId: string;
   role: string;
   /**
-   * Who minted it: the owner, or (for an older link) a member the server
-   * once let invite. Empty for invites the server has no provenance for.
+   * Who minted it: the owner, or a manager they delegated to. Empty for
+   * invites the server has no provenance for.
    */
   mintedBy: string;
   /** Minter display name (hcfs #455); absent when unknown. */
@@ -477,7 +481,7 @@ export interface DriveInviteInfo {
   recipientEmail?: string;
   /**
    * How far a mailed invitation has got. `sent`: waiting for the recipient to
-   * open it. `awaiting_seal`: opened, waiting for the owner to
+   * open it. `awaiting_seal`: opened, waiting for an owner or manager to
    * approve. `sealed`: approved, waiting for them to join. Absent on a link.
    */
   emailStatus?: EmailInviteStatus;
@@ -674,7 +678,7 @@ export function isSharedDrivesNotEntitled(error: unknown): boolean {
 /**
  * Invite `email` into a drive and have the server send the invitation.
  *
- * Viewer or Editor only, single use,
+ * Viewer or Editor only (a Manager invite has to be a link), single use,
  * between one hour and thirty days; Rust refuses anything else by name.
  * Returns only the new invite's id: the token exists only in the mail.
  */
@@ -682,7 +686,7 @@ export async function emailDriveInvite(
   label: string,
   email: string,
   opts?: {
-    role?: DriveRole;
+    role?: Exclude<DriveRole, "manager">;
     expiresInSecs?: number;
     target?: DriveTarget;
     /**

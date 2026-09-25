@@ -333,11 +333,12 @@ const FolderList: React.FC<FolderListProps> = ({
                   clicks into an overflow menu. Only on rows where it means
                   something: an own drive with people in it. */}
               {onManageAccess &&
-                // An own drive that has been shared. Only the owner manages
-                // access, so a drive shared with this account gets the role
-                // badge and nothing to press, whatever its role there.
-                !row.ownerSs58 &&
-                isDriveShared(sharingByLabel?.get(row.folderName)) && (
+                // An own drive that has been shared, or somebody else's drive
+                // this account manages. A Viewer or Editor gets the role badge
+                // and nothing to press.
+                (row.ownerSs58
+                  ? rolesByLabel?.get(row.folderName) === "manager"
+                  : isDriveShared(sharingByLabel?.get(row.folderName))) && (
                   <Button
                     variant="ghost"
                     size="auto"

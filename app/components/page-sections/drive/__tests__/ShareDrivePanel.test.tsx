@@ -449,7 +449,7 @@ describe("an owner's drive", () => {
 
   it("says whether a single-use link was used, with no bar", async () => {
     listAccessPanelMock.mockResolvedValue(
-      panel({ links: [link({ singleUse: true, maxUses: 1, useCount: 0, usagePercent: 0, role: "reader" })] }),
+      panel({ links: [link({ singleUse: true, maxUses: 1, useCount: 0, usagePercent: 0, role: "manager" })] }),
     );
     renderPanel();
     expect(await screen.findByText("Single use, not used yet · Expires in 5 days")).toBeInTheDocument();
@@ -534,16 +534,12 @@ describe("changes are pessimistic", () => {
     renderPanel();
     await screen.findByText("Ann");
     fireEvent.click(screen.getByLabelText("Role for Ann"));
-    // Viewer and Editor only: nobody is made a Manager.
-    expect(screen.queryByText("Manager")).not.toBeInTheDocument();
-    fireEvent.click(screen.getAllByText("Viewer").at(-1)!);
-    // A demotion is confirmed first.
-    fireEvent.click(await screen.findByRole("button", { name: "Change role" }));
-    await waitFor(() => expect(changeRoleMock).toHaveBeenCalledWith("team-docs", ANN, "reader", undefined));
+    fireEvent.click(screen.getAllByText("Manager").at(-1)!);
+    await waitFor(() => expect(changeRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", undefined));
     expect(screen.getByText("Saving…")).toBeInTheDocument();
-    listAccessPanelMock.mockResolvedValue(panel({ members: [member({ role: "reader" })] }));
+    listAccessPanelMock.mockResolvedValue(panel({ members: [member({ role: "manager" })] }));
     finish();
-    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Viewer"));
+    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Manager"));
     expect(screen.queryByText("Saving…")).not.toBeInTheDocument();
   });
 
@@ -717,23 +713,41 @@ describe("a drive shared with you", () => {
     expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
   });
 
-  // A former Manager: Rust sends `writer` and `canManage: false`. Should a
-  // `manager` ever arrive, it still reads as an Editor, never a Viewer.
-  it("tells a former Manager they are an Editor, read only, with Leave", async () => {
-    memberships.list = [{ ...memberships.list[0], role: "manager", frozen: false }];
-    listAccessPanelMock.mockResolvedValue(sharedWithMe("manager"));
-    renderPanel();
-    expect(await screen.findByText("Shared with you by Olive · you are an Editor")).toBeInTheDocument();
-    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Role for Ann")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Invite" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Leave drive" })).toBeInTheDocument();
-  });
-
   it("says when the drive is frozen", async () => {
     listAccessPanelMock.mockResolvedValue(sharedWithMe("writer"));
     renderPanel();
     expect(await screen.findByText("This drive is frozen. Files can be opened but not changed.")).toBeInTheDocument();
+  });
+
+  // A whole-drive Manager manages the drive for its owner: role menus with
+  // Manager, Remove, the links and invitations, and the add-people buttons,
+  // every call naming the owner. The owner's plan decides, so this account's
+  // plan never puts an upgrade card here.
+  it("gives a Manager the full controls, through the owner", async () => {
+    sharing.can = false;
+    memberships.list = [{ ...memberships.list[0], role: "manager", frozen: false }];
+    changeRoleMock.mockResolvedValue(undefined);
+    listAccessPanelMock.mockResolvedValue({
+      ...full(),
+      ownerSs58: OWNER,
+      ownerIsYou: false,
+      yourRole: "manager",
+      canManage: true,
+      members: [member({ memberSs58: ME, memberName: "Me", role: "manager", isYou: true }), member()],
+    });
+    renderPanel({ label: "team-docs", folderName: "team-docs", ownerSs58: OWNER, folderHash: "abc123" });
+    expect(await screen.findByText("Shared with you by Olive · you are a Manager")).toBeInTheDocument();
+    expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Invite" }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: /^Links/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Role for Me")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Role for Ann"));
+    fireEvent.click(screen.getAllByText("Manager").at(-1)!);
+    await waitFor(() =>
+      expect(changeRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", { ownerSs58: OWNER, folderHash: "abc123" }),
+    );
+    // A Manager can still leave; they are a member like anyone else.
+    expect(screen.getByRole("button", { name: "Leave drive" })).toBeInTheDocument();
   });
 
   it("gives anyone but the owner the read-only list and Leave, never Share", async () => {

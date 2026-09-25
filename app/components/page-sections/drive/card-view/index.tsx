@@ -98,7 +98,7 @@ const CardView: FC<CardViewProps> = ({
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
   // Whether a folder in one of those drives may be shared by link: an
-  // Editor, on a server that takes `owner_ss58` (hcfs #458).
+  // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
   const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
