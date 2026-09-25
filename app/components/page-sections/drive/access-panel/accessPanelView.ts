@@ -13,7 +13,7 @@ import type {
   AccessPanelLinkStatus,
   AccessPanelMember,
 } from "@/app/lib/tauri/sharedDrives";
-import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
+import { presentText } from "@/app/lib/shared-drives/accountLabel";
 import { driveRoleLabel, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { formatJoinedDate } from "../shareDriveModalState";
 
@@ -116,11 +116,16 @@ export function linkTitle(link: AccessPanelLink): string {
   return `${driveRoleLabel(parseDriveRole(link.role))} link`;
 }
 
-/** Who made a link: "You", their name or short address, or null if unknown. */
+/**
+ * Who made a link: "You", their name or their full address, or null if
+ * unknown. Full, not shortened: the row shortens it in the middle to the
+ * width it has (`MiddleTruncate`), and a pre-shortened address cut again at
+ * the end showed two ellipses.
+ */
 export function linkCreator(link: AccessPanelLink): string | null {
   if (link.mintedByYou) return "You";
   if (!link.mintedBy.trim()) return null;
-  return accountDisplayName(link.mintedBy, link.mintedByName, 14);
+  return presentText(link.mintedByName) ?? link.mintedBy;
 }
 
 /** "12 of 50 used", or for a single-use link whether it was used. */

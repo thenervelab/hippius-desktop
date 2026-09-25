@@ -20,6 +20,7 @@ import { ArrowRight, Loader2, Mail, Users } from "lucide-react";
 
 import { Button, Skeleton } from "@/components/ui";
 import { Select } from "@/components/ui/select/Select";
+import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import AccountLabel from "../AccountLabel";
 import { cn } from "@/lib/utils";
 import {
@@ -72,6 +73,10 @@ export const ROW = "flex min-h-[48px] min-w-0 items-center gap-3 py-2";
 /** The words column: never wider than what the avatar and the role leave. */
 export const TEXT_COLUMN = "min-w-0 flex-1 overflow-hidden";
 const META = "truncate text-xs text-grey-50 dark:text-grey-dark-600";
+/** META's type, for a line that is an email or an address: `MiddleTruncate` shortens it. */
+const META_TEXT = "text-xs text-grey-50 dark:text-grey-dark-600";
+/** A pending invitation's address, the row's name line. */
+const ADDRESS_TEXT = "text-sm text-grey-10 dark:text-white";
 /** The right-hand slot: as wide as the role select, its contents at the right end. */
 export const ROLE_SLOT = "flex w-[98px] shrink-0 items-center justify-end";
 /** A role as plain text, ending where the column ends. */
@@ -407,6 +412,7 @@ export function MemberRow({
   const role = parseDriveRole(member.role);
   const { asking, ask, cancel, done, rowRef } = useRowConfirm<"remove" | DriveRole>(member.memberSs58);
   const who = accountDisplayName(member.memberSs58, member.memberName);
+  const metaLine = meta !== undefined ? meta : member.memberEmail;
   const name = (
     <NameLine ss58={member.memberSs58} name={member.memberName} email={member.memberEmail} isYou={member.isYou} />
   );
@@ -451,10 +457,14 @@ export function MemberRow({
       <PersonAvatar ss58={member.memberSs58} />
       <div className={TEXT_COLUMN}>
         {name}
-        {meta !== undefined ? (
-          meta ? <p className={META} title={typeof meta === "string" ? meta : undefined}>{meta}</p> : null
-        ) : member.memberEmail ? (
-          <p className={META} title={member.memberEmail}>{member.memberEmail}</p>
+        {/* The email (the default line, and the panel's too) is shortened in
+            the middle, keeping its domain; other lines are cut at the end. */}
+        {metaLine && metaLine === member.memberEmail ? (
+          <MiddleTruncate text={member.memberEmail} className={META_TEXT} />
+        ) : metaLine ? (
+          <p className={META} title={typeof metaLine === "string" ? metaLine : undefined}>
+            {metaLine}
+          </p>
         ) : null}
       </div>
       {/* A role change keeps the old role in view, disabled, until the server
@@ -542,9 +552,20 @@ function HolderRow({
       <div className={TEXT_COLUMN}>
         {name}
         {holder.memberEmail || via ? (
-          <p className={META} title={[holder.memberEmail, via].filter(Boolean).join(" · ")}>
-            {[holder.memberEmail, via].filter(Boolean).join(" · ")}
-          </p>
+          // The email gives way in the middle, keeping its domain; the folder
+          // it comes through is cut at its end, after the email.
+          <div
+            className={cn("flex min-w-0 items-baseline", META_TEXT)}
+            title={[holder.memberEmail, via].filter(Boolean).join(" · ")}
+          >
+            {holder.memberEmail ? <MiddleTruncate text={holder.memberEmail} title={null} /> : null}
+            {via ? (
+              <span className="min-w-[3rem] shrink-[4] truncate whitespace-pre">
+                {holder.memberEmail ? " · " : ""}
+                {via}
+              </span>
+            ) : null}
+          </div>
         ) : null}
       </div>
       {/* The role in the column every row shares, then Remove, last, so the
@@ -603,11 +624,7 @@ export function PendingRow({
     return (
       <RowConfirm
         leading={icon}
-        title={
-          <p className="truncate text-sm text-grey-10 dark:text-white" title={address}>
-            {address}
-          </p>
-        }
+        title={<MiddleTruncate text={address} className={ADDRESS_TEXT} />}
         question="Cancel this invite?"
         detail="The link in the email stops working."
         confirmLabel="Cancel invite"
@@ -631,9 +648,7 @@ export function PendingRow({
     >
       {icon}
       <div className="min-w-0 flex-1 basis-[150px] overflow-hidden">
-        <p className="truncate text-sm text-grey-10 dark:text-white" title={address}>
-          {address}
-        </p>
+        <MiddleTruncate text={address} className={ADDRESS_TEXT} />
         {meta !== undefined ? (
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-grey-50 dark:text-grey-dark-600">
             {meta}

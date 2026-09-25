@@ -424,7 +424,9 @@ describe("an owner's drive", () => {
     renderPanel();
     const links = within(await waitFor(() => group(/^Links/)));
     expect(links.getByText("Editor link")).toBeInTheDocument();
-    expect(links.getByText(/by You/)).toBeInTheDocument();
+    // "by" stays whole; the maker after it is a middle-shortened line.
+    expect(links.getByText(/·\s*by/)).toBeInTheDocument();
+    expect(links.getByText("You").closest("[data-middle-truncate]")).not.toBeNull();
     expect(links.getByText("12 of 50 used · Expires in 5 days")).toHaveClass("truncate");
     const bar = links.getByRole("progressbar");
     expect(bar).toHaveAttribute("aria-valuenow", "24");
@@ -838,11 +840,14 @@ describe("rows never run under the role", () => {
     );
     renderPanel();
     const name = await screen.findByText(LONG);
-    expect(name).toHaveClass("truncate");
+    // Shortened in the middle to the width it has, never cut at its end.
+    expect(name.closest("[data-middle-truncate]")).not.toHaveClass("truncate");
     // The words column takes what is left and clips, so nothing can paint
     // under the select beside it.
     expect(name.closest(".flex-1")).toHaveClass("min-w-0", "overflow-hidden");
-    expect(screen.getByText("srinivasa.ramanujan@research.example.com")).toHaveClass("truncate");
+    const email = screen.getByText("srinivasa.ramanujan@research.example.com").closest("[data-middle-truncate]");
+    expect(email).not.toBeNull();
+    expect(email).not.toHaveClass("truncate");
     const slot = screen.getByLabelText(`Role for ${LONG}`).closest("span.shrink-0");
     expect(slot).toHaveClass("w-[98px]", "shrink-0");
     // The owner's role sits in a slot of the same width, so the column lines up.
@@ -853,7 +858,7 @@ describe("rows never run under the role", () => {
     listAccessPanelMock.mockResolvedValue(panel({ members: [member({ memberName: LONG, memberEmail: "sr@example.com" })] }));
     renderPanel();
     const name = await screen.findByText(LONG);
-    const trigger = name.parentElement!;
+    const trigger = name.closest("[tabindex='0']")!;
     expect(trigger).toHaveAttribute("tabindex", "0");
     expect(trigger).toHaveTextContent(`${LONG}, sr@example.com, address ${ANN}`);
   });
@@ -871,8 +876,11 @@ describe("rows never run under the role", () => {
     const tag = await screen.findByText(folder);
     expect(tag).toHaveClass("truncate");
     expect(tag.parentElement).toHaveClass("max-w-[65%]");
-    expect(screen.getByText(address)).toHaveClass("truncate");
-    expect(screen.getByText(address)).toHaveAttribute("title", address);
+    // The address is shortened in the middle, keeping its domain; its full
+    // form is on hover.
+    const line = screen.getByText(address).closest("[data-middle-truncate]");
+    expect(line).not.toHaveClass("truncate");
+    expect(line).toHaveAttribute("title", address);
   });
 });
 

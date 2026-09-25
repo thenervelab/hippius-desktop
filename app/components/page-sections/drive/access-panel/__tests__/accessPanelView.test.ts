@@ -134,6 +134,12 @@ describe("links", () => {
     expect(linkCreator(link({ mintedBy: " ", mintedByName: undefined }))).toBeNull();
   });
 
+  it("hands the row the whole address to shorten, never a pre-shortened one", () => {
+    const ss58 = "5CV9U636UM4LJqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqLjc3M";
+    expect(linkCreator(link({ mintedBy: ss58, mintedByName: undefined }))).toBe(ss58);
+    expect(linkCreator(link({ mintedBy: ss58, mintedByName: "  " }))).toBe(ss58);
+  });
+
   it("says why an ended link stopped, and folds them into one line", () => {
     expect(linkEndedLabel("revoked")).toBe("Revoked");
     expect(linkEndedLabel("expired")).toBe("Expired");

@@ -12,6 +12,7 @@ import { toast } from "sonner";
 
 import { Button, Icons, Skeleton } from "@/components/ui";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
+import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import { cn } from "@/lib/utils";
 import AccountLabel from "../AccountLabel";
 import {
@@ -201,11 +202,7 @@ export function HolderRow({
         {name}
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
           <FolderTag title={folders.join(", ")}>{holderFolderTag(holder)}</FolderTag>
-          {holder.memberEmail ? (
-            <span className={cn(MUTED, "min-w-0 truncate")} title={holder.memberEmail}>
-              {holder.memberEmail}
-            </span>
-          ) : null}
+          {holder.memberEmail ? <MiddleTruncate text={holder.memberEmail} className={MUTED} /> : null}
         </div>
       </div>
       {/* The role and its menu share the members' role slot, so the role
@@ -457,9 +454,18 @@ export function LinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke }: L
       </span>
       <div className="grid min-w-0 flex-1 gap-1.5 overflow-hidden">
         <div className="min-w-0">
-          <p className="truncate text-sm text-grey-10 dark:text-white" title={creator ? `${title} · by ${creator}` : title}>
-            {title}
-            {creator ? <span className="text-xs text-grey-50 dark:text-grey-dark-600"> · by {creator}</span> : null}
+          {/* The creator gives way in the middle; "Editor link · by" stays whole. */}
+          <p
+            className="flex min-w-0 items-baseline text-sm text-grey-10 dark:text-white"
+            title={creator ? `${title} · by ${creator}` : title}
+          >
+            <span className="shrink-0">{title}</span>
+            {creator ? (
+              <span className="flex min-w-0 items-baseline text-xs text-grey-50 dark:text-grey-dark-600">
+                <span className="shrink-0 whitespace-pre"> · by </span>
+                <MiddleTruncate text={creator} title={null} />
+              </span>
+            ) : null}
           </p>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
             {link.pathPrefix ? <FolderTag>{link.pathPrefix}</FolderTag> : null}

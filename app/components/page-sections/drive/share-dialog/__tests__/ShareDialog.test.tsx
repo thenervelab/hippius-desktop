@@ -981,9 +981,14 @@ describe("People with access", () => {
     );
     renderDialog();
     const name = await screen.findByText(long);
-    expect(name).toHaveClass("truncate");
+    // Shortened in the middle to the column's width, never cut at its end.
+    const line = name.closest("[data-middle-truncate]");
+    expect(line).not.toBeNull();
+    expect(line).not.toHaveClass("truncate");
     expect(name.closest(".flex-1")).toHaveClass("min-w-0", "overflow-hidden");
-    expect(screen.getByText("sr@example.com")).toHaveClass("truncate");
+    const email = screen.getByText("sr@example.com").closest("[data-middle-truncate]");
+    expect(email).toHaveAttribute("title", "sr@example.com");
+    expect(email).not.toHaveClass("truncate");
     expect(screen.getByLabelText(`Role for ${long}`).closest("span.shrink-0")).toHaveClass("w-[98px]");
   });
 
