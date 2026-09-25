@@ -524,11 +524,14 @@ describe("General access", () => {
     // Bottom-aligned, so the button lines up with the selects, not the labels.
     expect(rowClasses).toContain("@md:items-end");
 
-    // Compact fixed widths for the selects, natural width for the button.
+    // A compact fixed width for Access; the expiry select grows into the
+    // rest of the row so there is no empty gap before the button, which
+    // keeps its natural width, flush right.
     expect(accessField?.className).toContain("@md:w-[120px]");
     expect(accessField?.className).toContain("@md:flex-none");
-    expect(expiresField?.className).toContain("@md:w-[140px]");
-    expect(expiresField?.className).toContain("@md:flex-none");
+    expect(expiresField?.className.split(/\s+/)).toEqual(expect.arrayContaining(["@md:flex-1", "min-w-0"]));
+    expect(expiresField?.className).not.toContain("@md:flex-none");
+    expect(create.className).toContain("@md:ml-auto");
     expect(create.className).toContain("@md:w-auto");
     expect(create.className).toContain("h-[34px]");
   });

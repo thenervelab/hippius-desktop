@@ -180,9 +180,11 @@ export function GeneralAccessSection({
                   {generalAccessNote({ folder, role, neverExpires: ttlSecs === NEVER_EXPIRES_SECS })}
                 </p>
               </div>
-              {/* One row that never wraps: two compact selects at fixed
-                  widths, each under a small label, and the button at its
-                  natural width, all 34px tall and bottom-aligned so the
+              {/* One row that never wraps: the Access select at a fixed
+                  width, the expiry select growing into whatever is left so
+                  the row has no empty gap, and the button at its natural
+                  width, flush right under Done. Each select sits under a
+                  small label; all are 34px tall and bottom-aligned so the
                   button lines up with the selects rather than the labels.
                   The breakpoints key off this column (a container query),
                   not the window, so the dialog at its normal width always
@@ -213,7 +215,7 @@ export function GeneralAccessSection({
                       minimal
                     />
                   </div>
-                  <div className="flex min-w-0 flex-col gap-1.5 @xs:flex-1 @md:w-[140px] @md:flex-none">
+                  <div className="flex min-w-0 flex-col gap-1.5 @xs:flex-1 @md:min-w-[140px] @md:flex-1">
                     <label htmlFor={ttlId} className={FIELD_LABEL}>
                       Link expires
                     </label>
