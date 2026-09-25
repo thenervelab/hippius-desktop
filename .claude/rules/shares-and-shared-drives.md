@@ -241,8 +241,12 @@ reading the list again once the recovery dialog closes. Rows reuse the Share dia
 `MemberRow` / `PendingRow` / `useRowChanges`, so changes are pessimistic in both. The
 dev fixture covers the panel too. Each group comes newest first from Rust (you, then most
 recently joined; invitations and links most recently created) and the main view draws its first
-`PANEL_GROUP_PREVIEW` (5) rows, a jump bar (owner only, when more than one group has rows; a member
-sees "People N") and "Show all N …", which opens that group's full view in place of the list:
+`PANEL_PREVIEW` rows (6 people, 3 pending invites, 6 links, so people and links fit one laptop
+screen), a jump bar (owner: when more than one group has rows; a member sees "People N" only past
+`MEMBER_JUMP_BAR_MIN_PEOPLE` (5) people, the console's rule) and "Show all N …", which opens that
+group's full view in place of the list. Main-view links are `CompactLinkRow`s, as tall as a person
+row: title and meta line, a 2px usage bar, and a fixed slot with Copy ("Copy link") or, when locked,
+"Unlock to copy", beside the Revoke menu; only the full view draws the link field. The full view is
 search, filter chips and a windowed list (`useWindowedRows`; no virtualization dependency), with the
 same pessimistic actions because busy and refusal state live above both views. Searching and
 filtering there is presentation over rows Rust already sent. Every person row is avatar, a
