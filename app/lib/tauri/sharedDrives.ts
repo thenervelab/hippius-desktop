@@ -504,11 +504,11 @@ export async function listDriveInvites(
  */
 export interface DriveSharingSummary {
   label: string;
-  /** People who have joined. */
+  /** Whole-drive members. Folder holders are the folder's, not the drive's. */
   memberCount: number;
-  /** Invite links that can still admit someone. */
+  /** Whole-drive invite links that can still admit someone. */
   liveInviteCount: number;
-  /** Every invite the server still lists, expired and revoked included. */
+  /** Every whole-drive invite the server still lists, lapsed ones included. */
   totalInviteCount: number;
 }
 
@@ -525,6 +525,29 @@ export async function listOwnedDriveSharing(
   return invoke<DriveSharingSummary[]>("list_owned_drive_sharing", {
     labels: [...labels],
   });
+}
+
+/**
+ * One folder of an own drive that is shared on its own. See
+ * `shared_drives/commands.rs::fold_folder_sharing` for the rule.
+ */
+export interface FolderSharingSummary {
+  /** Drive-relative folder, no surrounding `/`, NFC. */
+  path: string;
+  /** People holding a grant on exactly this folder. */
+  holderCount: number;
+  /** A folder invite for exactly this folder is listed, live or spent. */
+  hasInvite: boolean;
+}
+
+/**
+ * The folders of ONE own drive that are shared on their own. Asked only for
+ * the drive being browsed, never fanned out over the drive list.
+ */
+export async function listOwnedFolderSharing(
+  label: string,
+): Promise<FolderSharingSummary[]> {
+  return invoke<FolderSharingSummary[]>("list_owned_folder_sharing", { label });
 }
 
 /**
