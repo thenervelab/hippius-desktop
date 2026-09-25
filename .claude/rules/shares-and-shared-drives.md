@@ -263,6 +263,30 @@ flush right: `ROLE_SLOT` is `justify-end`, `ROLE_TEXT` right-aligned, the quiet 
 pulled right by its own padding (`FLUSH_SELECT`), and a folder holder's Remove (red text,
 `DANGER_TEXT_BUTTON`) comes after the role, last.
 
+**Emailed invitations are approved automatically while the owner is signed in**
+(`shared_drives/auto_seal.rs`). An opened invitation (`awaiting_seal` with a
+`requester_pubkey`) is sealed and PUT by a Rust background task, the same way Approve
+does it: keys from `invite_seal_keys`, sealed and posted by `seal_invite_row` (derived
+file key for a row with `path_prefix`, entropy otherwise), the only two helpers
+`approve_email_invite` uses too. Safe without a click because the server lets only the
+invited mailbox publish the key (HCFS #480). Rules: OWN drives only (`/list_folders` in
+this account's namespace, each through `resolve_owned_target` naming this account);
+NEVER prompts (no session mnemonic is a quiet pass, `recovery_lock` is `try_lock`ed);
+plan gate `fetch_can_share_drives` (same inputs and rule as `get_storage_overview`,
+cached 10 min, re-read on a nudge); one attempt per `(invite_id, pubkey)`, forgotten on
+stale or transient failure; folder rows only when the FE passes `FOLDER_ROLES_ENABLED`.
+Cadence (`next_delay`, pure): 15 s while any owned drive has an emailed invitation `sent`
+or `awaiting_seal`, 3 min otherwise or when unavailable, errors back off 30 s doubling to
+5 min. Started by `InviteAutoSealListener` (protected layout, behind
+`SHARED_DRIVES_ENABLED`), stopped by `logout_full` and on unmount, ends itself when the
+session account changes. `email_drive_invite` nudges it in Rust; Manage access nudges on
+open. Each delivery emits `shared-drive:invite-key-delivered`; the listener toasts
+"{email} can join {drive}." ("Someone" when the address is hidden), bumps
+`driveInvitesVersionAtom` and `inviteKeyDeliveredVersionAtom` (the Share dialog reloads
+on it) and invalidates the sharing badges. The row copy is "Opened · they join while the
+app is open" (panel pill "Opened"), with Approve kept as the fallback. Pinned by the
+`auto_seal` unit tests and `automatic_delivery_uses_the_approve_path_and_the_owner_gate`.
+
 **The Manage access panel is one list, from one Rust fold** (`ShareDrivePanel.tsx` +
 `drive/access-panel/`, `list_access_panel` in `shared_drives/access_panel.rs`), for a
 drive or, when the target carries `pathPrefix`, one folder. People (owner, members,

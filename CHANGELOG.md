@@ -31,6 +31,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   drive or folder, and invitations still waiting. You can change someone's
   role or remove them right there, approve an emailed invitation that is
   waiting for you, and revoke a link you just made.
+- **People you invite by email join without waiting for you.** Once they
+  open the invitation, the app approves it on its own while you are signed
+  in, and tells you "{name} can join {drive}." Approve is still there if they
+  are waiting while the app is closed or locked.
 - **Manage access is one list** instead of tabs: the people who have the
   drive or folder, invitations still waiting, and every link with how often
   it was used and when it expires, all in one place.
