@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { driveWriteRefusal } from "../writeRefusal";
+import { driveWriteRefusal, frozenNotice } from "../writeRefusal";
+import { parseDriveRole } from "../roles";
 
 describe("driveWriteRefusal", () => {
   // A drop lands on the page whatever the permission, so a silent refusal
@@ -14,8 +15,13 @@ describe("driveWriteRefusal", () => {
     expect(message).toMatch(/ask whoever shared it/i);
   });
 
-  it.each(["writer", "manager"] as const)("lets %s write", (role) => {
-    expect(driveWriteRefusal(role)).toBeNull();
+  it("lets an Editor write", () => {
+    expect(driveWriteRefusal("writer")).toBeNull();
+  });
+
+  // A former Manager parses as an Editor and keeps writing.
+  it("lets a wire manager write, as an Editor", () => {
+    expect(driveWriteRefusal(parseDriveRole("manager"))).toBeNull();
   });
 
   // An own drive has no role at all.
@@ -38,7 +44,21 @@ describe("driveWriteRefusal", () => {
 
   it("refuses every role when the drive is frozen", () => {
     expect(driveWriteRefusal("writer", { frozen: true })).toMatch(/frozen/i);
-    expect(driveWriteRefusal("manager", { frozen: true })).toMatch(/frozen/i);
     expect(driveWriteRefusal(null, { frozen: true })).toMatch(/frozen/i);
+  });
+});
+
+describe("frozenNotice", () => {
+  it("reads the server's timestamp as a date", () => {
+    expect(frozenNotice("2026-10-01T12:00:00Z")).toBe(
+      "Frozen until Oct 1, 2026. Files can be opened but not changed.",
+    );
+  });
+
+  it("never shows a raw or broken timestamp", () => {
+    expect(frozenNotice(undefined)).toBe(
+      "This drive is frozen. Files can be opened but not changed.",
+    );
+    expect(frozenNotice("not a date")).not.toContain("Invalid");
   });
 });

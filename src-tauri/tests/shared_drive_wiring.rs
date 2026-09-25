@@ -188,37 +188,85 @@ fn leave_shared_drive_always_passes_the_owner_param() {
     );
 }
 
-/// Every management command resolves its label through ONE of the two named
-/// gates, never the raw lenient resolver.
-///
-/// Management used to be owner-only (`resolve_own_drive`, which refuses member
-/// labels). It now admits a delegated manager, which means the local refusal
-/// is gone and the SERVER is the authority on role — so the thing worth
-/// pinning changed shape: not "everything uses the owner gate", but "nothing
-/// reaches `resolve_drive_identity_or_own` directly". A command that did would
-/// silently skip whichever gate its siblings share, and the difference between
-/// the two is invisible at the call site.
+/// Only the owner changes access. Every command that invites, removes, changes
+/// a role, revokes, approves or changes folder grants resolves through the
+/// OWNER gate (`resolve_owned_target`, or `resolve_own_drive` for the badge
+/// listing), which refuses a drive this account does not own before any key is
+/// read or any request made. The reads a member may make (who has access, the
+/// panel) go through the access gate, and nothing reaches the raw lenient
+/// resolver directly, which would silently skip whichever gate its siblings
+/// share.
 #[test]
-fn management_commands_route_through_a_named_gate() {
+fn access_changes_are_owner_only() {
     let src = shared_drive_commands_src();
     for command in [
-        "pub async fn create_drive_invite(",
-        "pub async fn list_drive_members(",
+        "async fn mint_invite_link(",
         "pub async fn remove_drive_member(",
         "pub async fn change_drive_member_role(",
         "pub async fn list_drive_invites(",
         "pub async fn revoke_drive_invite(",
-        "pub async fn list_owned_drive_sharing(",
+        "pub async fn email_drive_invite(",
+        "pub async fn email_invites_available(",
+        "pub async fn approve_email_invite(",
+        "pub async fn replace_folder_grants(",
     ] {
         let body = fn_body(&src, command);
         assert!(
-            body.contains("resolve_manage_target(") || body.contains("resolve_own_drive("),
-            "{command} must resolve its label through a named gate"
+            body.contains("resolve_owned_target("),
+            "{command} changes access and must resolve through the owner gate"
         );
         assert!(
-            !body.contains("resolve_drive_identity_or_own("),
+            !body.contains("resolve_access_target(") && !body.contains("member_owner("),
+            "{command} must not admit or name somebody else's drive"
+        );
+    }
+    for command in [
+        "pub async fn list_drive_members(",
+        "pub async fn list_share_access(",
+        "pub async fn list_access_panel(",
+        "pub async fn list_drive_folder_grants(",
+    ] {
+        let body = fn_body(&src, command);
+        assert!(
+            body.contains("resolve_access_target("),
+            "{command} is a read a member may make, through the access gate"
+        );
+    }
+    let sharing = fn_body(&src, "pub async fn list_owned_drive_sharing(");
+    assert!(sharing.contains("resolve_own_drive("), "the sharing badge listing stays owner-only");
+    let folder_sharing = fn_body(&src, "pub async fn list_owned_folder_sharing(");
+    assert!(folder_sharing.contains("resolve_own_drive("), "the folder sharing marks stay owner-only");
+    for command in [
+        "async fn mint_invite_link(",
+        "pub async fn list_drive_members(",
+        "pub async fn list_share_access(",
+        "pub async fn list_access_panel(",
+        "pub async fn list_owned_drive_sharing(",
+        "pub async fn list_owned_folder_sharing(",
+        "pub async fn approve_email_invite(",
+    ] {
+        assert!(
+            !fn_body(&src, command).contains("resolve_drive_identity_or_own("),
             "{command} must not reach past its gate to the raw lenient resolver"
         );
+    }
+}
+
+/// The role that goes on the wire is checked FIRST: a `manager` (or anything
+/// but Viewer and Editor) is refused before the session, the drive or the
+/// network is touched.
+#[test]
+fn a_manager_role_is_refused_before_anything_else() {
+    let src = shared_drive_commands_src();
+    for (command, check) in [
+        ("async fn mint_invite_link(", "resolve_invite_role(role)"),
+        ("pub async fn email_drive_invite(", "resolve_email_invite("),
+        ("pub async fn change_drive_member_role(", "require_offered_role(&role)"),
+    ] {
+        let body = fn_body(&src, command);
+        let checked = body.find(check).unwrap_or_else(|| panic!("{command} must check the role with {check}"));
+        let ctx = body.find("api_ctx(").unwrap_or_else(|| panic!("{command} reads the session"));
+        assert!(checked < ctx, "{command} must refuse the role before reading the session or the drive");
     }
 }
 
@@ -227,11 +275,44 @@ fn management_commands_route_through_a_named_gate() {
 #[test]
 fn create_drive_invite_seals_the_token_back() {
     let src = shared_drive_commands_src();
-    let body = fn_body(&src, "pub async fn create_drive_invite(");
+    let body = fn_body(&src, "async fn mint_invite_link(");
     assert!(
         body.contains("seal_invite_token") && body.contains("http_put_sealed_token"),
         "create_drive_invite must park the sealed token so the Links tab can rebuild URLs"
     );
+}
+
+/// Both invite commands mint through the ONE funnel, so the gates above hold
+/// for folder invites too, and sharing a folder can never be a whole-drive
+/// invite: the folder command's path is required (not an `Option`) and is
+/// planned, which refuses an empty one, before any request goes out.
+#[test]
+fn a_folder_invite_can_never_go_out_as_a_drive_invite() {
+    let src = shared_drive_commands_src();
+    let drive = fn_body(&src, "pub async fn create_drive_invite(");
+    let folder = fn_body(&src, "pub async fn create_folder_invite(");
+    assert!(drive.contains("mint_invite_link(") && drive.contains("InviteScope::Drive"));
+    assert!(folder.contains("mint_invite_link(") && folder.contains("InviteScope::Folder"));
+    assert!(
+        !drive.contains("path_prefix"),
+        "the drive command takes no folder: one command, one kind of invite"
+    );
+
+    let sig_start = src.find("pub async fn create_folder_invite(").expect("folder command");
+    let sig = &src[sig_start..sig_start + src[sig_start..].find('{').expect("body")];
+    assert!(sig.contains("path_prefix: String,"), "the folder is required, never optional");
+
+    let funnel = fn_body(&src, "async fn mint_invite_link(");
+    let plan = funnel.find("plan_folder_invite(").expect("the folder is planned");
+    let request = funnel.find("http_create_invite(").expect("then minted");
+    assert!(plan < request, "the folder path is validated before any request");
+    assert!(
+        funnel.contains("require_server_knows_folder_invites"),
+        "a server that would ignore the folder is never sent one"
+    );
+    // The same for a MAILED folder invite, which has no echo to check.
+    let email = fn_body(&src, "pub async fn email_drive_invite(");
+    assert!(email.contains("require_server_knows_folder_invites"));
 }
 
 /// Opening sealed tokens on list is what puts a copyable URL on each Links
@@ -239,11 +320,18 @@ fn create_drive_invite_seals_the_token_back() {
 #[test]
 fn list_drive_invites_opens_sealed_tokens() {
     let src = shared_drive_commands_src();
-    let body = fn_body(&src, "pub async fn list_drive_invites(");
+    let helper = fn_body(&src, "async fn open_invite_links(");
     assert!(
-        body.contains("open_invite_token") && body.contains("build_invite_url"),
-        "list_drive_invites must open sealed tokens and attach invite_url"
+        helper.contains("open_invite_token") && helper.contains("build_invite_url"),
+        "open_invite_links must open sealed tokens and attach invite_url"
     );
+    assert!(helper.contains("sealed_token = None"), "no ciphertext reaches the FE");
+    // Both listings that show a link go through it: the Links rows and the
+    // access panel.
+    for command in ["pub async fn list_drive_invites(", "pub async fn list_access_panel("] {
+        let body = fn_body(&src, command);
+        assert!(body.contains("open_invite_links("), "{command} must open sealed links");
+    }
 }
 
 /// Storage on a shared drive bills the OWNER: `add_shared_drive` must not
@@ -458,29 +546,27 @@ fn revoked_latch_clears_ride_the_existing_teardown_edges() {
     );
 }
 
-/// A MANAGER minting on a drive they do not own must take the folder key from
-/// the ONE resolver that knows where a drive's key lives, never from a copy
-/// of that branch.
+/// The mint must take the folder key from the ONE resolver that knows where a
+/// drive's key lives, never from a copy of that branch.
 ///
-/// The master chain (`derive_folder_mnemonic(master, label)`) yields the key
-/// for a drive of that name owned by THIS account. On a member drive it is
-/// simply a different key, and nothing here would fail: the mint succeeds, the
-/// link looks right, and the recipient joins and finds that nothing decrypts.
-/// The same reasoning, and the same file, as `remote::encryption_key_for_label`
-/// — which is unit-tested; this pins the mint to it so the branch cannot be
+/// A copy is free to drift: a key derived from the wrong mnemonic is simply a
+/// different key, and nothing here would fail. The mint succeeds, the link
+/// looks right, and the recipient joins and finds that nothing decrypts. The
+/// same reasoning, and the same file, as `remote::encryption_key_for_label`,
+/// which is unit-tested; this pins the mint to it so the branch cannot be
 /// refactored away.
 #[test]
-fn a_delegated_mint_takes_the_owners_sealed_folder_key() {
-    let body = fn_body(&shared_drive_commands_src(), "pub async fn create_drive_invite");
+fn the_mint_takes_its_folder_key_from_the_one_resolver() {
+    let body = fn_body(&shared_drive_commands_src(), "async fn mint_invite_link(");
 
     assert!(
-        body.contains("folder_phrase_for_label"),
+        body.contains("drive_key_material_for_label"),
         "the mint must take its folder key from the one resolver that knows all three sources"
     );
 
     // It used to carry its own copy of the member branch, and that copy read
     // the drive password WITHOUT the session mnemonic -- so an encrypted
-    // password could not be decrypted and a manager could not mint at all.
+    // password could not be decrypted and the mint failed outright.
     // The resolver takes the mnemonic; a second copy here would be free to
     // forget it again.
     assert!(
@@ -494,59 +580,27 @@ fn a_delegated_mint_takes_the_owners_sealed_folder_key() {
     assert!(!body.contains("derive_folder_mnemonic"), "nor re-derive an own drive's phrase");
 }
 
-/// Every delegated management call names the drive's owner.
+/// A member's read of somebody else's drive names that drive's owner.
 ///
 /// `folder_hash` is label-derived and collides across owners as a matter of
-/// course, so a call that drops the owner addresses whichever row the server
-/// finds first. The value comes from ONE helper so a new management command
-/// cannot quietly omit it.
+/// course, so a read that drops the owner addresses whichever row the server
+/// finds first. The value comes from ONE helper so a new read cannot quietly
+/// omit it.
 #[test]
-fn every_management_command_passes_the_delegated_owner() {
+fn every_member_read_names_the_owner() {
     let src = shared_drive_commands_src();
-
     for sig in [
         "pub async fn list_drive_members",
-        "pub async fn list_drive_invites",
-        "pub async fn revoke_drive_invite",
-        "pub async fn change_drive_member_role",
-        "pub async fn remove_drive_member",
-        "pub async fn create_drive_invite",
+        "pub async fn list_share_access",
+        "pub async fn list_access_panel",
+        "pub async fn list_drive_folder_grants",
     ] {
         let body = fn_body(&src, sig);
         assert!(
-            body.contains("delegated_owner(&identity)"),
-            "{sig} must pass the delegated owner, or a manager's call addresses the wrong drive"
+            body.contains("member_owner(&identity)"),
+            "{sig} must name the owner, or a member's read addresses the wrong drive"
         );
     }
-}
-
-/// The management commands resolve through the MANAGEABLE resolver, not the
-/// owner-only one — otherwise a manager is refused locally before the server
-/// ever sees the call, which is what made the desktop mint Manager invites it
-/// could not then honour.
-#[test]
-fn management_commands_admit_a_delegated_manager() {
-    let src = shared_drive_commands_src();
-
-    for sig in [
-        "pub async fn list_drive_members",
-        "pub async fn list_drive_invites",
-        "pub async fn revoke_drive_invite",
-        "pub async fn change_drive_member_role",
-        "pub async fn create_drive_invite",
-    ] {
-        let body = fn_body(&src, sig);
-        assert!(
-            body.contains("resolve_manage_target"),
-            "{sig} must resolve through the target gate, which admits a delegated manager \
-             and lets the caller name a drive that is not synced here"
-        );
-    }
-
-    // The badge listing is the exception and stays owner-only: it answers
-    // "which of MY drives have I shared".
-    let sharing = fn_body(&src, "pub async fn list_owned_drive_sharing");
-    assert!(sharing.contains("resolve_own_drive"), "the sharing badge listing stays owner-only");
 }
 
 /// A file's encryption key and its manifest signing key come from ONE folder
@@ -568,8 +622,8 @@ fn upload_and_rename_take_both_keys_from_one_folder_phrase() {
         let src = std::fs::read_to_string(format!("{}{file}", env!("CARGO_MANIFEST_DIR"))).unwrap_or_else(|e| panic!("read {file}: {e}"));
 
         assert!(
-            src.contains("folder_phrase_for_label"),
-            "{file} must take its folder phrase from the one resolver that knows about member drives"
+            src.contains("drive_key_material_for_label"),
+            "{file} must take its keys from the one resolver that knows about member drives"
         );
         assert!(
             !src.contains("signing_key_for_folder(&mnemonic, label)"),
@@ -640,8 +694,8 @@ fn the_folder_key_is_derived_once_per_upload_not_per_file() {
 
     let per_file = fn_body(&src, "pub(crate) async fn upload_to_remote_folder_with_progress");
     assert!(
-        !per_file.contains("folder_phrase_for_label"),
-        "the per-file path must take the phrase, not derive it"
+        !per_file.contains("drive_key_material_for_label"),
+        "the per-file path must take the keys, not derive them"
     );
 
     for sig in [
@@ -650,9 +704,77 @@ fn the_folder_key_is_derived_once_per_upload_not_per_file() {
     ] {
         let body = fn_body(&src, sig);
         assert_eq!(
-            body.matches("folder_phrase_for_label").count(),
+            body.matches("drive_key_material_for_label").count(),
             1,
             "{sig} must derive the folder key exactly once"
         );
     }
+}
+
+/// An approval seals the DRIVE's key, resolved through the same funnel the
+/// link mint uses. Deriving it any other way would admit the recipient to a
+/// drive whose files they cannot decrypt.
+///
+/// The manual Approve and the automatic delivery share two helpers: one
+/// resolves the keys, one seals and posts a row. Pinned here so the key rule
+/// (derived key for a folder invitation, entropy for a drive) cannot fork.
+#[test]
+fn approve_email_invite_seals_the_drives_key() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn approve_email_invite(");
+    assert!(body.contains("invite_seal_keys("), "approve resolves keys through the shared helper");
+    assert!(body.contains("seal_invite_row("), "approve seals through the shared helper");
+    assert!(
+        !body.contains("derive_folder_mnemonic"),
+        "never derive the drive key from the caller's master"
+    );
+
+    let keys = fn_body(&src, "pub(crate) async fn invite_seal_keys(");
+    assert!(
+        keys.contains("drive_key_material_for_label("),
+        "the drive key must come from the key funnel"
+    );
+    assert!(!keys.contains("derive_folder_mnemonic"), "never derive the drive key by hand");
+
+    let seal = fn_body(&src, "pub(crate) async fn seal_invite_row(");
+    assert!(seal.contains("key_for(row.path_prefix.is_some())"), "the key follows the row's folder");
+    assert!(
+        seal.contains("seal_invite_key("),
+        "the key is sealed to the recipient, not sent in the clear"
+    );
+}
+
+fn auto_seal_src() -> String {
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shared_drives/auto_seal.rs")).expect("read auto_seal.rs")
+}
+
+/// Automatic delivery is the manual Approve without the click: owner-only
+/// through the same gate, the same key helpers, and it never prompts.
+#[test]
+fn automatic_delivery_uses_the_approve_path_and_the_owner_gate() {
+    let full = auto_seal_src();
+    // The module's code, without its tests (which name what they refuse).
+    let src = full.split("#[cfg(test)]").next().expect("module code").to_string();
+    let pass = [
+        fn_body(&src, "async fn may_deliver("),
+        fn_body(&src, "async fn pass("),
+        fn_body(&src, "async fn seal_drive("),
+    ]
+    .concat();
+    assert!(pass.contains("resolve_owned_target("), "only own drives are sealed for");
+    assert!(pass.contains("Some(account_id.to_string())"), "the owner named is always this account");
+    assert!(pass.contains("invite_seal_keys("), "keys come from the shared helper");
+    assert!(pass.contains("seal_invite_row("), "rows are sealed by the shared helper");
+    assert!(!pass.contains("seal_invite_key("), "no second seal path");
+    assert!(!pass.contains("derive_folder_mnemonic"), "never derive the drive key by hand");
+    assert!(
+        pass.contains("fetch_can_share_drives("),
+        "delivery follows the plan rule inviting follows"
+    );
+    assert!(pass.contains("recovery_lock.try_lock()"), "never waits behind a recovery or rotation");
+    assert!(!pass.contains("recovery_check") && !pass.contains("unlock"), "never raises a prompt");
+
+    let logout = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/auth/logout.rs")).expect("read logout.rs");
+    let body = fn_body(&logout, "pub async fn logout_full(");
+    assert!(body.contains("invite_auto_seal.stop()"), "sign-out stops delivery");
 }

@@ -122,6 +122,8 @@ struct MockOptions {
     /// `expires_at` echoed by a successful PATCH — the response carries
     /// nothing else (no token echo).
     patch_expires_at: serde_json::Value,
+    /// Body of `GET /v1/drive-memberships`: the member-mint role gate.
+    memberships: serde_json::Value,
 }
 
 impl Default for MockOptions {
@@ -135,6 +137,7 @@ impl Default for MockOptions {
             list: json!([]),
             missing_tokens: Vec::new(),
             patch_expires_at: json!(null),
+            memberships: json!({ "memberships": [] }),
         }
     }
 }
@@ -164,8 +167,18 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
     let delete_missing = opts.missing_tokens.clone();
     let patch_missing = opts.missing_tokens.clone();
     let patch_expires = opts.patch_expires_at.clone();
+    let memberships_body = opts.memberships.clone();
 
     Router::new()
+        .route(
+            "/v1/drive-memberships",
+            get(move |headers: HeaderMap| async move {
+                if let Some(resp) = bearer_rejection(&headers) {
+                    return resp;
+                }
+                Json(memberships_body).into_response()
+            }),
+        )
         .route(
             "/v1/capabilities",
             get(move || async move {
@@ -632,9 +645,9 @@ async fn member_drive_mint_refuses_before_any_mint_request() {
 
     let err = create_folder_share_inner(&state, account, label, "docs", ShareTtl::Days7, ShareChoice::Public)
         .await
-        .expect_err("a member mint must refuse");
+        .expect_err("a member mint must refuse on a server without member_folder_shares");
     match err {
-        AppError::Validation(msg) => assert!(msg.contains("Only the owner"), "the owner-only rule must be named: {msg}"),
+        AppError::Validation(msg) => assert!(msg.contains("newer server"), "the missing capability must be named: {msg}"),
         other => panic!("expected Validation, got {other:?}"),
     }
 
@@ -1008,4 +1021,198 @@ async fn expiry_update_pins_the_patch_body_and_consumes_the_bare_response() {
         .await
         .expect("never update");
     assert_eq!(expires, None, "a never-expiring share reports None");
+}
+
+// ── Mint inside somebody else's drive (hcfs #458) ─────────────────────────
+
+/// The owner's folder phrase for the seeded member drive: a published BIP-39
+/// vector standing in for the owner-derived folder mnemonic.
+const MEMBER_FOLDER_PHRASE: &str = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+
+fn member_caps() -> serde_json::Value {
+    json!({ "shares": true, "folder_shares": true, "member_folder_shares": true })
+}
+
+fn membership(role: &str, frozen: bool) -> serde_json::Value {
+    json!({ "memberships": [{
+        "owner_ss58": OWNER_SS58, "folder_hash": WIRE_HASH, "role": role,
+        "grant_blob": "", "display_label": "joined-drive",
+        "created_at": "2026-08-20T00:00:00Z", "frozen": frozen
+    }]})
+}
+
+/// Write the owner-sealed folder key where a synced member drive keeps it.
+fn write_member_seal(account: &str, label: &str) {
+    let path = TEST_HOME
+        .join(".hippius")
+        .join("drives")
+        .join(account_key(account))
+        // Keyed by the LOCAL label's hash, like every config dir.
+        .join(hcfs_client::drive::keys::folder_hash(label))
+        .join("enc_mnemonic.json");
+    std::fs::create_dir_all(path.parent().unwrap()).expect("config dir");
+    hcfs_client::auth::save_encrypted_mnemonic(&path, MEMBER_FOLDER_PHRASE, DRIVE_PW).expect("write member seal");
+}
+
+/// A Viewer is refused locally with words, and no mint reaches the server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_cannot_share_a_folder_in_someone_elses_drive() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5ViewerMintAcct";
+    let label = "joined-drive";
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: member_caps(),
+            memberships: membership("reader", false),
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_member_drive(&pool, account, label).await;
+    let state = make_state(pool.clone(), account);
+
+    let err = create_folder_share_inner(&state, account, label, "docs", ShareTtl::Days7, ShareChoice::Public)
+        .await
+        .expect_err("a Viewer must be refused");
+    assert!(
+        matches!(err, AppError::Validation(ref m) if m.contains("Only Editors can share")),
+        "{err:?}"
+    );
+    assert!(recorded.create_bodies.lock().unwrap().is_empty());
+}
+
+/// A frozen drive is refused even for an Editor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_frozen_drive_cannot_be_shared_from() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5FrozenMintAcct";
+    let label = "joined-drive";
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: member_caps(),
+            memberships: membership("writer", true),
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_member_drive(&pool, account, label).await;
+    let state = make_state(pool.clone(), account);
+
+    let err = create_folder_share_inner(&state, account, label, "docs", ShareTtl::Days7, ShareChoice::Public)
+        .await
+        .expect_err("frozen");
+    assert!(matches!(err, AppError::Validation(ref m) if m.contains("frozen")), "{err:?}");
+    assert!(recorded.create_bodies.lock().unwrap().is_empty());
+}
+
+/// A member the server still calls `manager` is an Editor to this client, and
+/// keeps an Editor's public folder link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_former_manager_shares_a_folder_as_an_editor() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5FormerManagerAcct";
+    let label = "joined-drive";
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: member_caps(),
+            memberships: membership("manager", false),
+            create: CreateReply::Created {
+                share_token: "tok_former_manager",
+                expires_at: None,
+            },
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_member_drive(&pool, account, label).await;
+    write_member_seal(account, label);
+    let state = make_state(pool.clone(), account);
+
+    create_folder_share_inner(&state, account, label, "docs", ShareTtl::Days7, ShareChoice::Public)
+        .await
+        .expect("a former Manager shares like an Editor");
+    let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
+    assert_eq!(body["owner_ss58"], OWNER_SS58);
+}
+
+/// An Editor's mint names the owner, carries the DRIVE's derived file key
+/// (from the owner's seal, never this account's master) and is kept in the
+/// keystore like any other folder share.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_editor_shares_a_folder_naming_the_owner() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5EditorMintAcct";
+    let label = "joined-drive";
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: member_caps(),
+            memberships: membership("writer", false),
+            create: CreateReply::Created {
+                share_token: "tok_member",
+                expires_at: None,
+            },
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_member_drive(&pool, account, label).await;
+    write_member_seal(account, label);
+    let state = make_state(pool.clone(), account);
+
+    let link = create_folder_share_inner(&state, account, label, "docs/2026", ShareTtl::Days30, ShareChoice::Public)
+        .await
+        .expect("an Editor may share");
+
+    let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
+    assert_eq!(
+        body,
+        json!({
+            "folder_hash": WIRE_HASH,
+            "path_prefix": "docs/2026",
+            "display_name": "2026",
+            "ttl": "30d",
+            "owner_ss58": OWNER_SS58,
+        }),
+    );
+
+    let phrase: bip39::Mnemonic = MEMBER_FOLDER_PHRASE.parse().expect("phrase");
+    let seed = phrase.to_seed("");
+    let expected = URL_SAFE_NO_PAD.encode(&seed[..32]);
+    assert!(
+        link.share_url.ends_with(&format!("/share/folder/tok_member#k={expected}")),
+        "{}",
+        link.share_url
+    );
+    assert_ne!(
+        URL_SAFE_NO_PAD.encode(expected_file_key(label)),
+        expected,
+        "never a key derived from this account's own master"
+    );
+
+    let keystore = SqliteShareKeystore::new(pool);
+    assert!(matches!(keystore.get("tok_member").expect("get"), Some(ShareSecret::Public(_))));
 }

@@ -163,3 +163,20 @@ describe("shared drives is gated with the console, not ahead of it", () => {
     expect(config).toMatch(/NODE_ENV\s*===\s*"development"\s*\?\s*"staging"/);
   });
 });
+
+/**
+ * Folder roles are built against a server contract HCFS has not published,
+ * so the surface is internal only: on in staging, off in beta and production.
+ */
+describe("FOLDER_ROLES_ENABLED", () => {
+  const flags = read("app/lib/featureFlags.ts");
+
+  it("is staging only", () => {
+    const gate = flags.match(/FOLDER_ROLES_ENABLED\s*=\s*enabledFrom\("(\w+)"\)/);
+    expect(gate, "FOLDER_ROLES_ENABLED must name its lane").not.toBeNull();
+    const lane = gate![1] as Parameters<typeof isEnabledOn>[0];
+    expect(isEnabledOn(lane, "staging")).toBe(true);
+    expect(isEnabledOn(lane, "beta")).toBe(false);
+    expect(isEnabledOn(lane, "production")).toBe(false);
+  });
+});

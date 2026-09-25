@@ -12,6 +12,7 @@ import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
 import DriveSharingHeaderMark from "./DriveSharingHeaderMark";
+import { FolderSharingHeaderMark } from "./FolderSharingMark";
 import SyncFolderBreadcrumb, {
   BreadcrumbSegment,
 } from "./SyncFolderBreadcrumb";
@@ -523,6 +524,15 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                 displayName={openDriveDisplayName}
                 browsedSharedDrive={browsedSharedDrive}
               />
+              {/* Inside a folder shared on its own, that folder's mark. The
+                  drive mark above counts whole-drive people only, this one
+                  the folder's, so nobody is counted twice. */}
+              {isNested && !browsedSharedDrive ? (
+                <FolderSharingHeaderMark
+                  label={openDriveLabel}
+                  folderPath={nestedSubfolderPath}
+                />
+              ) : null}
             </div>
             <div className="flex items-center gap-3 flex-wrap ml-auto">
               {refreshButton}

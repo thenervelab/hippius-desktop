@@ -272,6 +272,8 @@ pub struct OAuthSessionResult {
     pub token: String,
     pub user_id: i64,
     pub username: String,
+    /// Empty when the account has no email to show: none on file, or a
+    /// system placeholder (see `crate::utils::display_email`).
     pub email: String,
     pub substrate_address: String,
     pub provider: String,
@@ -793,7 +795,9 @@ pub async fn complete_oauth_flow(
         token,
         user_id,
         username,
-        email,
+        // Stored as the server sent it, but a system placeholder
+        // (`@hippius.local`) is never shown, so the FE gets an empty email.
+        email: crate::utils::display_email::display_email(Some(&email)).unwrap_or_default(),
         substrate_address,
         provider: provider_name,
         expires_at,

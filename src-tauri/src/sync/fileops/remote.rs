@@ -85,7 +85,52 @@ pub(crate) async fn upload_target_identity(
     }
 }
 
-/// The folder mnemonic a drive's keys are derived from.
+/// What this account holds of a drive's key.
+///
+/// A drive's keys all descend from its folder mnemonic, and anyone with
+/// access to the WHOLE drive holds that phrase. A folder grant holder holds
+/// less: only the folder's DERIVED file key (folder roles, following HCFS
+/// #475; see `shared_drives::folder_roles`, assumption 7). The
+/// derived key is `seed(phrase)[..32]`, which is both the file-encryption key
+/// and the manifest signing secret, so a holder can read and write inside the
+/// folder but can never produce the drive's entropy for a whole-drive invite.
+pub(crate) enum DriveKeyMaterial {
+    /// The drive's folder mnemonic: an own drive or a whole-drive membership.
+    Phrase(zeroize::Zeroizing<String>),
+    /// Only the derived file key: a folder grant.
+    FileKey(zeroize::Zeroizing<[u8; 32]>),
+}
+
+impl DriveKeyMaterial {
+    /// The 32-byte file-encryption key.
+    pub(crate) fn encryption_key(&self) -> Result<[u8; 32]> {
+        match self {
+            Self::Phrase(phrase) => encryption_key_from_phrase(phrase),
+            Self::FileKey(key) => Ok(**key),
+        }
+    }
+
+    /// The manifest signing key. The SAME secret bytes as the encryption key
+    /// (both are `seed[..32]`), taken from one source so they cannot drift.
+    pub(crate) fn signing_key(&self) -> Result<ed25519_dalek::SigningKey> {
+        match self {
+            Self::Phrase(phrase) => crate::sync::fileops::remote_upload::signing_key_for_folder(phrase),
+            Self::FileKey(key) => Ok(ed25519_dalek::SigningKey::from_bytes(key)),
+        }
+    }
+
+    /// The folder phrase, which only whole-drive access has. A folder grant
+    /// holder asking for it (to invite someone to the whole drive) is refused
+    /// by name rather than handed a wrong key.
+    pub(crate) fn into_phrase(self) -> Result<zeroize::Zeroizing<String>> {
+        match self {
+            Self::Phrase(phrase) => Ok(phrase),
+            Self::FileKey(_) => Err(AppError::Validation("Only someone with access to the whole drive can do this.".into())),
+        }
+    }
+}
+
+/// Where this account's key for a drive lives, as [`DriveKeyMaterial`].
 ///
 /// ONE source for both the encryption key and the manifest signing key. They
 /// were derived separately, and only the encryption path had a member branch:
@@ -94,18 +139,20 @@ pub(crate) async fn upload_target_identity(
 /// Two different keys for one file, and nothing local fails when they
 /// disagree.
 ///
-/// Three sources, in order of what the drive actually is:
+/// Four sources, in order of what the drive actually is:
 ///   - an OWN drive derives from this account's master;
 ///   - a member drive synced here reads the owner-sealed `enc_mnemonic.json`;
 ///   - a member drive never synced here opens this account's own grant, which
-///     carries the same key sealed to them.
-pub(crate) async fn folder_phrase_for_label(
+///     carries the same key sealed to them;
+///   - a drive this account holds only a FOLDER GRANT on opens that grant,
+///     which carries the derived file key alone.
+pub(crate) async fn drive_key_material_for_label(
     state: &AppState,
     account_id: &str,
     label: &str,
     mnemonic: &str,
     identity: &DriveIdentity,
-) -> Result<zeroize::Zeroizing<String>> {
+) -> Result<DriveKeyMaterial> {
     let pool = state.pool()?;
     let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
 
@@ -114,16 +161,20 @@ pub(crate) async fn folder_phrase_for_label(
         if folder_enc.exists() {
             let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, &password)
                 .map_err(|e| AppError::Hcfs(format!("Failed to recover shared-drive folder mnemonic: {e}")))?;
-            return Ok(zeroize::Zeroizing::new(folder.to_string()));
+            return Ok(DriveKeyMaterial::Phrase(zeroize::Zeroizing::new(folder.to_string())));
         }
 
-        // Never synced here: the grant holds the same key, sealed to this
-        // account. Argon2id is offloaded inside `open_grant_entropy`.
+        // Never synced here: the grant holds the key, sealed to this account.
+        // Argon2id is offloaded inside `open_member_key_inner`.
         let ctx = crate::shared_drives::commands::api_ctx_for(state).await?;
-        let entropy = crate::shared_drives::commands::open_grant_entropy_inner(state, &ctx, identity).await?;
-        let folder =
-            bip39::Mnemonic::from_entropy(entropy.as_ref()).map_err(|e| AppError::Crypto(format!("grant entropy is not a folder key: {e}")))?;
-        return Ok(zeroize::Zeroizing::new(folder.to_string()));
+        return match crate::shared_drives::commands::open_member_key_inner(state, &ctx, identity).await? {
+            crate::shared_drives::commands::MemberKey::DriveEntropy(entropy) => {
+                let folder = bip39::Mnemonic::from_entropy(entropy.as_ref())
+                    .map_err(|e| AppError::Crypto(format!("grant entropy is not a folder key: {e}")))?;
+                Ok(DriveKeyMaterial::Phrase(zeroize::Zeroizing::new(folder.to_string())))
+            }
+            crate::shared_drives::commands::MemberKey::FolderFileKey(key) => Ok(DriveKeyMaterial::FileKey(key)),
+        };
     }
 
     let master_path = master_mnemonic_path(account_id)?;
@@ -133,7 +184,7 @@ pub(crate) async fn folder_phrase_for_label(
     let phrase = hcfs_client::drive::keys::derive_folder_mnemonic(&master_mnemonic, label)
         .map_err(|e| AppError::Crypto(format!("Failed to derive folder mnemonic: {e}")));
     master_mnemonic.zeroize();
-    Ok(zeroize::Zeroizing::new(phrase?))
+    Ok(DriveKeyMaterial::Phrase(zeroize::Zeroizing::new(phrase?)))
 }
 
 /// The 32-byte file-encryption key: the folder mnemonic's seed, first 32
@@ -151,7 +202,7 @@ pub(crate) fn encryption_key_from_phrase(phrase: &str) -> Result<[u8; 32]> {
 
 /// The 32-byte file-encryption key for a drive.
 ///
-/// Delegates to [`folder_phrase_for_label`] rather than deriving anything
+/// Delegates to [`drive_key_material_for_label`] rather than deriving anything
 /// itself: it held a SECOND copy of the member branch, and that copy knew
 /// only about the sealed `enc_mnemonic.json`. A drive shared with this
 /// account and merely BROWSED has no local row and so no seal, which the
@@ -170,8 +221,9 @@ pub(crate) async fn encryption_key_for_label(
     mnemonic: &str,
     identity: &DriveIdentity,
 ) -> Result<[u8; 32]> {
-    let phrase = folder_phrase_for_label(state, account_id, label, mnemonic, identity).await?;
-    encryption_key_from_phrase(&phrase)
+    drive_key_material_for_label(state, account_id, label, mnemonic, identity)
+        .await?
+        .encryption_key()
 }
 
 /// The OWN-drive half of that derivation, straight from hcfs-client's
@@ -899,6 +951,14 @@ pub(crate) struct BrowsePage {
     pub has_more: bool,
 }
 
+/// An attribution email as the UI may show it: trimmed, and absent rather
+/// than blank or a system placeholder (`crate::utils::display_email`), so a
+/// tooltip never shows an empty line or a fake address. Shared by the browse
+/// and search mappers.
+pub(crate) fn present_email(value: Option<&str>) -> Option<String> {
+    crate::utils::display_email::display_email(value)
+}
+
 pub(crate) fn append_browse_page(
     folders: &mut Vec<super::files::FileEntry>,
     files: &mut Vec<super::files::FileEntry>,
@@ -926,6 +986,7 @@ pub(crate) fn append_browse_page(
             // A folder is not uploaded by anyone; its contents are.
             uploaded_by: None,
             uploaded_by_name: None,
+            uploaded_by_email: None,
         });
     }
     for f in page_files {
@@ -960,6 +1021,7 @@ pub(crate) fn append_browse_page(
             // as a blank "uploaded by".
             uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
             uploaded_by_name: f.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            uploaded_by_email: present_email(f.uploaded_by_email.as_deref()),
         });
     }
 }
@@ -1161,7 +1223,10 @@ pub async fn list_remote_folder_grouped(
         // no local row (that is the whole point of browsable remote folders).
         (None, None) => resolve_drive_identity_or_own(pool, &account_id, &label).await?,
     };
-    let path = subfolder.trim_matches('/');
+    // A folder grant is browsed rooted at its folder: the view's path is
+    // relative to it, and nothing above it can be asked for.
+    let rooted = crate::sync::identity::rooted_path(&label, &subfolder);
+    let path = rooted.as_str();
 
     // The FE picks the page size (scroll-driven lazy loading wants small
     // pages); clamp to the server's per-request ceiling either way.
@@ -1378,13 +1443,20 @@ mod tests {
         let attributed = hcfs_shared::network::RemoteFileEntry {
             uploaded_by: Some("5Member".to_string()),
             uploaded_by_name: Some("Ada".to_string()),
+            uploaded_by_email: Some("  ada@example.com ".to_string()),
             ..browse_file(Some("theirs.png"), None, 1, 10, 10)
         };
         let blank = hcfs_shared::network::RemoteFileEntry {
             uploaded_by: Some(String::new()),
+            uploaded_by_email: Some("   ".to_string()),
             ..browse_file(Some("blank.png"), None, 1, 10, 10)
         };
         let unattributed = browse_file(Some("old.png"), None, 1, 10, 10);
+        let placeholder = hcfs_shared::network::RemoteFileEntry {
+            uploaded_by: Some("5Key".to_string()),
+            uploaded_by_email: Some("user_key@hippius.local".to_string()),
+            ..browse_file(Some("key.png"), None, 1, 10, 10)
+        };
 
         append_browse_page(
             &mut folders,
@@ -1395,15 +1467,20 @@ mod tests {
                 total_bytes: 1,
                 created_at: Some(10),
             }],
-            vec![attributed, blank, unattributed],
+            vec![attributed, blank, unattributed, placeholder],
         );
 
         assert_eq!(files[0].uploaded_by.as_deref(), Some("5Member"));
         assert_eq!(files[0].uploaded_by_name.as_deref(), Some("Ada"));
+        assert_eq!(files[0].uploaded_by_email.as_deref(), Some("ada@example.com"), "email is trimmed");
         assert_eq!(files[1].uploaded_by, None, "an empty ss58 is unattributed, not a blank name");
+        assert_eq!(files[1].uploaded_by_email, None, "a blank email is absent, not an empty line");
+        assert_eq!(files[2].uploaded_by_email, None, "absent key means unknown");
         assert_eq!(files[2].uploaded_by, None);
+        assert_eq!(files[3].uploaded_by_email, None, "a system placeholder email is never shown");
         assert_eq!(folders[0].uploaded_by, None, "a folder is not uploaded by anyone");
         assert_eq!(folders[0].uploaded_by_name, None, "a folder is not uploaded by anyone");
+        assert_eq!(folders[0].uploaded_by_email, None, "a folder is not uploaded by anyone");
     }
 
     /// Wire pin: `FileEntry` is serialized with no `rename_all`, so the FE

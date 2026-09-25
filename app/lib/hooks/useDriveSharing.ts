@@ -32,10 +32,9 @@ export interface DriveSharing {
   /**
    * Whether the viewer may manage who has access — invite, remove, re-role.
    *
-   * An owner may, once the drive is actually shared. A MANAGER may too, on a
-   * drive they do not own: the server admits a delegated manager by name
-   * (`?owner=`), and refusing them here is what made the desktop mint Manager
-   * invites it could not then honour.
+   * The owner only, once the drive is actually shared. A member of somebody
+   * else's drive never may, whatever its role there (a former Manager
+   * included): Rust refuses every such change, and the panel opens read only.
    */
   canManage: boolean;
   /**
@@ -93,13 +92,8 @@ export function useDriveSharing(label: string | null | undefined): DriveSharing 
       sharing,
       isShared: sharing.isShared,
       role,
-      canManage: canManageDrive({
-        isOwner: !membership,
-        role: role ?? undefined,
-      })
-        // An owner with nothing shared has nothing to manage; a manager
-        // always does, since being one means the drive is already shared.
-        && (Boolean(membership) || isDriveShared(own)),
+      // An owner with nothing shared has nothing to manage yet.
+      canManage: canManageDrive({ isOwner: !membership }) && isDriveShared(own),
       canWrite: canWriteToDrive({
         // No membership row means this account owns the drive -- or the
         // listing has not answered yet, which reads the same way on purpose.

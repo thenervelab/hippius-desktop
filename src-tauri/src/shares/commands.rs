@@ -954,7 +954,10 @@ pub async fn create_folder_share_inner(
     choice: ShareChoice,
 ) -> Result<ShareLink> {
     let pool = state.pool()?;
-    let path_prefix = folder_share_path_prefix(relative_path)?;
+    // Rooted at a folder grant's folder when the label is one; the grant's
+    // path is part of the share's server-side identity.
+    let rooted = crate::sync::identity::rooted_path(folder_label, relative_path);
+    let path_prefix = folder_share_path_prefix(&rooted)?;
 
     require_folder_shares_supported(state, account_id).await?;
 
@@ -967,14 +970,15 @@ pub async fn create_folder_share_inner(
     // resolves to member identity and is refused just below.
     let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, folder_label).await?;
 
-    // Folder shares are owner-mint-only (server v1), and a member's derived
-    // key would be wrong anyway — the drive's file key belongs to the OWNER's
-    // derivation chain. Refuse with a message the modal can show, instead of
-    // letting the server's folder_not_found 404 misreport it.
+    // A folder in somebody else's drive (hcfs #458): an Editor may share it
+    // by link, naming the owner on the POST. Gated on the
+    // server knowing `owner_ss58` there (`member_folder_shares`) AND on this
+    // account's write access, both checked before any key is touched. The
+    // key is the drive's DERIVED file key through the same funnel below, which
+    // for a member drive reads the owner's seal or this account's grant: never
+    // a key derived from this account's own master.
     if identity.is_member {
-        return Err(AppError::Validation(
-            "Only the owner of a shared drive can share its folders as a link.".into(),
-        ));
+        return create_member_folder_share(state, account_id, folder_label, path_prefix, ttl, choice, &identity).await;
     }
 
     info!(label = %folder_label, path_prefix = %path_prefix, "Creating folder share");
@@ -1028,6 +1032,215 @@ pub async fn create_folder_share_inner(
         share_token: result.share_token,
         share_url: result.share_url,
         expires_at: result.expires_at.map(|e| e.to_rfc3339()),
+        password: choice.into_password(),
+    })
+}
+
+/// Why a folder in somebody else's drive cannot be shared by link, or `None`
+/// when it can.
+///
+/// Pure so the rule is testable without a server: the server needs to know
+/// `owner_ss58` on the mint (`member_folder_shares`), and admits only an
+/// Editor of a drive that is not frozen (it answers a Viewer with the same
+/// 404 as a stranger, so saying why here is the only place it gets said).
+///
+/// `manager` is still accepted as a write role here: [`member_access_for`]
+/// maps it to `writer` already, and the server may still return it for a
+/// member made one before this client dropped the role.
+pub(crate) fn member_folder_share_refusal(member_folder_shares: bool, access: Option<(&str, bool)>) -> Option<&'static str> {
+    if !member_folder_shares {
+        return Some("Sharing a folder from someone else's drive needs a newer server.");
+    }
+    match access {
+        None => Some("You are no longer a member of this drive."),
+        Some((_, true)) => Some("This drive is frozen, so nothing in it can be shared right now."),
+        Some(("writer" | "manager", false)) => None,
+        Some(_) => Some("Only Editors can share a folder from this drive by link."),
+    }
+}
+
+/// This account's role on a drive it does not own, and whether the drive is
+/// frozen, from the memberships listing. A whole-drive membership wins; a
+/// folder grant counts only when it covers `path_prefix` (a grant holder's
+/// role is `reader` unless the server says otherwise). A whole-drive
+/// `manager`, which the server may still return, reads as `writer`.
+pub(crate) fn member_access_for(
+    memberships: &hcfs_shared::network::DriveMembershipsResponse,
+    owner_ss58: &str,
+    folder_hash: &str,
+    path_prefix: &str,
+) -> Option<(String, bool)> {
+    if let Some(m) = memberships
+        .memberships
+        .iter()
+        .find(|m| m.owner_ss58 == owner_ss58 && m.folder_hash == folder_hash)
+    {
+        return Some((crate::shared_drives::commands::drive_role_from_wire(&m.role), m.frozen));
+    }
+    memberships
+        .folder_grants
+        .iter()
+        .filter(|g| g.owner_ss58 == owner_ss58 && g.folder_hash == folder_hash)
+        .find(|g| crate::shared_drives::folder_grant_path::prefix_covers(&g.path_prefix, path_prefix))
+        .map(|g| (g.role.clone(), g.frozen))
+}
+
+/// `POST /v1/folder-shares` for a folder in somebody else's drive.
+///
+/// hcfs-client's `create_folder_share` has no `owner_ss58`, so a member's
+/// mint is issued here with the same four metadata fields plus the owner.
+/// Key material never joins the body.
+pub(crate) struct MemberFolderShareRequest<'a> {
+    pub folder_hash: &'a str,
+    pub path_prefix: &'a str,
+    pub display_name: &'a str,
+    pub ttl: ShareTtl,
+    pub owner_ss58: &'a str,
+}
+
+/// The server's answer to a member mint: the token (a capability, never
+/// logged) and its expiry.
+pub(crate) struct MemberFolderShareCreated {
+    pub share_token: String,
+    pub expires_at: Option<chrono::DateTime<Utc>>,
+}
+
+pub(crate) async fn http_create_member_folder_share(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    req: &MemberFolderShareRequest<'_>,
+) -> Result<MemberFolderShareCreated> {
+    let resp = http
+        .post(format!("{}/v1/folder-shares", base_url.trim_end_matches('/')))
+        .header("Authorization", format!("Bearer {bearer}"))
+        .json(&serde_json::json!({
+            "folder_hash": req.folder_hash,
+            "path_prefix": req.path_prefix,
+            "display_name": req.display_name,
+            "ttl": req.ttl,
+            "owner_ss58": req.owner_ss58,
+        }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("member folder-share request failed: {e}")))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(map_member_folder_share_status(status.as_u16(), &body));
+    }
+    #[derive(serde::Deserialize)]
+    struct Created {
+        share_token: String,
+        #[serde(default)]
+        expires_at: Option<chrono::DateTime<Utc>>,
+    }
+    let created: Created = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("member folder-share response did not parse: {e}")))?;
+    Ok(MemberFolderShareCreated {
+        share_token: created.share_token,
+        expires_at: created.expires_at,
+    })
+}
+
+/// A refused member mint, in words. The server answers a Viewer, a stranger
+/// and a missing folder with the same 404, so a JSON 404 says the one thing
+/// that covers all three.
+fn map_member_folder_share_status(status: u16, body: &str) -> AppError {
+    let enveloped = serde_json::from_str::<serde_json::Value>(body).is_ok_and(|v| v.get("error").is_some());
+    match status {
+        404 if enveloped => {
+            AppError::Validation("This folder could not be shared. You need to be an Editor of the drive, and the folder must still exist.".into())
+        }
+        404 => AppError::Validation("Folder sharing is not enabled on this server.".into()),
+        401 | 403 => AppError::Auth(format!("folder-share mint rejected (status {status})")),
+        _ => AppError::Hcfs(format!("folder-share mint failed (status {status})")),
+    }
+}
+
+/// The member half of [`create_folder_share_inner`]: every gate, then the
+/// direct POST, then the same keystore, origin and URL steps the owner path
+/// takes through hcfs-client.
+async fn create_member_folder_share(
+    state: &AppState,
+    account_id: &str,
+    folder_label: &str,
+    path_prefix: &str,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+    identity: &crate::sync::identity::DriveIdentity,
+) -> Result<ShareLink> {
+    let pool = state.pool()?;
+    let caps = fetch_capabilities(state, account_id).await?;
+    let ctx = crate::shared_drives::commands::api_ctx_for(state).await?;
+
+    let access = if caps.member_folder_shares {
+        let memberships = crate::shared_drives::commands::http_list_memberships(&state.api_client, ctx.base_url(), ctx.bearer()).await?;
+        member_access_for(&memberships, &identity.wire_ss58, &identity.wire_folder_hash, path_prefix)
+    } else {
+        None
+    };
+    if let Some(reason) = member_folder_share_refusal(caps.member_folder_shares, access.as_ref().map(|(r, f)| (r.as_str(), *f))) {
+        return Err(AppError::Validation(reason.into()));
+    }
+
+    info!(label = %folder_label, path_prefix = %path_prefix, "Creating folder share in a member drive");
+
+    let mnemonic = crate::sync::remote::session_mnemonic(state)?;
+    let file_key =
+        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, identity).await?);
+
+    // Wrap BEFORE minting, as hcfs-client does: a wrap failure must not leave
+    // a live share whose only plaintext token was in the 201 body.
+    let secret = match choice.password() {
+        Some(password) => {
+            ShareSecret::Private(hcfs_client::client::share::wrap_share_key(password, &file_key).map_err(|e| AppError::Validation(e.to_string()))?)
+        }
+        None => ShareSecret::Public(*file_key),
+    };
+
+    let created = http_create_member_folder_share(
+        &state.api_client,
+        ctx.base_url(),
+        ctx.bearer(),
+        &MemberFolderShareRequest {
+            folder_hash: &identity.wire_folder_hash,
+            path_prefix,
+            display_name: folder_share_display_name(folder_label, path_prefix),
+            ttl,
+            owner_ss58: &identity.wire_ss58,
+        },
+    )
+    .await?;
+
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    if let Err(e) = keystore.put(&created.share_token, &secret) {
+        warn!(error = ?e, "member folder-share keystore put failed; revoking the new share");
+        // Compensate: a share whose token exists nowhere else is unrevokable.
+        let _ = state
+            .api_client
+            .delete(format!(
+                "{}/v1/folder-shares/{}",
+                ctx.base_url().trim_end_matches('/'),
+                created.share_token
+            ))
+            .header("Authorization", format!("Bearer {}", ctx.bearer()))
+            .send()
+            .await;
+        return Err(AppError::Other(format!("could not store the share link: {e}")));
+    }
+
+    let share_url = build_folder_share_url_for(&console_base_url(), &created.share_token, &secret);
+    let owner = account_key(account_id);
+    if let Err(e) = origin::record_folder(pool, &created.share_token, &owner, folder_label, path_prefix).await {
+        warn!(share_token = %created.share_token, error = %e, "Failed to record folder_share_origin (share itself succeeded)");
+    }
+    super::owner_wrap::push_folder_for_account(state, account_id, &[(created.share_token.clone(), secret)]).await;
+
+    Ok(ShareLink {
+        share_token: created.share_token,
+        share_url,
+        expires_at: created.expires_at.map(|e| e.to_rfc3339()),
         password: choice.into_password(),
     })
 }
@@ -2345,5 +2558,61 @@ mod tests {
             "resolve_folder_share_rows must NOT call build_folder_share_url directly — that takes \
              a raw key and would emit a password-free #k= link for a password-protected share",
         );
+    }
+
+    // ── Folder shares inside somebody else's drive (hcfs #458) ────────────
+
+    #[test]
+    fn a_member_folder_share_needs_the_capability_and_write_access() {
+        assert!(member_folder_share_refusal(false, Some(("writer", false))).is_some(), "old server");
+        assert!(member_folder_share_refusal(true, None).is_some(), "not a member");
+        assert!(member_folder_share_refusal(true, Some(("reader", false))).is_some(), "a Viewer");
+        assert!(member_folder_share_refusal(true, Some(("writer", true))).is_some(), "frozen drive");
+        assert!(member_folder_share_refusal(true, Some(("manager", true))).is_some(), "frozen drive");
+        assert_eq!(member_folder_share_refusal(true, Some(("writer", false))), None);
+        assert_eq!(member_folder_share_refusal(true, Some(("manager", false))), None);
+        // An unknown role degrades to "no", never to management.
+        assert!(member_folder_share_refusal(true, Some(("owner", false))).is_some());
+    }
+
+    fn memberships(json: serde_json::Value) -> hcfs_shared::network::DriveMembershipsResponse {
+        serde_json::from_value(json).expect("memberships fixture")
+    }
+
+    #[test]
+    fn access_comes_from_the_membership_first_then_a_covering_grant() {
+        let resp = memberships(serde_json::json!({
+            "memberships": [{"owner_ss58":"5O","folder_hash":"h1","role":"writer","grant_blob":"","display_label":"d","created_at":"t","frozen":true}],
+            "folder_grants": [{"owner_ss58":"5O","folder_hash":"h2","display_label":"d","path_prefix":"Clients/ACME","role":"writer","grant_blob":"","created_at":"t"}]
+        }));
+        assert_eq!(member_access_for(&resp, "5O", "h1", "any"), Some(("writer".into(), true)));
+        assert_eq!(member_access_for(&resp, "5O", "h2", "Clients/ACME/x"), Some(("writer".into(), false)));
+        assert_eq!(member_access_for(&resp, "5O", "h2", "Clients"), None, "above the grant is out of reach");
+        assert_eq!(member_access_for(&resp, "5Other", "h1", "any"), None, "hash alone never matches");
+    }
+
+    /// A member the server still calls `manager` keeps an Editor's folder
+    /// link: the role reads as `writer` before the gate sees it.
+    #[test]
+    fn a_wire_manager_shares_a_folder_as_an_editor() {
+        let resp = memberships(serde_json::json!({
+            "memberships": [{"owner_ss58":"5O","folder_hash":"h1","role":"manager","grant_blob":"","display_label":"d","created_at":"t"}],
+            "folder_grants": []
+        }));
+        let access = member_access_for(&resp, "5O", "h1", "any");
+        assert_eq!(access, Some(("writer".into(), false)));
+        let (role, frozen) = access.expect("member");
+        assert_eq!(member_folder_share_refusal(true, Some((role.as_str(), frozen))), None);
+    }
+
+    #[test]
+    fn a_refused_member_mint_is_worded_for_the_user() {
+        assert!(matches!(
+            map_member_folder_share_status(404, r#"{"error":"folder_not_found","message":"x"}"#),
+            AppError::Validation(m) if m.contains("Editor of the drive") && !m.contains("Manager")
+        ));
+        assert!(matches!(map_member_folder_share_status(404, ""), AppError::Validation(m) if m.contains("not enabled")));
+        assert!(matches!(map_member_folder_share_status(403, ""), AppError::Auth(_)));
+        assert!(matches!(map_member_folder_share_status(500, ""), AppError::Hcfs(_)));
     }
 }

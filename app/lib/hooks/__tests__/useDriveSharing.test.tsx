@@ -18,7 +18,10 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     listOwnedDriveSharing: (...a: unknown[]) => listOwnedDriveSharingMock(...a),
   };
 });
-vi.mock("@/app/lib/featureFlags", () => ({ SHARED_DRIVES_ENABLED: true }));
+vi.mock("@/app/lib/featureFlags", () => ({
+  SHARED_DRIVES_ENABLED: true,
+  FOLDER_ROLES_ENABLED: false,
+}));
 
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 
@@ -120,24 +123,25 @@ describe("useDriveSharing", () => {
     expect(result.current.canWrite).toBe(true);
   });
 
-  // The server admits a delegated manager by name, so refusing them here is
-  // what made the desktop mint Manager invites it could not then honour.
-  it("lets a manager manage a drive they do not own", async () => {
+  // Only the owner manages. A member the server still calls a Manager is an
+  // Editor: it writes, and it never manages somebody else's drive.
+  it.each(["manager", "writer", "reader"])("never lets a %s manage a drive they do not own", async (role) => {
     listMyDriveMembershipsMock.mockResolvedValue([
       {
         ownerSs58: "5Owner",
         folderHash: "h",
         displayLabel: "team",
-        role: "manager",
+        role,
         createdAt: "",
         syncedLocally: true,
         localLabel: "team",
       },
     ]);
     const { result } = renderHook(() => useDriveSharing("team"), { wrapper: wrapper() });
-    await waitFor(() => expect(result.current.canManage).toBe(true));
-    expect(result.current.sharing.direction).toBe("with-me");
-    expect(result.current.canWrite).toBe(true);
+    await waitFor(() => expect(result.current.sharing.direction).toBe("with-me"));
+    expect(result.current.canManage).toBe(false);
+    expect(result.current.role).not.toBe("manager");
+    expect(result.current.canWrite).toBe(role !== "reader");
   });
 
   it("asks nothing when no drive is open", () => {

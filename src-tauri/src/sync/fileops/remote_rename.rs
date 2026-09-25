@@ -19,7 +19,7 @@ use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use crate::sync::identity::DriveIdentity;
 
-use super::remote_upload::{signing_key_for_folder, wire_relative_path};
+use super::remote_upload::wire_relative_path;
 
 /// How many state rows to ask for per page while locating a file.
 const STATE_PAGE: u32 = 500;
@@ -103,9 +103,10 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
     }
 
     let mnemonic = super::remote::session_mnemonic(state)?;
-    let encryption_key = super::remote::encryption_key_for_label(state, account_id, label, &mnemonic, identity).await?;
-    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
-    let signing_key = signing_key_for_folder(&folder_phrase)?;
+    // ONE source for both keys (see `DriveKeyMaterial`).
+    let keys = crate::sync::fileops::remote::drive_key_material_for_label(state, account_id, label, &mnemonic, identity).await?;
+    let encryption_key = keys.encryption_key()?;
+    let signing_key = keys.signing_key()?;
 
     let old_relative = wire_relative_path(parent_path, old_name);
     let new_relative = wire_relative_path(parent_path, new_name);
@@ -429,9 +430,10 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
     }
 
     let mnemonic = super::remote::session_mnemonic(state)?;
-    let encryption_key = super::remote::encryption_key_for_label(state, account_id, label, &mnemonic, identity).await?;
-    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
-    let signing_key = signing_key_for_folder(&folder_phrase)?;
+    // ONE source for both keys (see `DriveKeyMaterial`).
+    let keys = crate::sync::fileops::remote::drive_key_material_for_label(state, account_id, label, &mnemonic, identity).await?;
+    let encryption_key = keys.encryption_key()?;
+    let signing_key = keys.signing_key()?;
 
     let old_prefix = wire_relative_path(parent_path, old_name);
     let new_prefix = wire_relative_path(parent_path, new_name);
@@ -528,7 +530,8 @@ pub async fn create_remote_folder(
     // row; the lenient resolver would create the folder in THIS account's
     // namespace instead. Same rule as uploading and browsing.
     let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
-    create_remote_folder_inner(pool, &account_id, parent_path.as_deref().unwrap_or_default(), &name, &identity).await
+    let parent = crate::sync::identity::rooted_path(&label, parent_path.as_deref().unwrap_or_default());
+    create_remote_folder_inner(pool, &account_id, &parent, &name, &identity).await
 }
 
 /// The body of {@link create_remote_folder}, without the Tauri state.
@@ -582,7 +585,8 @@ pub async fn rename_remote_file(
         RemoteRename {
             account_id: &account_id,
             label: &label,
-            parent_path: &parent_path.unwrap_or_default(),
+            // Rooted at a folder grant's folder when the label is one.
+            parent_path: &crate::sync::identity::rooted_path(&label, &parent_path.unwrap_or_default()),
             old_name: &old_name,
             new_name: &new_name,
             identity: &identity,
@@ -614,7 +618,8 @@ pub async fn rename_remote_folder(
         RemoteRename {
             account_id: &account_id,
             label: &label,
-            parent_path: &parent_path.unwrap_or_default(),
+            // Rooted at a folder grant's folder when the label is one.
+            parent_path: &crate::sync::identity::rooted_path(&label, &parent_path.unwrap_or_default()),
             old_name: &old_name,
             new_name: &new_name,
             identity: &identity,

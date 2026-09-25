@@ -4,12 +4,22 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { rolesByLocalLabel } from "@/app/lib/shared-drives/driveRowSharing";
+import { useAtomValue } from "jotai";
+import {
+  rolesByLocalLabel,
+  writableMemberDriveLabels,
+} from "@/app/lib/shared-drives/driveRowSharing";
+import { parseFolderGrantLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
+import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { FOLDER_ROLES_ENABLED } from "@/app/lib/featureFlags";
+import { folderShareInviteOffered } from "@/app/lib/utils/folderGrantGating";
 import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import {
   isSharedDrivesUnavailable,
   listMyDriveMemberships,
+  listMyFolderGrants,
   type DriveMembershipInfo,
+  type MyFolderGrantInfo,
 } from "@/app/lib/tauri/sharedDrives";
 
 const EMPTY_ROLES: ReadonlyMap<string, DriveRole> = new Map();
@@ -143,4 +153,87 @@ export function useMemberDriveLabels(): ReadonlySet<string> {
         : new Set(memberships.map((m) => m.localLabel).filter((l): l is string => Boolean(l))),
     [memberships],
   );
+}
+
+/**
+ * Labels of the drives shared with this account that it may WRITE to: an
+ * Editor role (a former Manager reads as one) on a drive that is not frozen.
+ * Both spellings of a drive are in the set, its local label when synced here
+ * and its `shared:<owner>~<hash>` browse label, so a row from either view is answered
+ * without the caller knowing which it is. The server re-checks every write.
+ */
+export function useWritableMemberDriveLabels(): ReadonlySet<string> {
+  const memberships = useSharedDriveMemberships();
+  const { grants } = useMyFolderGrants();
+  return useMemo(
+    () => writableMemberDriveLabels(memberships, grants),
+    [memberships, grants],
+  );
+}
+
+export const MY_FOLDER_GRANTS_QUERY_KEY = "my-folder-grants";
+const EMPTY_GRANTS: readonly MyFolderGrantInfo[] = [];
+
+/**
+ * The folders shared WITH this account (folder grants), behind the folder
+ * roles flag. Off, this is empty and nothing is fetched; on a server without
+ * folder grants the listing is simply empty.
+ */
+export function useMyFolderGrants(): {
+  grants: readonly MyFolderGrantInfo[];
+  isSettled: boolean;
+} {
+  // The flag alone: inside it nothing waits on a capability.
+  const enabled = FOLDER_ROLES_ENABLED;
+  const { data, isFetched } = useQuery({
+    queryKey: [MY_FOLDER_GRANTS_QUERY_KEY],
+    queryFn: async () => {
+      try {
+        return await listMyFolderGrants();
+      } catch (err) {
+        if (!isSharedDrivesUnavailable(err)) {
+          console.warn("[useMyFolderGrants] listing failed:", err);
+        }
+        return [] as MyFolderGrantInfo[];
+      }
+    },
+    enabled,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  return { grants: data ?? EMPTY_GRANTS, isSettled: !enabled || isFetched };
+}
+
+/** The folder grant a `grant:` browse label names, if this account holds it. */
+export function useFolderGrantForLabel(label: string | null | undefined): {
+  grant: MyFolderGrantInfo | undefined;
+  isGrant: boolean;
+  isSettled: boolean;
+} {
+  const { grants, isSettled } = useMyFolderGrants();
+  const parsed = useMemo(() => parseFolderGrantLabel(label), [label]);
+  const grant = useMemo(
+    () =>
+      parsed
+        ? grants.find(
+            (g) =>
+              g.ownerSs58 === parsed.ownerSs58 &&
+              g.folderHash === parsed.folderHash &&
+              g.pathPrefix.replace(/^\/+|\/+$/g, "") === parsed.pathPrefix,
+          )
+        : undefined,
+    [grants, parsed],
+  );
+  return { grant, isGrant: parsed !== null, isSettled };
+}
+
+/**
+ * Whether a folder row may offer "Share folder" as a live action: always
+ * inside the folder-roles flag (the server's refusal reads "coming soon"),
+ * otherwise only once the server advertises folder grants (the older
+ * read-only folder sharing). See `folderShareInviteOffered`.
+ */
+export function useFolderShareInviteOffered(): boolean {
+  const caps = useAtomValue(serverCapabilitiesAtom);
+  return folderShareInviteOffered(FOLDER_ROLES_ENABLED, caps);
 }

@@ -98,10 +98,10 @@ describe("shared drives in the list", () => {
     render(
       <FolderList
         rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
-        rolesByLabel={new Map([["team-docs", "manager" as const]])}
+        rolesByLabel={new Map([["team-docs", "writer" as const]])}
       />,
     );
-    expect(screen.getByText("Manager")).toBeInTheDocument();
+    expect(screen.getByText("Editor")).toBeInTheDocument();
   });
 
   // Rows and roles come from different sources. Showing "Shared" alone beats
@@ -123,11 +123,11 @@ describe("shared drives in the list", () => {
     render(
       <FolderList
         rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
-        rolesByLabel={new Map([["a-different-drive", "manager" as const]])}
+        rolesByLabel={new Map([["a-different-drive", "writer" as const]])}
       />,
     );
     expect(screen.getByText("Shared")).toBeInTheDocument();
-    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Editor/)).not.toBeInTheDocument();
   });
 
   it("names the owner in the badge tooltip", () => {
@@ -214,6 +214,33 @@ describe("Manage access on the row", () => {
     ).not.toBeInTheDocument();
   });
 
+  // Drive-level Manage access is for a drive shared as a whole. The counts
+  // are whole-drive only (Rust leaves folder invites and folder holders
+  // out), so a drive where only folders are shared reads as zero here, and
+  // each shared folder carries its own Manage access instead.
+  it("stays hidden on a drive where only folders are shared", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        sharingByLabel={new Map([["team-docs", { memberCount: 0, liveInviteCount: 0, totalInviteCount: 0 }]])}
+        onManageAccess={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
+  });
+
+  // A whole-drive invite nobody has accepted yet still makes it shared.
+  it("offers it on a drive with only a whole-drive invite out", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        sharingByLabel={new Map([["team-docs", { memberCount: 0, liveInviteCount: 1, totalInviteCount: 1 }]])}
+        onManageAccess={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Manage access" })).toBeInTheDocument();
+  });
+
   // Managing access is the owner's, and a member drive's owner is elsewhere.
   it("stays hidden on a drive owned by someone else", () => {
     render(
@@ -226,6 +253,20 @@ describe("Manage access on the row", () => {
     expect(
       screen.queryByRole("button", { name: "Manage access" }),
     ).not.toBeInTheDocument();
+  });
+
+  // Only the owner manages. A former Manager is an Editor now, and the role
+  // never brings the button back.
+  it.each(["reader", "writer"] as const)("stays hidden on somebody else's drive for a %s", (role) => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "m", folderName: "team-docs", ownerSs58: OWNER })]}
+        rolesByLabel={new Map([["team-docs", role]])}
+        sharingByLabel={new Map([["team-docs", { memberCount: 5, liveInviteCount: 0, totalInviteCount: 0 }]])}
+        onManageAccess={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
   });
 
   // Opening the sharing surface is not opening the drive.
