@@ -135,30 +135,22 @@ describe("the lane gate stays usable", () => {
 });
 
 /**
- * The desktop owns only part of the shared-drive flow. An invite link is
- * ACCEPTED on the console's `/invite/[token]` page, and the console keeps its
- * own SHARED_DRIVES flag off in production. A desktop build with the feature
- * on in production would let an owner mint links that land on a console page
- * with the feature off: the desktop half working perfectly, the flow dying at
- * the one step it does not own, and nothing in either codebase noticing.
+ * Shared drives are on in every lane. The desktop owns only part of the flow:
+ * an invite link is ACCEPTED on the console's `/invite/[token]` page, and the
+ * console ships that page on in production, so a production owner's links
+ * land on a working page.
  */
-describe("shared drives is gated with the console, not ahead of it", () => {
+describe("shared drives is on everywhere", () => {
   const flags = read("app/lib/featureFlags.ts");
 
-  it("is gated to a lane rather than on everywhere", () => {
-    expect(flags).toMatch(/SHARED_DRIVES_ENABLED\s*=\s*enabledFrom\(/);
-    expect(flags).not.toMatch(/SHARED_DRIVES_ENABLED\s*=\s*true/);
-  });
-
-  it("is off in production, which is where the console is off", () => {
-    const gate = flags.match(/SHARED_DRIVES_ENABLED\s*=\s*enabledFrom\("(\w+)"\)/);
-    expect(gate, "SHARED_DRIVES_ENABLED must name its lane").not.toBeNull();
-    expect(isEnabledOn(gate![1] as Parameters<typeof isEnabledOn>[0], "production")).toBe(false);
+  it("is not gated to a lane", () => {
+    expect(flags).toMatch(/SHARED_DRIVES_ENABLED\s*=\s*true;/);
+    expect(flags).not.toMatch(/SHARED_DRIVES_ENABLED\s*=\s*enabledFrom\(/);
   });
 
   // Without this a developer running `pnpm tauri:dev` loses every lane-gated
   // surface and reads it as the feature being broken.
-  it("still resolves to a lane that shows it in local dev", () => {
+  it("still resolves local dev to a lane that shows lane-gated features", () => {
     const config = read("next.config.ts");
     expect(config).toMatch(/NODE_ENV\s*===\s*"development"\s*\?\s*"staging"/);
   });

@@ -17,6 +17,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Shared drives are available in every release, not only beta.** Plus, Max
+  and Scale plans can share a drive and invite people from the released app,
+  and the plan cards no longer mark the shared team drive as coming soon.
 - **Sharing drives and folders is part of the Plus, Max and Scale plans.** On
   Free and Starter, the Share dialog and Manage access show a short note with
   an "Upgrade plan" button in place of inviting people or creating links. You
