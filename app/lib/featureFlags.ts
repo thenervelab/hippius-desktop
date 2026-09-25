@@ -121,9 +121,10 @@ export const VM_VPN_ENABLED = false;
  *
  * Two gates still stand in front of it, which is what makes that safe:
  *
- *   - a plan without the perk never sees "Share drive" at all
- *     (`planSupportsSharedDrives`), and the server refuses a mint with
- *     `shared_drives_not_entitled` even if it somehow did;
+ *   - a plan without the perk (Free, Starter) gets an upgrade prompt in
+ *     place of every control that adds people (`canShareDrives`, decided in
+ *     Rust), and the server refuses a mint with `shared_drives_not_entitled`
+ *     even if it somehow got through;
  *   - a server fleet without `HCFS_FEATURE_SHARED_DRIVES=1` answers the
  *     unmounted routes as `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the
  *     UI hides rather than erroring on.

@@ -105,6 +105,13 @@ export interface StorageOverview {
    * that eventually contradicts the others.
    */
   planAction: PlanAction;
+  /**
+   * Whether this account's plan lets it share drives and folders (Plus, Max
+   * and Scale; not Free or Starter). Decided in Rust; `true` when the plan
+   * could not be loaded, leaving the verdict to the server. Read it through
+   * `useSharedDrivesInPlan`, never re-derive it from `plan.code`.
+   */
+  canShareDrives: boolean;
 }
 
 /**
