@@ -30,10 +30,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Manage access is one list** instead of tabs: the people who have the
   drive or folder, invitations still waiting, and every link with how often
   it was used and when it expires, all in one place.
-- **Manage access stays easy to read on a big drive**: each group shows its
-  newest five, a bar at the top jumps between people, invitations and links,
-  and "Show all" opens a list you can search and filter. Long names and
-  emails are cut short instead of running under someone's role.
+- **Manage access stays easy to read on a big drive**: people and links fit
+  on one screen, with the newest six people, three invitations and six links,
+  each link on one short line with its own Copy button. A bar at the top jumps
+  between people, invitations and links, and "Show all" opens a list you can
+  search and filter. Long names and emails are cut short instead of running
+  under someone's role.
 - **Changing which folders someone can open now lets you add a folder**, as
   Viewer or Editor, not only take folders away.
 - **Storage and plan banners on Overview use a button on the right**
