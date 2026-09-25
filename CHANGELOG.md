@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Sharing drives and folders is part of the Plus, Max and Scale plans.** On
+  Free and Starter, the Share dialog and Manage access show a short note with
+  an "Upgrade plan" button in place of inviting people or creating links. You
+  can still see who has access and remove people or links.
 - **Shared drives have two roles, Viewer and Editor.** Only the owner invites and removes people.
 - **Sharing a drive or folder happens in one Share dialog**, with inviting
   someone by email and creating a link as two separate steps, so typing an

@@ -27,7 +27,32 @@ The `HIPPIUS_CONSOLE_BASE_URL` runtime override is honored in dev builds and **s
 
 ## Shared drives (cross-account member drives)
 
-An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI gated on `SHARED_DRIVES_ENABLED` (`app/lib/featureFlags.ts`), which is `enabledFrom("beta")` — **off on production, on beta and staging**. The rules file previously claimed it was `true` on every lane; that was wrong. Console splits create vs use (`SHARED_DRIVES` on prod for members/invite accept, `SHARED_DRIVES_CREATE` off prod). Desktop still has one flag covering both mint and use — matching the console split is a follow-up if straightforward; do **not** silently enable create on production. A SECOND gate sits in front of it: `planSupportsSharedDrives` (a DENYLIST — Starter and free are out, an unrecognised plan is in, because hiding a perk somebody bought is worse than a surface the server refuses with an upgrade prompt). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
+An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI gated on `SHARED_DRIVES_ENABLED` (`app/lib/featureFlags.ts`), which is `enabledFrom("beta")`: **off on production, on beta and staging**. The rules file previously claimed it was `true` on every lane; that was wrong. Console splits create vs use (`SHARED_DRIVES` on prod for members/invite accept, `SHARED_DRIVES_CREATE` off prod). Desktop still has one flag covering both mint and use; matching the console split is a follow-up if straightforward; do **not** silently enable create on production. A SECOND gate sits in front of it: the plan (see "Sharing needs Plus, Max or Scale" below). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
+
+### Sharing needs Plus, Max or Scale
+
+Adding people (emailed invite, drive or folder link, Approve, Change folders) is on the
+`duo` (Plus), `max` and `scale` plans; `free` and `solo` (Starter) are out. The rule lives
+ONCE, in `billing/sharing_entitlement.rs`, and reaches the FE as `canShareDrives` on
+`get_storage_overview`; `useSharedDrivesInPlan` only reads it (there is no TypeScript copy
+of the codes). Unknown is permitted, never refused: an empty code (legacy card plan), a code
+this build does not know, or a subscription read that failed all read `true` and leave it to
+the server's 403 `shared_drives_not_entitled` (`classify_error_status` maps it to
+`NotReady(SharedDrivesNotEntitled)`), because hiding a perk somebody paid for is worse than
+a click the server answers with the same prompt. `get_storage_overview` records whether each
+subscription read succeeded BEFORE its soft defaults, or a failed read would look like Free.
+
+FE (`sharingGate` in `share-dialog/shareDialogState.ts`: `loading | allowed | upgrade`): the
+Share dialog and Manage access still open on Free/Starter so an owner who downgraded can see
+and remove people, cancel invitations and revoke links; every add-access control gives way to
+`NotEntitledNotice` ("Sharing is available on Plus, Max and Scale plans.", "Upgrade plan" to
+`BILLING_ROUTE`). While the plan loads, `SharingActionsSkeleton` holds their place so neither
+the controls nor the card flash. A 403 from any sharing command (sections via
+`onNotEntitled`, rows via `useRowChanges`' third argument) flips the host to the card. The
+gate applies to a drive this account OWNS only; another owner's drive is decided by that
+owner's plan. The folder-row "Share drive" menu item is deliberately NOT plan-gated
+(discoverability). Pinned by the `sharing_entitlement` unit tests, `ShareDialog.test.tsx`,
+`ShareDrivePanel.test.tsx` and `useSharedDrivesInPlan.test.ts`.
 
 ### DriveIdentity resolver — the local label is decoupled from the wire identity
 
