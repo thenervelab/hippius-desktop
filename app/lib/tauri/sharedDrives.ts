@@ -734,6 +734,44 @@ export async function approveEmailInvite(
   });
 }
 
+/**
+ * Emitted by Rust each time it delivers an emailed invitation's key on its
+ * own (`shared_drives::auto_seal`), so the owner never had to press Approve.
+ */
+export const INVITE_KEY_DELIVERED_EVENT = "shared-drive:invite-key-delivered";
+
+/** Payload of {@link INVITE_KEY_DELIVERED_EVENT}. */
+export interface InviteKeyDelivered {
+  /** The drive's label, which is its name. */
+  label: string;
+  folderHash: string;
+  inviteId: string;
+  /** Absent when the address is hidden (a placeholder address). */
+  recipientEmail?: string;
+  /** Present for a folder invitation. */
+  pathPrefix?: string;
+}
+
+/**
+ * Start delivering emailed invitation keys in the background while this
+ * account is signed in. Rust decides everything else (owner only, never
+ * prompts, plan gate, cadence); `folderInvites` is whether folder
+ * collaboration is on, the flag that shows a folder invitation's Approve.
+ */
+export async function startInviteAutoSeal(folderInvites: boolean): Promise<void> {
+  await invoke("start_invite_auto_seal", { folderInvites });
+}
+
+/** Stop the background delivery. Sign-out stops it in Rust as well. */
+export async function stopInviteAutoSeal(): Promise<void> {
+  await invoke("stop_invite_auto_seal");
+}
+
+/** Ask the background delivery to look again now. */
+export async function nudgeInviteAutoSeal(): Promise<void> {
+  await invoke("nudge_invite_auto_seal");
+}
+
 /** Rust's as-you-type verdict on an invite address. */
 export interface InviteEmailCheck {
   /** Whether "Send invite" may be pressed. */

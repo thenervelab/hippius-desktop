@@ -125,6 +125,7 @@ const approveMock = vi.fn();
 const replaceFoldersMock = vi.fn();
 const leaveMock = vi.fn();
 const leaveByIdentityMock = vi.fn();
+const nudgeMock = vi.fn();
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
   return {
@@ -137,6 +138,7 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     replaceFolderGrants: (...a: unknown[]) => replaceFoldersMock(...a),
     leaveSharedDrive: (...a: unknown[]) => leaveMock(...a),
     leaveSharedDriveByIdentity: (...a: unknown[]) => leaveByIdentityMock(...a),
+    nudgeInviteAutoSeal: (...a: unknown[]) => Promise.resolve(nudgeMock(...a)),
     listMyDriveMemberships: vi.fn().mockResolvedValue([]),
   };
 });
@@ -570,11 +572,20 @@ describe("changes are pessimistic", () => {
     await waitFor(() => expect(screen.queryByText("Editor link")).not.toBeInTheDocument());
   });
 
+  it("asks the background delivery to look again when the panel opens", async () => {
+    renderPanel();
+    await waitFor(() => group(/^Pending invites/));
+    expect(nudgeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("offers Approve only on an invitation that needs it, with its stage as a pill", async () => {
     approveMock.mockResolvedValue({ status: "sealed" });
     renderPanel();
     const pending = within(await waitFor(() => group(/^Pending invites/)));
-    expect(pending.getByText("Needs approval")).toBeInTheDocument();
+    expect(pending.getByText("Opened")).toHaveAttribute(
+      "title",
+      "They join while the app is open. Approve if they are still waiting.",
+    );
     expect(pending.getByText("Viewer · 6 days left")).toBeInTheDocument();
     fireEvent.click(pending.getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(approveMock).toHaveBeenCalledWith("team-docs", "p1", undefined));

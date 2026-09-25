@@ -100,9 +100,18 @@ export function holderFolderTag(holder: AccessPanelHolder): string {
 
 /** How an emailed invitation's pill reads, by how far it has got. */
 export function pendingStage(status: string | undefined): string {
-  if (status === "awaiting_seal") return "Needs approval";
+  if (status === "awaiting_seal") return "Opened";
   if (status === "sealed") return "Approved";
   return "Invite sent";
+}
+
+/**
+ * The pill's hover text: an opened invitation is approved by the app on its
+ * own while the owner is signed in, with Approve as the fallback.
+ */
+export function pendingStageHint(status: string | undefined): string | undefined {
+  if (status === "awaiting_seal") return "They join while the app is open. Approve if they are still waiting.";
+  return undefined;
 }
 
 /** "6 days left", or null for an unreadable expiry. */

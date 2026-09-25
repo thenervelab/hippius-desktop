@@ -21,8 +21,8 @@
 // dialog stays open after each, so several people can be invited in one go;
 // Done closes it.
 
-import React, { useCallback, useMemo, useState } from "react";
-import { useAtom, useSetAtom } from "jotai";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
@@ -31,6 +31,7 @@ import { FramedDialog } from "@/components/ui/FramedDialog";
 import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   driveInvitesVersionAtom,
+  inviteKeyDeliveredVersionAtom,
   shareDialogAtom,
   shareDriveModalAtom,
   type ShareDriveModalTarget,
@@ -114,6 +115,16 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
     onChanged();
     void reload();
   }, [onChanged, reload]);
+
+  // Rust delivered an emailed invitation's key on its own: read the people
+  // list again so the row moves from "Opened" to "Approved" in place.
+  const delivered = useAtomValue(inviteKeyDeliveredVersionAtom);
+  const seenDelivered = useRef(delivered);
+  useEffect(() => {
+    if (seenDelivered.current === delivered) return;
+    seenDelivered.current = delivered;
+    void reload();
+  }, [delivered, reload]);
 
   // The in-app plans page, like every other Drive upgrade prompt.
   const upgrade = useCallback(() => {

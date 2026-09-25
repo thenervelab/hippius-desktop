@@ -43,6 +43,7 @@ import {
   pendingLeft,
   pendingMatches,
   pendingStage,
+  pendingStageHint,
   personInFilter,
   personKey,
   personMatches,
@@ -141,6 +142,7 @@ function StagePill({ status }: { status?: string }) {
   const approved = status === "sealed";
   return (
     <span
+      title={pendingStageHint(status)}
       className={cn(
         "inline-flex shrink-0 items-center rounded-full px-1.5 text-[11px] font-semibold leading-[18px]",
         needsApproval

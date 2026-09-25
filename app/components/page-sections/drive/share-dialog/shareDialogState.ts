@@ -145,10 +145,15 @@ export function expiresInLabel(expiresAt: string, now: Date = new Date()): strin
   return `expires in ${days} days`;
 }
 
-/** How far an emailed invitation has got, as its row says it. */
+/**
+ * How far an emailed invitation has got, as its row says it. An opened
+ * invitation is approved by the app on its own while the owner is signed in
+ * (Rust's `shared_drives::auto_seal`); Approve stays on the row as the
+ * fallback for when it cannot (a locked session).
+ */
 const PENDING_STAGE: Record<string, string> = {
   sent: "Invite sent",
-  awaiting_seal: "Needs your approval",
+  awaiting_seal: "Opened · they join while the app is open",
   sealed: "Approved, not joined yet",
 };
 

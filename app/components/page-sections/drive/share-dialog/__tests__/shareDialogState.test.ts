@@ -108,7 +108,7 @@ describe("pending invite rows", () => {
     expect(pendingInviteMeta({ emailStatus: "sent", expiresAt: "2026-09-30T12:00:00Z" }, now)).toBe(
       "Invite sent · expires in 6 days",
     );
-    expect(pendingInviteMeta({ emailStatus: "awaiting_seal", expiresAt: "x" }, now)).toBe("Needs your approval");
+    expect(pendingInviteMeta({ emailStatus: "awaiting_seal", expiresAt: "x" }, now)).toBe("Opened · they join while the app is open");
   });
 });
 

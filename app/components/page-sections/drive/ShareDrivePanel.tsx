@@ -69,6 +69,7 @@ import {
   isSharedDrivesNotEntitled,
   leaveSharedDrive,
   leaveSharedDriveByIdentity,
+  nudgeInviteAutoSeal,
   removeDriveMember,
   replaceFolderGrants,
   revokeDriveInvite,
@@ -220,6 +221,12 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
   );
 
   const { state, reload, retry } = useAccessPanel({ label: target.label, pathPrefix, target: driveTarget });
+
+  // Opening Manage access is a good moment for the background delivery of
+  // emailed invitation keys to look again (Rust decides whether it can).
+  useEffect(() => {
+    void nudgeInviteAutoSeal().catch(() => undefined);
+  }, []);
 
   // The Share dialog bumps this on every invite or link it makes.
   const invitesVersion = useAtomValue(driveInvitesVersionAtom);

@@ -15,6 +15,7 @@ import type { ReactNode } from "react";
 import ShareDialog from "../ShareDialog";
 import {
   driveInvitesVersionAtom,
+  inviteKeyDeliveredVersionAtom,
   shareDialogAtom,
   shareDriveModalAtom,
   type ShareDriveModalTarget,
@@ -953,7 +954,7 @@ describe("People with access", () => {
     renderDialog();
     await screen.findByText("sent@example.com");
     expect(screen.getByText("Invite sent · expires in 7 days")).toBeInTheDocument();
-    expect(screen.getByText("Needs your approval · expires in 7 days")).toBeInTheDocument();
+    expect(screen.getByText("Opened · they join while the app is open · expires in 7 days")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -962,6 +963,22 @@ describe("People with access", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel invite to sent@example.com" }));
     confirmCancelInvite();
     await waitFor(() => expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "i1", undefined));
+  });
+
+  it("reads the list again when the app delivers an invitation's key on its own", async () => {
+    listShareAccessMock.mockResolvedValue(
+      access({ pendingInvites: [mailed("i2", "opened@example.com", "awaiting_seal")] }),
+    );
+    const store = renderDialog();
+    await screen.findByText("Opened · they join while the app is open · expires in 7 days");
+    const reads = listShareAccessMock.mock.calls.length;
+
+    listShareAccessMock.mockResolvedValue(access({ pendingInvites: [mailed("i2", "opened@example.com", "sealed")] }));
+    act(() => store.set(inviteKeyDeliveredVersionAtom, (n) => n + 1));
+
+    expect(await screen.findByText("Approved, not joined yet · expires in 7 days")).toBeInTheDocument();
+    expect(listShareAccessMock.mock.calls.length).toBe(reads + 1);
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
 
   it("keeps a pending invite when cancelling it fails", async () => {

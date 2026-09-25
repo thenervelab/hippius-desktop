@@ -200,3 +200,10 @@ export const shareDialogAtom = atom<ShareDriveModalTarget | null>(null);
  * open Links tab lists it without the panel having to be reopened.
  */
 export const driveInvitesVersionAtom = atom(0);
+
+/**
+ * Bumped each time Rust delivers an emailed invitation's key on its own, so
+ * an open Share dialog or Manage access panel reads its rows again and the
+ * invitation moves from "Opened" to "Approved" without a reopen.
+ */
+export const inviteKeyDeliveredVersionAtom = atom(0);

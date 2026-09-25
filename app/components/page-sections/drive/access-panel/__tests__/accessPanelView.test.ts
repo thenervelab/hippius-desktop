@@ -29,6 +29,7 @@ import {
   panelSubline,
   pendingLeft,
   pendingStage,
+  pendingStageHint,
   planLabel,
   rolePhrase,
 } from "../accessPanelView";
@@ -110,7 +111,9 @@ describe("rows", () => {
 
   it("reads an invitation's stage and the time it has left", () => {
     expect(pendingStage("sent")).toBe("Invite sent");
-    expect(pendingStage("awaiting_seal")).toBe("Needs approval");
+    expect(pendingStage("awaiting_seal")).toBe("Opened");
+    expect(pendingStageHint("awaiting_seal")).toBe("They join while the app is open. Approve if they are still waiting.");
+    expect(pendingStageHint("sent")).toBeUndefined();
     expect(pendingStage("sealed")).toBe("Approved");
     expect(pendingLeft(6 * DAY + 10)).toBe("6 days left");
     expect(pendingLeft(null)).toBeNull();
