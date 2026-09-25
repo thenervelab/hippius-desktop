@@ -30,7 +30,7 @@ use chrono::{DateTime, Utc};
 use hcfs_shared::network::{DriveGrantHolderEntry, DriveMembersResponse};
 use serde::Serialize;
 
-use super::commands::{DriveInviteInfo, drive_role_from_wire, present_text as present};
+use super::commands::{DriveInviteInfo, drive_role_from_wire, present_email, present_text as present};
 use super::folder_grant_path::prefix_covers;
 use super::folder_roles::grant_role;
 
@@ -230,8 +230,15 @@ fn panel_link(invite: DriveInviteInfo, account_id: &str, now: DateTime<Utc>) -> 
 
 /// A name or email from any of a holder's grants: the server may send it on
 /// one row and not another, and the row should name them either way.
-fn first_present(grants: &[DriveGrantHolderEntry], ss58: &str, field: impl Fn(&DriveGrantHolderEntry) -> &Option<String>) -> Option<String> {
-    grants.iter().filter(|g| g.member_ss58 == ss58).find_map(|g| present(field(g).clone()))
+/// `keep` is [`present`] for a name and [`present_email`] for an email, so a
+/// placeholder on one grant does not stop a real address on another.
+fn first_present(
+    grants: &[DriveGrantHolderEntry],
+    ss58: &str,
+    field: impl Fn(&DriveGrantHolderEntry) -> &Option<String>,
+    keep: fn(Option<String>) -> Option<String>,
+) -> Option<String> {
+    grants.iter().filter(|g| g.member_ss58 == ss58).find_map(|g| keep(field(g).clone()))
 }
 
 /// Folder holders, one row each, this account first. See the module doc.
@@ -254,8 +261,8 @@ fn fold_holders(account_id: &str, folder: Option<&str>, grants: &[DriveGrantHold
         }
         let row = AccessPanelHolder {
             member_ss58: grant.member_ss58.clone(),
-            member_name: first_present(grants, &grant.member_ss58, |g| &g.member_name),
-            member_email: first_present(grants, &grant.member_ss58, |g| &g.member_email),
+            member_name: first_present(grants, &grant.member_ss58, |g| &g.member_name, present),
+            member_email: first_present(grants, &grant.member_ss58, |g| &g.member_email, present_email),
             is_you: grant.member_ss58 == account_id,
             role: grant_role(Some(&grant.role)),
             path_prefix: grant.path_prefix.clone(),
@@ -350,7 +357,7 @@ pub(crate) fn fold_access_panel(
             member_ss58: m.member_ss58,
             role: drive_role_from_wire(&m.role),
             member_name: present(m.member_name),
-            member_email: present(m.member_email),
+            member_email: present_email(m.member_email),
             created_at: m.created_at,
         })
         .collect();
@@ -451,6 +458,43 @@ mod tests {
             Some("Bo"),
             "a name on any grant names them"
         );
+    }
+
+    #[test]
+    fn a_placeholder_email_never_reaches_a_member_or_holder_row() {
+        let listing: DriveMembersResponse = serde_json::from_value(serde_json::json!({
+            "members": [
+                {"member_ss58": "5Ann", "role": "writer", "created_at": "t", "member_email": "user_abc@hippius.local"},
+                {"member_ss58": "5Eve", "role": "reader", "created_at": "t", "member_email": " eve@example.com "},
+            ],
+            "folder_grants": [
+                {"member_ss58": "5Bo", "path_prefix": "Work", "role": "reader", "created_at": "t", "member_email": "USER_BO@Hippius.Local"},
+                {"member_ss58": "5Bo", "path_prefix": "Clients", "role": "reader", "created_at": "t", "member_email": "bo@example.com"},
+                {"member_ss58": "5Cy", "path_prefix": "Photos", "role": "writer", "created_at": "t", "member_email": "user_cy@hippius.local"},
+            ],
+        }))
+        .expect("listing");
+        let panel = fold_access_panel("5Owner", "5Owner", None, listing, Vec::new(), false, now());
+        let email = |ss58: &str| panel.members.iter().find(|m| m.member_ss58 == ss58).and_then(|m| m.member_email.clone());
+        assert_eq!(
+            email("5Ann"),
+            None,
+            "a placeholder is absent, so the row falls back to the name or address"
+        );
+        assert_eq!(email("5Eve").as_deref(), Some("eve@example.com"), "a real address is kept, trimmed");
+        let holder = |ss58: &str| {
+            panel
+                .folder_holders
+                .iter()
+                .find(|h| h.member_ss58 == ss58)
+                .and_then(|h| h.member_email.clone())
+        };
+        assert_eq!(
+            holder("5Bo").as_deref(),
+            Some("bo@example.com"),
+            "a placeholder on one grant does not hide a real one on another"
+        );
+        assert_eq!(holder("5Cy"), None);
     }
 
     #[test]

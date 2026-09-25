@@ -952,10 +952,11 @@ pub(crate) struct BrowsePage {
 }
 
 /// An attribution email as the UI may show it: trimmed, and absent rather
-/// than blank. Same rule as the name beside it, so a whitespace email never
-/// reaches a tooltip as an empty line. Shared by the browse and search mappers.
+/// than blank or a system placeholder (`crate::utils::display_email`), so a
+/// tooltip never shows an empty line or a fake address. Shared by the browse
+/// and search mappers.
 pub(crate) fn present_email(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    crate::utils::display_email::display_email(value)
 }
 
 pub(crate) fn append_browse_page(
@@ -1451,6 +1452,11 @@ mod tests {
             ..browse_file(Some("blank.png"), None, 1, 10, 10)
         };
         let unattributed = browse_file(Some("old.png"), None, 1, 10, 10);
+        let placeholder = hcfs_shared::network::RemoteFileEntry {
+            uploaded_by: Some("5Key".to_string()),
+            uploaded_by_email: Some("user_key@hippius.local".to_string()),
+            ..browse_file(Some("key.png"), None, 1, 10, 10)
+        };
 
         append_browse_page(
             &mut folders,
@@ -1461,7 +1467,7 @@ mod tests {
                 total_bytes: 1,
                 created_at: Some(10),
             }],
-            vec![attributed, blank, unattributed],
+            vec![attributed, blank, unattributed, placeholder],
         );
 
         assert_eq!(files[0].uploaded_by.as_deref(), Some("5Member"));
@@ -1471,6 +1477,7 @@ mod tests {
         assert_eq!(files[1].uploaded_by_email, None, "a blank email is absent, not an empty line");
         assert_eq!(files[2].uploaded_by_email, None, "absent key means unknown");
         assert_eq!(files[2].uploaded_by, None);
+        assert_eq!(files[3].uploaded_by_email, None, "a system placeholder email is never shown");
         assert_eq!(folders[0].uploaded_by, None, "a folder is not uploaded by anyone");
         assert_eq!(folders[0].uploaded_by_name, None, "a folder is not uploaded by anyone");
         assert_eq!(folders[0].uploaded_by_email, None, "a folder is not uploaded by anyone");

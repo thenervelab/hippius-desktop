@@ -128,6 +128,12 @@ pub(crate) fn present_text(value: Option<String>) -> Option<String> {
     value.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// [`present_text`] for an email: also drops a system placeholder
+/// (`@hippius.local`), so the row falls back to the name, then the address.
+pub(crate) fn present_email(value: Option<String>) -> Option<String> {
+    crate::utils::display_email::display_email(value.as_deref())
+}
+
 /// Forward a server `member_count` of 0/omitted as `None` so the FE never
 /// draws "0 members" from an unknown or empty listing signal.
 fn present_member_count(count: u64) -> Option<u32> {
@@ -642,7 +648,7 @@ pub(crate) const EMAIL_STATUSES: [&str; 3] = ["sent", "awaiting_seal", "sealed"]
 /// ([`drive_role_from_wire`]).
 fn normalize_invite_fields(invite: &mut DriveInviteInfo) {
     invite.role = drive_role_from_wire(&invite.role);
-    invite.recipient_email = present_text(invite.recipient_email.take());
+    invite.recipient_email = present_email(invite.recipient_email.take());
     invite.requester_ss58 = present_text(invite.requester_ss58.take());
     invite.email_status = invite.email_status.take().filter(|s| EMAIL_STATUSES.contains(&s.as_str()));
 }
@@ -1302,7 +1308,7 @@ pub async fn list_drive_members(
             role: drive_role_from_wire(&m.role),
             created_at: m.created_at,
             member_name: present_text(m.member_name),
-            member_email: present_text(m.member_email),
+            member_email: present_email(m.member_email),
         })
         .collect())
 }
@@ -1382,7 +1388,7 @@ pub(crate) fn fold_share_access(
                 member_ss58: m.member_ss58,
                 role: drive_role_from_wire(&m.role),
                 member_name: present_text(m.member_name),
-                member_email: present_text(m.member_email),
+                member_email: present_email(m.member_email),
             })
             .collect()
     };
@@ -1399,7 +1405,7 @@ pub(crate) fn fold_share_access(
                 role: super::folder_roles::grant_role(Some(&grant.role)),
                 path_prefix: grant.path_prefix.clone(),
                 member_name: present_text(grant.member_name.clone()),
-                member_email: present_text(grant.member_email.clone()),
+                member_email: present_email(grant.member_email.clone()),
                 other_folder_count: held.saturating_sub(1),
             };
             match folder_holders.iter_mut().find(|h| h.member_ss58 == row.member_ss58) {
@@ -1610,7 +1616,7 @@ pub async fn list_drive_folder_grants(
             role: super::folder_roles::grant_role(Some(&g.role)),
             created_at: g.created_at,
             member_name: present_text(g.member_name),
-            member_email: present_text(g.member_email),
+            member_email: present_email(g.member_email),
         })
         .collect())
 }
@@ -3683,6 +3689,32 @@ mod tests {
         assert_eq!(pending, ["drive-mail"], "only live emailed whole-drive invites");
     }
 
+    /// Access-key and wallet accounts carry a system placeholder email; the
+    /// Share dialog must fall back to the name or address, never show it.
+    #[test]
+    fn a_share_dialog_never_shows_a_placeholder_email() {
+        let listing: DriveMembersResponse = serde_json::from_value(serde_json::json!({
+            "members": [
+                {"member_ss58": "5Ann", "role": "writer", "created_at": "t", "member_email": "user_ann@hippius.local"},
+            ],
+            "folder_grants": [
+                {"member_ss58": "5Bo", "path_prefix": "Clients", "role": "reader", "created_at": "t", "member_email": "User_Bo@HIPPIUS.local"},
+            ],
+        }))
+        .expect("listing");
+        let drive = fold_share_access("5Owner", "5Owner", None, listing, Vec::new());
+        assert_eq!(drive.members[0].member_email, None);
+        let listing: DriveMembersResponse = serde_json::from_value(serde_json::json!({
+            "members": [],
+            "folder_grants": [
+                {"member_ss58": "5Bo", "path_prefix": "Clients", "role": "reader", "created_at": "t", "member_email": "User_Bo@HIPPIUS.local"},
+            ],
+        }))
+        .expect("listing");
+        let folder = fold_share_access("5Owner", "5Owner", Some("Clients"), listing, Vec::new());
+        assert_eq!(folder.folder_holders[0].member_email, None);
+    }
+
     /// An older invitation minted as `manager` still reads as Editor, in the
     /// dialog's fold and in every invite listing.
     #[test]
@@ -3883,6 +3915,26 @@ mod tests {
         assert!(matches!(approvable_invite(&rows, "link"), Err(AppError::Validation(_))));
         assert!(matches!(approvable_invite(&rows, "gone"), Err(AppError::NotFound(_))));
         assert!(approvable_invite(&[mailed("x", Some("awaiting_seal"), Some("  "))], "x").is_err());
+    }
+
+    #[test]
+    fn a_placeholder_invite_address_never_reaches_the_ui() {
+        let mut row = DriveInviteInfo {
+            recipient_email: Some(" user_abc@Hippius.Local ".into()),
+            ..invite(true, false)
+        };
+        normalize_invite_fields(&mut row);
+        assert_eq!(row.recipient_email, None);
+        let mut row = DriveInviteInfo {
+            recipient_email: Some("ada@example.com".into()),
+            ..invite(true, false)
+        };
+        normalize_invite_fields(&mut row);
+        assert_eq!(
+            row.recipient_email.as_deref(),
+            Some("ada@example.com"),
+            "an address the owner typed is kept"
+        );
     }
 
     #[test]
