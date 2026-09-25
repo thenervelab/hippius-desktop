@@ -4,9 +4,9 @@
 // and their counts, the empty and loading states, pessimistic changes on
 // every row kind, locked links, the Share dialog hand-off, and Leave; and, for
 // a big drive, rows that cut long words short beside a fixed role slot, the
-// jump bar, six people, three invitations and six compact links with
-// "Show all", and the full view's search, chips, windowed list, link fields
-// and actions.
+// jump bar, six people, three invitations and up to ten links in full (with
+// their link fields) before "Show all", and the full view's search, chips,
+// windowed list and actions.
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -257,10 +257,11 @@ describe("an owner's drive", () => {
     listAccessPanelMock.mockReturnValue(new Promise(() => {}));
     renderPanel();
     const loading = screen.getByRole("status", { name: "Loading access" });
-    // Links load as compact rows: a square tile, two lines, a thin bar and two small buttons.
+    // Links load shaped like the real row: two lines, a usage bar and the link field.
     const linkRows = within(loading).getAllByTestId("link-skeleton-row");
     expect(linkRows).toHaveLength(2);
-    expect(linkRows[0].querySelector(".rounded-full[style*='height: 2px']")).not.toBeNull();
+    expect(linkRows[0].querySelector(".rounded-full[style*='height: 4px']")).not.toBeNull();
+    expect(linkRows[0].querySelector("[style*='height: 34px']")).not.toBeNull();
   });
 
   it("says whose drive it is and the plan it is on", async () => {
@@ -289,7 +290,7 @@ describe("an owner's drive", () => {
     expect(people.getByText("Joined Aug 20, 2026")).toBeInTheDocument();
   });
 
-  it("draws a link as one compact row: role, maker, usage, expiry, a thin bar and Copy, never the link", async () => {
+  it("draws a link in full: role, maker, usage, expiry, a bar, then the link field, key hidden", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     renderPanel();
@@ -299,13 +300,16 @@ describe("an owner's drive", () => {
     expect(links.getByText("12 of 50 used · Expires in 5 days")).toHaveClass("truncate");
     const bar = links.getByRole("progressbar");
     expect(bar).toHaveAttribute("aria-valuenow", "24");
-    expect(bar).toHaveClass("h-[2px]", "w-full");
-    // No link field in the main view, so no address and no key.
-    expect(links.queryByText(/console\.hippius\.com/)).not.toBeInTheDocument();
+    expect(bar).toHaveClass("h-1");
+    // The field sits under the bar and cuts a long address short; never the key.
+    const address = links.getByText(/^console\.hippius\.com\/invite\/tok_abcd/);
+    expect(address).toHaveClass("truncate");
+    expect(bar.compareDocumentPosition(address) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(links.queryByText(/SECRETKEY/)).not.toBeInTheDocument();
-    expect(links.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
+    // No separate copy icon beside the menu.
+    expect(links.queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
     // Copy takes the whole link, key included, and says so without quoting it.
-    fireEvent.click(links.getByRole("button", { name: "Copy link" }));
+    fireEvent.click(links.getByRole("button", { name: "Copy invite link" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(link().inviteUrl));
     expect(await links.findByRole("button", { name: "Copied" })).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith("Invite link copied");
@@ -472,22 +476,34 @@ describe("changes are pessimistic", () => {
 });
 
 describe("locked links", () => {
-  it("says so and offers the unlock flow from the compact row's lock button", async () => {
+  it("says so and offers the unlock flow from the row's blurred field", async () => {
     listAccessPanelMock.mockResolvedValue(panel({ links: [link({ inviteUrl: undefined })], linksLocked: true }));
     renderPanel();
     expect(
       await screen.findByText("Links are locked. Enter your unlock password to show and copy them."),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Unlock to copy" }));
+    const links = within(group(/^Links/));
+    expect(links.getByRole("status", { name: "Link locked" })).toBeInTheDocument();
+    expect(links.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
+    fireEvent.click(links.getByRole("button", { name: "Unlock" }));
     expect(unlockMock).toHaveBeenCalled();
   });
 
-  it("offers Unlock on the blurred field in the Links full view", async () => {
+  it("marks a link whose sealed copy did not open, with nothing to unlock", async () => {
+    listAccessPanelMock.mockResolvedValue(panel({ links: [link({ inviteUrl: undefined })], linksLocked: false }));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    expect(links.getByRole("status", { name: "Link locked" })).toBeInTheDocument();
+    expect(links.getByTitle("Could not rebuild this invite link")).toBeInTheDocument();
+    expect(links.queryByRole("button", { name: "Unlock" })).not.toBeInTheDocument();
+  });
+
+  it("offers Unlock on the blurred field in the main view and the Links full view", async () => {
     listAccessPanelMock.mockResolvedValue(bigPanel(BIG, {}, { locked: true }));
     renderPanel();
     const links = within(await waitFor(() => group(/^Links/)));
-    expect(links.getAllByRole("button", { name: "Unlock to copy" })).toHaveLength(6);
+    expect(links.getAllByRole("status", { name: "Link locked" })).toHaveLength(10);
+    expect(links.getAllByRole("button", { name: "Unlock" })).toHaveLength(10);
     fireEvent.click(links.getByRole("button", { name: "Show all 45 links" }));
     const list = within(fullList("Links"));
     expect(list.getAllByRole("status", { name: "Link locked" }).length).toBeGreaterThan(0);
@@ -743,7 +759,7 @@ describe("a big drive", () => {
     expect(screen.getByRole("button", { name: /15 expired or revoked links/ })).toBeInTheDocument();
   });
 
-  it("draws six people, three invitations and six compact links, then Show all with the full count", async () => {
+  it("draws six people, three invitations and ten full links, then Show all with the full count", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     const big = bigPanel(BIG);
@@ -757,11 +773,12 @@ describe("a big drive", () => {
     expect(pending.getAllByRole("listitem")).toHaveLength(3);
     expect(pending.getByRole("button", { name: "Show all 6 pending invites" })).toBeInTheDocument();
     const links = within(group(/^Links/));
-    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(6);
-    expect(links.getAllByRole("button", { name: "Copy link" })).toHaveLength(6);
-    expect(links.queryByText(/console\.hippius\.com/)).not.toBeInTheDocument();
+    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(10);
+    expect(links.getAllByRole("button", { name: "Copy invite link" })).toHaveLength(10);
+    expect(links.getAllByText(/^console\.hippius\.com\/invite\//)).toHaveLength(10);
+    expect(links.queryByText(/SECRETKEY/)).not.toBeInTheDocument();
     expect(links.getByRole("button", { name: "Show all 45 links" })).toBeInTheDocument();
-    fireEvent.click(links.getAllByRole("button", { name: "Copy link" })[0]);
+    fireEvent.click(links.getAllByRole("button", { name: "Copy invite link" })[0]);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(big.links[0].inviteUrl));
   });
 
@@ -776,7 +793,33 @@ describe("a big drive", () => {
     expect(list.queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
   });
 
-  it("dims a compact link while it is revoked, with Revoking in its right slot", async () => {
+  it("shows every link in full with no Show all when there are ten or fewer", async () => {
+    listAccessPanelMock.mockResolvedValue(bigPanel({ ...BIG, links: 7 }));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    expect(links.getAllByRole("button", { name: "Copy invite link" })).toHaveLength(7);
+    expect(links.getAllByText(/^console\.hippius\.com\/invite\//)).toHaveLength(7);
+    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(7);
+    expect(links.queryByRole("button", { name: /^Show all \d+ links$/ })).not.toBeInTheDocument();
+  });
+
+  it("still shows all ten, with no Show all, at exactly ten", async () => {
+    listAccessPanelMock.mockResolvedValue(bigPanel({ ...BIG, links: 10 }));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    expect(links.getAllByRole("button", { name: "Copy invite link" })).toHaveLength(10);
+    expect(links.queryByRole("button", { name: /^Show all \d+ links$/ })).not.toBeInTheDocument();
+  });
+
+  it("shows ten links and Show all past ten", async () => {
+    listAccessPanelMock.mockResolvedValue(bigPanel({ ...BIG, links: 11 }));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    expect(links.getAllByRole("button", { name: "Copy invite link" })).toHaveLength(10);
+    expect(links.getByRole("button", { name: "Show all 11 links" })).toBeInTheDocument();
+  });
+
+  it("dims a link while it is revoked, with Revoking in its right slot", async () => {
     revokeMock.mockReturnValue(new Promise<void>(() => {}));
     listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel();
@@ -786,8 +829,8 @@ describe("a big drive", () => {
     const busy = await links.findByText("Revoking…");
     const row = busy.closest("[aria-busy]");
     expect(row).toHaveClass("opacity-60");
-    expect(within(row as HTMLElement).queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
-    expect(links.getAllByRole("button", { name: "Copy link" })).toHaveLength(5);
+    expect(within(row as HTMLElement).queryByRole("button", { name: "Revoke" })).not.toBeInTheDocument();
+    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(9);
   });
 
   it("jumps to a group from the bar: scrolls, focuses its heading and marks it for a moment", async () => {
@@ -916,7 +959,7 @@ describe("a huge drive", () => {
       expect(await screen.findByRole("heading", { name: "People 101" })).toBeInTheDocument();
       expect(within(group(/^People/)).getAllByRole("listitem")).toHaveLength(6);
       expect(within(group(/^Pending invites/)).getAllByRole("listitem")).toHaveLength(3);
-      expect(within(group(/^Links/)).getAllByRole("button", { name: "Copy link" })).toHaveLength(6);
+      expect(within(group(/^Links/)).getAllByRole("button", { name: "Copy invite link" })).toHaveLength(10);
       expect(screen.getByRole("button", { name: "Show all 50 pending invites" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Show all 100 links" })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Show all 101 people" }));

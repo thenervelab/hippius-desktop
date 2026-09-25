@@ -715,7 +715,7 @@ function PanelContent({
           <ul>
             {linksShown.slice(0, PANEL_PREVIEW.links).map((link) => (
               <li key={link.inviteId}>
-                <LinkItem link={link} ctx={ctx} compact />
+                <LinkItem link={link} ctx={ctx} />
               </li>
             ))}
           </ul>

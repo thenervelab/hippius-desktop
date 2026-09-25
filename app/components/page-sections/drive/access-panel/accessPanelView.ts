@@ -162,16 +162,19 @@ export function endedLinksLine(count: number): string {
 
 /**
  * How many rows each group draws in the panel's main view before its
- * "Show all" row. A big drive has 100 people and 100 links; six people,
- * three invitations and six compact link rows keep people AND links, and the
- * jump bar above them, on one laptop screen, and the whole of each group
- * lives one tap away in its full view.
+ * "Show all" row. A big drive has 100 people and 100 links; six people and
+ * three invitations keep the jump bar and the first links in view, and up to
+ * ten links show in full, each with its link field, so most drives never
+ * need the Links full view. The whole of each group lives one tap away there.
  */
 export const PANEL_PREVIEW: Readonly<Record<PanelGroup, number>> = {
   people: 6,
   pending: 3,
-  links: 6,
+  links: 10,
 };
+
+/** How many ended links the main view's opened fold lists before "Show all". */
+export const ENDED_LINKS_PREVIEW = 6;
 
 /**
  * Someone the drive is shared with only reads the people, so the jump bar

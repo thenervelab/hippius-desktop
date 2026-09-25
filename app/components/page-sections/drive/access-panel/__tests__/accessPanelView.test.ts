@@ -4,6 +4,7 @@
 import { describe, it, expect } from "vitest";
 import type { AccessPanel, AccessPanelHolder, AccessPanelLink, AccessPanelMember } from "@/app/lib/tauri/sharedDrives";
 import {
+  ENDED_LINKS_PREVIEW,
   PANEL_PREVIEW,
   SEARCH_PLACEHOLDER,
   capRows,
@@ -161,8 +162,11 @@ describe("empty", () => {
 describe("capRows", () => {
   const rows = Array.from({ length: 30 }, (_, i) => i);
 
-  it("draws six people, three invitations and six links in the main view", () => {
-    expect(PANEL_PREVIEW).toEqual({ people: 6, pending: 3, links: 6 });
+  it("draws six people, three invitations and ten links in the main view", () => {
+    expect(PANEL_PREVIEW).toEqual({ people: 6, pending: 3, links: 10 });
+    expect(ENDED_LINKS_PREVIEW).toBe(6);
+    expect(capRows(rows.slice(0, 10), false, PANEL_PREVIEW.links)).toEqual({ shown: rows.slice(0, 10), hidden: 0 });
+    expect(capRows(rows.slice(0, 11), false, PANEL_PREVIEW.links)).toEqual({ shown: rows.slice(0, 10), hidden: 1 });
     expect(capRows(rows.slice(0, 6), false, PANEL_PREVIEW.people)).toEqual({ shown: rows.slice(0, 6), hidden: 0 });
     expect(capRows(rows, false, PANEL_PREVIEW.people)).toEqual({ shown: rows.slice(0, 6), hidden: 24 });
     expect(capRows(rows, false, PANEL_PREVIEW.pending)).toEqual({ shown: rows.slice(0, 3), hidden: 27 });
