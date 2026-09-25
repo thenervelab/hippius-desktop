@@ -59,6 +59,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Long names, emails and wallet addresses stay readable.** In the Share
+  dialog, Manage access, the Added by column, Shared with me and your account
+  menu, a long one is shortened in the middle to fit, so you still see how an
+  address starts and ends and an email keeps its domain. Hover to see it in
+  full, and "(you)" is always visible.
 - **Sharing one folder no longer marks the whole drive as shared.** The drive
   list and drive header only say a drive is shared, and only offer Manage
   access for the drive, when the whole drive is. "Share drive" is still there

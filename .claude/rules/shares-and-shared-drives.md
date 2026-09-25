@@ -288,9 +288,13 @@ blurred with Unlock while locked), beside the Revoke menu. The ended-links fold 
 search, filter chips and a windowed list (`useWindowedRows`; no virtualization dependency), with the
 same pessimistic actions because busy and refusal state live above both views. Searching and
 filtering there is presentation over rows Rust already sent. Every person row is avatar, a
-`min-w-0 overflow-hidden` words column whose lines truncate, and a fixed 98px role slot
-(`ROLE_SLOT`), so a long name cannot run under the role select. Pinned by `access_panel.rs` unit
-and wire tests and `drive/__tests__/ShareDrivePanel.test.tsx`.
+`min-w-0 overflow-hidden` words column whose lines shorten, and a fixed 98px role slot
+(`ROLE_SLOT`), so a long name cannot run under the role select. A name, address or email is
+shortened in the MIDDLE by `ui/MiddleTruncate` (fit by `lib/utils/fitMiddle.ts`: an email keeps
+its domain, an ss58 both ends), handed the full value, never CSS `truncate` and never a
+pre-shortened string, which together drew "5DSQ…5…"; "(you)" sits outside it, `shrink-0`.
+Pinned by `share-dialog/__tests__/identityLines.test.tsx`, `access_panel.rs` unit and wire
+tests and `drive/__tests__/ShareDrivePanel.test.tsx`.
 
 **Refusals are "coming soon", mapped in Rust.** The server words them as `400 bad_request`
 plus a message, so `classify_folder_invite_refusal` / `classify_folder_email_refusal`
