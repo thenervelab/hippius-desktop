@@ -29,7 +29,7 @@ import { driveRoleLabel, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { truncateInviteUrl } from "@/app/lib/shared-drives/inviteLink";
 import {
   ACCESS_PANEL_COPY,
-  PANEL_GROUP_PREVIEW,
+  PANEL_PREVIEW,
   capRows,
   endedLinksLine,
   holderFolderTag,
@@ -218,6 +218,35 @@ const LINK_FIELD =
 const FIELD_BUTTON = "h-[26px] shrink-0 gap-1 rounded-[6px] px-2 text-xs font-medium";
 
 /**
+ * Copying a link: writes the full link (key included) to the clipboard, says
+ * so without ever quoting it, and marks the button "copied" for a moment.
+ */
+function useCopyInvite(url: string | undefined) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+  const copy = async () => {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      // Never the URL itself in a toast: it carries the drive key.
+      toast.success("Invite link copied");
+      setCopied(true);
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), COPIED_MS);
+    } catch {
+      toast.error("Couldn't copy invite link");
+    }
+  };
+  return { copied, copy };
+}
+
+/**
  * A link's field: the address with the key after `#` hidden, and Copy for
  * the full link. Locked while the drive key is not available here, with a
  * way to unlock; a link whose sealed copy did not open says so.
@@ -233,28 +262,9 @@ function LinkField({
   onUnlock: () => void;
   unlocking: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
+  const { copied, copy } = useCopyInvite(url);
 
   if (url) {
-    const copy = async () => {
-      try {
-        await navigator.clipboard.writeText(url);
-        // Never the URL itself in a toast: it carries the drive key.
-        toast.success("Invite link copied");
-        setCopied(true);
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setCopied(false), COPIED_MS);
-      } catch {
-        toast.error("Couldn't copy invite link");
-      }
-    };
     return (
       <div className={LINK_FIELD}>
         <span
@@ -304,23 +314,77 @@ function LinkField({
   );
 }
 
-/** One working link: who it makes people, who made it, how used, the link. */
-export function LinkRow({
-  link,
-  busy,
-  locked,
-  unlocking,
-  onUnlock,
-  onRevoke,
-}: {
+type LinkRowProps = {
   link: AccessPanelLink;
   busy?: Busy;
   locked: boolean;
   unlocking: boolean;
   onUnlock: () => void;
   onRevoke: () => void;
-}) {
+};
+
+/** A link's ⋯ menu with Revoke, confirmed first. Both link row shapes use it. */
+function LinkRevokeMenu({ title, onRevoke }: { title: string; onRevoke: () => void }) {
   const [confirming, setConfirming] = useState(false);
+  return (
+    <>
+      <TableActionMenu
+        dropdownTitle=""
+        items={[
+          {
+            icon: <Icons.Trash className="size-4" />,
+            itemTitle: "Revoke",
+            variant: "destructive",
+            onItemClick: () => setConfirming(true),
+          },
+        ]}
+      >
+        <Button variant="ghost" size="auto" aria-label={`Actions for ${title}`} className={MENU_BUTTON}>
+          <Icons.EllipsisVertical className="size-[18px]" />
+        </Button>
+      </TableActionMenu>
+      <ConfirmationDialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        onBack={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          onRevoke();
+        }}
+        heading="Revoke link"
+        icon={<Icons.Trash className="size-4 text-white" />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
+        confirmButtonClassName="text-white"
+        button="Revoke"
+        text={`Revoke this ${title.toLowerCase()}?`}
+        helperText="Nobody new can join with it. People who already joined keep their access."
+      />
+    </>
+  );
+}
+
+/** How far a multi-use link's uses have gone, as a bar. */
+function UsageBar({ link, className }: { link: AccessPanelLink; className: string }) {
+  return (
+    <div
+      role="progressbar"
+      aria-label={linkUsage(link)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={link.usagePercent}
+      className={cn("overflow-hidden rounded-full bg-grey-90 dark:bg-white/10", className)}
+    >
+      <span
+        className="block h-full rounded-full bg-primary-50 dark:bg-primary-brand-dark"
+        style={{ width: `${link.usagePercent}%` }}
+      />
+    </div>
+  );
+}
+
+/** One working link: who it makes people, who made it, how used, the link. */
+export function LinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke }: LinkRowProps) {
   const creator = linkCreator(link);
   const title = linkTitle(link);
 
@@ -342,61 +406,110 @@ export function LinkRow({
             </span>
           </div>
         </div>
-        {link.singleUse ? null : (
-          <div
-            role="progressbar"
-            aria-label={`${linkUsage(link)}`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={link.usagePercent}
-            className="h-1 overflow-hidden rounded bg-grey-90 dark:bg-white/10"
-          >
-            <span
-              className="block h-full rounded bg-primary-50 dark:bg-primary-brand-dark"
-              style={{ width: `${link.usagePercent}%` }}
-            />
-          </div>
-        )}
+        {link.singleUse ? null : <UsageBar link={link} className="h-1" />}
         {link.linkAvailable ? (
           <LinkField url={link.inviteUrl} locked={locked} onUnlock={onUnlock} unlocking={unlocking} />
         ) : null}
       </div>
-      {busy ? (
-        <BusyLabel busy={busy} />
-      ) : (
-        <TableActionMenu
-          dropdownTitle=""
-          items={[
-            {
-              icon: <Icons.Trash className="size-4" />,
-              itemTitle: "Revoke",
-              variant: "destructive",
-              onItemClick: () => setConfirming(true),
-            },
-          ]}
-        >
-          <Button variant="ghost" size="auto" aria-label={`Actions for ${title}`} className={MENU_BUTTON}>
-            <Icons.EllipsisVertical className="size-[18px]" />
-          </Button>
-        </TableActionMenu>
-      )}
-      <ConfirmationDialog
-        open={confirming}
-        onClose={() => setConfirming(false)}
-        onBack={() => setConfirming(false)}
-        onConfirm={() => {
-          setConfirming(false);
-          onRevoke();
-        }}
-        heading="Revoke link"
-        icon={<Icons.Trash className="size-4 text-white" />}
-        iconBgColor="bg-[#fc7d73]"
-        confirmVariant="destructive"
-        confirmButtonClassName="text-white"
-        button="Revoke"
-        text={`Revoke this ${title.toLowerCase()}?`}
-        helperText="Nobody new can join with it. People who already joined keep their access."
-      />
+      {busy ? <BusyLabel busy={busy} /> : <LinkRevokeMenu title={title} onRevoke={onRevoke} />}
+    </div>
+  );
+}
+
+const ICON_BUTTON =
+  "flex size-7 shrink-0 items-center justify-center rounded-md p-0 text-grey-40 transition-colors hover:bg-grey-90 hover:text-grey-10 disabled:opacity-50 dark:text-grey-dark-500 dark:hover:bg-white/10 dark:hover:text-white";
+
+/**
+ * The compact link row's one action: Copy while the link is here, Unlock
+ * while links are locked, a quiet lock when the sealed copy did not open,
+ * and an empty slot for a link with nothing to copy. Always the same width,
+ * so the ⋯ menus line up down the group.
+ */
+function CompactLinkAction({
+  link,
+  locked,
+  unlocking,
+  onUnlock,
+}: Pick<LinkRowProps, "link" | "locked" | "unlocking" | "onUnlock">) {
+  const { copied, copy } = useCopyInvite(link.inviteUrl);
+  if (!link.linkAvailable) return <span aria-hidden className="size-7 shrink-0" />;
+  if (link.inviteUrl) {
+    return (
+      <button
+        type="button"
+        aria-label={copied ? "Copied" : "Copy link"}
+        title={copied ? "Copied" : "Copy link"}
+        onClick={() => void copy()}
+        className={cn(ICON_BUTTON, copied && "text-success-40 dark:text-success-50")}
+      >
+        {copied ? <Check className="size-4" aria-hidden /> : <Icons.Copy className="size-4" />}
+      </button>
+    );
+  }
+  if (locked) {
+    return (
+      <button
+        type="button"
+        aria-label="Unlock to copy"
+        title="Unlock to copy"
+        disabled={unlocking}
+        onClick={onUnlock}
+        className={ICON_BUTTON}
+      >
+        <Lock className="size-4" aria-hidden />
+      </button>
+    );
+  }
+  return (
+    <span title="Could not rebuild this invite link" className="flex size-7 shrink-0 items-center justify-center">
+      <Lock aria-label="Could not rebuild this invite link" className="size-3.5 text-grey-50 dark:text-grey-dark-700" />
+    </span>
+  );
+}
+
+/** The compact row's right-hand slot: as wide as a person's role, so the columns line up. */
+const LINK_ACTION_SLOT = "flex w-[98px] shrink-0 items-center justify-end gap-0.5";
+
+/**
+ * A working link in the main view, about as tall as a person's row: what it
+ * makes people and who made it, how used and when it ends, a thin usage bar,
+ * and Copy (or Unlock) beside the menu. The link itself is left to the Links
+ * full view, which has the room for it.
+ */
+export function CompactLinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke }: LinkRowProps) {
+  const creator = linkCreator(link);
+  const title = linkTitle(link);
+  const heading = creator ? `${title} · by ${creator}` : title;
+  const meta = linkMeta(link);
+
+  return (
+    <div className={cn(PANEL_ROW, busy && "opacity-60")} aria-busy={busy ? true : undefined}>
+      <span aria-hidden className={ICON_TILE}>
+        <Link2 className="size-4" />
+      </span>
+      <div className={TEXT_COLUMN}>
+        <p className="truncate text-sm text-grey-10 dark:text-white" title={heading}>
+          {title}
+          {creator ? <span className="text-xs text-grey-50 dark:text-grey-dark-600"> · by {creator}</span> : null}
+        </p>
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+          {link.pathPrefix ? <FolderTag>{link.pathPrefix}</FolderTag> : null}
+          <span className={cn(MUTED, "min-w-0 truncate")} title={meta}>
+            {meta}
+          </span>
+        </div>
+        {link.singleUse ? null : <UsageBar link={link} className="mt-1 h-[2px] w-full" />}
+      </div>
+      <span className={LINK_ACTION_SLOT}>
+        {busy ? (
+          <BusyLabel busy={busy} />
+        ) : (
+          <>
+            <CompactLinkAction link={link} locked={locked} unlocking={unlocking} onUnlock={onUnlock} />
+            <LinkRevokeMenu title={title} onRevoke={onRevoke} />
+          </>
+        )}
+      </span>
     </div>
   );
 }
@@ -428,7 +541,7 @@ export function EndedLinkRow({ link }: { link: AccessPanelLink }) {
 export function EndedLinks({ links, onShowAll }: { links: AccessPanelLink[]; onShowAll: () => void }) {
   const [open, setOpen] = useState(false);
   if (links.length === 0) return null;
-  const { shown, hidden } = capRows(links, false, PANEL_GROUP_PREVIEW);
+  const { shown, hidden } = capRows(links, false, PANEL_PREVIEW.links);
   return (
     <div>
       <button
@@ -523,6 +636,28 @@ function SkeletonRows({ count }: { count: number }) {
   );
 }
 
+/** Shaped like `CompactLinkRow`: a square tile, two lines, a thin bar, two small buttons. */
+function LinkSkeletonRows({ count }: { count: number }) {
+  return (
+    <>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} data-testid="link-skeleton-row" className={PANEL_ROW}>
+          <Skeleton width={32} height={32} className="shrink-0 rounded-[9px]" />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <Skeleton width={`${45 + ((i * 13) % 25)}%`} height={11} className="rounded-md" />
+            <Skeleton width={`${55 + ((i * 9) % 20)}%`} height={9} className="rounded-md" />
+            <Skeleton width="100%" height={2} className="rounded-full" />
+          </div>
+          <span className={LINK_ACTION_SLOT}>
+            <Skeleton width={28} height={28} className="rounded-md" />
+            <Skeleton width={28} height={28} className="rounded-md" />
+          </span>
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** The panel while its listing is on the wire: rows shaped like the real ones. */
 export function PanelSkeleton({ withLinks }: { withLinks: boolean }) {
   return (
@@ -533,7 +668,7 @@ export function PanelSkeleton({ withLinks }: { withLinks: boolean }) {
       {withLinks ? (
         <>
           <GroupHeader id="access-links-loading" title="Links" />
-          <SkeletonRows count={2} />
+          <LinkSkeletonRows count={2} />
         </>
       ) : null}
     </div>

@@ -162,17 +162,29 @@ export function endedLinksLine(count: number): string {
 
 /**
  * How many rows each group draws in the panel's main view before its
- * "Show all" row. A big drive has 100 people and 100 links; five of each
- * keeps every group, and the jump bar above them, on one screen, and the
- * whole list lives one tap away in the group's full view.
+ * "Show all" row. A big drive has 100 people and 100 links; six people,
+ * three invitations and six compact link rows keep people AND links, and the
+ * jump bar above them, on one laptop screen, and the whole of each group
+ * lives one tap away in its full view.
  */
-export const PANEL_GROUP_PREVIEW = 5;
+export const PANEL_PREVIEW: Readonly<Record<PanelGroup, number>> = {
+  people: 6,
+  pending: 3,
+  links: 6,
+};
+
+/**
+ * Someone the drive is shared with only reads the people, so the jump bar
+ * has one item for them; it earns its row only with more people than this
+ * (the web console's rule).
+ */
+export const MEMBER_JUMP_BAR_MIN_PEOPLE = 5;
 
 /** More people than this and the main view offers a search field. */
 export const MAIN_SEARCH_MIN_PEOPLE = 10;
 
 /** The rows a group draws now, and how many wait behind "Show all". */
-export function capRows<T>(rows: readonly T[], expanded: boolean, cap: number = PANEL_GROUP_PREVIEW): { shown: T[]; hidden: number } {
+export function capRows<T>(rows: readonly T[], expanded: boolean, cap: number): { shown: T[]; hidden: number } {
   if (expanded || rows.length <= cap) return { shown: [...rows], hidden: 0 };
   return { shown: rows.slice(0, cap), hidden: rows.length - cap };
 }

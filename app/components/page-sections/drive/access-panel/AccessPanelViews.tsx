@@ -2,10 +2,13 @@
 
 // The Manage access panel's two shapes, and the pieces they share.
 //
-//   Main view   every group's first rows (`PANEL_GROUP_PREVIEW`), a jump bar
-//               above the list, and "Show all N …" under a group with more.
+//   Main view   every group's first rows (`PANEL_PREVIEW`: 6 people, 3
+//               invitations, 6 links), a jump bar above the list, and
+//               "Show all N …" under a group with more. Links draw compact
+//               (`CompactLinkRow`), so people and links share one screen.
 //   Full view   one group, all of it: a search field, filter chips and a
-//               windowed list, behind a "‹ Back" sub-header.
+//               windowed list, behind a "‹ Back" sub-header. Links draw in
+//               full there, with the link field.
 //
 // Which rows exist, their order and every change still come from Rust; this
 // file only arranges them. Row changes stay pessimistic in both views: the
@@ -26,7 +29,7 @@ import { driveRoleLabel, parseDriveRole, type DriveRole } from "@/app/lib/shared
 import { InlineNotice } from "../share-dialog/InlineNotice";
 import { MemberRow, OwnerRow, PendingRow, type Busy } from "../share-dialog/PeopleWithAccessSection";
 import type { FolderRole } from "./ChangeFoldersDialog";
-import { EndedLinkRow, EndedLinks, FolderTag, HolderRow, LinkRow } from "./AccessPanelRows";
+import { CompactLinkRow, EndedLinkRow, EndedLinks, FolderTag, HolderRow, LinkRow } from "./AccessPanelRows";
 import {
   ACCESS_PANEL_COPY,
   GROUP_SHORT,
@@ -169,10 +172,12 @@ export function PendingItem({ invite, ctx }: { invite: AccessPanelInvite; ctx: R
   );
 }
 
-export function LinkItem({ link, ctx }: { link: AccessPanelLink; ctx: RowContext }) {
+/** A working link: compact in the main view, with its field in the full view. */
+export function LinkItem({ link, ctx, compact = false }: { link: AccessPanelLink; ctx: RowContext; compact?: boolean }) {
+  const Row = compact ? CompactLinkRow : LinkRow;
   return (
     <>
-      <LinkRow
+      <Row
         link={link}
         busy={ctx.busy[link.inviteId]}
         locked={ctx.locked}

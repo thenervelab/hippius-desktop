@@ -86,7 +86,8 @@ import {
 import {
   ACCESS_PANEL_COPY,
   MAIN_SEARCH_MIN_PEOPLE,
-  PANEL_GROUP_PREVIEW,
+  MEMBER_JUMP_BAR_MIN_PEOPLE,
+  PANEL_PREVIEW,
   SEARCH_PLACEHOLDER,
   isOnlyOwner,
   linkMatches,
@@ -534,13 +535,17 @@ function groupTotal(panel: AccessPanel, group: PanelGroup): number {
 /**
  * The jump bar's items, or null when there is nothing to jump between. The
  * owner gets one per group with rows (only when there is more than one);
- * anyone else only reads the people, so theirs is just "People N". While the
+ * anyone else only reads the people, so theirs is just "People N", and only
+ * once there are more than `MEMBER_JUMP_BAR_MIN_PEOPLE` of them. While the
  * main search has text the counts are its matches, and a group with none
  * drops out, as it does from the list.
  */
 function summaryItems(panel: AccessPanel, people: PanelPerson[], query: string): SummaryItem[] | null {
   const peopleShown = people.filter((p) => personMatches(p, query)).length;
-  if (!panel.canManage) return peopleShown > 0 ? [{ group: "people", count: peopleShown }] : null;
+  if (!panel.canManage) {
+    if (peopleCount(panel) <= MEMBER_JUMP_BAR_MIN_PEOPLE || peopleShown === 0) return null;
+    return [{ group: "people", count: peopleShown }];
+  }
   if (isOnlyOwner(panel)) return null;
   const items: SummaryItem[] = [
     { group: "people", count: peopleShown },
@@ -655,13 +660,13 @@ function PanelContent({
             action={panel.canManage ? { label: "Invite", onClick: onShare } : undefined}
           />
           <ul>
-            {peopleShown.slice(0, PANEL_GROUP_PREVIEW).map((person) => (
+            {peopleShown.slice(0, PANEL_PREVIEW.people).map((person) => (
               <li key={personKey(person)}>
                 <PersonItem person={person} ctx={ctx} />
               </li>
             ))}
           </ul>
-          {peopleShown.length > PANEL_GROUP_PREVIEW ? (
+          {peopleShown.length > PANEL_PREVIEW.people ? (
             <ShowAllGroup group="people" total={peopleShown.length} onClick={() => onShowAll("people")} />
           ) : null}
           {/* There is no role change for a folder holder (HCFS #475), so the
@@ -682,13 +687,13 @@ function PanelContent({
             highlighted={flash === "pending"}
           />
           <ul>
-            {pendingShown.slice(0, PANEL_GROUP_PREVIEW).map((invite) => (
+            {pendingShown.slice(0, PANEL_PREVIEW.pending).map((invite) => (
               <li key={invite.inviteId}>
                 <PendingItem invite={invite} ctx={ctx} />
               </li>
             ))}
           </ul>
-          {pendingShown.length > PANEL_GROUP_PREVIEW ? (
+          {pendingShown.length > PANEL_PREVIEW.pending ? (
             <ShowAllGroup group="pending" total={pendingShown.length} onClick={() => onShowAll("pending")} />
           ) : null}
         </section>
@@ -709,13 +714,13 @@ function PanelContent({
             </InlineNotice>
           ) : null}
           <ul>
-            {linksShown.slice(0, PANEL_GROUP_PREVIEW).map((link) => (
+            {linksShown.slice(0, PANEL_PREVIEW.links).map((link) => (
               <li key={link.inviteId}>
-                <LinkItem link={link} ctx={ctx} />
+                <LinkItem link={link} ctx={ctx} compact />
               </li>
             ))}
           </ul>
-          {linksShown.length > PANEL_GROUP_PREVIEW ? (
+          {linksShown.length > PANEL_PREVIEW.links ? (
             <ShowAllGroup group="links" total={linksShown.length} onClick={() => onShowAll("links")} />
           ) : null}
           <EndedLinks links={endedShown} onShowAll={() => onShowAll("links", "ended")} />

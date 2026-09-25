@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import type { AccessPanel, AccessPanelHolder, AccessPanelLink, AccessPanelMember } from "@/app/lib/tauri/sharedDrives";
 import {
-  PANEL_GROUP_PREVIEW,
+  PANEL_PREVIEW,
   SEARCH_PLACEHOLDER,
   capRows,
   linkMatches,
@@ -161,14 +161,15 @@ describe("empty", () => {
 describe("capRows", () => {
   const rows = Array.from({ length: 30 }, (_, i) => i);
 
-  it("draws a group's first five rows in the main view", () => {
-    expect(PANEL_GROUP_PREVIEW).toBe(5);
-    expect(capRows(rows.slice(0, 5), false)).toEqual({ shown: rows.slice(0, 5), hidden: 0 });
-    expect(capRows(rows, false)).toEqual({ shown: rows.slice(0, 5), hidden: 25 });
+  it("draws six people, three invitations and six links in the main view", () => {
+    expect(PANEL_PREVIEW).toEqual({ people: 6, pending: 3, links: 6 });
+    expect(capRows(rows.slice(0, 6), false, PANEL_PREVIEW.people)).toEqual({ shown: rows.slice(0, 6), hidden: 0 });
+    expect(capRows(rows, false, PANEL_PREVIEW.people)).toEqual({ shown: rows.slice(0, 6), hidden: 24 });
+    expect(capRows(rows, false, PANEL_PREVIEW.pending)).toEqual({ shown: rows.slice(0, 3), hidden: 27 });
   });
 
   it("draws everything when expanded, and takes another cap", () => {
-    expect(capRows(rows, true)).toEqual({ shown: rows, hidden: 0 });
+    expect(capRows(rows, true, PANEL_PREVIEW.links)).toEqual({ shown: rows, hidden: 0 });
     expect(capRows(rows, false, 0)).toEqual({ shown: [], hidden: 30 });
   });
 });

@@ -4,8 +4,9 @@
 // and their counts, the empty and loading states, pessimistic changes on
 // every row kind, locked links, the Share dialog hand-off, and Leave; and, for
 // a big drive, rows that cut long words short beside a fixed role slot, the
-// jump bar, five rows a group with "Show all", and the full view's search,
-// chips, windowed list and actions (the Share dev tools' Big and Huge presets).
+// jump bar, six people, three invitations and six compact links with
+// "Show all", and the full view's search, chips, windowed list, link fields
+// and actions (the Share dev tools' Big and Huge presets).
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -255,7 +256,11 @@ describe("an owner's drive", () => {
   it("shows skeleton rows while loading, never a spinner", () => {
     listAccessPanelMock.mockReturnValue(new Promise(() => {}));
     renderPanel();
-    expect(screen.getByRole("status", { name: "Loading access" })).toBeInTheDocument();
+    const loading = screen.getByRole("status", { name: "Loading access" });
+    // Links load as compact rows: a square tile, two lines, a thin bar and two small buttons.
+    const linkRows = within(loading).getAllByTestId("link-skeleton-row");
+    expect(linkRows).toHaveLength(2);
+    expect(linkRows[0].querySelector(".rounded-full[style*='height: 2px']")).not.toBeNull();
   });
 
   it("says whose drive it is and the plan it is on", async () => {
@@ -284,18 +289,26 @@ describe("an owner's drive", () => {
     expect(people.getByText("Joined Aug 20, 2026")).toBeInTheDocument();
   });
 
-  it("describes a link by its role, maker, usage and expiry, with the key hidden", async () => {
+  it("draws a link as one compact row: role, maker, usage, expiry, a thin bar and Copy, never the link", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     renderPanel();
     const links = within(await waitFor(() => group(/^Links/)));
     expect(links.getByText("Editor link")).toBeInTheDocument();
     expect(links.getByText(/by You/)).toBeInTheDocument();
-    expect(links.getByText("12 of 50 used · Expires in 5 days")).toBeInTheDocument();
-    expect(links.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "24");
+    expect(links.getByText("12 of 50 used · Expires in 5 days")).toHaveClass("truncate");
+    const bar = links.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "24");
+    expect(bar).toHaveClass("h-[2px]", "w-full");
+    // No link field in the main view, so no address and no key.
+    expect(links.queryByText(/console\.hippius\.com/)).not.toBeInTheDocument();
     expect(links.queryByText(/SECRETKEY/)).not.toBeInTheDocument();
-    fireEvent.click(links.getByRole("button", { name: "Copy invite link" }));
+    expect(links.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
+    // Copy takes the whole link, key included, and says so without quoting it.
+    fireEvent.click(links.getByRole("button", { name: "Copy link" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(link().inviteUrl));
+    expect(await links.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+    expect(toast.success).toHaveBeenCalledWith("Invite link copied");
   });
 
   it("says whether a single-use link was used, with no bar", async () => {
@@ -459,14 +472,26 @@ describe("changes are pessimistic", () => {
 });
 
 describe("locked links", () => {
-  it("says so and offers the unlock flow on the blurred field", async () => {
+  it("says so and offers the unlock flow from the compact row's lock button", async () => {
     listAccessPanelMock.mockResolvedValue(panel({ links: [link({ inviteUrl: undefined })], linksLocked: true }));
     renderPanel();
     expect(
       await screen.findByText("Links are locked. Enter your unlock password to show and copy them."),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy invite link" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    expect(screen.queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Unlock to copy" }));
+    expect(unlockMock).toHaveBeenCalled();
+  });
+
+  it("offers Unlock on the blurred field in the Links full view", async () => {
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big", {}, { locked: true }));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    expect(links.getAllByRole("button", { name: "Unlock to copy" })).toHaveLength(6);
+    fireEvent.click(links.getByRole("button", { name: "Show all 45 links" }));
+    const list = within(fullList("Links"));
+    expect(list.getAllByRole("status", { name: "Link locked" }).length).toBeGreaterThan(0);
+    fireEvent.click(list.getAllByRole("button", { name: "Unlock" })[0]);
     expect(unlockMock).toHaveBeenCalled();
   });
 });
@@ -575,11 +600,16 @@ describe("a drive shared with you", () => {
 });
 
 // The Share dev tools' presets, as the panel receives them.
-async function presetPanel(id: "big" | "huge", over: Partial<AccessPanel> = {}): Promise<AccessPanel> {
+async function presetPanel(
+  id: "big" | "huge",
+  over: Partial<AccessPanel> = {},
+  { locked = false }: { locked?: boolean } = {},
+): Promise<AccessPanel> {
   const { buildFixture, fixtureAccessPanel } = await import("../share-dialog/shareFixture");
   const { DEFAULT_SETTINGS, applyPreset } = await import("../share-dialog/shareDevToolsSettings");
   const now = Date.parse("2026-09-25T12:00:00Z");
-  return { ...fixtureAccessPanel(buildFixture(applyPreset(DEFAULT_SETTINGS, id), null, now), false, now), ...over };
+  const settings = { ...applyPreset(DEFAULT_SETTINGS, id), linksLocked: locked };
+  return { ...fixtureAccessPanel(buildFixture(settings, null, now), locked, now), ...over };
 }
 
 /** The rows of the full view's windowed list. */
@@ -646,19 +676,51 @@ describe("a big drive", () => {
     expect(screen.getByRole("button", { name: /15 expired or revoked links/ })).toBeInTheDocument();
   });
 
-  it("draws five rows a group, then Show all with the group's full count", async () => {
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+  it("draws six people, three invitations and six compact links, then Show all with the full count", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const big = await presetPanel("big");
+    listAccessPanelMock.mockResolvedValue(big);
     renderPanel();
     const people = within(await waitFor(() => group(/^People/)));
-    // The owner and four more; every row with a role select is a member.
-    expect(people.getAllByRole("listitem")).toHaveLength(5);
+    // The owner and five more.
+    expect(people.getAllByRole("listitem")).toHaveLength(6);
     expect(people.getByRole("button", { name: "Show all 61 people" })).toBeInTheDocument();
     const pending = within(group(/^Pending invites/));
-    expect(pending.getAllByRole("listitem")).toHaveLength(5);
+    expect(pending.getAllByRole("listitem")).toHaveLength(3);
     expect(pending.getByRole("button", { name: "Show all 6 pending invites" })).toBeInTheDocument();
     const links = within(group(/^Links/));
-    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(5);
+    expect(links.getAllByRole("button", { name: "Revoke" })).toHaveLength(6);
+    expect(links.getAllByRole("button", { name: "Copy link" })).toHaveLength(6);
+    expect(links.queryByText(/console\.hippius\.com/)).not.toBeInTheDocument();
     expect(links.getByRole("button", { name: "Show all 45 links" })).toBeInTheDocument();
+    fireEvent.click(links.getAllByRole("button", { name: "Copy link" })[0]);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(big.links[0].inviteUrl));
+  });
+
+  it("keeps the link field, key hidden, in the Links full view", async () => {
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Show all 45 links" }));
+    const list = within(fullList("Links"));
+    expect(list.getAllByText(/^console\.hippius\.com\/invite\//).length).toBeGreaterThan(0);
+    expect(list.queryByText(/fixture-key/)).not.toBeInTheDocument();
+    expect(list.getAllByRole("button", { name: "Copy invite link" }).length).toBeGreaterThan(0);
+    expect(list.queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
+  });
+
+  it("dims a compact link while it is revoked, with Revoking in its right slot", async () => {
+    revokeMock.mockReturnValue(new Promise<void>(() => {}));
+    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    fireEvent.click(links.getAllByRole("button", { name: "Revoke" })[0]);
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
+    const busy = await links.findByText("Revoking…");
+    const row = busy.closest("[aria-busy]");
+    expect(row).toHaveClass("opacity-60");
+    expect(within(row as HTMLElement).queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
+    expect(links.getAllByRole("button", { name: "Copy link" })).toHaveLength(5);
   });
 
   it("jumps to a group from the bar: scrolls, focuses its heading and marks it for a moment", async () => {
@@ -785,6 +847,9 @@ describe("the Huge preset", () => {
       listAccessPanelMock.mockResolvedValue(await presetPanel("huge"));
       renderPanel();
       expect(await screen.findByRole("heading", { name: "People 101" })).toBeInTheDocument();
+      expect(within(group(/^People/)).getAllByRole("listitem")).toHaveLength(6);
+      expect(within(group(/^Pending invites/)).getAllByRole("listitem")).toHaveLength(3);
+      expect(within(group(/^Links/)).getAllByRole("button", { name: "Copy link" })).toHaveLength(6);
       expect(screen.getByRole("button", { name: "Show all 50 pending invites" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Show all 100 links" })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Show all 101 people" }));
@@ -803,6 +868,26 @@ describe("the Huge preset", () => {
 });
 
 describe("the jump bar for someone the drive is shared with", () => {
+  const readerOn = (members: AccessPanelMember[]) =>
+    panel({ ownerSs58: OWNER, ownerIsYou: false, yourRole: "reader", canManage: false, members });
+  const people = (n: number) =>
+    Array.from({ length: n }, (_, i) => member({ memberSs58: `5Member${i}`.padEnd(48, "x"), memberName: `Person ${i}` }));
+
+  it("stays hidden with five people or fewer, as in the web console", async () => {
+    // The owner and four members: five people.
+    listAccessPanelMock.mockResolvedValue(readerOn(people(4)));
+    renderPanel();
+    expect(await screen.findByRole("heading", { name: "People 5" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Jump to a group" })).not.toBeInTheDocument();
+  });
+
+  it("shows once there are more than five people", async () => {
+    listAccessPanelMock.mockResolvedValue(readerOn(people(5)));
+    renderPanel();
+    const bar = within(await screen.findByRole("navigation", { name: "Jump to a group" }));
+    expect(bar.getAllByRole("button").map((b) => b.textContent)).toEqual(["People6"]);
+  });
+
   it("shows only People, with no pending invites or links to jump to", async () => {
     memberships.list = [
       {
