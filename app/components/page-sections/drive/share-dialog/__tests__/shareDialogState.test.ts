@@ -30,6 +30,10 @@ describe("describeLinkLifetime", () => {
     expect(describeLinkLifetime(3600)).toBe("Expires in 1 hour");
     expect(describeLinkLifetime(5 * 3600)).toBe("Expires in 5 hours");
     expect(describeLinkLifetime(3 * 24 * 3600)).toBe("Expires in 3 days");
+    expect(describeLinkLifetime(7 * 24 * 3600 - 5)).toBe("Expires in 7 days");
+    expect(describeLinkLifetime(23 * 3600 + 1800)).toBe("Expires in 24 hours");
+    expect(describeLinkLifetime(1800)).toBe("Expires in less than an hour");
+    expect(describeLinkLifetime(0)).toBe("Expired");
   });
 });
 
@@ -95,18 +99,23 @@ describe("generalAccessNote", () => {
 describe("pending invite rows", () => {
   const now = new Date("2026-09-24T12:00:00Z");
 
-  it("counts days left, rounding up, and says today and tomorrow", () => {
-    expect(expiresInLabel("2026-09-30T12:00:00Z", now)).toBe("expires in 6 days");
+  it("counts time left rounding up, the same way Manage access does", () => {
+    expect(expiresInLabel("2026-10-01T11:59:55Z", now)).toBe("expires in 7 days");
     expect(expiresInLabel("2026-09-30T13:00:00Z", now)).toBe("expires in 7 days");
-    expect(expiresInLabel("2026-09-24T18:00:00Z", now)).toBe("expires today");
-    expect(expiresInLabel("2026-09-25T11:00:00Z", now)).toBe("expires tomorrow");
+    expect(expiresInLabel("2026-09-30T12:00:00Z", now)).toBe("expires in 6 days");
+    expect(expiresInLabel("2026-09-25T12:00:00Z", now)).toBe("expires in 1 day");
+    expect(expiresInLabel("2026-09-25T11:30:00Z", now)).toBe("expires in 24 hours");
+    expect(expiresInLabel("2026-09-24T17:00:00Z", now)).toBe("expires in 5 hours");
+    expect(expiresInLabel("2026-09-24T12:30:00Z", now)).toBe("expires in less than an hour");
+    expect(expiresInLabel("2026-09-24T12:00:00Z", now)).toBe("expired");
     expect(expiresInLabel("2026-09-20T00:00:00Z", now)).toBe("expired");
+    expect(expiresInLabel("2126-09-24T12:00:00Z", now)).toBe("never expires");
     expect(expiresInLabel("not a date", now)).toBeNull();
   });
 
   it("names the stage, and approval when it is needed", () => {
-    expect(pendingInviteMeta({ emailStatus: "sent", expiresAt: "2026-09-30T12:00:00Z" }, now)).toBe(
-      "Invite sent · expires in 6 days",
+    expect(pendingInviteMeta({ emailStatus: "sent", expiresAt: "2026-10-01T11:59:55Z" }, now)).toBe(
+      "Invite sent · expires in 7 days",
     );
     expect(pendingInviteMeta({ emailStatus: "awaiting_seal", expiresAt: "x" }, now)).toBe("Opened · they join while the app is open");
   });

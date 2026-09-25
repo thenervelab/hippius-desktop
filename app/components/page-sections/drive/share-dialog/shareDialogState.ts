@@ -13,6 +13,7 @@ import {
 } from "@/app/lib/tauri/sharedDrives";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { driveRoleLabel, type DriveRole } from "@/app/lib/shared-drives/roles";
+import { expiresInWords, secsUntil, timeLeft } from "@/app/lib/shared-drives/timeLeft";
 import {
   COMING_SOON_COPY,
   INVITE_TTL_OPTIONS,
@@ -95,10 +96,7 @@ export function describeLinkLifetime(expiresInSecs: number): string {
   if (expiresInSecs >= NEVER_EXPIRES_SECS) return "Never expires";
   const preset = INVITE_TTL_OPTIONS.find((o) => o.secs === expiresInSecs);
   if (preset) return `Expires in ${preset.label}`;
-  const hours = Math.max(1, Math.round(expiresInSecs / 3600));
-  if (hours < 48) return `Expires in ${hours} hour${hours === 1 ? "" : "s"}`;
-  const days = Math.round(hours / 24);
-  return `Expires in ${days} days`;
+  return expiresInWords(expiresInSecs);
 }
 
 /** "Single use" or "Up to 50 uses", from the uses count Rust sent. */
@@ -134,15 +132,18 @@ export function generalAccessNote(params: {
   return "Anyone with the link can join until it expires.";
 }
 
-/** "expires in 6 days", "expires today", or null for an unreadable date. */
+/**
+ * "expires in 7 days", "expires in 5 hours", "expired", or null for an
+ * unreadable date. Same words as Manage access (`timeLeft`), lower case
+ * because it follows the stage on the row.
+ */
 export function expiresInLabel(expiresAt: string, now: Date = new Date()): string | null {
-  const ts = Date.parse(expiresAt);
-  if (Number.isNaN(ts)) return null;
-  const ms = ts - now.getTime();
-  if (ms <= 0) return "expired";
-  const days = Math.ceil(ms / (24 * 60 * 60 * 1000));
-  if (days <= 1) return ms < 12 * 60 * 60 * 1000 ? "expires today" : "expires tomorrow";
-  return `expires in ${days} days`;
+  const secs = secsUntil(expiresAt, now);
+  if (secs === null) return null;
+  const left = timeLeft(secs);
+  if (left.kind === "never") return "never expires";
+  if (left.kind === "expired") return "expired";
+  return `expires in ${left.words}`;
 }
 
 /**
@@ -157,7 +158,7 @@ const PENDING_STAGE: Record<string, string> = {
   sealed: "Approved, not joined yet",
 };
 
-/** "Invite sent · expires in 6 days" for a pending emailed invitation. */
+/** "Invite sent · expires in 7 days" for a pending emailed invitation. */
 export function pendingInviteMeta(
   invite: { emailStatus?: string | null; expiresAt: string },
   now: Date = new Date(),

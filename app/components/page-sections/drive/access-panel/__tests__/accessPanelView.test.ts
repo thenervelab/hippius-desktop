@@ -17,7 +17,6 @@ import {
   personMatches,
   showAllLabel,
   type PanelPerson,
-  durationWords,
   endedLinksLine,
   holderFolderTag,
   isOnlyOwner,
@@ -115,7 +114,10 @@ describe("rows", () => {
     expect(pendingStageHint("awaiting_seal")).toBe("They join while the app is open. Approve if they are still waiting.");
     expect(pendingStageHint("sent")).toBeUndefined();
     expect(pendingStage("sealed")).toBe("Approved");
-    expect(pendingLeft(6 * DAY + 10)).toBe("6 days left");
+    expect(pendingLeft(7 * DAY - 5)).toBe("7 days left");
+    expect(pendingLeft(6 * DAY + 3600)).toBe("7 days left");
+    expect(pendingLeft(0)).toBe("Expired");
+    expect(pendingLeft(-60)).toBe("Expired");
     expect(pendingLeft(null)).toBeNull();
   });
 });
@@ -129,6 +131,8 @@ describe("links", () => {
     );
     expect(linkMeta(link({ singleUse: true, maxUses: 1, useCount: 1, expiresInSecs: null }))).toBe("Used");
     expect(linkExpiry(link({ expiresInSecs: 30 }))).toBe("Expires in less than an hour");
+    expect(linkExpiry(link({ expiresInSecs: 5 * DAY - 5 }))).toBe("Expires in 5 days");
+    expect(linkExpiry(link({ expiresInSecs: 0 }))).toBe("Expired");
   });
 
   it("names who made it", () => {
@@ -149,12 +153,6 @@ describe("links", () => {
     expect(linkEndedLabel("used_up")).toBe("All uses taken");
     expect(endedLinksLine(1)).toBe("1 expired or revoked link");
     expect(endedLinksLine(3)).toBe("3 expired or revoked links");
-  });
-
-  it("counts time down in whole units", () => {
-    expect(durationWords(2 * DAY)).toBe("2 days");
-    expect(durationWords(DAY + 5)).toBe("1 day");
-    expect(durationWords(3600)).toBe("1 hour");
   });
 });
 
