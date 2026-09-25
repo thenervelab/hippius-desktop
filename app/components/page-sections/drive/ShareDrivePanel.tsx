@@ -20,6 +20,11 @@
 // change is pessimistic, like the Share dialog's rows, which it reuses.
 // Inviting and making links happen in the Share dialog (`shareDialogAtom`);
 // the panel opens it and steps aside.
+//
+// On a plan without sharing (Free, Starter; Rust decides, `canShareDrives`)
+// the owner still sees and removes everyone here, but Invite, New link,
+// Share, Approve and Change folders give way to one upgrade card. A 403
+// `shared_drives_not_entitled` from any change does the same.
 
 "use client";
 
@@ -28,10 +33,11 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { Folder, HardDrive, LogOut, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button, Icons } from "@/components/ui";
+import { Button, Icons, Skeleton } from "@/components/ui";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
@@ -41,6 +47,8 @@ import {
   useSharedDriveMemberships,
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
+import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 import { useUnlockFlow } from "@/app/lib/hooks/useUnlockFlow";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
@@ -54,6 +62,7 @@ import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import {
   approveEmailInvite,
   changeDriveMemberRole,
+  isSharedDrivesNotEntitled,
   leaveSharedDrive,
   leaveSharedDriveByIdentity,
   removeDriveMember,
@@ -69,7 +78,13 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 import { InlineNotice } from "./share-dialog/InlineNotice";
 import { useRowChanges } from "./share-dialog/PeopleWithAccessSection";
-import { FOLDER_ACCESS_HINT, SHARED_DRIVES_UNAVAILABLE_COPY } from "./share-dialog/shareDialogState";
+import {
+  FOLDER_ACCESS_HINT,
+  SHARED_DRIVES_UNAVAILABLE_COPY,
+  sharingGate,
+  type SharingGate,
+} from "./share-dialog/shareDialogState";
+import { NotEntitledNotice, SharingActionsSkeleton } from "./share-dialog/SectionNoticeView";
 import { driveDisplayName, findMembership } from "./share-dialog/ShareDialog";
 import { useAccessPanel, type AccessPanelState } from "./access-panel/useAccessPanel";
 import { EmptyAccess, EndedLinks, GroupHeader, PanelSkeleton, ShowAllGroup } from "./access-panel/AccessPanelRows";
@@ -230,7 +245,19 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
   const onChanged = useCallback(() => {
     void invalidateOwnedDriveSharing(queryClient);
   }, [queryClient]);
-  const { busy, rowError, run } = useRowChanges(onChanged, reload);
+
+  // Whether this owner's plan lets them add people. Rust decides; a 403
+  // from any change here flips it to the upgrade card as well.
+  const router = useRouter();
+  const planAllows = useSharedDrivesInPlan();
+  const [refusedByServer, setRefusedByServer] = useState(false);
+  const onNotEntitled = useCallback(() => setRefusedByServer(true), []);
+  const upgrade = useCallback(() => {
+    onClose();
+    router.push(BILLING_ROUTE);
+  }, [onClose, router]);
+
+  const { busy, rowError, run } = useRowChanges(onChanged, reload, onNotEntitled);
 
   const openShareDialog = useCallback(() => {
     // Close the panel as the dialog opens: they are two surfaces for one
@@ -304,16 +331,28 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
       revoke: (id, who) => void run(id, who, "revoking", () => revokeDriveInvite(target.label, id, driveTarget)),
       cancel: (id, who) => void run(id, who, "removing", () => revokeDriveInvite(target.label, id, driveTarget)),
       approve: (id, who) => void run(id, who, "saving", () => approveEmailInvite(target.label, id, driveTarget)),
-      // Throws on refusal: the dialog shows why and stays open.
+      // Throws on refusal: the dialog shows why and stays open. A plan
+      // refusal also puts the upgrade card in place behind it.
       changeFolders: async (ss58, folders, role) => {
-        await replaceFolderGrants(target.label, ss58, folders, { role, target: driveTarget });
+        try {
+          await replaceFolderGrants(target.label, ss58, folders, { role, target: driveTarget });
+        } catch (err) {
+          if (isSharedDrivesNotEntitled(err)) onNotEntitled();
+          throw err;
+        }
         toast.success("Folders updated");
         onChanged();
         await reload();
       },
     }),
-    [run, target.label, driveTarget, onChanged, reload],
+    [run, target.label, driveTarget, onChanged, reload, onNotEntitled],
   );
+  // Only the owner adds people, so the gate is about the owner's plan.
+  const gate = sharingGate({
+    planAllows,
+    owner: panel ? panel.canManage : expectManage,
+    refusedByServer,
+  });
   const ctx: RowContext | null = panel
     ? {
         panel,
@@ -324,6 +363,7 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
         locked: panel.linksLocked,
         unlocking,
         onUnlock: () => void unlock(),
+        canAddAccess: gate === "allowed",
       }
     : null;
   const people = useMemo(() => (panel ? panelPeople(panel, membership?.ownerName) : []), [panel, membership?.ownerName]);
@@ -448,6 +488,8 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
             expectManage={expectManage}
             retry={retry}
             onShare={openShareDialog}
+            gate={gate}
+            onUpgrade={upgrade}
             ctx={ctx}
             people={people}
             query={mainQuery}
@@ -477,7 +519,11 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
               {ACCESS_PANEL_COPY.changesApply}
             </span>
           )}
-          {canManage ? (
+          {canManage && gate === "loading" ? (
+            // Holds the Share button's place until the plan is known, so
+            // neither the button nor its absence flashes.
+            <Skeleton width={92} height={38} className="ml-auto rounded-[8px]" />
+          ) : canManage && gate === "allowed" ? (
             <Button
               type="button"
               variant="primary"
@@ -562,6 +608,8 @@ function PanelContent({
   expectManage,
   retry,
   onShare,
+  gate,
+  onUpgrade,
   ctx,
   people,
   query,
@@ -574,6 +622,9 @@ function PanelContent({
   expectManage: boolean;
   retry: () => void;
   onShare: () => void;
+  /** Whether Invite, New link and Share are offered, or the upgrade card. */
+  gate: SharingGate;
+  onUpgrade: () => void;
   ctx: RowContext | null;
   people: PanelPerson[];
   query: string;
@@ -612,12 +663,22 @@ function PanelContent({
   }
 
   const panel = ctx.panel;
+  // Only the owner adds people; for anyone else there is nothing to gate.
+  const upgradeCard =
+    panel.canManage && gate === "upgrade" ? <NotEntitledNotice onUpgrade={onUpgrade} className="mt-3" /> : null;
+  const addAction = <T,>(action: T): T | undefined =>
+    panel.canManage && gate === "allowed" ? action : undefined;
   if (isOnlyOwner(panel)) {
     return (
       <>
+        {upgradeCard}
         <GroupHeader id="access-people" title="People" count={1} />
         <PersonItem person={people[0]} ctx={ctx} />
-        <EmptyAccess folder={folder} onShare={onShare} />
+        {gate === "allowed" ? (
+          <EmptyAccess folder={folder} onShare={onShare} />
+        ) : gate === "loading" ? (
+          <SharingActionsSkeleton className="mt-4" />
+        ) : null}
       </>
     );
   }
@@ -634,6 +695,7 @@ function PanelContent({
 
   return (
     <>
+      {upgradeCard}
       {peopleCount(panel) > MAIN_SEARCH_MIN_PEOPLE ? (
         <PanelSearch
           value={query}
@@ -656,7 +718,7 @@ function PanelContent({
             title="People"
             count={peopleCount(panel)}
             highlighted={flash === "people"}
-            action={panel.canManage ? { label: "Invite", onClick: onShare } : undefined}
+            action={addAction({ label: "Invite", onClick: onShare })}
           />
           <ul>
             {peopleShown.slice(0, PANEL_PREVIEW.people).map((person) => (
@@ -705,7 +767,7 @@ function PanelContent({
             title="Links"
             count={`${panel.links.length} active`}
             highlighted={flash === "links"}
-            action={{ label: "New link", onClick: onShare }}
+            action={addAction({ label: "New link", onClick: onShare })}
           />
           {ctx.locked && linksShown.length > 0 ? (
             <InlineNotice tone="info" className="mb-1">

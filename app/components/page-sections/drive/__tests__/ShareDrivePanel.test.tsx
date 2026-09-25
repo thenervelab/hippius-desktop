@@ -73,9 +73,15 @@ vi.mock("@/app/lib/featureFlags", () => ({
   FOLDER_ROLES_ENABLED: true,
 }));
 
+// `canShareDrives` is Rust's answer; `undefined` here stands for the
+// overview still loading.
+const sharing = vi.hoisted(() => ({ can: true as boolean | undefined }));
 vi.mock("@/app/lib/hooks/api/useStorageOverview", () => ({
   STORAGE_OVERVIEW_QUERY_KEY: "storage-overview",
-  useStorageOverview: () => ({ data: { source: "subscription", plan: { name: "Plus" } } }),
+  useStorageOverview: () =>
+    sharing.can === undefined
+      ? { data: undefined, isError: false }
+      : { data: { source: "subscription", plan: { name: "Plus" }, canShareDrives: sharing.can }, isError: false },
 }));
 
 const unlockMock = vi.hoisted(() => vi.fn());
@@ -98,7 +104,8 @@ vi.mock("next/dynamic", () => ({
     return Stub;
   },
 }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+const push = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 const listAccessPanelMock = vi.fn();
 const changeRoleMock = vi.fn();
@@ -230,7 +237,111 @@ beforeEach(() => {
   vi.clearAllMocks();
   flags.sharedDrives = true;
   memberships.list = [];
+  sharing.can = true;
   listAccessPanelMock.mockResolvedValue(full());
+});
+
+const UPGRADE_TITLE = "Sharing is available on Plus, Max and Scale plans.";
+
+// Sharing is on Plus, Max and Scale; Free and Starter see an upgrade card in
+// place of every control that adds people, and keep everything that removes.
+describe("a plan without sharing (Free, Starter)", () => {
+  beforeEach(() => {
+    sharing.can = false;
+  });
+
+  it("shows the upgrade card and no Invite, New link or Share", async () => {
+    renderPanel();
+    await screen.findAllByText("Ann");
+    expect(screen.getByText(UPGRADE_TITLE)).toBeInTheDocument();
+    for (const name of ["Invite", "New link", "Share"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+  });
+
+  it("still lists everyone and every link, and removes and revokes", async () => {
+    removeMock.mockResolvedValue(undefined);
+    revokeMock.mockResolvedValue(undefined);
+    renderPanel();
+    await screen.findByText("Bo");
+    expect(screen.getByText("mia@example.com")).toBeInTheDocument();
+    const links = within(await waitFor(() => group(/^Links/)));
+    fireEvent.click(links.getByRole("button", { name: "Revoke" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "l1", undefined));
+    fireEvent.click(screen.getByRole("button", { name: "Remove access" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(removeMock).toHaveBeenCalledWith("team-docs", BO, undefined));
+  });
+
+  it("offers Cancel on a waiting invitation, but not Approve or Change folders", async () => {
+    revokeMock.mockResolvedValue(undefined);
+    renderPanel();
+    await screen.findByText("mia@example.com");
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change folders" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel invite to mia@example.com" }));
+    await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "p1", undefined));
+  });
+
+  it("puts the card in place of the empty state's Share button", async () => {
+    listAccessPanelMock.mockResolvedValue(panel());
+    renderPanel();
+    expect(await screen.findByText(UPGRADE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText("Only you have access")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+  });
+
+  it("takes them to the Drive plans and closes the panel", async () => {
+    const store = renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Upgrade plan" }));
+    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+    expect(store.get(shareDriveModalAtom)).toBeNull();
+  });
+
+  // The plan asked about is this account's; somebody else's drive is not
+  // this account's to share, so there is nothing to upgrade for.
+  it("shows no card on a drive shared with you", async () => {
+    listAccessPanelMock.mockResolvedValue(
+      panel({ ownerSs58: OWNER, ownerIsYou: false, yourRole: "writer", canManage: false, members: [member()] }),
+    );
+    renderPanel();
+    await screen.findByText("Ann");
+    expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+  });
+});
+
+describe("while the plan is loading", () => {
+  it("shows neither the add-people controls nor the upgrade card", async () => {
+    sharing.can = undefined;
+    renderPanel();
+    await screen.findAllByText("Ann");
+    expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+    for (const name of ["Invite", "New link", "Share", "Approve"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+  });
+
+  it("shows a skeleton, not the empty state's Share button, when only the owner has access", async () => {
+    sharing.can = undefined;
+    listAccessPanelMock.mockResolvedValue(panel());
+    renderPanel();
+    expect(await screen.findByRole("status", { name: "Loading sharing options" })).toBeInTheDocument();
+    expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+  });
+});
+
+describe("a 403 not-entitled from the server", () => {
+  it("turns into the upgrade card, not a row error", async () => {
+    approveMock.mockRejectedValue({ kind: "NotReady", subkind: "SHARED_DRIVES_NOT_ENTITLED", message: "x" });
+    renderPanel();
+    const pending = within(await waitFor(() => group(/^Pending invites/)));
+    fireEvent.click(pending.getByRole("button", { name: "Approve" }));
+    expect(await screen.findByText(UPGRADE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't change access/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Invite" })).not.toBeInTheDocument();
+    expect(screen.getByText("mia@example.com")).toBeInTheDocument();
+  });
 });
 
 describe("gating", () => {

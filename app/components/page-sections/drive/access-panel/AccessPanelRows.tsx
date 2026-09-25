@@ -121,7 +121,11 @@ export function HolderRow({
   busy?: Busy;
   canManage: boolean;
   onRemove: () => void;
-  onChangeFolders: (next: string[], addRole?: FolderRole) => Promise<void>;
+  /**
+   * Omitted on a plan without sharing: a changed folder list can add
+   * folders, which adds access. Remove access stays.
+   */
+  onChangeFolders?: (next: string[], addRole?: FolderRole) => Promise<void>;
 }) {
   const [dialog, setDialog] = useState<"none" | "folders" | "remove">("none");
   const who = accountDisplayName(holder.memberSs58, holder.memberName);
@@ -162,11 +166,15 @@ export function HolderRow({
           <TableActionMenu
             dropdownTitle=""
             items={[
-              {
-                icon: <FolderPen className="size-4" />,
-                itemTitle: "Change folders",
-                onItemClick: () => setDialog("folders"),
-              },
+              ...(onChangeFolders
+                ? [
+                    {
+                      icon: <FolderPen className="size-4" />,
+                      itemTitle: "Change folders",
+                      onItemClick: () => setDialog("folders"),
+                    },
+                  ]
+                : []),
               {
                 icon: <Icons.Trash className="size-4" />,
                 itemTitle: "Remove access",
@@ -182,7 +190,7 @@ export function HolderRow({
         ) : null}
       </span>
 
-      {dialog === "folders" ? (
+      {dialog === "folders" && onChangeFolders ? (
         <ChangeFoldersDialog who={who} folders={folders} onClose={() => setDialog("none")} onConfirm={onChangeFolders} />
       ) : null}
       <ConfirmationDialog

@@ -71,6 +71,12 @@ export type RowContext = {
   locked: boolean;
   unlocking: boolean;
   onUnlock: () => void;
+  /**
+   * False on a plan without sharing (or while it loads): Approve and Change
+   * folders add access, so they are not offered. Remove, Cancel and Revoke
+   * always are.
+   */
+  canAddAccess: boolean;
 };
 
 /** The key a row's busy and refusal state are filed under. */
@@ -118,7 +124,9 @@ export function PersonItem({ person, ctx }: { person: PanelPerson; ctx: RowConte
         busy={busy[h.memberSs58]}
         canManage={panel.canManage}
         onRemove={() => actions.remove(h.memberSs58, who)}
-        onChangeFolders={(next, role) => actions.changeFolders(h.memberSs58, next, role)}
+        onChangeFolders={
+          ctx.canAddAccess ? (next, role) => actions.changeFolders(h.memberSs58, next, role) : undefined
+        }
       />
       <RowRefusal id={busyKeyOf(person)} rowError={rowError} />
     </>
@@ -155,7 +163,7 @@ export function PendingItem({ invite, ctx }: { invite: AccessPanelInvite; ctx: R
         invite={invite}
         busy={ctx.busy[invite.inviteId]}
         onCancel={() => ctx.actions.cancel(invite.inviteId, who)}
-        onApprove={() => ctx.actions.approve(invite.inviteId, who)}
+        onApprove={ctx.canAddAccess ? () => ctx.actions.approve(invite.inviteId, who) : undefined}
         meta={
           <>
             <StagePill status={invite.emailStatus} />
