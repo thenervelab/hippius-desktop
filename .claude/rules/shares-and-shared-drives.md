@@ -237,12 +237,13 @@ with `list_drive_invites`), which also reports a missing drive key; the panel th
 reading the list again once the recovery dialog closes. Rows reuse the Share dialog's
 `MemberRow` / `PendingRow` / `useRowChanges`, so changes are pessimistic in both. Each
 group comes newest first from Rust (you, then most recently joined; invitations and links most recently created) and the main view draws its first
-`PANEL_PREVIEW` rows (6 people, 3 pending invites, 6 links, so people and links fit one laptop
-screen), a jump bar (owner: when more than one group has rows; a member sees "People N" only past
+`PANEL_PREVIEW` rows (6 people, 3 pending invites, 10 links; ten or fewer links draw with no
+"Show all"), a jump bar (owner: when more than one group has rows; a member sees "People N" only past
 `MEMBER_JUMP_BAR_MIN_PEOPLE` (5) people, the console's rule) and "Show all N …", which opens that
-group's full view in place of the list. Main-view links are `CompactLinkRow`s, as tall as a person
-row: title and meta line, a 2px usage bar, and a fixed slot with Copy ("Copy link") or, when locked,
-"Unlock to copy", beside the Revoke menu; only the full view draws the link field. The full view is
+group's full view in place of the list. Main-view links are the full view's `LinkRow` (one row
+shape in both views): title and meta line, a usage bar, then the link field (key hidden, Copy; or
+blurred with Unlock while locked), beside the Revoke menu. The ended-links fold lists
+`ENDED_LINKS_PREVIEW` (6) before its own "Show all". The full view is
 search, filter chips and a windowed list (`useWindowedRows`; no virtualization dependency), with the
 same pessimistic actions because busy and refusal state live above both views. Searching and
 filtering there is presentation over rows Rust already sent. Every person row is avatar, a
