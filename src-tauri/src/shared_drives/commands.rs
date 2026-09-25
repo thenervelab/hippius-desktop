@@ -2493,10 +2493,13 @@ fn sealed_invite_payload(material: crate::sync::remote::DriveKeyMaterial, folder
 #[serde(rename_all = "camelCase")]
 pub struct DriveSharingSummary {
     pub label: String,
+    /// Whole-drive members. Folder holders are not counted: a drive where
+    /// only a folder is shared is not a shared drive.
     pub member_count: u32,
-    /// Invite links that can still admit someone.
+    /// Whole-drive invite links that can still admit someone.
     pub live_invite_count: u32,
-    /// Every invite the server still lists, expired and revoked included.
+    /// Every whole-drive invite the server still lists, expired and revoked
+    /// included. Folder invites are the folder's (see [`FolderSharingSummary`]).
     ///
     /// The badge keys on this rather than on live links alone: an owner who
     /// shared a drive last week and whose link has since lapsed still shared
@@ -2514,17 +2517,123 @@ pub struct DriveSharingSummary {
 /// newer route than `/members`, so a server that serves one and not the other
 /// must still describe the half it can.
 ///
+/// Only WHOLE-DRIVE invites count. A folder invite shares one folder, not the
+/// drive, and counting it here marked a drive "Invite sent" when the owner had
+/// only ever shared a folder inside it. Folder sharing is described on the
+/// folder's own row by [`list_owned_folder_sharing`]. `member_count` is
+/// already whole-drive only: the server's `member_count` does not include
+/// folder holders.
+///
 /// Pure, so the rule is testable without a server.
 fn fold_drive_sharing(label: &str, member_count: Option<usize>, invites: Option<&[DriveInviteInfo]>) -> Option<DriveSharingSummary> {
     if member_count.is_none() && invites.is_none() {
         return None;
     }
+    let whole_drive = || invites.into_iter().flatten().filter(|i| invite_folder(i).is_none());
     Some(DriveSharingSummary {
         label: label.to_string(),
         member_count: member_count.unwrap_or(0) as u32,
-        live_invite_count: invites.map_or(0, |i| i.iter().filter(|i| i.valid && !i.revoked).count()) as u32,
-        total_invite_count: invites.map_or(0, <[_]>::len) as u32,
+        live_invite_count: whole_drive().filter(|i| i.valid && !i.revoked).count() as u32,
+        total_invite_count: whole_drive().count() as u32,
     })
+}
+
+/// The folder a folder invite names, drive-relative with no surrounding `/`
+/// and NFC, as a grant's `path_prefix` is. `None` for a whole-drive invite
+/// (no prefix, or an empty one).
+fn invite_folder(invite: &DriveInviteInfo) -> Option<String> {
+    invite.path_prefix.as_deref().and_then(folder_key)
+}
+
+/// A folder path as the folder sharing map keys it: no surrounding `/`, NFC.
+/// `None` when nothing is left, which is the whole drive, never a folder.
+fn folder_key(path: &str) -> Option<String> {
+    use unicode_normalization::UnicodeNormalization;
+    let trimmed = path.trim_matches('/');
+    (!trimmed.is_empty()).then(|| trimmed.nfc().collect())
+}
+
+/// One folder of an own drive that is shared on its own: people hold a grant
+/// on exactly this folder, or a folder invite for it is listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderSharingSummary {
+    /// Drive-relative folder, no surrounding `/`, NFC.
+    pub path: String,
+    /// People holding a grant on exactly this folder. A grant on a folder
+    /// around it is that folder's, not this one's, so nobody is counted twice.
+    pub holder_count: u32,
+    /// A folder invite for exactly this folder is listed, live or spent: the
+    /// same "any invite" rule the drive mark keys on, since an owner whose
+    /// folder link lapsed still shared the folder.
+    pub has_invite: bool,
+}
+
+/// Fold one own drive's folder grants and folder invites into the folders
+/// that are shared on their own, sorted by path. Whole-drive members and
+/// whole-drive invites are the drive's, never a folder's, so they are left
+/// out. `None` for either listing means it failed; the other still answers.
+///
+/// Pure, so the rule is testable without a server.
+fn fold_folder_sharing(
+    grants: Option<&[hcfs_shared::network::DriveGrantHolderEntry]>,
+    invites: Option<&[DriveInviteInfo]>,
+) -> Vec<FolderSharingSummary> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut by_path: BTreeMap<String, (BTreeSet<&str>, bool)> = BTreeMap::new();
+    for grant in grants.into_iter().flatten() {
+        if let Some(path) = folder_key(&grant.path_prefix) {
+            by_path.entry(path).or_default().0.insert(grant.member_ss58.as_str());
+        }
+    }
+    for invite in invites.into_iter().flatten() {
+        if let Some(path) = invite_folder(invite) {
+            by_path.entry(path).or_default().1 = true;
+        }
+    }
+    by_path
+        .into_iter()
+        .map(|(path, (holders, has_invite))| FolderSharingSummary {
+            path,
+            holder_count: holders.len() as u32,
+            has_invite,
+        })
+        .collect()
+}
+
+/// The folders of ONE own drive that are shared on their own, for the marks
+/// on its folder rows and on the header of an open shared folder. Asked only
+/// for the drive being browsed: the drive list never fans this out.
+///
+/// Both listings are fetched together and either may fail on its own; the
+/// call fails only when both do, so the webview draws no folder mark rather
+/// than claiming every folder is private.
+#[tauri::command]
+pub async fn list_owned_folder_sharing(app: tauri::AppHandle, label: String) -> Result<Vec<FolderSharingSummary>> {
+    let state = app.state::<AppState>();
+    let ctx = api_ctx(&state).await?;
+    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
+    let http = state.api_client.clone();
+
+    let (listing, invites) = tokio::join!(
+        http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
+        http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash),
+    );
+    let (listing, invites) = match (listing, invites) {
+        (Err(e), Err(_)) => return Err(e),
+        (listing, invites) => (
+            listing
+                .map_err(|e| debug!(label = %label, error = %e, "Folder sharing: member listing failed"))
+                .ok(),
+            invites
+                .map_err(|e| debug!(label = %label, error = %e, "Folder sharing: invite listing failed"))
+                .ok(),
+        ),
+    };
+
+    let folders = fold_folder_sharing(listing.as_ref().map(|l| l.folder_grants.as_slice()), invites.as_deref());
+    info!(label = %label, shared_folders = folders.len(), "Listed owned folder sharing");
+    Ok(folders)
 }
 
 /// Sharing state for every OWN drive named in `labels`, in one call.
@@ -3275,6 +3384,92 @@ mod tests {
     #[test]
     fn fold_omits_a_drive_when_both_listings_failed() {
         assert_eq!(fold_drive_sharing("team", None, None), None);
+    }
+
+    fn folder_invite(path: &str, valid: bool) -> DriveInviteInfo {
+        DriveInviteInfo {
+            path_prefix: Some(path.into()),
+            ..invite(valid, false)
+        }
+    }
+
+    fn grant(ss58: &str, path: &str) -> hcfs_shared::network::DriveGrantHolderEntry {
+        serde_json::from_value(serde_json::json!({
+            "member_ss58": ss58, "path_prefix": path, "role": "reader", "created_at": "t",
+        }))
+        .expect("grant row")
+    }
+
+    // A folder invite shares one folder. Counting it on the drive marked the
+    // drive "Invite sent" when only a folder inside it had been shared.
+    #[test]
+    fn fold_counts_only_whole_drive_invites_on_the_drive() {
+        let invites = [folder_invite("Clients", true), folder_invite("Work", false)];
+        let s = fold_drive_sharing("team", Some(0), Some(&invites)).expect("answered");
+        assert_eq!((s.member_count, s.live_invite_count, s.total_invite_count), (0, 0, 0));
+
+        let invites = [folder_invite("Clients", true), invite(true, false), folder_invite("/", false)];
+        let s = fold_drive_sharing("team", Some(0), Some(&invites)).expect("answered");
+        assert_eq!(s.live_invite_count, 1, "only the whole-drive link is the drive's");
+        assert_eq!(s.total_invite_count, 2, "an empty prefix is the whole drive");
+    }
+
+    #[test]
+    fn folder_fold_counts_holders_per_exact_folder_and_marks_invites() {
+        let grants = [
+            grant("5Bo", "Clients/ACME"),
+            grant("5Cy", "/Clients/ACME/"),
+            grant("5Bo", "Clients/ACME"),
+            grant("5Di", "Work"),
+        ];
+        let invites = [folder_invite("Clients/ACME", false), folder_invite("Photos", false), invite(true, false)];
+        let folders = fold_folder_sharing(Some(&grants), Some(&invites));
+        assert_eq!(
+            folders,
+            vec![
+                FolderSharingSummary {
+                    path: "Clients/ACME".into(),
+                    holder_count: 2,
+                    has_invite: true,
+                },
+                FolderSharingSummary {
+                    path: "Photos".into(),
+                    holder_count: 0,
+                    has_invite: true,
+                },
+                FolderSharingSummary {
+                    path: "Work".into(),
+                    holder_count: 1,
+                    has_invite: false,
+                },
+            ],
+            "a nested grant marks its own folder, never the one around it; the whole-drive invite is left out"
+        );
+    }
+
+    #[test]
+    fn folder_fold_answers_from_either_listing_and_normalises_paths() {
+        let grants = [grant("5Bo", "Cafe\u{0301}")];
+        let folders = fold_folder_sharing(Some(&grants), None);
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].path, "Caf\u{00E9}", "keyed NFC, as the server stores a grant");
+
+        let folders = fold_folder_sharing(None, Some(&[folder_invite("Work", true)]));
+        assert_eq!((folders[0].holder_count, folders[0].has_invite), (0, true));
+
+        assert!(fold_folder_sharing(None, None).is_empty());
+        assert!(fold_folder_sharing(Some(&[]), Some(&[invite(true, false)])).is_empty());
+    }
+
+    #[test]
+    fn folder_sharing_serializes_camel_case() {
+        let json = serde_json::to_value(FolderSharingSummary {
+            path: "Work".into(),
+            holder_count: 2,
+            has_invite: false,
+        })
+        .expect("serialize");
+        assert_eq!(json, serde_json::json!({"path": "Work", "holderCount": 2, "hasInvite": false}));
     }
 
     #[test]

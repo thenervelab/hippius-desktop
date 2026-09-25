@@ -234,12 +234,15 @@ fn access_changes_are_owner_only() {
     }
     let sharing = fn_body(&src, "pub async fn list_owned_drive_sharing(");
     assert!(sharing.contains("resolve_own_drive("), "the sharing badge listing stays owner-only");
+    let folder_sharing = fn_body(&src, "pub async fn list_owned_folder_sharing(");
+    assert!(folder_sharing.contains("resolve_own_drive("), "the folder sharing marks stay owner-only");
     for command in [
         "async fn mint_invite_link(",
         "pub async fn list_drive_members(",
         "pub async fn list_share_access(",
         "pub async fn list_access_panel(",
         "pub async fn list_owned_drive_sharing(",
+        "pub async fn list_owned_folder_sharing(",
         "pub async fn approve_email_invite(",
     ] {
         assert!(
