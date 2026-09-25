@@ -42,6 +42,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   under someone's role.
 - **Changing which folders someone can open now lets you add a folder**, as
   Viewer or Editor, not only take folders away.
+- **Removing someone, cancelling an invitation, revoking a link or leaving
+  asks right in that row**, with the red button and Cancel beside it, instead
+  of opening a second window on top of the Share dialog or Manage access.
+  Changing which folders someone can open now happens inside Manage access
+  too. Escape or Cancel puts the row back.
+- **The Share dialog's people line up on the right**: roles and Remove end at
+  the same edge, Remove is red text, and the link's expiry picker fills the
+  space before Create link.
 - **Storage and plan banners on Overview use a button on the right**
   (Upgrade, See storage plans, Top up). Drive keeps an underlined text
   link under the banner copy so it does not duplicate the plan-chip

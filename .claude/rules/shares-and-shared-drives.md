@@ -247,6 +247,22 @@ demotion is confirmed first (the server revokes links as part of it). Six rows a
 then "+ N more · Manage access" to the panel. Pinned by
 `share-dialog/__tests__/ShareDialog.test.tsx` and the `fold_share_access` unit tests.
 
+**Never a second dialog over the Share dialog or the panel** (the panel is itself a Radix
+dialog below the desktop breakpoint). Remove, a demotion, Cancel invite, Revoke and Leave
+ask IN THE ROW (`share-dialog/RowConfirm.tsx`; Leave in the panel footer): the row keeps
+its avatar and name, swaps its subline for a short question ("Remove <name>'s access to
+this drive?" / "...to this folder?", plus "They also lose any other folders on this drive
+shared with them." only when they hold more than one) and its right side for the
+destructive button and Cancel. The confirm button takes focus; Escape (caught on the window
+in the capture phase, ahead of Radix's document listener, so it never closes the dialog)
+or Cancel puts the row back and focus returns to the `ROW_TRIGGER` control. One
+`RowConfirmProvider` per list (the panel has one for the rows and the footer), so only one
+row asks at a time. Change folders (`access-panel/ChangeFoldersView.tsx`) is a view in
+place of the panel's list, with Back, like a group's full view. The People column ends
+flush right: `ROLE_SLOT` is `justify-end`, `ROLE_TEXT` right-aligned, the quiet role select
+pulled right by its own padding (`FLUSH_SELECT`), and a folder holder's Remove (red text,
+`DANGER_TEXT_BUTTON`) comes after the role, last.
+
 **The Manage access panel is one list, from one Rust fold** (`ShareDrivePanel.tsx` +
 `drive/access-panel/`, `list_access_panel` in `shared_drives/access_panel.rs`), for a
 drive or, when the target carries `pathPrefix`, one folder. People (owner, members,
