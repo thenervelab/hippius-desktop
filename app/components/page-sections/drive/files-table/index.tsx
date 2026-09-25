@@ -1451,8 +1451,10 @@ const FilesTable: FC<FilesTableProps> = memo(
                   driveOwnerSs58: ownerSs58,
                   driveOwnerName: ownerName,
                 } = cellCtxRef.current;
+                // No `truncate` here: the label shortens itself in the middle,
+                // and an end ellipsis on top of it drew a second "…".
                 return (
-                  <div className="text-grey-dark-800 text-xs font-medium truncate tracking-[-0.24px]">
+                  <div className="text-grey-dark-800 text-xs font-medium min-w-0 overflow-hidden whitespace-nowrap tracking-[-0.24px]">
                     <UploaderCell
                       uploadedBy={file.uploadedBy}
                       uploadedByName={file.uploadedByName}

@@ -98,14 +98,13 @@ export default function UploaderCell({
     );
   }
 
-  // 28 chars fits the ~18% Added by column; 22 was too aggressive in the
-  // old skinny cell and still left CSS truncate fighting the middle ellipsis.
+  // No character budget: the label shortens the name or address in the
+  // middle to whatever width the Added by column has.
   return (
     <AccountLabel
       ss58={uploadedBy}
       name={name}
       email={uploadedByEmail}
-      maxChars={28}
       className={cn(!name && "text-xs", className)}
     />
   );

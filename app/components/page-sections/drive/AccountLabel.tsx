@@ -1,15 +1,18 @@
 "use client";
 
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
+import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import { accountLabelView } from "@/app/lib/shared-drives/accountLabel";
 import { cn } from "@/lib/utils";
 
 /**
  * One account, named the same way on every shared-drive surface.
  *
- * Shows the display name when the server sent one, otherwise the shortened
- * ss58 in mono. Hovering always reveals the full ss58 (the identity; a name
- * is not unique) and the email when this reader may see it. Used by the
+ * Shows the display name when the server sent one, otherwise the ss58 in
+ * mono, either one shortened in the MIDDLE to the width the row gives it
+ * (`MiddleTruncate`), never cut at the end. Hovering always reveals the full
+ * ss58 (the identity; a name is not unique) and the email when this reader
+ * may see it. Used by the
  * members panel, the remove confirmation, Shared with me, the invite list,
  * the Added by column and File Details, so they cannot disagree about what
  * someone is called.
@@ -18,7 +21,6 @@ export default function AccountLabel({
   ss58,
   name,
   email,
-  maxChars = 22,
   className,
   prefix,
   focusable = false,
@@ -26,19 +28,24 @@ export default function AccountLabel({
   ss58: string;
   name?: string | null;
   email?: string | null;
-  maxChars?: number;
   className?: string;
-  /** Words before the label inside the same hover target, e.g. "by ". */
+  /**
+   * Words before the label inside the same hover target, e.g. "by ". They
+   * never shorten; only the label after them does.
+   */
   prefix?: string;
   /**
    * For a label that may be cut short in a list row: it takes keyboard
    * focus (which opens the same tooltip as hover) and its accessible name
    * carries the full name, email and address, since the eye may only see
-   * the start of them.
+   * part of them.
    */
   focusable?: boolean;
 }) {
-  const view = accountLabelView(ss58, name, email, maxChars);
+  const view = accountLabelView(ss58, name, email);
+  // The full words: shortening is the line's job, from the width it gets, so
+  // nothing is shortened by a character count first and then cut again.
+  const full = view.isName ? view.label : view.ss58;
   return (
     <CustomTooltip2
       side="bottom"
@@ -60,18 +67,16 @@ export default function AccountLabel({
     >
       <span
         data-ss58={view.ss58}
-        className={cn(
-          "block min-w-0 cursor-default truncate",
-          !view.isName && "font-mono",
-          className,
-        )}
+        className={cn("flex min-w-0 cursor-default items-baseline", !view.isName && "font-mono", className)}
       >
-        {prefix}
-        {view.label}
+        {prefix ? <span className="shrink-0 whitespace-pre">{prefix}</span> : null}
+        {/* A name that is really an email keeps its domain: the kind is read from the text. */}
+        <MiddleTruncate text={full} kind={view.isName ? undefined : "address"} title={null} />
       </span>
       {focusable ? (
         <span className="sr-only">
-          {view.email ? `, ${view.email}` : ""}, address {view.ss58}
+          {view.email ? `, ${view.email}` : ""}
+          {view.isName ? `, address ${view.ss58}` : ""}
         </span>
       ) : null}
     </CustomTooltip2>
