@@ -12,14 +12,15 @@ import { cn } from "@/lib/utils";
 /**
  * What the viewer may do in a drive somebody else owns.
  *
- * Ported from the console's `files-table/DriveRoleChip.tsx`, tones and
- * geometry included, for the two roles this client has. Two clients colouring
- * the same role differently is a worse fault than either palette being wrong,
- * so a change to Viewer or Editor has to land on both sides together.
+ * A VERBATIM port of the console's `files-table/DriveRoleChip.tsx`, tones and
+ * geometry included. Two clients colouring the same role differently is a
+ * worse fault than either palette being wrong, so a change here has to land
+ * on both sides together, exactly like `roles.ts`.
  *
  * Colour carries the same ordering the roles themselves have, so a list of
  * drives can be read for access at a glance instead of word by word:
  *
+ *   Manager: green, the one role that can also hand out access.
  *   Editor:  blue, the console's own colour for "you can act here".
  *   Viewer:  neutral, because read-only is the absence of power and a
  *            colour would be claiming something it does not have.
@@ -35,6 +36,10 @@ import { cn } from "@/lib/utils";
  * white and go muddy on near-black.
  */
 const ROLE_TONES: Record<DriveRole, string> = {
+  manager: cn(
+    "border-success-70 bg-success-90 text-success-30",
+    "dark:border-success-30 dark:bg-success-40/15 dark:text-success-50",
+  ),
   writer: cn(
     "border-primary-80 bg-primary-90 text-primary-50",
     "dark:border-primary-40 dark:bg-primary-50/15 dark:text-primary-65",

@@ -1081,7 +1081,7 @@ async fn a_viewer_cannot_share_a_folder_in_someone_elses_drive() {
         .await
         .expect_err("a Viewer must be refused");
     assert!(
-        matches!(err, AppError::Validation(ref m) if m.contains("Only Editors can share")),
+        matches!(err, AppError::Validation(ref m) if m.contains("Editors and Managers")),
         "{err:?}"
     );
     assert!(recorded.create_bodies.lock().unwrap().is_empty());
@@ -1115,42 +1115,6 @@ async fn a_frozen_drive_cannot_be_shared_from() {
         .expect_err("frozen");
     assert!(matches!(err, AppError::Validation(ref m) if m.contains("frozen")), "{err:?}");
     assert!(recorded.create_bodies.lock().unwrap().is_empty());
-}
-
-/// A member the server still calls `manager` is an Editor to this client, and
-/// keeps an Editor's public folder link.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_former_manager_shares_a_folder_as_an_editor() {
-    let _home = &*TEST_HOME;
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let pool = make_pool(dir.path()).await;
-    let account = "5FormerManagerAcct";
-    let label = "joined-drive";
-
-    let recorded = Recorded::default();
-    let base = serve(share_router(
-        MockOptions {
-            capabilities: member_caps(),
-            memberships: membership("manager", false),
-            create: CreateReply::Created {
-                share_token: "tok_former_manager",
-                expires_at: None,
-            },
-            ..MockOptions::default()
-        },
-        recorded.clone(),
-    ))
-    .await;
-    seed_account(&pool, account, &base).await;
-    seed_member_drive(&pool, account, label).await;
-    write_member_seal(account, label);
-    let state = make_state(pool.clone(), account);
-
-    create_folder_share_inner(&state, account, label, "docs", ShareTtl::Days7, ShareChoice::Public)
-        .await
-        .expect("a former Manager shares like an Editor");
-    let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
-    assert_eq!(body["owner_ss58"], OWNER_SS58);
 }
 
 /// An Editor's mint names the owner, carries the DRIVE's derived file key

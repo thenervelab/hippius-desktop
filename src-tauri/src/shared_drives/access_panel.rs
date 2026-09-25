@@ -7,8 +7,8 @@
 //!   they can open every folder), and folder
 //!   holders. A drive panel lists EVERY holder on the drive, tagged with the
 //!   folder they hold; a folder panel lists the holders of a grant at or above
-//!   the folder (nearest grant wins, as in the Share dialog's fold). The
-//!   server sends folder grants to the owner.
+//!   the folder (nearest grant wins, as in the Share dialog's fold). Only the
+//!   owner and managers are sent folder grants by the server.
 //! - emailed invitations still waiting: every live one on a drive panel
 //!   (folder ones carry their folder), exactly that folder's on a folder panel.
 //! - links: link invites (not emailed) split into active and ended, with the
@@ -17,10 +17,11 @@
 //! - `links_locked`: some active link has a sealed copy that cannot be opened
 //!   because the drive key is not available in this session. The panel then
 //!   asks for the unlock password instead of showing a broken field.
-//! - what the viewer is here (`your_role`, and `can_manage`, which is the
-//!   owner only), so the header and footer never guess from a second listing.
-//! - roles as this client shows them: a `manager` the server still returns
-//!   reads as `writer` (`drive_role_from_wire`), so the webview never sees it.
+//! - what the viewer is here (`your_role`, and `can_manage`: the owner or a
+//!   Manager, decided by `commands::manages_drive`), so the header and footer
+//!   never guess from a second listing.
+//! - roles as this client shows them: Viewer, Editor or Manager; anything
+//!   else the server returns reads as a Viewer (`drive_role_from_wire`).
 //!
 //! Pure: the command fetches, opens sealed links, and hands the rows here.
 
@@ -30,7 +31,7 @@ use chrono::{DateTime, Utc};
 use hcfs_shared::network::{DriveGrantHolderEntry, DriveMembersResponse};
 use serde::Serialize;
 
-use super::commands::{DriveInviteInfo, drive_role_from_wire, present_email, present_text as present};
+use super::commands::{DriveInviteInfo, drive_role_from_wire, manages_drive, present_email, present_text as present};
 use super::folder_grant_path::prefix_covers;
 use super::folder_roles::grant_role;
 
@@ -46,8 +47,9 @@ pub struct AccessPanel {
     /// This account's role here: `owner`, its member role, or the role of the
     /// folder grant it holds. `None` when the listings do not say.
     pub your_role: Option<String>,
-    /// The drive's owner: may invite, change roles, remove and see links.
-    /// Everyone else reads the people list and may leave.
+    /// The drive's owner or a whole-drive Manager: may invite, change roles,
+    /// remove and see links. Everyone else reads the people list and may
+    /// leave.
     pub can_manage: bool,
     /// Whole-drive members, this account first, then the most recently
     /// joined. A folder panel lists them too, since the whole drive includes
@@ -125,7 +127,7 @@ pub enum LinkStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AccessPanelLink {
     pub invite_id: String,
-    /// `reader` or `writer` (an older `manager` link reads as `writer`).
+    /// `reader`, `writer` or `manager`.
     pub role: String,
     /// The folder of a folder link; absent for a whole-drive link.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -370,14 +372,14 @@ pub(crate) fn fold_access_panel(
 
     let your_role = if owner_is_you {
         Some("owner".to_string())
-    } else if let Some(role) = your_member_role {
+    } else if let Some(role) = your_member_role.clone() {
         Some(role)
     } else {
         folder_holders.iter().find(|h| h.is_you).map(|h| h.role.clone())
     };
-    // Owner only: only a drive's owner invites and removes people, so a
-    // member's role (a former Manager's included) never opens the controls.
-    let can_manage = owner_is_you;
+    // The owner, or a whole-drive Manager (the one rule, `manages_drive`). A
+    // folder grant never opens the controls: Manager is not a folder role.
+    let can_manage = manages_drive(!owner_is_you, your_member_role.as_deref());
 
     let (pending_invites, links, inactive_links) = split_invites(account_id, folder, invites, now);
     let links_locked = key_unavailable && links.iter().any(|l| l.link_available && l.invite_url.is_none());
@@ -439,9 +441,8 @@ mod tests {
     fn a_drive_panel_lists_members_and_every_holder_tagged_with_a_folder() {
         let panel = fold_access_panel("5Me", "5Owner", None, listing(), Vec::new(), false, now());
         assert!(!panel.owner_is_you);
-        assert_eq!(panel.your_role.as_deref(), Some("writer"), "a former Manager is told they are an Editor");
-        assert!(!panel.can_manage, "only the owner manages, a former Manager included");
-        assert!(panel.members.iter().all(|m| m.role != "manager"), "the webview never receives manager");
+        assert_eq!(panel.your_role.as_deref(), Some("manager"));
+        assert!(panel.can_manage, "a whole-drive Manager manages somebody else's drive");
         let people: Vec<&str> = panel.members.iter().map(|m| m.member_ss58.as_str()).collect();
         assert_eq!(people, ["5Me", "5Ann"], "you first, then the server's order");
         assert_eq!(panel.members[1].member_name.as_deref(), Some("Ann"));
@@ -521,17 +522,33 @@ mod tests {
         assert!(panel.folder_holders[0].is_you);
     }
 
-    /// Only the owner manages. Every other account, whatever its role on the
-    /// drive or a folder of it, and a former Manager in particular, reads.
+    /// The owner and a whole-drive Manager manage. An Editor, a Viewer, a
+    /// folder holder (even a writer one) and a stranger only read.
     #[test]
-    fn nobody_but_the_owner_can_manage() {
-        for viewer in ["5Me", "5Ann", "5Bo", "5Cy", "5Stranger"] {
+    fn only_the_owner_or_a_manager_can_manage() {
+        for viewer in ["5Ann", "5Bo", "5Cy", "5Stranger"] {
             for folder in [None, Some("Clients/ACME")] {
                 let panel = fold_access_panel(viewer, "5Owner", folder, listing(), Vec::new(), false, now());
                 assert!(!panel.can_manage, "{viewer} on {folder:?} must not manage");
             }
         }
-        assert!(fold_access_panel("5Owner", "5Owner", None, listing(), Vec::new(), false, now()).can_manage);
+        for folder in [None, Some("Clients/ACME")] {
+            assert!(fold_access_panel("5Me", "5Owner", folder, listing(), Vec::new(), false, now()).can_manage);
+            assert!(fold_access_panel("5Owner", "5Owner", folder, listing(), Vec::new(), false, now()).can_manage);
+        }
+    }
+
+    /// An unknown member role reads as a Viewer and never opens the controls.
+    #[test]
+    fn an_unknown_member_role_reads_as_a_viewer() {
+        let listing: DriveMembersResponse = serde_json::from_value(serde_json::json!({
+            "members": [{"member_ss58": "5Me", "role": "admin", "created_at": "t"}],
+        }))
+        .expect("listing");
+        let panel = fold_access_panel("5Me", "5Owner", None, listing, Vec::new(), false, now());
+        assert_eq!(panel.your_role.as_deref(), Some("reader"));
+        assert_eq!(panel.members[0].role, "reader");
+        assert!(!panel.can_manage);
     }
 
     #[test]
@@ -610,10 +627,6 @@ mod tests {
                 serde_json::json!({"expires_at": "2126-09-12T12:00:00Z", "minted_by": "5Sara", "minted_by_name": "Sara"}),
             ),
             invite("once", serde_json::json!({"max_uses": 1, "use_count": 0, "role": "manager"})),
-            invite(
-                "mail",
-                serde_json::json!({"email_status": "sent", "recipient_email": "a@b.c", "role": "manager"}),
-            ),
         ];
         let panel = fold_access_panel("5Me", "5Owner", None, listing(), invites, false, now());
         let live = &panel.links[0];
@@ -625,8 +638,7 @@ mod tests {
         let once = &panel.links[2];
         assert!(once.single_use);
         assert_eq!(once.usage_percent, 0);
-        assert_eq!(once.role, "writer", "an older manager link reads as Editor");
-        assert_eq!(panel.pending_invites[0].invite.role, "writer", "so does an older manager invitation");
+        assert_eq!(once.role, "manager", "a Manager link reads as Manager");
     }
 
     #[test]
@@ -690,7 +702,7 @@ mod tests {
                 "canManage": true,
                 "members": [
                     {"memberSs58": "5Ann", "role": "writer", "memberName": "Ann", "createdAt": "t", "isYou": false},
-                    {"memberSs58": "5Me", "role": "writer", "createdAt": "t", "isYou": false},
+                    {"memberSs58": "5Me", "role": "manager", "createdAt": "t", "isYou": false},
                 ],
                 "folderHolders": [{
                     "memberSs58": "5Bo", "memberName": "Bo", "isYou": false, "role": "reader",

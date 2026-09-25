@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // What the header says about the drive you are standing in: the badge appears
-// on a shared drive and nowhere else, and only an owner is offered the way in
-// to managing access.
+// on a shared drive and nowhere else, and the owner and a Manager are offered
+// the way in to managing access.
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -46,13 +46,16 @@ const MEMBERSHIP = {
   localLabel: "team-docs",
 };
 
-function renderMark(label: string | null = "team-docs") {
+function renderMark(
+  label: string | null = "team-docs",
+  browsedSharedDrive: { ownerSs58: string; folderHash: string } | null = null,
+) {
   const store = createStore();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <Provider store={store}>
-        <DriveSharingHeaderMark label={label} displayName="team-docs" />
+        <DriveSharingHeaderMark label={label} displayName="team-docs" browsedSharedDrive={browsedSharedDrive} />
       </Provider>
     </QueryClientProvider>,
   );
@@ -121,8 +124,53 @@ describe("the drive header's sharing mark", () => {
     );
   });
 
-  // A member sees whose drive it is and what they may do in it. Managing
-  // access is the owner's business, and the IPC would refuse them anyway.
+  // A Manager gets what the owner gets: the drive's mark, with how many
+  // people are in it, and Manage access, which opens the panel through the
+  // owner.
+  it("gives a Manager the count and Manage access, like the owner", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([{ ...MEMBERSHIP, role: "manager", memberCount: 3 }]);
+    const store = renderMark();
+    expect(await screen.findByText("Manager")).toBeInTheDocument();
+    expect(screen.getByText("Shared with 3")).toBeInTheDocument();
+    (await screen.findByRole("button", { name: "Manage access" })).click();
+    await waitFor(() => expect(store.get(shareDriveModalAtom)).toMatchObject({ label: "team-docs" }));
+    // Their drive is not theirs: the owner-only listing is never asked.
+    expect(listOwnedDriveSharingMock).not.toHaveBeenCalled();
+  });
+
+  it("names the owner's drive when a Manager browses one not synced here", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([
+      { ...MEMBERSHIP, role: "manager", syncedLocally: false, localLabel: null, memberCount: 1 },
+    ]);
+    const store = renderMark("shared:5Owner~abc", { ownerSs58: "5Owner", folderHash: "abc" });
+    expect(await screen.findByText("Shared with 1")).toBeInTheDocument();
+    (await screen.findByRole("button", { name: "Manage access" })).click();
+    await waitFor(() =>
+      expect(store.get(shareDriveModalAtom)).toMatchObject({ ownerSs58: "5Owner", folderHash: "abc" }),
+    );
+  });
+
+  it("gives a Manager no count mark when the listing does not say", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([{ ...MEMBERSHIP, role: "manager" }]);
+    renderMark();
+    expect(await screen.findByRole("button", { name: "Manage access" })).toBeInTheDocument();
+    expect(screen.queryByText(/Shared with/)).not.toBeInTheDocument();
+  });
+
+  // A Viewer or an Editor sees whose drive it is and what they may do in it,
+  // and no Manage access.
+  it.each([
+    ["writer", "Editor"],
+    ["reader", "Viewer"],
+  ])("shows a %s their role and no Manage access or count", async (role, chip) => {
+    listMyDriveMembershipsMock.mockResolvedValue([{ ...MEMBERSHIP, role, memberCount: 3 }]);
+    renderMark();
+    expect(await screen.findByText(chip)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Who has access" })).toBeInTheDocument();
+    expect(screen.queryByText("Shared with 3")).not.toBeInTheDocument();
+  });
+
   it("shows a member their role and no Manage access", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([MEMBERSHIP]);
     renderMark();

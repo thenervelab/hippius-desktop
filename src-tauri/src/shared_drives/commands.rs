@@ -58,56 +58,71 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const DEFAULT_INVITE_EXPIRES_IN_SECS: u64 = 7 * 24 * 60 * 60;
 const DEFAULT_INVITE_MAX_USES: u32 = 50;
 
-/// The roles this client offers and sends, in the server's spelling: Viewer
-/// (`reader`) and Editor (`writer`). Kept in step with `DRIVE_ROLES` in
-/// `app/lib/shared-drives/roles.ts`.
+/// The whole-drive roles, in the server's spelling: Viewer (`reader`), Editor
+/// (`writer`) and Manager (`manager`). Kept in step with `DRIVE_ROLES` in
+/// `app/lib/shared-drives/roles.ts`, which holds the same list for the UI.
 ///
-/// The server also knows `manager`. This client never offers it and never
-/// sends it: only a drive's owner invites and removes people. A `manager` the
-/// server still returns for an existing member reads as `writer`
-/// ([`drive_role_from_wire`]).
-pub(crate) const WIRE_ROLES: [&str; 2] = ["reader", "writer"];
+/// A folder is shared as Viewer or Editor only (`folder_roles::FOLDER_ROLES`):
+/// the server refuses `manager` on a folder invite and on a grant.
+pub(crate) const WIRE_ROLES: [&str; 3] = ["reader", "writer", "manager"];
 
-/// The refusal for any role outside [`WIRE_ROLES`], `manager` included.
-pub(crate) const DRIVE_ROLE_ONLY: &str = "Viewer or Editor only.";
+/// A manager invite is hard-capped by the server at one use and 24 hours
+/// (`MANAGER_USES_CAP` / `MANAGER_EXPIRES_CAP_SECS` in hcfs-server's
+/// `drives/routes.rs`): a leaked manager link mints more managers. An
+/// over-cap value is a 400 there, so the desktop clamps before sending.
+pub(crate) const MANAGER_INVITE_MAX_USES: u32 = 1;
+pub(crate) const MANAGER_INVITE_MAX_SECS: u64 = 24 * 60 * 60;
 
-/// Refuse a role this client does not send, before any request is made.
-///
-/// Every path that puts a role on the wire (the link mint, the emailed
-/// invite, the role change) goes through this, so `manager` can never be
-/// sent even by a caller that bypasses the pickers.
-pub(crate) fn require_offered_role(role: &str) -> Result<()> {
+/// Refuse a role the server does not know, by name, before any request is
+/// made. The server answers a bare 400, which tells the user nothing.
+pub(crate) fn require_drive_role(role: &str) -> Result<()> {
     if WIRE_ROLES.contains(&role) {
         Ok(())
     } else {
-        Err(AppError::Validation(DRIVE_ROLE_ONLY.into()))
+        Err(AppError::Validation(format!(
+            "Unknown drive role: {role}. Choose Viewer, Editor or Manager."
+        )))
     }
 }
 
 /// A whole-drive role as it comes off the wire, as this client shows and
-/// gates it.
-///
-/// The server may still return `manager` for a member made one before this
-/// client dropped the role. That member keeps what an Editor can do (open,
-/// upload, delete, share a folder by link) and reads as an Editor everywhere,
-/// so the UI never receives `manager`. Anything else passes through; the UI
-/// reads an unknown role as a Viewer.
+/// gates it: one of [`WIRE_ROLES`], and anything else (blank, misspelt, a
+/// role a newer server adds) reads as `reader`, the least it could be. Every
+/// member, membership and invite listing passes through this, so the webview
+/// only ever sees the three roles it draws.
 pub(crate) fn drive_role_from_wire(raw: &str) -> String {
-    match raw.trim() {
-        "manager" => "writer".to_string(),
-        other => other.to_string(),
+    let role = raw.trim();
+    if WIRE_ROLES.contains(&role) {
+        role.to_string()
+    } else {
+        "reader".to_string()
     }
 }
 
 /// Resolve the role an invite is minted for.
 ///
 /// An omitted role keeps the historical `writer`, so a caller that predates
-/// the picker mints exactly what it always did. Anything but Viewer or Editor
-/// is refused (see [`require_offered_role`]).
+/// the picker mints exactly what it always did. An unknown spelling is
+/// refused by name ([`require_drive_role`]).
+///
+/// Manager caps are applied by [`apply_manager_invite_caps`], not rejected
+/// here: an omitted `max_uses` resolves to the ordinary default of 50, which
+/// would otherwise fail every manager mint.
 pub(crate) fn resolve_invite_role(role: Option<String>) -> Result<String> {
     let role = role.unwrap_or_else(|| "writer".to_string());
-    require_offered_role(&role)?;
+    require_drive_role(&role)?;
     Ok(role)
+}
+
+/// Cap a manager invite at the server's limits: clamp, don't reject. An
+/// omitted `max_uses` becomes the ordinary default of 50 and an omitted
+/// lifetime 7 days; without this clamp either would fail every manager mint
+/// with a 400. Other roles pass through untouched.
+pub(crate) fn apply_manager_invite_caps(role: &str, expires_in_secs: u64, max_uses: u32) -> (u64, u32) {
+    if role != "manager" {
+        return (expires_in_secs, max_uses);
+    }
+    (expires_in_secs.min(MANAGER_INVITE_MAX_SECS), max_uses.min(MANAGER_INVITE_MAX_USES))
 }
 
 /// Resolve the caller's optional invite parameters against the desktop
@@ -147,7 +162,7 @@ fn present_member_count(count: u64) -> Option<u32> {
 /// secret crosses IPC on.
 ///
 /// The policy fields are what was actually SENT, after the defaults and the
-/// folder caps: the Share dialog describes the link from these, so
+/// manager and folder caps: the Share dialog describes the link from these, so
 /// it can never quote a lifetime or a uses count the server was not asked for.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,10 +171,10 @@ pub struct DriveInviteLink {
     /// The server's id for the new invite (the blake3 hash of its token, never
     /// the token), so the Share dialog can revoke the link it just made.
     pub invite_id: String,
-    /// `reader` or `writer`.
+    /// `reader`, `writer` or `manager`.
     pub role: String,
     pub expires_in_secs: u64,
-    /// Always 1 for a folder link.
+    /// 1 for a folder or a manager link.
     pub max_uses: u32,
 }
 
@@ -175,7 +190,7 @@ pub struct DriveMemberInfo {
     /// when the account has none on file — FE falls back to a shortened ss58.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_name: Option<String>,
-    /// Email, only disclosed to the drive's owner. Same absence rules.
+    /// Email, only disclosed to the drive's owner/managers. Same absence rules.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_email: Option<String>,
 }
@@ -291,16 +306,16 @@ pub(crate) fn classify_error_status(status: reqwest::StatusCode, body: &str) -> 
 /// concrete lifetime and claim cap (see [`resolve_invite_policy`]), so the
 /// server's own defaults never silently apply to a desktop mint.
 /// What the mint endpoint needs — an args struct, the `MemberDriveInstall`
-/// precedent, once the list outgrew a readable positional call.
-///
-/// There is no owner field: only a drive's owner mints, and the server reads
-/// an omitted `owner_ss58` as caller-as-owner.
+/// precedent, once delegation added the owner and the list outgrew a readable
+/// positional call.
 pub struct MintInvite<'a> {
     pub folder_hash: &'a str,
     pub expires_in_secs: u64,
     pub max_uses: u32,
-    /// `reader` or `writer`; anything else is refused before the request.
     pub role: &'a str,
+    /// Set by a MANAGER minting for a drive they do not own; `None` for an
+    /// owner, which the server reads as caller-as-owner.
+    pub owner: Option<&'a str>,
     /// Drive-relative folder for a folder invite. `None` = whole-drive invite.
     /// When set, the response MUST echo it or the mint is refused (an older
     /// server ignoring the field would mint a whole-drive invite).
@@ -322,11 +337,9 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
         expires_in_secs,
         max_uses,
         role,
+        owner,
         path_prefix,
     } = mint;
-    // Belt and braces behind the command's own check: `manager` never
-    // reaches the wire, whoever calls this.
-    require_offered_role(role)?;
     // `Some("")` would read as a folder invite here and as no folder at all
     // on the wire. Refused before anything is sent.
     if path_prefix.is_some_and(|p| p.trim_matches('/').is_empty()) {
@@ -336,9 +349,11 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
     }
     let req = CreateDriveInviteRequest {
         folder_hash: folder_hash.to_string(),
-        // Only the owner mints, and the server reads `None` as
+        // A MANAGER mints for the drive's OWNER, and names them here rather
+        // than in a query param -- `folder_hash` alone is not globally
+        // unique. Owners send `None`, which the server reads as
         // caller-as-owner.
-        owner_ss58: None,
+        owner_ss58: owner.map(str::to_string),
         expires_in_secs: Some(expires_in_secs),
         max_uses: Some(max_uses),
         // Sent explicitly rather than omitted. An omitted role means `writer`
@@ -391,7 +406,7 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
     if let Some(asked) = path_prefix
         && parsed.path_prefix.as_deref() != Some(asked)
     {
-        if let Err(e) = http_revoke_invite(http, base_url, bearer, folder_hash, &invite_id).await {
+        if let Err(e) = http_revoke_invite(http, base_url, bearer, folder_hash, &invite_id, owner).await {
             warn!(error = %e, "could not revoke a whole-drive invite minted in place of a folder invite");
         }
         return Err(AppError::NotReady(NotReadyKind::FolderInvitesUnavailable));
@@ -414,14 +429,18 @@ pub async fn http_put_sealed_token(
     folder_hash: &str,
     invite_id: &str,
     sealed_token: &str,
+    owner: Option<&str>,
 ) -> Result<()> {
     let resp = http
-        .put(format!(
-            "{}/v1/drives/{}/invites/{}/sealed-token",
-            base_url.trim_end_matches('/'),
-            folder_hash,
-            invite_id
-        ))
+        .put(with_owner(
+            &format!(
+                "{}/v1/drives/{}/invites/{}/sealed-token",
+                base_url.trim_end_matches('/'),
+                folder_hash,
+                invite_id
+            ),
+            owner,
+        )?)
         .header("Authorization", format!("Bearer {bearer}"))
         .json(&serde_json::json!({ "sealed_token": sealed_token }))
         .timeout(REQUEST_TIMEOUT)
@@ -512,16 +531,14 @@ pub async fn http_remove_member(
 ///
 /// The new role binds on the member's very next request, so there is no
 /// propagation delay to warn anyone about. The server refuses a caller
-/// targeting themselves with a 400; a member leaves through the member
-/// DELETE instead.
+/// targeting themselves with a 400: a manager cannot demote themself, they
+/// leave through the member DELETE instead.
 ///
-/// A downward change is sticky: the server also revokes the invite that
-/// admitted the member when that link still outranks the new role. Nothing
-/// here has to arrange that; it matters when explaining the result to the
-/// user.
-///
-/// Only the owner changes roles, so no `?owner=` is ever sent, and `role` is
-/// Viewer or Editor only: `manager` is refused before the request.
+/// A downward change is sticky. The server also revokes the invite that
+/// admitted the member when that link still outranks the new role, and a
+/// demotion out of `manager` additionally revokes every live invite that
+/// member minted, so a spare link cannot re-escalate them. Nothing here has
+/// to arrange that; it matters when explaining the result to the user.
 pub async fn http_change_member_role(
     http: &reqwest::Client,
     base_url: &str,
@@ -529,15 +546,18 @@ pub async fn http_change_member_role(
     folder_hash: &str,
     member_ss58: &str,
     role: &str,
+    owner: Option<&str>,
 ) -> Result<()> {
-    require_offered_role(role)?;
-    let url = reqwest::Url::parse(&format!(
+    let mut url = reqwest::Url::parse(&format!(
         "{}/v1/drives/{}/members/{}",
         base_url.trim_end_matches('/'),
         folder_hash,
         member_ss58
     ))
     .map_err(|e| AppError::Hcfs(format!("invalid change-role URL: {e}")))?;
+    if let Some(owner) = owner {
+        url.query_pairs_mut().append_pair("owner", owner);
+    }
 
     let resp = http
         .patch(url)
@@ -578,8 +598,7 @@ pub struct DriveInviteInfo {
     #[serde(alias = "invite_id")]
     pub invite_id: String,
     pub role: String,
-    /// Who minted it: the owner, or (for an older link) a member the server
-    /// once let invite. Empty for
+    /// Who minted it: the owner, or a manager they delegated to. Empty for
     /// invites predating provenance, and `#[serde(default)]` so those rows
     /// still parse rather than failing the whole listing.
     #[serde(default, alias = "minted_by")]
@@ -644,8 +663,7 @@ pub(crate) const EMAIL_STATUSES: [&str; 3] = ["sent", "awaiting_seal", "sealed"]
 
 /// Trim the mailed-invite fields and drop a stage this build does not know,
 /// the console's `isEmailStatus` rule. A blank email is absent, not an empty
-/// line on the row. An older link minted as `manager` reads as `writer`
-/// ([`drive_role_from_wire`]).
+/// line on the row. The role reads through [`drive_role_from_wire`].
 pub(crate) fn normalize_invite_fields(invite: &mut DriveInviteInfo) {
     invite.role = drive_role_from_wire(&invite.role);
     invite.recipient_email = present_email(invite.recipient_email.take());
@@ -660,10 +678,18 @@ struct DriveInvitesResponse {
 }
 
 /// `GET /v1/drives/{folder_hash}/invites` — the live invites for a drive.
-/// Only ever asked about the caller's own drive, so no `?owner=`.
-pub async fn http_list_invites(http: &reqwest::Client, base_url: &str, bearer: &str, folder_hash: &str) -> Result<Vec<DriveInviteInfo>> {
+pub async fn http_list_invites(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    owner: Option<&str>,
+) -> Result<Vec<DriveInviteInfo>> {
     let resp = http
-        .get(format!("{}/v1/drives/{}/invites", base_url.trim_end_matches('/'), folder_hash))
+        .get(with_owner(
+            &format!("{}/v1/drives/{}/invites", base_url.trim_end_matches('/'), folder_hash),
+            owner,
+        )?)
         .header("Authorization", format!("Bearer {bearer}"))
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -686,14 +712,19 @@ pub async fn http_list_invites(http: &reqwest::Client, base_url: &str, bearer: &
 /// same plain 404, so a failure here is never proof the invite existed. The
 /// caller treats 404 as "it is gone", which is the state the user asked for
 /// either way.
-pub async fn http_revoke_invite(http: &reqwest::Client, base_url: &str, bearer: &str, folder_hash: &str, invite_id: &str) -> Result<()> {
+pub async fn http_revoke_invite(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    invite_id: &str,
+    owner: Option<&str>,
+) -> Result<()> {
     let resp = http
-        .delete(format!(
-            "{}/v1/drives/{}/invites/{}",
-            base_url.trim_end_matches('/'),
-            folder_hash,
-            invite_id
-        ))
+        .delete(with_owner(
+            &format!("{}/v1/drives/{}/invites/{}", base_url.trim_end_matches('/'), folder_hash, invite_id),
+            owner,
+        )?)
         .header("Authorization", format!("Bearer {bearer}"))
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -818,12 +849,12 @@ pub async fn resolve_own_drive(pool: &sqlx::SqlitePool, account_id: &str, label:
     Ok(identity)
 }
 
-/// Append `?owner=` when a read names somebody else's drive.
+/// Append `?owner=` when a call names somebody else's drive.
 ///
 /// One helper rather than a `query_pairs_mut` block per endpoint: the param
-/// is what makes a member's read address the right drive, and a route that
-/// quietly forgets it falls back to a `folder_hash` that collides across
-/// owners who both named a drive the same thing.
+/// is what makes a member's read or a Manager's change address the right
+/// drive, and a route that quietly forgets it falls back to a `folder_hash`
+/// that collides across owners who both named a drive the same thing.
 fn with_owner(url: &str, owner: Option<&str>) -> Result<reqwest::Url> {
     let mut parsed = reqwest::Url::parse(url).map_err(|e| AppError::Hcfs(format!("invalid shared-drive URL: {e}")))?;
     if let Some(owner) = owner {
@@ -844,9 +875,9 @@ fn with_owner(url: &str, owner: Option<&str>) -> Result<reqwest::Url> {
 /// Half an identity is refused rather than guessed: falling through to the
 /// label would address the wrong drive instead of failing.
 ///
-/// Admits a member drive, so it is the gate for READS only (who has access,
-/// the panel). Anything that changes access goes through
-/// [`resolve_owned_target`].
+/// This is the gate for READS (who has access, the panel), which the server
+/// opens to every member. Anything that changes access goes through
+/// [`resolve_managed_target`].
 async fn resolve_access_target(
     pool: &sqlx::SqlitePool,
     account_id: &str,
@@ -878,38 +909,48 @@ async fn resolve_access_target(
     }
 }
 
-/// The refusal for any access change on a drive this account does not own.
-pub(crate) const OWNER_ONLY: &str = "Only the drive's owner can invite and remove people.";
-
-/// Resolve the drive an access CHANGE addresses, and require it to be this
-/// account's own.
+/// Whether this account may change who has access to a drive: its owner
+/// always, and a member whose role on it is `manager`.
 ///
-/// Only a drive's owner invites, removes people, changes roles, revokes or
-/// approves invites and changes folder grants. The server still admits a
-/// member it made a `manager` to do some of that on the owner's behalf; this
-/// client does not, so a member drive is refused here, before any key is read
-/// or any request is made.
-pub(crate) async fn resolve_owned_target(
+/// The one place the owner-or-Manager rule lives on this side. The access
+/// panel's `can_manage`, the Share dialog's fold and the background key
+/// delivery all ask it; the frontend's `canManageDrive` mirrors it. A
+/// folder grant is never enough: Manager is not a folder role.
+pub(crate) fn manages_drive(is_member: bool, role: Option<&str>) -> bool {
+    !is_member || role.map(str::trim) == Some("manager")
+}
+
+/// Resolve the drive an access CHANGE addresses: one this account owns, or a
+/// drive somebody else owns that this account manages.
+///
+/// Every access change (mint a link or a folder invite, email an invite,
+/// approve or revoke one, change a role, remove someone, change folders)
+/// resolves through here, and then names the owner with [`member_owner`]:
+/// `owner_ss58` in a mint body, `?owner=` on every other route. That is the
+/// delegated path the server gives a Manager.
+///
+/// The role is not checked here, deliberately: the server decides it on
+/// every call, and its refusal for "no such drive", "not a member" and "not
+/// a Manager" is the same 404, so drive existence never leaks. The UI only
+/// offers these actions where [`manages_drive`] says so.
+pub(crate) async fn resolve_managed_target(
     pool: &sqlx::SqlitePool,
     account_id: &str,
     label: &str,
     owner_ss58: Option<String>,
     folder_hash: Option<String>,
 ) -> Result<crate::sync::identity::DriveIdentity> {
-    let identity = resolve_access_target(pool, account_id, label, owner_ss58, folder_hash).await?;
-    if identity.is_member {
-        return Err(AppError::Validation(OWNER_ONLY.into()));
-    }
-    Ok(identity)
+    resolve_access_target(pool, account_id, label, owner_ss58, folder_hash).await
 }
 
-/// The `owner` a member's read must name, or `None` for an own drive where
-/// the server keys by the caller's own identity.
+/// The `owner` a call on somebody else's drive must name, or `None` for an
+/// own drive where the server keys by the caller's own identity.
 ///
-/// A member drive's `wire_ss58` IS the owner's address: pass it and the read
-/// addresses the right drive; omit it and `folder_hash` alone collides across
-/// owners who both named a drive the same thing.
-fn member_owner(identity: &crate::sync::identity::DriveIdentity) -> Option<&str> {
+/// A member drive's `wire_ss58` IS the owner's address: pass it and a
+/// member's read or a Manager's change addresses the right drive; omit it
+/// and `folder_hash` alone collides across owners who both named a drive the
+/// same thing.
+pub(crate) fn member_owner(identity: &crate::sync::identity::DriveIdentity) -> Option<&str> {
     identity.is_member.then_some(identity.wire_ss58.as_str())
 }
 
@@ -1125,7 +1166,7 @@ enum InviteScope {
     Folder { path: String },
 }
 
-/// Mint an invite link for a WHOLE drive this account owns.
+/// Mint an invite link for a WHOLE drive this account owns or manages.
 ///
 /// The link is assembled here, in Rust: the invite token and the fragment
 /// key exist nowhere else -- not in logs, not in another IPC response --
@@ -1193,7 +1234,7 @@ pub async fn create_folder_invite(
     .await
 }
 
-/// The one mint funnel behind both invite commands. Owner only.
+/// The one mint funnel behind both invite commands.
 async fn mint_invite_link(
     state: &AppState,
     label: &str,
@@ -1203,14 +1244,8 @@ async fn mint_invite_link(
     role: Option<String>,
     scope: InviteScope,
 ) -> Result<DriveInviteLink> {
-    // The role first, before the session, the key or the network: a
-    // `manager` (or any role this client does not offer) is refused here.
-    let role = match &scope {
-        InviteScope::Drive { .. } => Some(resolve_invite_role(role)?),
-        InviteScope::Folder { .. } => role,
-    };
     let ctx = api_ctx(state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, label, owner_ss58, folder_hash).await?;
 
     // Resolve the policy BEFORE touching the key or the network: a folder
     // with no path is refused here, not sent.
@@ -1226,7 +1261,9 @@ async fn mint_invite_link(
         }
         InviteScope::Drive { max_uses } => {
             let (secs, uses) = resolve_invite_policy(expires_in_secs, max_uses);
-            (None, secs, uses, resolve_invite_role(role)?)
+            let role = resolve_invite_role(role)?;
+            let (secs, uses) = apply_manager_invite_caps(&role, secs, uses);
+            (None, secs, uses, role)
         }
     };
 
@@ -1252,6 +1289,7 @@ async fn mint_invite_link(
             expires_in_secs,
             max_uses,
             role: &role_owned,
+            owner: member_owner(&identity),
             path_prefix: folder_prefix.as_deref(),
         },
     )
@@ -1260,7 +1298,16 @@ async fn mint_invite_link(
     // Best-effort seal-back: seal under the SAME key the link fragment uses
     // so the Links tab rebuilds the correct `#k=` on open.
     if let Ok(sealed) = super::invite_token::seal_invite_token(fragment_key.as_ref(), &minted.invite_id, &minted.token) {
-        let _ = http_put_sealed_token(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, &minted.invite_id, &sealed).await;
+        let _ = http_put_sealed_token(
+            &http,
+            &ctx.base_url,
+            &ctx.bearer,
+            &identity.wire_folder_hash,
+            &minted.invite_id,
+            &sealed,
+            member_owner(&identity),
+        )
+        .await;
     }
 
     let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &minted.token, &fragment_key);
@@ -1280,7 +1327,7 @@ async fn mint_invite_link(
     })
 }
 
-/// List the members of an OWN drive.
+/// List the members of a drive this account owns or belongs to.
 #[tauri::command]
 pub async fn list_drive_members(
     app: tauri::AppHandle,
@@ -1326,6 +1373,9 @@ pub struct ShareAccess {
     /// The drive's owner, who is never in `members`.
     pub owner_ss58: String,
     pub owner_is_you: bool,
+    /// This account may change who has access: the owner, or a whole-drive
+    /// Manager ([`manages_drive`]). Everyone else sees the rows read only.
+    pub can_manage: bool,
     /// Whole-drive members. Drive target only; empty for a folder.
     pub members: Vec<ShareAccessMember>,
     /// Folder target only: one row per person holding a grant at or above
@@ -1382,6 +1432,13 @@ pub(crate) fn fold_share_access(
     use super::folder_grant_path::prefix_covers;
 
     let drive_member_count = listing.members.len();
+    let owner_is_you = owner_ss58 == account_id;
+    let your_member_role = listing
+        .members
+        .iter()
+        .find(|m| m.member_ss58 == account_id)
+        .map(|m| drive_role_from_wire(&m.role));
+    let can_manage = manages_drive(!owner_is_you, your_member_role.as_deref());
     let members = if folder.is_some() {
         Vec::new()
     } else {
@@ -1425,10 +1482,6 @@ pub(crate) fn fold_share_access(
 
     let pending_invites = invites
         .into_iter()
-        .map(|mut i| {
-            i.role = drive_role_from_wire(&i.role);
-            i
-        })
         .filter(|i| i.valid && !i.revoked && i.email_status.is_some())
         .filter(|i| match (folder, i.path_prefix.as_deref().map(|p| p.trim_matches('/'))) {
             (None, None) => true,
@@ -1439,7 +1492,8 @@ pub(crate) fn fold_share_access(
         .collect();
 
     ShareAccess {
-        owner_is_you: owner_ss58 == account_id,
+        owner_is_you,
+        can_manage,
         owner_ss58: owner_ss58.to_string(),
         members,
         folder_holders,
@@ -1471,19 +1525,11 @@ pub async fn list_share_access(
     let ctx = api_ctx(&state).await?;
     let identity = resolve_access_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
     let http = state.api_client.clone();
+    let owner = member_owner(&identity);
 
-    // Pending invitations are the owner's to see: somebody else's drive is
-    // never asked for them.
-    let invites = async {
-        if identity.is_member {
-            Ok(Vec::new())
-        } else {
-            http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await
-        }
-    };
     let (listing, invites) = tokio::join!(
-        http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, member_owner(&identity)),
-        invites,
+        http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+        http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
     );
     let listing = listing?;
     let mut invites = invites.unwrap_or_else(|e| {
@@ -1507,8 +1553,10 @@ pub async fn list_share_access(
 /// split into working and ended, with their sealed links opened here.
 ///
 /// The member listing is required (any member of the drive may read it). The
-/// invite listing is fetched for an own drive only, and best effort: a list
-/// of people is still right without the links.
+/// invite listing is fetched for the owner and a Manager only, and best
+/// effort: a list of people is still right without the links. A Manager sees
+/// the links they minted in full; the server keeps other people's sealed
+/// links and addresses to the owner and each link's own maker.
 #[tauri::command]
 pub async fn list_access_panel(
     app: tauri::AppHandle,
@@ -1527,26 +1575,41 @@ pub async fn list_access_panel(
     let ctx = api_ctx(&state).await?;
     let identity = resolve_access_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
     let http = state.api_client.clone();
+    let owner = member_owner(&identity);
 
-    // Invites and links are the owner's to see in the panel: somebody else's
-    // drive is never asked for them (and its sealed links never opened).
-    let invites = async {
-        if identity.is_member {
-            Ok(Vec::new())
+    // Invites and links are management data: the owner's and a Manager's to
+    // see. On an own drive both listings go out together. On somebody else's
+    // drive the member listing says whether this account is a Manager
+    // (`manages_drive`), and only then are its invites asked for, through the
+    // delegated owner path; a Viewer or an Editor never asks.
+    let (listing, invites) = if identity.is_member {
+        let listing = http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner).await?;
+        let your_role = listing
+            .members
+            .iter()
+            .find(|m| m.member_ss58 == ctx.account_id)
+            .map(|m| drive_role_from_wire(&m.role));
+        let invites = if manages_drive(true, your_role.as_deref()) {
+            http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner).await
         } else {
-            http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await
-        }
+            Ok(Vec::new())
+        };
+        (listing, invites)
+    } else {
+        let (listing, invites) = tokio::join!(
+            http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+            http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+        );
+        (listing?, invites)
     };
-    let (listing, invites) = tokio::join!(
-        http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, member_owner(&identity)),
-        invites,
-    );
-    let listing = listing?;
     let mut invites = invites.unwrap_or_else(|e| {
         warn!(label = %label, error = %e, "Access panel: invite listing failed; links omitted");
         Vec::new()
     });
     let key_unavailable = open_invite_links(&state, &ctx.account_id, &label, &identity, &mut invites).await;
+    // From inside a folder grant, only the invites to that folder or below.
+    let scope = crate::sync::identity::folder_grant_browse(&label).map(|(_, root)| root);
+    invites.retain(|i| in_scope(scope.as_deref(), i.path_prefix.as_deref()));
 
     let panel = super::access_panel::fold_access_panel(
         &ctx.account_id,
@@ -1568,7 +1631,7 @@ pub async fn list_access_panel(
     Ok(panel)
 }
 
-/// One folder grant on a drive, as its owner sees it (no grant blob).
+/// One folder grant on a drive, owner/manager view (no grant blob).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveFolderGrantInfo {
@@ -1582,9 +1645,8 @@ pub struct DriveFolderGrantInfo {
     pub member_email: Option<String>,
 }
 
-/// Folder grants on a drive, one row per (holder, folder). Holders never
-/// appear in [`list_drive_members`]. A read: the server sends folder grants
-/// to the owner, and this answers whatever it sends.
+/// Folder grants on a drive this account owns or manages, one row per
+/// (holder, folder). Holders never appear in [`list_drive_members`].
 #[tauri::command]
 pub async fn list_drive_folder_grants(
     app: tauri::AppHandle,
@@ -1609,7 +1671,8 @@ pub async fn list_drive_folder_grants(
         member_owner(&identity),
     )
     .await?;
-    // Read from inside a granted folder, only the holders at or below it.
+    // A folder Manager manages from inside their grant: only the holders at
+    // or below it are theirs to see (folder roles, assumption 6).
     let scope = crate::sync::identity::folder_grant_browse(&label).map(|(_, root)| root);
     Ok(resp
         .folder_grants
@@ -1626,9 +1689,9 @@ pub async fn list_drive_folder_grants(
         .collect())
 }
 
-/// Whether a row belongs to what the caller is reading. No scope (the whole
-/// drive) sees everything; a folder scope (a granted folder) sees only rows
-/// for that folder or below it, and never a whole-drive row.
+/// Whether a row belongs to what the caller is managing. No scope (an owner or
+/// a whole-drive manager) sees everything; a folder scope sees only rows for
+/// that folder or below it, and never a whole-drive row.
 pub(crate) fn in_scope(scope: Option<&str>, row_path: Option<&str>) -> bool {
     match (scope, row_path) {
         (None, _) => true,
@@ -1667,7 +1730,6 @@ impl From<hcfs_shared::network::ReplaceFolderGrantsResponse> for ReplacedFolderG
 /// folder the holder already has keeps its role on the server. `manager` and
 /// anything else are refused here by name. An Editor folder while the server
 /// has writer grants off comes back as `NotReady(FolderEditorInvitesUnavailable)`.
-/// Owner only.
 #[tauri::command]
 pub async fn replace_folder_grants(
     app: tauri::AppHandle,
@@ -1682,7 +1744,7 @@ pub async fn replace_folder_grants(
 
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     let caps = crate::shares::capabilities::fetch_capabilities(&state, &ctx.account_id).await?;
     // Same guard as the mint: a server that does not know folder grants has
@@ -1697,6 +1759,7 @@ pub async fn replace_folder_grants(
         &member_ss58,
         &normalized,
         role.as_deref(),
+        member_owner(&identity),
     )
     .await?;
     info!(
@@ -1731,8 +1794,7 @@ pub(crate) fn plan_folder_grant_replace(path_prefixes: &[String], role: Option<S
     Ok((normalized, role))
 }
 
-/// `PUT /v1/drives/{folder_hash}/grants/{member_ss58}`. Owner only, so no
-/// `?owner=`.
+/// `PUT /v1/drives/{folder_hash}/grants/{member_ss58}`.
 #[allow(clippy::too_many_arguments)]
 pub async fn http_replace_folder_grants(
     http: &reqwest::Client,
@@ -1742,14 +1804,13 @@ pub async fn http_replace_folder_grants(
     member_ss58: &str,
     path_prefixes: &[String],
     role: Option<&str>,
+    owner: Option<&str>,
 ) -> Result<hcfs_shared::network::ReplaceFolderGrantsResponse> {
     let resp = http
-        .put(format!(
-            "{}/v1/drives/{}/grants/{}",
-            base_url.trim_end_matches('/'),
-            folder_hash,
-            member_ss58
-        ))
+        .put(with_owner(
+            &format!("{}/v1/drives/{}/grants/{}", base_url.trim_end_matches('/'), folder_hash, member_ss58),
+            owner,
+        )?)
         .header("Authorization", format!("Bearer {bearer}"))
         .json(&hcfs_shared::network::ReplaceFolderGrantsRequest {
             path_prefixes: path_prefixes.to_vec(),
@@ -1827,9 +1888,10 @@ pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolder
         .collect())
 }
 
-/// Remove a member from an OWN drive (the owner path — revocation of access).
-/// The member's next request is denied server-side; their drive surfaces the
-/// revoked state on its next sync cycle (Task 5).
+/// Remove a member or a folder holder from a drive this account owns or
+/// manages. The member's next request is denied server-side; their drive
+/// surfaces the revoked state on its next sync cycle. The owner is never
+/// removed ([`refuse_targeting_the_owner`]).
 #[tauri::command]
 pub async fn remove_drive_member(
     app: tauri::AppHandle,
@@ -1840,17 +1902,19 @@ pub async fn remove_drive_member(
 ) -> Result<()> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    refuse_targeting_the_owner(&identity, &member_ss58)?;
 
-    // Owner only, so no `?owner=`: the server keys the delete by the caller's
-    // own identity. Leaving a drive is `leave_shared_drive`, not this.
+    // `None` for an owner (the server keys the delete by the caller's own
+    // identity); the owner's address for a manager removing somebody from a
+    // drive they do not own.
     http_remove_member(
         &state.api_client.clone(),
         &ctx.base_url,
         &ctx.bearer,
         &identity.wire_folder_hash,
         &member_ss58,
-        None,
+        member_owner(&identity),
     )
     .await?;
 
@@ -1858,11 +1922,24 @@ pub async fn remove_drive_member(
     Ok(())
 }
 
-/// Change a member's role on a drive this account owns.
+/// Refuse to remove or re-role a drive's owner. The owner has no member row
+/// and the server would answer "no such member"; saying the rule is kinder.
+pub(crate) fn refuse_targeting_the_owner(identity: &crate::sync::identity::DriveIdentity, member_ss58: &str) -> Result<()> {
+    if identity.wire_ss58 == member_ss58 {
+        return Err(AppError::Validation("The drive's owner always keeps their access.".into()));
+    }
+    Ok(())
+}
+
+/// Change a member's role on a drive this account owns or manages. A Manager
+/// may make someone a Viewer, an Editor or a Manager, and may change another
+/// Manager's role; nobody changes their own role or the owner's.
 ///
-/// The role is validated here, before anything else, rather than forwarded
-/// blind: Viewer or Editor only ([`require_offered_role`]). The server still
-/// accepts `manager`, and this client never sends it.
+/// The role is validated here rather than forwarded blind: the server answers
+/// 400 for anything outside its vocabulary, and a typo reaching the wire as a
+/// rejected request is a worse diagnostic than refusing it by name. Kept in
+/// step with `app/lib/shared-drives/roles.ts`, which holds the same list for
+/// the UI.
 #[tauri::command]
 pub async fn change_drive_member_role(
     app: tauri::AppHandle,
@@ -1872,18 +1949,22 @@ pub async fn change_drive_member_role(
     owner_ss58: Option<String>,
     folder_hash: Option<String>,
 ) -> Result<()> {
-    require_offered_role(&role)?;
+    require_drive_role(&role)?;
 
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    refuse_targeting_the_owner(&identity, &member_ss58)?;
 
-    // Targeting yourself is the server's 400. Refuse it here so the UI can
-    // say why instead of surfacing a bare rejection.
+    // Targeting yourself is the server's 400 (a manager demotes themself by
+    // leaving, not by PATCH). Refuse it here so the UI can say why instead of
+    // surfacing a bare rejection.
     if member_ss58 == ctx.account_id {
         return Err(AppError::Validation("You cannot change your own role. Leave the drive instead.".into()));
     }
 
+    // `None` for an owner; the owner's address for a manager re-roling
+    // somebody on a drive they do not own.
     http_change_member_role(
         &state.api_client.clone(),
         &ctx.base_url,
@@ -1891,6 +1972,7 @@ pub async fn change_drive_member_role(
         &identity.wire_folder_hash,
         &member_ss58,
         &role,
+        member_owner(&identity),
     )
     .await?;
 
@@ -1972,7 +2054,7 @@ async fn open_invite_links(
     key_unavailable
 }
 
-/// List the live invites for a drive this account owns.
+/// List the live invites for a drive this account owns or manages.
 ///
 /// Opens each row's sealed token under the drive key and attaches a rebuilt
 /// `invite_url` so the Links tab can copy a link minted earlier. Rows without
@@ -1988,18 +2070,29 @@ pub async fn list_drive_invites(
 ) -> Result<Vec<DriveInviteInfo>> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
-    let mut invites = http_list_invites(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
+    let mut invites = http_list_invites(
+        &state.api_client.clone(),
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        member_owner(&identity),
+    )
+    .await?;
 
     open_invite_links(&state, &ctx.account_id, &label, &identity, &mut invites).await;
+
+    // From inside a folder grant, only the invites to that folder or below.
+    let scope = crate::sync::identity::folder_grant_browse(&label).map(|(_, root)| root);
+    invites.retain(|i| in_scope(scope.as_deref(), i.path_prefix.as_deref()));
 
     let live = invites.iter().filter(|i| i.valid && !i.revoked).count();
     info!(label = %label, count = invites.len(), live, "Listed drive invites");
     Ok(invites)
 }
 
-// ─── Emailed invites (hcfs #459), owner side ───────────────────────────────
+// ─── Emailed invites (hcfs #459), owner/manager side ───────────────────────
 //
 // The recipient side (open the mail, publish a key, join) lives in the
 // console. The desktop mints a mailed invitation, shows its progress on the
@@ -2020,12 +2113,24 @@ pub(crate) struct EmailInvitePolicy {
 /// Validate what the dialog asked for, before any network call.
 ///
 /// Rules are the server's, refused here by name so the dialog can say which
-/// one: one address; Viewer or Editor only ([`require_offered_role`]); a
-/// lifetime between one hour and thirty days, defaulting to the ordinary
-/// seven.
+/// one: one address; Viewer or Editor only (a Manager invite has to be a
+/// link, because the server caps those at a day and a mailed one would
+/// expire before anyone could approve it); a lifetime between one hour and
+/// thirty days, defaulting to the ordinary seven.
 pub(crate) fn resolve_email_invite(email: &str, role: Option<String>, expires_in_secs: Option<u64>) -> Result<EmailInvitePolicy> {
     let email = validate_invite_email(email)?;
-    let role = resolve_invite_role(role)?;
+    let role = role.unwrap_or_else(|| "writer".to_string());
+    match role.as_str() {
+        "reader" | "writer" => {}
+        "manager" => {
+            return Err(AppError::Validation(
+                "A Manager invite has to be a link. Invite them as an Editor by email and change their role after they join.".into(),
+            ));
+        }
+        other => {
+            return Err(AppError::Validation(format!("Unknown drive role: {other}. Expected reader or writer.")));
+        }
+    }
     let expires_in_secs = expires_in_secs.unwrap_or(DEFAULT_INVITE_EXPIRES_IN_SECS);
     if !(EMAIL_INVITE_MIN_SECS..=EMAIL_INVITE_MAX_SECS).contains(&expires_in_secs) {
         return Err(AppError::Validation(
@@ -2159,8 +2264,6 @@ fn rate_limited_message(retry_after_secs: Option<u64>) -> String {
 
 /// The body of `POST /v1/drive-invites/email`. `path_prefix` is only ever
 /// set for a folder (`folder_roles`), and only to a server that knows it.
-/// No `owner_ss58`: only the owner invites, and the server reads its absence
-/// as caller-as-owner.
 #[derive(Debug, Serialize)]
 pub struct EmailInviteBody<'a> {
     pub folder_hash: &'a str,
@@ -2168,14 +2271,14 @@ pub struct EmailInviteBody<'a> {
     pub role: &'a str,
     pub expires_in_secs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_ss58: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path_prefix: Option<&'a str>,
 }
 
 /// `POST /v1/drive-invites/email`. Returns the new invite's id; the token
 /// exists only in the message, by design.
 pub async fn http_email_invite(http: &reqwest::Client, base_url: &str, bearer: &str, body: &EmailInviteBody<'_>) -> Result<String> {
-    // `manager` never reaches the wire, whoever calls this.
-    require_offered_role(body.role)?;
     let resp = http
         .post(format!("{}/v1/drive-invites/email", base_url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {bearer}"))
@@ -2210,7 +2313,7 @@ pub struct EmailInviteResult {
     pub invite_id: String,
 }
 
-/// Invite someone into a drive this account owns, by email.
+/// Invite someone into a drive by email (owner, or a manager naming the owner).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // IPC surface: the invite fields plus the drive target and folder
 pub async fn email_drive_invite(
@@ -2226,7 +2329,7 @@ pub async fn email_drive_invite(
     let policy = resolve_email_invite(&email, role, expires_in_secs)?;
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     // A folder email invite (`folder_roles`, assumption 3). The server
     // refuses `path_prefix` on this route today; the request is still sent so
@@ -2253,6 +2356,7 @@ pub async fn email_drive_invite(
             email: &policy.email,
             role: &policy.role,
             expires_in_secs: policy.expires_in_secs,
+            owner_ss58: member_owner(&identity),
             path_prefix: folder_prefix.as_deref(),
         },
     )
@@ -2275,7 +2379,7 @@ pub async fn email_drive_invite(
 pub async fn email_invites_available(app: tauri::AppHandle, label: String, owner_ss58: Option<String>, folder_hash: Option<String>) -> Result<bool> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
     let probe = http_email_invite(
         &state.api_client.clone(),
         &ctx.base_url,
@@ -2285,6 +2389,7 @@ pub async fn email_invites_available(app: tauri::AppHandle, label: String, owner
             email: "",
             role: "reader",
             expires_in_secs: DEFAULT_INVITE_EXPIRES_IN_SECS,
+            owner_ss58: member_owner(&identity),
             path_prefix: None,
         },
     )
@@ -2325,14 +2430,18 @@ pub async fn http_put_sealed_key(
     invite_id: &str,
     sealed_key: &str,
     sealed_for: &str,
+    owner: Option<&str>,
 ) -> Result<SealKeyPut> {
     let resp = http
-        .put(format!(
-            "{}/v1/drives/{}/invites/{}/sealed-key",
-            base_url.trim_end_matches('/'),
-            folder_hash,
-            invite_id
-        ))
+        .put(with_owner(
+            &format!(
+                "{}/v1/drives/{}/invites/{}/sealed-key",
+                base_url.trim_end_matches('/'),
+                folder_hash,
+                invite_id
+            ),
+            owner,
+        )?)
         .header("Authorization", format!("Bearer {bearer}"))
         .json(&serde_json::json!({ "sealed_key": sealed_key, "sealed_for": sealed_for }))
         .timeout(REQUEST_TIMEOUT)
@@ -2401,9 +2510,10 @@ pub struct ApproveInviteResult {
 /// Approve an emailed invitation: seal the DRIVE's key to the recipient's
 /// published key and hand the blob to the server.
 ///
-/// Owner only. The sealed secret is resolved exactly like the link mint
-/// resolves it (`drive_key_material_for_label`), through the one funnel that
-/// knows where a drive's key lives.
+/// The sealed secret is resolved exactly like the link mint resolves it
+/// (`drive_key_material_for_label`: this account's master for an own drive, the
+/// owner's seal or this manager's grant for a member drive), never derived
+/// from the caller's own master for somebody else's drive.
 ///
 /// A 404 means the recipient replaced their key after the row was read; the
 /// row is re-read once and sealed again for the new key.
@@ -2417,8 +2527,9 @@ pub async fn approve_email_invite(
 ) -> Result<ApproveInviteResult> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
     let http = state.api_client.clone();
+    let owner = member_owner(&identity);
 
     // Resolve the key material once; both attempts seal the same drive key.
     // Through the one funnel the link mint uses: never this account's master.
@@ -2429,9 +2540,9 @@ pub async fn approve_email_invite(
     };
 
     for attempt in 0..2 {
-        let invites = http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
+        let invites = http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner).await?;
         let row = approvable_invite(&invites, &invite_id)?;
-        match seal_invite_row(&http, &ctx, &identity.wire_folder_hash, &invite_id, &row, &keys).await? {
+        match seal_invite_row(&http, &ctx, &identity, &invite_id, &row, &keys).await? {
             SealKeyPut::Sealed => {
                 info!(label = %label, invite_id = %invite_id, "Emailed invite approved");
                 return Ok(ApproveInviteResult { status: "sealed".into() });
@@ -2517,11 +2628,13 @@ pub(crate) async fn invite_seal_keys(
 ///
 /// The ONE seal path: the manual Approve and the automatic delivery both end
 /// here, so the key choice ([`InviteSealKeys::key_for`]), the AAD (the invite
-/// id) and the `sealed_for` pin cannot drift apart between them.
+/// id), the `sealed_for` pin and the delegated owner cannot drift apart
+/// between them. On a drive this account manages but does not own, the PUT
+/// names the owner (`?owner=`); the server lets any Manager seal a key.
 pub(crate) async fn seal_invite_row(
     http: &reqwest::Client,
     ctx: &ApiCtx,
-    folder_hash: &str,
+    identity: &crate::sync::identity::DriveIdentity,
     invite_id: &str,
     row: &ApprovableInvite,
     keys: &InviteSealKeys,
@@ -2530,7 +2643,17 @@ pub(crate) async fn seal_invite_row(
     let sealed = super::invite_key::seal_invite_key(key.as_ref(), &row.requester_pubkey, invite_id)
         .map_err(|e| AppError::Crypto(format!("could not seal the drive key: {e}")))?;
     drop(key);
-    http_put_sealed_key(http, &ctx.base_url, &ctx.bearer, folder_hash, invite_id, &sealed, &row.requester_pubkey).await
+    http_put_sealed_key(
+        http,
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        invite_id,
+        &sealed,
+        &row.requester_pubkey,
+        member_owner(identity),
+    )
+    .await
 }
 
 /// The 32 bytes an approval seals: the drive's folder-key ENTROPY for a
@@ -2679,7 +2802,7 @@ pub async fn list_owned_folder_sharing(app: tauri::AppHandle, label: String) -> 
 
     let (listing, invites) = tokio::join!(
         http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
-        http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash),
+        http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None),
     );
     let (listing, invites) = match (listing, invites) {
         (Err(e), Err(_)) => return Err(e),
@@ -2750,7 +2873,7 @@ pub async fn list_owned_drive_sharing(app: tauri::AppHandle, labels: Vec<String>
             // count): otherwise the badge already has its answer and N invite
             // GETs would be pure noise on every drive-list refresh.
             let invites = if member_count.unwrap_or(0) == 0 {
-                match http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await {
+                match http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, None).await {
                     Ok(invites) => Some(invites),
                     Err(err) => {
                         debug!(label = %label, error = %err, "Drive invites listing failed");
@@ -2799,7 +2922,7 @@ pub async fn revoke_drive_invite(
 ) -> Result<()> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_owned_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
 
     http_revoke_invite(
         &state.api_client.clone(),
@@ -2807,6 +2930,7 @@ pub async fn revoke_drive_invite(
         &ctx.bearer,
         &identity.wire_folder_hash,
         &invite_id,
+        member_owner(&identity),
     )
     .await?;
 
@@ -3270,36 +3394,44 @@ mod tests {
         }
     }
 
-    /// Anything outside Viewer and Editor is refused as a Validation error
-    /// before any request, `manager` included: this client never offers it.
+    /// The server answers a bare 400 for an unknown role, which tells the user
+    /// nothing about which choice it objected to.
     #[test]
-    fn manager_and_unknown_roles_are_refused_as_viewer_or_editor_only() {
-        for role in ["manager", "admin", "Manager", ""] {
-            let err = resolve_invite_role(Some(role.into())).expect_err("not offered");
-            assert!(
-                matches!(&err, AppError::Validation(m) if m == DRIVE_ROLE_ONLY),
-                "{role:?} must be refused as Viewer or Editor only, got {err:?}"
-            );
-            assert!(require_offered_role(role).is_err());
-        }
+    fn an_unknown_role_is_refused_by_name() {
+        let err = resolve_invite_role(Some("admin".into())).expect_err("unknown role");
+        assert!(format!("{err}").contains("admin"), "the refusal must name the role: {err}");
     }
 
-    /// A member the server still calls `manager` reads as an Editor: the same
-    /// write access, never the management it used to carry.
+    /// Match the console: clamp manager caps rather than reject. An omitted
+    /// `max_uses` resolves to 50; rejecting that would fail every manager mint.
     #[test]
-    fn a_wire_manager_reads_as_an_editor() {
-        assert_eq!(drive_role_from_wire("manager"), "writer");
-        assert_eq!(drive_role_from_wire(" manager "), "writer");
-        assert_eq!(drive_role_from_wire("writer"), "writer");
-        assert_eq!(drive_role_from_wire("reader"), "reader");
-        // An unknown role passes through; the UI reads it as a Viewer.
-        assert_eq!(drive_role_from_wire("owner"), "owner");
+    fn a_manager_invite_is_clamped_to_the_server_caps() {
+        assert_eq!(
+            apply_manager_invite_caps("manager", 7 * 24 * 60 * 60, DEFAULT_INVITE_MAX_USES),
+            (MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES)
+        );
+        assert_eq!(
+            apply_manager_invite_caps("manager", MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES),
+            (MANAGER_INVITE_MAX_SECS, MANAGER_INVITE_MAX_USES)
+        );
+        assert_eq!(resolve_invite_role(Some("manager".into())).expect("manager"), "manager");
+    }
+
+    /// The caps bind managers only; a reader or writer link is unaffected.
+    #[test]
+    fn the_manager_caps_do_not_bind_other_roles() {
+        for role in ["reader", "writer"] {
+            assert_eq!(
+                apply_manager_invite_caps(role, MANAGER_INVITE_MAX_SECS * 7, 50),
+                (MANAGER_INVITE_MAX_SECS * 7, 50)
+            );
+        }
     }
 
     /// The desktop and the UI must not drift apart on the wire vocabulary.
     #[test]
     fn wire_roles_match_the_frontend_list() {
-        assert_eq!(WIRE_ROLES, ["reader", "writer"]);
+        assert_eq!(WIRE_ROLES, ["reader", "writer", "manager"]);
     }
 
     #[test]
@@ -3557,10 +3689,10 @@ mod tests {
     }
 
     // `folder_hash` is label-derived, so two owners who both name a drive
-    // "Documents" collide. A member's read that forgets the owner addresses
+    // "Documents" collide. A delegated call that forgets the owner addresses
     // whichever row the server finds first.
     #[test]
-    fn a_member_read_names_the_drives_owner() {
+    fn a_member_drive_delegates_by_naming_its_owner() {
         assert_eq!(member_owner(&member_of("5Owner", "abc")), Some("5Owner"));
     }
 
@@ -3572,7 +3704,7 @@ mod tests {
     }
 
     #[test]
-    fn with_owner_appends_the_param_only_when_named() {
+    fn with_owner_appends_the_param_only_when_delegated() {
         let base = "https://s.example.com/v1/drives/abc/members";
         assert_eq!(with_owner(base, None).unwrap().as_str(), base);
         assert_eq!(with_owner(base, Some("5Owner")).unwrap().as_str(), format!("{base}?owner=5Owner"));
@@ -3587,14 +3719,14 @@ mod tests {
         assert_eq!(url.query(), Some("owner=a%26b%3Dc"));
     }
 
-    /// A member may hold a drive they never synced here. Resolving a LOCAL
+    /// A manager may hold a drive they never synced here. Resolving a LOCAL
     /// label for one falls through to this account's own namespace, which
-    /// reads the wrong drive rather than failing, so the caller may name the
-    /// wire identity instead.
+    /// manages the wrong drive rather than failing, so the caller may name
+    /// the wire identity instead.
     #[tokio::test]
-    async fn a_named_drive_is_read_in_its_owners_namespace() {
+    async fn a_named_drive_is_managed_in_its_owners_namespace() {
         let pool = sqlx::SqlitePool::connect(":memory:").await.expect("pool");
-        let id = resolve_access_target(&pool, "5Me", "team-docs", Some("5Owner".into()), Some("abc123".into()))
+        let id = resolve_managed_target(&pool, "5Me", "team-docs", Some("5Owner".into()), Some("abc123".into()))
             .await
             .expect("identity");
 
@@ -3604,23 +3736,38 @@ mod tests {
         assert_eq!(member_owner(&id), Some("5Owner"), "and it is named on the wire");
     }
 
-    /// Only the owner changes access. Somebody else's drive, whatever this
-    /// account's role on it (a former Manager included), is refused before
-    /// any key is read or any request is made; the owner naming their own
-    /// drive by identity is still the owner.
+    /// Naming this account as the owner is an own drive: nothing delegated,
+    /// no `?owner=` on the wire.
     #[tokio::test]
-    async fn access_changes_are_refused_on_a_drive_this_account_does_not_own() {
+    async fn naming_yourself_as_the_owner_is_an_own_drive() {
         let pool = sqlx::SqlitePool::connect(":memory:").await.expect("pool");
-        let err = resolve_owned_target(&pool, "5Me", "team-docs", Some("5Owner".into()), Some("abc123".into()))
+        let id = resolve_managed_target(&pool, "5Me", "team-docs", Some("5Me".into()), Some("abc123".into()))
             .await
-            .expect_err("somebody else's drive");
-        assert!(matches!(&err, AppError::Validation(m) if m == OWNER_ONLY), "got {err:?}");
+            .expect("identity");
+        assert!(!id.is_member);
+        assert_eq!(member_owner(&id), None);
+    }
 
-        let own = resolve_owned_target(&pool, "5Me", "team-docs", Some("5Me".into()), Some("abc123".into()))
-            .await
-            .expect("naming yourself is your own drive");
-        assert!(!own.is_member);
-        assert_eq!(member_owner(&own), None, "an owner never sends ?owner=");
+    /// A Manager may remove or re-role anyone but the owner.
+    #[test]
+    fn nobody_removes_or_demotes_the_owner() {
+        let managed = member_of("5Owner", "abc");
+        assert!(refuse_targeting_the_owner(&managed, "5Owner").is_err());
+        assert!(refuse_targeting_the_owner(&managed, "5Ann").is_ok());
+    }
+
+    /// The owner-or-Manager rule, in its one place: the owner always, a
+    /// member only as a Manager, and nobody through a folder grant or an
+    /// unknown role.
+    #[test]
+    fn only_the_owner_or_a_manager_manages_a_drive() {
+        assert!(manages_drive(false, None), "the owner");
+        assert!(manages_drive(false, Some("reader")), "the owner, whatever a stray role says");
+        assert!(manages_drive(true, Some("manager")));
+        assert!(manages_drive(true, Some(" manager ")));
+        for role in [Some("writer"), Some("reader"), Some("Manager"), Some("admin"), Some(""), None] {
+            assert!(!manages_drive(true, role), "{role:?} does not manage somebody else's drive");
+        }
     }
 
     /// Half an identity must not fall through to the label: the lenient
@@ -3635,7 +3782,7 @@ mod tests {
             (Some("5Owner".to_string()), Some("  ".to_string())),
         ] {
             assert!(
-                resolve_access_target(&pool, "5Me", "team-docs", owner, hash).await.is_err(),
+                resolve_managed_target(&pool, "5Me", "team-docs", owner, hash).await.is_err(),
                 "half an identity must fail rather than resolve the label"
             );
         }
@@ -3790,11 +3937,9 @@ mod tests {
     }
 
     #[test]
-    fn email_invite_policy_refuses_manager_as_viewer_or_editor_only() {
-        for role in ["manager", "admin"] {
-            let err = resolve_email_invite("ada@example.com", Some(role.into()), None).expect_err("not offered");
-            assert!(matches!(&err, AppError::Validation(m) if m == DRIVE_ROLE_ONLY), "{role}: {err:?}");
-        }
+    fn email_invite_policy_refuses_manager_by_name() {
+        let err = resolve_email_invite("ada@example.com", Some("manager".into()), None).expect_err("manager");
+        assert!(format!("{err}").contains("has to be a link"), "{err}");
     }
 
     #[test]
@@ -3928,17 +4073,9 @@ mod tests {
         ];
         let access = fold_share_access("5Me", "5Owner", None, access_listing(), invites);
         assert_eq!(access.owner_ss58, "5Owner");
-        assert!(!access.owner_is_you, "a former manager is not the owner");
-        let people: Vec<(&str, &str, bool)> = access
-            .members
-            .iter()
-            .map(|m| (m.member_ss58.as_str(), m.role.as_str(), m.is_you))
-            .collect();
-        assert_eq!(
-            people,
-            [("5Me", "writer", true), ("5Ann", "writer", false)],
-            "a wire manager reads as an Editor"
-        );
+        assert!(!access.owner_is_you, "a manager is not the owner");
+        let people: Vec<(&str, bool)> = access.members.iter().map(|m| (m.member_ss58.as_str(), m.is_you)).collect();
+        assert_eq!(people, [("5Me", true), ("5Ann", false)]);
         assert_eq!(access.members[1].member_name.as_deref(), Some("Ann"));
         assert_eq!(access.members[1].member_email, None, "a blank email is absent");
         assert!(access.folder_holders.is_empty(), "holders are not drive members");
@@ -3972,19 +4109,32 @@ mod tests {
         assert_eq!(folder.folder_holders[0].member_email, None);
     }
 
-    /// An older invitation minted as `manager` still reads as Editor, in the
-    /// dialog's fold and in every invite listing.
+    /// A wire `manager` reads as a Manager again, in the dialog's fold, in
+    /// every invite listing and in the member rows.
     #[test]
-    fn a_wire_manager_invite_reads_as_an_editor() {
+    fn a_wire_manager_reads_as_a_manager() {
         let mut mail = mailed_invite("drive-mail", None, Some("sent"), true);
         mail.role = "manager".into();
         let access = fold_share_access("5Owner", "5Owner", None, access_listing(), vec![mail]);
-        assert_eq!(access.pending_invites[0].role, "writer");
+        assert_eq!(access.pending_invites[0].role, "manager");
 
         let mut row = mailed_invite("link", None, None, true);
-        row.role = "manager".into();
+        row.role = " manager ".into();
         normalize_invite_fields(&mut row);
-        assert_eq!(row.role, "writer");
+        assert_eq!(row.role, "manager");
+        assert_eq!(drive_role_from_wire("manager"), "manager");
+    }
+
+    /// Anything outside the three roles reads as a Viewer, the least it
+    /// could be, so the webview only ever draws roles it knows.
+    #[test]
+    fn an_unknown_wire_role_reads_as_a_viewer() {
+        for raw in ["admin", "Manager", "", "  ", "owner"] {
+            assert_eq!(drive_role_from_wire(raw), "reader", "{raw:?}");
+        }
+        for raw in ["reader", "writer", "manager"] {
+            assert_eq!(drive_role_from_wire(raw), raw);
+        }
     }
 
     #[test]
@@ -4010,6 +4160,26 @@ mod tests {
         assert_eq!(pending, ["folder-mail"]);
     }
 
+    /// The Share dialog manages for the owner and a whole-drive Manager, and
+    /// shows everyone else the rows read only.
+    #[test]
+    fn the_share_dialog_manages_for_the_owner_and_a_manager_only() {
+        let listing = |role: &str| -> DriveMembersResponse {
+            serde_json::from_value(serde_json::json!({
+                "members": [{"member_ss58": "5Me", "role": role, "created_at": "t"}],
+            }))
+            .expect("listing")
+        };
+        assert!(fold_share_access("5Me", "5Owner", None, listing("manager"), Vec::new()).can_manage);
+        assert!(fold_share_access("5Me", "5Owner", Some("A"), listing("manager"), Vec::new()).can_manage);
+        for role in ["writer", "reader", "admin"] {
+            assert!(!fold_share_access("5Me", "5Owner", None, listing(role), Vec::new()).can_manage, "{role}");
+        }
+        assert!(fold_share_access("5Owner", "5Owner", None, listing("reader"), Vec::new()).can_manage);
+        let manager = fold_share_access("5Owner", "5Owner", None, listing("manager"), Vec::new());
+        assert_eq!(manager.members[0].role, "manager", "a Manager row reads as Manager");
+    }
+
     #[test]
     fn share_access_wire_keys_are_pinned() {
         let access = fold_share_access("5Owner", "5Owner", Some("Clients"), access_listing(), Vec::new());
@@ -4019,6 +4189,7 @@ mod tests {
             serde_json::json!({
                 "ownerSs58": "5Owner",
                 "ownerIsYou": true,
+                "canManage": true,
                 "members": [],
                 "folderHolders": [{
                     "memberSs58": "5Bo", "role": "reader", "pathPrefix": "Clients", "otherFolderCount": 2,
@@ -4030,7 +4201,7 @@ mod tests {
         let drive = fold_share_access("5Owner", "5Owner", None, access_listing(), Vec::new());
         assert_eq!(
             serde_json::to_value(&drive.members[0]).expect("serialize"),
-            serde_json::json!({ "memberSs58": "5Me", "role": "writer", "isYou": false })
+            serde_json::json!({ "memberSs58": "5Me", "role": "manager", "isYou": false })
         );
     }
 
@@ -4258,7 +4429,7 @@ mod tests {
     }
 
     #[test]
-    fn a_granted_folder_reads_only_that_folder_and_below() {
+    fn a_folder_manager_sees_only_their_folder_and_below() {
         assert!(in_scope(None, None), "an owner sees whole-drive rows");
         assert!(in_scope(None, Some("a/b")));
         assert!(in_scope(Some("Clients"), Some("Clients")));

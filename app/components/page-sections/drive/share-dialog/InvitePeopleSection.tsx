@@ -224,9 +224,16 @@ export function InvitePeopleSection({
       ) : null}
 
       {composing ? (
-        <p className="mt-2 text-xs text-grey-50 dark:text-grey-dark-600">
-          They get their own invite that only works for them.
-        </p>
+        <div className="mt-2 flex flex-col gap-1">
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+            They get their own invite that only works for them.
+          </p>
+          {folder ? null : (
+            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+              To add a Manager, invite them as an Editor, then change their role below.
+            </p>
+          )}
+        </div>
       ) : null}
 
       {sentTo ? (

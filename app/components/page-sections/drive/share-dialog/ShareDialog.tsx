@@ -10,6 +10,9 @@
 //   3. General access: a LINK invite (`create_drive_invite`, or
 //      `create_folder_invite` for a folder), usable by whoever holds it.
 //
+// Only the owner and a whole-drive Manager add people (Rust's `canManage`);
+// anyone else sees People with access alone, read only.
+//
 // On a plan without sharing (Free, Starter; Rust decides, `canShareDrives`)
 // the dialog still opens, so the owner can see who has access and remove
 // people: the Invite and General access sections give way to one upgrade
@@ -49,6 +52,7 @@ import { GeneralAccessSection } from "./GeneralAccessSection";
 import { NotEntitledNotice, SharingActionsSkeleton } from "./SectionNoticeView";
 import { useShareAccess } from "./useShareAccess";
 import { peopleHaveAccess, sharingGate } from "./shareDialogState";
+import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 
 const DIVIDER = <hr className="my-5 border-grey-80 dark:border-white/10" />;
 
@@ -90,12 +94,6 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
   const membership = findMembership(target, memberships);
   const [refusedByServer, setRefusedByServer] = useState(false);
   const onNotEntitled = useCallback(() => setRefusedByServer(true), []);
-  const gate = sharingGate({
-    planAllows: planIncludesSharing,
-    owner: !membership,
-    refusedByServer,
-  });
-
   // Always loaded: on a plan without sharing the owner still sees who has
   // access and can remove them.
   const access = useShareAccess({
@@ -103,6 +101,26 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
     pathPrefix,
     target: driveTarget,
   });
+
+  // Who may add people here: the owner, or a whole-drive Manager. Rust's
+  // `canManage` decides once the list is in; until then the membership says.
+  // A Viewer or an Editor sees who has access and nothing to add with.
+  const canManage =
+    access.state.kind === "ready"
+      ? access.state.access.canManage
+      : canManageDrive({
+          isOwner: !membership,
+          role: membership ? parseDriveRole(membership.role) : undefined,
+        });
+  // The plan asked about is this account's, so it only gates a drive this
+  // account owns. On a drive it manages the owner's plan decides, and only a
+  // 403 from the server shows the upgrade card there.
+  const planGate = sharingGate({
+    planAllows: planIncludesSharing,
+    owner: !membership,
+    refusedByServer,
+  });
+  const gate = canManage ? planGate : "none";
 
   // Every change reports here: the drive list's badge and an open Links tab
   // pick it up without a reopen, and the people list reloads in place.
@@ -184,7 +202,7 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
               {DIVIDER}
             </>
           ) : null
-        ) : emailOffered ? (
+        ) : gate === "allowed" && emailOffered ? (
           <>
             <InvitePeopleSection
               label={target.label}

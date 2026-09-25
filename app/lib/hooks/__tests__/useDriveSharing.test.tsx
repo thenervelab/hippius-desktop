@@ -123,25 +123,24 @@ describe("useDriveSharing", () => {
     expect(result.current.canWrite).toBe(true);
   });
 
-  // Only the owner manages. A member the server still calls a Manager is an
-  // Editor: it writes, and it never manages somebody else's drive.
-  it.each(["manager", "writer", "reader"])("never lets a %s manage a drive they do not own", async (role) => {
+  // The server admits a delegated manager by name, so refusing them here is
+  // what made the desktop mint Manager invites it could not then honour.
+  it("lets a manager manage a drive they do not own", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([
       {
         ownerSs58: "5Owner",
         folderHash: "h",
         displayLabel: "team",
-        role,
+        role: "manager",
         createdAt: "",
         syncedLocally: true,
         localLabel: "team",
       },
     ]);
     const { result } = renderHook(() => useDriveSharing("team"), { wrapper: wrapper() });
-    await waitFor(() => expect(result.current.sharing.direction).toBe("with-me"));
-    expect(result.current.canManage).toBe(false);
-    expect(result.current.role).not.toBe("manager");
-    expect(result.current.canWrite).toBe(role !== "reader");
+    await waitFor(() => expect(result.current.canManage).toBe(true));
+    expect(result.current.sharing.direction).toBe("with-me");
+    expect(result.current.canWrite).toBe(true);
   });
 
   it("asks nothing when no drive is open", () => {

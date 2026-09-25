@@ -34,7 +34,7 @@ export function canShareFolder(
  *
  * A FOLDER in somebody else's drive is a reference, not a copy: the mint
  * names the drive's owner (`owner_ss58`, hcfs #458), which the server accepts
- * from an Editor of a drive that is not frozen, and only once it
+ * from an Editor or a Manager of a drive that is not frozen, and only once it
  * advertises `member_folder_shares`. Anywhere else the item is ABSENT rather
  * than disabled: a Viewer's answer will not change by waiting, and a dead
  * control invites a hunt for a permission that was never going to be granted.
@@ -62,10 +62,10 @@ export function offersShareAction(
 
 /**
  * Whether a row may offer a WRITE action (rename). Always on this account's
- * own drives; on somebody else's only where its role can write (Editor, a
- * former Manager included) and the drive is not frozen. Hidden, not
- * disabled, where it cannot: a Viewer's answer does not change by waiting.
- * The server refuses the write anyway; this is the affordance.
+ * own drives; on somebody else's only where its role can write (Editor or
+ * Manager) and the drive is not frozen. Hidden, not disabled, where it
+ * cannot: a Viewer's answer does not change by waiting. The server refuses
+ * the write anyway; this is the affordance.
  */
 export function offersWriteAction(
   file: Pick<FormattedUserFile, "label">,

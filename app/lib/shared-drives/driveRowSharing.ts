@@ -127,6 +127,23 @@ export function driveRowSharing(params: {
 }
 
 /**
+ * The count mark a MANAGER sees on a drive they manage for somebody else:
+ * the owner's "Shared with N", counted from the membership listing
+ * (`member_count`, owner excluded). `null` when the count is unknown or
+ * zero, so the mark never claims nobody is there from absence.
+ */
+export function managedDriveCountMark(
+  memberCount: number | null | undefined,
+): { label: string; title: string } | null {
+  if (!memberCount || memberCount < 1) return null;
+  const people = memberCount === 1 ? "1 person" : `${memberCount} people`;
+  return {
+    label: `Shared with ${memberCount}`,
+    title: `${people} besides the owner can open this drive`,
+  };
+}
+
+/**
  * Index a membership listing by the local label it syncs as, so a drive row can
  * find its own role.
  *
@@ -151,8 +168,7 @@ export function rolesByLocalLabel(
 
 /**
  * The labels (local and browse) of every shared drive this account may write
- * to: Editor (a former Manager reads as one), and not frozen. See
- * `useWritableMemberDriveLabels`.
+ * to: Editor or Manager, and not frozen. See `useWritableMemberDriveLabels`.
  */
 export function writableMemberDriveLabels(
   memberships: readonly {
@@ -177,6 +193,18 @@ export interface FolderGrantRow {
   pathPrefix: string;
   role: string;
   frozen?: boolean;
+}
+
+/**
+ * Labels (local and `shared:`) of the drives this account MANAGES in
+ * somebody else's name: a Manager role, not frozen. Drives the folder "Share
+ * folder" item there. Never a `grant:` label: Manager is not a folder role
+ * (HCFS #475), so a folder holder never manages the folder.
+ */
+export function manageableMemberDriveLabels(
+  memberships: Parameters<typeof writableMemberDriveLabels>[0],
+): ReadonlySet<string> {
+  return memberLabelsWhere(memberships, [], (role) => role === "manager");
 }
 
 function memberLabelsWhere(

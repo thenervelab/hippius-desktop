@@ -36,15 +36,15 @@ describe("canShareFolderGrant", () => {
     expect(canShareFolderGrant(folder("team"), true, new Set(["team"]))).toBe(false);
   });
 
-  // Only the owner invites people: a drive shared with this account never
-  // offers it, whatever the role there (a former Manager included).
-  it("never offers it in somebody else's drive", () => {
-    expect(canShareFolderGrant(folder("team"), true, new Set(["team"]))).toBe(false);
-    expect(canShareFolderGrant(folder("shared:5O~h"), true)).toBe(false);
+  it("lets a drive Manager share a folder in somebody else's drive", () => {
+    const manageable = new Set(["team"]);
+    expect(canShareFolderGrant(folder("team"), true, new Set(["team"]), manageable)).toBe(true);
+    expect(canShareFolderGrant(folder("viewer"), true, new Set(["viewer"]), manageable)).toBe(false);
   });
 
-  it("never from inside a granted folder: only the owner mints folder invites", () => {
+  it("never from inside a granted folder: only owners and drive Managers mint folder invites", () => {
     const grant = makeFolderGrantLabel({ ownerSs58: "5O", folderHash: "h", pathPrefix: "Clients" });
+    // A grant label is somebody else's drive on its own, and never manageable.
     expect(canShareFolderGrant(folder(grant), true)).toBe(false);
   });
 
@@ -65,7 +65,7 @@ describe("folderGrantPathPrefix", () => {
  * An Editor holder of a granted folder gets exactly what HCFS #475 lets a
  * writer holder do from the desktop: upload and new folder (the view's write
  * gate), rename, and a public folder link. Not "Share folder" (folder
- * invites are for the owner). A Viewer gets none of it.
+ * invites are for owners and drive Managers). A Viewer gets none of it.
  */
 describe("what a granted folder's role offers", () => {
   const grant = (role: string) => ({ ownerSs58: "5O", folderHash: "h", pathPrefix: `F-${role}`, role });

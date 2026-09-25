@@ -55,8 +55,8 @@ pub struct ServerCapabilities {
     /// (`HCFS_FEATURE_FOLDER_GRANTS`). Requires shared drives. Absent on
     /// older servers and off in prod until clients are ready.
     pub folder_grants: bool,
-    /// `POST /v1/folder-shares` takes `owner_ss58`, so an Editor can share
-    /// a folder by link inside a drive somebody else owns
+    /// `POST /v1/folder-shares` takes `owner_ss58`, so an Editor or Manager
+    /// can share a folder by link inside a drive somebody else owns
     /// (hcfs #458). Absent on older servers, which read that mint under the
     /// caller's own account and find nothing.
     pub member_folder_shares: bool,
