@@ -39,7 +39,7 @@ describe("the account card matches the console", () => {
   // The old row named the action without ever showing what would be
   // copied.
   it("puts the address itself on the copy row", () => {
-    expect(card).toContain("truncatedAddress");
+    expect(card).toContain("identity.address");
     expect(card).toContain("WalletMinimal");
     expect(card).not.toMatch(/>Copy address</);
   });
@@ -58,14 +58,16 @@ describe("the account card matches the console", () => {
     expect(card).toMatch(/ChevronDown[\s\S]*?shrink-0/);
   });
 
-  // The head shrinks and ellipsizes, the tail never does. A single
-  // `truncate` over the whole string cuts the END, which is where the
-  // ".com" is — the fault this replaces.
-  it("lets only the head of the identity give way", () => {
-    expect(card).toContain("identity.primary.head");
-    expect(card).toContain("identity.primary.tail");
-    expect(card).toMatch(/min-w-0 truncate">\{identity\.primary\.head\}/);
-    expect(card).toMatch(/shrink-0">\{identity\.primary\.tail\}/);
+  // A `truncate` over the whole string cut the END, which is where the
+  // ".com" is; a head/tail split then let the head's own ellipsis eat the
+  // domain. Every identity on the card and in the menu is shortened in the
+  // middle instead, to the width it has.
+  it("shortens every identity in the middle, never at the end", () => {
+    expect(card).toMatch(/<MiddleTruncate\s+text=\{identity\.primary\}/);
+    expect(card).toMatch(/<MiddleTruncate\s+text=\{identity\.menuName\}/);
+    expect(card).toMatch(/<MiddleTruncate\s+text=\{identity\.menuEmail\}/);
+    expect(card).toMatch(/<MiddleTruncate\s+text=\{identity\.address\}/);
+    expect(card).not.toMatch(/truncate[^"]*">\s*\{(identity\.|truncatedAddress)/);
   });
 
   // A character budget cannot know the window, the zoom or the font.
