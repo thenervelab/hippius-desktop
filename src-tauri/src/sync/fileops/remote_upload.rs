@@ -109,7 +109,7 @@ impl UploadBatch {
 /// shared with this account a file was encrypted with the OWNER's folder key
 /// and signed with one derived from this account's master. Two keys for one
 /// file, and nothing local fails when they disagree. Both now come from
-/// `remote::folder_phrase_for_label`.
+/// `remote::drive_key_material_for_label`.
 pub(crate) fn signing_key_for_folder(folder_phrase: &str) -> Result<SigningKey> {
     use bip39::Mnemonic;
     use std::str::FromStr;
@@ -367,8 +367,8 @@ pub async fn upload_to_remote_folder(
     identity: &DriveIdentity,
 ) -> Result<()> {
     let mnemonic = crate::sync::fileops::remote::session_mnemonic(state)?;
-    let folder_phrase = crate::sync::fileops::remote::folder_phrase_for_label(state, account_id, label, &mnemonic, identity).await?;
-    upload_to_remote_folder_with_progress(pool, account_id, label, parent_path, source, identity, &folder_phrase, None).await
+    let keys = crate::sync::fileops::remote::drive_key_material_for_label(state, account_id, label, &mnemonic, identity).await?;
+    upload_to_remote_folder_with_progress(pool, account_id, label, parent_path, source, identity, &keys, None).await
 }
 
 #[allow(clippy::too_many_arguments)] // one file's worth of context, not a call site's
@@ -379,12 +379,12 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
     parent_path: &str,
     source: &Path,
     identity: &DriveIdentity,
-    // The drive's folder phrase, resolved ONCE by the caller. Deriving it
+    // The drive's key material, resolved ONCE by the caller. Deriving it
     // here meant a key derivation PER FILE, and for a drive shared with this
     // account that is not synced here that is an Argon2id grant open apiece,
     // seconds each, so a fifty-file upload spent over a minute re-deriving
     // the same key.
-    folder_phrase: &zeroize::Zeroizing<String>,
+    keys: &crate::sync::fileops::remote::DriveKeyMaterial,
     batch: Option<&UploadBatch>,
 ) -> Result<()> {
     let file_name = source
@@ -393,10 +393,11 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
         .ok_or_else(|| AppError::Validation("File has no usable name".into()))?
         .to_string();
 
-    // ONE folder phrase for both keys: they must agree, and only the
-    // encryption path used to have a member branch.
-    let encryption_key = crate::sync::fileops::remote::encryption_key_from_phrase(folder_phrase)?;
-    let signing_key = signing_key_for_folder(folder_phrase)?;
+    // ONE source for both keys: they must agree, and only the encryption
+    // path used to have a member branch. A folder grant holder's material is
+    // the derived key itself, which is both (see `DriveKeyMaterial`).
+    let encryption_key = keys.encryption_key()?;
+    let signing_key = keys.signing_key()?;
 
     // The salted hash is over the PLAINTEXT and is what the server uses to
     // recognise the same content again, so it is computed from the source
@@ -537,7 +538,9 @@ pub async fn upload_files_to_remote_folder(
         Some(&identity),
     )
     .await?;
-    let parent = parent_path.unwrap_or_default();
+    // Relative to what the user is looking at; a folder grant is browsed
+    // rooted at its folder, so the grant goes in front (`rooted_path`).
+    let parent = crate::sync::identity::rooted_path(&label, &parent_path.unwrap_or_default());
 
     // Announce the WHOLE batch before uploading any of it, so the widget
     // shows a queue rather than one row that is replaced each time the
@@ -548,9 +551,9 @@ pub async fn upload_files_to_remote_folder(
     // ONCE per upload, not per file: deriving it inside the loop meant a key
     // derivation for every file, and for an unsynced shared drive that is an
     // Argon2id grant open apiece.
-    let folder_phrase = {
+    let keys = {
         let mnemonic = crate::sync::fileops::remote::session_mnemonic(state.inner())?;
-        crate::sync::fileops::remote::folder_phrase_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
+        crate::sync::fileops::remote::drive_key_material_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
     };
     for path in &file_paths {
         let source = std::path::Path::new(path);
@@ -572,7 +575,7 @@ pub async fn upload_files_to_remote_folder(
     let mut failures = Vec::new();
     for path in &file_paths {
         let source = std::path::Path::new(path);
-        let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &parent, source, &identity, &folder_phrase, Some(&batch)).await;
+        let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &parent, source, &identity, &keys, Some(&batch)).await;
         if let Err(e) = sent {
             tracing::warn!(file = %path, error = %e, "remote upload failed");
             failures.push(RemoteUploadFailure {
@@ -665,7 +668,9 @@ pub async fn upload_folder_to_remote_folder(
         return Err(AppError::Validation("That is not a folder.".into()));
     }
 
-    let parent = parent_path.unwrap_or_default();
+    // Relative to what the user is looking at; a folder grant is browsed
+    // rooted at its folder, so the grant goes in front (`rooted_path`).
+    let parent = crate::sync::identity::rooted_path(&label, &parent_path.unwrap_or_default());
     let planned = tokio::task::spawn_blocking({
         let root = root.to_path_buf();
         let parent = parent.clone();
@@ -696,9 +701,9 @@ pub async fn upload_folder_to_remote_folder(
     // ONCE per upload, not per file: deriving it inside the loop meant a key
     // derivation for every file, and for an unsynced shared drive that is an
     // Argon2id grant open apiece.
-    let folder_phrase = {
+    let keys = {
         let mnemonic = crate::sync::fileops::remote::session_mnemonic(state.inner())?;
-        crate::sync::fileops::remote::folder_phrase_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
+        crate::sync::fileops::remote::drive_key_material_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
     };
 
     // The whole batch is announced before any of it moves, so the widget
@@ -721,17 +726,7 @@ pub async fn upload_folder_to_remote_folder(
 
     let mut failures = Vec::new();
     for item in &planned {
-        let sent = upload_to_remote_folder_with_progress(
-            pool,
-            &account_id,
-            &label,
-            &item.parent,
-            &item.source,
-            &identity,
-            &folder_phrase,
-            Some(&batch),
-        )
-        .await;
+        let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &item.parent, &item.source, &identity, &keys, Some(&batch)).await;
         if let Err(e) = sent {
             tracing::warn!(file = %item.source.display(), error = %e, "remote folder upload failed for one file");
             failures.push(RemoteUploadFailure {

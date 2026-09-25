@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { driveWriteRefusal } from "../writeRefusal";
+import { driveWriteRefusal, frozenNotice } from "../writeRefusal";
 
 describe("driveWriteRefusal", () => {
   // A drop lands on the page whatever the permission, so a silent refusal
@@ -40,5 +40,20 @@ describe("driveWriteRefusal", () => {
     expect(driveWriteRefusal("writer", { frozen: true })).toMatch(/frozen/i);
     expect(driveWriteRefusal("manager", { frozen: true })).toMatch(/frozen/i);
     expect(driveWriteRefusal(null, { frozen: true })).toMatch(/frozen/i);
+  });
+});
+
+describe("frozenNotice", () => {
+  it("reads the server's timestamp as a date", () => {
+    expect(frozenNotice("2026-10-01T12:00:00Z")).toBe(
+      "Frozen until Oct 1, 2026. Files can be opened but not changed.",
+    );
+  });
+
+  it("never shows a raw or broken timestamp", () => {
+    expect(frozenNotice(undefined)).toBe(
+      "This drive is frozen. Files can be opened but not changed.",
+    );
+    expect(frozenNotice("not a date")).not.toContain("Invalid");
   });
 });

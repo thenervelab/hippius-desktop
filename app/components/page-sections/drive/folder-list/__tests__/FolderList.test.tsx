@@ -214,6 +214,33 @@ describe("Manage access on the row", () => {
     ).not.toBeInTheDocument();
   });
 
+  // Drive-level Manage access is for a drive shared as a whole. The counts
+  // are whole-drive only (Rust leaves folder invites and folder holders
+  // out), so a drive where only folders are shared reads as zero here, and
+  // each shared folder carries its own Manage access instead.
+  it("stays hidden on a drive where only folders are shared", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        sharingByLabel={new Map([["team-docs", { memberCount: 0, liveInviteCount: 0, totalInviteCount: 0 }]])}
+        onManageAccess={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
+  });
+
+  // A whole-drive invite nobody has accepted yet still makes it shared.
+  it("offers it on a drive with only a whole-drive invite out", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "own", folderName: "team-docs" })]}
+        sharingByLabel={new Map([["team-docs", { memberCount: 0, liveInviteCount: 1, totalInviteCount: 1 }]])}
+        onManageAccess={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Manage access" })).toBeInTheDocument();
+  });
+
   // Managing access is the owner's, and a member drive's owner is elsewhere.
   it("stays hidden on a drive owned by someone else", () => {
     render(

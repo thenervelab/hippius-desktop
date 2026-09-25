@@ -17,6 +17,51 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Shared drives are available in every release, not only beta.** Plus, Max
+  and Scale plans can share a drive and invite people from the released app,
+  and the plan cards no longer mark the shared team drive as coming soon.
+- **Sharing drives and folders is part of the Plus, Max and Scale plans.** On
+  Free and Starter, the Share dialog and Manage access show a short note with
+  an "Upgrade plan" button in place of inviting people or creating links. You
+  can still see who has access and remove people or links.
+- **Shared drives have three roles again: Viewer, Editor and Manager.** A
+  Manager can invite people by link or email, change roles, remove people,
+  revoke links and let emailed invitations through, on a drive they do not
+  own, from the same Share dialog, Manage access and drive header the owner
+  uses. A Manager link works once and expires within 24 hours. A folder is
+  still shared as Viewer or Editor, and the owner always keeps their access.
+- **Sharing a drive or folder happens in one Share dialog**, with inviting
+  someone by email and creating a link as two separate steps, so typing an
+  address never turns a link into an invitation by mistake. Problems are
+  explained right where they happen, and the dialog stays open so you can
+  invite several people in a row.
+- **The Share dialog shows who has access**: the owner, everyone in the
+  drive or folder, and invitations still waiting. You can change someone's
+  role or remove them right there, approve an emailed invitation that is
+  waiting for you, and revoke a link you just made.
+- **People you invite by email join without waiting for you.** Once they
+  open the invitation, the app approves it on its own while you (or a Manager
+  of the drive) are signed in, and tells you "{name} can join {drive}." Approve is still there if they
+  are waiting while the app is closed or locked.
+- **Manage access is one list** instead of tabs: the people who have the
+  drive or folder, invitations still waiting, and every link with how often
+  it was used and when it expires, all in one place.
+- **Manage access stays easy to read on a big drive**: it shows the newest
+  six people and three invitations, and up to ten links in full, each with
+  its link ready to copy. A bar at the top jumps
+  between people, invitations and links, and "Show all" opens a list you can
+  search and filter. Long names and emails are cut short instead of running
+  under someone's role.
+- **Changing which folders someone can open now lets you add a folder**, as
+  Viewer or Editor, not only take folders away.
+- **Removing someone, cancelling an invitation, revoking a link or leaving
+  asks right in that row**, with the red button and Cancel beside it, instead
+  of opening a second window on top of the Share dialog or Manage access.
+  Changing which folders someone can open now happens inside Manage access
+  too. Escape or Cancel puts the row back.
+- **The Share dialog's people line up on the right**: roles and Remove end at
+  the same edge, Remove is red text, and the link's expiry picker fills the
+  space before Create link.
 - **Storage and plan banners on Overview use a button on the right**
   (Upgrade, See storage plans, Top up). Drive keeps an underlined text
   link under the banner copy so it does not duplicate the plan-chip
@@ -26,6 +71,24 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Invites and links show the right time left.** A 7-day invite sent a moment
+  ago now says "7 days", not "6 days", and the Share dialog and Manage access
+  always agree on how long an invite or link has.
+- **Long names, emails and wallet addresses stay readable.** In the Share
+  dialog, Manage access, the Added by column, Shared with me and your account
+  menu, a long one is shortened in the middle to fit, so you still see how an
+  address starts and ends and an email keeps its domain. Hover to see it in
+  full, and "(you)" is always visible.
+- **Sharing one folder no longer marks the whole drive as shared.** The drive
+  list and drive header only say a drive is shared, and only offer Manage
+  access for the drive, when the whole drive is. "Share drive" is still there
+  to share it. A folder you shared on its own carries its own "Shared" mark and
+  a Manage access button on its row, and the same in its header, where you see
+  who has that folder and can make more links for it.
+- **A frozen shared drive now says until when in plain words**, instead of a raw timestamp.
+- **Accounts that sign in with an access key or a wallet no longer show a made-up
+  `@hippius.local` email.** The account menu, sharing and Manage access show the
+  name or the wallet address instead.
 - **Sync Queue when storage is full (HTTP 402).** Failed uploads say
   "Storage full. Upgrade your plan or free up space." instead of
   "Server error (402). Please try again." Credits-exhausted failures still
@@ -40,6 +103,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Share one folder as a Viewer or Editor** (internal test builds only for now), by a single-use link or by email. People you share a folder with see it under Shared with me, can open it without seeing anything above it, and can do what their role allows. Whatever the server does not offer yet (single-folder sharing, Editor on a folder, email invites) says "coming soon" instead of disappearing.
+- **Editors can share a folder by link from a drive someone else owns.** Viewers and frozen drives do not see the option.
+- **Invite people to a shared drive by email.** The owner can send a single-use invitation from the Share dialog, see where each one is on the Links tab, and approve it once the person opens it.
+- **Shared drives show people by name.** Members, invite links, Shared with me, the Added by column and File Details name each person, with their full address and email on hover.
 - **Drive remembers how many rows you chose.** Pick 50 per page and it stays 50
   — in other folders, after visiting another page, and next time you open the
   app. The rows-per-page control also stops disappearing on folders that fit on
@@ -65,20 +132,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   access. Starter plans do not include shared drives, so the option is not shown.
 - **Shared drives show who they belong to and what you can do in them.** A drive
   someone shared with you is marked in your drive list and says whether you are a
-  Viewer, an Editor or a Manager, instead of looking exactly like your own drives.
+  Viewer or an Editor, instead of looking exactly like your own drives.
 - **Choose what an invite grants.** Inviting someone to a drive now asks whether
-  they join as a Viewer (open and download), an Editor (also upload and delete) or
-  a Manager (also invite and remove people), and says what the link allows before
-  you send it.
+  they join as a Viewer (open and download) or an Editor (also upload and delete),
+  and says what the link allows before you send it.
 - **The Drive toolbar stays put as you go deeper into folders.** New Folder,
   upload and the rest sat at the right edge until a long breadcrumb pushed them onto
   a second line, where they jumped to the left. They hold the right edge either way now.
 - **Uploading and dropping files inside a shared drive works.** Opening a folder
   inside one lost track of the drive, so uploads quietly went to a folder on this
   computer instead. Drag and drop works there too.
-- **Manage access shows on a shared drive you manage**, whether or not you have
-  synced it to this computer.
-- **Viewer, Editor and Manager now read as coloured badges**, the same ones the
+- **Viewer and Editor now read as coloured badges**, the same ones the
   web console uses, so a list of drives can be read for access at a glance.
 - **The Drive breakdown cards no longer list categories nothing is in.** A drive
   uploaded only from the console showed "Desktop 0", "Mobile 0" and "Other 0"
@@ -86,15 +150,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **The file-types card no longer says "(before tracking)".** That caveat is true
   of where a file was uploaded from, which older files do not record, but a file's
   type has always been known.
-- **A Manager can manage a shared drive without syncing it first**, and an Editor
-  can upload into one they are only browsing. Both used to need a copy of the
-  drive on this computer.
+- **An Editor can upload into a shared drive they are only browsing.** That used
+  to need a copy of the drive on this computer.
 - **Drives shared with you show their size, file count and last change**, the
   same facts your own drives show. A drive whose figures have not arrived yet
   shows none rather than claiming to be empty.
 - **Drives shared with you read like your own drives.** Each row shows a folder
   icon, its role as a badge, and a menu with Open, Sync to this computer and
-  Leave drive; managers get Manage access on the row itself.
+  Leave drive.
 - **You can leave a shared drive you never synced.** Leaving used to require a
   local copy of the drive first.
 - **Open a drive somebody shared with you without copying it to this computer.**
@@ -109,16 +172,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Sharing a drive is offered on every plan, and says what it costs.** Picking it
   on a plan that does not include shared drives opens an upgrade prompt naming Plus,
   Max and Scale, rather than the option being hidden with no explanation.
-- **A Manager can manage the drive they were made a manager of.** Someone given
-  the Manager role on a drive shared with them can now invite people, change
-  roles and remove members from the desktop app, instead of only from the web
-  console.
 - **A Viewer is no longer offered uploads they cannot make.** On a drive shared
   with you as a Viewer, the upload buttons are absent rather than failing later
-  as a sync error. Editors and Managers are unaffected.
+  as a sync error. Editors are unaffected.
 - **Changing a role says what it costs before you save it.** Demoting someone now
-  warns that the invite link which admitted them is revoked too, and that
-  demoting a manager revokes every link that manager created.
+  warns that the invite link which admitted them is revoked too.
 - **File Details says who uploaded a file in a shared drive.** Opening a file in
   a drive you share shows the person who put it there, or "You" when it was you.
   Files on your own private drives are unchanged — there is only one answer there.

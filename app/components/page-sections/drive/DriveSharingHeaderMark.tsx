@@ -17,8 +17,8 @@ import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
-import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
-import { parseDriveRole } from "@/app/lib/shared-drives/roles";
+import { driveRowSharing, managedDriveCountMark } from "@/app/lib/shared-drives/driveRowSharing";
+import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import DriveRoleChip from "./DriveRoleChip";
 
 export default function DriveSharingHeaderMark({
@@ -53,12 +53,16 @@ export default function DriveSharingHeaderMark({
         role: byIdentity.membership?.role,
       })
     : bySynced.sharing;
-  // Managing no longer needs a local copy: the manage calls address the drive
-  // by its wire identity, and the mint falls back to this account's own grant
-  // for the folder key when no seal is on disk.
+  // The owner of a shared drive, or a Manager of somebody else's, manages
+  // access. Managing needs no local copy: the manage calls address the drive
+  // by its wire identity (`?owner=`), and the mint falls back to this
+  // account's own grant for the key when no seal is on disk.
   const canManage = browsedSharedDrive
-    ? browsedRole === "manager"
+    ? canManageDrive({ isOwner: false, role: browsedRole ?? undefined })
     : bySynced.canManage;
+  const memberCount = browsedSharedDrive
+    ? (byIdentity.membership?.memberCount ?? null)
+    : bySynced.memberCount;
 
   if (!sharing.isShared) return null;
 
@@ -66,6 +70,9 @@ export default function DriveSharingHeaderMark({
   // The role this account holds here, when it is known: a member drive is
   // described by what the viewer may do in it, not by the word "Shared".
   const heldRole = browsedSharedDrive ? browsedRole : bySynced.role;
+  // A Manager sees the drive's own mark beside their role, as its owner
+  // would: how many people are in it, when the listing says.
+  const countMark = withMe && canManage ? managedDriveCountMark(memberCount) : null;
 
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -86,10 +93,21 @@ export default function DriveSharingHeaderMark({
       </span>
       )}
 
-      {/* Owners, and managers on a drive they do not own. A Viewer or Editor
-          sees the badge and their role, which is the whole of what the drive
-          means for them here. */}
-      {canManage && (
+      {/* Left out on a phone, where the role, the count and the button do
+          not fit beside the breadcrumb; the panel says who is in it. */}
+      {countMark ? (
+        <span
+          title={countMark.title}
+          className="hidden flex-shrink-0 sm:inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[#1F50BD]/40 px-2 py-0.5 text-[11px] font-medium text-[#1F50BD] dark:border-[#6b93ea]/40 dark:text-[#9dbaf2]"
+        >
+          <Users className="size-3" aria-hidden="true" />
+          {countMark.label}
+        </span>
+      ) : null}
+
+      {/* Owners and managers manage access. A Viewer or Editor opens the
+          same panel read only: who else is in the drive, and Leave. */}
+      {canManage || withMe ? (
         <Button
           variant="ghost"
           size="auto"
@@ -110,9 +128,9 @@ export default function DriveSharingHeaderMark({
           }
           className="h-7 flex-shrink-0 rounded-md border border-primary-50 px-2.5 text-xs font-medium text-primary-50 transition-colors hover:bg-primary-50/10 dark:border-primary-brand-dark dark:text-primary-brand-dark dark:hover:bg-primary-50/15"
         >
-          Manage access
+          {canManage ? "Manage access" : "Who has access"}
         </Button>
-      )}
+      ) : null}
     </div>
   );
 }

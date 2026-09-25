@@ -5,7 +5,7 @@ import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import {
-  createDriveInviteDialogAtom,
+  shareDialogAtom,
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
@@ -87,6 +87,13 @@ interface DriveOnboardingProps {
     folderHash: string;
     displayLabel: string;
   }) => void;
+  /** Open a FOLDER shared with this account, rooted at that folder. */
+  onOpenFolderGrant?: (grant: {
+    ownerSs58: string;
+    folderHash: string;
+    pathPrefix: string;
+    folderName: string;
+  }) => void;
   /**
    * Polled plan gate: uploads / sync will be refused. Clicks open the
    * upgrade dialog instead of the folder picker.
@@ -99,6 +106,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSelectFolder,
   onOpenRemoteFolder,
   onOpenSharedDrive,
+  onOpenFolderGrant,
   isStorageFull = false,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -108,7 +116,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const sharedDriveRoles = useSharedDriveRoles();
   const sharedDrivesInPlan = useSharedDrivesInPlan();
   const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
-  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
+  const setInviteDialogTarget = useSetAtom(shareDialogAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -787,6 +795,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             exactly like a freshly added local folder. */}
         <SharedWithMeSection
           onOpenDrive={onOpenSharedDrive}
+          onOpenFolderGrant={onOpenFolderGrant}
           onManageAccess={setShareDriveTarget}
           onDriveAdded={(label) => {
             loadFolders();

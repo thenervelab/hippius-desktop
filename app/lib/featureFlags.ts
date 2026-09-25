@@ -7,7 +7,7 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). `SHARED_DRIVES_ENABLED` uses it.
+// staging, never production). `FOLDER_ROLES_ENABLED` uses it.
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
@@ -112,42 +112,47 @@ export const VM_VPN_ENABLED = false;
  * silently anyway (the backend maps the unmounted routes to
  * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches and hides).
  *
- * **Gated to beta** (`enabledFrom("beta")`): off production, on beta/staging.
+ * **On everywhere**, production included.
  *
- * Console splits create vs use (`SHARED_DRIVES` on prod for members/invite
- * accept; `SHARED_DRIVES_CREATE` off prod until launch). Desktop still uses
- * one flag for both mint and use. Matching that split is a follow-up — do
- * not silently enable create on production without an explicit decision.
+ * It was gated to beta while the console kept its own `SHARED_DRIVES` flag
+ * off in production: an invite link is ACCEPTED on the console's
+ * `/invite/[token]` page, so a production desktop owner could have minted
+ * links that died at the one step the desktop does not own. The console now
+ * ships `SHARED_DRIVES` on in production (joining, members, Manage access,
+ * the invite page), so that step works and the gate has no reason left.
  *
- * Two gates still stand in front of it, which is what makes that safe:
+ * Two gates still stand in front of creating shares, which is what makes
+ * that safe:
  *
- *   - a plan without the perk never sees "Share drive" at all
- *     (`planSupportsSharedDrives`), and the server refuses a mint with
- *     `shared_drives_not_entitled` even if it somehow did;
+ *   - a plan without the perk (Free, Starter) gets an upgrade prompt in
+ *     place of every control that adds people (`canShareDrives`, decided in
+ *     Rust), and the server refuses a mint with `shared_drives_not_entitled`
+ *     even if it somehow got through;
  *   - a server fleet without `HCFS_FEATURE_SHARED_DRIVES=1` answers the
  *     unmounted routes as `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the
  *     UI hides rather than erroring on.
  *
- * So the worst case on a lane whose fleet is not ready is a menu item that
- * opens a modal saying the feature is not available — not a broken flow.
- *
- * Worth remembering why it was dark: it was left `true` through 0.6.0 without
- * ever being announced, which left the app contradicting itself — the Drive
- * plan cards grey out the shared team drive perk as "coming soon" while the
- * sharing surfaces were reachable. Check that copy still matches before this
- * reaches production.
- *
- * **Gated to beta because the console gates itself the same way.** The desktop
- * owns only part of the flow: an invite link is ACCEPTED on the console's
- * `/invite/[token]` page, and the console keeps its own `SHARED_DRIVES` flag
- * off in production. On everywhere here would let a production owner mint
- * links that land on a console page with the feature off — the desktop half
- * working perfectly and the flow dying at the one step it does not own.
- * Nothing in either codebase catches that, so the two flags flip together at
- * launch. `pnpm dev` resolves to staging (see `next.config.ts`), so local
- * work still sees it.
+ * The Drive plan cards list the shared team drive perk as available, not
+ * "coming soon" (`DrivePlanCard.tsx`); keep the two in step.
  */
-export const SHARED_DRIVES_ENABLED = enabledFrom("beta");
+export const SHARED_DRIVES_ENABLED = true;
+
+/**
+ * Folder collaboration: share ONE folder of a drive as Viewer or Editor, by
+ * link or by email, and let an Editor holder write inside it.
+ *
+ * Built against HCFS #475 (not merged yet), documented in one place: the
+ * module doc of `src-tauri/src/shared_drives/folder_roles.rs`. Inside this
+ * flag nothing is hidden on a server capability: "Share folder" is always
+ * offered to owners and drive Managers, and whatever the server refuses
+ * (folder invites off, Editor off, email off) reads as "coming soon", so each
+ * piece lights up on its own when the server turns it on. With the flag off,
+ * folder sharing stays the read-only, capability-gated version.
+ *
+ * **Staging only** (`enabledFrom("staging")`): off in beta and production
+ * until #475 merges and is checked against this build.
+ */
+export const FOLDER_ROLES_ENABLED = enabledFrom("staging");
 
 /**
  * API token settings. When `false`, the surface is fully invisible: the

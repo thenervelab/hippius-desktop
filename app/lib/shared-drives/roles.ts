@@ -11,8 +11,8 @@
  * by identity rather than by a role column. Callers that need to show "Owner"
  * hold that fact themselves.
  *
- * Deliberately a verbatim port of the console's `src/lib/shared-drives/roles.ts`
- * — same wire words, same labels, same degrade rule. Two clients showing a
+ * Deliberately a verbatim port of the console's `src/lib/shared-drives/roles.ts`,
+ * with the same wire words, labels and degrade rule. Two clients showing a
  * member different powers for the same role is the failure this prevents, so
  * any change here has to land on both sides together.
  */

@@ -717,7 +717,9 @@ pub async fn restore_session(app: tauri::AppHandle, state: tauri::State<'_, crat
         "token": auth_token,
         "userId": row.user_id.unwrap_or(0),
         "username": row.username.clone().unwrap_or_default(),
-        "email": row.email.clone(),
+        // A system placeholder (`@hippius.local`) is not a real address and
+        // is never shown, so it does not reach the FE at all.
+        "email": crate::utils::display_email::display_email(row.email.as_deref()),
         "provider": &provider,
         "expiresAt": row.token_expiry.and_then(|e| chrono::DateTime::from_timestamp_millis(e).map(|d| d.to_rfc3339())).unwrap_or_default(),
         "substrateAddress": &addr,

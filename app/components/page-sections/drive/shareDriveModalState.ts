@@ -3,10 +3,6 @@
 // unit-testable without a render. Tested in
 // `__tests__/shareDriveModalState.test.ts`.
 
-import type {
-  DriveInviteInfo,
-  DriveMemberInfo,
-} from "@/app/lib/tauri/sharedDrives";
 import {
   MANAGER_INVITE_MAX_SECONDS,
   type DriveRole,
@@ -22,70 +18,36 @@ export type InviteState =
   | { kind: "choosing" }
   | { kind: "running" }
   | { kind: "done"; inviteUrl: string }
+  // A mailed invitation: there is no link to show, only who it went to.
+  | { kind: "emailSent"; email: string }
   | { kind: "unavailable" }
   // The mint plan gate: the owner's plan does not include shared drives. A
   // terminal upgrade state, not an error — its own copy and CTA, no retry.
   | { kind: "notEntitled" }
+  // The server has folder invites off (or predates them): sharing a single
+  // folder is coming soon. Terminal, never a fallback to a drive invite.
+  | { kind: "folderComingSoon" }
   | { kind: "error"; message: string };
 
 /**
- * Members-tab data lifecycle. `idle` means the tab has never been opened
- * this session — the fetch is lazy so minting an invite costs no member
- * listing round-trip.
+ * A "coming soon" shown inline beside the choice it is about, keyed by the
+ * structured refusal Rust returned (never by the message text).
  */
-export type MembersState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; members: DriveMemberInfo[] }
-  | { kind: "unavailable" }
-  | { kind: "error"; message: string };
-
-export type InvitesState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; invites: DriveInviteInfo[] }
-  | { kind: "unavailable" }
-  | { kind: "error"; message: string };
+export type ComingSoonNotice = "email" | "folderEmail" | "folderEditor";
 
 /**
- * Same five-state shape as members, deliberately: both tabs load the same way
- * against the same server, so one reader can learn one shape.
+ * The words for each "coming soon". The same sentences are the Rust
+ * `NotReadyKind` Display texts (`src-tauri/src/error.rs`); a test pins the
+ * two together so neither side can reword alone.
  */
-export function getInvitesView(state: InvitesState): MembersView {
-  switch (state.kind) {
-    case "loading":
-    case "idle":
-      return "loading";
-    case "unavailable":
-      return "unavailable";
-    case "error":
-      return "error";
-    default:
-      return state.invites.length === 0 ? "empty" : "rows";
-  }
-}
-
-export type MembersView = "loading" | "rows" | "empty" | "unavailable" | "error";
-
-/**
- * Which members-tab body renders. `idle` maps to `loading` — by the time
- * anything is on screen the activation effect has started the fetch, and
- * rendering a skeleton for the one frame in between beats a flash of the
- * empty state.
- */
-export function getMembersView(state: MembersState): MembersView {
-  switch (state.kind) {
-    case "idle":
-    case "loading":
-      return "loading";
-    case "ready":
-      return state.members.length === 0 ? "empty" : "rows";
-    case "unavailable":
-      return "unavailable";
-    case "error":
-      return "error";
-  }
-}
+export const COMING_SOON_COPY: Record<ComingSoonNotice | "folder", string> = {
+  email: "Email invites are coming soon. For now, copy the invite link and send it yourself.",
+  folderEmail:
+    "Email invites for a single folder are coming soon. For now, copy the invite link and send it yourself.",
+  folderEditor:
+    "Editor access for a single folder is coming soon. You can share it as view only for now.",
+  folder: "Sharing a single folder is coming soon.",
+};
 
 /**
  * "Never expires", expressed as the hcfs server's 100-year lifetime cap —
@@ -113,7 +75,7 @@ export const INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> 
  * Rust mint and the console clamp anything wider. Offering "7 days" /
  * "Never expires" for a manager would still mint a working link, but the
  * done dialog would describe the lifetime the user picked rather than the
- * one that was sent — so the chooser stops offering them (console
+ * one that was sent, so the chooser stops offering them (console
  * `inviteTtlOptionsFor`).
  */
 export function inviteTtlOptionsFor(
@@ -136,6 +98,54 @@ export function clampInviteTtl(role: DriveRole, secs: number): number {
   return allowed.some((o) => o.secs === secs)
     ? secs
     : (allowed[allowed.length - 1]?.secs ?? DEFAULT_INVITE_TTL_SECS);
+}
+
+/**
+ * Lifetimes a MAILED invitation may carry. The server takes one hour to
+ * thirty days, so "Never expires" is not offered (Rust refuses it by name).
+ */
+export const EMAIL_INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> =
+  INVITE_TTL_OPTIONS.filter((o) => o.secs <= 30 * 24 * 60 * 60);
+
+/**
+ * Roles an emailed invitation may confer. A Manager invite has to be a link:
+ * the server caps those at a day, and a mailed one would expire before it
+ * could be approved.
+ */
+export const EMAIL_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> = [
+  "reader",
+  "writer",
+];
+
+/**
+ * Roles a FOLDER may be shared with: Viewer and Editor. Manager is not a
+ * folder role (HCFS #475). Mirrors `folder_roles::FOLDER_ROLES` in Rust.
+ */
+export const FOLDER_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> = [
+  "reader",
+  "writer",
+];
+
+/**
+ * Lifetimes a folder invite may carry: at most 30 days (the server's cap),
+ * so "Never expires" is not offered. Always single use, so there is no uses
+ * choice at all.
+ */
+export const FOLDER_INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> =
+  INVITE_TTL_OPTIONS.filter((o) => o.secs <= 30 * 24 * 60 * 60);
+
+/** Keep a picked lifetime inside what a folder invite allows. */
+export function clampFolderInviteTtl(secs: number): number {
+  return FOLDER_INVITE_TTL_OPTIONS.some((o) => o.secs === secs)
+    ? secs
+    : DEFAULT_INVITE_TTL_SECS;
+}
+
+/** Keep a picked lifetime inside what an emailed invitation allows. */
+export function clampEmailInviteTtl(secs: number): number {
+  return EMAIL_INVITE_TTL_OPTIONS.some((o) => o.secs === secs)
+    ? secs
+    : DEFAULT_INVITE_TTL_SECS;
 }
 
 /**

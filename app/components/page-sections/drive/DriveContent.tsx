@@ -702,6 +702,7 @@ const DriveContent: FC<DriveContentProps> = ({
             setRenameModalFile(file);
             setContextMenu(null);
           }}
+          basePath={currentSubfolderPath}
         />
       )}
 

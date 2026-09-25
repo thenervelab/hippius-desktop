@@ -37,7 +37,7 @@ export interface FolderMenuFlags {
  */
 export interface FolderMenuPlan {
   /**
-   * "Share drive…" — an own drive, or one this account manages for somebody
+   * "Share drive…": an own drive, or one this account manages for somebody
    * else. Gated on the flag either way.
    */
   showShareDrive: boolean;

@@ -29,30 +29,51 @@ export function canShareFolder(
 /**
  * Whether a row's "Share via link" action is offered at all.
  *
- * Folder shares are owner-mint-only, and that is the SERVER's rule rather than
- * a desktop policy: the mint looks the folder up under the authenticated
- * bearer's own account, so a member's request finds nothing and is refused.
- * The link would be unusable even if it were minted, since it names the
- * minter's namespace rather than the owner's. Nothing this client can do makes
- * it work, so the action is hidden on a drive shared WITH this account instead
- * of being offered and then refused — which is what it did, with Rust's "only
- * the owner of a shared drive can share its folders as a link" arriving in the
- * share dialog after the user had already chosen an expiry.
+ * A FILE always can be, from anybody's drive: sharing one uploads a
+ * re-encrypted copy to the sharer's own share storage.
  *
- * Hidden rather than disabled-with-a-tooltip, which is how the missing server
- * capability reads: that one is a "not yet", worth making discoverable, while
- * this is a "not here, ever". Rust keeps its refusal — it is the enforcement,
- * and this is the affordance.
- *
- * FILE shares are unaffected. They upload a re-encrypted copy to the sharer's
- * own share storage, which a member may do on any drive they can read.
+ * A FOLDER in somebody else's drive is a reference, not a copy: the mint
+ * names the drive's owner (`owner_ss58`, hcfs #458), which the server accepts
+ * from an Editor or a Manager of a drive that is not frozen, and only once it
+ * advertises `member_folder_shares`. Anywhere else the item is ABSENT rather
+ * than disabled: a Viewer's answer will not change by waiting, and a dead
+ * control invites a hunt for a permission that was never going to be granted.
+ * (The missing `folder_shares` capability stays disabled-with-a-tooltip,
+ * because that one is a "not yet".) Rust keeps every refusal as the
+ * enforcement; this is the affordance. Console `offersShareByLink` parity.
  */
 export function offersShareAction(
   file: FormattedUserFile,
   memberDriveLabels?: ReadonlySet<string>,
+  context: {
+    /** `capabilities.member_folder_shares`. */
+    memberFolderShares?: boolean;
+    /** Labels of shared drives this account may write to (not frozen). */
+    writableMemberDriveLabels?: ReadonlySet<string>;
+  } = {},
 ): boolean {
   if (!file.isFolder) return true;
-  return !isMemberDriveLabel(file.label, memberDriveLabels);
+  if (!isMemberDriveLabel(file.label, memberDriveLabels)) return true;
+  return (
+    context.memberFolderShares === true &&
+    Boolean(file.label && context.writableMemberDriveLabels?.has(file.label))
+  );
+}
+
+/**
+ * Whether a row may offer a WRITE action (rename). Always on this account's
+ * own drives; on somebody else's only where its role can write (Editor or
+ * Manager) and the drive is not frozen. Hidden, not disabled, where it
+ * cannot: a Viewer's answer does not change by waiting. The server refuses
+ * the write anyway; this is the affordance.
+ */
+export function offersWriteAction(
+  file: Pick<FormattedUserFile, "label">,
+  memberDriveLabels: ReadonlySet<string> | undefined,
+  writableMemberDriveLabels: ReadonlySet<string> | undefined,
+): boolean {
+  if (!isMemberDriveLabel(file.label, memberDriveLabels)) return true;
+  return Boolean(file.label && writableMemberDriveLabels?.has(file.label));
 }
 
 /**

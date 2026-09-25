@@ -46,6 +46,8 @@ export type FormattedUserFile = {
   uploadedBy?: string;
   /** Display name beside uploadedBy (hcfs #455). */
   uploadedByName?: string;
+  /** Uploader email beside uploadedBy (hcfs #455); tooltip only, never a key. */
+  uploadedByEmail?: string;
   isFolder?: boolean;
   type?: string;
   isErasureCoded: boolean;

@@ -1,395 +1,153 @@
-// Owner-side management modal for a shared drive: mint invite links and
-// list/remove members. Opened via `shareDriveModalAtom` (the
-// `ShareFileModal` singleton pattern — mounted once in the pages layout,
-// any surface opens it by setting the atom). Own drives only: the
-// "Share drive…" menu item is hidden for member rows and the backend
-// refuses a member label as `Validation`.
+// The Manage access side panel, for a drive or one folder of it. Opened via
+// `shareDriveModalAtom` (the `ShareFileModal` singleton pattern: mounted once
+// in the pages layout, any surface opens it by setting the atom).
 //
-// Invite minting lives in `CreateDriveInviteDialog` (a separate dialog).
-// This panel's Links tab lists invites the server still holds, opens sealed
-// tokens in Rust, and offers copy / revoke — console parity for seal-back.
+// One scrolling list, grouped:
+//
+//   People             the owner, you, members (role select, Remove) and
+//                      folder holders tagged with their folder (Change
+//                      folders, Remove). Read only for anyone but the owner.
+//   Pending invites    emailed invitations still waiting (Cancel, Approve).
+//   Links              working links with usage, expiry, maker and the link
+//                      itself; ended ones folded into one line.
+//
+// A big drive has 100 people and 100 links, so the main view draws only each
+// group's first rows, with a jump bar above the list and "Show all N …"
+// under a group; the full list of one group opens in place of the main one,
+// with search, filter chips and a windowed list (`access-panel/AccessPanelViews`).
+//
+// Everything in it comes from one Rust fold (`list_access_panel`); every
+// change is pessimistic, like the Share dialog's rows, which it reuses.
+// Inviting and making links happen in the Share dialog (`shareDialogAtom`);
+// the panel opens it and steps aside.
+//
+// Nothing opens a second dialog over the panel (it is one itself on a narrow
+// window): removing, revoking, cancelling and leaving ask in the row or the
+// footer (`share-dialog/RowConfirm`), and Change folders is a view in place
+// of the list.
+//
+// On a plan without sharing (Free, Starter; Rust decides, `canShareDrives`)
+// the owner still sees and removes everyone here, but Invite, New link,
+// Share, Approve and Change folders give way to one upgrade card. A 403
+// `shared_drives_not_entitled` from any change does the same.
 
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
-import dynamic from "next/dynamic";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, Copy, Lock, UserRoundPen, Users, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Folder, HardDrive, LogOut, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons, Skeleton } from "@/components/ui";
-import { FramedDialog } from "@/components/ui/FramedDialog";
-import ConfirmationDialog from "@/components/ConfirmationDialog";
-import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
-import DriveRoleChip from "./DriveRoleChip";
 import { useBreakpoint } from "@/app/lib/hooks";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
-import { SegmentedControl } from "@/components/ui/SegmentedControl";
+import {
+  MY_FOLDER_GRANTS_QUERY_KEY,
+  SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY,
+  useSharedDriveMemberships,
+} from "@/app/lib/hooks/useSharedDriveRoles";
+import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
+import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
+import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
+import { BILLING_ROUTE } from "@/app/lib/routes";
+import { useUnlockFlow } from "@/app/lib/hooks/useUnlockFlow";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
-  createDriveInviteDialogAtom,
+  driveInvitesVersionAtom,
+  shareDialogAtom,
   shareDriveModalAtom,
+  type ShareDriveModalTarget,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { activeRecoveryCheckAtom } from "@/app/lib/global-atoms/recoveryAtoms";
+import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import {
+  approveEmailInvite,
   changeDriveMemberRole,
-  isSharedDrivesUnavailable,
-  listDriveInvites,
-  listDriveMembers,
+  isSharedDrivesNotEntitled,
+  leaveSharedDrive,
+  leaveSharedDriveByIdentity,
+  nudgeInviteAutoSeal,
   removeDriveMember,
+  replaceFolderGrants,
   revokeDriveInvite,
-  type DriveInviteInfo,
-  type DriveMemberInfo,
+  type AccessPanel,
+  type AccessPanelHolder,
+  type DriveMembershipInfo,
 } from "@/app/lib/tauri/sharedDrives";
-import {
-  deadReasonLabel,
-  inviteRowView,
-} from "@/app/lib/shared-drives/inviteRowView";
-import { truncateInviteUrl } from "@/app/lib/shared-drives/inviteLink";
-import { cn } from "@/lib/utils";
-import {
-  DRIVE_ROLES,
-  driveRoleDemotionWarning,
-  driveRoleDescription,
-  driveRoleLabel,
-  parseDriveRole,
-  type DriveRole,
-} from "@/app/lib/shared-drives/roles";
+import { parseFolderGrantLabel, parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
-import { inviteDriveDisplayName } from "@/app/lib/shared-drives/inviteDriveName";
+import { frozenNotice } from "@/app/lib/shared-drives/writeRefusal";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+
+import { InlineNotice } from "./share-dialog/InlineNotice";
+import { useRowChanges } from "./share-dialog/PeopleWithAccessSection";
+import { ROW_TRIGGER, RowConfirm, RowConfirmProvider, useRowConfirm } from "./share-dialog/RowConfirm";
+import ChangeFoldersView from "./access-panel/ChangeFoldersView";
 import {
-  formatJoinedDate,
-  getInvitesView,
-  getMembersView,
-  type InvitesState,
-  type MembersState,
-} from "./shareDriveModalState";
-
-/** How many placeholder rows to show while a tab list is on the wire. */
-const SKELETON_ROWS = 4;
-
-/**
- * Members-tab loading body — avatar + name + role chip shaped like a real
- * `MemberRow`, so the list does not flash empty text then jump.
- */
-function MembersTabSkeleton() {
-  return (
-    <div
-      role="status"
-      aria-busy="true"
-      aria-label="Loading members"
-      className="min-h-0 flex-1 overflow-hidden"
-    >
-      <span className="sr-only">Loading members…</span>
-      {Array.from({ length: SKELETON_ROWS }, (_, i) => (
-        <div
-          key={i}
-          className="flex items-center justify-between gap-2 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10"
-        >
-          <div className="flex min-w-0 items-center gap-2.5">
-            <Skeleton variant="circle" width={28} height={28} />
-            <div className="min-w-0 space-y-1.5">
-              <Skeleton
-                width={i % 2 === 0 ? 128 : 96}
-                height={12}
-                className="rounded-md"
-              />
-              <div className="flex items-center gap-1.5">
-                <Skeleton width={52} height={18} className="rounded-full" />
-                <Skeleton width={72} height={11} className="rounded-md" />
-              </div>
-            </div>
-          </div>
-          <Skeleton width={28} height={28} className="shrink-0 rounded-md" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Links-tab loading body — summary / expiry / revoke button, with a URL
- * field bar on the first few rows (console-parity shape for sealed invites).
- */
-function LinksTabSkeleton() {
-  return (
-    <div
-      role="status"
-      aria-busy="true"
-      aria-label="Loading links"
-      className="min-h-0 flex-1 overflow-hidden"
-    >
-      <span className="sr-only">Loading links…</span>
-      {Array.from({ length: SKELETON_ROWS }, (_, i) => (
-        <div
-          key={i}
-          className="border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0 space-y-1.5">
-              <Skeleton
-                width={i % 2 === 0 ? 148 : 132}
-                height={12}
-                className="rounded-md"
-              />
-              <Skeleton width={110} height={11} className="rounded-md" />
-            </div>
-            <Skeleton width={58} height={28} className="shrink-0 rounded-md" />
-          </div>
-          {/* First three rows include the link field — most live invites show one. */}
-          {i < 3 ? (
-            <Skeleton
-              height={30}
-              width="100%"
-              className="mt-2 rounded-[6px]"
-            />
-          ) : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
+  FOLDER_ACCESS_HINT,
+  SHARED_DRIVES_UNAVAILABLE_COPY,
+  sharingGate,
+  type SharingGate,
+} from "./share-dialog/shareDialogState";
+import { NotEntitledNotice, SharingActionsSkeleton } from "./share-dialog/SectionNoticeView";
+import { driveDisplayName, findMembership } from "./share-dialog/ShareDialog";
+import { useAccessPanel, type AccessPanelState } from "./access-panel/useAccessPanel";
+import { EmptyAccess, EndedLinks, GroupHeader, PanelSkeleton, ShowAllGroup } from "./access-panel/AccessPanelRows";
+import {
+  FullViewHeader,
+  FullViewList,
+  LinkItem,
+  PanelSearch,
+  PendingItem,
+  PersonItem,
+  SummaryBar,
+  type FullViewState,
+  type RowActions,
+  type RowContext,
+  type SummaryItem,
+} from "./access-panel/AccessPanelViews";
+import {
+  ACCESS_PANEL_COPY,
+  MAIN_SEARCH_MIN_PEOPLE,
+  MEMBER_JUMP_BAR_MIN_PEOPLE,
+  PANEL_PREVIEW,
+  SEARCH_PLACEHOLDER,
+  isOnlyOwner,
+  linkMatches,
+  noMatchLine,
+  normalizeQuery,
+  panelPeople,
+  panelSubline,
+  peopleCount,
+  pendingMatches,
+  personKey,
+  personMatches,
+  planLabel,
+  type LinksFilter,
+  type PanelGroup,
+  type PanelPerson,
+} from "./access-panel/accessPanelView";
 
 /** Wider than File Details' 305: this panel holds lists, not labels. */
 const PANEL_WIDTH_PX = 360;
 
-type Tab = "members" | "links";
-
 export default function ShareDrivePanel() {
   const [target, setTarget] = useAtom(shareDriveModalAtom);
-  const queryClient = useQueryClient();
-  // Own links say nothing extra; somebody else's name who made them.
-  const { polkadotAddress } = useWalletAuth();
   const { isDesktop, isLargeDesktop } = useBreakpoint();
-
-  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
-
-  // Members first: it is what someone opens this for once the drive is
-  // already shared, which is the only state it opens in.
-  const [tab, setTab] = useState<Tab>("members");
-  const [members, setMembers] = useState<MembersState>({ kind: "idle" });
-  const [invites, setInvites] = useState<InvitesState>({ kind: "idle" });
-
-  const label = target?.label ?? null;
-  // Named only for a drive this account has NOT synced here; an own drive's
-  // label resolves on its own. `useMemo` so the identity is a stable value in
-  // the callbacks' dependency lists.
-  const driveTarget = useMemo(
-    () =>
-      target?.ownerSs58 && target?.folderHash
-        ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
-        : undefined,
-    [target?.ownerSs58, target?.folderHash],
-  );
-  // Stale-async guard: the modal never unmounts and `label` changes on
-  // close/reopen, so a response still in flight for a previous drive must
-  // not land on the current session's state (the reset effect below runs
-  // before the late response resolves, then the response would clobber it).
-  const currentLabelRef = useRef<string | null>(null);
-  currentLabelRef.current = label;
-
-  // Reset on every session transition, close included — the modal never
-  // unmounts, so without this a previous drive's invite link or member
-  // list would survive into the next open.
-  useEffect(() => {
-    setTab("members");
-    setMembers({ kind: "idle" });
-    setInvites({ kind: "idle" });
-  }, [label]);
-
-  const loadMembers = useCallback(async (driveLabel: string) => {
-    setMembers({ kind: "loading" });
-    try {
-      const rows = await listDriveMembers(driveLabel, driveTarget);
-      if (driveLabel !== currentLabelRef.current) return;
-      setMembers({ kind: "ready", members: rows });
-    } catch (err) {
-      if (driveLabel !== currentLabelRef.current) return;
-      if (isSharedDrivesUnavailable(err)) {
-        // Feature-off server: quiet degrade, never a toast.
-        setMembers({ kind: "unavailable" });
-      } else {
-        setMembers({ kind: "error", message: errorMessage(err) });
-      }
-    }
-  }, [driveTarget]);
-
-  const loadInvites = useCallback(async (driveLabel: string) => {
-    setInvites({ kind: "loading" });
-    try {
-      const rows = await listDriveInvites(driveLabel, driveTarget);
-      if (driveLabel !== currentLabelRef.current) return;
-      setInvites({ kind: "ready", invites: rows });
-    } catch (err) {
-      if (driveLabel !== currentLabelRef.current) return;
-      if (isSharedDrivesUnavailable(err)) {
-        setInvites({ kind: "unavailable" });
-      } else {
-        setInvites({ kind: "error", message: errorMessage(err) });
-      }
-    }
-  }, [driveTarget]);
-
-  const revokeInvite = useCallback(
-    async (inviteId: string) => {
-      if (!label) return;
-      const labelAtCall = label;
-      try {
-        await revokeDriveInvite(labelAtCall, inviteId, driveTarget);
-        toast.success("Link revoked");
-        void invalidateOwnedDriveSharing(queryClient);
-        await loadInvites(labelAtCall);
-      } catch (err) {
-        if (labelAtCall !== currentLabelRef.current) return;
-        toast.error(`Could not revoke the link: ${errorMessage(err)}`);
-      }
-    },
-    [label, loadInvites, queryClient, driveTarget],
-  );
-
-  // Same lazy rule as members: the tab pays for its own listing.
-  useEffect(() => {
-    if (!label || tab !== "links") return;
-    if (invites.kind !== "idle") return;
-    void loadInvites(label);
-  }, [label, tab, invites.kind, loadInvites]);
-
-  // Lazy members fetch: first activation of the tab only, so minting an
-  // invite costs no member-listing round-trip.
-  useEffect(() => {
-    if (!label || tab !== "members") return;
-    if (members.kind !== "idle") return;
-    void loadMembers(label);
-  }, [label, tab, members.kind, loadMembers]);
-
-  // Auto-copy once we reach `done`; the URL stays in a selectable textbox
-  // so the user can re-copy if focus rules block the auto-copy.
-
-  const removeMember = useCallback(
-    async (memberSs58: string) => {
-      if (!label) return;
-      const labelAtCall = label;
-      try {
-        await removeDriveMember(labelAtCall, memberSs58, driveTarget);
-        toast.success("Member removed");
-        void invalidateOwnedDriveSharing(queryClient);
-        await loadMembers(labelAtCall);
-      } catch (err) {
-        if (labelAtCall !== currentLabelRef.current) return;
-        if (isSharedDrivesUnavailable(err)) {
-          setMembers({ kind: "unavailable" });
-        } else {
-          toast.error(`Could not remove member: ${errorMessage(err)}`);
-        }
-      }
-    },
-    [label, loadMembers, queryClient, driveTarget],
-  );
-
-  const changeRole = useCallback(
-    async (memberSs58: string, role: DriveRole) => {
-      if (!label) return;
-      const labelAtCall = label;
-      try {
-        await changeDriveMemberRole(labelAtCall, memberSs58, role, driveTarget);
-        // The new role binds on the member's next request, so there is no
-        // propagation delay to caveat.
-        toast.success(`Role changed to ${driveRoleLabel(role)}`);
-        void invalidateOwnedDriveSharing(queryClient);
-        await loadMembers(labelAtCall);
-      } catch (err) {
-        if (labelAtCall !== currentLabelRef.current) return;
-        if (isSharedDrivesUnavailable(err)) {
-          setMembers({ kind: "unavailable" });
-        } else {
-          // The backend's refusals are written for the user -- "you cannot
-          // change your own role", the named role, the manager caps -- so
-          // they are surfaced verbatim rather than replaced.
-          toast.error(`Could not change role: ${errorMessage(err)}`);
-        }
-      }
-    },
-    [label, loadMembers, queryClient, driveTarget],
-  );
-
-  const onClose = () => setTarget(null);
+  const onClose = useCallback(() => setTarget(null), [setTarget]);
   const open = Boolean(SHARED_DRIVES_ENABLED && target);
 
-  // Body first, so the inline panel and the small-screen overlay render
-  // exactly the same thing and cannot drift.
+  // Remount for each target so nothing from the previous drive or folder (a
+  // loaded list, an open menu, a row error, a question) carries over. One
+  // provider for the whole panel: one row or the footer asks at a time.
   const body = target ? (
-      <div className="flex h-full min-h-0 flex-col px-3 pb-4 pt-4 font-geist">
-        <div className="mb-4 flex shrink-0 items-start justify-between gap-2 px-2">
-          <div className="min-w-0">
-            <p className="text-[16px] font-medium leading-5 text-black-900 dark:text-white">
-              Share access
-            </p>
-            <p className="mt-0.5 min-w-0 truncate text-[13px] text-black-900/40 dark:text-white/40">
-              {inviteDriveDisplayName(target.folderName, target.label)}
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="mt-1 flex size-[18px] shrink-0 items-center justify-center rounded-md bg-[#0000000F] text-black-900/40 transition-colors hover:bg-black/15 hover:text-black-900 dark:bg-[#FFFFFF0F] dark:text-grey-light-100/40 dark:hover:bg-white/25 dark:hover:text-white"
-          >
-            <X className="size-[10px]" strokeWidth={2.5} />
-          </button>
-        </div>
-
-        <div className="mb-5 shrink-0">
-          <SegmentedControl<Tab>
-            ariaLabel="Share drive sections"
-            fullWidth
-            value={tab}
-            onChange={setTab}
-            options={[
-              { label: "Members", value: "members" },
-              { label: "Links", value: "links" },
-            ]}
-          />
-        </div>
-
-        {/* List tabs claim remaining panel height and scroll inside it —
-            fixed max-h caps left empty space below while clipping rows. */}
-        {tab === "links" ? (
-          <LinksTab
-            state={invites}
-            onRevoke={(id) => void revokeInvite(id)}
-            onClose={() => setTarget(null)}
-            viewerSs58={polkadotAddress}
-          />
-        ) : (
-          <MembersTab
-            state={members}
-            driveName={
-              inviteDriveDisplayName(
-                target?.folderName,
-                target?.label ?? label,
-              ) || "this drive"
-            }
-            onRemove={(ss58) => void removeMember(ss58)}
-            onChangeRole={(ss58, role) => void changeRole(ss58, role)}
-            onCreateInvite={() => {
-              if (!target) return;
-              // Close the panel as the dialog opens. They are two surfaces for
-              // one drive, and a focused mint does not need the list behind
-              // it -- which also avoids the dialog opening underneath the
-              // panel's own overlay on small screens, where the panel sits
-              // above FramedDialog's layer.
-              setTarget(null);
-              setInviteDialogTarget(target);
-            }}
-          />
-        )}
-      </div>
+    <RowConfirmProvider key={`${target.label}|${target.pathPrefix ?? "\u0000"}|${target.ownerSs58 ?? ""}`}>
+      <AccessPanelBody target={target} onClose={onClose} />
+    </RowConfirmProvider>
   ) : null;
 
   // Same shell as File Details: an inline width-slide on large screens so the
@@ -407,10 +165,7 @@ export default function ShareDrivePanel() {
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="h-full shrink-0 overflow-hidden"
           >
-            <div
-              className="flex h-full min-h-0 flex-col overflow-hidden"
-              style={{ width: PANEL_WIDTH_PX }}
-            >
+            <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ width: PANEL_WIDTH_PX }}>
               {body}
             </div>
           </motion.aside>
@@ -427,7 +182,7 @@ export default function ShareDrivePanel() {
           aria-describedby={undefined}
           className="fixed bottom-0 right-0 top-0 z-[1003] flex w-full max-w-[360px] flex-col overflow-hidden bg-cover bg-fixed bg-center bg-no-repeat font-geist animate-panel-in bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]"
         >
-          <Dialog.Title className="sr-only">Share access</Dialog.Title>
+          <Dialog.Title className="sr-only">Manage access</Dialog.Title>
           {body}
         </Dialog.Content>
       </Dialog.Portal>
@@ -435,576 +190,670 @@ export default function ShareDrivePanel() {
   );
 }
 
-
-/**
- * The live invite links for this drive, and the only way to kill one.
- *
- * A minted link could not be revoked at all before this: the desktop never
- * persists tokens and the server stores only their hashes, so a link handed to
- * the wrong person stayed live for as long as it was configured to -- forever,
- * for a "never expires" one. Removing a member does not help; that revokes
- * somebody who already joined, not the link still circulating.
- */
-function LinksTab({
-  state,
-  onRevoke,
-  onClose,
-  viewerSs58,
-}: {
-  state: InvitesState;
-  onRevoke: (inviteId: string) => void;
-  onClose: () => void;
-  viewerSs58?: string | null;
-}) {
-  const view = getInvitesView(state);
-
-  if (view === "unavailable") return <SharedDrivesUnavailableNotice onClose={onClose} />;
-
-  if (view === "loading") {
-    return <LinksTabSkeleton />;
-  }
-
-  if (view === "error") {
-    return (
-      <p className="min-h-0 flex-1 py-6 text-center text-sm text-error-70">
-        {state.kind === "error" ? state.message : "Could not load links"}
-      </p>
-    );
-  }
-
-  if (view === "empty") {
-    return (
-      <p className="min-h-0 flex-1 py-6 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-        No invite links yet. Create one from the Invite tab.
-      </p>
-    );
-  }
-
-  const invites = state.kind === "ready" ? state.invites : [];
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      {invites.map((invite) => (
-        <InviteRow
-          key={invite.inviteId}
-          invite={invite}
-          onRevoke={onRevoke}
-          viewerSs58={viewerSs58}
-        />
-      ))}
-    </div>
-  );
+/** The drive's wire identity, from whatever the target and listings know. */
+function wireIdentity(
+  target: ShareDriveModalTarget,
+  membership: DriveMembershipInfo | undefined,
+): { ownerSs58: string; folderHash: string } | null {
+  const fromLabel = parseSharedDriveLabel(target.label) ?? parseFolderGrantLabel(target.label);
+  if (fromLabel) return { ownerSs58: fromLabel.ownerSs58, folderHash: fromLabel.folderHash };
+  if (target.ownerSs58 && target.folderHash) return { ownerSs58: target.ownerSs58, folderHash: target.folderHash };
+  if (membership) return { ownerSs58: membership.ownerSs58, folderHash: membership.folderHash };
+  return null;
 }
 
-function InviteRow({
-  invite,
-  onRevoke,
-  viewerSs58,
-}: {
-  invite: DriveInviteInfo;
-  onRevoke: (inviteId: string) => void;
-  viewerSs58?: string | null;
-}) {
-  // The same two-step inline confirm the member row uses: revoking is
-  // irreversible and the row is small.
-  const [confirming, setConfirming] = useState(false);
-  const [copying, setCopying] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const view = inviteRowView(invite, undefined, viewerSs58);
+function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const setShareDialogTarget = useSetAtom(shareDialogAtom);
+  const refreshSyncPaths = useSetAtom(triggerSyncPathRefreshAtom);
+  const memberships = useSharedDriveMemberships();
+  const { data: overview } = useStorageOverview();
 
-  const handleCopy = async () => {
-    if (!invite.inviteUrl || copying) return;
-    setCopying(true);
-    try {
-      await navigator.clipboard.writeText(invite.inviteUrl);
-      // Toast never carries the URL — it contains the drive key in `#k=`.
-      toast.success("Invite link copied");
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error("Couldn't copy invite link");
-    } finally {
-      setCopying(false);
+  // A folder is decided by the key being present, as in the Share dialog.
+  const pathPrefix = target.pathPrefix !== undefined ? target.pathPrefix.trim() : null;
+  const folder = pathPrefix !== null;
+  const folderPath = pathPrefix?.replace(/^\/+|\/+$/g, "") ?? null;
+  const driveTarget = useMemo(
+    () =>
+      target.ownerSs58 && target.folderHash
+        ? { ownerSs58: target.ownerSs58, folderHash: target.folderHash }
+        : undefined,
+    [target.ownerSs58, target.folderHash],
+  );
+
+  const { state, reload, retry } = useAccessPanel({ label: target.label, pathPrefix, target: driveTarget });
+
+  // Opening Manage access is a good moment for the background delivery of
+  // emailed invitation keys to look again (Rust decides whether it can).
+  useEffect(() => {
+    void nudgeInviteAutoSeal().catch(() => undefined);
+  }, []);
+
+  // The Share dialog bumps this on every invite or link it makes.
+  const invitesVersion = useAtomValue(driveInvitesVersionAtom);
+  const seenVersion = useRef(invitesVersion);
+  useEffect(() => {
+    if (seenVersion.current === invitesVersion) return;
+    seenVersion.current = invitesVersion;
+    void reload();
+  }, [invitesVersion, reload]);
+
+  // Locked links: the unlock flow runs in its own dialog, and once it closes
+  // the listing is read again, which opens the links that can now be opened.
+  const { unlock, busy: unlocking } = useUnlockFlow();
+  const recoveryCheck = useAtomValue(activeRecoveryCheckAtom);
+  const hadRecovery = useRef(false);
+  useEffect(() => {
+    if (recoveryCheck) {
+      hadRecovery.current = true;
+    } else if (hadRecovery.current) {
+      hadRecovery.current = false;
+      void reload();
     }
-  };
+  }, [recoveryCheck, reload]);
+
+  const membership = findMembership(target, memberships);
+  const driveName = driveDisplayName({ ...target, pathPrefix: undefined }, membership);
+  const title = folder ? folderPath || "this folder" : driveName;
+
+  const onChanged = useCallback(() => {
+    void invalidateOwnedDriveSharing(queryClient);
+  }, [queryClient]);
+
+  // Whether this owner's plan lets them add people. Rust decides; a 403
+  // from any change here flips it to the upgrade card as well.
+  const router = useRouter();
+  const planAllows = useSharedDrivesInPlan();
+  const [refusedByServer, setRefusedByServer] = useState(false);
+  const onNotEntitled = useCallback(() => setRefusedByServer(true), []);
+  const upgrade = useCallback(() => {
+    onClose();
+    router.push(BILLING_ROUTE);
+  }, [onClose, router]);
+
+  const { busy, rowError, run } = useRowChanges(onChanged, reload, onNotEntitled);
+
+  const openShareDialog = useCallback(() => {
+    // Close the panel as the dialog opens: they are two surfaces for one
+    // drive, and on a small screen the panel sits above the dialog's layer.
+    onClose();
+    setShareDialogTarget(
+      folder
+        ? {
+            label: target.label,
+            folderName: folderPath ?? "",
+            ownerSs58: target.ownerSs58,
+            folderHash: target.folderHash,
+            pathPrefix: pathPrefix ?? "",
+          }
+        : {
+            label: target.label,
+            folderName: target.folderName,
+            ownerSs58: target.ownerSs58,
+            folderHash: target.folderHash,
+          },
+    );
+  }, [onClose, setShareDialogTarget, folder, folderPath, pathPrefix, target]);
+
+  const panel = state.kind === "ready" ? state.panel : null;
+  // Before the listing lands, whether links will show is a guess from the
+  // membership: a drive with no membership row is this account's own, and a
+  // Manager manages somebody else's. The panel's `canManage` (Rust) wins.
+  const expectManage = canManageDrive({
+    isOwner: !membership,
+    role: membership ? parseDriveRole(membership.role) : undefined,
+  });
+  const ownerName =
+    membership?.ownerName?.trim() || (panel ? accountDisplayName(panel.ownerSs58) : "the owner");
+  const subline = panel
+    ? panelSubline({
+        folder,
+        ownerIsYou: panel.ownerIsYou,
+        driveName,
+        ownerName,
+        yourRole: panel.yourRole,
+        planName: planLabel(overview?.plan?.name ?? (overview?.source === "free" ? "Free" : null)),
+      })
+    : null;
+
+  // Leaving is for anyone the drive is shared with. It asks in the footer.
+  const [leaving, setLeaving] = useState<"idle" | "busy">("idle");
+  const leaveConfirm = useRowConfirm<"leave">("leave");
+  const leave = useCallback(async () => {
+    setLeaving("busy");
+    try {
+      const identity = wireIdentity(target, membership);
+      if (membership?.syncedLocally && membership.localLabel) {
+        // Ends the membership AND removes the drive from this device.
+        await leaveSharedDrive(membership.localLabel);
+      } else if (identity) {
+        await leaveSharedDriveByIdentity(identity.ownerSs58, identity.folderHash);
+      } else {
+        await leaveSharedDrive(target.label);
+      }
+      toast.success(`Left "${title}"`);
+      void queryClient.invalidateQueries({ queryKey: [SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY] });
+      void queryClient.invalidateQueries({ queryKey: [MY_FOLDER_GRANTS_QUERY_KEY] });
+      refreshSyncPaths((n) => n + 1);
+      onClose();
+    } catch (err) {
+      toast.error(`Could not leave the ${folder ? "folder" : "drive"}: ${errorMessage(err)}`);
+      setLeaving("idle");
+    }
+  }, [target, membership, title, queryClient, refreshSyncPaths, onClose, folder]);
+
+  const actions = useMemo<RowActions>(
+    () => ({
+      changeRole: (ss58, who, role) =>
+        void run(ss58, who, "saving", () => changeDriveMemberRole(target.label, ss58, role, driveTarget)),
+      remove: (ss58, who) => void run(ss58, who, "removing", () => removeDriveMember(target.label, ss58, driveTarget)),
+      revoke: (id, who) => void run(id, who, "revoking", () => revokeDriveInvite(target.label, id, driveTarget)),
+      cancel: (id, who) => void run(id, who, "removing", () => revokeDriveInvite(target.label, id, driveTarget)),
+      approve: (id, who) => void run(id, who, "saving", () => approveEmailInvite(target.label, id, driveTarget)),
+      // Throws on refusal: the Change folders view shows why and stays. A plan
+      // refusal also puts the upgrade card in place behind it.
+      changeFolders: async (ss58, folders, role) => {
+        try {
+          await replaceFolderGrants(target.label, ss58, folders, { role, target: driveTarget });
+        } catch (err) {
+          if (isSharedDrivesNotEntitled(err)) onNotEntitled();
+          throw err;
+        }
+        toast.success("Folders updated");
+        onChanged();
+        await reload();
+      },
+    }),
+    [run, target.label, driveTarget, onChanged, reload, onNotEntitled],
+  );
+  // Adding people follows the OWNER's plan. On an own drive that is this
+  // account's plan; on a drive this account manages for somebody else it is
+  // the owner's, which only the server knows (its 403 still shows the card),
+  // so this account's own plan never puts an upgrade card there.
+  const gate = sharingGate({
+    planAllows,
+    owner: panel ? panel.ownerIsYou : !membership,
+    refusedByServer,
+  });
+  const ctx: RowContext | null = panel
+    ? {
+        panel,
+        folder,
+        busy,
+        rowError,
+        actions,
+        locked: panel.linksLocked,
+        unlocking,
+        onUnlock: () => void unlock(),
+        canAddAccess: gate === "allowed",
+        openChangeFolders: (holder) => {
+          beforeChanging.current = {
+            scrollTop: scrollRef.current?.scrollTop ?? 0,
+            who: accountDisplayName(holder.memberSs58, holder.memberName),
+          };
+          setChanging(holder);
+        },
+      }
+    : null;
+  const people = useMemo(() => (panel ? panelPeople(panel, membership?.ownerName) : []), [panel, membership?.ownerName]);
+
+  // Change folders replaces the list (main or full view) until Back, never a
+  // second dialog over the panel.
+  const [changing, setChanging] = useState<AccessPanelHolder | null>(null);
+  const beforeChanging = useRef<{ scrollTop: number; who: string } | null>(null);
+
+  // The main view's search, which the full view starts from.
+  const [mainQuery, setMainQuery] = useState("");
+  // A full view replaces the list with one group, all of it. The Share
+  // dialog's "+N more" row opens the panel straight on the people.
+  const [fullView, setFullView] = useState<FullViewState | null>(() =>
+    target.openOn === "people" ? { group: "people", query: "", peopleFilter: "all", linksFilter: "active" } : null,
+  );
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Where the main list was, so Back returns to it rather than the top.
+  const mainScrollTop = useRef(0);
+  const restoreMainScroll = useRef(false);
+  const openFullView = useCallback(
+    (group: PanelGroup, linksFilter: LinksFilter = "active") => {
+      mainScrollTop.current = scrollRef.current?.scrollTop ?? 0;
+      setFullView({ group, query: mainQuery, peopleFilter: "all", linksFilter });
+    },
+    [mainQuery],
+  );
+  const closeFullView = useCallback(() => {
+    restoreMainScroll.current = true;
+    setFullView(null);
+  }, []);
+  const viewGroup = fullView?.group ?? null;
+
+  // Back from Change folders: the list where it was, and focus on the row's
+  // menu button it was opened from.
+  const closeChanging = useCallback(() => setChanging(null), []);
+  const isChanging = changing !== null;
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    const before = beforeChanging.current;
+    if (!scroller || !before) return;
+    if (isChanging) {
+      scroller.scrollTop = 0;
+      return;
+    }
+    beforeChanging.current = null;
+    scroller.scrollTop = before.scrollTop;
+    const menu = Array.from(scroller.querySelectorAll<HTMLElement>("[aria-label]")).find(
+      (el) => el.getAttribute("aria-label") === `Actions for ${before.who}`,
+    );
+    menu?.focus({ preventScroll: true });
+  }, [isChanging]);
+
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    if (viewGroup) {
+      scroller.scrollTop = 0;
+    } else if (restoreMainScroll.current) {
+      restoreMainScroll.current = false;
+      scroller.scrollTop = mainScrollTop.current;
+    }
+  }, [viewGroup]);
+
+  // The jump bar: scroll the list to a group, move focus to its heading and
+  // mark it for a moment so the eye finds where it landed.
+  const reducedMotion = useReducedMotion();
+  const [flash, setFlash] = useState<PanelGroup | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+  const jump = useCallback(
+    (group: PanelGroup) => {
+      const scroller = scrollRef.current;
+      const heading = document.getElementById(GROUP_HEADING_ID[group]);
+      if (!scroller || !heading) return;
+      const top = heading.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 12;
+      const behavior: ScrollBehavior = reducedMotion ? "auto" : "smooth";
+      if (typeof scroller.scrollTo === "function") scroller.scrollTo({ top: Math.max(0, top), behavior });
+      else scroller.scrollTop = Math.max(0, top);
+      heading.focus({ preventScroll: true });
+      setFlash(group);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setFlash(null), JUMP_HIGHLIGHT_MS);
+    },
+    [reducedMotion],
+  );
+  const summary = panel ? summaryItems(panel, people, mainQuery) : null;
+
+  const canManage = panel ? panel.canManage : expectManage;
+  const sharedWithMe = panel ? !panel.ownerIsYou : Boolean(membership);
 
   return (
-    <div className="border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium text-grey-10 dark:text-white">
-            {view.summary}
-          </p>
-          <p className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
-            {view.live ? view.expiry : deadReasonLabel(view.deadReason)}
-            {/* Only somebody ELSE's link says who made it. Now that a manager
-                can mint, a drive's links no longer all come from one person,
-                and "who let them in" is a question the list has to answer. */}
-            {view.mintedBy && (
-              <>
-                {" "}
-                · by{" "}
-                {accountDisplayName(
-                  view.mintedBy,
-                  invite.mintedByName,
-                  14,
-                )}
-              </>
-            )}
-          </p>
-        </div>
-
-        {view.live ? (
-          confirming ? (
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                variant="ghost"
-                size="auto"
-                onClick={() => {
-                  setConfirming(false);
-                  onRevoke(invite.inviteId);
-                }}
-                className="h-7 rounded-md border border-error-50/40 px-2 text-xs font-medium text-error-50 hover:bg-error-50/10"
-              >
-                Confirm revoke
-              </Button>
-              <Button
-                variant="ghost"
-                size="auto"
-                onClick={() => setConfirming(false)}
-                className="h-7 rounded-md px-2 text-xs font-medium text-grey-50 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:bg-white/10"
-              >
-                Cancel
-              </Button>
-            </div>
-          ) : (
-            <Button
-              variant="ghost"
-              size="auto"
-              onClick={() => setConfirming(true)}
-              className="h-7 shrink-0 rounded-md border border-error-50/50 px-2 text-xs font-medium text-error-50 transition-colors hover:bg-error-50/10 dark:border-error-50/40 dark:hover:bg-error-50/10"
-            >
-              Revoke
-            </Button>
-          )
-        ) : (
-          // A dead link needs no action; showing a disabled Revoke would imply
-          // there is something left to do.
-          <span className="shrink-0 text-[11px] text-grey-60 dark:text-grey-dark-600">
-            No longer works
+    <div className="@container flex h-full min-h-0 flex-col font-geist">
+      <header className="shrink-0 border-b border-grey-80 px-4 pb-3.5 pt-4 dark:border-white/10">
+        <div className="flex items-start gap-2.5">
+          <span
+            aria-hidden
+            className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-primary-50/10 text-primary-50 dark:bg-primary-50/15 dark:text-primary-brand-dark"
+          >
+            {folder ? <Folder className="size-[18px]" /> : <HardDrive className="size-[18px]" />}
           </span>
-        )}
-      </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="break-words text-base font-semibold leading-5 text-grey-10 [overflow-wrap:anywhere] dark:text-white">
+              {title}
+            </h2>
+            <p className="mt-0.5 min-h-[18px] break-words text-xs text-grey-50 dark:text-grey-dark-600">
+              {subline ?? <span className="sr-only">Loading</span>}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="flex size-[30px] shrink-0 items-center justify-center rounded-lg text-grey-50 transition-colors hover:bg-grey-90 hover:text-grey-10 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        {membership?.frozen ? (
+          <InlineNotice tone="info" className="mt-3">
+            {frozenNotice(membership.frozenUntil)}
+          </InlineNotice>
+        ) : null}
+      </header>
 
-      {/* Console parity: sealed + valid → link field (ready / locked).
-          Revoked / pre-seal-back rows omit it. Never render `#k=`. */}
-      {invite.linkAvailable ? (
-        <InviteLinkField
-          url={invite.inviteUrl}
-          copying={copying}
-          copied={copied}
-          onCopy={() => void handleCopy()}
+      {panel && summary && !fullView && !changing ? <SummaryBar items={summary} onJump={jump} /> : null}
+      {panel && fullView && !changing ? (
+        <FullViewHeader
+          view={fullView}
+          total={groupTotal(panel, fullView.group)}
+          onBack={closeFullView}
+          onChange={setFullView}
         />
       ) : null}
-    </div>
-  );
-}
 
-/**
- * The invite's link field — same three visual states as console
- * `InviteLinkRows.InviteLinkField`, without the unlock gate (Rust opens
- * blobs inside `list_drive_invites`; absence of `url` is locked).
- */
-const LOCKED_LINK_PLACEHOLDER =
-  "https://console.hippius.com/invite/Xk29fLpQ7rTnB4vW8yHc";
-
-const LINK_FIELD =
-  "mt-2 flex w-full min-w-0 items-center gap-2 rounded-[6px] border border-grey-80 bg-grey-90/40 px-2.5 py-1.5 text-left transition-colors dark:border-white/10 dark:bg-white/5";
-
-function InviteLinkField({
-  url,
-  copying,
-  copied,
-  onCopy,
-}: {
-  url: string | undefined;
-  copying: boolean;
-  copied: boolean;
-  onCopy: () => void;
-}) {
-  if (url) {
-    return (
-      <button
-        type="button"
-        title="Copy invite link"
-        aria-label="Copy invite link"
-        disabled={copying}
-        onClick={onCopy}
-        className={cn(
-          LINK_FIELD,
-          "group hover:border-primary-50 disabled:opacity-60 dark:hover:border-[#82a3f0]",
-        )}
-      >
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] leading-4 text-grey-30 dark:text-grey-dark-500">
-          {truncateInviteUrl(url)}
-        </span>
-        {copied ? (
-          <Check
-            aria-hidden
-            className="size-3.5 shrink-0 text-success-40 dark:text-success-50"
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+        {ctx && changing ? (
+          <ChangeFoldersView
+            who={accountDisplayName(changing.memberSs58, changing.memberName)}
+            folders={changing.folders}
+            onClose={closeChanging}
+            onConfirm={(next, role) => actions.changeFolders(changing.memberSs58, next, role)}
           />
+        ) : ctx && fullView ? (
+          <FullViewList view={fullView} people={people} ctx={ctx} scrollRef={scrollRef} onChange={setFullView} />
         ) : (
-          <Copy
-            aria-hidden
-            className="size-3.5 shrink-0 text-grey-50 transition-colors group-hover:text-primary-50 dark:text-grey-dark-700 dark:group-hover:text-[#82a3f0]"
+          <PanelContent
+            state={state}
+            folder={folder}
+            expectManage={expectManage}
+            retry={retry}
+            onShare={openShareDialog}
+            gate={gate}
+            onUpgrade={upgrade}
+            ctx={ctx}
+            people={people}
+            query={mainQuery}
+            onQuery={setMainQuery}
+            flash={flash}
+            onShowAll={openFullView}
           />
         )}
-      </button>
-    );
-  }
-
-  return (
-    <div
-      role="status"
-      aria-label="Link locked"
-      title="Could not rebuild this invite link"
-      className={LINK_FIELD}
-    >
-      <span
-        aria-hidden
-        className="min-w-0 flex-1 select-none truncate font-mono text-[11px] leading-4 text-grey-30 blur-[3px] dark:text-grey-dark-500"
-      >
-        {LOCKED_LINK_PLACEHOLDER}
-      </span>
-      <Lock
-        aria-hidden
-        className="size-3.5 shrink-0 text-grey-50 dark:text-grey-dark-700"
-      />
-    </div>
-  );
-}
-
-function MembersTab({
-  state,
-  driveName,
-  onRemove,
-  onChangeRole,
-  onCreateInvite,
-}: {
-  state: MembersState;
-  driveName: string;
-  onRemove: (memberSs58: string) => void;
-  onChangeRole: (memberSs58: string, role: DriveRole) => void;
-  onCreateInvite: () => void;
-}) {
-  const view = getMembersView(state);
-
-  if (view === "loading") {
-    return <MembersTabSkeleton />;
-  }
-
-  if (view === "unavailable") {
-    return (
-      <p className="min-h-0 flex-1 py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-        Shared drives aren&apos;t available on your server yet.
-      </p>
-    );
-  }
-
-  if (view === "error") {
-    return (
-      <div className="mb-2 flex min-h-0 flex-1 items-start gap-2 rounded-md border border-error-90 bg-error-100/40 px-3 py-2.5 dark:border-error-30/60 dark:bg-error-30/10">
-        <AlertCircle className="mt-0.5 size-4 shrink-0 text-error-70" />
-        <p className="break-words text-xs text-grey-50 dark:text-grey-dark-600">
-          {state.kind === "error" ? state.message : "Couldn't load members"}
-        </p>
       </div>
-    );
-  }
 
-  if (view === "empty") {
-    return (
-      <div className="min-h-0 flex-1 py-6 text-center">
-        <p className="mb-4 text-sm text-grey-50 dark:text-grey-dark-600">
-          No one has joined this drive yet.
-        </p>
-        <InviteButton onClick={onCreateInvite} />
-      </div>
-    );
-  }
-
-  const members = state.kind === "ready" ? state.members : [];
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-3 shrink-0">
-        <InviteButton onClick={onCreateInvite} hasMembers />
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {members.map((member) => (
-          <MemberRow
-            key={member.memberSs58}
-            member={member}
-            driveName={driveName}
-            onRemove={onRemove}
-            onChangeRole={onChangeRole}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The one way into the mint flow, which is a dialog rather than a tab.
- *
- * The label follows the drive's state. "Create invite link" is right for a
- * drive nobody has joined -- it names the artefact, which is the thing that
- * does not exist yet. Once people are in, the artefact is not the point any
- * more and the same words read as though the earlier link had failed.
- */
-function InviteButton({
-  onClick,
-  hasMembers = false,
-}: {
-  onClick: () => void;
-  hasMembers?: boolean;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="primary"
-      size="auto"
-      onClick={onClick}
-      className="h-[34px] w-full rounded-[8px] text-[13px] font-medium"
-    >
-      {hasMembers ? "Invite more people" : "Create invite link"}
-    </Button>
-  );
-}
-
-/**
- * Changing a member's role, as a dialog.
- *
- * Console parity: roles are a radio list with each option's description
- * beside it (not a dropdown that hides the other choices). The role used to
- * commit on an inline row select; a mis-click then changed what somebody
- * could do, with only a toast to say so. A role is a decision, so it gets
- * the app's decision surface -- pick, read what it grants, press Save --
- * and the row keeps a three-dot menu like every other row in the app.
- */
-function ChangeRoleDialog({
-  member,
-  onClose,
-  onConfirm,
-}: {
-  member: DriveMemberInfo;
-  onClose: () => void;
-  onConfirm: (role: DriveRole) => void;
-}) {
-  const current = parseDriveRole(member.role);
-  const [role, setRole] = useState<DriveRole>(current);
-  const demotionWarning = driveRoleDemotionWarning(current, role);
-  const who = accountDisplayName(member.memberSs58, member.memberName);
-
-  return (
-    <FramedDialog
-      open
-      onClose={onClose}
-      title="Change role"
-      icon={<Users className="size-4 text-white" />}
-      maxWidth="max-w-[585px]"
-      contentClassName="sm:w-[405px]"
-    >
-      <div className="font-geist">
-        <p className="mb-5 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-          What {who} can do in this drive.
-        </p>
-
-        <div className="mb-6 flex flex-col gap-2">
-          {DRIVE_ROLES.map((option) => (
-            <label
-              key={option}
-              className={cn(
-                "flex cursor-pointer flex-col gap-0.5 rounded-lg border p-3 transition-colors",
-                role === option
-                  ? "border-primary-50 bg-primary-100 dark:border-primary-50 dark:bg-primary-50/10"
-                  : "border-grey-80 hover:bg-grey-90 dark:border-white/10 dark:hover:bg-white/5",
-              )}
-            >
-              <span className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="change-member-role"
-                  className="accent-primary-50"
-                  checked={role === option}
-                  onChange={() => setRole(option)}
-                />
-                <span className="text-sm font-medium text-grey-10 dark:text-white">
-                  {driveRoleLabel(option)}
-                </span>
-              </span>
-              <span className="pl-6 text-xs text-grey-50 dark:text-grey-dark-600">
-                {driveRoleDescription(option)}
-              </span>
-            </label>
-          ))}
-          {/* A demotion has a side effect nobody would guess: the server
-              revokes the link that admitted this member when it outranks
-              their new role, and demoting a manager revokes every link that
-              manager minted. Said here, before Save, rather than discovered
-              later as links that stopped working. */}
-          {demotionWarning && (
-            <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
-              {demotionWarning}
-            </p>
-          )}
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <Button
-            type="button"
-            variant="primary"
-            size="auto"
-            // Saving the role somebody already has is a round-trip that
-            // changes nothing, so the button says there is nothing to do.
-            disabled={role === current}
-            onClick={() => {
-              onConfirm(role);
-              onClose();
+      {leaveConfirm.asking ? (
+        // Leaving asks here, in the footer, in place of its buttons.
+        <footer className="shrink-0 border-t border-grey-80 px-4 py-1 dark:border-white/10">
+          <RowConfirm
+            question={`Leave “${title}”?`}
+            detail={
+              folder
+                ? "You lose access to it, and to any other folder of the same drive shared with you."
+                : "You lose access to its files. Anything already on this computer stays."
+            }
+            confirmLabel={folder ? "Leave folder" : "Leave drive"}
+            onConfirm={() => {
+              leaveConfirm.done();
+              void leave();
             }}
-            className="h-[38px] w-full rounded-[8px] text-[14px] font-medium leading-[1.4] tracking-[-0.28px]"
-          >
-            Save role
-          </Button>
+            onCancel={leaveConfirm.cancel}
+          />
+        </footer>
+      ) : state.kind === "ready" || state.kind === "loading" ? (
+        <footer
+          ref={leaveConfirm.rowRef as React.RefObject<HTMLElement>}
+          tabIndex={-1}
+          className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-grey-80 px-4 py-3 outline-none dark:border-white/10"
+        >
+          {sharedWithMe ? (
+            <Button
+              type="button"
+              variant="defaultStable"
+              size="auto"
+              disabled={leaving === "busy"}
+              onClick={() => leaveConfirm.ask("leave")}
+              className="h-[38px] gap-1.5 rounded-[8px] px-3.5 text-sm font-medium text-error-70 dark:text-error-70"
+              {...ROW_TRIGGER}
+            >
+              <LogOut className="size-4" aria-hidden />
+              {leaving === "busy" ? "Leaving…" : folder ? "Leave folder" : "Leave drive"}
+            </Button>
+          ) : (
+            <span className="hidden text-xs text-grey-50 @[340px]:inline dark:text-grey-dark-600">
+              {ACCESS_PANEL_COPY.changesApply}
+            </span>
+          )}
+          {canManage && gate === "loading" ? (
+            // Holds the Share button's place until the plan is known, so
+            // neither the button nor its absence flashes.
+            <Skeleton width={92} height={38} className="ml-auto rounded-[8px]" />
+          ) : canManage && gate === "allowed" ? (
+            <Button
+              type="button"
+              variant="primary"
+              size="auto"
+              onClick={openShareDialog}
+              className="ml-auto h-[38px] gap-1.5 rounded-[8px] px-4 text-sm font-medium"
+            >
+              <Icons.Link className="size-4" />
+              Share
+            </Button>
+          ) : null}
+        </footer>
+      ) : null}
+
+    </div>
+  );
+}
+
+/** The heading each group's jump lands on. */
+const GROUP_HEADING_ID: Record<PanelGroup, string> = {
+  people: "access-people",
+  pending: "access-pending",
+  links: "access-links",
+};
+
+/** How long a group's heading stays marked after a jump. */
+const JUMP_HIGHLIGHT_MS = 1200;
+
+/** Everyone or everything in a group, whatever the search. */
+function groupTotal(panel: AccessPanel, group: PanelGroup): number {
+  if (group === "people") return peopleCount(panel);
+  if (group === "pending") return panel.pendingInvites.length;
+  return panel.links.length;
+}
+
+/**
+ * The jump bar's items, or null when there is nothing to jump between. The
+ * owner gets one per group with rows (only when there is more than one);
+ * anyone else only reads the people, so theirs is just "People N", and only
+ * once there are more than `MEMBER_JUMP_BAR_MIN_PEOPLE` of them. While the
+ * main search has text the counts are its matches, and a group with none
+ * drops out, as it does from the list.
+ */
+function summaryItems(panel: AccessPanel, people: PanelPerson[], query: string): SummaryItem[] | null {
+  const peopleShown = people.filter((p) => personMatches(p, query)).length;
+  if (!panel.canManage) {
+    if (peopleCount(panel) <= MEMBER_JUMP_BAR_MIN_PEOPLE || peopleShown === 0) return null;
+    return [{ group: "people", count: peopleShown }];
+  }
+  if (isOnlyOwner(panel)) return null;
+  const items: SummaryItem[] = [
+    { group: "people", count: peopleShown },
+    { group: "pending", count: panel.pendingInvites.filter((i) => pendingMatches(i, query)).length },
+    { group: "links", count: panel.links.filter((l) => linkMatches(l, query)).length },
+  ];
+  const endedMatch = panel.inactiveLinks.some((l) => linkMatches(l, query));
+  const withRows = items.filter((i) => i.count > 0 || (i.group === "links" && endedMatch));
+  return withRows.length > 1 ? withRows : null;
+}
+
+function PanelContent({
+  state,
+  folder,
+  expectManage,
+  retry,
+  onShare,
+  gate,
+  onUpgrade,
+  ctx,
+  people,
+  query,
+  onQuery,
+  flash,
+  onShowAll,
+}: {
+  state: AccessPanelState;
+  folder: boolean;
+  expectManage: boolean;
+  retry: () => void;
+  onShare: () => void;
+  /** Whether Invite, New link and Share are offered, or the upgrade card. */
+  gate: SharingGate;
+  onUpgrade: () => void;
+  ctx: RowContext | null;
+  people: PanelPerson[];
+  query: string;
+  onQuery: (next: string) => void;
+  flash: PanelGroup | null;
+  onShowAll: (group: PanelGroup, linksFilter?: LinksFilter) => void;
+}) {
+  if (state.kind === "loading") return <PanelSkeleton withLinks={expectManage} />;
+  if (state.kind === "unavailable") {
+    return (
+      <InlineNotice tone="info" className="mt-4">
+        {SHARED_DRIVES_UNAVAILABLE_COPY}
+      </InlineNotice>
+    );
+  }
+  if (state.kind === "error" || !ctx) {
+    return (
+      <InlineNotice
+        tone="error"
+        className="mt-4"
+        action={
           <Button
             type="button"
             variant="defaultStable"
             size="auto"
-            onClick={onClose}
-            className="h-[38px] w-full rounded-[8px] border border-grey-80 text-[14px] font-medium leading-[1.4] tracking-[-0.28px] text-grey-10 dark:border-white/10 dark:text-white"
+            onClick={retry}
+            className="h-8 rounded-[6px] px-3 text-xs font-medium"
           >
-            Cancel
+            Try again
           </Button>
-        </div>
-      </div>
-    </FramedDialog>
-  );
-}
+        }
+      >
+        {state.kind === "error" ? state.message : ""}
+      </InlineNotice>
+    );
+  }
 
-function MemberRow({
-  member,
-  driveName,
-  onRemove,
-  onChangeRole,
-}: {
-  member: DriveMemberInfo;
-  driveName: string;
-  onRemove: (memberSs58: string) => void;
-  onChangeRole: (memberSs58: string, role: DriveRole) => void;
-}) {
-  // Both destructive-ish actions are dialogs rather than inline controls.
-  // The row is 360px wide in a panel; an inline two-step confirm and a role
-  // select were competing for the same few pixels as the address they act on.
-  const [dialog, setDialog] = useState<"none" | "role" | "remove">("none");
-  const joined = formatJoinedDate(member.createdAt);
-  const role = parseDriveRole(member.role);
+  const panel = ctx.panel;
+  // Only the owner adds people; for anyone else there is nothing to gate.
+  const upgradeCard =
+    panel.canManage && gate === "upgrade" ? <NotEntitledNotice onUpgrade={onUpgrade} className="mt-3" /> : null;
+  const addAction = <T,>(action: T): T | undefined =>
+    panel.canManage && gate === "allowed" ? action : undefined;
+  if (isOnlyOwner(panel)) {
+    return (
+      <>
+        {upgradeCard}
+        <GroupHeader id="access-people" title="People" count={1} />
+        <PersonItem person={people[0]} ctx={ctx} />
+        {gate === "allowed" ? (
+          <EmptyAccess folder={folder} onShare={onShare} />
+        ) : gate === "loading" ? (
+          <SharingActionsSkeleton className="mt-4" />
+        ) : null}
+      </>
+    );
+  }
+
+  // Typing in the main search filters every group at once; each still draws
+  // its first rows, and "Show all" opens the full view on the same search.
+  const searching = normalizeQuery(query) !== "";
+  const peopleShown = people.filter((p) => personMatches(p, query));
+  const pendingShown = panel.canManage ? panel.pendingInvites.filter((i) => pendingMatches(i, query)) : [];
+  const linksShown = panel.canManage ? panel.links.filter((l) => linkMatches(l, query)) : [];
+  const endedShown = panel.canManage ? panel.inactiveLinks.filter((l) => linkMatches(l, query)) : [];
+  const nothing =
+    searching && peopleShown.length + pendingShown.length + linksShown.length + endedShown.length === 0;
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2 border-b border-grey-90 py-2.5 last:border-b-0 dark:border-white/10">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="size-[28px] shrink-0 overflow-hidden rounded-full">
-            <Avatar name={member.memberSs58} size={28} variant="pixel" />
-          </div>
-          <div className="min-w-0">
-            <p
-              className="truncate font-mono text-xs text-grey-10 dark:text-white"
-              title={member.memberSs58}
-            >
-              {accountDisplayName(member.memberSs58, member.memberName)}
-            </p>
-            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
-              {/* The role reads as a chip here too, so a member list and a
-                  drive list say access the same way. An unknown role
-                  degrades to Viewer rather than reading as management. */}
-              <DriveRoleChip role={role} />
-              {joined && (
-                <span className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600">
-                  Joined {joined}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* The same overflow menu every other row in the app carries, so a
-            member row is operated the way a drive row is. */}
-        <TableActionMenu
-          dropdownTitle=""
-          items={[
-            {
-              icon: <UserRoundPen className="size-4" />,
-              itemTitle: "Change role",
-              onItemClick: () => setDialog("role"),
-            },
-            {
-              icon: <Icons.Trash className="size-4" />,
-              itemTitle: "Remove from drive",
-              variant: "destructive",
-              onItemClick: () => setDialog("remove"),
-            },
-          ]}
-        >
-          <Button
-            variant="ghost"
-            size="auto"
-            aria-label={`Actions for ${member.memberSs58}`}
-            className="h-7 w-7 shrink-0 rounded-md p-0 text-grey-70 transition-colors hover:bg-grey-90 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white"
-          >
-            <Icons.EllipsisVertical className="size-[18px]" />
-          </Button>
-        </TableActionMenu>
-      </div>
-
-      {dialog === "role" && (
-        <ChangeRoleDialog
-          member={member}
-          onClose={() => setDialog("none")}
-          onConfirm={(next) => onChangeRole(member.memberSs58, next)}
+      {upgradeCard}
+      {peopleCount(panel) > MAIN_SEARCH_MIN_PEOPLE ? (
+        <PanelSearch
+          value={query}
+          onChange={onQuery}
+          label={SEARCH_PLACEHOLDER.main}
+          placeholder={SEARCH_PLACEHOLDER.main}
+          className="mt-3"
         />
-      )}
+      ) : null}
+      {nothing ? (
+        <p role="status" className="px-1 py-8 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+          {noMatchLine(query)}
+        </p>
+      ) : null}
 
-      <ConfirmationDialog
-        open={dialog === "remove"}
-        onClose={() => setDialog("none")}
-        onBack={() => setDialog("none")}
-        onConfirm={() => {
-          setDialog("none");
-          onRemove(member.memberSs58);
-        }}
-        heading="Remove from drive"
-        icon={<Icons.Trash className="size-4 text-white" />}
-        iconBgColor="bg-[#fc7d73]"
-        confirmVariant="destructive"
-        confirmButtonClassName="text-white"
-        button="Remove"
-        text={`Remove this member from "${driveName}"?`}
-        helperText="They lose access on their next request. Files already downloaded to their device stay there, and any invite link still circulating keeps working — revoke it in the Links tab."
-      />
+      {peopleShown.length > 0 ? (
+        <section aria-labelledby="access-people">
+          <GroupHeader
+            id="access-people"
+            title="People"
+            count={peopleCount(panel)}
+            highlighted={flash === "people"}
+            action={addAction({ label: "Invite", onClick: onShare })}
+          />
+          <ul>
+            {peopleShown.slice(0, PANEL_PREVIEW.people).map((person) => (
+              <li key={personKey(person)}>
+                <PersonItem person={person} ctx={ctx} />
+              </li>
+            ))}
+          </ul>
+          {peopleShown.length > PANEL_PREVIEW.people ? (
+            <ShowAllGroup group="people" total={peopleShown.length} onClick={() => onShowAll("people")} />
+          ) : null}
+          {/* There is no role change for a folder holder (HCFS #475), so the
+              list says what to do instead of offering a control the server
+              would refuse. */}
+          {panel.canManage && folder && panel.folderHolders.length > 0 ? (
+            <p className="mt-1 px-0.5 text-xs text-grey-50 dark:text-grey-dark-600">{FOLDER_ACCESS_HINT}</p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {pendingShown.length > 0 ? (
+        <section aria-labelledby="access-pending">
+          <GroupHeader
+            id="access-pending"
+            title="Pending invites"
+            count={panel.pendingInvites.length}
+            highlighted={flash === "pending"}
+          />
+          <ul>
+            {pendingShown.slice(0, PANEL_PREVIEW.pending).map((invite) => (
+              <li key={invite.inviteId}>
+                <PendingItem invite={invite} ctx={ctx} />
+              </li>
+            ))}
+          </ul>
+          {pendingShown.length > PANEL_PREVIEW.pending ? (
+            <ShowAllGroup group="pending" total={pendingShown.length} onClick={() => onShowAll("pending")} />
+          ) : null}
+        </section>
+      ) : null}
+
+      {panel.canManage && (!searching || linksShown.length + endedShown.length > 0) ? (
+        <section aria-labelledby="access-links">
+          <GroupHeader
+            id="access-links"
+            title="Links"
+            count={`${panel.links.length} active`}
+            highlighted={flash === "links"}
+            action={addAction({ label: "New link", onClick: onShare })}
+          />
+          {ctx.locked && linksShown.length > 0 ? (
+            <InlineNotice tone="info" className="mb-1">
+              {ACCESS_PANEL_COPY.linksLocked}
+            </InlineNotice>
+          ) : null}
+          <ul>
+            {linksShown.slice(0, PANEL_PREVIEW.links).map((link) => (
+              <li key={link.inviteId}>
+                <LinkItem link={link} ctx={ctx} />
+              </li>
+            ))}
+          </ul>
+          {linksShown.length > PANEL_PREVIEW.links ? (
+            <ShowAllGroup group="links" total={linksShown.length} onClick={() => onShowAll("links")} />
+          ) : null}
+          <EndedLinks links={endedShown} onShowAll={() => onShowAll("links", "ended")} />
+        </section>
+      ) : null}
     </>
   );
 }
-
-function SharedDrivesUnavailableNotice({ onClose }: { onClose: () => void }) {
-  return (
-    <div>
-      <p className="mb-6 py-4 text-center text-sm text-grey-50 dark:text-grey-dark-600">
-        Shared drives aren&apos;t available on your server yet.
-      </p>
-      <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={secondaryButtonClass}>
-        Close
-      </Button>
-    </div>
-  );
-}
-
-const secondaryButtonClass = "h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]";

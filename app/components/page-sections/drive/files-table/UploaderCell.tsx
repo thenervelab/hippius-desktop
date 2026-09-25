@@ -6,7 +6,8 @@ import {
   presentText,
 } from "@/app/lib/shared-drives/accountLabel";
 import { cn } from "@/lib/utils";
-import { middleTruncate } from "@/lib/utils/middleTruncate";
+import { displayEmail } from "@/lib/utils/displayEmail";
+import AccountLabel from "../AccountLabel";
 
 /**
  * Who added a file, in a shared drive.
@@ -18,6 +19,7 @@ import { middleTruncate } from "@/lib/utils/middleTruncate";
 export default function UploaderCell({
   uploadedBy,
   uploadedByName,
+  uploadedByEmail,
   isFolder,
   sessionSs58,
   driveOwnerSs58,
@@ -26,6 +28,7 @@ export default function UploaderCell({
 }: {
   uploadedBy?: string | null;
   uploadedByName?: string;
+  uploadedByEmail?: string;
   isFolder?: boolean;
   sessionSs58?: string;
   driveOwnerSs58?: string;
@@ -34,6 +37,7 @@ export default function UploaderCell({
 }) {
   const muted = "text-grey-60 dark:text-grey-dark-700";
   const name = presentText(uploadedByName);
+  const email = displayEmail(uploadedByEmail);
 
   if (isFolder) {
     return (
@@ -85,6 +89,7 @@ export default function UploaderCell({
           <span className="flex flex-col gap-0.5">
             {name ? <span className="font-medium">{name}</span> : null}
             <span className="break-all font-mono text-xs">{uploadedBy}</span>
+            {email ? <span className="break-all text-xs">{email}</span> : null}
           </span>
         }
       >
@@ -93,29 +98,14 @@ export default function UploaderCell({
     );
   }
 
-  // 28 chars fits the ~18% Added by column; 22 was too aggressive in the
-  // old skinny cell and still left CSS truncate fighting the middle ellipsis.
-  const label = name ?? middleTruncate(uploadedBy, 28);
+  // No character budget: the label shortens the name or address in the
+  // middle to whatever width the Added by column has.
   return (
-    <CustomTooltip2
-      side="bottom"
-      tooltipContent={
-        <span className="flex flex-col gap-0.5">
-          {name ? <span className="font-medium">{name}</span> : null}
-          <span className="break-all font-mono text-xs">{uploadedBy}</span>
-        </span>
-      }
-    >
-      <span
-        data-ss58={uploadedBy}
-        className={cn(
-          "min-w-0 cursor-default truncate",
-          !name && "font-mono text-xs",
-          className,
-        )}
-      >
-        {label}
-      </span>
-    </CustomTooltip2>
+    <AccountLabel
+      ss58={uploadedBy}
+      name={name}
+      email={uploadedByEmail}
+      className={cn(!name && "text-xs", className)}
+    />
   );
 }

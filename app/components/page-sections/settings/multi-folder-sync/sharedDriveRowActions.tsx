@@ -5,7 +5,7 @@
 // worth testing without rendering a menu.
 
 import React from "react";
-import { FolderOpen, LogOut, RefreshCw } from "lucide-react";
+import { FolderOpen, LogOut, RefreshCw, Users } from "lucide-react";
 
 import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
@@ -21,6 +21,11 @@ export interface SharedDriveActionHandlers {
   /** Browse it without a local copy. Absent where there is nowhere to browse to. */
   onOpen?: () => void;
   onSyncLocally: () => void;
+  /**
+   * Open the Manage access panel. Passed only for a drive this account
+   * manages (a Manager); a Viewer or an Editor gets no such item.
+   */
+  onManageAccess?: () => void;
   onLeave: () => void;
 }
 
@@ -56,6 +61,14 @@ export function buildSharedDriveActions(
     });
   }
 
+  if (handlers.onManageAccess) {
+    items.push({
+      icon: <Users className="size-4" />,
+      itemTitle: "Manage access",
+      onItemClick: handlers.onManageAccess,
+    });
+  }
+
   items.push({
     icon: <LogOut className="size-4" />,
     itemTitle: "Leave drive",
@@ -63,5 +76,31 @@ export function buildSharedDriveActions(
     onItemClick: handlers.onLeave,
   });
 
+  return items;
+}
+
+/**
+ * What a shared FOLDER row offers: open it (rooted at the folder) and leave.
+ * No "Sync to this computer": syncing a granted folder to disk is not
+ * supported yet, and offering it would promise what the app cannot do.
+ */
+export function buildFolderGrantActions(handlers: {
+  onOpen?: () => void;
+  onLeave: () => void;
+}): ActionItem[] {
+  const items: ActionItem[] = [];
+  if (handlers.onOpen) {
+    items.push({
+      icon: <FolderOpen className="size-4" />,
+      itemTitle: "Open",
+      onItemClick: handlers.onOpen,
+    });
+  }
+  items.push({
+    icon: <LogOut className="size-4" />,
+    itemTitle: "Leave folder",
+    variant: "destructive",
+    onItemClick: handlers.onLeave,
+  });
   return items;
 }

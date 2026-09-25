@@ -4,9 +4,11 @@
 // picker → add_shared_drive → verbatim Validation toast).
 
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render as rtlRender, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { getDefaultStore } from "jotai";
+import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import "@testing-library/jest-dom";
 
 // The overflow menu is Radix-backed and does not open under jsdom. These
@@ -66,20 +68,29 @@ const render = (ui: React.ReactElement) =>
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
 
 const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
+const folderRolesFlag = vi.hoisted(() => ({ on: false }));
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
     return flagState.sharedDrivesEnabled;
+  },
+  get FOLDER_ROLES_ENABLED() {
+    return folderRolesFlag.on;
   },
 }));
 
 const listMyDriveMembershipsMock = vi.fn();
 const addSharedDriveMock = vi.fn();
+const listMyFolderGrantsMock = vi.fn().mockResolvedValue([]);
+const leaveSharedDriveByIdentityMock = vi.fn();
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
   return {
     ...original,
     listMyDriveMemberships: (...args: unknown[]) => listMyDriveMembershipsMock(...args),
     addSharedDrive: (...args: unknown[]) => addSharedDriveMock(...args),
+    listMyFolderGrants: (...args: unknown[]) => listMyFolderGrantsMock(...args),
+    leaveSharedDriveByIdentity: (...args: unknown[]) =>
+      leaveSharedDriveByIdentityMock(...args),
   };
 });
 
@@ -203,6 +214,51 @@ describe("rows", () => {
     // Already here: syncing again would either no-op or re-install it at a
     // new path, and neither is what the word promises.
     expect(screen.queryByRole("button", { name: "Sync to this computer" })).not.toBeInTheDocument();
+  });
+});
+
+// A Manager manages the drive for its owner from this row, as an owner does
+// from theirs: a Manage access button and the same item in the row's menu.
+// A Viewer or an Editor gets neither.
+describe("managing access from a shared drive's row", () => {
+  it("gives a Manager Manage access on the row and in its menu, naming the owner's drive", async () => {
+    const onManageAccess = vi.fn();
+    const onOpenDrive = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([membership({ role: "manager" })]);
+    render(<SharedWithMeSection onManageAccess={onManageAccess} onOpenDrive={onOpenDrive} />);
+
+    const buttons = await screen.findAllByRole("button", { name: "Manage access" });
+    expect(buttons).toHaveLength(2);
+    for (const button of buttons) fireEvent.click(button);
+    expect(onManageAccess).toHaveBeenCalledTimes(2);
+    expect(onManageAccess).toHaveBeenCalledWith({
+      label: "team-docs",
+      folderName: "team-docs",
+      ownerSs58: OWNER,
+      folderHash: "0123456789abcdef",
+    });
+    // Pressing it manages; it never also opens the drive behind the panel.
+    expect(onOpenDrive).not.toHaveBeenCalled();
+  });
+
+  it("opens a synced drive by its local label", async () => {
+    const onManageAccess = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([
+      membership({ role: "manager", syncedLocally: true, localLabel: "team-docs-2" }),
+    ]);
+    render(<SharedWithMeSection onManageAccess={onManageAccess} />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "Manage access" }))[0]);
+    expect(onManageAccess).toHaveBeenCalledWith({ label: "team-docs-2", folderName: "team-docs" });
+  });
+
+  it.each(["writer", "reader", "admin"])("offers a %s no Manage access", async (role) => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership({ role })]);
+    render(<SharedWithMeSection onManageAccess={vi.fn()} />);
+
+    await screen.findByText("team-docs");
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave drive" })).toBeInTheDocument();
   });
 });
 
@@ -359,5 +415,82 @@ describe("a shared drive's size and counts", () => {
 
     await screen.findByText("team-docs");
     expect(screen.getByText((_t, el) => el?.textContent?.trim() === "0 files")).toBeInTheDocument();
+  });
+});
+
+describe("folders shared with me (folder roles)", () => {
+  const CAPS = {
+    shares: true,
+    folder_shares: true,
+    folder_share_revoke_by_hash: true,
+    share_owner_wrap: true,
+    folder_grants: true,
+    folder_grant_writes: true,
+  };
+  const GRANT = {
+    ownerSs58: OWNER,
+    ownerName: "Grace",
+    folderHash: "0123456789abcdef",
+    displayLabel: "team-docs",
+    pathPrefix: "Clients/ACME",
+    role: "writer",
+    createdAt: "2026-08-20T00:00:00Z",
+  };
+
+  beforeEach(() => {
+    folderRolesFlag.on = true;
+    getDefaultStore().set(serverCapabilitiesAtom, CAPS);
+    listMyDriveMembershipsMock.mockResolvedValue([]);
+    listMyFolderGrantsMock.mockResolvedValue([GRANT]);
+  });
+
+  afterEach(() => {
+    folderRolesFlag.on = false;
+    getDefaultStore().set(serverCapabilitiesAtom, null);
+  });
+
+  it("lists a shared folder as its own row, naming its drive and owner", async () => {
+    render(<SharedWithMeSection />);
+    expect(await screen.findByText("ACME")).toBeInTheDocument();
+    expect(screen.getByText("In team-docs")).toBeInTheDocument();
+    expect(screen.getByText("Grace")).toBeInTheDocument();
+    expect(screen.getByText("Editor")).toBeInTheDocument();
+    // Never offered: syncing a granted folder to disk is out of scope.
+    expect(screen.queryByText("Sync to this computer")).not.toBeInTheDocument();
+  });
+
+  it("opens the folder rooted at itself", async () => {
+    const onOpenFolderGrant = vi.fn();
+    render(<SharedWithMeSection onOpenFolderGrant={onOpenFolderGrant} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open ACME" }));
+    expect(onOpenFolderGrant).toHaveBeenCalledWith({
+      ownerSs58: OWNER,
+      folderHash: "0123456789abcdef",
+      pathPrefix: "Clients/ACME",
+      folderName: "ACME",
+    });
+  });
+
+  // Manager is not a folder role (HCFS #475): a holder never manages the
+  // folder, whatever role the listing claims.
+  it("offers no Manage access on a shared folder", async () => {
+    listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, role: "manager" }]);
+    render(<SharedWithMeSection onManageAccess={vi.fn()} />);
+    await screen.findByText("ACME");
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
+  });
+
+  it("leaves the folder after a confirmation", async () => {
+    leaveSharedDriveByIdentityMock.mockResolvedValue(undefined);
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    // The row menu's item opens the confirmation; nothing is left yet.
+    fireEvent.click(screen.getByRole("button", { name: "Leave folder" }));
+    expect(leaveSharedDriveByIdentityMock).not.toHaveBeenCalled();
+    const buttons = await screen.findAllByRole("button", { name: "Leave folder" });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() =>
+      expect(leaveSharedDriveByIdentityMock).toHaveBeenCalledWith(OWNER, "0123456789abcdef"),
+    );
   });
 });

@@ -310,10 +310,12 @@ fn create_drive_invite_request_wire_pinned() {
         max_uses: Some(5),
         role: None,
         owner_ss58: None,
+        path_prefix: None,
     };
 
     let json = serde_json::to_value(&req).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+    // path_prefix is skip_serializing_if None — whole-drive mint omits it.
     assert_eq!(
         keys,
         ["expires_in_secs", "folder_hash", "max_uses", "owner_ss58", "role"]
@@ -326,26 +328,43 @@ fn create_drive_invite_request_wire_pinned() {
     assert_eq!(decoded.folder_hash, "0123456789abcdef");
     assert_eq!(decoded.expires_in_secs, Some(3600));
     assert_eq!(decoded.max_uses, Some(5));
+    assert!(decoded.path_prefix.is_none());
+
+    let folder = CreateDriveInviteRequest {
+        folder_hash: "0123456789abcdef".to_string(),
+        expires_in_secs: Some(3600),
+        max_uses: Some(1),
+        role: Some("reader".into()),
+        owner_ss58: None,
+        path_prefix: Some("Clients/ACME".into()),
+    };
+    let folder_json = serde_json::to_value(&folder).expect("serialize folder");
+    assert_eq!(folder_json.get("path_prefix").and_then(|v| v.as_str()), Some("Clients/ACME"));
 
     // Both limits are `#[serde(default)]`: a body carrying only folder_hash
     // must deserialize with the server-default sentinels (None).
     let minimal: CreateDriveInviteRequest = serde_json::from_str(r#"{"folder_hash":"h"}"#).expect("minimal body deserializes");
     assert_eq!(minimal.expires_in_secs, None);
     assert_eq!(minimal.max_uses, None);
+    assert!(minimal.path_prefix.is_none());
 }
 
 #[test]
 fn create_drive_invite_response_wire_pinned() {
     let resp: CreateDriveInviteResponse = serde_json::from_str(r#"{"invite_token":"tok_abc"}"#).expect("deserialize");
     assert_eq!(resp.invite_token, "tok_abc");
+    assert!(resp.path_prefix.is_none());
 
     let json = serde_json::to_value(&resp).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
     assert_eq!(
         keys,
         ["invite_token"].into_iter().collect::<BTreeSet<_>>(),
-        "CreateDriveInviteResponse must carry exactly the invite_token key"
+        "CreateDriveInviteResponse must omit path_prefix when absent"
     );
+
+    let folder: CreateDriveInviteResponse = serde_json::from_str(r#"{"invite_token":"tok_abc","path_prefix":"Clients/ACME"}"#).expect("deserialize");
+    assert_eq!(folder.path_prefix.as_deref(), Some("Clients/ACME"));
 }
 
 #[test]
@@ -381,6 +400,7 @@ fn drive_invite_meta_response_wire_pinned() {
 fn accept_drive_invite_request_wire_pinned() {
     let req = AcceptDriveInviteRequest {
         grant_blob: "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=".to_string(),
+        path_prefix: None,
     };
 
     let json = serde_json::to_value(&req).expect("serialize");
@@ -388,11 +408,18 @@ fn accept_drive_invite_request_wire_pinned() {
     assert_eq!(
         keys,
         ["grant_blob"].into_iter().collect::<BTreeSet<_>>(),
-        "AcceptDriveInviteRequest must carry exactly the grant_blob key"
+        "AcceptDriveInviteRequest must omit path_prefix when absent"
     );
 
     let decoded: AcceptDriveInviteRequest = serde_json::from_value(json).expect("deserialize");
     assert_eq!(decoded.grant_blob, "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=");
+
+    let folder = AcceptDriveInviteRequest {
+        grant_blob: "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=".to_string(),
+        path_prefix: Some("Clients/ACME".into()),
+    };
+    let folder_json = serde_json::to_value(&folder).expect("serialize");
+    assert_eq!(folder_json.get("path_prefix").and_then(|v| v.as_str()), Some("Clients/ACME"));
 }
 
 /// `already_owner` is the field that replaced the earlier `already` bool: it
@@ -405,6 +432,7 @@ fn accept_drive_invite_response_wire_pinned() {
         folder_hash: "0123456789abcdef".to_string(),
         already_owner: false,
         role: "writer".to_string(),
+        path_prefix: None,
     };
     let json = serde_json::to_value(&member_accept).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();

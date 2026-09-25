@@ -1,7 +1,10 @@
 // Pure view/row routing for `SharedWithMeSection` — the sidebarSearchState
 // convention. Unit-tested in `__tests__/sharedWithMeState.test.ts`.
 
-import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
+import type {
+  DriveMembershipInfo,
+  MyFolderGrantInfo,
+} from "@/app/lib/tauri/sharedDrives";
 
 /** Data lifecycle of the memberships fetch. */
 export type SharedWithMeData =
@@ -22,8 +25,14 @@ export type SharedWithMeView = "hidden" | "rows";
  * quiet degrade the feature-off rule requires, and it costs a user with
  * memberships at most one frame of absence while the list loads.
  */
-export function getSharedWithMeView(enabled: boolean, data: SharedWithMeData): SharedWithMeView {
+export function getSharedWithMeView(
+  enabled: boolean,
+  data: SharedWithMeData,
+  /** Folders shared with this account (folder roles). Rows of their own. */
+  folderGrantCount = 0,
+): SharedWithMeView {
   if (!enabled) return "hidden";
+  if (folderGrantCount > 0) return "rows";
   switch (data.kind) {
     case "idle":
     case "loading":
@@ -53,4 +62,29 @@ export function getMembershipRowAction(
     return { kind: "synced", localLabel: membership.localLabel };
   }
   return { kind: "sync-locally" };
+}
+
+/** How one shared FOLDER reads in the list. */
+export interface FolderGrantRowView {
+  /** Stable key: owner, drive and folder (a drive can grant several). */
+  key: string;
+  /** The folder's own name: the last segment of its path. */
+  folderName: string;
+  /** The drive it lives in, as its owner named it. */
+  driveName: string;
+  /** The full folder path, for the hover. */
+  path: string;
+}
+
+export function folderGrantRowView(
+  grant: Pick<MyFolderGrantInfo, "ownerSs58" | "folderHash" | "pathPrefix" | "displayLabel">,
+): FolderGrantRowView {
+  const path = grant.pathPrefix.replace(/^\/+|\/+$/g, "");
+  const segments = path.split("/").filter(Boolean);
+  return {
+    key: `${grant.ownerSs58}:${grant.folderHash}:${path}`,
+    folderName: segments[segments.length - 1] ?? path,
+    driveName: grant.displayLabel,
+    path,
+  };
 }

@@ -72,6 +72,26 @@ export const folderShareRevokeByHashEnabledAtom = atom((get) => {
 });
 
 /**
+ * Derived: does the connected server support folder grants (share one folder
+ * of a shared drive, read-only)? Hidden until `capabilities.folder_grants`
+ * is confirmed — `null` capabilities collapse to false.
+ */
+export const folderGrantsFeatureEnabledAtom = atom((get) => {
+  const caps = get(serverCapabilitiesAtom);
+  return caps?.folder_grants === true;
+});
+
+/**
+ * Whether an Editor or Manager may share a folder by link inside a drive
+ * somebody else owns (`capabilities.member_folder_shares`, hcfs #458).
+ * `null` capabilities collapse to `false`.
+ */
+export const memberFolderSharesEnabledAtom = atom((get) => {
+  const caps = get(serverCapabilitiesAtom);
+  return caps?.member_folder_shares === true;
+});
+
+/**
  * What `ShareFileModal` is currently sharing. `null` means closed.
  *
  * Storing the file (rather than just `(label, name)`) lets the modal render
@@ -138,24 +158,50 @@ export type ShareDriveModalTarget = {
    *
    * A manager may hold a drive they never synced. The manage IPCs resolve a
    * local `sync_paths` row such a drive does not have, and the lenient
-   * fallback then answers with THIS account's namespace — managing the wrong
+   * fallback then answers with THIS account's namespace, managing the wrong
    * drive rather than failing. Naming the identity is what addresses theirs.
    * Absent for an own drive, where the label resolves.
    */
   ownerSs58?: string;
   folderHash?: string;
+  /**
+   * Makes the Share dialog a **folder invite** for this
+   * drive-relative path: its PRESENCE decides, not its value. Every folder
+   * surface sets it, and the dialog then only ever calls the folder command,
+   * which refuses an empty path; it never falls back to a whole-drive
+   * invite. Absent = whole-drive invite. On the Manage access panel it
+   * scopes the panel to that folder the same way.
+   */
+  pathPrefix?: string;
+  /**
+   * Manage access panel only: open straight on this group's full list
+   * rather than the overview (the Share dialog's "+N more" row does, since
+   * the people it could not show are what the reader went looking for).
+   */
+  openOn?: "people";
 };
 
 export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);
 
 /**
- * The drive whose "create invite link" dialog is open.
+ * The drive or folder whose Share dialog is open (`share-dialog/ShareDialog`).
  *
- * Separate from the panel so minting keeps its own focused surface. The panel
+ * Separate from the panel so sharing keeps its own focused surface. The panel
  * is for managing what already exists -- who is in the drive, which links are
- * live -- and a mint is a short, decision-shaped flow that ends in a link to
- * copy. Putting it in the panel made a list surface carry a wizard.
+ * live -- and inviting someone or making a link is a short, decision-shaped
+ * flow. Putting it in the panel made a list surface carry a wizard.
  */
-export const createDriveInviteDialogAtom = atom<ShareDriveModalTarget | null>(
-  null,
-);
+export const shareDialogAtom = atom<ShareDriveModalTarget | null>(null);
+
+/**
+ * Bumped whenever the Share dialog sends an invite or creates a link, so an
+ * open Links tab lists it without the panel having to be reopened.
+ */
+export const driveInvitesVersionAtom = atom(0);
+
+/**
+ * Bumped each time Rust delivers an emailed invitation's key on its own, so
+ * an open Share dialog or Manage access panel reads its rows again and the
+ * invitation moves from "Opened" to "Approved" without a reopen.
+ */
+export const inviteKeyDeliveredVersionAtom = atom(0);
