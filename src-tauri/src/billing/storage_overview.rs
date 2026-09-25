@@ -261,6 +261,13 @@ pub struct StorageOverview {
     /// copy of it in TypeScript is one that drifts the first time a
     /// sign-in method is added.
     pub free_tier_entitled: bool,
+    /// Whether this account's plan lets it share drives and folders (Plus,
+    /// Max and Scale do; Free and Starter do not). Decided once in
+    /// [`crate::billing::sharing_entitlement`]; a plan that could not be
+    /// loaded reads `true`, leaving the verdict to the server's own
+    /// `shared_drives_not_entitled` gate. The FE renders this and never
+    /// re-derives it from `plan.code`.
+    pub can_share_drives: bool,
 }
 
 /// Pure composition of the overview from its inputs.
@@ -311,6 +318,13 @@ fn finish_overview(
     let percent = percent_of(used_bytes, total_bytes);
     // Decide here, where every input is already resolved, so no surface
     // has to combine source + percent + funding + balance for itself.
+    // From the plan alone; `get_storage_overview` refines it with whether
+    // the subscriptions could be read at all.
+    let can_share_drives = crate::billing::sharing_entitlement::resolve_can_share_drives(
+        plan.as_ref(),
+        Some(&serde_json::Value::Null),
+        true,
+    );
     let plan_action = match resolve_plan_action(source, percent, plan.as_ref()) {
         PlanAction::None if plan.as_ref().is_some_and(|p| credits_short_for_renewal(p, credits_hip.as_deref())) => PlanAction::TopUpCredits,
         decided => decided,
@@ -329,6 +343,7 @@ fn finish_overview(
         over_display: format_over_display(used_bytes, total_bytes),
         plan_action,
         free_tier_entitled,
+        can_share_drives,
     }
 }
 
@@ -683,6 +698,11 @@ pub async fn get_storage_overview(
     );
 
     let stats = stats_result?;
+    // Whether each subscription read succeeded, before the soft defaults
+    // below erase the difference: a plan that could not be loaded must not
+    // read as the free tier to the sharing rule.
+    let drive_sub_read = drive_sub_result.is_ok();
+    let legacy_read = active_result.is_ok();
     let drive_sub = drive_sub_result.unwrap_or_else(|_| serde_json::json!({ "active": false }));
     let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
     let active = active_result.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
@@ -729,6 +749,11 @@ pub async fn get_storage_overview(
         free_tier_entitled(provider.as_deref()),
     );
     overview.used_pending = used_pending(stats.total_bytes, local_bytes);
+    overview.can_share_drives = crate::billing::sharing_entitlement::resolve_can_share_drives(
+        overview.plan.as_ref(),
+        drive_sub_read.then_some(&drive_sub),
+        legacy_read,
+    );
 
     // The header states this the moment the balance is short; the
     // notification waits until the renewal is close. Raised from here
@@ -758,6 +783,18 @@ mod tests {
     /// across IPC to catch it going missing. A gate written against `name`
     /// silently stops matching when marketing renames a tier, which is the
     /// bug this field exists to end.
+    /// The sharing verdict reaches the frontend under the name it reads.
+    #[test]
+    fn the_sharing_verdict_reaches_the_wire() {
+        let free = serde_json::to_value(build_overview(0, None, Some(10 * BYTES_PER_GB), None, true)).unwrap();
+        assert_eq!(free["canShareDrives"], false, "the free tier cannot share");
+        let starter = PlanInfo { code: "solo".into(), ..pro_plan(1) };
+        let starter = serde_json::to_value(build_overview(0, Some(starter), None, None, true)).unwrap();
+        assert_eq!(starter["canShareDrives"], false, "Starter cannot share");
+        let max = serde_json::to_value(build_overview(0, Some(pro_plan(1)), None, None, true)).unwrap();
+        assert_eq!(max["canShareDrives"], true, "Max can share");
+    }
+
     #[test]
     fn plan_info_sends_the_code_as_well_as_the_name() {
         let json = serde_json::to_value(pro_plan(100)).unwrap();
