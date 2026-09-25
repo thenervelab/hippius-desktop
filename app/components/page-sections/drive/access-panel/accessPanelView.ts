@@ -15,21 +15,8 @@ import type {
 } from "@/app/lib/tauri/sharedDrives";
 import { presentText } from "@/app/lib/shared-drives/accountLabel";
 import { driveRoleLabel, parseDriveRole } from "@/app/lib/shared-drives/roles";
+import { expiresInWords, timeLeftWords } from "@/app/lib/shared-drives/timeLeft";
 import { formatJoinedDate } from "../shareDriveModalState";
-
-const HOUR = 3600;
-const DAY = 24 * HOUR;
-
-/** "5 days", "1 day", "20 hours", "1 hour", "less than an hour". */
-export function durationWords(secs: number): string {
-  const days = Math.floor(secs / DAY);
-  if (days >= 2) return `${days} days`;
-  if (days === 1) return "1 day";
-  const hours = Math.floor(secs / HOUR);
-  if (hours >= 2) return `${hours} hours`;
-  if (hours === 1) return "1 hour";
-  return "less than an hour";
-}
 
 /** "a Viewer", "an Editor" (a wire `manager` reads as an Editor). */
 export function rolePhrase(role: string): string {
@@ -114,10 +101,10 @@ export function pendingStageHint(status: string | undefined): string | undefined
   return undefined;
 }
 
-/** "6 days left", or null for an unreadable expiry. */
+/** "7 days left", "Expired", or null for an unreadable expiry. */
 export function pendingLeft(expiresInSecs: number | null): string | null {
   if (expiresInSecs === null) return null;
-  return `${durationWords(Math.max(0, expiresInSecs))} left`;
+  return timeLeftWords(expiresInSecs);
 }
 
 /** "Editor link". */
@@ -143,11 +130,11 @@ export function linkUsage(link: AccessPanelLink): string {
   return `${link.useCount} of ${link.maxUses} used`;
 }
 
-/** "Expires in 5 days", "Never expires", or null when Rust did not say. */
+/** "Expires in 5 days", "Expired", "Never expires", or null when Rust did not say. */
 export function linkExpiry(link: AccessPanelLink): string | null {
   if (link.neverExpires) return "Never expires";
   if (link.expiresInSecs === null) return null;
-  return `Expires in ${durationWords(Math.max(0, link.expiresInSecs))}`;
+  return expiresInWords(link.expiresInSecs);
 }
 
 /** The usage line under a working link. */
