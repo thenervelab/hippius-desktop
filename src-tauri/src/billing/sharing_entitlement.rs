@@ -68,11 +68,7 @@ fn active_drive_plan_code(sub: &serde_json::Value) -> Option<&str> {
 ///
 /// Only a clean read that finds no plan, or a known code without sharing,
 /// answers `false`.
-pub fn resolve_can_share_drives(
-    plan: Option<&PlanInfo>,
-    drive_sub: Option<&serde_json::Value>,
-    legacy_read: bool,
-) -> bool {
+pub fn resolve_can_share_drives(plan: Option<&PlanInfo>, drive_sub: Option<&serde_json::Value>, legacy_read: bool) -> bool {
     if let Some(plan) = plan {
         return plan_code_allows_sharing(Some(&plan.code));
     }
