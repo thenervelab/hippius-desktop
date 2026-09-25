@@ -396,7 +396,9 @@ const NameCell: FC<NameCellProps> = ({
   };
 
   return (
-    <div className={cn("w-full min-w-0", className)} draggable={false}>
+    // `@container`: the folder sharing mark's Manage access button reads the
+    // name cell's width to choose between words and an icon.
+    <div className={cn("@container w-full min-w-0", className)} draggable={false}>
       {isFolder ? (
         <Link
           href={folderUrl}

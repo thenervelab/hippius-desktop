@@ -133,6 +133,64 @@ describe("the folder row's sharing mark", () => {
     expect(onRowClick).not.toHaveBeenCalled();
   });
 
+  // Its own way in, beside the pill: the same folder-scoped panel, named for
+  // the folder, and it does not open the folder either.
+  it("has a Manage access button that opens the folder's panel", async () => {
+    const onRowClick = vi.fn();
+    const { store } = renderWith(
+      <div onClick={onRowClick}>
+        <FolderSharingMark
+          label="team"
+          folderPath="Clients/ACME"
+          folderName="ACME"
+        />
+      </div>,
+    );
+    const button = await screen.findByRole("button", {
+      name: "Manage access for ACME",
+    });
+    // Words where the name cell is wide, an icon where it is narrow.
+    expect(button).toHaveTextContent("Manage access");
+    fireEvent.click(button);
+    expect(store.get(shareDriveModalAtom)).toEqual({
+      label: "team",
+      folderName: "ACME",
+      pathPrefix: "Clients/ACME",
+    });
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it("opens it from the keyboard", async () => {
+    const { store } = renderWith(
+      <FolderSharingMark
+        label="team"
+        folderPath="Clients/ACME"
+        folderName="ACME"
+      />,
+    );
+    fireEvent.keyDown(
+      await screen.findByRole("button", { name: "Manage access for ACME" }),
+      { key: "Enter" },
+    );
+    expect(store.get(shareDriveModalAtom)).toMatchObject({
+      pathPrefix: "Clients/ACME",
+    });
+  });
+
+  it("offers no Manage access on a folder that is not shared on its own", async () => {
+    renderWith(
+      <FolderSharingMark
+        label="team"
+        folderPath="Clients"
+        folderName="Clients"
+      />,
+    );
+    await waitFor(() => expect(listOwnedFolderSharingMock).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("button", { name: /Manage access/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows only the icon and the count in the card view", async () => {
     renderWith(
       <FolderSharingMark
@@ -146,6 +204,10 @@ describe("the folder row's sharing mark", () => {
       name: "Shared with 2. Manage access to this folder",
     });
     expect(mark).toHaveTextContent(/^2$/);
+    // The card's button is an icon, named for the folder.
+    expect(
+      screen.getByRole("button", { name: "Manage access for ACME" }),
+    ).toHaveTextContent(/^$/);
   });
 
   // The listing is the owner's. Somebody else's drive is never asked about.

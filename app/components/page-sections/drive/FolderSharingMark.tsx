@@ -8,9 +8,15 @@
 // same outline pill), so a shared folder reads like a shared drive, one level
 // down. Clicking it opens Manage access scoped to this folder, and stops the
 // click there: the row around it is a link that opens the folder.
+//
+// Beside the pill sits the folder's own "Manage access" button, the compact
+// cousin of the one in the drive header, so the way in to that folder's
+// people and links is visible rather than only in the row menu. It is words
+// where the name cell has room and an icon where it does not: the name cell
+// is an `@container`, and anywhere without one the button stays an icon.
 
 import React from "react";
-import { Users } from "lucide-react";
+import { UserCog, Users } from "lucide-react";
 import { useSetAtom } from "jotai";
 
 import { Button } from "@/components/ui";
@@ -63,31 +69,53 @@ export default function FolderSharingMark({
     setShareTarget({ label, folderName, pathPrefix });
   };
 
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") open(e);
+  };
+
+  // role=button, not a <button>: both controls sit inside the row's <a>, and
+  // a button inside a link is invalid markup. Enter and Space match a button.
   return (
-    // role=button, not a <button>: the mark sits inside the row's <a>, and a
-    // button inside a link is invalid markup. Enter and Space match a button.
     <span
-      role="button"
-      tabIndex={0}
-      title={sharing.title ?? undefined}
-      aria-label={`${sharing.label}. Manage access to this folder`}
-      onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") open(e);
-      }}
-      className={cn(
-        SHARED_BY_ME_PILL_CLASS,
-        compact && "gap-1 px-1.5",
-        "cursor-pointer transition-colors hover:bg-[#1F50BD]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:hover:bg-[#6b93ea]/10",
-        className,
-      )}
+      className={cn("inline-flex flex-shrink-0 items-center gap-1", className)}
     >
-      <Users className="size-3" aria-hidden="true" />
-      {compact
-        ? summary && summary.holderCount > 0
-          ? summary.holderCount
-          : null
-        : sharing.label}
+      <span
+        role="button"
+        tabIndex={0}
+        title={sharing.title ?? undefined}
+        aria-label={`${sharing.label}. Manage access to this folder`}
+        onClick={open}
+        onKeyDown={onKeyDown}
+        className={cn(
+          SHARED_BY_ME_PILL_CLASS,
+          compact && "gap-1 px-1.5",
+          "cursor-pointer transition-colors hover:bg-[#1F50BD]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:hover:bg-[#6b93ea]/10",
+        )}
+      >
+        <Users className="size-3" aria-hidden="true" />
+        {compact
+          ? summary && summary.holderCount > 0
+            ? summary.holderCount
+            : null
+          : sharing.label}
+      </span>
+      <span
+        role="button"
+        tabIndex={0}
+        title="Manage access"
+        aria-label={`Manage access for ${folderName}`}
+        onClick={open}
+        onKeyDown={onKeyDown}
+        className="inline-flex h-5 flex-shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-primary-50 px-1 text-[11px] font-medium text-primary-50 transition-colors hover:bg-primary-50/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:border-primary-brand-dark dark:text-primary-brand-dark dark:hover:bg-primary-50/15"
+      >
+        <UserCog
+          className={cn("size-3", !compact && "@[22rem]:hidden")}
+          aria-hidden="true"
+        />
+        {compact ? null : (
+          <span className="hidden px-0.5 @[22rem]:inline">Manage access</span>
+        )}
+      </span>
     </span>
   );
 }
