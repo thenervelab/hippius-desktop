@@ -220,7 +220,7 @@ const full = () =>
         createdAt: "t",
         recipientEmail: "mia@example.com",
         emailStatus: "awaiting_seal",
-        expiresInSecs: 6 * DAY,
+        expiresInSecs: 7 * DAY - 5,
       },
     ],
     links: [link()],
@@ -586,7 +586,7 @@ describe("changes are pessimistic", () => {
       "title",
       "They join while the app is open. Approve if they are still waiting.",
     );
-    expect(pending.getByText("Viewer · 6 days left")).toBeInTheDocument();
+    expect(pending.getByText("Viewer · 7 days left")).toBeInTheDocument();
     fireEvent.click(pending.getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(approveMock).toHaveBeenCalledWith("team-docs", "p1", undefined));
   });

@@ -63,6 +63,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Invites and links show the right time left.** A 7-day invite sent a moment
+  ago now says "7 days", not "6 days", and the Share dialog and Manage access
+  always agree on how long an invite or link has.
 - **Long names, emails and wallet addresses stay readable.** In the Share
   dialog, Manage access, the Added by column, Shared with me and your account
   menu, a long one is shortened in the middle to fit, so you still see how an
