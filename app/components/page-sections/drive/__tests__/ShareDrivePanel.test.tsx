@@ -6,7 +6,7 @@
 // a big drive, rows that cut long words short beside a fixed role slot, the
 // jump bar, six people, three invitations and six compact links with
 // "Show all", and the full view's search, chips, windowed list, link fields
-// and actions (the Share dev tools' Big and Huge presets).
+// and actions.
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -484,7 +484,7 @@ describe("locked links", () => {
   });
 
   it("offers Unlock on the blurred field in the Links full view", async () => {
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big", {}, { locked: true }));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG, {}, { locked: true }));
     renderPanel();
     const links = within(await waitFor(() => group(/^Links/)));
     expect(links.getAllByRole("button", { name: "Unlock to copy" })).toHaveLength(6);
@@ -599,17 +599,84 @@ describe("a drive shared with you", () => {
   });
 });
 
-// The Share dev tools' presets, as the panel receives them.
-async function presetPanel(
-  id: "big" | "huge",
+const LONG_NAME = "Srinivasa Ramanujan Aiyangar Venkataraghavan";
+
+/** How many of each a big drive's panel lists. */
+interface DriveSize {
+  members: number;
+  holders: number;
+  pending: number;
+  links: number;
+  ended: number;
+}
+/** 60 people (54 with the whole drive, 6 with folders), 6 invitations, 45 links, 15 ended. */
+const BIG: DriveSize = { members: 54, holders: 6, pending: 6, links: 45, ended: 15 };
+/** 100 people, 50 invitations, 100 links, 50 ended. */
+const HUGE: DriveSize = { members: 90, holders: 10, pending: 50, links: 100, ended: 50 };
+
+/** An address of the right length, distinct for every `n`. */
+const address = (tag: string, n: number) => `5${tag}${String(n).padStart(3, "0")}`.padEnd(48, "x");
+
+/** A big drive's panel, built from plain rows: mixed roles, a long name among the first. */
+function bigPanel(
+  size: DriveSize,
   over: Partial<AccessPanel> = {},
   { locked = false }: { locked?: boolean } = {},
-): Promise<AccessPanel> {
-  const { buildFixture, fixtureAccessPanel } = await import("../share-dialog/shareFixture");
-  const { DEFAULT_SETTINGS, applyPreset } = await import("../share-dialog/shareDevToolsSettings");
-  const now = Date.parse("2026-09-25T12:00:00Z");
-  const settings = { ...applyPreset(DEFAULT_SETTINGS, id), linksLocked: locked };
-  return { ...fixtureAccessPanel(buildFixture(settings, null, now), locked, now), ...over };
+): AccessPanel {
+  const members = Array.from({ length: size.members }, (_, i) =>
+    member({
+      memberSs58: address("Member", i),
+      memberName: i === 1 ? LONG_NAME : `Person ${i}`,
+      memberEmail: `person${i}@example.com`,
+      role: i % 2 ? "writer" : "reader",
+    }),
+  );
+  const folderHolders = Array.from({ length: size.holders }, (_, j) =>
+    holder({
+      memberSs58: address("Holder", j),
+      memberName: `Holder ${j}`,
+      memberEmail: `holder${j}@example.com`,
+      role: j % 2 ? "writer" : "reader",
+    }),
+  );
+  const statuses = ["sent", "awaiting_seal", "sealed"] as const;
+  const pendingInvites = Array.from({ length: size.pending }, (_, k) => ({
+    ...full().pendingInvites[0],
+    inviteId: `invite-${k}`,
+    role: k % 2 ? "writer" : "reader",
+    recipientEmail: `invitee${k + 1}@example.com`,
+    emailStatus: statuses[k % 3],
+  }));
+  const links = Array.from({ length: size.links }, (_, a) =>
+    link({
+      inviteId: `link-${a}`,
+      role: a % 3 ? "reader" : "writer",
+      mintedByYou: a % 2 === 0,
+      useCount: a % 50,
+      usagePercent: Math.round(((a % 50) / 50) * 100),
+      inviteUrl: locked ? undefined : `https://console.hippius.com/invite/tok${a}abcdefgh#k=SECRETKEY`,
+    }),
+  );
+  const endedStatuses = ["revoked", "expired", "used_up"] as const;
+  const inactiveLinks = Array.from({ length: size.ended }, (_, e) =>
+    link({
+      inviteId: `ended-${e}`,
+      status: endedStatuses[e % 3],
+      expiresInSecs: null,
+      inviteUrl: undefined,
+      linkAvailable: false,
+    }),
+  );
+  return panel({
+    members,
+    folderHolders,
+    pendingInvites,
+    links,
+    inactiveLinks,
+    linksLocked: locked,
+    driveMemberCount: members.length,
+    ...over,
+  });
 }
 
 /** The rows of the full view's windowed list. */
@@ -666,7 +733,7 @@ describe("rows never run under the role", () => {
 
 describe("a big drive", () => {
   it("counts every group in full, in the headers and the jump bar", async () => {
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel();
     expect(await screen.findByRole("heading", { name: "People 61" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Pending invites 6" })).toBeInTheDocument();
@@ -679,7 +746,7 @@ describe("a big drive", () => {
   it("draws six people, three invitations and six compact links, then Show all with the full count", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
-    const big = await presetPanel("big");
+    const big = bigPanel(BIG);
     listAccessPanelMock.mockResolvedValue(big);
     renderPanel();
     const people = within(await waitFor(() => group(/^People/)));
@@ -699,19 +766,19 @@ describe("a big drive", () => {
   });
 
   it("keeps the link field, key hidden, in the Links full view", async () => {
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Show all 45 links" }));
     const list = within(fullList("Links"));
     expect(list.getAllByText(/^console\.hippius\.com\/invite\//).length).toBeGreaterThan(0);
-    expect(list.queryByText(/fixture-key/)).not.toBeInTheDocument();
+    expect(list.queryByText(/SECRETKEY/)).not.toBeInTheDocument();
     expect(list.getAllByRole("button", { name: "Copy invite link" }).length).toBeGreaterThan(0);
     expect(list.queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
   });
 
   it("dims a compact link while it is revoked, with Revoking in its right slot", async () => {
     revokeMock.mockReturnValue(new Promise<void>(() => {}));
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel();
     const links = within(await waitFor(() => group(/^Links/)));
     fireEvent.click(links.getAllByRole("button", { name: "Revoke" })[0]);
@@ -728,7 +795,7 @@ describe("a big drive", () => {
     const original = HTMLElement.prototype.scrollTo;
     HTMLElement.prototype.scrollTo = scrollTo;
     try {
-      listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+      listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
       renderPanel();
       await screen.findByRole("heading", { name: "Links 45 active" });
       const bar = within(screen.getByRole("navigation", { name: "Jump to a group" }));
@@ -744,7 +811,7 @@ describe("a big drive", () => {
   });
 
   it("filters every group at once from the main search", async () => {
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel();
     const search = await screen.findByRole("searchbox", { name: "Search people, invites and links" });
     fireEvent.change(search, { target: { value: "invitee3@" } });
@@ -756,7 +823,7 @@ describe("a big drive", () => {
   });
 
   it("opens a group's full view, lists it all behind search and chips, and goes back", async () => {
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Show all 61 people" }));
     expect(screen.getByRole("heading", { name: "People 61" })).toBeInTheDocument();
@@ -771,7 +838,7 @@ describe("a big drive", () => {
 
     // A search by email narrows it; one that matches nothing says so.
     fireEvent.click(screen.getByRole("button", { name: "All" }));
-    fireEvent.change(search, { target: { value: "sara.khan0@" } });
+    fireEvent.change(search, { target: { value: "person0@" } });
     expect(within(fullList("People")).getAllByRole("listitem")).toHaveLength(1);
     fireEvent.change(search, { target: { value: "nobody-here" } });
     expect(screen.getByText("No one matches “nobody-here”")).toBeInTheDocument();
@@ -784,7 +851,7 @@ describe("a big drive", () => {
   it("changes a role from the full view, saying Saving until Rust answers", async () => {
     let finish: () => void = () => {};
     changeRoleMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
-    const big = await presetPanel("big");
+    const big = bigPanel(BIG);
     listAccessPanelMock.mockResolvedValue(big);
     renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Show all 61 people" }));
@@ -807,13 +874,13 @@ describe("a big drive", () => {
 
   it("revokes a link from the Links full view, and lists ended links under Ended", async () => {
     revokeMock.mockReturnValue(new Promise<void>(() => {}));
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Show all 45 links" }));
     const list = within(fullList("Links"));
     fireEvent.click(list.getAllByRole("button", { name: "Revoke" })[0]);
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
-    await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "fixture-link-0", undefined));
+    await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "link-0", undefined));
     expect(await screen.findByText("Revoking…")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Ended" }));
@@ -823,7 +890,7 @@ describe("a big drive", () => {
   });
 
   it("searches pending invitations by email in their full view", async () => {
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Show all 6 pending invites" }));
     expect(within(fullList("Pending invites")).getAllByRole("listitem")).toHaveLength(6);
@@ -833,18 +900,18 @@ describe("a big drive", () => {
   });
 
   it("opens straight on the people when the Share dialog's more row asked for it", async () => {
-    listAccessPanelMock.mockResolvedValue(await presetPanel("big"));
+    listAccessPanelMock.mockResolvedValue(bigPanel(BIG));
     renderPanel({ label: "team-docs", folderName: "team-docs", openOn: "people" });
     expect(await screen.findByRole("list", { name: "People" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
   });
 });
 
-describe("the Huge preset", () => {
+describe("a huge drive", () => {
   it("renders every group without errors and draws only a window of a 100-row list", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      listAccessPanelMock.mockResolvedValue(await presetPanel("huge"));
+      listAccessPanelMock.mockResolvedValue(bigPanel(HUGE));
       renderPanel();
       expect(await screen.findByRole("heading", { name: "People 101" })).toBeInTheDocument();
       expect(within(group(/^People/)).getAllByRole("listitem")).toHaveLength(6);
@@ -859,7 +926,7 @@ describe("the Huge preset", () => {
       expect(rows[0]).toHaveAttribute("aria-setsize", "101");
       // A person far down the list is one search away.
       fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), { target: { value: "Srinivasa" } });
-      expect(within(fullList("People")).getAllByText("Srinivasa Ramanujan Aiyangar Venkataraghavan").length).toBeGreaterThan(0);
+      expect(within(fullList("People")).getAllByText(LONG_NAME).length).toBeGreaterThan(0);
       expect(errors).not.toHaveBeenCalled();
     } finally {
       errors.mockRestore();
@@ -903,7 +970,7 @@ describe("the jump bar for someone the drive is shared with", () => {
         frozenUntil: null,
       },
     ];
-    const big = await presetPanel("big", { ownerSs58: OWNER, ownerIsYou: false, yourRole: "reader", canManage: false });
+    const big = bigPanel(BIG, { ownerSs58: OWNER, ownerIsYou: false, yourRole: "reader", canManage: false });
     listAccessPanelMock.mockResolvedValue(big);
     renderPanel();
     const bar = within(await screen.findByRole("navigation", { name: "Jump to a group" }));
