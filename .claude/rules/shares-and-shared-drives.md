@@ -219,11 +219,8 @@ drive or folder. Role change, remove, cancel and approve are PESSIMISTIC: the ro
 "Saving…" / "Removing…" until the command succeeds and the listing is read again, and a
 refusal leaves the row as it was with "Couldn't change access for <name>. <reason>". A
 demotion is confirmed first (the server revokes links as part of it). Six rows at most,
-then "+ N more · Manage access" to the panel. A dev and staging only preview fixture
-(`shareAccessApi.ts` + `shareFixture.ts`, driven by the Share dev tools panel, see
-`frontend.md`) stands in for these commands with fake people, links, latency and refusals;
-it is off at build time on beta and production. Pinned by `share-dialog/__tests__/ShareDialog.test.tsx` and the
-`fold_share_access` unit tests.
+then "+ N more · Manage access" to the panel. Pinned by
+`share-dialog/__tests__/ShareDialog.test.tsx` and the `fold_share_access` unit tests.
 
 **The Manage access panel is one list, from one Rust fold** (`ShareDrivePanel.tsx` +
 `drive/access-panel/`, `list_access_panel` in `shared_drives/access_panel.rs`), for a
@@ -238,9 +235,8 @@ drive is never asked for invites. Sealed links open through `open_invite_links` 
 with `list_drive_invites`), which also reports a missing drive key; the panel then shows
 "Links are locked…" and routes Unlock through `useUnlockFlow` (the sync banner's flow),
 reading the list again once the recovery dialog closes. Rows reuse the Share dialog's
-`MemberRow` / `PendingRow` / `useRowChanges`, so changes are pessimistic in both. The
-dev fixture covers the panel too. Each group comes newest first from Rust (you, then most
-recently joined; invitations and links most recently created) and the main view draws its first
+`MemberRow` / `PendingRow` / `useRowChanges`, so changes are pessimistic in both. Each
+group comes newest first from Rust (you, then most recently joined; invitations and links most recently created) and the main view draws its first
 `PANEL_PREVIEW` rows (6 people, 3 pending invites, 6 links, so people and links fit one laptop
 screen), a jump bar (owner: when more than one group has rows; a member sees "People N" only past
 `MEMBER_JUMP_BAR_MIN_PEOPLE` (5) people, the console's rule) and "Show all N …", which opens that
