@@ -21,11 +21,15 @@ import { Select } from "@/components/ui/select/Select";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import AccountLabel from "../AccountLabel";
 import { cn } from "@/lib/utils";
-import type {
-  DriveInviteInfo,
-  DriveTarget,
-  ShareAccessHolder,
-  ShareAccessMember,
+import {
+  approveEmailInvite,
+  changeDriveMemberRole,
+  removeDriveMember,
+  revokeDriveInvite,
+  type DriveInviteInfo,
+  type DriveTarget,
+  type ShareAccessHolder,
+  type ShareAccessMember,
 } from "@/app/lib/tauri/sharedDrives";
 import {
   DRIVE_ROLES,
@@ -45,7 +49,6 @@ import {
   couldNotChangeAccess,
   pendingInviteMeta,
 } from "./shareDialogState";
-import type { ShareAccessApi } from "./shareAccessApi";
 import type { ShareAccessState } from "./useShareAccess";
 
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
@@ -108,7 +111,6 @@ export function useRowChanges(onChanged: () => void, reload: () => Promise<void>
 }
 
 export function PeopleWithAccessSection({
-  api,
   state,
   folder,
   label,
@@ -119,7 +121,6 @@ export function PeopleWithAccessSection({
   onChanged,
   onManage,
 }: {
-  api: ShareAccessApi;
   state: ShareAccessState;
   /** Present for a folder dialog. */
   folder: string | null;
@@ -165,9 +166,9 @@ export function PeopleWithAccessSection({
             readOnly={readOnly}
             busy={busy[m.memberSs58]}
             onChangeRole={(role) =>
-              void run(m.memberSs58, who, "saving", () => api.changeRole(label, m.memberSs58, role, target))
+              void run(m.memberSs58, who, "saving", () => changeDriveMemberRole(label, m.memberSs58, role, target))
             }
-            onRemove={() => void run(m.memberSs58, who, "removing", () => api.remove(label, m.memberSs58, target))}
+            onRemove={() => void run(m.memberSs58, who, "removing", () => removeDriveMember(label, m.memberSs58, target))}
           />
         ),
       });
@@ -182,7 +183,7 @@ export function PeopleWithAccessSection({
             folder={folder ?? ""}
             readOnly={readOnly}
             busy={busy[h.memberSs58]}
-            onRemove={() => void run(h.memberSs58, who, "removing", () => api.remove(label, h.memberSs58, target))}
+            onRemove={() => void run(h.memberSs58, who, "removing", () => removeDriveMember(label, h.memberSs58, target))}
           />
         ),
       });
@@ -195,8 +196,8 @@ export function PeopleWithAccessSection({
           <PendingRow
             invite={i}
             busy={busy[i.inviteId]}
-            onCancel={() => void run(i.inviteId, who, "removing", () => api.revoke(label, i.inviteId, target))}
-            onApprove={() => void run(i.inviteId, who, "saving", () => api.approve(label, i.inviteId, target))}
+            onCancel={() => void run(i.inviteId, who, "removing", () => revokeDriveInvite(label, i.inviteId, target))}
+            onApprove={() => void run(i.inviteId, who, "saving", () => approveEmailInvite(label, i.inviteId, target))}
           />
         ),
       });

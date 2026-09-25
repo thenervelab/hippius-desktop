@@ -7,9 +7,13 @@
 // server refused.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isSharedDrivesUnavailable, type DriveTarget, type ShareAccess } from "@/app/lib/tauri/sharedDrives";
+import {
+  isSharedDrivesUnavailable,
+  listShareAccess,
+  type DriveTarget,
+  type ShareAccess,
+} from "@/app/lib/tauri/sharedDrives";
 import { errorMessage } from "@/lib/utils/errorUtils";
-import type { ShareAccessApi } from "./shareAccessApi";
 
 export type ShareAccessState =
   | { kind: "loading" }
@@ -18,7 +22,6 @@ export type ShareAccessState =
   | { kind: "error"; message: string };
 
 export function useShareAccess(params: {
-  api: ShareAccessApi;
   label: string;
   /** Present for a folder. */
   pathPrefix: string | null;
@@ -31,7 +34,7 @@ export function useShareAccess(params: {
   /** Start over from the skeleton, after a failed first load. */
   retry: () => void;
 } {
-  const { api, label, pathPrefix, target, enabled } = params;
+  const { label, pathPrefix, target, enabled } = params;
   const [state, setState] = useState<ShareAccessState>({ kind: "loading" });
   // Only the newest request may land: the dialog reloads after every change,
   // and an older answer arriving late would put a removed row back.
@@ -42,7 +45,7 @@ export function useShareAccess(params: {
       const mine = ++seq.current;
       if (!quiet) setState({ kind: "loading" });
       try {
-        const access = await api.list(label, pathPrefix, target);
+        const access = await listShareAccess(label, pathPrefix, target);
         if (mine === seq.current) setState({ kind: "ready", access });
       } catch (err) {
         if (mine !== seq.current) return;
@@ -53,7 +56,7 @@ export function useShareAccess(params: {
         );
       }
     },
-    [api, label, pathPrefix, target],
+    [label, pathPrefix, target],
   );
 
   useEffect(() => {

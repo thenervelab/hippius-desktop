@@ -52,8 +52,13 @@ import {
 import { activeRecoveryCheckAtom } from "@/app/lib/global-atoms/recoveryAtoms";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import {
+  approveEmailInvite,
+  changeDriveMemberRole,
   leaveSharedDrive,
   leaveSharedDriveByIdentity,
+  removeDriveMember,
+  replaceFolderGrants,
+  revokeDriveInvite,
   type AccessPanel,
   type DriveMembershipInfo,
 } from "@/app/lib/tauri/sharedDrives";
@@ -64,8 +69,6 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 import { InlineNotice } from "./share-dialog/InlineNotice";
 import { useRowChanges } from "./share-dialog/PeopleWithAccessSection";
-import { shareAccessApiFor, type ShareAccessApi } from "./share-dialog/shareAccessApi";
-import { useReloadOnShareDevToolsChange } from "./share-dialog/shareDevToolsSettings";
 import { FOLDER_ACCESS_HINT, SHARED_DRIVES_UNAVAILABLE_COPY } from "./share-dialog/shareDialogState";
 import { driveDisplayName, findMembership } from "./share-dialog/ShareDialog";
 import { useAccessPanel, type AccessPanelState } from "./access-panel/useAccessPanel";
@@ -195,11 +198,7 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
     [target.ownerSs58, target.folderHash],
   );
 
-  // Real commands, or (dev and staging only) the Share dev tools' fake data,
-  // which the API decides per call; the list starts over when those change.
-  const [api] = useState<ShareAccessApi>(() => shareAccessApiFor(folder));
-  const { state, reload, retry } = useAccessPanel({ api, label: target.label, pathPrefix, target: driveTarget });
-  useReloadOnShareDevToolsChange(retry);
+  const { state, reload, retry } = useAccessPanel({ label: target.label, pathPrefix, target: driveTarget });
 
   // The Share dialog bumps this on every invite or link it makes.
   const invitesVersion = useAtomValue(driveInvitesVersionAtom);
@@ -300,20 +299,20 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
   const actions = useMemo<RowActions>(
     () => ({
       changeRole: (ss58, who, role) =>
-        void run(ss58, who, "saving", () => api.changeRole(target.label, ss58, role, driveTarget)),
-      remove: (ss58, who) => void run(ss58, who, "removing", () => api.remove(target.label, ss58, driveTarget)),
-      revoke: (id, who) => void run(id, who, "revoking", () => api.revoke(target.label, id, driveTarget)),
-      cancel: (id, who) => void run(id, who, "removing", () => api.revoke(target.label, id, driveTarget)),
-      approve: (id, who) => void run(id, who, "saving", () => api.approve(target.label, id, driveTarget)),
+        void run(ss58, who, "saving", () => changeDriveMemberRole(target.label, ss58, role, driveTarget)),
+      remove: (ss58, who) => void run(ss58, who, "removing", () => removeDriveMember(target.label, ss58, driveTarget)),
+      revoke: (id, who) => void run(id, who, "revoking", () => revokeDriveInvite(target.label, id, driveTarget)),
+      cancel: (id, who) => void run(id, who, "removing", () => revokeDriveInvite(target.label, id, driveTarget)),
+      approve: (id, who) => void run(id, who, "saving", () => approveEmailInvite(target.label, id, driveTarget)),
       // Throws on refusal: the dialog shows why and stays open.
       changeFolders: async (ss58, folders, role) => {
-        await api.replaceFolders(target.label, ss58, folders, role, driveTarget);
+        await replaceFolderGrants(target.label, ss58, folders, { role, target: driveTarget });
         toast.success("Folders updated");
         onChanged();
         await reload();
       },
     }),
-    [run, api, target.label, driveTarget, onChanged, reload],
+    [run, target.label, driveTarget, onChanged, reload],
   );
   const ctx: RowContext | null = panel
     ? {

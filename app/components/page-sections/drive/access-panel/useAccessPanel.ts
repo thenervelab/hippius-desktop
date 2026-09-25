@@ -5,9 +5,13 @@
 // a change until Rust has made it and the listing has been read again.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isSharedDrivesUnavailable, type AccessPanel, type DriveTarget } from "@/app/lib/tauri/sharedDrives";
+import {
+  isSharedDrivesUnavailable,
+  listAccessPanel,
+  type AccessPanel,
+  type DriveTarget,
+} from "@/app/lib/tauri/sharedDrives";
 import { errorMessage } from "@/lib/utils/errorUtils";
-import type { ShareAccessApi } from "../share-dialog/shareAccessApi";
 
 export type AccessPanelState =
   | { kind: "loading" }
@@ -16,7 +20,6 @@ export type AccessPanelState =
   | { kind: "error"; message: string };
 
 export function useAccessPanel(params: {
-  api: ShareAccessApi;
   label: string;
   /** Present for a folder. */
   pathPrefix: string | null;
@@ -28,7 +31,7 @@ export function useAccessPanel(params: {
   /** Start over from the skeleton, after a failed first load. */
   retry: () => void;
 } {
-  const { api, label, pathPrefix, target } = params;
+  const { label, pathPrefix, target } = params;
   const [state, setState] = useState<AccessPanelState>({ kind: "loading" });
   // Only the newest request may land: the panel reloads after every change,
   // and an older answer arriving late would put a removed row back.
@@ -39,7 +42,7 @@ export function useAccessPanel(params: {
       const mine = ++seq.current;
       if (!quiet) setState({ kind: "loading" });
       try {
-        const panel = await api.listPanel(label, pathPrefix, target);
+        const panel = await listAccessPanel(label, pathPrefix, target);
         if (mine === seq.current) setState({ kind: "ready", panel });
       } catch (err) {
         if (mine !== seq.current) return;
@@ -50,7 +53,7 @@ export function useAccessPanel(params: {
         );
       }
     },
-    [api, label, pathPrefix, target],
+    [label, pathPrefix, target],
   );
 
   useEffect(() => {
