@@ -65,3 +65,29 @@ export function buildSharedDriveActions(
 
   return items;
 }
+
+/**
+ * What a shared FOLDER row offers: open it (rooted at the folder) and leave.
+ * No "Sync to this computer": syncing a granted folder to disk is not
+ * supported yet, and offering it would promise what the app cannot do.
+ */
+export function buildFolderGrantActions(handlers: {
+  onOpen?: () => void;
+  onLeave: () => void;
+}): ActionItem[] {
+  const items: ActionItem[] = [];
+  if (handlers.onOpen) {
+    items.push({
+      icon: <FolderOpen className="size-4" />,
+      itemTitle: "Open",
+      onItemClick: handlers.onOpen,
+    });
+  }
+  items.push({
+    icon: <LogOut className="size-4" />,
+    itemTitle: "Leave folder",
+    variant: "destructive",
+    onItemClick: handlers.onLeave,
+  });
+  return items;
+}

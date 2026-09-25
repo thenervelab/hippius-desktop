@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  folderGrantRowView,
   getMembershipRowAction,
   getSharedWithMeView,
   type SharedWithMeData,
@@ -64,8 +65,8 @@ describe("getMembershipRowAction", () => {
 });
 
 // The row printed the wire word raw, so a drive shared with you announced
-// itself as "writer". The wire vocabulary is reader/writer/manager; every
-// surface a person reads says Viewer/Editor/Manager.
+// itself as "writer". The wire vocabulary is reader/writer; every surface a
+// person reads says Viewer/Editor.
 describe("the Shared with me row's role", () => {
   it("never shows a wire word", () => {
     const source = readFileSync(
@@ -77,5 +78,29 @@ describe("the Shared with me row's role", () => {
     expect(source).toContain("<DriveRoleChip role={role} />");
     expect(source).toContain("parseDriveRole(membership.role)");
     expect(source).not.toMatch(/·\s*\{membership\.role\}/);
+  });
+});
+
+describe("shared folders (folder roles)", () => {
+  it("shows the section for folders alone, whatever the drive listing did", () => {
+    expect(getSharedWithMeView(true, { kind: "loading" }, 1)).toBe("rows");
+    expect(getSharedWithMeView(true, { kind: "ready", memberships: [] }, 2)).toBe("rows");
+    expect(getSharedWithMeView(true, { kind: "ready", memberships: [] }, 0)).toBe("hidden");
+    expect(getSharedWithMeView(false, { kind: "ready", memberships: [] }, 3)).toBe("hidden");
+  });
+
+  it("names the folder by its own name and keeps the drive and path", () => {
+    const view = folderGrantRowView({
+      ownerSs58: "5Owner",
+      folderHash: "abc",
+      pathPrefix: "/Clients/ACME/",
+      displayLabel: "Team",
+    });
+    expect(view).toEqual({
+      key: "5Owner:abc:Clients/ACME",
+      folderName: "ACME",
+      driveName: "Team",
+      path: "Clients/ACME",
+    });
   });
 });

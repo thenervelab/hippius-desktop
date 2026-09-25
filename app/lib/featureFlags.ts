@@ -121,9 +121,10 @@ export const VM_VPN_ENABLED = false;
  *
  * Two gates still stand in front of it, which is what makes that safe:
  *
- *   - a plan without the perk never sees "Share drive" at all
- *     (`planSupportsSharedDrives`), and the server refuses a mint with
- *     `shared_drives_not_entitled` even if it somehow did;
+ *   - a plan without the perk (Free, Starter) gets an upgrade prompt in
+ *     place of every control that adds people (`canShareDrives`, decided in
+ *     Rust), and the server refuses a mint with `shared_drives_not_entitled`
+ *     even if it somehow got through;
  *   - a server fleet without `HCFS_FEATURE_SHARED_DRIVES=1` answers the
  *     unmounted routes as `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the
  *     UI hides rather than erroring on.
@@ -148,6 +149,23 @@ export const VM_VPN_ENABLED = false;
  * work still sees it.
  */
 export const SHARED_DRIVES_ENABLED = enabledFrom("beta");
+
+/**
+ * Folder collaboration: share ONE folder of a drive as Viewer or Editor, by
+ * link or by email, and let an Editor holder write inside it.
+ *
+ * Built against HCFS #475 (not merged yet), documented in one place: the
+ * module doc of `src-tauri/src/shared_drives/folder_roles.rs`. Inside this
+ * flag nothing is hidden on a server capability: "Share folder" is always
+ * offered to owners and drive Managers, and whatever the server refuses
+ * (folder invites off, Editor off, email off) reads as "coming soon", so each
+ * piece lights up on its own when the server turns it on. With the flag off,
+ * folder sharing stays the read-only, capability-gated version.
+ *
+ * **Staging only** (`enabledFrom("staging")`): off in beta and production
+ * until #475 merges and is checked against this build.
+ */
+export const FOLDER_ROLES_ENABLED = enabledFrom("staging");
 
 /**
  * API token settings. When `false`, the surface is fully invisible: the

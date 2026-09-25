@@ -7,6 +7,7 @@ import {
   canShareFolder,
   isMemberDriveLabel,
   offersShareAction,
+  offersWriteAction,
   driveFolderHash,
   folderShareRelativePath,
   shareTargetFor,
@@ -256,8 +257,55 @@ describe("every surface that offers Share via link consults the gate", () => {
 
   it.each(SURFACES)("%s gates the item on offersShareAction", (surface) => {
     const src = readFileSync(join(process.cwd(), surface), "utf8");
-    expect(src).toContain("offersShareAction(file, memberDriveLabels)");
+    expect(src).toMatch(/offersShareAction\(file, memberDriveLabels, \{\s*memberFolderShares,\s*writableMemberDriveLabels,/);
     // The labels have to come from the listing, not from a local guess.
     expect(src).toContain("useMemberDriveLabels()");
+    // And the member half from the role listing plus the server capability.
+    expect(src).toContain("useWritableMemberDriveLabels()");
+    expect(src).toContain("memberFolderSharesEnabledAtom");
+  });
+});
+
+describe("offersShareAction: an Editor in someone else's drive (hcfs #458)", () => {
+  const BROWSED = "shared:5DSQAMf3JVb3VyuXwqWUx3tj6aX6EX9f5p1UDJYh5TMdSK63~263bad4ad83e395a";
+  const writable = new Set([BROWSED, "team"]);
+
+  it("offers the folder link once the server takes owner_ss58 and the role can write", () => {
+    const ctx = { memberFolderShares: true, writableMemberDriveLabels: writable };
+    expect(offersShareAction(folder({ label: BROWSED }), undefined, ctx)).toBe(true);
+    expect(offersShareAction(folder({ label: "team" }), new Set(["team"]), ctx)).toBe(true);
+  });
+
+  it("keeps it hidden on an older server", () => {
+    expect(
+      offersShareAction(folder({ label: BROWSED }), undefined, {
+        memberFolderShares: false,
+        writableMemberDriveLabels: writable,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps it hidden for a Viewer or a frozen drive (not in the writable set)", () => {
+    expect(
+      offersShareAction(folder({ label: "viewer-drive" }), new Set(["viewer-drive"]), {
+        memberFolderShares: true,
+        writableMemberDriveLabels: writable,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("offersWriteAction", () => {
+  const writable = new Set(["team", "grant:5O~h~61"]);
+
+  it("always offers writes on this account's own drive", () => {
+    expect(offersWriteAction(folder({ label: "mine" }), new Set(["team"]), writable)).toBe(true);
+  });
+
+  it("offers them in somebody else's drive only where the role can write", () => {
+    expect(offersWriteAction(folder({ label: "team" }), new Set(["team", "viewer"]), writable)).toBe(true);
+    expect(offersWriteAction(folder({ label: "viewer" }), new Set(["team", "viewer"]), writable)).toBe(false);
+    expect(offersWriteAction(folder({ label: "grant:5O~h~61" }), undefined, writable)).toBe(true);
+    expect(offersWriteAction(folder({ label: "grant:5O~h~62" }), undefined, writable)).toBe(false);
   });
 });

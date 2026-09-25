@@ -37,6 +37,19 @@ export interface ServerCapabilities {
    * Absent on older servers; Rust collapses missing to `false`.
    */
   share_owner_wrap: boolean;
+  /**
+   * Folder grants: share one folder of a shared drive, read-only.
+   * Absent on older servers; Rust collapses missing to `false`.
+   */
+  folder_grants: boolean;
+  /** `POST /v1/folder-shares` takes `owner_ss58` (hcfs #458). */
+  member_folder_shares?: boolean;
+  /**
+   * Editor folder invites are accepted (HCFS #475). A HINT only: an Editor
+   * folder invite is still offered and sent without it, and a refusal reads
+   * "coming soon".
+   */
+  folder_grant_writes?: boolean;
 }
 
 /**

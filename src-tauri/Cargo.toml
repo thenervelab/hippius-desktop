@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.4-dev.3"
+version = "0.6.5-dev.1"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -135,6 +135,10 @@ hostname = "0.4"
 zeroize = "1"
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
+# Emailed drive invites: a manager seals the drive key to the recipient's
+# ephemeral X25519 key (`shared_drives::invite_key`). Already in the graph
+# through the chat stack; `static_secrets` lets the KAT inject its secret.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 argon2 = "0.5"
 bip39 = { version = "2.2", features = ["rand"] }
 zxcvbn = { version = "3", default-features = false }
@@ -190,19 +194,19 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # stages every copy into a hidden `.hippius-incoming-*` sibling and
 # renames onto the destination. See `.claude/rules/sync-engine.md`.
 #
-# NOT ON `main` YET. This is hcfs#367's head, and hcfs squash-merges, so
-# this exact SHA disappears the moment that PR lands. Re-pin to the
-# squashed `main` commit before this desktop PR merges — see the note in
-# the desktop PR.
+# Now at hcfs main 4d4dd3d. That includes #475 (a folder-grant writer may
+# change files inside the folder; a download is written only where the path
+# hashes to the file id; replace-grants gained `role` and `roles`) and #477,
+# which changes server invite mail and does not change these two crates.
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "02191cc0b4437b0b65829ddd371266ad2ac4a6a0" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "4d4dd3d413ce0437fbe6bdbd034c6f91e0767440" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "02191cc0b4437b0b65829ddd371266ad2ac4a6a0" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "4d4dd3d413ce0437fbe6bdbd034c6f91e0767440" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

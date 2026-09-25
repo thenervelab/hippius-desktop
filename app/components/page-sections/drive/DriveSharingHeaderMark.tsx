@@ -53,12 +53,9 @@ export default function DriveSharingHeaderMark({
         role: byIdentity.membership?.role,
       })
     : bySynced.sharing;
-  // Managing no longer needs a local copy: the manage calls address the drive
-  // by its wire identity, and the mint falls back to this account's own grant
-  // for the folder key when no seal is on disk.
-  const canManage = browsedSharedDrive
-    ? browsedRole === "manager"
-    : bySynced.canManage;
+  // Only the owner manages access. A browsed drive is somebody else's by
+  // construction, so it never can, whatever this account's role there.
+  const canManage = browsedSharedDrive ? false : bySynced.canManage;
 
   if (!sharing.isShared) return null;
 
@@ -86,10 +83,10 @@ export default function DriveSharingHeaderMark({
       </span>
       )}
 
-      {/* Owners, and managers on a drive they do not own. A Viewer or Editor
-          sees the badge and their role, which is the whole of what the drive
-          means for them here. */}
-      {canManage && (
+      {/* The owner manages access. Anyone else (a Viewer or an Editor, a
+          former Manager included) opens the same panel read only: who else
+          is in the drive, and Leave. */}
+      {canManage || withMe ? (
         <Button
           variant="ghost"
           size="auto"
@@ -97,7 +94,7 @@ export default function DriveSharingHeaderMark({
             setShareTarget({
               // A synced drive resolves by its local label; one that is not
               // synced here names its wire identity instead, which is what
-              // lets the manage calls address somebody else's namespace.
+              // lets the panel's read address somebody else's namespace.
               label: byIdentity.membership?.localLabel ?? label,
               folderName: displayName ?? label,
               ...(browsedSharedDrive && !byIdentity.membership?.localLabel
@@ -110,9 +107,9 @@ export default function DriveSharingHeaderMark({
           }
           className="h-7 flex-shrink-0 rounded-md border border-primary-50 px-2.5 text-xs font-medium text-primary-50 transition-colors hover:bg-primary-50/10 dark:border-primary-brand-dark dark:text-primary-brand-dark dark:hover:bg-primary-50/15"
         >
-          Manage access
+          {canManage ? "Manage access" : "Who has access"}
         </Button>
-      )}
+      ) : null}
     </div>
   );
 }

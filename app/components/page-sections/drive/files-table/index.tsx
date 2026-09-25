@@ -31,10 +31,15 @@ import {
   Folder,
   FolderOpen,
   Pencil,
+  FolderInput,
+  Users,
 } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
+  shareDialogAtom,
+  shareDriveModalAtom,
   folderShareFeatureEnabledAtom,
+  memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -48,10 +53,24 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   offersShareAction,
+  offersWriteAction,
+  isMemberDriveLabel,
   FOLDER_SHARE_DISABLED_TOOLTIP,
   shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
-import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import {
+  canShareFolderGrant,
+  folderGrantPathPrefix,
+  FOLDER_GRANT_DISABLED_TOOLTIP,
+} from "@/app/lib/utils/folderGrantGating";
+import {
+  useMemberDriveLabels,
+  useWritableMemberDriveLabels,
+  useFolderShareInviteOffered,
+} from "@/app/lib/hooks/useSharedDriveRoles";
+import { useOwnedFolderSharing } from "@/app/lib/hooks/useOwnedFolderSharing";
+import { folderSharingKey } from "@/app/lib/shared-drives/folderRowSharing";
+import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
@@ -611,9 +630,26 @@ const FilesTable: FC<FilesTableProps> = memo(
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
     const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
+    // "Share folder" is live: always behind the folder-roles flag, else once
+    // the server advertises folder grants.
+    const folderGrantsEnabled = useFolderShareInviteOffered();
     // Which of this listing's rows sit in a drive shared WITH this account.
     const memberDriveLabels = useMemberDriveLabels();
+    // Whether a folder in one of those drives may be shared by link: an
+    // Editor, on a server that takes `owner_ss58` (hcfs #458).
+    const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
+    const writableMemberDriveLabels = useWritableMemberDriveLabels();
     const setShareModalFile = useSetAtom(shareModalFileAtom);
+    const setInviteDialogTarget = useSetAtom(shareDialogAtom);
+    const setManageAccessTarget = useSetAtom(shareDriveModalAtom);
+    // The folders of this listing's drive shared on their own, for the
+    // folder rows' "Manage access" item. One drive per listing, so the first
+    // folder's label names it; the hook asks nothing for a member drive.
+    const listingDriveLabel = useMemo(
+      () => allFiles.find((f) => f.isFolder)?.label ?? null,
+      [allFiles],
+    );
+    const sharedFolders = useOwnedFolderSharing(listingDriveLabel);
     const setRenameModalFile = useSetAtom(renameModalFileAtom);
     const enableFolderExpander = !isRecentFiles;
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
@@ -1095,7 +1131,10 @@ const FilesTable: FC<FilesTableProps> = memo(
           // all: only its owner can mint a folder link (`offersShareAction`).
           ...((file.isFolder || file.syncStatus === "synced") &&
           shareEnabled &&
-          offersShareAction(file, memberDriveLabels)
+          offersShareAction(file, memberDriveLabels, {
+            memberFolderShares,
+            writableMemberDriveLabels,
+          })
             ? [
                 {
                   icon: <Link2 className="size-4" />,
@@ -1127,22 +1166,105 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
+          // "Share folder" (a folder invite): own drives only, since only
+          // the owner invites people.
+          ...(SHARED_DRIVES_ENABLED &&
+          file.isFolder &&
+          !isMemberDriveLabel(file.label, memberDriveLabels)
+            ? [
+                {
+                  icon: <FolderInput className="size-4" />,
+                  itemTitle: "Share folder",
+                  onItemClick: () => {
+                    if (
+                      !canShareFolderGrant(
+                        file,
+                        folderGrantsEnabled,
+                        memberDriveLabels,
+                      )
+                    ) {
+                      return;
+                    }
+                    if (!file.label) return;
+                    const pathPrefix = folderGrantPathPrefix(
+                      file,
+                      parentSubFolderPath ?? normalizedSubfolderPath ?? "",
+                    );
+                    if (!pathPrefix) return;
+                    setInviteDialogTarget({
+                      label: file.label,
+                      folderName: file.name,
+                      pathPrefix,
+                    });
+                  },
+                  disabled:
+                    itemDeleting ||
+                    !canShareFolderGrant(
+                      file,
+                      folderGrantsEnabled,
+                      memberDriveLabels,
+                    ),
+                  tooltip:
+                    !itemDeleting &&
+                    !canShareFolderGrant(
+                      file,
+                      folderGrantsEnabled,
+                      memberDriveLabels,
+                    )
+                      ? FOLDER_GRANT_DISABLED_TOOLTIP
+                      : undefined,
+                },
+              ]
+            : []),
+          // "Manage access" on a folder shared on its own: the same panel its
+          // row mark opens, scoped to the folder. Only where the mark is.
+          ...(() => {
+            if (!SHARED_DRIVES_ENABLED || !file.isFolder || !file.label) return [];
+            const pathPrefix = folderSharingKey(
+              folderGrantPathPrefix(
+                file,
+                parentSubFolderPath ?? normalizedSubfolderPath ?? "",
+              ),
+            );
+            if (file.label !== listingDriveLabel || !sharedFolders.has(pathPrefix)) {
+              return [];
+            }
+            const label = file.label;
+            return [
+              {
+                icon: <Users className="size-4" />,
+                itemTitle: "Manage access",
+                onItemClick: () =>
+                  setManageAccessTarget({
+                    label,
+                    folderName: file.name,
+                    pathPrefix,
+                  }),
+                disabled: itemDeleting,
+              },
+            ];
+          })(),
           // Rename shares the delete-style gating plus the local-presence
-          // gate in `canRenameFile` — the rename is an on-disk operation.
-          {
-            icon: <Pencil className="size-4" />,
-            itemTitle: "Rename",
-            disabled: itemDeleting || !canRenameFile(file),
-            tooltip:
-              !itemDeleting && !canRenameFile(file)
-                ? RENAME_DISABLED_TOOLTIP
-                : undefined,
-            onItemClick: () => {
-              if (!itemDeleting && canRenameFile(file)) {
-                setRenameModalFile(file);
-              }
-            },
-          },
+          // gate in `canRenameFile`. Absent where this account's role in
+          // somebody else's drive cannot write (`offersWriteAction`).
+          ...(offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels)
+            ? [
+                {
+                  icon: <Pencil className="size-4" />,
+                  itemTitle: "Rename",
+                  disabled: itemDeleting || !canRenameFile(file),
+                  tooltip:
+                    !itemDeleting && !canRenameFile(file)
+                      ? RENAME_DISABLED_TOOLTIP
+                      : undefined,
+                  onItemClick: () => {
+                    if (!itemDeleting && canRenameFile(file)) {
+                      setRenameModalFile(file);
+                    }
+                  },
+                },
+              ]
+            : []),
           // Delete is gated by both sync state (unassigned files are
           // mid-upload) and live deletion state (already in flight).
           // Cloud-only rows hide it entirely — the delete pipeline removes
@@ -1184,8 +1306,18 @@ const FilesTable: FC<FilesTableProps> = memo(
         polkadotAddress,
         shareEnabled,
         folderSharesEnabled,
+        // Missing before: a folder row's "Share folder" item kept whatever
+        // capability answer the first render saw, so it stayed disabled after
+        // the server confirmed folder grants.
+        folderGrantsEnabled,
         memberDriveLabels,
+        memberFolderShares,
+        writableMemberDriveLabels,
         setShareModalFile,
+        setInviteDialogTarget,
+        setManageAccessTarget,
+        listingDriveLabel,
+        sharedFolders,
         setRenameModalFile,
         isItemDeleting,
         normalizedSubfolderPath,
@@ -1319,11 +1451,14 @@ const FilesTable: FC<FilesTableProps> = memo(
                   driveOwnerSs58: ownerSs58,
                   driveOwnerName: ownerName,
                 } = cellCtxRef.current;
+                // No `truncate` here: the label shortens itself in the middle,
+                // and an end ellipsis on top of it drew a second "…".
                 return (
-                  <div className="text-grey-dark-800 text-xs font-medium truncate tracking-[-0.24px]">
+                  <div className="text-grey-dark-800 text-xs font-medium min-w-0 overflow-hidden whitespace-nowrap tracking-[-0.24px]">
                     <UploaderCell
                       uploadedBy={file.uploadedBy}
                       uploadedByName={file.uploadedByName}
+                      uploadedByEmail={file.uploadedByEmail}
                       isFolder={file.isFolder}
                       sessionSs58={sessionSs58}
                       driveOwnerSs58={ownerSs58}
