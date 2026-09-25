@@ -52,9 +52,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **Sharing one folder no longer marks the whole drive as shared.** The drive
-  list and drive header only say a drive is shared when the whole drive is.
-  A folder you shared on its own carries its own "Shared" mark on its row and
-  in its header, with a way in to Manage access for that folder.
+  list and drive header only say a drive is shared, and only offer Manage
+  access for the drive, when the whole drive is. "Share drive" is still there
+  to share it. A folder you shared on its own carries its own "Shared" mark and
+  a Manage access button on its row, and the same in its header, where you see
+  who has that folder and can make more links for it.
 - **A frozen shared drive now says until when in plain words**, instead of a raw timestamp.
 - **Accounts that sign in with an access key or a wallet no longer show a made-up
   `@hippius.local` email.** The account menu, sharing and Manage access show the
