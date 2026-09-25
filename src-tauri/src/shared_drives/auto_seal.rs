@@ -7,12 +7,15 @@
 //! only the invited mailbox publish that key (HCFS #480), so sealing it is
 //! key delivery to the right person and needs no human in the loop.
 //!
-//! This task does it while the owner has the app signed in:
+//! This task does it while an owner or a Manager has the app signed in:
 //!
-//! - **Owner only.** It reads this account's OWN drives (`/list_folders` in
-//!   its own namespace) and resolves each through the owner gate
-//!   ([`commands::resolve_owned_target`]). A drive shared with this account
-//!   is never sealed for, whatever the role.
+//! - **Owner or Manager.** It reads this account's OWN drives
+//!   (`/list_folders` in its own namespace) and the drives shared with it
+//!   (`/v1/drive-memberships`), and keeps the ones the owner-or-Manager rule
+//!   ([`commands::manages_drive`]) admits: every own drive, and a member drive
+//!   only where this account is a whole-drive Manager. A Manager's seal goes
+//!   through the delegated owner path (`?owner=`), which the server opens to
+//!   any Manager. A Viewer, an Editor or a folder grant holder never seals.
 //! - **Never prompts.** The key comes from the session mnemonic already in
 //!   memory. A locked session (no mnemonic loaded) is a quiet pass, never a
 //!   dialog; the Approve button stays as the fallback for that case.
@@ -24,8 +27,11 @@
 //!   remembered once tried; a stale or transient failure forgets it so the
 //!   next pass retries, and a key rotation is a new pair.
 //! - **Plan gate.** Delivering a key adds a person, so it follows the same
-//!   rule as inviting ([`crate::billing::storage_overview::fetch_can_share_drives`]).
-//! - **Cheap.** About every 15 s while some owned drive has an emailed
+//!   rule as inviting: on an own drive, this account's plan
+//!   ([`crate::billing::storage_overview::fetch_can_share_drives`]); on a drive
+//!   it manages, the OWNER's plan, which only the server knows, so this
+//!   account's plan never holds those back.
+//! - **Cheap.** About every 15 s while some drive it manages has an emailed
 //!   invitation in flight, every few minutes otherwise, backing off
 //!   exponentially on errors. [`nudge_invite_auto_seal`] wakes it early (an
 //!   invite was sent, Manage access was opened).
@@ -48,7 +54,8 @@ use tracing::{debug, info, warn};
 /// Emitted once per key this task delivers.
 pub const INVITE_KEY_DELIVERED_EVENT: &str = "shared-drive:invite-key-delivered";
 
-/// Cadence while some owned drive has an emailed invitation in flight.
+/// Cadence while some drive it owns or manages has an emailed invitation in
+/// flight.
 pub(crate) const ACTIVE_INTERVAL: Duration = Duration::from_secs(15);
 /// Cadence with nothing in flight, or when delivery is not possible now
 /// (locked session, plan without sharing, server without the feature).
@@ -62,7 +69,7 @@ const PLAN_TTL: Duration = Duration::from_mins(10);
 /// What one pass found, which decides when the next one runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PassOutcome {
-    /// Some owned drive has an emailed invitation that is `sent` or
+    /// Some drive it owns or manages has an emailed invitation that is `sent` or
     /// `awaiting_seal`: its recipient may publish a key any moment.
     Active,
     /// Nothing in flight.
@@ -309,12 +316,14 @@ fn is_unavailable(err: &AppError) -> bool {
     )
 }
 
-/// Whether delivery can run at all right now: a session key is in memory
-/// (this task never asks for one) and the plan includes sharing.
-async fn may_deliver(state: &AppState, plan: &mut PlanGate) -> bool {
-    if crate::sync::remote::session_mnemonic(state).is_err() {
-        return false;
-    }
+/// Whether a session key is in memory: this task never asks for one.
+fn has_session_key(state: &AppState) -> bool {
+    crate::sync::remote::session_mnemonic(state).is_ok()
+}
+
+/// Whether this account's plan includes sharing, which gates its OWN drives
+/// only. A drive it manages follows its owner's plan.
+async fn own_plan_allows(state: &AppState, plan: &mut PlanGate) -> bool {
     if let Some(answer) = plan.fresh(Instant::now()) {
         return answer;
     }
@@ -387,7 +396,117 @@ enum DriveSeal {
     Stop,
 }
 
-/// One pass over this account's own drives.
+/// A drive this account manages, as the memberships listing names it.
+#[derive(Debug, Clone)]
+pub(crate) struct MembershipDrive {
+    pub owner_ss58: String,
+    pub folder_hash: String,
+    /// The wire role, read through [`commands::drive_role_from_wire`].
+    pub role: String,
+    /// The owner's name for the drive, for the delivered toast.
+    pub display_label: String,
+    /// The local label when this device syncs the drive; key material for a
+    /// synced drive is read by it.
+    pub local_label: Option<String>,
+}
+
+/// One drive a pass reads invites for and may seal on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SealTarget {
+    /// The label key material resolves by.
+    pub label: String,
+    /// The name the delivered toast uses.
+    pub name: String,
+    pub identity: crate::sync::identity::DriveIdentity,
+}
+
+/// Which drives a pass works on, through the one owner-or-Manager rule
+/// ([`commands::manages_drive`]).
+///
+/// Own drives only when this account's plan includes sharing; drives it
+/// manages whatever its own plan says (their owner's plan decides, on the
+/// server). A membership naming this account as the owner is not a
+/// delegated drive and is skipped. Pure, so the gate is tested.
+pub(crate) fn seal_targets(
+    account_id: &str,
+    own: Vec<(String, String)>,
+    own_plan_allows: bool,
+    memberships: Vec<MembershipDrive>,
+) -> Vec<SealTarget> {
+    let mut targets = Vec::new();
+    if own_plan_allows && commands::manages_drive(false, None) {
+        for (label, folder_hash) in own {
+            if label.trim().is_empty() || folder_hash.trim().is_empty() {
+                continue;
+            }
+            targets.push(SealTarget {
+                name: label.clone(),
+                label,
+                identity: crate::sync::identity::DriveIdentity {
+                    wire_ss58: account_id.to_string(),
+                    wire_folder_hash: folder_hash,
+                    is_member: false,
+                },
+            });
+        }
+    }
+    for m in memberships {
+        if m.owner_ss58 == account_id || m.owner_ss58.trim().is_empty() || m.folder_hash.trim().is_empty() {
+            continue;
+        }
+        if !commands::manages_drive(true, Some(&m.role)) {
+            continue;
+        }
+        targets.push(SealTarget {
+            label: m.local_label.unwrap_or_else(|| m.display_label.clone()),
+            name: m.display_label,
+            identity: crate::sync::identity::DriveIdentity {
+                wire_ss58: m.owner_ss58,
+                wire_folder_hash: m.folder_hash,
+                is_member: true,
+            },
+        });
+    }
+    targets
+}
+
+/// Note a listing that could not be read in the tally.
+fn note_unread(tally: &mut PassTally, err: &AppError, what: &str) {
+    tally.every_drive_read = false;
+    if is_unavailable(err) {
+        tally.unavailable = true;
+    } else {
+        debug!(error = %err, "Email invite delivery could not list {what}");
+        tally.failed = true;
+    }
+}
+
+/// The drives this account manages but does not own, from its memberships.
+async fn managed_drives(pool: &sqlx::SqlitePool, http: &reqwest::Client, ctx: &commands::ApiCtx, account_id: &str) -> Result<Vec<MembershipDrive>> {
+    let listing = commands::http_list_memberships(http, ctx.base_url(), ctx.bearer()).await?;
+    let mut drives = Vec::new();
+    for m in listing.memberships {
+        let role = commands::drive_role_from_wire(&m.role);
+        // Only what the rule could admit needs a local lookup.
+        if !commands::manages_drive(true, Some(&role)) {
+            continue;
+        }
+        let local = crate::sync::identity::member_row_for_wire_identity(pool, account_id, &m.owner_ss58, &m.folder_hash)
+            .await
+            .ok()
+            .flatten();
+        drives.push(MembershipDrive {
+            owner_ss58: m.owner_ss58,
+            folder_hash: m.folder_hash,
+            role,
+            display_label: m.display_label,
+            local_label: local.map(|row| row.label),
+        });
+    }
+    Ok(drives)
+}
+
+/// One pass over the drives this account owns or manages.
 async fn pass(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -396,7 +515,7 @@ async fn pass(
     memory: &mut AttemptMemory,
     plan: &mut PlanGate,
 ) -> PassOutcome {
-    if !may_deliver(state, plan).await {
+    if !has_session_key(state) {
         return PassOutcome::Unavailable;
     }
     let Ok(ctx) = commands::api_ctx_for(state).await else {
@@ -410,47 +529,39 @@ async fn pass(
     }
     let http = state.api_client.clone();
 
-    let folders = match commands::http_list_owner_folders(&http, ctx.base_url(), ctx.bearer(), account_id).await {
-        Ok(folders) => folders,
-        Err(e) if is_unavailable(&e) => return PassOutcome::Unavailable,
-        Err(e) => {
-            debug!(error = %e, "Email invite delivery could not list drives");
-            return PassOutcome::Failed;
-        }
-    };
-
     let mut tally = PassTally {
         every_drive_read: true,
         ..PassTally::default()
     };
-    for folder in folders {
-        if folder.label.trim().is_empty() || folder.folder_hash.trim().is_empty() {
-            continue;
-        }
-        // The owner gate every manual access change goes through. Naming
-        // this account as the owner is what keeps it to OWN drives.
-        let Ok(identity) = commands::resolve_owned_target(
-            pool,
-            account_id,
-            &folder.label,
-            Some(account_id.to_string()),
-            Some(folder.folder_hash.clone()),
-        )
-        .await
-        else {
-            continue;
-        };
 
-        let mut invites = match commands::http_list_invites(&http, ctx.base_url(), ctx.bearer(), &identity.wire_folder_hash).await {
+    let own_allowed = own_plan_allows(state, plan).await;
+    let own = if own_allowed {
+        match commands::http_list_owner_folders(&http, ctx.base_url(), ctx.bearer(), account_id).await {
+            Ok(folders) => folders.into_iter().map(|f| (f.label, f.folder_hash)).collect(),
+            Err(e) => {
+                note_unread(&mut tally, &e, "drives");
+                Vec::new()
+            }
+        }
+    } else {
+        // Nothing to do on own drives until the plan changes.
+        tally.unavailable = true;
+        Vec::new()
+    };
+    let memberships = match managed_drives(pool, &http, &ctx, account_id).await {
+        Ok(drives) => drives,
+        Err(e) => {
+            note_unread(&mut tally, &e, "shared drives");
+            Vec::new()
+        }
+    };
+
+    for target in seal_targets(account_id, own, own_allowed, memberships) {
+        let owner = commands::member_owner(&target.identity);
+        let mut invites = match commands::http_list_invites(&http, ctx.base_url(), ctx.bearer(), &target.identity.wire_folder_hash, owner).await {
             Ok(invites) => invites,
             Err(e) => {
-                tally.every_drive_read = false;
-                if is_unavailable(&e) {
-                    tally.unavailable = true;
-                } else {
-                    debug!(label = %folder.label, error = %e, "Email invite delivery could not list invites");
-                    tally.failed = true;
-                }
+                note_unread(&mut tally, &e, "invites");
                 continue;
             }
         };
@@ -472,11 +583,7 @@ async fn pass(
             continue;
         }
 
-        let drive = DriveTarget {
-            label: &folder.label,
-            identity: &identity,
-        };
-        match seal_drive(app, state, &http, &ctx, account_id, &drive, due, memory).await {
+        match seal_drive(app, state, &http, &ctx, account_id, &target, due, memory).await {
             DriveSeal::Done { failed } => tally.failed |= failed,
             DriveSeal::Retry => tally.failed = true,
             DriveSeal::Stop => return PassOutcome::Unavailable,
@@ -489,12 +596,6 @@ async fn pass(
     tally.outcome()
 }
 
-/// The drive a batch of rows belongs to.
-struct DriveTarget<'a> {
-    label: &'a str,
-    identity: &'a crate::sync::identity::DriveIdentity,
-}
-
 /// Resolve one drive's keys and seal its due rows, reporting each delivery.
 #[allow(clippy::too_many_arguments)] // one drive's worth of context, all borrowed
 async fn seal_drive(
@@ -503,7 +604,7 @@ async fn seal_drive(
     http: &reqwest::Client,
     ctx: &commands::ApiCtx,
     account_id: &str,
-    drive: &DriveTarget<'_>,
+    drive: &SealTarget,
     due: Vec<(&DriveInviteInfo, ApprovableInvite)>,
     memory: &mut AttemptMemory,
 ) -> DriveSeal {
@@ -515,7 +616,7 @@ async fn seal_drive(
     let Ok(mnemonic) = crate::sync::remote::session_mnemonic(state) else {
         return DriveSeal::Stop;
     };
-    let keys = commands::invite_seal_keys(state, account_id, drive.label, &mnemonic, drive.identity).await;
+    let keys = commands::invite_seal_keys(state, account_id, &drive.label, &mnemonic, &drive.identity).await;
     drop(mnemonic);
     drop(recovery_guard);
     let keys = match keys {
@@ -535,14 +636,14 @@ async fn seal_drive(
         if !memory.begin(&invite.invite_id, &row.requester_pubkey) {
             continue;
         }
-        let result = commands::seal_invite_row(http, ctx, &drive.identity.wire_folder_hash, &invite.invite_id, &row, &keys).await;
+        let result = commands::seal_invite_row(http, ctx, &drive.identity, &invite.invite_id, &row, &keys).await;
         let verdict = attempt_verdict(&result);
         memory.settle(&invite.invite_id, &row.requester_pubkey, verdict);
         match result {
             Ok(SealKeyPut::Sealed) => {
                 info!(label = %drive.label, invite_id = %invite.invite_id, "Emailed invite key delivered");
                 let payload = InviteKeyDelivered {
-                    label: drive.label.to_string(),
+                    label: drive.name.clone(),
                     folder_hash: drive.identity.wire_folder_hash.clone(),
                     invite_id: invite.invite_id.clone(),
                     recipient_email: invite.recipient_email.clone(),
@@ -709,22 +810,70 @@ mod tests {
         assert_eq!(gate.fresh(start), None, "a nudge forgets the answer");
     }
 
-    /// Only the owner's own drives are sealed for: the pass names this
-    /// account as the owner, and the owner gate refuses anybody else's.
-    #[tokio::test]
-    async fn only_own_drives_pass_the_owner_gate() {
-        let pool = sqlx::SqlitePool::connect(":memory:").await.expect("pool");
-        let own = commands::resolve_owned_target(&pool, "5Me", "Team", Some("5Me".into()), Some("fh".into()))
-            .await
-            .expect("own drive");
-        assert!(!own.is_member);
-        assert_eq!(own.wire_ss58, "5Me");
-        assert!(
-            commands::resolve_owned_target(&pool, "5Me", "Team", Some("5Owner".into()), Some("fh".into()))
-                .await
-                .is_err(),
-            "a drive shared with this account is never sealed for"
+    fn membership(owner: &str, hash: &str, role: &str, local: Option<&str>) -> MembershipDrive {
+        MembershipDrive {
+            owner_ss58: owner.into(),
+            folder_hash: hash.into(),
+            role: role.into(),
+            display_label: format!("{owner}-drive"),
+            local_label: local.map(str::to_string),
+        }
+    }
+
+    /// Own drives and drives this account manages are sealed for; a drive it
+    /// only views or edits, or where the role is unknown, never is.
+    #[test]
+    fn own_and_managed_drives_are_sealed_for_and_nothing_else() {
+        let targets = seal_targets(
+            "5Me",
+            vec![("Team".into(), "fh1".into()), (" ".into(), "fh2".into())],
+            true,
+            vec![
+                membership("5Ann", "fa", "manager", None),
+                membership("5Bo", "fb", "writer", None),
+                membership("5Cy", "fc", "reader", None),
+                membership("5Di", "fd", "admin", None),
+                membership("5Me", "fe", "manager", None),
+                membership("5Ed", "ff", "manager", Some("synced-here")),
+            ],
         );
+        let seen: Vec<(&str, &str, bool, &str)> = targets
+            .iter()
+            .map(|t| {
+                (
+                    t.identity.wire_ss58.as_str(),
+                    t.identity.wire_folder_hash.as_str(),
+                    t.identity.is_member,
+                    t.label.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("5Me", "fh1", false, "Team"),
+                ("5Ann", "fa", true, "5Ann-drive"),
+                ("5Ed", "ff", true, "synced-here"),
+            ]
+        );
+        // A managed drive names its owner on the wire.
+        assert_eq!(commands::member_owner(&targets[1].identity), Some("5Ann"));
+        assert_eq!(commands::member_owner(&targets[0].identity), None);
+        assert_eq!(targets[2].name, "5Ed-drive", "the toast uses the owner's name for the drive");
+    }
+
+    /// This account's plan gates its own drives only: a drive it manages
+    /// follows the owner's plan, which the server enforces.
+    #[test]
+    fn this_accounts_plan_never_holds_back_a_managed_drive() {
+        let targets = seal_targets(
+            "5Me",
+            vec![("Team".into(), "fh1".into())],
+            false,
+            vec![membership("5Ann", "fa", "manager", None)],
+        );
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].identity.is_member);
     }
 
     /// Automatic delivery seals exactly what Approve and a link would: the

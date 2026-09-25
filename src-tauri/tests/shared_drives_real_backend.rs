@@ -470,6 +470,8 @@ async fn member_accept_and_install(env: &LiveEnv, http: &reqwest::Client, owner:
             expires_in_secs: 3600,
             max_uses: 5,
             role: "writer",
+            // The owner's own mint; a manager's delegated mint names the owner.
+            owner: None,
             path_prefix: None,
         },
     )
