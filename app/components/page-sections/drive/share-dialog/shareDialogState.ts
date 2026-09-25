@@ -119,8 +119,7 @@ export function describeCreatedLink(link: {
 
 /**
  * The one line under "Invite link", by what the link can do. A folder link
- * is single use; the words say so before it is made. The role does not change
- * the line: Viewer and Editor links work the same way.
+ * and a manager link are single use; the words say so before it is made.
  */
 export function generalAccessNote(params: {
   folder: boolean;
@@ -128,6 +127,9 @@ export function generalAccessNote(params: {
   neverExpires: boolean;
 }): string {
   if (params.folder) return "Works once, for the first person who opens it.";
+  if (params.role === "manager") {
+    return "Works once and expires within 24 hours. Managers can invite and remove people.";
+  }
   if (params.neverExpires) return "Anyone with the link can join for as long as it exists.";
   return "Anyone with the link can join until it expires.";
 }

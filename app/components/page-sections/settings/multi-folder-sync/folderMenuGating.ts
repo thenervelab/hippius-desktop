@@ -5,7 +5,7 @@
 // convention. Unit-tested in `__tests__/folderMenuGating.test.ts`.
 
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
-import { canManageDrive } from "@/app/lib/shared-drives/roles";
+import { canManageDrive, type DriveRole } from "@/app/lib/shared-drives/roles";
 
 export interface FolderMenuFlags {
   /** `SHARED_DRIVES_ENABLED` — passed in so the resolver stays pure. */
@@ -19,6 +19,15 @@ export interface FolderMenuFlags {
    * sites for no behaviour.
    */
   planSupportsSharedDrives?: boolean;
+  /**
+   * The viewer's role on THIS drive, when it is one shared with them.
+   *
+   * A manager may invite on a drive they do not own -- the server admits a
+   * delegated manager by name -- so member-ness alone cannot decide whether
+   * to offer the mint. Absent for an own drive, and for a member drive whose
+   * role has not arrived yet, which stays conservative and offers nothing.
+   */
+  role?: DriveRole;
 }
 
 /**
@@ -28,8 +37,8 @@ export interface FolderMenuFlags {
  */
 export interface FolderMenuPlan {
   /**
-   * "Share drive…": an own drive only, since only the owner invites people,
-   * whatever this account's role on somebody else's drive. Gated on the flag.
+   * "Share drive…": an own drive, or one this account manages for somebody
+   * else. Gated on the flag either way.
    */
   showShareDrive: boolean;
   /**
@@ -102,7 +111,7 @@ export function resolveFolderMenuPlan(
     // dialog answers instead, opening straight into an upgrade prompt that
     // names the plans -- one click, no wasted round trip, and the feature is
     // visible to everyone.
-    showShareDrive: flags.sharedDrivesEnabled && canManageDrive({ isOwner: !member }),
+    showShareDrive: flags.sharedDrivesEnabled && canManageDrive({ isOwner: !member, role: flags.role }),
     showExclusions: !member,
     showDeleteFromServer: !member,
     removeItemTitle: member ? "Leave shared drive" : "Stop syncing on this device",

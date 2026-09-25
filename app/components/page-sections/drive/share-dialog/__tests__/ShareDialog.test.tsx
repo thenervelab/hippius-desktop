@@ -58,6 +58,7 @@ const changeDriveMemberRoleMock = vi.fn();
 const removeDriveMemberMock = vi.fn();
 const revokeDriveInviteMock = vi.fn();
 const approveEmailInviteMock = vi.fn();
+const listMyDriveMembershipsMock = vi.fn();
 
 // The wrappers are the dialog's only side effects; mocking them (not raw
 // invoke) keeps these tests on the dialog's contract.
@@ -75,7 +76,7 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     removeDriveMember: (...a: unknown[]) => removeDriveMemberMock(...a),
     revokeDriveInvite: (...a: unknown[]) => revokeDriveInviteMock(...a),
     approveEmailInvite: (...a: unknown[]) => approveEmailInviteMock(...a),
-    listMyDriveMemberships: vi.fn().mockResolvedValue([]),
+    listMyDriveMemberships: (...a: unknown[]) => listMyDriveMembershipsMock(...a),
   };
 });
 
@@ -92,6 +93,7 @@ function access(over: Partial<ShareAccess> = {}): ShareAccess {
   return {
     ownerSs58: ME,
     ownerIsYou: true,
+    canManage: true,
     members: [],
     folderHolders: [],
     pendingInvites: [],
@@ -162,6 +164,7 @@ beforeEach(() => {
   flags.sharedDrives = true;
   flags.folderRoles = false;
   plan.included = true;
+  listMyDriveMembershipsMock.mockResolvedValue([]);
   emailInvitesAvailableMock.mockResolvedValue(true);
   listShareAccessMock.mockResolvedValue(access());
   // Rust owns the rule; this stand-in only has to tell good from bad.
@@ -369,13 +372,16 @@ describe("Invite people", () => {
     expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
   });
 
-  it("offers Viewer and Editor only, and never mentions Managers", async () => {
+  it("offers Viewer and Editor only, and says how to add a Manager", async () => {
     renderDialog();
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByLabelText("Invite role"));
     expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Manager" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("To add a Manager, invite them as an Editor, then change their role below."),
+    ).toBeInTheDocument();
     expect(screen.getByText("They get their own invite that only works for them.")).toBeInTheDocument();
   });
 
@@ -590,16 +596,24 @@ describe("General access", () => {
     expect(store.get(driveInvitesVersionAtom)).toBe(2);
   });
 
-  it("offers Viewer and Editor only for a drive link, with every lifetime", () => {
+  it("offers Viewer, Editor and Manager for a drive, and keeps Manager's limits", () => {
     renderDialog();
-    fireEvent.click(screen.getByLabelText("Link access"));
-    expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getAllByText("Viewer").at(-1)!);
-    // Picking a role never narrows the lifetime: no role is capped any more.
-    choose("Link expires", "Never expires");
-    expect(screen.getByLabelText("Link expires")).toHaveTextContent("Never expires");
-    expect(screen.queryByText(/Works once and expires within 24 hours/)).not.toBeInTheDocument();
+    choose("Link access", "Manager");
+    expect(screen.getByLabelText("Link expires")).toHaveTextContent("24 hours");
+    expect(screen.getByText(/Works once and expires within 24 hours/)).toBeInTheDocument();
+  });
+
+  it("describes a manager link as single use, from what Rust sent", async () => {
+    createDriveInviteMock.mockResolvedValue({
+      inviteUrl: "https://x/invite/t#k=e",
+      role: "manager",
+      expiresInSecs: 24 * 60 * 60,
+      maxUses: 1,
+    });
+    renderDialog();
+    choose("Link access", "Manager");
+    fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    expect(await screen.findByText("Manager · Expires in 24 hours · Single use")).toBeInTheDocument();
   });
 
   const LINK_CASES: Array<[string, unknown, string]> = [
@@ -699,11 +713,23 @@ describe("a folder target", () => {
     expect(createDriveInviteMock).not.toHaveBeenCalled();
   });
 
+  // Manager is a whole-drive role: a folder link offers Viewer and Editor,
+  // while the drive's own link offers all three.
+  it("with folder roles: offers Viewer and Editor on a folder link, never Manager", async () => {
+    flags.folderRoles = true;
+    renderDialog(folderTarget());
+    fireEvent.click(screen.getByLabelText("Link access"));
+    expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("option", { name: /Manager/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Manager")).not.toBeInTheDocument();
+  });
+
   it("with folder roles: emails through the email command with the folder", async () => {
     flags.folderRoles = true;
     emailDriveInviteMock.mockResolvedValue({ inviteId: "i1" });
     renderDialog(folderTarget());
-    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
+    // No Manager hint for a folder: Manager is not a folder role.
+    expect(screen.queryByText(/To add a Manager/)).not.toBeInTheDocument();
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
     await waitFor(() =>
@@ -809,49 +835,38 @@ describe("People with access", () => {
     await waitFor(() => expect(listShareAccessMock).toHaveBeenCalledWith("team-docs", "Clients/ACME", undefined));
   });
 
-  const annAsViewer = () =>
-    access({ members: [{ memberSs58: ANN, role: "reader", memberName: "Ann", isYou: false }] });
-
-  it("offers Viewer and Editor only in a member's role picker", async () => {
-    listShareAccessMock.mockResolvedValue(withAnn());
-    renderDialog();
-    await screen.findByText("Ann");
-    fireEvent.click(screen.getByLabelText("Role for Ann"));
-    expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Remove access").length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Manager/)).not.toBeInTheDocument();
-  });
-
   it("changes a role only once Rust has, saying Saving meanwhile", async () => {
-    listShareAccessMock.mockResolvedValueOnce(annAsViewer());
+    listShareAccessMock.mockResolvedValueOnce(withAnn());
     let finish: () => void = () => {};
     changeDriveMemberRoleMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
     const store = renderDialog();
     await screen.findByText("Ann");
-    choose("Role for Ann", "Editor");
-    await waitFor(() => expect(changeDriveMemberRoleMock).toHaveBeenCalledWith("team-docs", ANN, "writer", undefined));
+    choose("Role for Ann", "Manager");
+    await waitFor(() => expect(changeDriveMemberRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", undefined));
     // Not shown as done while the server has not answered.
     expect(screen.getByText("Saving…")).toBeInTheDocument();
-    expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Viewer");
+    expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Editor");
     expect(screen.getByLabelText("Role for Ann")).toBeDisabled();
 
-    listShareAccessMock.mockResolvedValue(withAnn());
+    listShareAccessMock.mockResolvedValue(
+      access({ members: [{ memberSs58: ANN, role: "manager", memberName: "Ann", isYou: false }] }),
+    );
     finish();
-    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Editor"));
+    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Manager"));
     expect(screen.queryByText("Saving…")).not.toBeInTheDocument();
     expect(store.get(driveInvitesVersionAtom)).toBe(1);
   });
 
   it("leaves a refused role change as it was and says why, inline", async () => {
-    listShareAccessMock.mockResolvedValue(annAsViewer());
-    changeDriveMemberRoleMock.mockRejectedValue({ kind: "Validation", message: "The server refused the change." });
+    listShareAccessMock.mockResolvedValue(withAnn());
+    changeDriveMemberRoleMock.mockRejectedValue({ kind: "Validation", message: "Managers cannot promote to Manager." });
     renderDialog();
     await screen.findByText("Ann");
-    choose("Role for Ann", "Editor");
+    choose("Role for Ann", "Manager");
     expect(
-      await within(peopleSection()).findByText("Couldn't change access for Ann. The server refused the change."),
+      await within(peopleSection()).findByText("Couldn't change access for Ann. Managers cannot promote to Manager."),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Viewer");
+    expect(screen.getByLabelText("Role for Ann")).toHaveTextContent("Editor");
     expect(screen.getByLabelText("Role for Ann")).toBeEnabled();
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -894,31 +909,12 @@ describe("People with access", () => {
 
   it("never offers a role change on your own row", async () => {
     listShareAccessMock.mockResolvedValue(
-      access({ ownerSs58: ANN, ownerIsYou: false, members: [{ memberSs58: ME, role: "writer", isYou: true }] }),
+      access({ ownerSs58: ANN, ownerIsYou: false, members: [{ memberSs58: ME, role: "manager", isYou: true }] }),
     );
     renderDialog({ label: "team-docs", folderName: "team-docs", ownerSs58: ANN, folderHash: "abc" });
     await screen.findByText("(you)");
     expect(screen.queryByLabelText(/Role for/)).not.toBeInTheDocument();
-    expect(within(peopleSection()).getByText("Editor")).toBeInTheDocument();
-  });
-
-  // Only the owner changes access. On somebody else's drive nobody's row is
-  // editable, a former Manager's view included.
-  it("shows everyone read only on a drive you do not own", async () => {
-    listShareAccessMock.mockResolvedValue(
-      access({
-        ownerSs58: ANN,
-        ownerIsYou: false,
-        members: [
-          { memberSs58: ME, role: "writer", isYou: true },
-          { memberSs58: "5Other", memberName: "Other", role: "reader", isYou: false },
-        ],
-      }),
-    );
-    renderDialog({ label: "team-docs", folderName: "team-docs", ownerSs58: ANN, folderHash: "abc" });
-    await screen.findByText("Other");
-    expect(screen.queryByLabelText(/Role for/)).not.toBeInTheDocument();
-    expect(within(peopleSection()).getByText("Viewer")).toBeInTheDocument();
+    expect(within(peopleSection()).getByText("Manager")).toBeInTheDocument();
   });
 
   it("lists folder holders with their role as text, Remove, and how to change access", async () => {
@@ -1038,7 +1034,7 @@ describe("People with access", () => {
         ownerIsYou: false,
         members: [
           { memberSs58: "5Other", memberName: "Other", role: "reader", isYou: false },
-          { memberSs58: ME, memberName: "Me", role: "writer", isYou: true },
+          { memberSs58: ME, memberName: "Me", role: "manager", isYou: true },
         ],
       }),
     );
@@ -1090,6 +1086,93 @@ describe("People with access", () => {
 
 // Removing someone asked in a second dialog stacked over this one. It asks in
 // the row now: one dialog on screen at a time, whatever is being confirmed.
+// A whole-drive Manager on somebody else's drive: the dialog manages it
+// through the owner (`ownerSs58` + `folderHash` on every call), and the
+// owner's plan decides, never this account's. A Viewer or an Editor sees
+// People with access alone, read only.
+describe("a drive somebody else owns", () => {
+  const OWNER = "5OwnerCccccccccccccccccccccccccccccccccccccccccccc";
+  const drive = { label: "team-docs", folderName: "team-docs", ownerSs58: OWNER, folderHash: "abc" };
+  const membership = (role: string) => ({
+    ownerSs58: OWNER,
+    ownerName: "Olive",
+    folderHash: "abc",
+    displayLabel: "team-docs",
+    role,
+    createdAt: "t",
+    syncedLocally: false,
+    localLabel: null,
+  });
+  const theirs = (role: string, canManage: boolean) =>
+    access({
+      ownerSs58: OWNER,
+      ownerIsYou: false,
+      canManage,
+      members: [
+        { memberSs58: ME, memberName: "Me", role, isYou: true },
+        { memberSs58: ANN, memberName: "Ann", role: "writer", isYou: false },
+      ],
+    });
+
+  it("lets a Manager invite, change roles and make links, through the owner", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership("manager")]);
+    listShareAccessMock.mockResolvedValue(theirs("manager", true));
+    changeDriveMemberRoleMock.mockResolvedValue(undefined);
+    createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e", inviteId: "i", role: "manager", expiresInSecs: 86400, maxUses: 1 });
+    renderDialog(drive);
+    await screen.findByText("Ann");
+    expect(screen.getByRole("heading", { name: "Invite people" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "General access" })).toBeInTheDocument();
+    // Their own row stays text; Ann's has the three drive roles.
+    expect(screen.queryByLabelText("Role for Me")).not.toBeInTheDocument();
+    choose("Role for Ann", "Manager");
+    await waitFor(() =>
+      expect(changeDriveMemberRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", { ownerSs58: OWNER, folderHash: "abc" }),
+    );
+    choose("Link access", "Manager");
+    expect(screen.getByText(/Works once and expires within 24 hours/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    await waitFor(() =>
+      expect(createDriveInviteMock).toHaveBeenCalledWith("team-docs", {
+        expiresInSecs: 86400,
+        role: "manager",
+        target: { ownerSs58: OWNER, folderHash: "abc" },
+      }),
+    );
+  });
+
+  it("never shows a Manager this account's upgrade card: the owner's plan decides", async () => {
+    plan.included = false;
+    listMyDriveMembershipsMock.mockResolvedValue([membership("manager")]);
+    listShareAccessMock.mockResolvedValue(theirs("manager", true));
+    renderDialog(drive);
+    await screen.findByText("Ann");
+    expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Invite people" })).toBeInTheDocument();
+  });
+
+  it("still shows the card when the server says the owner's plan has no sharing", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership("manager")]);
+    listShareAccessMock.mockResolvedValue(theirs("manager", true));
+    createDriveInviteMock.mockRejectedValue(notReady("SHARED_DRIVES_NOT_ENTITLED"));
+    renderDialog(drive);
+    await screen.findByText("Ann");
+    fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    expect(await screen.findByText(UPGRADE_TITLE)).toBeInTheDocument();
+  });
+
+  it.each(["writer", "reader"])("shows a %s who has access, read only, and nothing to add with", async (role) => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership(role)]);
+    listShareAccessMock.mockResolvedValue(theirs(role, false));
+    renderDialog(drive);
+    await screen.findByText("Ann");
+    expect(screen.queryByRole("heading", { name: "Invite people" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "General access" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Role for Ann")).not.toBeInTheDocument();
+    expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+  });
+});
+
 describe("asking in the row, never in a second dialog", () => {
   const BO = "5BoCccccccccccccccccccccccccccccccccccccccccccccc";
   const annAndBo = () =>

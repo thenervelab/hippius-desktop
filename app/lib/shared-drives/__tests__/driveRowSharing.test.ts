@@ -4,6 +4,7 @@ import {
   driveRowSharing,
   rolesByLocalLabel,
   writableMemberDriveLabels,
+  manageableMemberDriveLabels,
 } from "@/app/lib/shared-drives/driveRowSharing";
 
 const OWNER = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -47,8 +48,7 @@ describe("driveRowSharing", () => {
   it.each([
     ["reader", "Viewer"],
     ["writer", "Editor"],
-    // A former Manager is an Editor.
-    ["manager", "Editor"],
+    ["manager", "Manager"],
   ])("labels the wire role %s as %s", (wire, label) => {
     expect(driveRowSharing({ ownerSs58: OWNER, role: wire }).label).toBe(
       `Shared · ${label}`,
@@ -101,8 +101,7 @@ describe("rolesByLocalLabel", () => {
       { localLabel: "team-docs", syncedLocally: true, role: "manager" },
       { localLabel: "design", syncedLocally: true, role: "reader" },
     ]);
-    // A former Manager indexes as an Editor, never as a Viewer.
-    expect(map.get("team-docs")).toBe("writer");
+    expect(map.get("team-docs")).toBe("manager");
     expect(map.get("design")).toBe("reader");
   });
 
@@ -166,7 +165,7 @@ describe("writableMemberDriveLabels", () => {
     ...over,
   });
 
-  it("holds Editors, a former Manager included, under both spellings of the drive", () => {
+  it("holds Editors and Managers, under both spellings of the drive", () => {
     const set = writableMemberDriveLabels([
       m("writer", { localLabel: "team" }),
       m("manager"),
@@ -201,6 +200,14 @@ describe("folder grants in the label sets", () => {
   it("adds a granted folder's grant: label where its role allows", () => {
     const writable = writableMemberDriveLabels([], [grant("writer"), grant("reader")]);
     expect([...writable]).toEqual(["grant:5Owner~h~436c69656e74732f777269746572"]);
+  });
+
+  it("never makes a granted folder manageable: Manager is not a folder role", () => {
+    const manageable = manageableMemberDriveLabels([
+      { ownerSs58: "5Owner", folderHash: "h", role: "manager", localLabel: null },
+    ]);
+    expect([...manageable]).toEqual(["shared:5Owner~h"]);
+    expect([...manageable].some((l) => l.startsWith("grant:"))).toBe(false);
   });
 
   it("leaves a frozen grant out", () => {

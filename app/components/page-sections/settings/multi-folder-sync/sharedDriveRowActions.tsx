@@ -5,7 +5,7 @@
 // worth testing without rendering a menu.
 
 import React from "react";
-import { FolderOpen, LogOut, RefreshCw } from "lucide-react";
+import { FolderOpen, LogOut, RefreshCw, Users } from "lucide-react";
 
 import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
@@ -21,6 +21,11 @@ export interface SharedDriveActionHandlers {
   /** Browse it without a local copy. Absent where there is nowhere to browse to. */
   onOpen?: () => void;
   onSyncLocally: () => void;
+  /**
+   * Open the Manage access panel. Passed only for a drive this account
+   * manages (a Manager); a Viewer or an Editor gets no such item.
+   */
+  onManageAccess?: () => void;
   onLeave: () => void;
 }
 
@@ -53,6 +58,14 @@ export function buildSharedDriveActions(
       itemTitle: "Sync to this computer",
       disabled: handlers.busy,
       onItemClick: handlers.onSyncLocally,
+    });
+  }
+
+  if (handlers.onManageAccess) {
+    items.push({
+      icon: <Users className="size-4" />,
+      itemTitle: "Manage access",
+      onItemClick: handlers.onManageAccess,
     });
   }
 

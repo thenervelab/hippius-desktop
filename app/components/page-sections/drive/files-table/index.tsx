@@ -64,13 +64,14 @@ import {
   FOLDER_GRANT_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderGrantGating";
 import {
+  useManageableMemberDriveLabels,
   useMemberDriveLabels,
   useWritableMemberDriveLabels,
   useFolderShareInviteOffered,
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useOwnedFolderSharing } from "@/app/lib/hooks/useOwnedFolderSharing";
 import { folderSharingKey } from "@/app/lib/shared-drives/folderRowSharing";
-import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
@@ -636,9 +637,17 @@ const FilesTable: FC<FilesTableProps> = memo(
     // Which of this listing's rows sit in a drive shared WITH this account.
     const memberDriveLabels = useMemberDriveLabels();
     // Whether a folder in one of those drives may be shared by link: an
-    // Editor, on a server that takes `owner_ss58` (hcfs #458).
+    // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
     const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
     const writableMemberDriveLabels = useWritableMemberDriveLabels();
+    // With folder roles on: drives somebody else owns where this account is a
+    // Manager, so it may share a folder there too. Never a granted folder:
+    // Manager is not a folder role.
+    const folderRolesEnabled = FOLDER_ROLES_ENABLED;
+    const manageableMemberDriveLabels = useManageableMemberDriveLabels();
+    const manageableLabels = folderRolesEnabled
+      ? manageableMemberDriveLabels
+      : undefined;
     const setShareModalFile = useSetAtom(shareModalFileAtom);
     const setInviteDialogTarget = useSetAtom(shareDialogAtom);
     const setManageAccessTarget = useSetAtom(shareDriveModalAtom);
@@ -1166,11 +1175,10 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
-          // "Share folder" (a folder invite): own drives only, since only
-          // the owner invites people.
           ...(SHARED_DRIVES_ENABLED &&
           file.isFolder &&
-          !isMemberDriveLabel(file.label, memberDriveLabels)
+          (!isMemberDriveLabel(file.label, memberDriveLabels) ||
+            Boolean(file.label && manageableLabels?.has(file.label)))
             ? [
                 {
                   icon: <FolderInput className="size-4" />,
@@ -1181,6 +1189,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         file,
                         folderGrantsEnabled,
                         memberDriveLabels,
+                        manageableLabels,
                       )
                     ) {
                       return;
@@ -1203,6 +1212,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                       file,
                       folderGrantsEnabled,
                       memberDriveLabels,
+                      manageableLabels,
                     ),
                   tooltip:
                     !itemDeleting &&
@@ -1210,6 +1220,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                       file,
                       folderGrantsEnabled,
                       memberDriveLabels,
+                      manageableLabels,
                     )
                       ? FOLDER_GRANT_DISABLED_TOOLTIP
                       : undefined,
@@ -1313,6 +1324,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         memberDriveLabels,
         memberFolderShares,
         writableMemberDriveLabels,
+        manageableLabels,
         setShareModalFile,
         setInviteDialogTarget,
         setManageAccessTarget,
