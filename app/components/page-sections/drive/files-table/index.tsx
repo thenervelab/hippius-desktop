@@ -32,10 +32,12 @@ import {
   FolderOpen,
   Pencil,
   FolderInput,
+  Users,
 } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   shareDialogAtom,
+  shareDriveModalAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
@@ -66,6 +68,8 @@ import {
   useWritableMemberDriveLabels,
   useFolderShareInviteOffered,
 } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useOwnedFolderSharing } from "@/app/lib/hooks/useOwnedFolderSharing";
+import { folderSharingKey } from "@/app/lib/shared-drives/folderRowSharing";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
@@ -637,6 +641,15 @@ const FilesTable: FC<FilesTableProps> = memo(
     const writableMemberDriveLabels = useWritableMemberDriveLabels();
     const setShareModalFile = useSetAtom(shareModalFileAtom);
     const setInviteDialogTarget = useSetAtom(shareDialogAtom);
+    const setManageAccessTarget = useSetAtom(shareDriveModalAtom);
+    // The folders of this listing's drive shared on their own, for the
+    // folder rows' "Manage access" item. One drive per listing, so the first
+    // folder's label names it; the hook asks nothing for a member drive.
+    const listingDriveLabel = useMemo(
+      () => allFiles.find((f) => f.isFolder)?.label ?? null,
+      [allFiles],
+    );
+    const sharedFolders = useOwnedFolderSharing(listingDriveLabel);
     const setRenameModalFile = useSetAtom(renameModalFileAtom);
     const enableFolderExpander = !isRecentFiles;
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
@@ -1203,6 +1216,34 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
+          // "Manage access" on a folder shared on its own: the same panel its
+          // row mark opens, scoped to the folder. Only where the mark is.
+          ...(() => {
+            if (!SHARED_DRIVES_ENABLED || !file.isFolder || !file.label) return [];
+            const pathPrefix = folderSharingKey(
+              folderGrantPathPrefix(
+                file,
+                parentSubFolderPath ?? normalizedSubfolderPath ?? "",
+              ),
+            );
+            if (file.label !== listingDriveLabel || !sharedFolders.has(pathPrefix)) {
+              return [];
+            }
+            const label = file.label;
+            return [
+              {
+                icon: <Users className="size-4" />,
+                itemTitle: "Manage access",
+                onItemClick: () =>
+                  setManageAccessTarget({
+                    label,
+                    folderName: file.name,
+                    pathPrefix,
+                  }),
+                disabled: itemDeleting,
+              },
+            ];
+          })(),
           // Rename shares the delete-style gating plus the local-presence
           // gate in `canRenameFile`. Absent where this account's role in
           // somebody else's drive cannot write (`offersWriteAction`).
@@ -1274,6 +1315,9 @@ const FilesTable: FC<FilesTableProps> = memo(
         writableMemberDriveLabels,
         setShareModalFile,
         setInviteDialogTarget,
+        setManageAccessTarget,
+        listingDriveLabel,
+        sharedFolders,
         setRenameModalFile,
         isItemDeleting,
         normalizedSubfolderPath,
