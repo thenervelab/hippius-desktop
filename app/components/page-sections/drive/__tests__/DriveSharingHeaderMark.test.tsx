@@ -83,6 +83,28 @@ describe("the drive header's sharing mark", () => {
     expect(screen.getByRole("button", { name: "Manage access" })).toBeInTheDocument();
   });
 
+  // Only a drive shared as a whole offers drive-level Manage access. Rust
+  // counts whole-drive members and invites only, so a drive where just a
+  // folder is shared answers zeros: no drive mark, no drive-level button.
+  // The folder carries its own mark and Manage access.
+  it("offers no drive-level Manage access when only folders are shared", async () => {
+    listOwnedDriveSharingMock.mockResolvedValue([
+      { label: "team-docs", memberCount: 0, liveInviteCount: 0, totalInviteCount: 0 },
+    ]);
+    renderMark();
+    await waitFor(() => expect(listOwnedDriveSharingMock).toHaveBeenCalled());
+    expect(screen.queryByText(/Shared/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage access" })).not.toBeInTheDocument();
+  });
+
+  it("offers Manage access on a drive with only a whole-drive invite out", async () => {
+    listOwnedDriveSharingMock.mockResolvedValue([
+      { label: "team-docs", memberCount: 0, liveInviteCount: 1, totalInviteCount: 1 },
+    ]);
+    renderMark();
+    expect(await screen.findByRole("button", { name: "Manage access" })).toBeInTheDocument();
+  });
+
   // Opening the panel is the point of the button — the badge alone would
   // tell the owner the drive is shared and give them nowhere to go.
   it("opens the manage panel on the drive the header names", async () => {
