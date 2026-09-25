@@ -20,6 +20,7 @@ import { ChevronLeft, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
   AccessPanel,
+  AccessPanelHolder,
   AccessPanelInvite,
   AccessPanelLink,
 } from "@/app/lib/tauri/sharedDrives";
@@ -27,7 +28,7 @@ import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
 import { driveRoleLabel, parseDriveRole, type DriveRole } from "@/app/lib/shared-drives/roles";
 import { InlineNotice } from "../share-dialog/InlineNotice";
 import { MemberRow, OwnerRow, PendingRow, type Busy } from "../share-dialog/PeopleWithAccessSection";
-import type { FolderRole } from "./ChangeFoldersDialog";
+import type { FolderRole } from "./ChangeFoldersView";
 import { EndedLinkRow, EndedLinks, FolderTag, HolderRow, LinkRow } from "./AccessPanelRows";
 import {
   ACCESS_PANEL_COPY,
@@ -77,6 +78,8 @@ export type RowContext = {
    * always are.
    */
   canAddAccess: boolean;
+  /** Opens Change folders for a holder, in place of the list. */
+  openChangeFolders: (holder: AccessPanelHolder) => void;
 };
 
 /** The key a row's busy and refusal state are filed under. */
@@ -123,10 +126,9 @@ export function PersonItem({ person, ctx }: { person: PanelPerson; ctx: RowConte
         holder={h}
         busy={busy[h.memberSs58]}
         canManage={panel.canManage}
+        folder={folder}
         onRemove={() => actions.remove(h.memberSs58, who)}
-        onChangeFolders={
-          ctx.canAddAccess ? (next, role) => actions.changeFolders(h.memberSs58, next, role) : undefined
-        }
+        onChangeFolders={ctx.canAddAccess ? () => ctx.openChangeFolders(h) : undefined}
       />
       <RowRefusal id={busyKeyOf(person)} rowError={rowError} />
     </>

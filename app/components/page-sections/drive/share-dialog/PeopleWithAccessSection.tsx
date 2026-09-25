@@ -8,17 +8,18 @@
 // Changes are pessimistic: the row says "Saving…" or "Removing…" until the
 // command has succeeded AND the listing has been read again, and a refusal
 // leaves the row as it was with the reason under it. Other rows stay usable
-// meanwhile. A demotion asks first, because the server also revokes links as
-// part of it. A folder holder has no role change (HCFS #475): the row offers
-// Remove and the list says to invite them again.
+// meanwhile. Removing someone, cancelling an invitation and a demotion (the
+// server also revokes links as part of it) ask first, in the row itself
+// (`RowConfirm`), never in a second dialog over this one. A folder holder has
+// no role change (HCFS #475): the row offers Remove and the list says to
+// invite them again.
 
 import React, { useCallback, useState } from "react";
 import dynamic from "next/dynamic";
 import { ArrowRight, Loader2, Mail, Users } from "lucide-react";
 
-import { Button, Icons, Skeleton } from "@/components/ui";
+import { Button, Skeleton } from "@/components/ui";
 import { Select } from "@/components/ui/select/Select";
-import ConfirmationDialog from "@/components/ConfirmationDialog";
 import AccountLabel from "../AccountLabel";
 import { cn } from "@/lib/utils";
 import {
@@ -43,6 +44,7 @@ import {
 import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { InlineNotice } from "./InlineNotice";
+import { ROW_TRIGGER, RowConfirm, RowConfirmProvider, useRowConfirm } from "./RowConfirm";
 import {
   FOLDER_ACCESS_HINT,
   PEOPLE_MAX_ROWS,
@@ -60,18 +62,28 @@ const REMOVE = "remove";
 /**
  * Every person row is three columns: the avatar (fixed), the words (take
  * what is left and cut each line short with an ellipsis) and the role on the
- * right, in a slot of one fixed width so Owner, Viewer and Editor line up
- * whether they are a select or plain text. Without the fixed slot a long name
- * ran on under the role select.
+ * right, in a slot of one fixed width. Without the fixed slot a long name ran
+ * on under the role select. The right column ends flush with the section's
+ * right edge, under the header's "Manage access": the slot's contents sit at
+ * its right end, and a row's action (a folder holder's Remove) comes after
+ * the role, last.
  */
 export const ROW = "flex min-h-[48px] min-w-0 items-center gap-3 py-2";
 /** The words column: never wider than what the avatar and the role leave. */
 export const TEXT_COLUMN = "min-w-0 flex-1 overflow-hidden";
 const META = "truncate text-xs text-grey-50 dark:text-grey-dark-600";
-/** The right-hand slot: as wide as the role select, so the column aligns. */
-export const ROLE_SLOT = "flex w-[98px] shrink-0 items-center";
-/** A role as plain text, indented like the select's value so they align. */
-export const ROLE_TEXT = "min-w-0 flex-1 truncate pl-2.5 text-xs text-grey-50 dark:text-grey-dark-600";
+/** The right-hand slot: as wide as the role select, its contents at the right end. */
+export const ROLE_SLOT = "flex w-[98px] shrink-0 items-center justify-end";
+/** A role as plain text, ending where the column ends. */
+export const ROLE_TEXT = "min-w-0 truncate text-right text-xs text-grey-50 dark:text-grey-dark-600";
+/**
+ * A quiet select's chevron sits inside the trigger's padding; pulled right by
+ * that padding, the chevron ends flush with the plain-text roles.
+ */
+export const FLUSH_SELECT = "w-auto min-w-0 -mr-2.5";
+/** A row's destructive action as red text, like the console's. */
+export const DANGER_TEXT_BUTTON =
+  "inline-flex h-8 shrink-0 items-center text-xs font-medium text-error-70 hover:underline dark:text-error-70";
 const SMALL_BUTTON = "h-8 shrink-0 rounded-[6px] px-3 text-xs font-medium";
 
 /** What a row is waiting on, while a change is on the wire. */
@@ -273,35 +285,37 @@ export function PeopleWithAccessSection({
       ) : null}
 
       {access ? (
-        <ul className="divide-y divide-grey-90 dark:divide-white/10">
-          {visible.map((row) => (
-            <li key={row.key}>
-              {row.node}
-              {rowError?.key === row.key ? (
-                <InlineNotice tone="error" className="mb-2">
-                  {rowError.message}
-                </InlineNotice>
-              ) : null}
-            </li>
-          ))}
-          {more > 0 ? (
-            <li>
-              <button
-                type="button"
-                onClick={() => onManage("people")}
-                className={cn(ROW, "w-full text-left text-xs font-medium text-primary-50 hover:underline dark:text-primary-brand-dark")}
-              >
-                <span
-                  aria-hidden
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-grey-90 text-grey-50 dark:bg-white/10 dark:text-grey-dark-600"
+        <RowConfirmProvider>
+          <ul className="divide-y divide-grey-90 dark:divide-white/10">
+            {visible.map((row) => (
+              <li key={row.key}>
+                {row.node}
+                {rowError?.key === row.key ? (
+                  <InlineNotice tone="error" className="mb-2">
+                    {rowError.message}
+                  </InlineNotice>
+                ) : null}
+              </li>
+            ))}
+            {more > 0 ? (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => onManage("people")}
+                  className={cn(ROW, "w-full text-left text-xs font-medium text-primary-50 hover:underline dark:text-primary-brand-dark")}
                 >
-                  <Users className="size-4" />
-                </span>
-                +{more} more · Manage access
-              </button>
-            </li>
-          ) : null}
-        </ul>
+                  <span
+                    aria-hidden
+                    className="flex size-8 shrink-0 items-center justify-center rounded-full bg-grey-90 text-grey-50 dark:bg-white/10 dark:text-grey-dark-600"
+                  >
+                    <Users className="size-4" />
+                  </span>
+                  +{more} more · Manage access
+                </button>
+              </li>
+            ) : null}
+          </ul>
+        </RowConfirmProvider>
       ) : null}
 
       {access && folder !== null ? (
@@ -360,6 +374,19 @@ export function OwnerRow({ ss58, isYou, name }: { ss58: string; isYou: boolean; 
   );
 }
 
+/** A row's own name line: the label, and "(you)" on your own row. */
+function NameLine({ ss58, name, email, isYou }: { ss58: string; name?: string; email?: string; isYou?: boolean }) {
+  return (
+    <div className="flex min-w-0 items-baseline gap-1.5">
+      <AccountLabel ss58={ss58} name={name} email={email} focusable className="text-sm text-grey-10 dark:text-white" />
+      {isYou ? <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">(you)</span> : null}
+    </div>
+  );
+}
+
+/** A row that can take focus back after its question, without a ring. */
+const FOCUS_ROOT = "outline-none";
+
 export function MemberRow({
   member,
   busy,
@@ -378,34 +405,52 @@ export function MemberRow({
   meta?: React.ReactNode;
 }) {
   const role = parseDriveRole(member.role);
-  const [pending, setPending] = useState<"none" | "remove" | DriveRole>("none");
+  const { asking, ask, cancel, done, rowRef } = useRowConfirm<"remove" | DriveRole>(member.memberSs58);
   const who = accountDisplayName(member.memberSs58, member.memberName);
-  const demotion = pending !== "none" && pending !== "remove" ? driveRoleDemotionWarning(role, pending) : null;
+  const name = (
+    <NameLine ss58={member.memberSs58} name={member.memberName} email={member.memberEmail} isYou={member.isYou} />
+  );
 
   const choose = (value: string) => {
-    if (value === REMOVE) return setPending("remove");
+    if (value === REMOVE) return ask("remove");
     const next = parseDriveRole(value);
     if (next === role) return;
     // A demotion revokes links as a side effect, so it is confirmed first; a
     // promotion takes nothing away and goes straight to the server.
-    if (driveRoleDemotionWarning(role, next)) return setPending(next);
+    if (driveRoleDemotionWarning(role, next)) return ask(next);
     onChangeRole(next);
   };
 
+  if (asking) {
+    const removing = asking === "remove";
+    return (
+      <RowConfirm
+        leading={<PersonAvatar ss58={member.memberSs58} />}
+        title={name}
+        question={removing ? `Remove ${who}'s access to this drive?` : `Make ${who} a ${driveRoleLabel(asking)}?`}
+        detail={removing ? null : driveRoleDemotionWarning(role, asking)}
+        confirmLabel={removing ? "Remove" : "Change role"}
+        destructive={removing}
+        onConfirm={() => {
+          done();
+          if (removing) onRemove();
+          else onChangeRole(asking);
+        }}
+        onCancel={cancel}
+      />
+    );
+  }
+
   return (
-    <div className={cn(ROW, busy === "removing" && "opacity-60")} aria-busy={busy ? true : undefined}>
+    <div
+      ref={rowRef}
+      tabIndex={-1}
+      className={cn(ROW, FOCUS_ROOT, busy === "removing" && "opacity-60")}
+      aria-busy={busy ? true : undefined}
+    >
       <PersonAvatar ss58={member.memberSs58} />
       <div className={TEXT_COLUMN}>
-        <div className="flex min-w-0 items-baseline gap-1.5">
-          <AccountLabel
-            ss58={member.memberSs58}
-            name={member.memberName}
-            email={member.memberEmail}
-            focusable
-            className="text-sm text-grey-10 dark:text-white"
-          />
-          {member.isYou ? <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">(you)</span> : null}
-        </div>
+        {name}
         {meta !== undefined ? (
           meta ? <p className={META} title={typeof meta === "string" ? meta : undefined}>{meta}</p> : null
         ) : member.memberEmail ? (
@@ -415,7 +460,7 @@ export function MemberRow({
       {/* A role change keeps the old role in view, disabled, until the server
           answers; the words sit left of the slot and the name gives way. */}
       {busy === "saving" ? <BusyLabel busy={busy} /> : null}
-      <span className={ROLE_SLOT}>
+      <span className={ROLE_SLOT} {...ROW_TRIGGER}>
         {busy && busy !== "saving" ? (
           <BusyLabel busy={busy} className="pl-2.5" />
         ) : member.isYou || readOnly ? (
@@ -434,46 +479,17 @@ export function MemberRow({
               ...DRIVE_ROLES.map((r) => ({ label: driveRoleLabel(r), value: r, description: driveRoleDescription(r) })),
               { label: "Remove access", value: REMOVE },
             ]}
-            className="w-full"
-            triggerClassName="w-[98px]"
+            className={FLUSH_SELECT}
+            triggerClassName="w-auto max-w-[108px]"
           />
         )}
       </span>
-
-      <ConfirmationDialog
-        open={pending === "remove"}
-        onClose={() => setPending("none")}
-        onBack={() => setPending("none")}
-        onConfirm={() => {
-          setPending("none");
-          onRemove();
-        }}
-        heading="Remove access"
-        icon={<Icons.Trash className="size-4 text-white" />}
-        iconBgColor="bg-[#fc7d73]"
-        confirmVariant="destructive"
-        confirmButtonClassName="text-white"
-        button="Remove"
-        text={`Remove ${who} from this drive?`}
-        helperText="They lose access on their next request. Files already on their device stay there."
-      />
-      <ConfirmationDialog
-        open={demotion !== null}
-        onClose={() => setPending("none")}
-        onBack={() => setPending("none")}
-        onConfirm={() => {
-          if (pending !== "none" && pending !== "remove") onChangeRole(pending);
-          setPending("none");
-        }}
-        heading="Change role"
-        icon={<Icons.InfoCircle className="size-4 text-white" />}
-        button="Change role"
-        text={pending !== "none" && pending !== "remove" ? `Make ${who} a ${driveRoleLabel(pending)}?` : ""}
-        helperText={demotion ?? undefined}
-      />
     </div>
   );
 }
+
+/** Said under a removal when the person also holds other folders of the drive. */
+export const OTHER_FOLDERS_LINE = "They also lose any other folders on this drive shared with them.";
 
 function HolderRow({
   holder,
@@ -489,67 +505,64 @@ function HolderRow({
   /** Someone who cannot manage the drive sees no Remove. */
   readOnly?: boolean;
 }) {
-  const [confirming, setConfirming] = useState(false);
+  const { asking, ask, cancel, done, rowRef } = useRowConfirm<"remove">(holder.memberSs58);
   const who = accountDisplayName(holder.memberSs58, holder.memberName);
   const role = driveRoleLabel(parseDriveRole(holder.role));
   // Access that comes from a folder around this one says where from.
   const via = holder.pathPrefix !== folder ? `Through “${holder.pathPrefix}”` : null;
-  const others = holder.otherFolderCount;
+  const name = <NameLine ss58={holder.memberSs58} name={holder.memberName} email={holder.memberEmail} />;
+
+  if (asking) {
+    return (
+      <RowConfirm
+        leading={<PersonAvatar ss58={holder.memberSs58} />}
+        title={name}
+        // Removing takes away the grant they hold, which for access through
+        // a folder around this one is that folder.
+        question={`Remove ${who}'s access to ${via ? `“${holder.pathPrefix}”` : "this folder"}?`}
+        detail={holder.otherFolderCount > 0 ? OTHER_FOLDERS_LINE : null}
+        confirmLabel="Remove"
+        onConfirm={() => {
+          done();
+          onRemove();
+        }}
+        onCancel={cancel}
+      />
+    );
+  }
 
   return (
-    <div className={cn(ROW, busy === "removing" && "opacity-60")} aria-busy={busy ? true : undefined}>
+    <div
+      ref={rowRef}
+      tabIndex={-1}
+      className={cn(ROW, FOCUS_ROOT, busy === "removing" && "opacity-60")}
+      aria-busy={busy ? true : undefined}
+    >
       <PersonAvatar ss58={holder.memberSs58} />
       <div className={TEXT_COLUMN}>
-        <AccountLabel
-          ss58={holder.memberSs58}
-          name={holder.memberName}
-          email={holder.memberEmail}
-          focusable
-          className="text-sm text-grey-10 dark:text-white"
-        />
+        {name}
         {holder.memberEmail || via ? (
           <p className={META} title={[holder.memberEmail, via].filter(Boolean).join(" · ")}>
             {[holder.memberEmail, via].filter(Boolean).join(" · ")}
           </p>
         ) : null}
       </div>
-      {busy ? null : readOnly ? null : (
-        <Button
-          type="button"
-          variant="defaultStable"
-          size="auto"
-          onClick={() => setConfirming(true)}
-          aria-label={`Remove ${who}`}
-          className={SMALL_BUTTON}
-        >
-          Remove
-        </Button>
-      )}
-      {/* Last, so the role lines up with the members' role column. */}
+      {/* The role in the column every row shares, then Remove, last, so the
+          right edge lines up down the list. */}
       <span className={ROLE_SLOT}>
         {busy ? <BusyLabel busy={busy} className="pl-2.5" /> : <span className={ROLE_TEXT}>{role}</span>}
       </span>
-      <ConfirmationDialog
-        open={confirming}
-        onClose={() => setConfirming(false)}
-        onBack={() => setConfirming(false)}
-        onConfirm={() => {
-          setConfirming(false);
-          onRemove();
-        }}
-        heading="Remove folder access"
-        icon={<Icons.Trash className="size-4 text-white" />}
-        iconBgColor="bg-[#fc7d73]"
-        confirmVariant="destructive"
-        confirmButtonClassName="text-white"
-        button="Remove"
-        text={`Remove ${who}'s access to “${holder.pathPrefix}”?`}
-        helperText={
-          others > 0
-            ? `This also removes their access to ${others} other folder${others === 1 ? "" : "s"} on this drive. Files already on their device stay there.`
-            : "They lose access on their next request. Files already on their device stay there."
-        }
-      />
+      {busy || readOnly ? null : (
+        <button
+          type="button"
+          onClick={() => ask("remove")}
+          aria-label={`Remove ${who}`}
+          className={DANGER_TEXT_BUTTON}
+          {...ROW_TRIGGER}
+        >
+          Remove
+        </button>
+      )}
     </div>
   );
 }
@@ -572,24 +585,51 @@ export function PendingRow({
    */
   meta?: React.ReactNode;
 }) {
+  const { asking, ask, cancel, done, rowRef } = useRowConfirm<"cancel">(invite.inviteId);
   // Approval is the one step a mailed invitation needs from this side: the
   // recipient opened it, and approving seals the drive key to them.
   const needsApproval = invite.emailStatus === "awaiting_seal";
   const address = invite.recipientEmail ?? "Address no longer on file";
+  const icon = (
+    <span
+      aria-hidden
+      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-grey-90 text-grey-50 dark:bg-white/10 dark:text-grey-dark-600"
+    >
+      <Mail className="size-4" />
+    </span>
+  );
+
+  if (asking) {
+    return (
+      <RowConfirm
+        leading={icon}
+        title={
+          <p className="truncate text-sm text-grey-10 dark:text-white" title={address}>
+            {address}
+          </p>
+        }
+        question="Cancel this invite?"
+        detail="The link in the email stops working."
+        confirmLabel="Cancel invite"
+        onConfirm={() => {
+          done();
+          onCancel();
+        }}
+        onCancel={cancel}
+      />
+    );
+  }
 
   return (
     // Wraps on a narrow dialog: the address keeps room to be read and the
     // buttons move, together, to a second line.
     <div
-      className={cn(ROW, "flex-wrap gap-y-1.5", busy === "removing" && "opacity-60")}
+      ref={rowRef}
+      tabIndex={-1}
+      className={cn(ROW, FOCUS_ROOT, "flex-wrap gap-y-1.5", busy === "removing" && "opacity-60")}
       aria-busy={busy ? true : undefined}
     >
-      <span
-        aria-hidden
-        className="flex size-8 shrink-0 items-center justify-center rounded-full bg-grey-90 text-grey-50 dark:bg-white/10 dark:text-grey-dark-600"
-      >
-        <Mail className="size-4" />
-      </span>
+      {icon}
       <div className="min-w-0 flex-1 basis-[150px] overflow-hidden">
         <p className="truncate text-sm text-grey-10 dark:text-white" title={address}>
           {address}
@@ -621,9 +661,10 @@ export function PendingRow({
             type="button"
             variant="defaultStable"
             size="auto"
-            onClick={onCancel}
+            onClick={() => ask("cancel")}
             aria-label={`Cancel invite to ${address}`}
             className={SMALL_BUTTON}
+            {...ROW_TRIGGER}
           >
             Cancel
           </Button>

@@ -33,17 +33,19 @@ import type {
 
 configure({ asyncUtilTimeout: 3000 });
 
-// jsdom has no matchMedia; the panel runs in its inline shape.
+// jsdom has no matchMedia; the panel runs in its inline shape unless a test
+// asks for the narrow one, where the panel is itself a dialog.
+const viewport = vi.hoisted(() => ({ wide: true }));
 vi.mock("@/app/lib/hooks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/lib/hooks")>();
   return {
     ...actual,
     useBreakpoint: () => ({
-      breakpoint: "xl",
-      isMobile: false,
+      breakpoint: viewport.wide ? "xl" : "sm",
+      isMobile: !viewport.wide,
       isTablet: false,
       isLaptop: false,
-      isDesktop: true,
+      isDesktop: viewport.wide,
       isLargeDesktop: false,
     }),
   };
@@ -51,11 +53,19 @@ vi.mock("@/app/lib/hooks", async (importOriginal) => {
 
 // The overflow menus are Radix dropdowns that do not open under jsdom's
 // pointer emulation; their items render as plain buttons so what each item
-// DOES is exercised for real.
+// DOES is exercised for real. The trigger renders too, so focus can return
+// to it after a row's question is put away.
 vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
   __esModule: true,
-  default: ({ items }: { items: { itemTitle: React.ReactNode; onItemClick?: () => void }[] }) => (
+  default: ({
+    items,
+    children,
+  }: {
+    items: { itemTitle: React.ReactNode; onItemClick?: () => void }[];
+    children?: React.ReactNode;
+  }) => (
     <div>
+      {children}
       {items.map((item, i) => (
         <button key={i} type="button" onClick={() => item.onItemClick?.()}>
           {item.itemTitle}
@@ -226,6 +236,11 @@ function renderPanel(target: ShareDriveModalTarget | null = { label: "team-docs"
   return store;
 }
 
+/** Answers a pending invite's in-row question with "Cancel invite". */
+function confirmCancelInvite() {
+  fireEvent.click(within(screen.getByRole("group", { name: "Cancel this invite?" })).getByRole("button", { name: "Cancel invite" }));
+}
+
 /** A loaded group's section; throws until it is on screen, for `waitFor`. */
 function group(name: RegExp): HTMLElement {
   const section = screen.getByRole("heading", { name }).closest("section");
@@ -235,6 +250,7 @@ function group(name: RegExp): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  viewport.wide = true;
   flags.sharedDrives = true;
   memberships.list = [];
   sharing.can = true;
@@ -267,7 +283,7 @@ describe("a plan without sharing (Free, Starter)", () => {
     expect(screen.getByText("mia@example.com")).toBeInTheDocument();
     const links = within(await waitFor(() => group(/^Links/)));
     fireEvent.click(links.getByRole("button", { name: "Revoke" }));
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Revoke this link?" })).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "l1", undefined));
     fireEvent.click(screen.getByRole("button", { name: "Remove access" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
@@ -281,6 +297,7 @@ describe("a plan without sharing (Free, Starter)", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Change folders" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel invite to mia@example.com" }));
+    confirmCancelInvite();
     await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "p1", undefined));
   });
 
@@ -543,7 +560,7 @@ describe("changes are pessimistic", () => {
     const links = within(await waitFor(() => group(/^Links/)));
     fireEvent.click(links.getByRole("button", { name: "Revoke" }));
     expect(revokeMock).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Revoke this link?" })).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "l1", undefined));
     expect(await screen.findByText("Revoking…")).toBeInTheDocument();
     listAccessPanelMock.mockResolvedValue(panel({ members: [member()] }));
@@ -566,6 +583,7 @@ describe("changes are pessimistic", () => {
     renderPanel();
     await screen.findByText("mia@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Cancel invite to mia@example.com" }));
+    confirmCancelInvite();
     await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "p1", undefined));
   });
 
@@ -720,7 +738,7 @@ describe("a drive shared with you", () => {
     const store = renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Leave drive" }));
     expect(leaveMock).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Leave drive" }));
+    fireEvent.click(within(screen.getByRole("group", { name: /^Leave/ })).getByRole("button", { name: "Leave drive" }));
     await waitFor(() => expect(leaveMock).toHaveBeenCalledWith("team-docs"));
     await waitFor(() => expect(store.get(shareDriveModalAtom)).toBeNull());
   });
@@ -936,7 +954,7 @@ describe("a big drive", () => {
     renderPanel();
     const links = within(await waitFor(() => group(/^Links/)));
     fireEvent.click(links.getAllByRole("button", { name: "Revoke" })[0]);
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Revoke this link?" })).getByRole("button", { name: "Revoke" }));
     const busy = await links.findByText("Revoking…");
     const row = busy.closest("[aria-busy]");
     expect(row).toHaveClass("opacity-60");
@@ -1033,7 +1051,7 @@ describe("a big drive", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Show all 45 links" }));
     const list = within(fullList("Links"));
     fireEvent.click(list.getAllByRole("button", { name: "Revoke" })[0]);
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Revoke this link?" })).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "link-0", undefined));
     expect(await screen.findByText("Revoking…")).toBeInTheDocument();
 
@@ -1133,5 +1151,115 @@ describe("the jump bar for someone the drive is shared with", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show all 61 people" }));
     expect(within(fullList("People")).queryByRole("combobox")).not.toBeInTheDocument();
+  });
+});
+
+// On a narrow window the panel is itself a dialog, so a confirmation dialog
+// stacked a second one over it. Every question is asked in the row (or the
+// footer), and Change folders is a view in place of the list.
+describe("one dialog at a time", () => {
+  beforeEach(() => {
+    viewport.wide = false;
+  });
+
+  it("revokes a link from a question in its row, with the panel the only dialog", async () => {
+    revokeMock.mockReturnValue(new Promise<void>(() => {}));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    fireEvent.click(links.getByRole("button", { name: "Revoke" }));
+    const question = screen.getByRole("group", { name: "Revoke this link?" });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(links.getByRole("group", { name: "Revoke this link?" })).toBe(question);
+    await waitFor(() => expect(within(question).getByRole("button", { name: "Revoke" })).toHaveFocus());
+    fireEvent.click(within(question).getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("team-docs", "l1", undefined));
+    expect(await links.findByText("Revoking…")).toBeInTheDocument();
+  });
+
+  it("puts a row back on Escape without closing the panel", async () => {
+    const store = renderPanel();
+    await screen.findByText("Bo");
+    fireEvent.click(screen.getByRole("button", { name: "Remove access" }));
+    const question = screen.getByRole("group", { name: "Remove Bo's access to their 2 folders on this drive?" });
+    const remove = within(question).getByRole("button", { name: "Remove" });
+    await waitFor(() => expect(remove).toHaveFocus());
+    fireEvent.keyDown(remove, { key: "Escape" });
+    expect(screen.queryByRole("group", { name: /Remove Bo/ })).not.toBeInTheDocument();
+    expect(store.get(shareDriveModalAtom)).not.toBeNull();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Actions for Bo" })).toHaveFocus());
+    expect(removeMock).not.toHaveBeenCalled();
+  });
+
+  it("asks in one row at a time", async () => {
+    renderPanel();
+    await screen.findByText("Bo");
+    fireEvent.click(screen.getByRole("button", { name: "Remove access" }));
+    expect(screen.getByRole("group", { name: /Remove Bo/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    expect(screen.getByRole("group", { name: "Revoke this link?" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /Remove Bo/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("group", { name: /\?$/ })).toHaveLength(1);
+  });
+
+  it("asks about this folder in a folder's panel, adding the other-folders line only when they hold more", async () => {
+    listAccessPanelMock.mockResolvedValue(
+      panel({ folderHolders: [holder(), holder({ memberSs58: "5Cy", memberName: "Cy", folders: ["Clients/ACME"] })] }),
+    );
+    renderPanel({ label: "team-docs", folderName: "ACME", pathPrefix: "Clients/ACME" });
+    await screen.findByText("Cy");
+    const removes = screen.getAllByRole("button", { name: "Remove access" });
+
+    fireEvent.click(removes[0]);
+    const bo = screen.getByRole("group", { name: "Remove Bo's access to this folder?" });
+    expect(within(bo).getByText("They also lose any other folders on this drive shared with them.")).toBeInTheDocument();
+    fireEvent.click(within(bo).getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove access" })[1]);
+    const cy = screen.getByRole("group", { name: "Remove Cy's access to this folder?" });
+    expect(within(cy).queryByText(/also lose/)).not.toBeInTheDocument();
+  });
+
+  it("opens Change folders in place of the list, and Back returns to it", async () => {
+    renderPanel();
+    await screen.findByText("Bo");
+    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
+    const heading = screen.getByRole("heading", { name: "Change folders" });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog")).toContainElement(heading);
+    expect(heading).toHaveFocus();
+    // The list is gone while the view is open.
+    expect(screen.queryByRole("heading", { name: /^Links/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Work" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.queryByRole("heading", { name: "Change folders" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^Links/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actions for Bo" })).toHaveFocus();
+  });
+
+  it("leaves Change folders on Escape without closing the panel", async () => {
+    const store = renderPanel();
+    await screen.findByText("Bo");
+    fireEvent.click(screen.getByRole("button", { name: "Change folders" }));
+    const heading = screen.getByRole("heading", { name: "Change folders" });
+    fireEvent.keyDown(heading, { key: "Escape" });
+    expect(screen.queryByRole("heading", { name: "Change folders" })).not.toBeInTheDocument();
+    expect(store.get(shareDriveModalAtom)).not.toBeNull();
+  });
+
+  it("asks before leaving in the footer, with Cancel putting the button back", async () => {
+    memberships.list = [];
+    listAccessPanelMock.mockResolvedValue(
+      panel({ ownerSs58: OWNER, ownerIsYou: false, yourRole: "reader", canManage: false, members: [member({ memberSs58: ME, isYou: true, role: "reader" })] }),
+    );
+    renderPanel({ label: "team-docs", folderName: "team-docs", ownerSs58: OWNER, folderHash: "abc" });
+    fireEvent.click(await screen.findByRole("button", { name: "Leave drive" }));
+    const question = screen.getByRole("group", { name: /^Leave/ });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Leave drive" })).toHaveFocus());
+    expect(leaveMock).not.toHaveBeenCalled();
+    expect(leaveByIdentityMock).not.toHaveBeenCalled();
   });
 });

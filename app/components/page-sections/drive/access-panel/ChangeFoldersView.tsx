@@ -1,15 +1,17 @@
 "use client";
 
 // Change which folders a holder has, from the Manage access panel's row menu.
+// A view inside the panel, in place of its list, never a second dialog over
+// it (the panel is itself a dialog on a narrow window).
 
-import React, { useState } from "react";
-import { FolderPen } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { ChevronLeft } from "lucide-react";
 
 import { Button } from "@/components/ui";
 import Input from "@/components/ui/input";
 import { Select } from "@/components/ui/select/Select";
-import { FramedDialog } from "@/components/ui/FramedDialog";
 import { SectionNoticeView } from "../share-dialog/SectionNoticeView";
+import { useEscapeFirst } from "../share-dialog/RowConfirm";
 import { noticeForError, type SectionNotice } from "../share-dialog/shareDialogState";
 import { driveRoleLabel, type DriveRole } from "@/app/lib/shared-drives/roles";
 import { FOLDER_INVITE_ROLES } from "../shareDriveModalState";
@@ -25,9 +27,9 @@ export type ChangeGrantFolders = (memberSs58: string, folders: string[], role?: 
  * folder with Viewer or Editor access. At least one must stay: removing every
  * folder is Remove access, a different request. The folder path is checked
  * by Rust on Save (the same rule a folder invite uses), and a refusal stays
- * in the dialog with the reason.
+ * in the view with the reason. Back, Cancel and Escape return to the list.
  */
-export default function ChangeFoldersDialog({
+export default function ChangeFoldersView({
   who,
   folders,
   onClose,
@@ -46,6 +48,14 @@ export default function ChangeFoldersDialog({
   const adding = added.trim().length > 0;
   const next = [...folders.filter((f) => kept.has(f)), ...(adding ? [added.trim()] : [])];
   const unchanged = !adding && kept.size === folders.length;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  // The view replaces the list the row was in, so focus starts on its title.
+  useEffect(() => {
+    headingRef.current?.focus({ preventScroll: true });
+  }, []);
+  useEscapeFirst(rootRef, onClose);
 
   const save = async (role: FolderRole) => {
     setSaving(true);
@@ -61,16 +71,27 @@ export default function ChangeFoldersDialog({
   };
 
   return (
-    <FramedDialog
-      open
-      onClose={onClose}
-      title="Change folders"
-      icon={<FolderPen className="size-4 text-white" />}
-      maxWidth="max-w-[585px]"
-      contentClassName="sm:w-[405px]"
-    >
-      <div className="font-geist">
-        <p className="mb-5 text-center text-sm text-grey-50 dark:text-grey-dark-600">
+    <section ref={rootRef} aria-labelledby="change-folders-heading" className="font-geist">
+      <div className="-mx-4 mb-3 flex min-w-0 items-center gap-2 border-b border-grey-80 px-4 pb-2.5 pt-2 dark:border-white/10">
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex shrink-0 items-center gap-0.5 rounded-md py-1 pl-0.5 pr-1.5 text-xs font-medium text-primary-50 hover:bg-grey-90/60 dark:text-primary-brand-dark dark:hover:bg-white/5"
+        >
+          <ChevronLeft className="size-4" aria-hidden />
+          Back
+        </button>
+        <h3
+          id="change-folders-heading"
+          ref={headingRef}
+          tabIndex={-1}
+          className="min-w-0 truncate text-sm font-semibold text-grey-10 outline-none dark:text-white"
+        >
+          Change folders
+        </h3>
+      </div>
+      <div>
+        <p className="mb-4 break-words text-sm text-grey-50 [overflow-wrap:anywhere] dark:text-grey-dark-600">
           Which folders {who} has access to.
         </p>
         <div className="mb-4 flex flex-col gap-2">
@@ -101,7 +122,7 @@ export default function ChangeFoldersDialog({
 
         <div className="mb-4">
           <p className="mb-1.5 text-xs font-medium text-grey-10 dark:text-white">Add a folder</p>
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="flex flex-col gap-2 @[300px]:flex-row">
             <div className="min-w-0 flex-1">
               <Input
                 aria-label="Folder to add"
@@ -123,7 +144,7 @@ export default function ChangeFoldersDialog({
                 setNotice((n) => (n?.kind === "folderEditor" ? null : n));
               }}
               options={FOLDER_INVITE_ROLES.map((r) => ({ label: driveRoleLabel(r), value: r }))}
-              className="sm:w-[116px] sm:shrink-0"
+              className="@[300px]:w-[116px] @[300px]:shrink-0"
               triggerClassName="min-h-[40px] py-2 sm:min-h-[40px] px-3"
               valueClassName="text-sm"
             />
@@ -173,6 +194,6 @@ export default function ChangeFoldersDialog({
           </Button>
         </div>
       </div>
-    </FramedDialog>
+    </section>
   );
 }

@@ -21,6 +21,11 @@
 // Inviting and making links happen in the Share dialog (`shareDialogAtom`);
 // the panel opens it and steps aside.
 //
+// Nothing opens a second dialog over the panel (it is one itself on a narrow
+// window): removing, revoking, cancelling and leaving ask in the row or the
+// footer (`share-dialog/RowConfirm`), and Change folders is a view in place
+// of the list.
+//
 // On a plan without sharing (Free, Starter; Rust decides, `canShareDrives`)
 // the owner still sees and removes everyone here, but Invite, New link,
 // Share, Approve and Change folders give way to one upgrade card. A 403
@@ -38,7 +43,6 @@ import { Folder, HardDrive, LogOut, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons, Skeleton } from "@/components/ui";
-import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import {
@@ -69,6 +73,7 @@ import {
   replaceFolderGrants,
   revokeDriveInvite,
   type AccessPanel,
+  type AccessPanelHolder,
   type DriveMembershipInfo,
 } from "@/app/lib/tauri/sharedDrives";
 import { parseFolderGrantLabel, parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
@@ -78,6 +83,8 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 import { InlineNotice } from "./share-dialog/InlineNotice";
 import { useRowChanges } from "./share-dialog/PeopleWithAccessSection";
+import { ROW_TRIGGER, RowConfirm, RowConfirmProvider, useRowConfirm } from "./share-dialog/RowConfirm";
+import ChangeFoldersView from "./access-panel/ChangeFoldersView";
 import {
   FOLDER_ACCESS_HINT,
   SHARED_DRIVES_UNAVAILABLE_COPY,
@@ -133,13 +140,12 @@ export default function ShareDrivePanel() {
   const open = Boolean(SHARED_DRIVES_ENABLED && target);
 
   // Remount for each target so nothing from the previous drive or folder (a
-  // loaded list, an open menu, a row error) carries over.
+  // loaded list, an open menu, a row error, a question) carries over. One
+  // provider for the whole panel: one row or the footer asks at a time.
   const body = target ? (
-    <AccessPanelBody
-      key={`${target.label}|${target.pathPrefix ?? "\u0000"}|${target.ownerSs58 ?? ""}`}
-      target={target}
-      onClose={onClose}
-    />
+    <RowConfirmProvider key={`${target.label}|${target.pathPrefix ?? "\u0000"}|${target.ownerSs58 ?? ""}`}>
+      <AccessPanelBody target={target} onClose={onClose} />
+    </RowConfirmProvider>
   ) : null;
 
   // Same shell as File Details: an inline width-slide on large screens so the
@@ -298,8 +304,9 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
       })
     : null;
 
-  // Leaving is for anyone the drive is shared with.
-  const [leaving, setLeaving] = useState<"idle" | "confirm" | "busy">("idle");
+  // Leaving is for anyone the drive is shared with. It asks in the footer.
+  const [leaving, setLeaving] = useState<"idle" | "busy">("idle");
+  const leaveConfirm = useRowConfirm<"leave">("leave");
   const leave = useCallback(async () => {
     setLeaving("busy");
     try {
@@ -331,7 +338,7 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
       revoke: (id, who) => void run(id, who, "revoking", () => revokeDriveInvite(target.label, id, driveTarget)),
       cancel: (id, who) => void run(id, who, "removing", () => revokeDriveInvite(target.label, id, driveTarget)),
       approve: (id, who) => void run(id, who, "saving", () => approveEmailInvite(target.label, id, driveTarget)),
-      // Throws on refusal: the dialog shows why and stays open. A plan
+      // Throws on refusal: the Change folders view shows why and stays. A plan
       // refusal also puts the upgrade card in place behind it.
       changeFolders: async (ss58, folders, role) => {
         try {
@@ -364,9 +371,21 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
         unlocking,
         onUnlock: () => void unlock(),
         canAddAccess: gate === "allowed",
+        openChangeFolders: (holder) => {
+          beforeChanging.current = {
+            scrollTop: scrollRef.current?.scrollTop ?? 0,
+            who: accountDisplayName(holder.memberSs58, holder.memberName),
+          };
+          setChanging(holder);
+        },
       }
     : null;
   const people = useMemo(() => (panel ? panelPeople(panel, membership?.ownerName) : []), [panel, membership?.ownerName]);
+
+  // Change folders replaces the list (main or full view) until Back, never a
+  // second dialog over the panel.
+  const [changing, setChanging] = useState<AccessPanelHolder | null>(null);
+  const beforeChanging = useRef<{ scrollTop: number; who: string } | null>(null);
 
   // The main view's search, which the full view starts from.
   const [mainQuery, setMainQuery] = useState("");
@@ -391,6 +410,27 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
     setFullView(null);
   }, []);
   const viewGroup = fullView?.group ?? null;
+
+  // Back from Change folders: the list where it was, and focus on the row's
+  // menu button it was opened from.
+  const closeChanging = useCallback(() => setChanging(null), []);
+  const isChanging = changing !== null;
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    const before = beforeChanging.current;
+    if (!scroller || !before) return;
+    if (isChanging) {
+      scroller.scrollTop = 0;
+      return;
+    }
+    beforeChanging.current = null;
+    scroller.scrollTop = before.scrollTop;
+    const menu = Array.from(scroller.querySelectorAll<HTMLElement>("[aria-label]")).find(
+      (el) => el.getAttribute("aria-label") === `Actions for ${before.who}`,
+    );
+    menu?.focus({ preventScroll: true });
+  }, [isChanging]);
+
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
@@ -468,8 +508,8 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
         ) : null}
       </header>
 
-      {panel && summary && !fullView ? <SummaryBar items={summary} onJump={jump} /> : null}
-      {panel && fullView ? (
+      {panel && summary && !fullView && !changing ? <SummaryBar items={summary} onJump={jump} /> : null}
+      {panel && fullView && !changing ? (
         <FullViewHeader
           view={fullView}
           total={groupTotal(panel, fullView.group)}
@@ -479,7 +519,14 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
       ) : null}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-        {ctx && fullView ? (
+        {ctx && changing ? (
+          <ChangeFoldersView
+            who={accountDisplayName(changing.memberSs58, changing.memberName)}
+            folders={changing.folders}
+            onClose={closeChanging}
+            onConfirm={(next, role) => actions.changeFolders(changing.memberSs58, next, role)}
+          />
+        ) : ctx && fullView ? (
           <FullViewList view={fullView} people={people} ctx={ctx} scrollRef={scrollRef} onChange={setFullView} />
         ) : (
           <PanelContent
@@ -500,16 +547,39 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
         )}
       </div>
 
-      {state.kind === "ready" || state.kind === "loading" ? (
-        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-grey-80 px-4 py-3 dark:border-white/10">
+      {leaveConfirm.asking ? (
+        // Leaving asks here, in the footer, in place of its buttons.
+        <footer className="shrink-0 border-t border-grey-80 px-4 py-1 dark:border-white/10">
+          <RowConfirm
+            question={`Leave “${title}”?`}
+            detail={
+              folder
+                ? "You lose access to it, and to any other folder of the same drive shared with you."
+                : "You lose access to its files. Anything already on this computer stays."
+            }
+            confirmLabel={folder ? "Leave folder" : "Leave drive"}
+            onConfirm={() => {
+              leaveConfirm.done();
+              void leave();
+            }}
+            onCancel={leaveConfirm.cancel}
+          />
+        </footer>
+      ) : state.kind === "ready" || state.kind === "loading" ? (
+        <footer
+          ref={leaveConfirm.rowRef as React.RefObject<HTMLElement>}
+          tabIndex={-1}
+          className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-grey-80 px-4 py-3 outline-none dark:border-white/10"
+        >
           {sharedWithMe ? (
             <Button
               type="button"
               variant="defaultStable"
               size="auto"
               disabled={leaving === "busy"}
-              onClick={() => setLeaving("confirm")}
+              onClick={() => leaveConfirm.ask("leave")}
               className="h-[38px] gap-1.5 rounded-[8px] px-3.5 text-sm font-medium text-error-70 dark:text-error-70"
+              {...ROW_TRIGGER}
             >
               <LogOut className="size-4" aria-hidden />
               {leaving === "busy" ? "Leaving…" : folder ? "Leave folder" : "Leave drive"}
@@ -538,24 +608,6 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
         </footer>
       ) : null}
 
-      <ConfirmationDialog
-        open={leaving === "confirm"}
-        onClose={() => setLeaving("idle")}
-        onBack={() => setLeaving("idle")}
-        onConfirm={() => void leave()}
-        heading={folder ? "Leave shared folder" : "Leave shared drive"}
-        icon={<Icons.Trash className="size-4 text-white" />}
-        iconBgColor="bg-[#fc7d73]"
-        confirmVariant="destructive"
-        confirmButtonClassName="text-white"
-        button={folder ? "Leave folder" : "Leave drive"}
-        text={`Leave "${title}"?`}
-        helperText={
-          folder
-            ? "You lose access to it, and to any other folder of the same drive shared with you. The owner can invite you again."
-            : "You lose access to its files. Anything already downloaded to this computer stays, and the owner can invite you again."
-        }
-      />
     </div>
   );
 }

@@ -3,18 +3,20 @@
 // The Manage access panel's own rows: folder holders, links, and the small
 // pieces around the groups. Member, owner and pending-invite rows are the
 // Share dialog's (`share-dialog/PeopleWithAccessSection`), reused as they are.
+// Removing a holder and revoking a link ask in the row (`RowConfirm`), never
+// in a second dialog over the panel, which is one itself on a narrow window.
 
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, ChevronDown, Clock, Folder, FolderPen, Link2, Lock, Plus, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons, Skeleton } from "@/components/ui";
-import ConfirmationDialog from "@/components/ConfirmationDialog";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import { cn } from "@/lib/utils";
 import AccountLabel from "../AccountLabel";
 import {
   BusyLabel,
+  OTHER_FOLDERS_LINE,
   PersonAvatar,
   ROLE_SLOT,
   ROLE_TEXT,
@@ -22,7 +24,7 @@ import {
   TEXT_COLUMN,
   type Busy,
 } from "../share-dialog/PeopleWithAccessSection";
-import ChangeFoldersDialog, { type FolderRole } from "./ChangeFoldersDialog";
+import { ROW_TRIGGER, RowConfirm, useRowConfirm } from "../share-dialog/RowConfirm";
 import type { AccessPanelHolder, AccessPanelLink } from "@/app/lib/tauri/sharedDrives";
 import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
 import { driveRoleLabel, parseDriveRole } from "@/app/lib/shared-drives/roles";
@@ -109,42 +111,94 @@ export function FolderTag({ children, title }: { children: React.ReactNode; titl
   );
 }
 
+/**
+ * What removing a holder asks. In a folder's panel it is about this folder,
+ * saying so when they hold more of the drive; in the drive's panel it names
+ * the folder, or how many.
+ */
+export function holderRemoveQuestion(holder: AccessPanelHolder, who: string, folder: boolean) {
+  const count = holder.folders.length;
+  if (folder) {
+    return {
+      question: `Remove ${who}'s access to this folder?`,
+      detail: count > 1 ? OTHER_FOLDERS_LINE : null,
+    };
+  }
+  return {
+    question:
+      count > 1
+        ? `Remove ${who}'s access to their ${count} folders on this drive?`
+        : `Remove ${who}'s access to “${holder.folders[0] ?? holder.pathPrefix}”?`,
+    detail: null,
+  };
+}
+
 /** A folder holder: tagged with their folder, role as text, and a menu. */
 export function HolderRow({
   holder,
   busy,
   canManage,
+  folder = false,
   onRemove,
   onChangeFolders,
 }: {
   holder: AccessPanelHolder;
   busy?: Busy;
   canManage: boolean;
+  /** The panel is for one folder, so removing is about this folder. */
+  folder?: boolean;
   onRemove: () => void;
   /**
-   * Omitted on a plan without sharing: a changed folder list can add
-   * folders, which adds access. Remove access stays.
+   * Opens Change folders in place of the list. Omitted on a plan without
+   * sharing: a changed folder list can add folders, which adds access.
+   * Remove access stays.
    */
-  onChangeFolders?: (next: string[], addRole?: FolderRole) => Promise<void>;
+  onChangeFolders?: () => void;
 }) {
-  const [dialog, setDialog] = useState<"none" | "folders" | "remove">("none");
+  const { asking, ask, cancel, done, rowRef } = useRowConfirm<"remove">(holder.memberSs58);
   const who = accountDisplayName(holder.memberSs58, holder.memberName);
   const folders = holder.folders;
+  const name = (
+    <div className="flex min-w-0 items-baseline gap-1.5">
+      <AccountLabel
+        ss58={holder.memberSs58}
+        name={holder.memberName}
+        email={holder.memberEmail}
+        focusable
+        className="text-sm text-grey-10 dark:text-white"
+      />
+      {holder.isYou ? <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">(you)</span> : null}
+    </div>
+  );
+
+  if (asking) {
+    const { question, detail } = holderRemoveQuestion(holder, who, folder);
+    return (
+      <RowConfirm
+        leading={<PersonAvatar ss58={holder.memberSs58} />}
+        title={name}
+        question={question}
+        detail={detail}
+        confirmLabel="Remove"
+        onConfirm={() => {
+          done();
+          onRemove();
+        }}
+        onCancel={cancel}
+      />
+    );
+  }
 
   return (
-    <div className={cn(PANEL_ROW, busy === "removing" && "opacity-60")} aria-busy={busy ? true : undefined}>
+    <div
+      ref={rowRef}
+      tabIndex={-1}
+      className={cn(PANEL_ROW, "outline-none", busy === "removing" && "opacity-60")}
+      aria-busy={busy ? true : undefined}
+    >
       <PersonAvatar ss58={holder.memberSs58} />
       <div className={TEXT_COLUMN}>
-        <div className="flex min-w-0 items-baseline gap-1.5">
-          <AccountLabel
-            ss58={holder.memberSs58}
-            name={holder.memberName}
-            email={holder.memberEmail}
-            focusable
-            className="text-sm text-grey-10 dark:text-white"
-          />
-          {holder.isYou ? <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">(you)</span> : null}
-        </div>
+        {name}
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
           <FolderTag title={folders.join(", ")}>{holderFolderTag(holder)}</FolderTag>
           {holder.memberEmail ? (
@@ -171,7 +225,7 @@ export function HolderRow({
                     {
                       icon: <FolderPen className="size-4" />,
                       itemTitle: "Change folders",
-                      onItemClick: () => setDialog("folders"),
+                      onItemClick: onChangeFolders,
                     },
                   ]
                 : []),
@@ -179,37 +233,22 @@ export function HolderRow({
                 icon: <Icons.Trash className="size-4" />,
                 itemTitle: "Remove access",
                 variant: "destructive",
-                onItemClick: () => setDialog("remove"),
+                onItemClick: () => ask("remove"),
               },
             ]}
           >
-            <Button variant="ghost" size="auto" aria-label={`Actions for ${who}`} className={MENU_BUTTON}>
+            <Button
+              variant="ghost"
+              size="auto"
+              aria-label={`Actions for ${who}`}
+              className={MENU_BUTTON}
+              {...ROW_TRIGGER}
+            >
               <Icons.EllipsisVertical className="size-[18px]" />
             </Button>
           </TableActionMenu>
         ) : null}
       </span>
-
-      {dialog === "folders" && onChangeFolders ? (
-        <ChangeFoldersDialog who={who} folders={folders} onClose={() => setDialog("none")} onConfirm={onChangeFolders} />
-      ) : null}
-      <ConfirmationDialog
-        open={dialog === "remove"}
-        onClose={() => setDialog("none")}
-        onBack={() => setDialog("none")}
-        onConfirm={() => {
-          setDialog("none");
-          onRemove();
-        }}
-        heading="Remove folder access"
-        icon={<Icons.Trash className="size-4 text-white" />}
-        iconBgColor="bg-[#fc7d73]"
-        confirmVariant="destructive"
-        confirmButtonClassName="text-white"
-        button="Remove"
-        text={`Remove ${who}'s access to ${folders.length === 1 ? `“${folders[0]}”` : "these folders"}?`}
-        helperText="They lose folder access on their next request. Files already on their device stay there."
-      />
     </div>
   );
 }
@@ -331,44 +370,24 @@ type LinkRowProps = {
   onRevoke: () => void;
 };
 
-/** A link's ⋯ menu with Revoke, confirmed first. */
-function LinkRevokeMenu({ title, onRevoke }: { title: string; onRevoke: () => void }) {
-  const [confirming, setConfirming] = useState(false);
+/** A link's ⋯ menu with Revoke, which asks in the row first. */
+function LinkRevokeMenu({ title, onAsk }: { title: string; onAsk: () => void }) {
   return (
-    <>
-      <TableActionMenu
-        dropdownTitle=""
-        items={[
-          {
-            icon: <Icons.Trash className="size-4" />,
-            itemTitle: "Revoke",
-            variant: "destructive",
-            onItemClick: () => setConfirming(true),
-          },
-        ]}
-      >
-        <Button variant="ghost" size="auto" aria-label={`Actions for ${title}`} className={MENU_BUTTON}>
-          <Icons.EllipsisVertical className="size-[18px]" />
-        </Button>
-      </TableActionMenu>
-      <ConfirmationDialog
-        open={confirming}
-        onClose={() => setConfirming(false)}
-        onBack={() => setConfirming(false)}
-        onConfirm={() => {
-          setConfirming(false);
-          onRevoke();
-        }}
-        heading="Revoke link"
-        icon={<Icons.Trash className="size-4 text-white" />}
-        iconBgColor="bg-[#fc7d73]"
-        confirmVariant="destructive"
-        confirmButtonClassName="text-white"
-        button="Revoke"
-        text={`Revoke this ${title.toLowerCase()}?`}
-        helperText="Nobody new can join with it. People who already joined keep their access."
-      />
-    </>
+    <TableActionMenu
+      dropdownTitle=""
+      items={[
+        {
+          icon: <Icons.Trash className="size-4" />,
+          itemTitle: "Revoke",
+          variant: "destructive",
+          onItemClick: onAsk,
+        },
+      ]}
+    >
+      <Button variant="ghost" size="auto" aria-label={`Actions for ${title}`} className={MENU_BUTTON} {...ROW_TRIGGER}>
+        <Icons.EllipsisVertical className="size-[18px]" />
+      </Button>
+    </TableActionMenu>
   );
 }
 
@@ -397,11 +416,42 @@ function UsageBar({ link, className }: { link: AccessPanelLink; className: strin
  * the link field under it (key hidden, with Copy, or locked with Unlock).
  */
 export function LinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke }: LinkRowProps) {
+  const { asking, ask, cancel, done, rowRef } = useRowConfirm<"revoke">(link.inviteId);
   const creator = linkCreator(link);
   const title = linkTitle(link);
 
+  if (asking) {
+    return (
+      <RowConfirm
+        leading={
+          <span aria-hidden className={ICON_TILE}>
+            <Link2 className="size-4" />
+          </span>
+        }
+        title={
+          <p className="truncate text-sm text-grey-10 dark:text-white" title={title}>
+            {title}
+          </p>
+        }
+        question="Revoke this link?"
+        detail="Nobody new can join with it. People who already joined keep their access."
+        confirmLabel="Revoke"
+        onConfirm={() => {
+          done();
+          onRevoke();
+        }}
+        onCancel={cancel}
+      />
+    );
+  }
+
   return (
-    <div className={cn("flex min-w-0 items-start gap-3 py-2", busy && "opacity-60")} aria-busy={busy ? true : undefined}>
+    <div
+      ref={rowRef}
+      tabIndex={-1}
+      className={cn("flex min-w-0 items-start gap-3 py-2 outline-none", busy && "opacity-60")}
+      aria-busy={busy ? true : undefined}
+    >
       <span aria-hidden className={ICON_TILE}>
         <Link2 className="size-4" />
       </span>
@@ -423,7 +473,7 @@ export function LinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke }: L
           <LinkField url={link.inviteUrl} locked={locked} onUnlock={onUnlock} unlocking={unlocking} />
         ) : null}
       </div>
-      {busy ? <BusyLabel busy={busy} /> : <LinkRevokeMenu title={title} onRevoke={onRevoke} />}
+      {busy ? <BusyLabel busy={busy} /> : <LinkRevokeMenu title={title} onAsk={() => ask("revoke")} />}
     </div>
   );
 }

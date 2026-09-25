@@ -139,6 +139,11 @@ async function typeEmail(value: string) {
   await act(async () => {});
 }
 
+/** Answers a pending invite's in-row question with "Cancel invite". */
+function confirmCancelInvite() {
+  fireEvent.click(within(screen.getByRole("group", { name: "Cancel this invite?" })).getByRole("button", { name: "Cancel invite" }));
+}
+
 /** Drive the custom Select: open by its aria-label, then click the option. */
 function choose(selectLabel: string, option: string) {
   fireEvent.click(screen.getByLabelText(selectLabel));
@@ -285,6 +290,7 @@ describe("a plan without sharing (Free, Starter)", () => {
     await screen.findByText("opened@example.com");
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel invite to opened@example.com" }));
+    confirmCancelInvite();
     await waitFor(() => expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "i2", undefined));
   });
 });
@@ -931,7 +937,7 @@ describe("People with access", () => {
       screen.getByText("To change someone’s access to this folder, remove them and invite them again."),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove Ann" }));
-    expect(await screen.findByText(/also removes their access to 1 other folder/)).toBeInTheDocument();
+    expect(await screen.findByText("They also lose any other folders on this drive shared with them.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", ANN, undefined));
   });
@@ -954,6 +960,7 @@ describe("People with access", () => {
     await waitFor(() => expect(approveEmailInviteMock).toHaveBeenCalledWith("team-docs", "i2", undefined));
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel invite to sent@example.com" }));
+    confirmCancelInvite();
     await waitFor(() => expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "i1", undefined));
   });
 
@@ -962,6 +969,7 @@ describe("People with access", () => {
     revokeDriveInviteMock.mockRejectedValue({ kind: "Hcfs", message: "server exploded" });
     renderDialog();
     fireEvent.click(await screen.findByRole("button", { name: "Cancel invite to sent@example.com" }));
+    confirmCancelInvite();
     expect(await screen.findByText("Couldn't change access for sent@example.com. server exploded")).toBeInTheDocument();
     expect(screen.getByText("sent@example.com")).toBeInTheDocument();
   });
@@ -1055,5 +1063,161 @@ describe("People with access", () => {
     renderDialog();
     expect(await within(peopleSection()).findByText("Shared drives aren't available on your server yet.")).toBeInTheDocument();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+// Removing someone asked in a second dialog stacked over this one. It asks in
+// the row now: one dialog on screen at a time, whatever is being confirmed.
+describe("asking in the row, never in a second dialog", () => {
+  const BO = "5BoCccccccccccccccccccccccccccccccccccccccccccccc";
+  const annAndBo = () =>
+    access({
+      members: [
+        { memberSs58: ANN, role: "writer", memberName: "Ann", isYou: false },
+        { memberSs58: BO, role: "writer", memberName: "Bo", isYou: false },
+      ],
+    });
+  const holderAccess = (otherFolderCount: number) =>
+    access({
+      folderHolders: [{ memberSs58: ANN, role: "reader", pathPrefix: "Clients/ACME", memberName: "Ann", otherFolderCount }],
+    });
+
+  it("shows Remove's question in the row, with only the Share dialog on screen", async () => {
+    listShareAccessMock.mockResolvedValue(annAndBo());
+    renderDialog();
+    await screen.findByText("Ann");
+    choose("Role for Ann", "Remove access");
+    const question = await screen.findByRole("group", { name: "Remove Ann's access to this drive?" });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog")).toContainElement(question);
+    const remove = within(question).getByRole("button", { name: "Remove" });
+    await waitFor(() => expect(remove).toHaveFocus());
+    expect(within(question).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(removeDriveMemberMock).not.toHaveBeenCalled();
+  });
+
+  it("puts the row back on Cancel, with focus on its role select", async () => {
+    listShareAccessMock.mockResolvedValue(annAndBo());
+    renderDialog();
+    await screen.findByText("Ann");
+    choose("Role for Ann", "Remove access");
+    const question = await screen.findByRole("group", { name: "Remove Ann's access to this drive?" });
+    fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("group", { name: /Remove Ann/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Role for Ann")).toHaveFocus());
+    expect(removeDriveMemberMock).not.toHaveBeenCalled();
+  });
+
+  it("puts the row back on Escape and keeps the dialog open", async () => {
+    listShareAccessMock.mockResolvedValue(annAndBo());
+    const store = renderDialog();
+    await screen.findByText("Ann");
+    choose("Role for Ann", "Remove access");
+    const question = await screen.findByRole("group", { name: "Remove Ann's access to this drive?" });
+    const remove = within(question).getByRole("button", { name: "Remove" });
+    await waitFor(() => expect(remove).toHaveFocus());
+    fireEvent.keyDown(remove, { key: "Escape" });
+    expect(screen.queryByRole("group", { name: /Remove Ann/ })).not.toBeInTheDocument();
+    expect(store.get(shareDialogAtom)).not.toBeNull();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(removeDriveMemberMock).not.toHaveBeenCalled();
+  });
+
+  it("removes once confirmed, saying Removing in the row", async () => {
+    listShareAccessMock.mockResolvedValue(annAndBo());
+    removeDriveMemberMock.mockReturnValue(new Promise(() => {}));
+    renderDialog();
+    await screen.findByText("Ann");
+    choose("Role for Ann", "Remove access");
+    const question = await screen.findByRole("group", { name: "Remove Ann's access to this drive?" });
+    fireEvent.click(within(question).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", ANN, undefined));
+    expect(await screen.findByText("Removing…")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /Remove Ann/ })).not.toBeInTheDocument();
+  });
+
+  it("asks in one row at a time", async () => {
+    listShareAccessMock.mockResolvedValue(annAndBo());
+    renderDialog();
+    await screen.findByText("Bo");
+    choose("Role for Ann", "Remove access");
+    await screen.findByRole("group", { name: "Remove Ann's access to this drive?" });
+    choose("Role for Bo", "Remove access");
+    expect(await screen.findByRole("group", { name: "Remove Bo's access to this drive?" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /Remove Ann/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Role for Ann")).toBeInTheDocument();
+  });
+
+  it("asks about this folder for a folder holder, and says so when they lose other folders too", async () => {
+    listShareAccessMock.mockResolvedValue(holderAccess(2));
+    renderDialog(folderTarget());
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Ann" }));
+    const question = screen.getByRole("group", { name: "Remove Ann's access to this folder?" });
+    expect(within(question).getByText("They also lose any other folders on this drive shared with them.")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("says nothing about other folders when this is the only one they hold", async () => {
+    listShareAccessMock.mockResolvedValue(holderAccess(0));
+    renderDialog(folderTarget());
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Ann" }));
+    expect(screen.getByRole("group", { name: "Remove Ann's access to this folder?" })).toBeInTheDocument();
+    expect(screen.queryByText(/also lose/)).not.toBeInTheDocument();
+  });
+
+  it("asks before cancelling an invitation, and Cancel keeps it", async () => {
+    listShareAccessMock.mockResolvedValue(access({ pendingInvites: [mailed("i1", "sent@example.com", "sent")] }));
+    renderDialog();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel invite to sent@example.com" }));
+    const question = screen.getByRole("group", { name: "Cancel this invite?" });
+    fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("group", { name: "Cancel this invite?" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel invite to sent@example.com" })).toHaveFocus());
+    expect(revokeDriveInviteMock).not.toHaveBeenCalled();
+  });
+
+  it("asks a demotion in the row too", async () => {
+    listShareAccessMock.mockResolvedValue(annAndBo());
+    renderDialog();
+    await screen.findByText("Ann");
+    choose("Role for Ann", "Viewer");
+    const question = await screen.findByRole("group", { name: "Make Ann a Viewer?" });
+    expect(within(question).getByRole("button", { name: "Change role" })).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+});
+
+// The right column ends flush with the section's right edge, under "Manage
+// access": the role slot's contents sit at its right end, and a folder
+// holder's Remove, red text like the console's, comes after the role, last.
+describe("People with access lines up on the right", () => {
+  it("ends the owner's role, a member's select and a holder's Remove at the right edge", async () => {
+    listShareAccessMock.mockResolvedValue(
+      access({
+        members: [{ memberSs58: "5Bo", role: "writer", memberName: "Bo", isYou: false }],
+        folderHolders: [{ memberSs58: ANN, role: "reader", pathPrefix: "Clients/ACME", memberName: "Ann", otherFolderCount: 0 }],
+      }),
+    );
+    renderDialog(folderTarget());
+    const remove = await screen.findByRole("button", { name: "Remove Ann" });
+
+    const ownerSlot = screen.getByText("Owner").parentElement!;
+    expect(ownerSlot).toHaveClass("w-[98px]", "justify-end");
+    expect(screen.getByText("Owner")).toHaveClass("text-right");
+    expect(screen.getByText("Owner")).not.toHaveClass("pl-2.5");
+
+    const select = screen.getByLabelText("Role for Bo");
+    const selectSlot = select.closest("span.shrink-0")!;
+    expect(selectSlot).toHaveClass("justify-end");
+    // The quiet select is pulled right by its own padding, so its chevron
+    // ends where the plain-text roles end.
+    expect(select.parentElement).toHaveClass("w-auto", "-mr-2.5");
+
+    // A holder's row: the role in the shared slot, then Remove, last.
+    const row = remove.parentElement!;
+    expect(row.lastElementChild).toBe(remove);
+    expect(remove.previousElementSibling).toHaveClass("w-[98px]", "justify-end");
+    expect(remove).toHaveClass("text-error-70");
+    expect(remove.className).not.toMatch(/(^|\s)border(\s|$)|rounded/);
   });
 });
