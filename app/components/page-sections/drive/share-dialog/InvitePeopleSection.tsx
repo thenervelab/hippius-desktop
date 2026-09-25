@@ -36,6 +36,7 @@ export function InvitePeopleSection({
   target,
   onSent,
   onUpgrade,
+  onNotEntitled,
 }: {
   label: string;
   /** Present for a folder; the folder rides on the email request. */
@@ -43,6 +44,11 @@ export function InvitePeopleSection({
   target?: DriveTarget;
   onSent: () => void;
   onUpgrade: () => void;
+  /**
+   * The server refused because the plan does not include sharing: the
+   * dialog swaps every add-people control for its upgrade card.
+   */
+  onNotEntitled?: () => void;
 }) {
   const folder = pathPrefix !== null;
   // A drive keeps the Editor default every earlier build sent; a folder
@@ -120,6 +126,7 @@ export function InvitePeopleSection({
         onSent();
       } catch (err) {
         const next = noticeForError(err);
+        if (next.kind === "notEntitled") onNotEntitled?.();
         if (next.kind === "comingSoon" && next.text === COMING_SOON_COPY.email) {
           setMailKnownOff(true);
         }
@@ -128,7 +135,7 @@ export function InvitePeopleSection({
         setSending(false);
       }
     },
-    [check, sending, email, label, target, folder, pathPrefix, onSent],
+    [check, sending, email, label, target, folder, pathPrefix, onSent, onNotEntitled],
   );
 
   const sendAsViewer = useCallback(() => {

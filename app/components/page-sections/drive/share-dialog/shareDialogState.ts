@@ -34,6 +34,35 @@ export type SectionNotice =
   /** Anything Rust worded for the user: rate limit, failed send, bad input. */
   | { kind: "error"; message: string };
 
+/**
+ * Whether the Share dialog and the Manage access panel offer the controls
+ * that ADD people (email invite, invite link, Approve, Change folders):
+ *
+ * - `allowed`: offer them.
+ * - `upgrade`: the plan does not include sharing, so an upgrade card stands
+ *   in their place. People already shared with stay listed and removable.
+ * - `loading`: the plan is not known yet, so a skeleton stands there, and
+ *   neither the controls nor the card flash.
+ *
+ * `planAllows` is Rust's `canShareDrives` (undefined while loading).
+ * `refusedByServer` is a 403 `shared_drives_not_entitled` from any sharing
+ * command, which wins over a stale or unknown plan. The plan asked about is
+ * this account's, so it only gates a drive this account owns: somebody
+ * else's drive is decided by its owner.
+ */
+export type SharingGate = "loading" | "allowed" | "upgrade";
+
+export function sharingGate(params: {
+  planAllows: boolean | undefined;
+  owner: boolean;
+  refusedByServer: boolean;
+}): SharingGate {
+  if (params.refusedByServer) return "upgrade";
+  if (!params.owner) return "allowed";
+  if (params.planAllows === undefined) return "loading";
+  return params.planAllows ? "allowed" : "upgrade";
+}
+
 /** Copy for a server that has shared drives switched off. */
 export const SHARED_DRIVES_UNAVAILABLE_COPY =
   "Shared drives aren't available on your server yet.";

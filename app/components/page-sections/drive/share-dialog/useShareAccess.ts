@@ -26,7 +26,6 @@ export function useShareAccess(params: {
   /** Present for a folder. */
   pathPrefix: string | null;
   target?: DriveTarget;
-  enabled: boolean;
 }): {
   state: ShareAccessState;
   /** Read the listing again, keeping the rows on screen meanwhile. */
@@ -34,7 +33,7 @@ export function useShareAccess(params: {
   /** Start over from the skeleton, after a failed first load. */
   retry: () => void;
 } {
-  const { label, pathPrefix, target, enabled } = params;
+  const { label, pathPrefix, target } = params;
   const [state, setState] = useState<ShareAccessState>({ kind: "loading" });
   // Only the newest request may land: the dialog reloads after every change,
   // and an older answer arriving late would put a removed row back.
@@ -60,7 +59,6 @@ export function useShareAccess(params: {
   );
 
   useEffect(() => {
-    if (!enabled) return;
     void load(false);
     // The counter itself, not a value read from it: bumping it on cleanup is
     // what drops a late answer for a closed or retargeted dialog.
@@ -68,7 +66,7 @@ export function useShareAccess(params: {
     return () => {
       counter.current++;
     };
-  }, [enabled, load]);
+  }, [load]);
 
   const reload = useCallback(() => load(true), [load]);
   const retry = useCallback(() => void load(false), [load]);

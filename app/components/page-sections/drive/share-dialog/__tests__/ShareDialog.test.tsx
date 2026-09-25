@@ -79,6 +79,7 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
 });
 
 const INVALID = "Enter one email address, like name@example.com.";
+const UPGRADE_TITLE = "Sharing is available on Plus, Max and Scale plans.";
 const WEEK = 7 * 24 * 60 * 60;
 
 const notReady = (subkind: string, message = "x") => ({ kind: "NotReady", subkind, message });
@@ -217,23 +218,99 @@ describe("the dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(store.get(shareDialogAtom)).toBeNull();
   });
+});
 
-  it("opens straight into the upgrade prompt on a plan without sharing", () => {
+// Sharing is on Plus, Max and Scale. Rust decides (`canShareDrives`); the
+// dialog reads it through `useSharedDrivesInPlan`, mocked here as `plan`.
+describe("a plan without sharing (Free, Starter)", () => {
+  const withAnn = () =>
+    access({
+      members: [{ memberSs58: ANN, role: "writer", memberName: "Ann", memberEmail: "ann@example.com", isYou: false }],
+    });
+
+  it("puts the upgrade card where Invite people and General access were", async () => {
     plan.included = false;
     renderDialog();
-    expect(screen.getByText("Sharing needs a Plus, Max or Scale plan")).toBeInTheDocument();
-    expect(screen.queryByText("Invite people")).not.toBeInTheDocument();
-    expect(screen.queryByText("General access")).not.toBeInTheDocument();
-    expect(listShareAccessMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
-    expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
+    expect(screen.getByText(UPGRADE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Invite people" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "General access" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send invite" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    // Not an error and not a toast: the card is the whole answer.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(await screen.findByText("(1)")).toBeInTheDocument();
   });
 
-  it("shows every section while the plan is still unknown", () => {
+  it("takes them to the Drive plans and closes the dialog", () => {
+    plan.included = false;
+    const store = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+    expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
+    expect(store.get(shareDialogAtom)).toBeNull();
+  });
+
+  it("does the same for a folder", () => {
+    plan.included = false;
+    flags.folderRoles = true;
+    renderDialog(folderTarget());
+    expect(screen.getByText(UPGRADE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
+  });
+
+  // Someone who downgraded still sees who has access and can take it away.
+  it("still lists people and removes them", async () => {
+    plan.included = false;
+    listShareAccessMock.mockResolvedValue(withAnn());
+    removeDriveMemberMock.mockResolvedValue(undefined);
+    renderDialog();
+    await screen.findByText("Ann");
+    choose("Role for Ann", "Remove access");
+    listShareAccessMock.mockResolvedValue(access());
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(removeDriveMemberMock).toHaveBeenCalledWith("team-docs", ANN, undefined));
+    await waitFor(() => expect(screen.queryByText("Ann")).not.toBeInTheDocument());
+  });
+
+  // Approving a waiting invitation adds someone; cancelling it does not.
+  it("offers Cancel on a waiting invitation but not Approve", async () => {
+    plan.included = false;
+    listShareAccessMock.mockResolvedValue(
+      access({ pendingInvites: [mailed("i2", "opened@example.com", "awaiting_seal")] }),
+    );
+    revokeDriveInviteMock.mockResolvedValue(undefined);
+    renderDialog();
+    await screen.findByText("opened@example.com");
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel invite to opened@example.com" }));
+    await waitFor(() => expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "i2", undefined));
+  });
+});
+
+describe("while the plan is loading", () => {
+  it("shows skeletons where the add-people controls go, and no upgrade card", () => {
     plan.included = undefined;
     renderDialog();
-    expect(screen.getByText("Invite people")).toBeInTheDocument();
-    expect(screen.getByText("General access")).toBeInTheDocument();
+    expect(screen.getAllByRole("status", { name: "Loading sharing options" })).toHaveLength(2);
+    expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    // The people list does not wait on the plan.
+    expect(listShareAccessMock).toHaveBeenCalled();
+  });
+
+  it("swaps the skeletons for the controls once the plan allows sharing", async () => {
+    plan.included = undefined;
+    const store = renderDialog();
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
+    plan.included = true;
+    // The same target again re-renders the dialog, which reads the answer.
+    act(() => store.set(shareDialogAtom, { label: "team-docs", folderName: "team-docs" }));
+    expect(await screen.findByLabelText("Email address")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create link" })).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Loading sharing options" })).not.toBeInTheDocument();
   });
 });
 
@@ -368,12 +445,19 @@ describe("Invite people", () => {
     expect(link).not.toHaveTextContent(text);
   });
 
-  it("shows the plan prompt inline with its upgrade button (403)", async () => {
+  // The server is the authority: a plan the app thought could share still
+  // ends on the same upgrade card, never a raw error.
+  it("turns a 403 not-entitled into the upgrade card, keeping the people", async () => {
     emailDriveInviteMock.mockRejectedValue(notReady("SHARED_DRIVES_NOT_ENTITLED"));
     renderDialog();
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
-    expect(await screen.findByText("Sharing needs a Plus, Max or Scale plan")).toBeInTheDocument();
+    expect(await screen.findByText(UPGRADE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /People with access/ })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
     expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
   });
@@ -523,11 +607,13 @@ describe("General access", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("shows the plan prompt inline with its upgrade button", async () => {
+  it("turns a 403 not-entitled into the upgrade card", async () => {
     createDriveInviteMock.mockRejectedValue(notReady("SHARED_DRIVES_NOT_ENTITLED"));
     renderDialog();
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
-    expect(await screen.findByText("Sharing needs a Plus, Max or Scale plan")).toBeInTheDocument();
+    expect(await screen.findByText(UPGRADE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
     expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
   });

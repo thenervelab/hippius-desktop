@@ -10,12 +10,18 @@
 //   3. General access: a LINK invite (`create_drive_invite`, or
 //      `create_folder_invite` for a folder), usable by whoever holds it.
 //
+// On a plan without sharing (Free, Starter; Rust decides, `canShareDrives`)
+// the dialog still opens, so the owner can see who has access and remove
+// people: the Invite and General access sections give way to one upgrade
+// card, and a 403 `shared_drives_not_entitled` from any command does the
+// same. While the plan loads, skeletons stand where those sections go.
+//
 // Invite and link are separate controls with separate commands: a typed
 // address can never turn a link into an email invite, or the reverse. The
 // dialog stays open after each, so several people can be invited in one go;
 // Done closes it.
 
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useAtom, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -39,9 +45,9 @@ import { BILLING_ROUTE } from "@/app/lib/routes";
 import { InvitePeopleSection } from "./InvitePeopleSection";
 import { PeopleWithAccessSection } from "./PeopleWithAccessSection";
 import { GeneralAccessSection } from "./GeneralAccessSection";
-import { NotEntitledNotice } from "./SectionNoticeView";
+import { NotEntitledNotice, SharingActionsSkeleton } from "./SectionNoticeView";
 import { useShareAccess } from "./useShareAccess";
-import { peopleHaveAccess } from "./shareDialogState";
+import { peopleHaveAccess, sharingGate } from "./shareDialogState";
 
 const DIVIDER = <hr className="my-5 border-grey-80 dark:border-white/10" />;
 
@@ -80,13 +86,21 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
   // exactly as before; with it, email and Editor are offered too.
   const folderRoles = folder && FOLDER_ROLES_ENABLED;
   const emailOffered = !folder || folderRoles;
-  const blocked = planIncludesSharing === false;
+  const membership = findMembership(target, memberships);
+  const [refusedByServer, setRefusedByServer] = useState(false);
+  const onNotEntitled = useCallback(() => setRefusedByServer(true), []);
+  const gate = sharingGate({
+    planAllows: planIncludesSharing,
+    owner: !membership,
+    refusedByServer,
+  });
 
+  // Always loaded: on a plan without sharing the owner still sees who has
+  // access and can remove them.
   const access = useShareAccess({
     label: target.label,
     pathPrefix,
     target: driveTarget,
-    enabled: !blocked,
   });
 
   // Every change reports here: the drive list's badge and an open Links tab
@@ -107,7 +121,6 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
     router.push(BILLING_ROUTE);
   }, [close, router]);
 
-  const membership = findMembership(target, memberships);
   const driveName = driveDisplayName(target, membership);
   const folderPath = pathPrefix?.replace(/^\/+|\/+$/g, "") ?? null;
   const name = folder ? folderPath || target.folderName || "this folder" : driveName;
@@ -148,36 +161,46 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
       contentClassName="min-w-0 sm:px-6 sm:pt-5"
     >
       <div className="font-geist">
-        {blocked ? (
-          // A plan without sharing opens straight into the upgrade prompt
-          // rather than a form the server would refuse. The surface is not
-          // hidden from them: this is where they learn it exists.
-          <NotEntitledNotice onUpgrade={upgrade} />
-        ) : (
+        {gate === "upgrade" ? (
           <>
-            {emailOffered ? (
-              <>
-                <InvitePeopleSection
-                  label={target.label}
-                  pathPrefix={pathPrefix}
-                  target={driveTarget}
-                  onSent={onSent}
-                  onUpgrade={upgrade}
-                />
-                {DIVIDER}
-              </>
-            ) : null}
-            <PeopleWithAccessSection
-              state={access.state}
-              folder={folderPath}
+            <NotEntitledNotice onUpgrade={upgrade} />
+            {DIVIDER}
+          </>
+        ) : gate === "loading" ? (
+          emailOffered ? (
+            <>
+              <SharingActionsSkeleton />
+              {DIVIDER}
+            </>
+          ) : null
+        ) : emailOffered ? (
+          <>
+            <InvitePeopleSection
               label={target.label}
+              pathPrefix={pathPrefix}
               target={driveTarget}
-              ownerName={membership?.ownerName}
-              reload={reload}
-              retry={retry}
-              onChanged={onChanged}
-              onManage={manage}
+              onSent={onSent}
+              onUpgrade={upgrade}
+              onNotEntitled={onNotEntitled}
             />
+            {DIVIDER}
+          </>
+        ) : null}
+        <PeopleWithAccessSection
+          state={access.state}
+          folder={folderPath}
+          label={target.label}
+          target={driveTarget}
+          ownerName={membership?.ownerName}
+          reload={reload}
+          retry={retry}
+          onChanged={onChanged}
+          onManage={manage}
+          canAddAccess={gate === "allowed"}
+          onNotEntitled={onNotEntitled}
+        />
+        {gate === "allowed" ? (
+          <>
             {DIVIDER}
             <GeneralAccessSection
               label={target.label}
@@ -186,9 +209,15 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
               target={driveTarget}
               onCreated={onChanged}
               onUpgrade={upgrade}
+              onNotEntitled={onNotEntitled}
             />
           </>
-        )}
+        ) : gate === "loading" ? (
+          <>
+            {DIVIDER}
+            <SharingActionsSkeleton />
+          </>
+        ) : null}
 
         <div className="mt-6 flex justify-end">
           <Button

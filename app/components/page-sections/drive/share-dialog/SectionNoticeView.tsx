@@ -5,18 +5,33 @@
 // subkinds; the words for the "coming soon" ones are pinned to Rust's.
 
 import React from "react";
-import { Button } from "@/components/ui";
+import { Users } from "lucide-react";
+import { Button, Skeleton } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import { COMING_SOON_COPY } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
 import type { SectionNotice } from "./shareDialogState";
 
 const actionClass = "h-[30px] rounded-[6px] px-3 text-xs font-medium";
 
-/** The plan prompt, shared by both sections and by a known-unentitled plan. */
-export const NOT_ENTITLED_TITLE = "Sharing needs a Plus, Max or Scale plan";
+/**
+ * The plan prompt. Sharing (email invites, invite links, anything that adds
+ * people) is on Plus, Max and Scale; Rust decides who that is
+ * (`canShareDrives`) and the server's 403 `shared_drives_not_entitled`
+ * lands here too. People already shared with keep their access, and the
+ * owner can still see and remove them, which the body says.
+ */
+export const NOT_ENTITLED_TITLE = "Sharing is available on Plus, Max and Scale plans.";
 export const NOT_ENTITLED_BODY =
-  "Upgrade your plan to share drives and folders. Anyone you've already shared with keeps their access.";
+  "Upgrade to invite people and create links for your drives and folders. Anyone you've already shared with keeps their access.";
+export const NOT_ENTITLED_ACTION = "Upgrade plan";
 
+/**
+ * The upgrade card that stands in for every control that adds people, for a
+ * plan without sharing. A card, not a warning: nothing is wrong, the plan
+ * just does not include it. Stacks on a narrow container, one row on a wide
+ * one.
+ */
 export function NotEntitledNotice({
   onUpgrade,
   className,
@@ -25,18 +40,54 @@ export function NotEntitledNotice({
   className?: string;
 }) {
   return (
-    <InlineNotice
-      tone="info"
-      className={className}
-      action={
-        <Button type="button" variant="primary" size="auto" onClick={onUpgrade} className={actionClass}>
-          Upgrade plan
+    <div className={cn("@container", className)}>
+      <div
+        role="region"
+        aria-label="Upgrade to share"
+        className="flex flex-col gap-3 rounded-lg border border-primary-50/25 bg-primary-50/[0.06] p-3.5 @md:flex-row @md:items-center dark:border-primary-50/30 dark:bg-primary-50/10"
+      >
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span
+            aria-hidden
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-50/10 text-primary-50 dark:bg-primary-50/15 dark:text-primary-brand-dark"
+          >
+            <Users className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="break-words text-[13px] font-medium leading-5 text-grey-10 dark:text-white">
+              {NOT_ENTITLED_TITLE}
+            </p>
+            <p className="mt-0.5 break-words text-xs leading-5 text-grey-40 dark:text-grey-dark-600">
+              {NOT_ENTITLED_BODY}
+            </p>
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="primary"
+          size="auto"
+          onClick={onUpgrade}
+          className="h-[34px] w-full shrink-0 whitespace-nowrap rounded-[8px] px-4 text-[13px] font-medium @md:w-auto"
+        >
+          {NOT_ENTITLED_ACTION}
         </Button>
-      }
-    >
-      <span className="block font-medium text-grey-10 dark:text-white">{NOT_ENTITLED_TITLE}</span>
-      {NOT_ENTITLED_BODY}
-    </InlineNotice>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Stands where the add-people controls go while the plan is still loading,
+ * so a Free or Starter account never sees them flash before the card, and a
+ * paying account never sees the card flash before them.
+ */
+export function SharingActionsSkeleton({ className }: { className?: string }) {
+  return (
+    <div role="status" aria-busy="true" aria-label="Loading sharing options" className={cn("space-y-2", className)}>
+      <span className="sr-only">Loading sharing options…</span>
+      <Skeleton width={96} height={14} className="rounded-md" />
+      <Skeleton width="100%" height={34} className="rounded-[8px]" />
+    </div>
   );
 }
 

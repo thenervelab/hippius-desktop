@@ -8,6 +8,7 @@ import {
   noticeForError,
   peopleHaveAccess,
   pendingInviteMeta,
+  sharingGate,
 } from "../shareDialogState";
 import { COMING_SOON_COPY, NEVER_EXPIRES_SECS } from "../../shareDriveModalState";
 
@@ -120,5 +121,35 @@ describe("row copy", () => {
   it("counts people", () => {
     expect(peopleHaveAccess(1)).toBe("1 person has access");
     expect(peopleHaveAccess(4)).toBe("4 people have access");
+  });
+});
+
+describe("sharingGate", () => {
+  const gate = (planAllows: boolean | undefined, owner = true, refusedByServer = false) =>
+    sharingGate({ planAllows, owner, refusedByServer });
+
+  it("offers the controls when the plan allows sharing", () => {
+    expect(gate(true)).toBe("allowed");
+  });
+
+  it("shows the upgrade card when it does not", () => {
+    expect(gate(false)).toBe("upgrade");
+  });
+
+  // Neither the controls nor the card may flash before the plan is known.
+  it("waits while the plan is loading", () => {
+    expect(gate(undefined)).toBe("loading");
+  });
+
+  // The server is the authority, whatever the app believed.
+  it("shows the upgrade card after a 403 not-entitled, even on an allowed plan", () => {
+    expect(gate(true, true, true)).toBe("upgrade");
+    expect(gate(undefined, true, true)).toBe("upgrade");
+  });
+
+  // The plan is this account's; somebody else's drive is decided by its owner.
+  it("never gates a drive this account does not own on its own plan", () => {
+    expect(gate(false, false)).toBe("allowed");
+    expect(gate(undefined, false)).toBe("allowed");
   });
 });

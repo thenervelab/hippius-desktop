@@ -52,6 +52,7 @@ export function GeneralAccessSection({
   target,
   onCreated,
   onUpgrade,
+  onNotEntitled,
 }: {
   label: string;
   /** Present for a folder: the link then goes through the folder command. */
@@ -62,6 +63,11 @@ export function GeneralAccessSection({
   /** A link was made or revoked: badges and the Links tab refresh. */
   onCreated: () => void;
   onUpgrade: () => void;
+  /**
+   * The server refused because the plan does not include sharing: the
+   * dialog swaps every add-people control for its upgrade card.
+   */
+  onNotEntitled?: () => void;
 }) {
   const folder = pathPrefix !== null;
   // `writer` is what every drive link before the picker minted; a folder
@@ -101,12 +107,14 @@ export function GeneralAccessSection({
         setCreated(link);
         onCreated();
       } catch (err) {
-        setNotice(noticeForError(err));
+        const next = noticeForError(err);
+        if (next.kind === "notEntitled") onNotEntitled?.();
+        setNotice(next);
       } finally {
         setRunning(false);
       }
     },
-    [running, folder, label, pathPrefix, ttlSecs, target, onCreated],
+    [running, folder, label, pathPrefix, ttlSecs, target, onCreated, onNotEntitled],
   );
 
   const mintAsViewer = useCallback(() => {

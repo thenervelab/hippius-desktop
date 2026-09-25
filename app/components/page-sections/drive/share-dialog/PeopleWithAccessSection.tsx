@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import {
   approveEmailInvite,
   changeDriveMemberRole,
+  isSharedDrivesNotEntitled,
   removeDriveMember,
   revokeDriveInvite,
   type DriveInviteInfo,
@@ -81,8 +82,17 @@ export type Busy = "saving" | "removing" | "revoking";
  * panel: mark the row, run the command, read the list again, and only then
  * let the row show the result. A refusal leaves the row as it was, with the
  * reason under it. Other rows stay usable meanwhile.
+ *
+ * A refusal because the plan does not include sharing (403
+ * `shared_drives_not_entitled`) goes to `onNotEntitled` instead, when the
+ * host passes it, so the host shows its upgrade card rather than a row
+ * error.
  */
-export function useRowChanges(onChanged: () => void, reload: () => Promise<void>) {
+export function useRowChanges(
+  onChanged: () => void,
+  reload: () => Promise<void>,
+  onNotEntitled?: () => void,
+) {
   const [busy, setBusy] = useState<Record<string, Busy>>({});
   const [rowError, setRowError] = useState<{ key: string; message: string } | null>(null);
 
@@ -95,7 +105,11 @@ export function useRowChanges(onChanged: () => void, reload: () => Promise<void>
         onChanged();
         await reload();
       } catch (err) {
-        setRowError({ key, message: couldNotChangeAccess(who, errorMessage(err)) });
+        if (onNotEntitled && isSharedDrivesNotEntitled(err)) {
+          onNotEntitled();
+        } else {
+          setRowError({ key, message: couldNotChangeAccess(who, errorMessage(err)) });
+        }
       } finally {
         setBusy((b) => {
           const next = { ...b };
@@ -104,7 +118,7 @@ export function useRowChanges(onChanged: () => void, reload: () => Promise<void>
         });
       }
     },
-    [onChanged, reload],
+    [onChanged, reload, onNotEntitled],
   );
 
   return { busy, rowError, run };
@@ -120,6 +134,8 @@ export function PeopleWithAccessSection({
   retry,
   onChanged,
   onManage,
+  canAddAccess = true,
+  onNotEntitled,
 }: {
   state: ShareAccessState;
   /** Present for a folder dialog. */
@@ -137,8 +153,15 @@ export function PeopleWithAccessSection({
    * full list of people (the "+N more" row, which is where that list went).
    */
   onManage: (openOn?: "people") => void;
+  /**
+   * False on a plan without sharing: approving a waiting invitation adds
+   * someone, so Approve is not offered. Removing and cancelling still are.
+   */
+  canAddAccess?: boolean;
+  /** A change was refused because the plan does not include sharing. */
+  onNotEntitled?: () => void;
 }) {
-  const { busy, rowError, run } = useRowChanges(onChanged, reload);
+  const { busy, rowError, run } = useRowChanges(onChanged, reload, onNotEntitled);
 
   const access = state.kind === "ready" ? state.access : null;
   const count = access
@@ -197,7 +220,11 @@ export function PeopleWithAccessSection({
             invite={i}
             busy={busy[i.inviteId]}
             onCancel={() => void run(i.inviteId, who, "removing", () => revokeDriveInvite(label, i.inviteId, target))}
-            onApprove={() => void run(i.inviteId, who, "saving", () => approveEmailInvite(label, i.inviteId, target))}
+            onApprove={
+              canAddAccess
+                ? () => void run(i.inviteId, who, "saving", () => approveEmailInvite(label, i.inviteId, target))
+                : undefined
+            }
           />
         ),
       });
@@ -537,7 +564,8 @@ export function PendingRow({
   invite: DriveInviteInfo;
   busy?: Busy;
   onCancel: () => void;
-  onApprove: () => void;
+  /** Omitted when this account may not add people (a plan without sharing). */
+  onApprove?: () => void;
   /**
    * The line under the address, in place of the dialog's stage and expiry
    * words (the Manage access panel draws a stage pill and a folder tag).
@@ -584,7 +612,7 @@ export function PendingRow({
         <BusyLabel busy={busy} />
       ) : (
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          {needsApproval ? (
+          {needsApproval && onApprove ? (
             <Button type="button" variant="primary" size="auto" onClick={onApprove} className={SMALL_BUTTON}>
               Approve
             </Button>
