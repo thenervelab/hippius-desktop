@@ -714,20 +714,67 @@ fn the_folder_key_is_derived_once_per_upload_not_per_file() {
 /// An approval seals the DRIVE's key, resolved through the same funnel the
 /// link mint uses. Deriving it any other way would admit the recipient to a
 /// drive whose files they cannot decrypt.
+///
+/// The manual Approve and the automatic delivery share two helpers: one
+/// resolves the keys, one seals and posts a row. Pinned here so the key rule
+/// (derived key for a folder invitation, entropy for a drive) cannot fork.
 #[test]
 fn approve_email_invite_seals_the_drives_key() {
     let src = shared_drive_commands_src();
     let body = fn_body(&src, "pub async fn approve_email_invite(");
-    assert!(
-        body.contains("drive_key_material_for_label("),
-        "the drive key must come from the key funnel"
-    );
+    assert!(body.contains("invite_seal_keys("), "approve resolves keys through the shared helper");
+    assert!(body.contains("seal_invite_row("), "approve seals through the shared helper");
     assert!(
         !body.contains("derive_folder_mnemonic"),
         "never derive the drive key from the caller's master"
     );
+
+    let keys = fn_body(&src, "pub(crate) async fn invite_seal_keys(");
     assert!(
-        body.contains("seal_invite_key("),
+        keys.contains("drive_key_material_for_label("),
+        "the drive key must come from the key funnel"
+    );
+    assert!(!keys.contains("derive_folder_mnemonic"), "never derive the drive key by hand");
+
+    let seal = fn_body(&src, "pub(crate) async fn seal_invite_row(");
+    assert!(seal.contains("key_for(row.path_prefix.is_some())"), "the key follows the row's folder");
+    assert!(
+        seal.contains("seal_invite_key("),
         "the key is sealed to the recipient, not sent in the clear"
     );
+}
+
+fn auto_seal_src() -> String {
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shared_drives/auto_seal.rs")).expect("read auto_seal.rs")
+}
+
+/// Automatic delivery is the manual Approve without the click: owner-only
+/// through the same gate, the same key helpers, and it never prompts.
+#[test]
+fn automatic_delivery_uses_the_approve_path_and_the_owner_gate() {
+    let full = auto_seal_src();
+    // The module's code, without its tests (which name what they refuse).
+    let src = full.split("#[cfg(test)]").next().expect("module code").to_string();
+    let pass = [
+        fn_body(&src, "async fn may_deliver("),
+        fn_body(&src, "async fn pass("),
+        fn_body(&src, "async fn seal_drive("),
+    ]
+    .concat();
+    assert!(pass.contains("resolve_owned_target("), "only own drives are sealed for");
+    assert!(pass.contains("Some(account_id.to_string())"), "the owner named is always this account");
+    assert!(pass.contains("invite_seal_keys("), "keys come from the shared helper");
+    assert!(pass.contains("seal_invite_row("), "rows are sealed by the shared helper");
+    assert!(!pass.contains("seal_invite_key("), "no second seal path");
+    assert!(!pass.contains("derive_folder_mnemonic"), "never derive the drive key by hand");
+    assert!(
+        pass.contains("fetch_can_share_drives("),
+        "delivery follows the plan rule inviting follows"
+    );
+    assert!(pass.contains("recovery_lock.try_lock()"), "never waits behind a recovery or rotation");
+    assert!(!pass.contains("recovery_check") && !pass.contains("unlock"), "never raises a prompt");
+
+    let logout = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/auth/logout.rs")).expect("read logout.rs");
+    let body = fn_body(&logout, "pub async fn logout_full(");
+    assert!(body.contains("invite_auto_seal.stop()"), "sign-out stops delivery");
 }

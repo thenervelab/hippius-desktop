@@ -646,7 +646,7 @@ pub(crate) const EMAIL_STATUSES: [&str; 3] = ["sent", "awaiting_seal", "sealed"]
 /// the console's `isEmailStatus` rule. A blank email is absent, not an empty
 /// line on the row. An older link minted as `manager` reads as `writer`
 /// ([`drive_role_from_wire`]).
-fn normalize_invite_fields(invite: &mut DriveInviteInfo) {
+pub(crate) fn normalize_invite_fields(invite: &mut DriveInviteInfo) {
     invite.role = drive_role_from_wire(&invite.role);
     invite.recipient_email = present_email(invite.recipient_email.take());
     invite.requester_ss58 = present_text(invite.requester_ss58.take());
@@ -741,6 +741,11 @@ pub(crate) struct ApiCtx {
 }
 
 impl ApiCtx {
+    /// The signed-in account this context was resolved for.
+    pub(crate) fn account_id(&self) -> &str {
+        &self.account_id
+    }
+
     /// The concrete regional base URL, for callers outside this module that
     /// issue their own requests (the member folder-share mint).
     pub(crate) fn base_url(&self) -> &str {
@@ -2256,6 +2261,9 @@ pub async fn email_drive_invite(
     // The address is not logged: it is personal data and the id is enough to
     // correlate with the server.
     info!(label = %label, folder_hash = %identity.wire_folder_hash, invite_id = %invite_id, "Drive invite emailed");
+    // A mailed invitation is now in flight: the background delivery looks
+    // again at once and keeps its fast cadence until the key is delivered.
+    state.invite_auto_seal.nudge();
     Ok(EmailInviteResult { invite_id })
 }
 
@@ -2414,43 +2422,16 @@ pub async fn approve_email_invite(
 
     // Resolve the key material once; both attempts seal the same drive key.
     // Through the one funnel the link mint uses: never this account's master.
-    let (drive_entropy, folder_key) = {
+    let keys = {
         let _recovery_guard = state.recovery_lock.lock().await;
         let mnemonic = crate::sync::remote::session_mnemonic(&state)?;
-        // A folder grant holder gets their derived key only, which can
-        // approve a folder invitation and never a whole-drive one.
-        match crate::sync::remote::drive_key_material_for_label(&state, &ctx.account_id, &label, &mnemonic, &identity).await? {
-            crate::sync::remote::DriveKeyMaterial::Phrase(phrase) => (
-                Some(grant::entropy_from_phrase(&phrase)?),
-                Zeroizing::new(crate::sync::remote::encryption_key_from_phrase(&phrase)?),
-            ),
-            crate::sync::remote::DriveKeyMaterial::FileKey(key) => (None, key),
-        }
+        invite_seal_keys(&state, &ctx.account_id, &label, &mnemonic, &identity).await?
     };
 
     for attempt in 0..2 {
         let invites = http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
         let row = approvable_invite(&invites, &invite_id)?;
-        let key: Zeroizing<[u8; 32]> = if row.path_prefix.is_some() {
-            folder_key.clone()
-        } else {
-            drive_entropy
-                .clone()
-                .ok_or_else(|| AppError::Validation("Only someone with access to the whole drive can approve this invitation.".into()))?
-        };
-        let sealed = super::invite_key::seal_invite_key(key.as_ref(), &row.requester_pubkey, &invite_id)
-            .map_err(|e| AppError::Crypto(format!("could not seal the drive key: {e}")))?;
-        match http_put_sealed_key(
-            &http,
-            &ctx.base_url,
-            &ctx.bearer,
-            &identity.wire_folder_hash,
-            &invite_id,
-            &sealed,
-            &row.requester_pubkey,
-        )
-        .await?
-        {
+        match seal_invite_row(&http, &ctx, &identity.wire_folder_hash, &invite_id, &row, &keys).await? {
             SealKeyPut::Sealed => {
                 info!(label = %label, invite_id = %invite_id, "Emailed invite approved");
                 return Ok(ApproveInviteResult { status: "sealed".into() });
@@ -2469,6 +2450,87 @@ pub async fn approve_email_invite(
     Err(AppError::Validation(
         "The invitation changed while it was being approved. Refresh the list and try again.".into(),
     ))
+}
+
+/// What this account holds to seal an emailed invitation with: the drive's
+/// entropy (whole-drive access only) and the derived folder file key.
+///
+/// ONE resolution for the manual Approve and the automatic delivery
+/// (`auto_seal`), so the two can never pick different keys for one row.
+/// Zeroized on drop.
+pub(crate) struct InviteSealKeys {
+    drive_entropy: Option<Zeroizing<[u8; 32]>>,
+    folder_key: Zeroizing<[u8; 32]>,
+}
+
+impl InviteSealKeys {
+    /// Split the funnel's answer into the two keys an invitation can carry.
+    /// A folder grant holder has the derived key only, which can approve a
+    /// folder invitation and never a whole-drive one.
+    pub(crate) fn from_material(material: crate::sync::remote::DriveKeyMaterial) -> Result<Self> {
+        match material {
+            crate::sync::remote::DriveKeyMaterial::Phrase(phrase) => Ok(Self {
+                drive_entropy: Some(grant::entropy_from_phrase(&phrase)?),
+                folder_key: Zeroizing::new(crate::sync::remote::encryption_key_from_phrase(&phrase)?),
+            }),
+            crate::sync::remote::DriveKeyMaterial::FileKey(key) => Ok(Self {
+                drive_entropy: None,
+                folder_key: key,
+            }),
+        }
+    }
+
+    /// The 32 bytes one row seals: the DERIVED file key for a folder
+    /// invitation (a row with `path_prefix`), the drive ENTROPY for a
+    /// whole-drive one. The split [`sealed_invite_payload`] makes for a link,
+    /// so a recipient holds exactly what a link would have handed them.
+    /// Sealing the entropy to a folder invitation would hand one folder's
+    /// holder the whole drive.
+    pub(crate) fn key_for(&self, folder_invite: bool) -> Result<Zeroizing<[u8; 32]>> {
+        if folder_invite {
+            return Ok(self.folder_key.clone());
+        }
+        self.drive_entropy
+            .clone()
+            .ok_or_else(|| AppError::Validation("Only someone with access to the whole drive can approve this invitation.".into()))
+    }
+}
+
+/// Resolve [`InviteSealKeys`] for a drive, through the one funnel that knows
+/// where a drive's key lives (`drive_key_material_for_label`), exactly as the
+/// link mint does. Never derived from this account's master by hand.
+///
+/// The caller holds `recovery_lock` and passes the session mnemonic; nothing
+/// here prompts for anything.
+pub(crate) async fn invite_seal_keys(
+    state: &AppState,
+    account_id: &str,
+    label: &str,
+    mnemonic: &str,
+    identity: &crate::sync::identity::DriveIdentity,
+) -> Result<InviteSealKeys> {
+    let material = crate::sync::remote::drive_key_material_for_label(state, account_id, label, mnemonic, identity).await?;
+    InviteSealKeys::from_material(material)
+}
+
+/// Seal one waiting row's key to its requester and hand it to the server.
+///
+/// The ONE seal path: the manual Approve and the automatic delivery both end
+/// here, so the key choice ([`InviteSealKeys::key_for`]), the AAD (the invite
+/// id) and the `sealed_for` pin cannot drift apart between them.
+pub(crate) async fn seal_invite_row(
+    http: &reqwest::Client,
+    ctx: &ApiCtx,
+    folder_hash: &str,
+    invite_id: &str,
+    row: &ApprovableInvite,
+    keys: &InviteSealKeys,
+) -> Result<SealKeyPut> {
+    let key = keys.key_for(row.path_prefix.is_some())?;
+    let sealed = super::invite_key::seal_invite_key(key.as_ref(), &row.requester_pubkey, invite_id)
+        .map_err(|e| AppError::Crypto(format!("could not seal the drive key: {e}")))?;
+    drop(key);
+    http_put_sealed_key(http, &ctx.base_url, &ctx.bearer, folder_hash, invite_id, &sealed, &row.requester_pubkey).await
 }
 
 /// The 32 bytes an approval seals: the drive's folder-key ENTROPY for a
@@ -2845,7 +2907,7 @@ fn parse_list_folders(body: &str) -> Result<Vec<hcfs_shared::network::RemoteFold
 
 /// `GET /list_folders/{owner}` — the owner's drives, filtered by the server to
 /// the ones the calling member belongs to.
-async fn http_list_owner_folders(
+pub(crate) async fn http_list_owner_folders(
     http: &reqwest::Client,
     base_url: &str,
     bearer: &str,

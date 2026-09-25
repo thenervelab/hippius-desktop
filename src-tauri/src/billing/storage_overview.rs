@@ -768,6 +768,41 @@ pub async fn get_storage_overview(
     Ok(overview)
 }
 
+/// Whether the signed-in account's plan lets it share, without the rest of
+/// the overview.
+///
+/// For the background email-invite delivery (`shared_drives::auto_seal`),
+/// which follows the same plan rule as inviting and must not pay for the
+/// indexer read and the local disk walk just to learn it. Reads the same
+/// three subscription answers [`get_storage_overview`] reads and decides
+/// through the same [`crate::billing::sharing_entitlement::resolve_can_share_drives`],
+/// so the two can never disagree: a subscription that could not be read
+/// leaves the verdict to the server, exactly as the overview does.
+///
+/// # Errors
+///
+/// [`AppError::Auth`] when nobody is signed in.
+pub(crate) async fn fetch_can_share_drives(state: &crate::app_state::AppState) -> Result<bool, AppError> {
+    let account_id = state.current_session_account()?;
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
+    let (drive_sub_result, drive_plans_result, active_result) = tokio::join!(
+        client.get::<serde_json::Value>("/api/drive/subscription/", &account_id),
+        client.get::<serde_json::Value>("/api/drive/plans/", &account_id),
+        client.get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id),
+    );
+    let drive_sub_read = drive_sub_result.is_ok();
+    let legacy_read = active_result.is_ok();
+    let drive_sub = drive_sub_result.unwrap_or_else(|_| serde_json::json!({ "active": false }));
+    let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
+    let active = active_result.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
+    let plan = plan_from_drive_subscription(&drive_sub, &drive_plans).or_else(|| plan_from_subscription(&active));
+    Ok(crate::billing::sharing_entitlement::resolve_can_share_drives(
+        plan.as_ref(),
+        drive_sub_read.then_some(&drive_sub),
+        legacy_read,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
