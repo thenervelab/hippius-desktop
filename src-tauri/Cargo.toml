@@ -194,19 +194,19 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # stages every copy into a hidden `.hippius-incoming-*` sibling and
 # renames onto the destination. See `.claude/rules/sync-engine.md`.
 #
-# Now at #475 (a folder-grant writer may change files inside the folder):
-# sync materializes a download at the server's `relative_path` when the
-# decrypted path does not hash to the file id, and the replace-grants wire
-# gained `role` (request) and `roles` (response).
+# Now at hcfs main 4d4dd3d. That includes #475 (a folder-grant writer may
+# change files inside the folder; a download is written only where the path
+# hashes to the file id; replace-grants gained `role` and `roles`) and #477,
+# which changes server invite mail and does not change these two crates.
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0913c0ee7d2aafb4b319dc67a7cdc7f2690aefca" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "4d4dd3d413ce0437fbe6bdbd034c6f91e0767440" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0913c0ee7d2aafb4b319dc67a7cdc7f2690aefca" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "4d4dd3d413ce0437fbe6bdbd034c6f91e0767440" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

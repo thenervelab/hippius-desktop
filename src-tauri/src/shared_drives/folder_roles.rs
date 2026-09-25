@@ -1,6 +1,7 @@
 //! Folder collaboration: Viewer or Editor on ONE folder of a drive.
 //!
-//! # Follows HCFS PR #475 (merged; the hcfs pin is at its merge commit)
+//! # Follows HCFS PR #475 (merged). The hcfs pin is hcfs main `4d4dd3d`,
+//! which includes that merge. #477 does not change the client.
 //!
 //! Everything below mirrors that PR's API. It is kept in this one module so
 //! the day it merges (or changes) there is one place to reconcile. Every
