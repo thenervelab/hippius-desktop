@@ -6,6 +6,7 @@ import {
   presentText,
 } from "@/app/lib/shared-drives/accountLabel";
 import { cn } from "@/lib/utils";
+import { displayEmail } from "@/lib/utils/displayEmail";
 import AccountLabel from "../AccountLabel";
 
 /**
@@ -36,6 +37,7 @@ export default function UploaderCell({
 }) {
   const muted = "text-grey-60 dark:text-grey-dark-700";
   const name = presentText(uploadedByName);
+  const email = displayEmail(uploadedByEmail);
 
   if (isFolder) {
     return (
@@ -87,9 +89,7 @@ export default function UploaderCell({
           <span className="flex flex-col gap-0.5">
             {name ? <span className="font-medium">{name}</span> : null}
             <span className="break-all font-mono text-xs">{uploadedBy}</span>
-            {presentText(uploadedByEmail) ? (
-              <span className="break-all text-xs">{presentText(uploadedByEmail)}</span>
-            ) : null}
+            {email ? <span className="break-all text-xs">{email}</span> : null}
           </span>
         }
       >

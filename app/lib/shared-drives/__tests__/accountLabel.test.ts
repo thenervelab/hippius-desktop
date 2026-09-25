@@ -57,6 +57,12 @@ describe("accountLabelView", () => {
     expect(view).not.toHaveProperty("email");
   });
 
+  it("never carries a placeholder email to the hover", () => {
+    const view = accountLabelView(ss58, "Ada", " user_abc@Hippius.Local ");
+    expect(view.label).toBe("Ada");
+    expect(view).not.toHaveProperty("email");
+  });
+
   it("honours a tighter width for narrow rows", () => {
     expect(accountLabelView(ss58, undefined, undefined, 14).label.length).toBe(14);
   });

@@ -122,6 +122,28 @@ describe("resolveAccountIdentity", () => {
     expect(id.menuEmail).toBeUndefined();
   });
 
+  // An access-key or wallet account carries a system placeholder email
+  // that is not a real address, so it is never shown: the card and the
+  // menu fall back to the name, then the address, as with no email.
+  it("never shows a placeholder email", () => {
+    const placeholder = "user_5hwknpywfcvfgm6fs2pprg8hbcxwudvpgoxmao3oc6ohqtcl@hippius.local";
+    const named = resolveAccountIdentity(
+      session({ provider: "google", username: "ahmad_rao", email: placeholder }),
+      ADDRESS,
+    );
+    expect(named.primary).toEqual({ head: "ahmad_rao", tail: "" });
+    expect(named.menuName).toBe("ahmad_rao");
+    expect(named.menuEmail).toBeUndefined();
+
+    const unnamed = resolveAccountIdentity(
+      session({ provider: "mnemonic", username: "", email: placeholder.toUpperCase() }),
+      ADDRESS,
+    );
+    expect(unnamed.menuName).toBe(unnamed.truncatedAddress);
+    expect(unnamed.menuEmail).toBeUndefined();
+    expect(JSON.stringify(unnamed)).not.toContain("hippius.local");
+  });
+
   // A mnemonic account has no sign-in identity to show.
   it("keeps the address for a mnemonic account", () => {
     const id = resolveAccountIdentity(session({ provider: "mnemonic" }), ADDRESS);

@@ -1,4 +1,5 @@
 import type { OAuthSession } from "@/app/lib/types/oAuth";
+import { displayEmail } from "@/lib/utils/displayEmail";
 
 /** Middle-truncated SS58, matching the console's own card. */
 export function truncateAddress(address: string): string {
@@ -87,6 +88,8 @@ export interface AccountIdentity {
  *   to it; it stays reachable on its own row in the menu.
  * - A mnemonic account has no sign-in identity, so it keeps the address.
  * - The menu's email is dropped when it merely repeats the name above it.
+ * - A system placeholder email (`@hippius.local`) counts as no email, so
+ *   the card falls back to the name, then the address.
  */
 export function resolveAccountIdentity(
   session: OAuthSession | null | undefined,
@@ -96,16 +99,16 @@ export function resolveAccountIdentity(
   const provider = session?.provider;
   const isOAuthAccount = Boolean(provider) && provider !== "mnemonic";
 
+  const email = displayEmail(session?.email);
   const signInHandle =
     provider === "github"
       ? session?.username
         ? `@${session.username}`
         : undefined
-      : session?.email;
+      : email;
   const displayName = session?.username || undefined;
 
   const menuName = displayName || signInHandle || truncatedAddress;
-  const email = session?.email;
 
   const primary = isOAuthAccount
     ? signInHandle || displayName || truncatedAddress

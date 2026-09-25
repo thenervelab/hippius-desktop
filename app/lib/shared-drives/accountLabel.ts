@@ -7,6 +7,7 @@
  * disagree about what someone is called.
  */
 
+import { displayEmail } from "@/lib/utils/displayEmail";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
 
 /** Keep a real display string; drop blank/whitespace (console `presentText`). */
@@ -56,7 +57,8 @@ export function accountLabelView(
   maxChars = 22,
 ): AccountLabelView {
   const presentName = presentText(name);
-  const presentEmail = presentText(email);
+  // A system placeholder (`@hippius.local`) is never shown.
+  const presentEmail = displayEmail(email);
   return {
     label: presentName ?? middleTruncate(ss58, maxChars),
     isName: presentName !== undefined,
