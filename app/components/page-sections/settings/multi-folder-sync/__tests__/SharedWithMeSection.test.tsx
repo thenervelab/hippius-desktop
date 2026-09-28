@@ -94,6 +94,11 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   };
 });
 
+const openUrlMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: (...args: unknown[]) => openUrlMock(...args),
+}));
+
 const openDialogMock = vi.fn();
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: (...args: unknown[]) => openDialogMock(...args),
@@ -492,5 +497,58 @@ describe("folders shared with me (folder roles)", () => {
     await waitFor(() =>
       expect(leaveSharedDriveByIdentityMock).toHaveBeenCalledWith(OWNER, "0123456789abcdef"),
     );
+  });
+});
+
+describe("on the Drive page (Share a drive)", () => {
+  it("shows the empty state with Share a drive and the docs when nothing is shared", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([]);
+    const onShareDrive = vi.fn();
+    render(<SharedWithMeSection onShareDrive={onShareDrive} />);
+
+    const region = await screen.findByRole("region", { name: "A place for teamwork" });
+    expect(screen.getByText("Shared with Me")).toBeInTheDocument();
+    expect(screen.getByTestId("teamwork-illustration")).toBeInTheDocument();
+    expect(
+      screen.getByText("Share a drive to work on the same encrypted files with your team."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Share a drive/ }));
+    expect(onShareDrive).toHaveBeenCalledTimes(1);
+
+    // Docs open in the browser, never in the app's own window.
+    fireEvent.click(screen.getByRole("link", { name: /How shared drives work/ }));
+    expect(openUrlMock).toHaveBeenCalledWith("https://docs.hippius.com/use/desktop/shared-drives");
+    expect(region).toBeInTheDocument();
+  });
+
+  it("holds skeleton rows while the listing loads, never the empty state", () => {
+    listMyDriveMembershipsMock.mockReturnValue(new Promise(() => undefined));
+    render(<SharedWithMeSection onShareDrive={vi.fn()} />);
+    expect(screen.getByLabelText("Loading drives shared with you")).toBeInTheDocument();
+    expect(screen.queryByText("A place for teamwork")).not.toBeInTheDocument();
+  });
+
+  it("lists shared drives with a Share a drive button in the header", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    const onShareDrive = vi.fn();
+    render(<SharedWithMeSection onShareDrive={onShareDrive} />);
+    await screen.findByText("team-docs");
+    expect(screen.queryByText("A place for teamwork")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Share a drive/ }));
+    expect(onShareDrive).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays hidden on a feature-off server", async () => {
+    listMyDriveMembershipsMock.mockRejectedValue(UNAVAILABLE);
+    const { container } = render(<SharedWithMeSection onShareDrive={vi.fn()} />);
+    await waitFor(() => expect(listMyDriveMembershipsMock).toHaveBeenCalled());
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+  });
+
+  it("stays hidden with the flag off", () => {
+    flagState.sharedDrivesEnabled = false;
+    const { container } = render(<SharedWithMeSection onShareDrive={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });
