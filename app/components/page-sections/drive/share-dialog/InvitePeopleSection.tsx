@@ -9,6 +9,7 @@
 // is pressed and can never accept what the send would refuse.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui";
 import Input from "@/components/ui/input";
 import { Select } from "@/components/ui/select/Select";
@@ -16,6 +17,7 @@ import {
   checkInviteEmail,
   emailDriveInvite,
   emailInvitesAvailable,
+  isSessionLocked,
   type DriveTarget,
   type InviteEmailCheck,
 } from "@/app/lib/tauri/sharedDrives";
@@ -25,6 +27,7 @@ import { COMING_SOON_COPY, EMAIL_INVITE_ROLES } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
 import { SectionNoticeView } from "./SectionNoticeView";
 import { noticeForError, type SectionNotice } from "./shareDialogState";
+import { useUnlockThenResume } from "./useUnlockThenResume";
 
 type EmailRole = (typeof EMAIL_INVITE_ROLES)[number];
 
@@ -34,6 +37,13 @@ export const EMAIL_INVITE_HINT = "They get their own invite, just for them.";
 export const EMAIL_MANAGER_HINT = "To add a Manager, invite them as an Editor, then change their role below.";
 
 const NOT_CHECKED: InviteEmailCheck = { valid: false };
+
+/**
+ * The info toast after a send whose key could not be sealed to the recipient
+ * at once: the invite went out, and an owner or Manager delivers the key once
+ * they open it (automatically while the app is open, or with Approve).
+ */
+export const MAY_NEED_APPROVING = "They may need approving when they open it.";
 
 export function InvitePeopleSection({
   label,
@@ -101,8 +111,11 @@ export function InvitePeopleSection({
       });
   }, []);
 
+  const unlockThenResume = useUnlockThenResume();
+  const sendRef = useRef<(asRole: EmailRole, afterUnlock?: boolean) => Promise<void>>(async () => {});
+
   const send = useCallback(
-    async (asRole: EmailRole) => {
+    async (asRole: EmailRole, afterUnlock = false) => {
       setShowCheck(true);
       if (sending) return;
       // Enter can beat the as-you-type answer; ask once more before refusing.
@@ -117,7 +130,7 @@ export function InvitePeopleSection({
       setNotice(null);
       setSentTo(null);
       try {
-        await emailDriveInvite(label, address, {
+        const sent = await emailDriveInvite(label, address, {
           role: asRole,
           target,
           ...(folder ? { pathPrefix: pathPrefix ?? "" } : {}),
@@ -128,8 +141,16 @@ export function InvitePeopleSection({
         setCheck(NOT_CHECKED);
         setShowCheck(false);
         setSentTo(address);
+        if (sent.presealed === false) toast.info(MAY_NEED_APPROVING);
         onSent();
       } catch (err) {
+        // Locked: nothing was sent. Unlock, then send the same address once
+        // more; a cancelled unlock is refused again the same way, and the
+        // address stays in the field either way.
+        if (isSessionLocked(err)) {
+          if (!afterUnlock) unlockThenResume(() => void sendRef.current(asRole, true));
+          return;
+        }
         const next = noticeForError(err);
         if (next.kind === "notEntitled") onNotEntitled?.();
         if (next.kind === "comingSoon" && next.text === COMING_SOON_COPY.email) {
@@ -140,8 +161,11 @@ export function InvitePeopleSection({
         setSending(false);
       }
     },
-    [check, sending, email, label, target, folder, pathPrefix, onSent, onNotEntitled],
+    [check, sending, email, label, target, folder, pathPrefix, onSent, onNotEntitled, unlockThenResume],
   );
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
 
   const sendAsViewer = useCallback(() => {
     setRole("reader");

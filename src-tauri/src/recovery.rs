@@ -525,6 +525,11 @@ pub async fn recover_mnemonic(app: tauri::AppHandle, state: tauri::State<'_, cra
     // succeeded ⇒ sync can start" transition, so kick auto-init here.
     spawn_post_unlock_sync_init(app, account_id.clone());
 
+    // The invite key can be derived now: publish it at once rather than on
+    // the next quiet tick, so an invitation mailed to this account from now
+    // on is sealed at mint (`shared_drives::auto_seal`).
+    state.invite_auto_seal.unlocked(&account_id);
+
     info!(
         account = %crate::console_access::short_ss58(&account_id),
         "recovery: unlock complete — mnemonic decrypted and installed locally (no upload performed)"

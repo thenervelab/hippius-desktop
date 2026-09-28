@@ -2361,11 +2361,39 @@ async fn preseal_minted_invite(
     seal_invite_row(&state.api_client, ctx, identity, invite_id, row, &keys).await
 }
 
+/// Whether a pre-seal left the recipient able to join with nobody online.
+///
+/// `AlreadySealed` counts: somebody delivered the key first. A stale row, an
+/// error, or no pre-seal at all leaves the invitation to the approval
+/// handshake, which the sender is told about. A decoy `recipient_key` answers
+/// `Sealed` like a real one, by design, so this is "as far as the sender can
+/// tell"; the handshake still covers a recipient who turns out to be new.
+pub(crate) fn preseal_landed(outcome: Option<&Result<SealKeyPut>>) -> bool {
+    matches!(outcome, Some(Ok(SealKeyPut::Sealed | SealKeyPut::AlreadySealed)))
+}
+
+/// Sending an emailed invitation needs the drive key loaded, because the
+/// pre-seal right after the mint seals it. A locked session (no mnemonic in
+/// memory) is refused BEFORE anything is sent, as `NoEncryptionKey`, so the
+/// frontend runs the unlock and sends after it: sent from a locked app,
+/// nothing would deliver the key until an owner or Manager came back.
+fn require_session_key(state: &AppState) -> Result<()> {
+    if state.auth.lock()?.mnemonic.is_some() {
+        Ok(())
+    } else {
+        Err(AppError::NotReady(crate::error::NotReadyKind::NoEncryptionKey))
+    }
+}
+
 /// Result of a mailed-invite mint. No link: the token is only in the mail.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailInviteResult {
     pub invite_id: String,
+    /// The key went up sealed to the recipient right after the mint, so they
+    /// can join with nobody online. `false` means they may need approving
+    /// when they open it (the handshake, `auto_seal`, or Approve).
+    pub presealed: bool,
 }
 
 /// Invite someone into a drive by email (owner, or a manager naming the owner).
@@ -2402,6 +2430,11 @@ pub async fn email_drive_invite(
         None => None,
     };
 
+    // Locked: nothing is sent, and the frontend unlocks and sends again.
+    // Checked last before the mint, so a refusal that needs no key (a bad
+    // folder, a server without folder invites) never asks for a password.
+    require_session_key(&state)?;
+
     let minted = http_email_invite(
         &state.api_client.clone(),
         &ctx.base_url,
@@ -2425,20 +2458,23 @@ pub async fn email_drive_invite(
     // Seal the key now, while the sender is here, so a recipient who already
     // has an account can join with nobody online. Best-effort: the invite is
     // already sent, and without a pre-seal it still arrives through the
-    // approval handshake (`auto_seal`), exactly as before.
-    if let Some(row) = preseal_row(&minted, folder_prefix.as_deref()) {
-        match preseal_minted_invite(&state, &ctx, &label, &identity, &invite_id, &row).await {
-            Ok(SealKeyPut::Sealed | SealKeyPut::AlreadySealed) => {
-                info!(invite_id = %invite_id, "Drive invite pre-sealed");
-            }
-            Ok(SealKeyPut::Stale) => warn!(invite_id = %invite_id, "Drive invite pre-seal refused as stale"),
-            Err(e) => warn!(invite_id = %invite_id, error = %e, "Drive invite pre-seal skipped"),
-        }
+    // approval handshake (`auto_seal`), exactly as before, and the result
+    // says so for the sender.
+    let outcome = match preseal_row(&minted, folder_prefix.as_deref()) {
+        Some(row) => Some(preseal_minted_invite(&state, &ctx, &label, &identity, &invite_id, &row).await),
+        None => None,
+    };
+    let presealed = preseal_landed(outcome.as_ref());
+    match &outcome {
+        Some(Ok(SealKeyPut::Sealed | SealKeyPut::AlreadySealed)) => info!(invite_id = %invite_id, "Drive invite pre-sealed"),
+        Some(Ok(SealKeyPut::Stale)) => warn!(invite_id = %invite_id, "Drive invite pre-seal refused as stale"),
+        Some(Err(e)) => warn!(invite_id = %invite_id, error = %e, "Drive invite pre-seal skipped"),
+        None => info!(invite_id = %invite_id, "Drive invite not pre-sealed: no key to seal to"),
     }
     // A mailed invitation is now in flight: the background delivery looks
     // again at once and keeps its fast cadence until the key is delivered.
     state.invite_auto_seal.nudge();
-    Ok(EmailInviteResult { invite_id })
+    Ok(EmailInviteResult { invite_id, presealed })
 }
 
 /// Whether this server can send invitations by email, asked without sending
@@ -2538,7 +2574,10 @@ pub async fn http_put_account_invite_key(http: &reqwest::Client, base_url: &str,
     let resp = http
         .put(format!("{}/v1/account/invite-key", base_url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {bearer}"))
-        .json(&serde_json::json!({ "pubkey": public_key_b64 }))
+        // The server's own request type, so the body cannot drift from it.
+        .json(&hcfs_shared::network::PublishInviteKeyRequest {
+            pubkey: public_key_b64.to_string(),
+        })
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
@@ -4441,6 +4480,142 @@ mod tests {
     fn nothing_is_presealed_without_a_key() {
         assert!(preseal_row(&minted(None, None), None).is_none());
         assert!(preseal_row(&minted(None, Some("  ")), None).is_none());
+    }
+
+    #[test]
+    fn only_a_landed_preseal_lets_the_recipient_join_on_their_own() {
+        assert!(preseal_landed(Some(&Ok(SealKeyPut::Sealed))));
+        assert!(preseal_landed(Some(&Ok(SealKeyPut::AlreadySealed))), "somebody delivered it first");
+        assert!(!preseal_landed(Some(&Ok(SealKeyPut::Stale))));
+        assert!(!preseal_landed(Some(&Err(AppError::Hcfs("offline".into())))));
+        assert!(!preseal_landed(None), "no key to seal to: the handshake it is");
+    }
+
+    /// The BIP-39 all-`abandon` phrase, standing in for a drive's folder
+    /// mnemonic (sealed) and for the recipient's master (sealed to).
+    const PRESEAL_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+                                  abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+
+    /// What the mock server saw of one `PUT .../sealed-key`.
+    #[derive(Debug, Default, Clone)]
+    struct SeenSeal {
+        path: String,
+        body: Option<serde_json::Value>,
+    }
+
+    async fn serve_sealed_key() -> (String, std::sync::Arc<std::sync::Mutex<Vec<SeenSeal>>>) {
+        use axum::{Json, Router, extract::Path, routing::put};
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<SeenSeal>>> = std::sync::Arc::default();
+        let rec = seen.clone();
+        let router = Router::new().route(
+            "/v1/drives/{fh}/invites/{id}/sealed-key",
+            put(move |Path((fh, id)): Path<(String, String)>, Json(body): Json<serde_json::Value>| {
+                let rec = rec.clone();
+                async move {
+                    rec.lock().unwrap().push(SeenSeal {
+                        path: format!("{fh}/{id}"),
+                        body: Some(body),
+                    });
+                    Json(serde_json::json!({}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    fn preseal_ctx(base_url: String) -> ApiCtx {
+        ApiCtx {
+            account_id: "5Owner".into(),
+            base_url,
+            bearer: "bearer".into(),
+        }
+    }
+
+    fn drive_keys() -> InviteSealKeys {
+        InviteSealKeys::from_material(crate::sync::remote::DriveKeyMaterial::Phrase(Zeroizing::new(PRESEAL_PHRASE.into()))).expect("keys")
+    }
+
+    /// The recipient's published invite key, and the secret that opens a
+    /// seal to it.
+    fn recipient() -> (String, [u8; 32]) {
+        let public = super::super::invite_key::account_invite_public_key(PRESEAL_PHRASE).expect("derive");
+        let pair = hcfs_client::client::invite_key::InviteAccountKey::derive(PRESEAL_PHRASE).expect("pair");
+        (public, *pair.secret_key())
+    }
+
+    #[tokio::test]
+    async fn a_whole_drive_preseal_seals_the_entropy_to_the_minted_key_and_names_it() {
+        let (base, seen) = serve_sealed_key().await;
+        let (recipient_key, recipient_secret) = recipient();
+        let identity = crate::sync::identity::DriveIdentity::own("5Owner", "0123456789abcdef");
+        let row = preseal_row(&minted(None, Some(&recipient_key)), None).expect("a row");
+
+        let put = seal_invite_row(&reqwest::Client::new(), &preseal_ctx(base), &identity, "invite-1", &row, &drive_keys())
+            .await
+            .expect("sealed");
+
+        assert_eq!(put, SealKeyPut::Sealed);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].path, "0123456789abcdef/invite-1");
+        let body = seen[0].body.clone().expect("body");
+        assert_eq!(
+            body["sealed_for"], recipient_key,
+            "the server keeps a pre-seal only for the key it minted"
+        );
+        let opened = super::super::invite_key::open_invite_key(body["sealed_key"].as_str().expect("blob"), recipient_secret, "invite-1")
+            .expect("the recipient's account key opens it");
+        assert_eq!(
+            opened,
+            *grant::entropy_from_phrase(PRESEAL_PHRASE).expect("entropy"),
+            "a whole-drive invite carries the drive entropy"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_folder_preseal_seals_the_derived_key_never_the_entropy() {
+        let (base, seen) = serve_sealed_key().await;
+        let (recipient_key, recipient_secret) = recipient();
+        let identity = crate::sync::identity::DriveIdentity::own("5Owner", "0123456789abcdef");
+        let row = preseal_row(&minted(Some("Clients"), Some(&recipient_key)), Some("Clients")).expect("an echoed folder");
+
+        seal_invite_row(&reqwest::Client::new(), &preseal_ctx(base), &identity, "invite-2", &row, &drive_keys())
+            .await
+            .expect("sealed");
+
+        let body = seen.lock().unwrap()[0].body.clone().expect("body");
+        let opened =
+            super::super::invite_key::open_invite_key(body["sealed_key"].as_str().expect("blob"), recipient_secret, "invite-2").expect("open");
+        assert_eq!(opened, crate::sync::remote::encryption_key_from_phrase(PRESEAL_PHRASE).expect("derived"));
+        assert_ne!(
+            opened,
+            *grant::entropy_from_phrase(PRESEAL_PHRASE).expect("entropy"),
+            "one folder's holder never gets the drive"
+        );
+    }
+
+    /// A key the seal refuses fails before any request: nothing half-sealed
+    /// reaches the server, and the caller falls back to the handshake. The
+    /// key bytes live only in `Zeroizing` buffers (`InviteSealKeys`,
+    /// `key_for`), which wipe on drop on this path as on every other.
+    #[tokio::test]
+    async fn a_preseal_that_cannot_seal_sends_nothing() {
+        use base64::Engine;
+        let (base, seen) = serve_sealed_key().await;
+        let identity = crate::sync::identity::DriveIdentity::own("5Owner", "0123456789abcdef");
+        let low_order = base64::engine::general_purpose::STANDARD.encode([0u8; 32]);
+        let row = preseal_row(&minted(None, Some(&low_order)), None).expect("a row");
+
+        let result = seal_invite_row(&reqwest::Client::new(), &preseal_ctx(base), &identity, "invite-3", &row, &drive_keys()).await;
+
+        assert!(matches!(result, Err(AppError::Crypto(_))), "{result:?}");
+        assert!(!preseal_landed(Some(&result)), "the sender is told they may need approving");
+        assert!(seen.lock().unwrap().is_empty(), "no request");
     }
 
     fn mailed(id: &str, status: Option<&str>, pubkey: Option<&str>) -> DriveInviteInfo {

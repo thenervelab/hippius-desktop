@@ -50,6 +50,12 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
 
+// Sending from a locked app runs the unlock (`emailInviteUnlock.test.tsx`
+// covers it); here the app is unlocked.
+vi.mock("@/app/lib/hooks/useUnlockFlow", () => ({
+  useUnlockFlow: () => ({ unlock: vi.fn(async () => {}), busy: false, isOAuth: true }),
+}));
+
 const createDriveInviteMock = vi.fn();
 const createFolderInviteMock = vi.fn();
 const emailDriveInviteMock = vi.fn();
