@@ -22,6 +22,7 @@ import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
+import type { UploaderOption } from "./AddedByFilter";
 import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
 import type { DateRange } from "@/app/lib/types/dateRange";
 import { useAtomValue } from "jotai";
@@ -119,7 +120,7 @@ interface DriveHeaderProps {
   /** See `shouldOfferExcludedFilter` — hidden on a drive with no rules. */
   showExcludedFilter?: boolean;
   /** Shared-drive "Added by" options; omit when the drive is not shared. */
-  addedByOptions?: Array<{ ss58: string; label: string }>;
+  addedByOptions?: UploaderOption[];
   selectedUploadedBy?: string;
   onUploadedByChange?: (ss58: string | undefined) => void;
   defaultFolderLabel?: string | null;

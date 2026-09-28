@@ -68,6 +68,7 @@ import {
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useUploaderOptions } from "./AddedByFilter";
+import { matchesUploader } from "@/app/lib/shared-drives/uploaderFilter";
 import {
   useMemberDriveLabels,
   useSharedDriveMembership,
@@ -606,11 +607,23 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
           folderHash: filterSyncedMembership.membership.folderHash,
         }
       : undefined;
+  // The owner's name, for the owner's filter option and the column's hover:
+  // from the membership of a drive shared with this account, or the folder
+  // grant for a shared folder. On an own drive the owner is "You".
+  const addedByBrowsedMembership =
+    useSharedDriveMembershipByIdentity(browsedSharedDrive).membership;
+  const addedByBrowsedGrant = useFolderGrantForLabel(
+    browsedSharedDrive ? remoteUploadLabel : null,
+  ).grant;
+  const addedByOwnerName = browsedSharedDrive
+    ? (addedByBrowsedMembership?.ownerName ?? addedByBrowsedGrant?.ownerName)
+    : filterSyncedMembership.membership?.ownerName;
   const addedByOptions = useUploaderOptions(
     showAddedByFilter ? filterDriveLabel : null,
     addedByOwnerSs58,
     polkadotAddress ?? undefined,
     addedByTarget,
+    addedByOwnerName,
   );
 
   const nestedListing = useNestedFolderListing({
@@ -839,8 +852,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // applied to the current level's listing. This is the console-parity
   // behaviour the user asked for: filters reach across every nested
   // folder instead of stopping at the rows currently loaded in memory.
+  // Rust already asks the server for exactly the rows the chosen "Added by"
+  // covers (the owner is two queries, merged). Checking them here against
+  // the column's own rule means a row is never listed under a person the
+  // column would not name, whatever the server sent.
+  const uploaderFilteredSearchResults = useMemo(
+    () =>
+      filterState.uploadedBy
+        ? remoteSearchResults.filter((f) =>
+            matchesUploader(f, filterState.uploadedBy, {
+              sessionSs58: polkadotAddress ?? undefined,
+              driveOwnerSs58: addedByOwnerSs58,
+            }),
+          )
+        : remoteSearchResults,
+    [remoteSearchResults, filterState.uploadedBy, polkadotAddress, addedByOwnerSs58],
+  );
   const filteredData = useRemoteSearch
-    ? remoteSearchResults
+    ? uploaderFilteredSearchResults
     : useRecursiveResults
       ? recursiveResults
       : inMemoryFilteredData;
@@ -2155,6 +2184,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 }
                 showUploadedBy={showAddedByFilter}
                 driveOwnerSs58={addedByOwnerSs58}
+                driveOwnerName={addedByOwnerName}
               />
             );
 

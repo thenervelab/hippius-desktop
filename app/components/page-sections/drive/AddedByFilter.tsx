@@ -11,6 +11,15 @@
  * The value is always an ss58 chosen from that list, never typed. A blank
  * or over-long value is a 400 server-side, and there is nothing useful a
  * free-text box could do with an address nobody can remember.
+ *
+ * People are named the way the ADDED BY column names them, through the same
+ * `accountDisplayName`: the owner as "name (owner)", members by name, and a
+ * shortened address only when no name is known (a placeholder email is
+ * never a name). Only the label changes; the value stays the ss58.
+ *
+ * Each option returns exactly the rows the column names that way, which for
+ * the owner includes the files with no uploader recorded (see
+ * `lib/shared-drives/uploaderFilter.ts`).
  */
 
 import { useMemo } from "react";
@@ -20,20 +29,37 @@ import { Check, ChevronDown } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { accountDisplayName } from "@/app/lib/shared-drives/accountLabel";
-import { middleTruncate } from "@/lib/utils/middleTruncate";
+import {
+  accountDisplayName,
+  presentText,
+} from "@/app/lib/shared-drives/accountLabel";
+import {
+  isSameUploader,
+  UPLOADED_BY_UNRECORDED,
+} from "@/app/lib/shared-drives/uploaderFilter";
+import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import {
   listDriveMembers,
   type DriveTarget,
 } from "@/app/lib/tauri/sharedDrives";
 
-/**
- * `uploaded_by` value selecting the files with no uploader recorded: rows
- * that predate attribution, and admin-tool writes (hcfs #456). Safe as a
- * sentinel because `_` is not in the base58 alphabet, so no account can be
- * called this.
- */
-export const UPLOADED_BY_UNRECORDED = "_none";
+export { UPLOADED_BY_UNRECORDED };
+
+/** One choice in the filter. */
+export interface UploaderOption {
+  /** The filter value: an ss58, or `UPLOADED_BY_UNRECORDED`. */
+  ss58: string;
+  /** The whole label, for the trigger and the active filter chip. */
+  label: string;
+  /**
+   * The person's name, when one is known. The menu cuts it in the middle to
+   * fit and keeps `suffix` whole beside it. Without a name the label is the
+   * shortened address, short enough to draw whole.
+   */
+  name?: string;
+  /** Drawn after the person, never cut: " (owner)". */
+  suffix?: string;
+}
 
 export const DRIVE_MEMBERS_QUERY_KEY = "drive-members";
 
@@ -63,36 +89,59 @@ export function useUploaderOptions(
   ownerSs58: string | undefined,
   sessionSs58: string | undefined,
   target?: DriveTarget,
+  /** The owner's name, as the ADDED BY column is given it. */
+  ownerName?: string,
 ) {
   const { data: members } = useDriveMembers(label, target, {
     enabled: Boolean(label) && Boolean(ownerSs58 || sessionSs58),
   });
 
-  return useMemo(() => {
-    const rows: Array<{ ss58: string; label: string }> = [];
-    const push = (ss58: string, label: string) => {
-      if (!ss58 || rows.some((r) => r.ss58 === ss58)) return;
-      rows.push({ ss58, label });
+  return useMemo(
+    () => buildUploaderOptions({ ownerSs58, ownerName, sessionSs58, members: members ?? [] }),
+    [members, ownerSs58, ownerName, sessionSs58],
+  );
+}
+
+/** The options, in order: You, the owner, members, then "Not recorded". */
+export function buildUploaderOptions({
+  ownerSs58,
+  ownerName,
+  sessionSs58,
+  members,
+}: {
+  ownerSs58?: string;
+  ownerName?: string;
+  sessionSs58?: string;
+  members: ReadonlyArray<{ memberSs58: string; memberName?: string }>;
+}): UploaderOption[] {
+  const rows: UploaderOption[] = [];
+  const push = (option: UploaderOption) => {
+    // By account, not by string: one address written with two prefixes is
+    // still one person, and one option.
+    if (!option.ss58 || rows.some((r) => isSameUploader(r.ss58, option.ss58))) return;
+    rows.push(option);
+  };
+  const personOption = (ss58: string, name: string | undefined, suffix?: string): UploaderOption => {
+    const text = accountDisplayName(ss58, name);
+    const shown = presentText(name);
+    return {
+      ss58,
+      label: suffix ? `${text}${suffix}` : text,
+      ...(shown ? { name: shown } : {}),
+      ...(suffix ? { suffix } : {}),
     };
-    // You first: it is the option most often wanted and the only one anyone
-    // recognises on sight.
-    if (sessionSs58) push(sessionSs58, "You");
-    if (ownerSs58) {
-      push(ownerSs58, `Owner (${middleTruncate(ownerSs58, 14)})`);
-    }
-    for (const m of members ?? []) {
-      push(
-        m.memberSs58,
-        accountDisplayName(m.memberSs58, m.memberName, 22),
-      );
-    }
-    // Files with no uploader recorded, which the ADDED BY column draws as a
-    // muted "Owner". The server will not count them as the owner's (hcfs
-    // #456 keeps "not recorded" apart from a real attribution), so they get
-    // an option of their own, named for how the column shows them.
-    if (ownerSs58) push(UPLOADED_BY_UNRECORDED, "Not recorded (shown as Owner)");
-    return rows;
-  }, [members, ownerSs58, sessionSs58]);
+  };
+  // You first: it is the option most often wanted and the only one anyone
+  // recognises on sight.
+  if (sessionSs58) push({ ss58: sessionSs58, label: "You" });
+  if (ownerSs58) push(personOption(ownerSs58, ownerName, " (owner)"));
+  for (const m of members) push(personOption(m.memberSs58, m.memberName));
+  // Files with no uploader recorded, which the ADDED BY column draws as a
+  // muted "Owner". Picking the owner returns them too, because the column
+  // calls them "Owner". This option narrows to only them: the rows whose
+  // "Owner" is an inference rather than a record.
+  if (ownerSs58) push({ ss58: UPLOADED_BY_UNRECORDED, label: "Not recorded (shown as Owner)" });
+  return rows;
 }
 
 const FILTER_PILL_TRIGGER = cn(
@@ -122,7 +171,7 @@ export default function AddedByFilter({
   value,
   onChange,
 }: {
-  options: Array<{ ss58: string; label: string }>;
+  options: UploaderOption[];
   value?: string;
   onChange: (_ss58: string | undefined) => void;
 }) {
@@ -163,10 +212,31 @@ export default function AddedByFilter({
             <span className="flex size-4 items-center justify-center">
               {value === o.ss58 ? <Check className="size-3.5" /> : null}
             </span>
-            <span className="flex-1 truncate">{o.label}</span>
+            <UploaderOptionLabel option={o} />
           </DropdownMenu.Item>
         ))}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
+  );
+}
+
+/**
+ * One option's words in the menu. A name is cut in the middle, like
+ * everywhere else a person is named, and "(owner)" after it stays whole, so
+ * a long owner name still reads as the owner.
+ */
+function UploaderOptionLabel({ option }: { option: UploaderOption }) {
+  if (!option.name) {
+    return <span className="flex-1 truncate">{option.label}</span>;
+  }
+  return (
+    <span
+      className="flex min-w-0 max-w-[240px] flex-1 items-center"
+      // The whole name, and the address that tells two of them apart.
+      title={`${option.label}\n${option.ss58}`}
+    >
+      <MiddleTruncate text={option.name} title={null} />
+      {option.suffix ? <span className="shrink-0 whitespace-pre">{option.suffix}</span> : null}
+    </span>
   );
 }
