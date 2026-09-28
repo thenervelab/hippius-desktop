@@ -292,20 +292,35 @@ flush right: `ROLE_SLOT` is `justify-end`, `ROLE_TEXT` right-aligned, the quiet 
 pulled right by its own padding (`FLUSH_SELECT`), and a folder holder's Remove (red text,
 `DANGER_TEXT_BUTTON`) comes after the role, last.
 
-**An emailed invitation is pre-sealed at send** (hcfs invite key directory,
+**An emailed invitation is pre-sealed at send** (hcfs #514, invite key directory,
 `docs/plans/2026-09-28-invite-key-directory-design.md` in hcfs). Every account publishes an
-X25519 invite key, `blake3::derive_key("hippius.hcfs.invite-account-key.v1", seed[..32])`
-(`invite_key::account_invite_public_key`, frozen vector shared with `hcfs-client` and the
-console): the auto-seal task PUTs `/v1/account/invite-key` once per task, only while a session
-mnemonic is in memory, never prompting. `email_drive_invite` reads `recipient_key` off the
-mint and seals to it through the same `invite_seal_keys` + `seal_invite_row` path Approve uses,
-so a recipient with an account joins with nobody online. `recipient_key` is a real key or a
-server decoy, indistinguishable by design: always seal, never branch on it. A folder key is
-pre-sealed only when the mint echoed that exact folder (`preseal_row`, fails closed). Best-effort:
-no session mnemonic or any error leaves the handshake below, which is unchanged. The envelope
-refuses a low-order recipient key (`was_contributory`), whose seal would open under
-`HKDF(0, invite_id)`. Pinned by the `invite_key` and `preseal_row` unit tests and
-`a_mint_reads_the_key_to_preseal_to_and_the_folder_echo`.
+X25519 invite key, `blake3::derive_key("hippius.hcfs.invite-account-key.v1", seed[..32])`:
+`invite_key::account_invite_public_key` delegates to `hcfs_client::client::invite_key` (needs
+the hcfs pin at or after a954460d; the frozen vector shared with the console stays pinned here
+and in `hcfs_contract.rs`). The auto-seal task PUTs `/v1/account/invite-key` (body is hcfs-shared's
+`PublishInviteKeyRequest`) once per account per sign-in (`InviteKeyPublishMemo`: a failed publish
+is not recorded and retries next pass, sign-out clears it), only while a session mnemonic is in
+memory, never prompting; `recover_mnemonic` calls `invite_auto_seal.unlocked(account)`, which
+forgets the account and nudges, so a session that started locked publishes right after the unlock.
+**A locked app sends no email invite**: `email_drive_invite` checks `require_session_key` last before
+the mint and answers `NotReady(NoEncryptionKey)`; the Share dialog (`InvitePeopleSection` +
+`useUnlockThenResume`) opens the same unlock as Manage access's locked links (`useUnlockFlow`) and
+re-sends once when the recovery dialog closes; a cancelled unlock is refused again the same way, so
+nothing is sent and the address stays. Refusals that need no key (bad folder, no folder invites on
+the server) come back before any unlock. After the mint, `email_drive_invite` reads `recipient_key`
+and seals to it through the same `invite_seal_keys` + `seal_invite_row` path Approve uses, so a
+recipient with an account joins with nobody online. `recipient_key` is a real key or a server decoy,
+indistinguishable by design: always seal, never branch on it. A folder key is pre-sealed only when
+the mint echoed that exact folder (`preseal_row`, fails closed). Best-effort: any error, a stale row
+or no key leaves the handshake below, and `EmailInviteResult.presealed` is `false`
+(`preseal_landed`), which the dialog words as an info toast, "They may need approving when they open
+it." A pre-seal does not change the listing: the row stays `sent` until the recipient claims, then
+lands `sealed` ("Approved, not joined yet") with no `awaiting_seal` step, so the pending copy needs no
+pre-seal state (and could not have one: a decoy looks the same). The envelope refuses a low-order
+recipient key (`was_contributory`), whose seal would open under `HKDF(0, invite_id)`. Pinned by the
+`invite_key`, `preseal_row` and pre-seal mock-server unit tests in `commands.rs`, the publish-memo
+tests in `auto_seal.rs`, `an_email_invite_needs_the_key_before_it_is_sent_and_preseals_like_approve`,
+`email_invite_mint_and_invite_key_publish_wire_pinned`, and `emailInviteUnlock.test.tsx`.
 
 **Emailed invitations are approved automatically while an owner or a Manager is signed in**
 (`shared_drives/auto_seal.rs`). An opened invitation (`awaiting_seal` with a
