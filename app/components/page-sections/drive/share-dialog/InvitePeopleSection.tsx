@@ -1,7 +1,7 @@
 "use client";
 
-// "Invite people": one address, one role, one button. It only ever calls the
-// email command (`POST /v1/drive-invites/email`), which binds the invite to
+// The Share dialog's "By email" tab: one address, one role, one button. It
+// only ever calls the email command (`POST /v1/drive-invites/email`), which binds the invite to
 // the recipient, so nothing here can mint a link anybody else could use.
 //
 // The address is checked by Rust as it is typed (`check_invite_email`, the
@@ -27,6 +27,11 @@ import { SectionNoticeView } from "./SectionNoticeView";
 import { noticeForError, type SectionNotice } from "./shareDialogState";
 
 type EmailRole = (typeof EMAIL_INVITE_ROLES)[number];
+
+/** Under the email field, on drives and folders alike. */
+export const EMAIL_INVITE_HINT = "They get their own invite, just for them.";
+/** Added to the hint for a drive while an address is being typed. */
+export const EMAIL_MANAGER_HINT = "To add a Manager, invite them as an Editor, then change their role below.";
 
 const NOT_CHECKED: InviteEmailCheck = { valid: false };
 
@@ -150,13 +155,7 @@ export function InvitePeopleSection({
   const invalidMessage = showCheck && !check.valid ? check.message : undefined;
 
   return (
-    <section aria-labelledby="share-invite-people" className="@container">
-      <h3
-        id="share-invite-people"
-        className="mb-2 text-sm font-medium text-grey-10 dark:text-white"
-      >
-        Invite people
-      </h3>
+    <div className="@container">
       <form
         className="flex flex-col gap-2 @xs:flex-row @xs:items-start"
         onSubmit={(e) => {
@@ -185,7 +184,7 @@ export function InvitePeopleSection({
           />
         </div>
         {/* The role and the button appear only once there is an address to
-            send to: at rest the section is one field, like any share sheet. */}
+            send to: at rest the tab is one field, like any share sheet. */}
         {composing ? (
           <div className="flex gap-2">
             <Select
@@ -223,18 +222,14 @@ export function InvitePeopleSection({
         </p>
       ) : null}
 
-      {composing ? (
-        <div className="mt-2 flex flex-col gap-1">
-          <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-            They get their own invite that only works for them.
-          </p>
-          {folder ? null : (
-            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-              To add a Manager, invite them as an Editor, then change their role below.
-            </p>
-          )}
-        </div>
-      ) : null}
+      {/* What an emailed invite is, at rest too; how to add a Manager (a
+          drive role only) once there is someone to invite. */}
+      <div className="mt-2 flex flex-col gap-1">
+        <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_INVITE_HINT}</p>
+        {composing && !folder ? (
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_MANAGER_HINT}</p>
+        ) : null}
+      </div>
 
       {sentTo ? (
         <InlineNotice tone="success" className="mt-3">
@@ -255,6 +250,6 @@ export function InvitePeopleSection({
           className="mt-3"
         />
       ) : null}
-    </section>
+    </div>
   );
 }

@@ -123,7 +123,7 @@ owner with `member_owner` (mint, email, approve, revoke, remove, change role, ch
 list invites); the server decides the role (its refusal is the uniform 404). Reads go
 through `resolve_access_target`. `refuse_targeting_the_owner` keeps the owner from being
 removed or re-roled. `apply_manager_invite_caps` clamps a Manager link to 1 use and 24 hours
-before the request; the General access row offers only "24 hours" for Manager and says
+before the request; the Share dialog's By link tab offers only "24 hours" for Manager and says
 "Works once and expires within 24 hours. Managers can invite and remove people."
 `list_access_panel` asks for invites on a member drive only when the member listing says this
 account is a Manager. The sharing marks (`list_owned_drive_sharing`,
@@ -297,10 +297,17 @@ whole-drive. Pinned by `a_folder_invite_can_never_go_out_as_a_drive_invite` and
 `tests/shared_drive_folder_roles_mock.rs`.
 
 **The Share dialog keeps the two invite kinds apart** (`drive/share-dialog/`, opened by
-setting `shareDialogAtom`). Top to bottom: Invite people, People with access, General
-access, Done. "Invite people" calls only `email_drive_invite` (the address checked as typed
-by `check_invite_email`; the role and Send appear once the field has text); "General
-access" calls only `create_drive_invite` / `create_folder_invite` and describes the result
+setting `shareDialogAtom`). Top to bottom: one box with two tabs, By email | By link
+(`ShareTabs.tsx`, the accessible mode of `components/ui/tabs/TabList` over `TabPanel`s),
+then People with access, then Done. The dialog opens on the tab used last this session
+(`shareDialogTabAtom`, memory only, By email by default); Manage access's "Invite" sets it
+to By email and "New link" to By link before opening. Both panels stay mounted (a typed
+address survives a switch) and the inactive one is hidden by attribute AND class, since a
+flex panel would otherwise beat `[hidden]`. On a plan without sharing the upgrade card
+replaces the whole box. A folder without folder roles keeps the By email tab with the
+folder-email "coming soon" notice. By email calls only `email_drive_invite` (the address
+checked as typed by `check_invite_email`; the role and Send appear once the field has
+text); By link calls only `create_drive_invite` / `create_folder_invite` and describes the result
 from the `role` / `expiresInSecs` / `maxUses` the mint returns, which are what was SENT
 after Rust's defaults and caps, and revokes it by the returned `inviteId`. One mixed form
 let a typed address silently turn a link into an email invite. Refusals route on the

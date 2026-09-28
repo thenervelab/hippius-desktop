@@ -23,9 +23,18 @@ export interface TabItemProps {
   showTooltip?: boolean;
   iconOnly?: boolean;
   tabItemClassName?: string;
+  /**
+   * ARIA and keyboard wiring for an accessible tab list (`TabList` with an
+   * `idBase`): the tab's id, role, selection, the panel it controls, its
+   * place in the tab order and its key handler.
+   */
+  tabAttributes?: Pick<
+    React.HTMLAttributes<HTMLDivElement>,
+    "id" | "role" | "aria-selected" | "aria-controls" | "tabIndex" | "onKeyDown"
+  >;
 }
 
-const TabItem: React.FC<TabItemProps> = ({
+const TabItem = React.forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
   label,
   dataLabel,
   icon,
@@ -40,13 +49,16 @@ const TabItem: React.FC<TabItemProps> = ({
   showTooltip = true,
   iconOnly = false,
   tabItemClassName,
-}) => {
+  tabAttributes,
+}, ref) {
   const TAB_MAX_CHARS = 24;
   const displayLabel = middleTruncate(label, TAB_MAX_CHARS);
   const isTruncated = displayLabel !== label;
 
   const content = (
     <div
+      ref={ref}
+      {...tabAttributes}
       data-tab-label={dataLabel ?? label}
       className={cn(
         "flex shrink-0 cursor-pointer items-center justify-center rounded-[3.065px] transition-opacity duration-200 border-[0.766px]",
@@ -126,6 +138,6 @@ const TabItem: React.FC<TabItemProps> = ({
       </Tooltip.Root>
     </Tooltip.Provider>
   );
-};
+});
 
 export default TabItem;

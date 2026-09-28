@@ -20,6 +20,7 @@ import ShareDrivePanel from "../ShareDrivePanel";
 import {
   driveInvitesVersionAtom,
   shareDialogAtom,
+  shareDialogTabAtom,
   shareDriveModalAtom,
   type ShareDriveModalTarget,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -486,6 +487,35 @@ describe("an owner's drive", () => {
     expect(opened).toEqual({ label: "team-docs", folderName: "team-docs", ownerSs58: undefined, folderHash: undefined });
     expect(opened && "pathPrefix" in opened).toBe(false);
     expect(store.get(shareDriveModalAtom)).toBeNull();
+  });
+
+  it("opens the Share dialog on By email from Invite and on By link from New link", async () => {
+    const cases: Array<[string, "email" | "link", "email" | "link"]> = [
+      ["Invite", "link", "email"],
+      ["New link", "email", "link"],
+      // The footer's Share keeps whichever tab was used last.
+      ["Share", "link", "link"],
+    ];
+    for (const [name, before, after] of cases) {
+      const store = renderPanel();
+      store.set(shareDialogTabAtom, before);
+      await screen.findAllByText("Ann");
+      fireEvent.click(screen.getAllByRole("button", { name }).at(-1)!);
+      expect(store.get(shareDialogAtom)).toMatchObject({ label: "team-docs" });
+      expect(store.get(shareDialogTabAtom)).toBe(after);
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("keeps the last tab when the empty state's Share opens the dialog", async () => {
+    listAccessPanelMock.mockResolvedValue(panel());
+    const store = renderPanel();
+    store.set(shareDialogTabAtom, "link");
+    fireEvent.click(
+      within((await screen.findByText("Only you have access")).parentElement!).getByRole("button", { name: "Share" }),
+    );
+    expect(store.get(shareDialogAtom)).not.toBeNull();
+    expect(store.get(shareDialogTabAtom)).toBe("link");
   });
 
   it("offers Invite, New link and Share, which all open the whole-drive Share dialog", async () => {

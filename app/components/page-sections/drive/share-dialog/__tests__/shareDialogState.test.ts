@@ -5,6 +5,7 @@ import {
   describeLinkUses,
   expiresInLabel,
   generalAccessNote,
+  linkHint,
   noticeForError,
   peopleHaveAccess,
   pendingInviteMeta,
@@ -79,11 +80,19 @@ describe("generalAccessNote", () => {
     );
     expect(generalAccessNote({ folder: false, role: "manager", neverExpires: false })).toMatch(/^Works once and expires within 24 hours/);
     expect(generalAccessNote({ folder: false, role: "writer", neverExpires: true })).toBe(
-      "Anyone with the link can join for as long as it exists.",
+      "Anyone with the link can join until you revoke it.",
     );
     expect(generalAccessNote({ folder: false, role: "reader", neverExpires: false })).toBe(
       "Anyone with the link can join until it expires.",
     );
+  });
+});
+
+describe("linkHint", () => {
+  it("says who a link lets in and until when, with no word on the role", () => {
+    expect(linkHint({ folder: true, neverExpires: true })).toBe("Works once, for the first person who opens it.");
+    expect(linkHint({ folder: false, neverExpires: true })).toBe("Anyone with the link can join until you revoke it.");
+    expect(linkHint({ folder: false, neverExpires: false })).toBe("Anyone with the link can join until it expires.");
   });
 });
 
