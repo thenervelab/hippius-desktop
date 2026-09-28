@@ -118,20 +118,29 @@ export function describeCreatedLink(link: {
 }
 
 /**
- * The one line under "Invite link", by what the link can do. A folder link
- * and a manager link are single use; the words say so before it is made.
+ * What a link does, by who can use it and for how long: under the By link
+ * controls and under a link just made.
+ */
+export function linkHint(params: { folder: boolean; neverExpires: boolean }): string {
+  if (params.folder) return "Works once, for the first person who opens it.";
+  if (params.neverExpires) return "Anyone with the link can join until you revoke it.";
+  return "Anyone with the link can join until it expires.";
+}
+
+/**
+ * The one line under the By link controls, by what the link can do. A
+ * folder link and a manager link are single use; the words say so before it
+ * is made.
  */
 export function generalAccessNote(params: {
   folder: boolean;
   role: DriveRole;
   neverExpires: boolean;
 }): string {
-  if (params.folder) return "Works once, for the first person who opens it.";
-  if (params.role === "manager") {
+  if (!params.folder && params.role === "manager") {
     return "Works once and expires within 24 hours. Managers can invite and remove people.";
   }
-  if (params.neverExpires) return "Anyone with the link can join for as long as it exists.";
-  return "Anyone with the link can join until it expires.";
+  return linkHint(params);
 }
 
 /**

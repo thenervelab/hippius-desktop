@@ -56,6 +56,13 @@ const inputShell =
   "dark:border-[#494949] dark:bg-[#1f1f1f] dark:shadow-[0px_0px_0px_4px_rgba(255,255,255,0.03)] " +
   "dark:focus-within:border-primary-65 dark:focus-within:shadow-[0px_0px_0px_4px_rgba(97,140,232,0.15)]";
 
+/**
+ * The trigger's text colour: the value a select holds reads as normal text,
+ * near black in light mode and white in dark. Exported for the test that
+ * pins it.
+ */
+export const SELECT_VALUE_TEXT = "text-grey-10 dark:text-white";
+
 const Select = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   SelectProps
@@ -108,7 +115,11 @@ const Select = React.forwardRef<
                 : "group min-h-[52px] sm:min-h-[54px] min-w-0 items-center justify-between text-left",
               quiet &&
                 "border-transparent bg-transparent hover:border-grey-80 hover:bg-white focus-visible:border-primary-50 data-[state=open]:border-grey-80 data-[state=open]:bg-white dark:border-transparent dark:bg-transparent dark:hover:border-[#494949] dark:hover:bg-[#1f1f1f] dark:data-[state=open]:border-[#494949] dark:data-[state=open]:bg-[#1f1f1f]",
-              "text-grey-dark-800 dark:text-white",
+              // The chosen value is ordinary text in both themes. Only the
+              // placeholder is muted, and a disabled select dims as a whole
+              // (opacity), so a value never borrows the placeholder's grey
+              // and reads as disabled in light mode.
+              SELECT_VALUE_TEXT,
               "data-[placeholder]:text-grey-dark-800 dark:data-[placeholder]:text-[#7d7d7d]",
               "disabled:cursor-not-allowed disabled:opacity-60",
               isInvalid &&
@@ -214,8 +225,8 @@ const Select = React.forwardRef<
                         "flex w-full min-w-0 cursor-pointer select-none items-center rounded-[6px]",
                         compact ? "px-2.5 py-1.5" : "px-3 py-3",
                         compact
-                          ? "text-[13px] font-medium leading-5 text-grey-dark-800 outline-none transition-colors"
-                          : "text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-dark-800 outline-none transition-colors",
+                          ? "text-[13px] font-medium leading-5 text-grey-40 outline-none transition-colors"
+                          : "text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-40 outline-none transition-colors",
                         "data-[highlighted]:bg-grey-90 data-[state=checked]:bg-grey-90 data-[state=checked]:text-grey-10",
                         "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
                         "dark:text-[#a3a3a3] dark:data-[highlighted]:bg-[#2c2c2c] dark:data-[state=checked]:bg-[#2c2c2c] dark:data-[state=checked]:text-white",
