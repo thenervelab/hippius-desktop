@@ -369,7 +369,7 @@ A granted folder is browsed under `grant:<owner>~<hash>~<hex(path)>` (mirrored b
 `shared:` label, and `identity::rooted_path(label, rel)` puts the grant in front of every
 view-relative path: browse, upload, new folder, rename, share by link, folder invites.
 That join lives in ONE function so no IPC addresses a same-named folder at the drive
-root. FE gate: `FOLDER_ROLES_ENABLED` (staging only) alone.
+root. FE gate: `FOLDER_ROLES_ENABLED` (on in every lane) alone.
 
 ## Folder share via link (live browsable)
 

@@ -6,7 +6,7 @@
 //! Everything below mirrors that PR's API. It is kept in this one module so
 //! the day it merges (or changes) there is one place to reconcile. Every
 //! desktop surface that depends on it is behind the `FOLDER_ROLES_ENABLED`
-//! lane flag (staging only). Inside the flag nothing is hidden on a server
+//! flag (on in every lane). Inside the flag nothing is hidden on a server
 //! capability: the request is sent and a refusal becomes a "coming soon"
 //! message, so each piece lights up on its own when the server turns it on.
 //!
