@@ -1260,9 +1260,135 @@ pub async fn list_remote_folder_grouped(
     })
 }
 
+/// What one folder holds, over its whole subtree.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderSubtreeStats {
+    pub file_count: u64,
+    pub total_bytes: u64,
+    /// The walk stopped at [`MAX_STATS_PAGES`] with the server still
+    /// reporting more, so both figures are lower bounds.
+    pub truncated: bool,
+}
+
+/// Runaway guard: 50 pages of 200 direct children. Subfolder rows carry their
+/// whole subtree's totals, so this bounds how WIDE one folder may be, not how
+/// much is under it.
+const MAX_STATS_PAGES: u32 = 50;
+
+/// Add one `/browse` page of a folder to its totals: each subfolder row
+/// already carries its whole subtree's `file_count` and `total_bytes` (hcfs
+/// `browse.md`), and the files at this level are the rest. The two partition
+/// the subtree, so nothing is counted twice. The console sums the same way
+/// (`fetchHcfsFolderStats`).
+fn add_browse_page_to_stats(stats: &mut FolderSubtreeStats, page: &BrowsePage) {
+    for folder in &page.folders {
+        stats.file_count = stats.file_count.saturating_add(folder.file_count);
+        stats.total_bytes = stats.total_bytes.saturating_add(folder.total_bytes);
+    }
+    for file in &page.files {
+        stats.file_count = stats.file_count.saturating_add(1);
+        stats.total_bytes = stats.total_bytes.saturating_add(file.size_bytes);
+    }
+}
+
+/// The size and file count of ONE folder shared with this account on its own
+/// (a folder grant), for its row in "Shared with me".
+///
+/// The drive's totals would overstate it: the grant is one part of the
+/// drive. A holder may browse at and below the granted folder, so browsing
+/// the folder itself gives its own totals. Read-only, no key needed.
+#[tauri::command]
+pub async fn folder_grant_stats(
+    state: tauri::State<'_, AppState>,
+    owner_ss58: String,
+    folder_hash: String,
+    path_prefix: String,
+) -> Result<FolderSubtreeStats> {
+    let account_id = state.current_account_id()?;
+    let identity = shared_drive_identity(&owner_ss58, &folder_hash)?;
+    let path = path_prefix.trim().trim_matches('/');
+    if path.is_empty() {
+        // A folder grant names a folder. An empty path would total the whole
+        // drive, which is the figure this exists to avoid.
+        return Err(AppError::Validation("A shared folder needs its path.".into()));
+    }
+
+    let mut stats = FolderSubtreeStats::default();
+    let mut offset: u32 = 0;
+    for page_index in 0..MAX_STATS_PAGES {
+        let page = browse_remote_page(state.inner(), &account_id, &identity, path, offset, BROWSE_PAGE_LIMIT, None, None)
+            .await
+            .inspect_err(|e| error!(path = %path, offset, "Failed to size a shared folder: {e}"))?;
+        add_browse_page_to_stats(&mut stats, &page);
+        let returned = u32::try_from(page.folders.len() + page.files.len()).unwrap_or(u32::MAX);
+        if !page.has_more || returned == 0 {
+            stats.truncated = false;
+            break;
+        }
+        offset = offset.saturating_add(returned);
+        // Still more to read and no pages left to read it with.
+        stats.truncated = page_index + 1 == MAX_STATS_PAGES;
+    }
+    Ok(stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stats_page(folders: &[(u64, u64)], file_sizes: &[u64], has_more: bool) -> BrowsePage {
+        BrowsePage {
+            folders: folders
+                .iter()
+                .enumerate()
+                .map(|(i, (count, bytes))| BrowseFolderRow {
+                    name: format!("f{i}"),
+                    file_count: *count,
+                    total_bytes: *bytes,
+                    created_at: None,
+                })
+                .collect(),
+            files: file_sizes.iter().map(|size| browse_file(Some("x"), None, *size, 1, 1)).collect(),
+            total_count: (folders.len() + file_sizes.len()) as u64,
+            has_more,
+        }
+    }
+
+    /// A shared folder's own size: its subfolders' subtree totals plus the
+    /// files at its own level, never the drive's.
+    #[test]
+    fn a_folder_is_sized_by_its_subfolders_totals_and_its_own_files() {
+        let mut stats = FolderSubtreeStats::default();
+        add_browse_page_to_stats(&mut stats, &stats_page(&[(23, 20_000), (2, 500)], &[100, 50], true));
+        add_browse_page_to_stats(&mut stats, &stats_page(&[], &[7], false));
+        assert_eq!(
+            stats,
+            FolderSubtreeStats {
+                file_count: 23 + 2 + 3,
+                total_bytes: 20_000 + 500 + 157,
+                truncated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn an_empty_folder_is_zero_not_unknown() {
+        let mut stats = FolderSubtreeStats::default();
+        add_browse_page_to_stats(&mut stats, &stats_page(&[], &[], false));
+        assert_eq!(stats, FolderSubtreeStats::default());
+    }
+
+    #[test]
+    fn folder_stats_serialize_camel_case_for_the_frontend() {
+        let json = serde_json::to_value(FolderSubtreeStats {
+            file_count: 1,
+            total_bytes: 2,
+            truncated: true,
+        })
+        .unwrap();
+        assert_eq!(json, serde_json::json!({"fileCount": 1, "totalBytes": 2, "truncated": true}));
+    }
 
     /// A shared drive browsed without syncing it resolves to the OWNER's
     /// namespace, and says so. Without `is_member` every downstream site that

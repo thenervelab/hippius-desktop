@@ -4,7 +4,7 @@ import React from "react";
 import FileExtensionSelector from "./filter-dialog-content/FileExtensionSelector";
 import DateRangeSelector from "./filter-dialog-content/DateRangeSelector";
 import EnhancedFileSizeSelector from "./filter-dialog-content/EnhancedFileSizeSelector";
-import AddedByFilter from "./AddedByFilter";
+import AddedByFilter, { type UploaderOption } from "./AddedByFilter";
 import { cn } from "@/app/lib/utils";
 import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
 import type { DateRange } from "@/app/lib/types/dateRange";
@@ -23,7 +23,7 @@ interface FilterPillsProps {
    *  filter that can only ever return nothing. */
   showExcludedFilter?: boolean;
   /** Shared-drive "Added by" picker — only when the open drive is shared. */
-  addedByOptions?: Array<{ ss58: string; label: string }>;
+  addedByOptions?: UploaderOption[];
   selectedUploadedBy?: string;
   onUploadedByChange?: (ss58: string | undefined) => void;
   className?: string;

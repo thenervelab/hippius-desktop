@@ -842,3 +842,27 @@ export interface MyFolderGrantInfo {
 export async function listMyFolderGrants(): Promise<MyFolderGrantInfo[]> {
   return invoke<MyFolderGrantInfo[]>("list_my_folder_grants");
 }
+
+/** What one folder shared with this account holds, over its whole subtree. */
+export interface FolderGrantStats {
+  fileCount: number;
+  totalBytes: number;
+  /** The folder was too wide to read in full: both figures are lower bounds. */
+  truncated: boolean;
+}
+
+/**
+ * The size of ONE folder shared on its own, never its drive's: Rust browses
+ * the folder itself (`folder_grant_stats`), which a holder may do.
+ */
+export async function folderGrantStats(
+  ownerSs58: string,
+  folderHash: string,
+  pathPrefix: string,
+): Promise<FolderGrantStats> {
+  return invoke<FolderGrantStats>("folder_grant_stats", {
+    ownerSs58,
+    folderHash,
+    pathPrefix,
+  });
+}

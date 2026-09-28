@@ -104,3 +104,27 @@ describe("shared folders (folder roles)", () => {
     });
   });
 });
+
+describe("on the Drive page (alwaysShow)", () => {
+  const always = { alwaysShow: true };
+
+  it("is there whenever the flag is on: skeleton, then rows or the empty state", () => {
+    expect(getSharedWithMeView(true, { kind: "idle" }, 0, always)).toBe("loading");
+    expect(getSharedWithMeView(true, { kind: "loading" }, 0, always)).toBe("loading");
+    expect(getSharedWithMeView(true, { kind: "ready", memberships: [] }, 0, always)).toBe("empty");
+    expect(getSharedWithMeView(true, { kind: "ready", memberships: [MEMBERSHIP] }, 0, always)).toBe("rows");
+    expect(getSharedWithMeView(true, { kind: "ready", memberships: [] }, 1, always)).toBe("rows");
+  });
+
+  it("waits for the folder listing before saying nothing is shared", () => {
+    expect(
+      getSharedWithMeView(true, { kind: "ready", memberships: [] }, 0, { alwaysShow: true, grantsSettled: false }),
+    ).toBe("loading");
+  });
+
+  it("still offers sharing after a failed fetch, and hides on a feature-off server or with the flag off", () => {
+    expect(getSharedWithMeView(true, { kind: "error" }, 0, always)).toBe("empty");
+    expect(getSharedWithMeView(true, { kind: "unavailable" }, 0, always)).toBe("hidden");
+    expect(getSharedWithMeView(false, { kind: "ready", memberships: [] }, 0, always)).toBe("hidden");
+  });
+});

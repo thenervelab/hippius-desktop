@@ -220,6 +220,47 @@ Desktop routing: `classify_sync_error` (`tauri_bridge.rs`) checks the marker BEF
 
 `SHARED_DRIVES_ENABLED` gates only the ADDITIVE surfaces — the "Share drive" menu item + `ShareDriveModal` (invite mint + members tab), the "Shared with me" sections, the owner badge.
 
+**Shared with Me on the Drive page is always there** (`SharedWithMeSection` with `onShareDrive`,
+view from `sharedWithMeState.ts::getSharedWithMeView(..., { alwaysShow, grantsSettled })`):
+skeleton rows until the membership AND folder-grant listings answer, then the rows with a
+"Share a drive" header button, or `SharedWithMeEmptyState` (the shared `NoEntriesFound` card,
+its `illustration`/`footerLink`/`titleId` props; "A place for teamwork", docs link
+`https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`). A feature-off
+server still hides it; a failed fetch shows the empty state. Settings passes no `onShareDrive`
+and keeps the quiet, rows-only section. "Share a drive" opens `share-drive-picker/`
+(`ShareDriveFlow` + `ShareDrivePicker`): own drives only (`folderRows` without `ownerSs58`),
+"Shared with N" / "Shared" / "Not shared" from `useOwnedDriveSharing` (unknown says nothing),
+search above `PICKER_SEARCH_THRESHOLD` (6). The plan gate is `sharingGate({ owner: true })`,
+so Free/Starter get `NotEntitledNotice` (its Upgrade plan goes to `BILLING_ROUTE`) and no
+Continue. Continue CLOSES the picker, then sets `shareDialogAtom` exactly as the row's "Share
+drive..." does, so there is never a dialog over a dialog. No drives: Sync a Folder (the
+page's `startSyncFolder`). Pinned by `ShareDrivePicker.test.tsx`, `SharedWithMeSection.test.tsx`
+and `sharedWithMeState.test.ts`.
+
+**Added by: one rule for the column and the filter** (`lib/shared-drives/uploaderFilter.ts`:
+`uploaderKind`, `matchesUploader`; Rust `uploader_search_values` in
+`sync/fileops/recent_uploads.rs`). The column shows a file with no uploader recorded as
+"Owner"; the server matches one exact `uploaded_by` and never matches a missing uploader to an
+address. So on a drive somebody else owns, the owner option is TWO searches in
+`search_files_in_drive` (the address and `_none`), each read from row 0 to `offset + limit`
+(capped at `MAX_MERGED_ROWS`), merged in the server's order (`compare_search_hits`: the sort
+column, `created_at` desc by default, then `path_hash`), deduped by path hash, then cut. When
+the viewer is the owner the option is "You", recorded rows only, one query. The FE filters the
+result with `matchesUploader` too, so a row is never listed under someone the column would not
+name. Accounts are compared by decoded public key, never text: `same_account` (subxt
+`AccountId32`) in Rust, `lib/utils/ss58.ts::sameAccount` in TypeScript. Options come from
+`buildUploaderOptions`: You, "name (owner)" (owner name from the membership or folder grant),
+members by name, a middle-shortened address only without a name, then "Not recorded (shown as
+Owner)". Pinned by `uploader_merge_tests`, `uploaderFilter.test.ts`, `ss58.test.ts`,
+`addedByOptions.test.ts`.
+
+**A folder grant row shows the folder's own size** (`folder_grant_stats` in
+`sync/fileops/remote.rs`, `useFolderGrantStats`): a holder may browse at and below the grant,
+and each subfolder row of `/browse` carries its subtree totals, so the folder's totals are its
+subfolders' totals plus its own files, paged at most `MAX_STATS_PAGES` (then `truncated`,
+shown as "at least"). Never the drive's totals. Skeleton while loading, dash on failure. No
+member count on a grant row: the server does not expose how many people reach a folder.
+
 **Member-row menu gating is deliberately NOT flag-keyed**: `resolveFolderMenuPlan` keys on the row's `ownerSs58` data alone, so a post-release flag rollback can never restore "Delete from Server" (wrong wire identity) or a plain Remove (leaves a live membership) on an existing member row; `leave_shared_drive` stays wired unconditionally. IPC wrappers in `app/lib/tauri/sharedDrives.ts`.
 
 ### v1 scope cuts
