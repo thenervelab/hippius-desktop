@@ -56,4 +56,4 @@ macOS Finder share: https://docs.hippius.com/use/desktop/share-from-finder
 - Billing: https://docs.hippius.com/use/desktop/billing
 - Settings: https://docs.hippius.com/use/desktop/settings
 - Beta channel: https://docs.hippius.com/use/desktop/beta-channel
-- Repository README: https://github.com/thenervelab/hippius-desktop/blob/main/README.md
+- Repository README: https://raw.githubusercontent.com/thenervelab/hippius-desktop/main/README.md
