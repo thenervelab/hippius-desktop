@@ -79,6 +79,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Picking the owner in "Added by" finds their files.** Inside a shared
+  drive, files that show "Owner" in the Added by column because nobody was
+  recorded as adding them now appear when you pick the owner, alongside the
+  files the owner did add. The options show people by name, like the column.
+- **A folder shared with you shows its own size.** In Shared with me, a
+  folder shared on its own shows how big it is and how many files it holds,
+  not the whole drive's figures.
 - **Invites and links show the right time left.** A 7-day invite sent a moment
   ago now says "7 days", not "6 days", and the Share dialog and Manage access
   always agree on how long an invite or link has.
@@ -111,6 +118,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Shared with Me is always on the Drive page, with Share a drive.** When
+  nothing is shared with you yet, it explains what shared drives are for and
+  links to the guide. Share a drive lets you pick one of your drives and opens
+  its Share dialog.
 - **Share one folder as a Viewer or Editor** (internal test builds only for now), by a single-use link or by email. People you share a folder with see it under Shared with me, can open it without seeing anything above it, and can do what their role allows. Whatever the server does not offer yet (single-folder sharing, Editor on a folder, email invites) says "coming soon" instead of disappearing.
 - **Editors can share a folder by link from a drive someone else owns.** Viewers and frozen drives do not see the option.
 - **Invite people to a shared drive by email.** The owner can send a single-use invitation from the Share dialog, see where each one is on the Links tab, and approve it once the person opens it.
