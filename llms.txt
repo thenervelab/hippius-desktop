@@ -1,0 +1,59 @@
+# Hippius Desktop
+
+> The Hippius app for macOS, Windows, and Linux. It syncs folders on a computer with Hippius Drive and encrypts each file on the computer before upload.
+
+Part of the Hippius docs for agents. Start at https://docs.hippius.com/llms.txt
+
+## What it is and what it does
+
+A native app (Tauri) for Hippius Drive. It keeps chosen folders in sync, browses the rest of the account, and creates share links. It is the same account as the web console and the Android app.
+
+Current stable release at the time of writing: 0.6.4.
+
+## How to install
+
+- Download page: https://hippius.com/desktop-app
+- Latest GitHub release: https://github.com/thenervelab/hippius-desktop/releases/latest
+  - macOS: `Hippius_universal.dmg`
+  - Windows: `Hippius_<version>_x64-setup.exe` or the `.msi`
+  - Linux (Debian and Ubuntu, x86_64): `Hippius_<version>_amd64.deb`
+  - `SHA256SUMS` lists the checksums
+- Point people at the release marked Latest. Pre-releases titled `[BETA]` and `[STAGING]` are not the stable build.
+- macOS and Windows update from GitHub Releases. Linux opens the releases page for a new `.deb`.
+
+Install steps and first sync: https://docs.hippius.com/use/desktop/getting-started
+
+## How to sign in
+
+1. On the login screen choose Google, GitHub, Apple, or an existing 12-word access key.
+2. Google, GitHub, and Apple open the browser. The user has to approve that step. The first sign-in creates the account.
+3. A new account sets an unlock password and is shown a 12-word recovery seed.
+4. An existing account on a new computer uses the same unlock password as the console or the phone.
+
+An agent cannot sign in for the user, and must not ask them to paste the seed or the unlock password into chat.
+
+Sign-in and sync folders: https://docs.hippius.com/use/desktop/using-the-app
+
+## How to pay
+
+Billing is inside the app (Settings, Billing): the account balance, Drive plans, and a top-up that opens the console in the browser. Plan prices are loaded from the server. The written guide is https://docs.hippius.com/use/desktop/billing
+
+Drive itself (encryption, unlock password, what is stored): https://docs.hippius.com/use/desktop/drive and https://docs.hippius.com/use/console/drive
+
+## First task
+
+Install, sign in, set the unlock password, then sync one folder. Progress shows in the app. On a second computer, sign in with the same account and the same unlock password. The folder is listed there and can be synced down.
+
+Sharing a file: https://docs.hippius.com/use/desktop/shared-links
+macOS Finder share: https://docs.hippius.com/use/desktop/share-from-finder
+
+## Links
+
+- Documentation home: https://docs.hippius.com
+- Getting started: https://docs.hippius.com/use/desktop/getting-started
+- Using the app: https://docs.hippius.com/use/desktop/using-the-app
+- Drive: https://docs.hippius.com/use/desktop/drive
+- Billing: https://docs.hippius.com/use/desktop/billing
+- Settings: https://docs.hippius.com/use/desktop/settings
+- Beta channel: https://docs.hippius.com/use/desktop/beta-channel
+- Repository README: https://github.com/thenervelab/hippius-desktop/blob/main/README.md
