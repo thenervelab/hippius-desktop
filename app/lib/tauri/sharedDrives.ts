@@ -675,12 +675,35 @@ export function isSharedDrivesNotEntitled(error: unknown): boolean {
   return isNotReady(error, "SHARED_DRIVES_NOT_ENTITLED");
 }
 
+/** What `email_drive_invite` answers. */
+export interface EmailInviteResult {
+  inviteId: string;
+  /**
+   * The drive key (or the folder's key) was sealed to the recipient right
+   * after the mint, so they can join with nobody online.
+   */
+  presealed: boolean;
+}
+
+/**
+ * The session has no key loaded (Rust's `NoEncryptionKey`): an action that
+ * needs the drive key, like sending an emailed invite, was refused before
+ * anything was sent. Run the unlock and try again.
+ */
+export function isSessionLocked(error: unknown): boolean {
+  return isNotReady(error, "NO_ENCRYPTION_KEY");
+}
+
 /**
  * Invite `email` into a drive and have the server send the invitation.
  *
  * Viewer or Editor only (a Manager invite has to be a link), single use,
  * between one hour and thirty days; Rust refuses anything else by name.
- * Returns only the new invite's id: the token exists only in the mail.
+ * Returns the new invite's id (the token exists only in the mail) and
+ * whether the key went up sealed to the recipient right away
+ * (`presealed`); when it did not, they may need approving when they open
+ * it. A locked session is refused before anything is sent
+ * ({@link isSessionLocked}): unlock, then send again.
  */
 export async function emailDriveInvite(
   label: string,
@@ -695,8 +718,8 @@ export async function emailDriveInvite(
      */
     pathPrefix?: string;
   },
-): Promise<{ inviteId: string }> {
-  return invoke<{ inviteId: string }>("email_drive_invite", {
+): Promise<EmailInviteResult> {
+  return invoke<EmailInviteResult>("email_drive_invite", {
     label,
     email,
     role: opts?.role ?? null,
