@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
 use tauri_project_lib::error::{AppError, NotReadyKind};
-use tauri_project_lib::shared_drives::commands::{EmailInviteBody, SealKeyPut, http_email_invite, http_list_invites, http_put_sealed_key};
+use tauri_project_lib::shared_drives::commands::{
+    EmailInviteBody, SealKeyPut, http_email_invite, http_list_invites, http_put_account_invite_key, http_put_sealed_key,
+};
 
 const BEARER: &str = "test-bearer-token";
 const HASH: &str = "0123456789abcdef";
@@ -42,7 +44,7 @@ fn body<'a>(email: &'a str, owner: Option<&'a str>) -> EmailInviteBody<'a> {
 }
 
 #[tokio::test]
-async fn email_mint_sends_the_fields_and_returns_only_an_id() {
+async fn email_mint_sends_the_fields_and_returns_the_id() {
     let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
     let rec = seen.clone();
     let base = serve(Router::new().route(
@@ -55,10 +57,11 @@ async fn email_mint_sends_the_fields_and_returns_only_an_id() {
     ))
     .await;
 
-    let id = http_email_invite(&reqwest::Client::new(), &base, BEARER, &body("ada@example.com", Some("5Owner")))
+    let minted = http_email_invite(&reqwest::Client::new(), &base, BEARER, &body("ada@example.com", Some("5Owner")))
         .await
         .expect("mint");
-    assert_eq!(id, "abc123");
+    assert_eq!(minted.invite_id, "abc123");
+    assert_eq!(minted.recipient_key, None, "a server that predates pre-sealing names no key");
 
     let sent = seen.lock().unwrap().last().cloned().unwrap();
     assert_eq!(sent["folder_hash"], HASH);
@@ -68,6 +71,30 @@ async fn email_mint_sends_the_fields_and_returns_only_an_id() {
     assert_eq!(sent["owner_ss58"], "5Owner", "a manager names the owner");
     assert!(sent.get("max_uses").is_none(), "a mailed invite is single use; no max_uses");
     assert!(sent.get("path_prefix").is_none(), "no folder unless asked");
+}
+
+/// The mint names the key to pre-seal to, and echoes a folder invite's
+/// folder; both are what the pre-seal is decided on.
+#[tokio::test]
+async fn a_mint_reads_the_key_to_preseal_to_and_the_folder_echo() {
+    let base = serve(Router::new().route(
+        "/v1/drive-invites/email",
+        post(|| async {
+            Json(serde_json::json!({
+                "invite_id": "abc123",
+                "path_prefix": "Clients",
+                "recipient_key": "E75P6uryBMf9M1j8nAByGIHRdCeBKCJ+xnTzf3/pe20=",
+            }))
+        }),
+    ))
+    .await;
+
+    let minted = http_email_invite(&reqwest::Client::new(), &base, BEARER, &body("ada@example.com", None))
+        .await
+        .expect("mint");
+
+    assert_eq!(minted.path_prefix.as_deref(), Some("Clients"));
+    assert_eq!(minted.recipient_key.as_deref(), Some("E75P6uryBMf9M1j8nAByGIHRdCeBKCJ+xnTzf3/pe20="));
 }
 
 #[tokio::test]
@@ -227,4 +254,49 @@ async fn seal_back_outcomes() {
     assert_eq!(seen[0].2["sealed_key"], "blob");
     assert_eq!(seen[0].2["sealed_for"], "pubkey", "sealed_for echoes the exact requester key");
     assert_eq!(seen[1].1, None);
+}
+
+/// The account's invite key goes up as the public half only, to the
+/// account-level route, under the user's bearer.
+#[tokio::test]
+async fn publishing_the_invite_key_puts_the_public_half() {
+    let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let rec = seen.clone();
+    let base = serve(Router::new().route(
+        "/v1/account/invite-key",
+        put(move |headers: HeaderMap, Json(b): Json<serde_json::Value>| async move {
+            assert_eq!(headers.get("authorization").unwrap(), &format!("Bearer {BEARER}"));
+            rec.lock().unwrap().push(b);
+            Json(serde_json::json!({ "status": "ok" }))
+        }),
+    ))
+    .await;
+
+    http_put_account_invite_key(&reqwest::Client::new(), &base, BEARER, "PUBKEY")
+        .await
+        .expect("publish");
+
+    assert_eq!(seen.lock().unwrap().as_slice(), [serde_json::json!({ "pubkey": "PUBKEY" })]);
+}
+
+/// A refusal is an error, so the auto-seal task retries next pass rather
+/// than remembering a publish that never landed.
+#[tokio::test]
+async fn a_refused_publish_is_an_error() {
+    let base = serve(Router::new().route(
+        "/v1/account/invite-key",
+        put(|| async {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "bad_request", "message": "pubkey is not a usable X25519 public key" })),
+            )
+        }),
+    ))
+    .await;
+
+    assert!(
+        http_put_account_invite_key(&reqwest::Client::new(), &base, BEARER, "PUBKEY")
+            .await
+            .is_err()
+    );
 }

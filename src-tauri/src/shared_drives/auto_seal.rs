@@ -283,11 +283,15 @@ async fn run(app: tauri::AppHandle, account_id: String, folder_invites: bool, nu
     let mut memory = AttemptMemory::default();
     let mut plan = PlanGate::default();
     let mut failures: u32 = 0;
+    let mut published = false;
     loop {
         let state = app.state::<AppState>();
         if !session_is(&state, &account_id) {
             debug!("Email invite delivery ended: the session account changed");
             return;
+        }
+        if !published {
+            published = publish_invite_key(&state).await;
         }
         let outcome = pass(&app, &state, &account_id, folder_invites, &mut memory, &mut plan).await;
         failures = if outcome == PassOutcome::Failed { failures.saturating_add(1) } else { 0 };
@@ -299,6 +303,40 @@ async fn run(app: tauri::AppHandle, account_id: String, folder_invites: bool, nu
                 // opened, maybe a plan upgrade): read the plan again too.
                 plan.forget();
             }
+        }
+    }
+}
+
+/// Publish this account's invite public key, so an invitation mailed to it
+/// can be sealed at mint time and it can join with nobody online.
+///
+/// Here because this task already runs exactly while a session mnemonic is
+/// in memory, and ends when the account changes: one publish per task is
+/// one per signed-in account. Returns whether it landed; a failure is tried
+/// again next pass. Never prompts, and only the public half is sent.
+async fn publish_invite_key(state: &AppState) -> bool {
+    let Ok(mnemonic) = crate::sync::remote::session_mnemonic(state) else {
+        return false;
+    };
+    let public = match super::invite_key::account_invite_public_key(&mnemonic) {
+        Ok(public) => public,
+        Err(e) => {
+            warn!(error = %e, "Invite key derivation failed");
+            return false;
+        }
+    };
+    drop(mnemonic);
+    let Ok(ctx) = commands::api_ctx_for(state).await else {
+        return false;
+    };
+    match commands::http_put_account_invite_key(&state.api_client, ctx.base_url(), ctx.bearer(), &public).await {
+        Ok(()) => {
+            info!("Invite key published");
+            true
+        }
+        Err(e) => {
+            debug!(error = %e, "Invite key publish failed; retrying next pass");
+            false
         }
     }
 }

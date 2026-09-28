@@ -2276,9 +2276,24 @@ pub struct EmailInviteBody<'a> {
     pub path_prefix: Option<&'a str>,
 }
 
-/// `POST /v1/drive-invites/email`. Returns the new invite's id; the token
-/// exists only in the message, by design.
-pub async fn http_email_invite(http: &reqwest::Client, base_url: &str, bearer: &str, body: &EmailInviteBody<'_>) -> Result<String> {
+/// What `POST /v1/drive-invites/email` answers. No token: it exists only in
+/// the message, by design.
+#[derive(Debug, Deserialize)]
+pub struct MintedEmailInvite {
+    pub invite_id: String,
+    /// Echo of a FOLDER invite's folder. A folder key is only ever sealed to
+    /// an invite the server confirmed is one.
+    #[serde(default)]
+    pub path_prefix: Option<String>,
+    /// The key to pre-seal to right now: the recipient's published invite
+    /// key, or a decoy the server discards. Indistinguishable by design;
+    /// always seal. Absent from a server that predates pre-sealing.
+    #[serde(default)]
+    pub recipient_key: Option<String>,
+}
+
+/// `POST /v1/drive-invites/email`.
+pub async fn http_email_invite(http: &reqwest::Client, base_url: &str, bearer: &str, body: &EmailInviteBody<'_>) -> Result<MintedEmailInvite> {
     let resp = http
         .post(format!("{}/v1/drive-invites/email", base_url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {bearer}"))
@@ -2298,12 +2313,52 @@ pub async fn http_email_invite(http: &reqwest::Client, base_url: &str, bearer: &
     if !status.is_success() {
         return Err(classify_email_invite_error(status, retry_after, &text));
     }
-    #[derive(Deserialize)]
-    struct Minted {
-        invite_id: String,
-    }
-    let minted: Minted = serde_json::from_str(&text).map_err(|e| AppError::Hcfs(format!("email-invite response did not parse: {e}")))?;
-    Ok(minted.invite_id)
+    serde_json::from_str(&text).map_err(|e| AppError::Hcfs(format!("email-invite response did not parse: {e}")))
+}
+
+/// The row a mint-time pre-seal targets, or `None` when there is nothing to
+/// seal to.
+///
+/// Fails closed on folders: a folder key is sealed only to an invite the
+/// server echoed back as that folder's. Without the echo the row could be a
+/// whole-drive invite, and a folder key sealed to it would be the wrong key
+/// for what the recipient joins. An echo the sender never asked for is
+/// refused the same way. Pure, so the rule is tested.
+pub(crate) fn preseal_row(minted: &MintedEmailInvite, asked_folder: Option<&str>) -> Option<ApprovableInvite> {
+    let recipient_key = minted.recipient_key.as_deref().map(str::trim).filter(|k| !k.is_empty())?;
+    let echoed = minted.path_prefix.as_deref().filter(|p| !p.trim().is_empty());
+    let path_prefix = match (asked_folder, echoed) {
+        (None, None) => None,
+        (Some(asked), Some(echo)) if asked == echo => Some(echo.to_string()),
+        _ => return None,
+    };
+    Some(ApprovableInvite {
+        requester_pubkey: recipient_key.to_string(),
+        path_prefix,
+    })
+}
+
+/// Seal a just-minted invite's key to the key the mint named.
+///
+/// Through the same funnel and the same PUT the Approve uses
+/// ([`invite_seal_keys`], [`seal_invite_row`]), so a pre-seal can never pick
+/// a different key than an approval would. Needs the session mnemonic; with
+/// none in memory it returns the `NotReady` the funnel gives and seals
+/// nothing.
+async fn preseal_minted_invite(
+    state: &AppState,
+    ctx: &ApiCtx,
+    label: &str,
+    identity: &crate::sync::identity::DriveIdentity,
+    invite_id: &str,
+    row: &ApprovableInvite,
+) -> Result<SealKeyPut> {
+    let keys = {
+        let _recovery_guard = state.recovery_lock.lock().await;
+        let mnemonic = crate::sync::remote::session_mnemonic(state)?;
+        invite_seal_keys(state, &ctx.account_id, label, &mnemonic, identity).await?
+    };
+    seal_invite_row(&state.api_client, ctx, identity, invite_id, row, &keys).await
 }
 
 /// Result of a mailed-invite mint. No link: the token is only in the mail.
@@ -2347,7 +2402,7 @@ pub async fn email_drive_invite(
         None => None,
     };
 
-    let invite_id = http_email_invite(
+    let minted = http_email_invite(
         &state.api_client.clone(),
         &ctx.base_url,
         &ctx.bearer,
@@ -2361,10 +2416,25 @@ pub async fn email_drive_invite(
         },
     )
     .await?;
+    let invite_id = minted.invite_id.clone();
 
     // The address is not logged: it is personal data and the id is enough to
     // correlate with the server.
     info!(label = %label, folder_hash = %identity.wire_folder_hash, invite_id = %invite_id, "Drive invite emailed");
+
+    // Seal the key now, while the sender is here, so a recipient who already
+    // has an account can join with nobody online. Best-effort: the invite is
+    // already sent, and without a pre-seal it still arrives through the
+    // approval handshake (`auto_seal`), exactly as before.
+    if let Some(row) = preseal_row(&minted, folder_prefix.as_deref()) {
+        match preseal_minted_invite(&state, &ctx, &label, &identity, &invite_id, &row).await {
+            Ok(SealKeyPut::Sealed | SealKeyPut::AlreadySealed) => {
+                info!(invite_id = %invite_id, "Drive invite pre-sealed");
+            }
+            Ok(SealKeyPut::Stale) => warn!(invite_id = %invite_id, "Drive invite pre-seal refused as stale"),
+            Err(e) => warn!(invite_id = %invite_id, error = %e, "Drive invite pre-seal skipped"),
+        }
+    }
     // A mailed invitation is now in flight: the background delivery looks
     // again at once and keeps its fast cadence until the key is delivered.
     state.invite_auto_seal.nudge();
@@ -2393,7 +2463,8 @@ pub async fn email_invites_available(app: tauri::AppHandle, label: String, owner
             path_prefix: None,
         },
     )
-    .await;
+    .await
+    .map(|minted| minted.invite_id);
     Ok(email_probe_says_available(&probe))
 }
 
@@ -2458,6 +2529,26 @@ pub async fn http_put_sealed_key(
         404 if !body.trim().is_empty() => Ok(SealKeyPut::Stale),
         _ => Err(classify_error_status(status, &body)),
     }
+}
+
+/// `PUT /v1/account/invite-key`: publish this account's invite public key,
+/// filed by the server under the mailbox its identity provider reports.
+/// Idempotent. A bodiless 404 is a server without shared drives.
+pub async fn http_put_account_invite_key(http: &reqwest::Client, base_url: &str, bearer: &str, public_key_b64: &str) -> Result<()> {
+    let resp = http
+        .put(format!("{}/v1/account/invite-key", base_url.trim_end_matches('/')))
+        .header("Authorization", format!("Bearer {bearer}"))
+        .json(&serde_json::json!({ "pubkey": public_key_b64 }))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("invite-key request failed: {e}")))?;
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let body = resp.text().await.unwrap_or_default();
+    Err(classify_error_status(status, &body))
 }
 
 /// What an approve needs from the invite row: who to seal to, and which key
@@ -4311,6 +4402,45 @@ mod tests {
         ))));
         assert!(email_probe_says_available(&Err(AppError::Hcfs("400 invalid email".into()))));
         assert!(email_probe_says_available(&Ok("unexpected".into())));
+    }
+
+    fn minted(path_prefix: Option<&str>, recipient_key: Option<&str>) -> MintedEmailInvite {
+        MintedEmailInvite {
+            invite_id: "id".into(),
+            path_prefix: path_prefix.map(str::to_string),
+            recipient_key: recipient_key.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_whole_drive_mint_is_presealed_to_the_key_it_names() {
+        let row = preseal_row(&minted(None, Some("KEY")), None).expect("a row to seal");
+        assert_eq!(row.requester_pubkey, "KEY");
+        assert_eq!(row.path_prefix, None, "a whole-drive invite gets the drive entropy");
+    }
+
+    #[test]
+    fn a_folder_mint_is_presealed_only_when_the_server_echoed_that_folder() {
+        let echoed = preseal_row(&minted(Some("Clients"), Some("KEY")), Some("Clients")).expect("echoed");
+        assert_eq!(
+            echoed.path_prefix.as_deref(),
+            Some("Clients"),
+            "the folder's derived key, never the entropy"
+        );
+
+        // No echo: the row may be a whole-drive invite; sealing a folder key
+        // to it would be the wrong key, and sealing the entropy would hand a
+        // one-folder invitee the whole drive. Nothing is sealed.
+        assert!(preseal_row(&minted(None, Some("KEY")), Some("Clients")).is_none());
+        // A different folder, or a folder nobody asked for: refused too.
+        assert!(preseal_row(&minted(Some("Other"), Some("KEY")), Some("Clients")).is_none());
+        assert!(preseal_row(&minted(Some("Clients"), Some("KEY")), None).is_none());
+    }
+
+    #[test]
+    fn nothing_is_presealed_without_a_key() {
+        assert!(preseal_row(&minted(None, None), None).is_none());
+        assert!(preseal_row(&minted(None, Some("  ")), None).is_none());
     }
 
     fn mailed(id: &str, status: Option<&str>, pubkey: Option<&str>) -> DriveInviteInfo {
