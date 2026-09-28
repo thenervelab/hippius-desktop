@@ -47,7 +47,7 @@ Build-time boolean constants in `app/lib/featureFlags.ts` gate user-visible surf
 - `REFERRALS_COMING_SOON = true` keeps the referrals page reachable but behind the blurred `ComingSoon` overlay.
 - `VM_VPN_ENABLED = false` (independent of `VPN_FEATURE_ENABLED`) hides the per-VM "Connect via VPN" surface (`VmVpnConnect.tsx` via `useVpn`); it pairs with the off-by-default `netbird-vpn` Cargo feature.
 - `FOLDER_ROLES_ENABLED = true` (on in every lane since HCFS #475 shipped): folder collaboration (Viewer or Editor on one folder), following HCFS #475 (`src-tauri/src/shared_drives/folder_roles.rs`). Inside the flag NOTHING hides on a capability: "Share folder" (`useFolderShareInviteOffered`) and the Share dialog's By email tab are always offered, and the server's refusals come back as structured `FOLDER_*` / `EMAIL_INVITES_UNAVAILABLE` subkinds the dialog shows inline as "coming soon" (`COMING_SOON_COPY`, pinned to the Rust texts). Read the flag directly, not through an atom: a dependency-free jotai atom caches its first value, which is how a flag-driven atom went stale across tests. Tests that mock `featureFlags` must export it.
-- `SHARED_DRIVES_ENABLED = false` — off on every lane; the feature only works against a fleet running `HCFS_FEATURE_SHARED_DRIVES=1` with the console's `/invite/{token}` page live, so the surfaces are hidden until both ship. See the shares rules file.
+- `SHARED_DRIVES_ENABLED = true`: on in every lane, production included. The server runs `HCFS_FEATURE_SHARED_DRIVES=1` and the console's `/invite/{token}` page is live in production; the plan gate and the server's `SHARED_DRIVES_UNAVAILABLE` answer stand in front of it. See the shares rules file.
 
 ## User preferences
 
