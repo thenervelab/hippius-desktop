@@ -11,28 +11,25 @@
 // refused again and nothing is sent.
 
 import { useCallback, useEffect, useRef } from "react";
-import { useAtomValue, useStore } from "jotai";
+import { useStore } from "jotai";
 import { activeRecoveryCheckAtom } from "@/app/lib/global-atoms/recoveryAtoms";
 import { useUnlockFlow } from "@/app/lib/hooks/useUnlockFlow";
 
 export function useUnlockThenResume(): (resume: () => void) => void {
   const { unlock } = useUnlockFlow();
   const store = useStore();
-  const recoveryCheck = useAtomValue(activeRecoveryCheckAtom);
   const pending = useRef<(() => void) | null>(null);
-  const dialogWasOpen = useRef(false);
+  const stopWatching = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    if (recoveryCheck) {
-      dialogWasOpen.current = true;
-      return;
-    }
-    if (!dialogWasOpen.current) return;
-    dialogWasOpen.current = false;
-    const resume = pending.current;
-    pending.current = null;
-    resume?.();
-  }, [recoveryCheck]);
+  // Stop watching when the section goes away, so a later close resumes nothing.
+  useEffect(
+    () => () => {
+      stopWatching.current?.();
+      stopWatching.current = null;
+      pending.current = null;
+    },
+    [],
+  );
 
   return useCallback(
     (resume: () => void) => {
@@ -41,7 +38,23 @@ export function useUnlockThenResume(): (resume: () => void) => void {
         // No dialog came up: the seed-phrase sign-in took over the window,
         // or there was nothing to unlock. Nothing will close to resume from,
         // so the next Send starts over.
-        if (!store.get(activeRecoveryCheckAtom)) pending.current = null;
+        if (!store.get(activeRecoveryCheckAtom)) {
+          pending.current = null;
+          return;
+        }
+        // Watch the dialog in the store itself, not through a render: an
+        // open and close that land before the next render would otherwise
+        // never be seen, and the send would be lost.
+        stopWatching.current?.();
+        const stop = store.sub(activeRecoveryCheckAtom, () => {
+          if (store.get(activeRecoveryCheckAtom)) return;
+          stop();
+          if (stopWatching.current === stop) stopWatching.current = null;
+          const next = pending.current;
+          pending.current = null;
+          next?.();
+        });
+        stopWatching.current = stop;
       });
     },
     [unlock, store],

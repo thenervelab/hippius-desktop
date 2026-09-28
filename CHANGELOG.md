@@ -89,6 +89,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **An email invite sent from a locked app always goes out after you
+  unlock.** Unlocking very quickly could leave the invite unsent.
+
 - **The Share a drive picker has room to breathe.** It is now as wide as the
   Share dialog it opens, so drive names and the upgrade card no longer look
   cramped.

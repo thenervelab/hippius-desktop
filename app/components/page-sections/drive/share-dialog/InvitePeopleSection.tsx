@@ -75,6 +75,10 @@ export function InvitePeopleSection({
   // or pressed Send: a half-typed address is not a mistake yet.
   const [showCheck, setShowCheck] = useState(false);
   const [sending, setSending] = useState(false);
+  // The in-flight guard is a ref, not `sending`: the send resumed after an
+  // unlock runs through `sendRef`, which can still hold the copy of `send`
+  // from the render where `sending` was true, and would refuse itself.
+  const inFlight = useRef(false);
   const [notice, setNotice] = useState<SectionNotice | null>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
   // The mail probe, as a hint only: the section is always offered, and a
@@ -117,7 +121,7 @@ export function InvitePeopleSection({
   const send = useCallback(
     async (asRole: EmailRole, afterUnlock = false) => {
       setShowCheck(true);
-      if (sending) return;
+      if (inFlight.current) return;
       // Enter can beat the as-you-type answer; ask once more before refusing.
       let verdict = check;
       if (!verdict.valid) {
@@ -126,6 +130,7 @@ export function InvitePeopleSection({
         if (!verdict.valid) return;
       }
       const address = email.trim();
+      inFlight.current = true;
       setSending(true);
       setNotice(null);
       setSentTo(null);
@@ -158,10 +163,11 @@ export function InvitePeopleSection({
         }
         setNotice(next);
       } finally {
+        inFlight.current = false;
         setSending(false);
       }
     },
-    [check, sending, email, label, target, folder, pathPrefix, onSent, onNotEntitled, unlockThenResume],
+    [check, email, label, target, folder, pathPrefix, onSent, onNotEntitled, unlockThenResume],
   );
   useEffect(() => {
     sendRef.current = send;
