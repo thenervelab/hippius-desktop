@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Share a single folder in every release.** Folder sharing is no longer
+  held to internal builds: share one folder as Viewer or Editor by link or
+  by email, see folders shared with you, and change someone's folders from
+  Manage access.
 - **Shared drives are available in every release, not only beta.** Plus, Max
   and Scale plans can share a drive and invite people from the released app,
   and the plan cards no longer mark the shared team drive as coming soon.

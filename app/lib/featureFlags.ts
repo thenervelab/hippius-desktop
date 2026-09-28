@@ -7,14 +7,13 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). `FOLDER_ROLES_ENABLED` uses it.
+// staging, never production). No flag uses it right now; bring the import
+// back when one does.
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
 // per-branch value either conflicts on every promotion or rides into
 // production through a hunk nobody read.
-
-import { enabledFrom } from "@/app/lib/buildChannel";
 
 /**
  * Switch the home-page Credit Usage chart and the Total Credit Used
@@ -141,18 +140,20 @@ export const SHARED_DRIVES_ENABLED = true;
  * Folder collaboration: share ONE folder of a drive as Viewer or Editor, by
  * link or by email, and let an Editor holder write inside it.
  *
- * Built against HCFS #475 (not merged yet), documented in one place: the
- * module doc of `src-tauri/src/shared_drives/folder_roles.rs`. Inside this
- * flag nothing is hidden on a server capability: "Share folder" is always
- * offered to owners and drive Managers, and whatever the server refuses
- * (folder invites off, Editor off, email off) reads as "coming soon", so each
- * piece lights up on its own when the server turns it on. With the flag off,
- * folder sharing stays the read-only, capability-gated version.
+ * Built against HCFS #475, documented in one place: the module doc of
+ * `src-tauri/src/shared_drives/folder_roles.rs`. Inside this flag nothing is
+ * hidden on a server capability: "Share folder" is always offered to owners
+ * and drive Managers, and whatever the server refuses (folder invites off,
+ * Editor off, email off) reads as "coming soon", so each piece lights up on
+ * its own when the server turns it on. With the flag off, folder sharing
+ * stays the read-only, capability-gated version.
  *
- * **Staging only** (`enabledFrom("staging")`): off in beta and production
- * until #475 merges and is checked against this build.
+ * **On everywhere**, production included. It was held to staging until #475
+ * merged; #475 is merged and deployed with folder-grant writes on, and the
+ * console ships folder sharing in production, so the two apps offer the
+ * same thing.
  */
-export const FOLDER_ROLES_ENABLED = enabledFrom("staging");
+export const FOLDER_ROLES_ENABLED = true;
 
 /**
  * API token settings. When `false`, the surface is fully invisible: the

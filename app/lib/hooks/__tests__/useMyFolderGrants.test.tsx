@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Folder grants held by this account (folder roles, staging only): fetched
+// Folder grants held by this account (folder roles): fetched
 // with the flag, never waiting on a capability, and found by `grant:` label.
 import React, { type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
