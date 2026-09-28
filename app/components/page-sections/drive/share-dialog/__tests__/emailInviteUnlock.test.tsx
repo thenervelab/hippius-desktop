@@ -112,6 +112,32 @@ describe("sending an emailed invite from a locked app", () => {
     expect(toast.info).not.toHaveBeenCalled();
   });
 
+  it("still sends when the unlock closes before the app redraws", async () => {
+    // The first send is held open so it is refused, and the dialog closed,
+    // inside one act: no render runs in between, so the resumed send sees
+    // the copy of `send` from the render where it was still sending.
+    let refuse: (e: unknown) => void = () => {};
+    emailDriveInviteMock
+      .mockImplementationOnce(() => new Promise((_, reject) => { refuse = reject; }))
+      .mockResolvedValueOnce({ inviteId: "i1", presealed: true });
+    const { onSent } = renderSection();
+
+    await typeAndSend("ada@example.com");
+    await waitFor(() => expect(emailDriveInviteMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Sending…" })).toBeInTheDocument();
+
+    await act(async () => {
+      refuse(LOCKED);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(unlock.fn).toHaveBeenCalledTimes(1);
+      store.set(activeRecoveryCheckAtom, null);
+    });
+
+    await waitFor(() => expect(emailDriveInviteMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Invite sent to ada@example.com")).toBeInTheDocument();
+    expect(onSent).toHaveBeenCalledTimes(1);
+  });
+
   it("sends nothing when the unlock is cancelled, and keeps the address", async () => {
     // Cancelled: the session is still locked, so Rust refuses the resumed
     // send before anything goes out.
