@@ -17,6 +17,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Share by email or by link from one place.** The Share dialog now opens
+  with two tabs at the top, By email and By link, instead of separate
+  sections above and below the people list. It remembers the tab you used
+  last, and Manage access's Invite and New link open the matching tab.
+
 - **People you invite by email can join even after you close the app.** If
   they already have a Hippius account, they can join as soon as they open the
   invitation, without waiting for you or a Manager to be online.
@@ -79,6 +84,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Dropdown values are easy to read in light mode.** Roles and link
+  expiry in the Share dialog and Manage access no longer show in a pale grey
+  that looked disabled.
 - **Invites and links show the right time left.** A 7-day invite sent a moment
   ago now says "7 days", not "6 days", and the Share dialog and Manage access
   always agree on how long an invite or link has.
