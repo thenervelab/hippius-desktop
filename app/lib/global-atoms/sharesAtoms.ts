@@ -194,6 +194,17 @@ export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);
 export const shareDialogAtom = atom<ShareDriveModalTarget | null>(null);
 
 /**
+ * The Share dialog's two ways in: an invite for one person by email, or a
+ * link. The dialog opens on whichever was used last in this session, so
+ * someone who always shares by link is not sent back to the email field
+ * every time. Memory only: a restart opens on By email again. The Manage
+ * access panel's "Invite" sets `email` and its "New link" sets `link`.
+ */
+export type ShareDialogTab = "email" | "link";
+
+export const shareDialogTabAtom = atom<ShareDialogTab>("email");
+
+/**
  * Bumped whenever the Share dialog sends an invite or creates a link, so an
  * open Links tab lists it without the panel having to be reopened.
  */

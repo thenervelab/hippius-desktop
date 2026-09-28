@@ -2,22 +2,24 @@
 
 // The Share dialog, for a drive or one folder in it. Top to bottom:
 //
-//   1. Invite people: an EMAIL invite (`email_drive_invite`), Viewer or
-//      Editor, single use, bound to the recipient.
+//   1. One box with two tabs (`ShareTabs`), the two ways to let someone in:
+//      - By email: an EMAIL invite (`email_drive_invite`), Viewer or Editor,
+//        single use, bound to the recipient.
+//      - By link: a LINK invite (`create_drive_invite`, or
+//        `create_folder_invite` for a folder), usable by whoever holds it.
+//      The dialog opens on the tab used last this session.
 //   2. People with access: the owner, members (with a working role select)
 //      or folder holders, and emailed invitations still waiting, from one
 //      Rust fold (`list_share_access`). "Manage access" opens the panel.
-//   3. General access: a LINK invite (`create_drive_invite`, or
-//      `create_folder_invite` for a folder), usable by whoever holds it.
 //
 // Only the owner and a whole-drive Manager add people (Rust's `canManage`);
 // anyone else sees People with access alone, read only.
 //
 // On a plan without sharing (Free, Starter; Rust decides, `canShareDrives`)
 // the dialog still opens, so the owner can see who has access and remove
-// people: the Invite and General access sections give way to one upgrade
-// card, and a 403 `shared_drives_not_entitled` from any command does the
-// same. While the plan loads, skeletons stand where those sections go.
+// people: the whole tabbed box gives way to one upgrade card, and a 403
+// `shared_drives_not_entitled` from any command does the same. While the
+// plan loads, a skeleton stands where the box goes.
 //
 // Invite and link are separate controls with separate commands: a typed
 // address can never turn a link into an email invite, or the reverse. The
@@ -49,7 +51,10 @@ import { BILLING_ROUTE } from "@/app/lib/routes";
 import { InvitePeopleSection } from "./InvitePeopleSection";
 import { PeopleWithAccessSection } from "./PeopleWithAccessSection";
 import { GeneralAccessSection } from "./GeneralAccessSection";
+import { InlineNotice } from "./InlineNotice";
 import { NotEntitledNotice, SharingActionsSkeleton } from "./SectionNoticeView";
+import { ShareTabs } from "./ShareTabs";
+import { COMING_SOON_COPY } from "../shareDriveModalState";
 import { useShareAccess } from "./useShareAccess";
 import { peopleHaveAccess, sharingGate } from "./shareDialogState";
 import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
@@ -196,21 +201,40 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
             {DIVIDER}
           </>
         ) : gate === "loading" ? (
-          emailOffered ? (
-            <>
-              <SharingActionsSkeleton />
-              {DIVIDER}
-            </>
-          ) : null
-        ) : gate === "allowed" && emailOffered ? (
           <>
-            <InvitePeopleSection
-              label={target.label}
-              pathPrefix={pathPrefix}
-              target={driveTarget}
-              onSent={onSent}
-              onUpgrade={upgrade}
-              onNotEntitled={onNotEntitled}
+            <SharingActionsSkeleton />
+            {DIVIDER}
+          </>
+        ) : gate === "allowed" ? (
+          <>
+            <ShareTabs
+              email={
+                emailOffered ? (
+                  <InvitePeopleSection
+                    label={target.label}
+                    pathPrefix={pathPrefix}
+                    target={driveTarget}
+                    onSent={onSent}
+                    onUpgrade={upgrade}
+                    onNotEntitled={onNotEntitled}
+                  />
+                ) : (
+                  // A folder without folder collaboration is shared by link
+                  // only, for now; the tab says so rather than vanishing.
+                  <InlineNotice tone="info">{COMING_SOON_COPY.folderEmail}</InlineNotice>
+                )
+              }
+              link={
+                <GeneralAccessSection
+                  label={target.label}
+                  pathPrefix={pathPrefix}
+                  folderRoles={folderRoles}
+                  target={driveTarget}
+                  onCreated={onChanged}
+                  onUpgrade={upgrade}
+                  onNotEntitled={onNotEntitled}
+                />
+              }
             />
             {DIVIDER}
           </>
@@ -228,25 +252,6 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
           canAddAccess={gate === "allowed"}
           onNotEntitled={onNotEntitled}
         />
-        {gate === "allowed" ? (
-          <>
-            {DIVIDER}
-            <GeneralAccessSection
-              label={target.label}
-              pathPrefix={pathPrefix}
-              folderRoles={folderRoles}
-              target={driveTarget}
-              onCreated={onChanged}
-              onUpgrade={upgrade}
-              onNotEntitled={onNotEntitled}
-            />
-          </>
-        ) : gate === "loading" ? (
-          <>
-            {DIVIDER}
-            <SharingActionsSkeleton />
-          </>
-        ) : null}
 
         <div className="mt-6 flex justify-end">
           <Button
