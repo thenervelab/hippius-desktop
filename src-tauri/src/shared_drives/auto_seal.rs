@@ -36,6 +36,11 @@
 //!   exponentially on errors. [`nudge_invite_auto_seal`] wakes it early (an
 //!   invite was sent, Manage access was opened).
 //!
+//! - **Publishes the account's invite key.** Once per sign-in and again
+//!   after an unlock, while a session mnemonic is in memory
+//!   ([`InviteKeyPublishMemo`]), so invitations mailed to this account can be
+//!   sealed at mint and it joins with nobody online.
+//!
 //! Started by the frontend once signed in, and only behind the same feature
 //! flags that show the manual Approve (`SHARED_DRIVES_ENABLED`, and
 //! `FOLDER_ROLES_ENABLED` for folder invitations). It stops on sign-out
@@ -183,6 +188,42 @@ impl AttemptMemory {
     }
 }
 
+/// Which accounts have put their invite key on the server this sign-in.
+///
+/// The publish is idempotent on the server, so this only keeps the task from
+/// repeating it every pass. A failed publish is never recorded, so the next
+/// pass tries again; an unlock forgets the account, so it publishes once
+/// more with the master that unlock installed; sign-out clears it all.
+/// Keyed on the account alone: a session's account has one master, and the
+/// key is derived from it, so there is nothing else a second publish could
+/// change.
+#[derive(Debug, Default)]
+pub(crate) struct InviteKeyPublishMemo {
+    published: HashSet<String>,
+}
+
+impl InviteKeyPublishMemo {
+    /// Whether `account_id` still has to publish.
+    pub(crate) fn needs_publish(&self, account_id: &str) -> bool {
+        !self.published.contains(account_id)
+    }
+
+    /// Record a publish the server accepted.
+    pub(crate) fn record(&mut self, account_id: &str) {
+        self.published.insert(account_id.to_string());
+    }
+
+    /// Publish again for this account on the next pass (after an unlock).
+    pub(crate) fn forget(&mut self, account_id: &str) {
+        self.published.remove(account_id);
+    }
+
+    /// Forget every account (sign-out).
+    pub(crate) fn clear(&mut self) {
+        self.published.clear();
+    }
+}
+
 /// The Tauri event payload for one delivered key. The recipient's address is
 /// already normalized (a placeholder `@hippius.local` address is absent), so
 /// the toast says "Someone" instead.
@@ -210,6 +251,8 @@ struct Running {
 pub struct AutoSealState {
     running: tokio::sync::Mutex<Option<Running>>,
     nudge: Arc<tokio::sync::Notify>,
+    /// Held only for a lookup or an insert, never across an await.
+    published: std::sync::Mutex<InviteKeyPublishMemo>,
 }
 
 impl AutoSealState {
@@ -219,6 +262,21 @@ impl AutoSealState {
             running.handle.abort();
             info!("Email invite delivery stopped");
         }
+        if let Ok(mut memo) = self.published.lock() {
+            memo.clear();
+        }
+    }
+
+    /// The session was just unlocked: publish this account's invite key on
+    /// the next pass, and run that pass now. The unlock is the moment the
+    /// key can first be derived for a session that started locked, and an
+    /// invitation mailed to this account is only sealed at mint once the
+    /// key is on the server.
+    pub fn unlocked(&self, account_id: &str) {
+        if let Ok(mut memo) = self.published.lock() {
+            memo.forget(account_id);
+        }
+        self.nudge();
     }
 
     /// Run a pass now instead of at the next tick. A nudge with no task
@@ -289,6 +347,7 @@ async fn run(app: tauri::AppHandle, account_id: String, folder_invites: bool, nu
             debug!("Email invite delivery ended: the session account changed");
             return;
         }
+        publish_invite_key(&state, &account_id).await;
         let outcome = pass(&app, &state, &account_id, folder_invites, &mut memory, &mut plan).await;
         failures = if outcome == PassOutcome::Failed { failures.saturating_add(1) } else { 0 };
         let delay = next_delay(outcome, failures);
@@ -300,6 +359,44 @@ async fn run(app: tauri::AppHandle, account_id: String, folder_invites: bool, nu
                 plan.forget();
             }
         }
+    }
+}
+
+/// Publish this account's invite public key, so an invitation mailed to it
+/// can be sealed at mint time and it can join with nobody online.
+///
+/// Here because this task already runs exactly while the account is signed
+/// in, and ends when the account changes. Once per sign-in
+/// ([`InviteKeyPublishMemo`]), and again after an unlock
+/// ([`AutoSealState::unlocked`]). A locked session (no mnemonic in memory)
+/// or a failed request is a quiet pass, tried again on the next one. Never
+/// prompts, and only the public half is sent.
+async fn publish_invite_key(state: &AppState, account_id: &str) {
+    if !state.invite_auto_seal.published.lock().is_ok_and(|memo| memo.needs_publish(account_id)) {
+        return;
+    }
+    let Ok(mnemonic) = crate::sync::remote::session_mnemonic(state) else {
+        return;
+    };
+    let public = match super::invite_key::account_invite_public_key(&mnemonic) {
+        Ok(public) => public,
+        Err(e) => {
+            warn!(error = %e, "Invite key derivation failed");
+            return;
+        }
+    };
+    drop(mnemonic);
+    let Ok(ctx) = commands::api_ctx_for(state).await else {
+        return;
+    };
+    match commands::http_put_account_invite_key(&state.api_client, ctx.base_url(), ctx.bearer(), &public).await {
+        Ok(()) => {
+            if let Ok(mut memo) = state.invite_auto_seal.published.lock() {
+                memo.record(account_id);
+            }
+            info!("Invite key published");
+        }
+        Err(e) => debug!(error = %e, "Invite key publish failed; retrying next pass"),
     }
 }
 
@@ -759,6 +856,50 @@ mod tests {
 
         // A rotated key is a new delivery.
         assert!(memory.begin("i", "k2"));
+    }
+
+    #[test]
+    fn the_invite_key_is_published_once_per_account_per_sign_in() {
+        let mut memo = InviteKeyPublishMemo::default();
+        assert!(memo.needs_publish("5Alice"), "nothing published yet");
+
+        memo.record("5Alice");
+        assert!(!memo.needs_publish("5Alice"), "no second PUT every pass");
+        assert!(memo.needs_publish("5Bob"), "another account publishes its own");
+
+        // An unlock publishes again, with the master it installed.
+        memo.forget("5Alice");
+        assert!(memo.needs_publish("5Alice"));
+
+        // Sign-out forgets everything.
+        memo.record("5Alice");
+        memo.record("5Bob");
+        memo.clear();
+        assert!(memo.needs_publish("5Alice") && memo.needs_publish("5Bob"));
+    }
+
+    #[tokio::test]
+    async fn an_unlock_forgets_the_account_and_wakes_the_task() {
+        let state = AutoSealState::default();
+        state.published.lock().expect("memo").record("5Alice");
+
+        state.unlocked("5Alice");
+
+        assert!(state.published.lock().expect("memo").needs_publish("5Alice"));
+        // The nudge is kept for the next wait, so it returns at once.
+        tokio::time::timeout(Duration::from_millis(50), state.nudge.notified())
+            .await
+            .expect("the unlock nudged the task");
+    }
+
+    #[tokio::test]
+    async fn sign_out_forgets_every_publish() {
+        let state = AutoSealState::default();
+        state.published.lock().expect("memo").record("5Alice");
+
+        state.stop().await;
+
+        assert!(state.published.lock().expect("memo").needs_publish("5Alice"));
     }
 
     #[test]

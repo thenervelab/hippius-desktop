@@ -29,8 +29,8 @@ use hcfs_client::drive::remote::derive_encryption_key;
 use hcfs_client::mnemonic_blob::{MnemonicBlobError, open_mnemonic, seal_mnemonic};
 use hcfs_shared::network::{
     AcceptDriveInviteRequest, AcceptDriveInviteResponse, CreateDriveInviteRequest, CreateDriveInviteResponse, DriveInviteMetaResponse,
-    DriveMemberEntry, DriveMembersResponse, DriveMembershipEntry, DriveMembershipsResponse, ListFolderEntriesResult, RegisterFolderEntriesRequest,
-    UnregisterFolderEntriesRequest,
+    DriveMemberEntry, DriveMembersResponse, DriveMembershipEntry, DriveMembershipsResponse, EmailDriveInviteResponse, ListFolderEntriesResult,
+    PublishInviteKeyRequest, RegisterFolderEntriesRequest, UnregisterFolderEntriesRequest,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -365,6 +365,46 @@ fn create_drive_invite_response_wire_pinned() {
 
     let folder: CreateDriveInviteResponse = serde_json::from_str(r#"{"invite_token":"tok_abc","path_prefix":"Clients/ACME"}"#).expect("deserialize");
     assert_eq!(folder.path_prefix.as_deref(), Some("Clients/ACME"));
+}
+
+/// The emailed-invite mint (hcfs #514): the desktop reads `recipient_key`
+/// and the folder echo off what the server serializes, and the account
+/// invite-key publish sends exactly the server's request body.
+#[test]
+fn email_invite_mint_and_invite_key_publish_wire_pinned() {
+    use tauri_project_lib::shared_drives::commands::MintedEmailInvite;
+
+    for path_prefix in [None, Some("Clients/ACME".to_string())] {
+        let server = serde_json::to_string(&EmailDriveInviteResponse {
+            invite_id: "a".repeat(64),
+            path_prefix: path_prefix.clone(),
+            recipient_key: "cHVia2V5".to_string(),
+        })
+        .expect("serialize");
+        let ours: MintedEmailInvite = serde_json::from_str(&server).expect("the desktop parses the server's mint");
+        assert_eq!(ours.invite_id, "a".repeat(64));
+        assert_eq!(ours.path_prefix, path_prefix);
+        assert_eq!(ours.recipient_key.as_deref(), Some("cHVia2V5"));
+    }
+
+    let body = serde_json::to_value(PublishInviteKeyRequest {
+        pubkey: "cHVia2V5".to_string(),
+    })
+    .expect("serialize");
+    assert_eq!(
+        body,
+        serde_json::json!({ "pubkey": "cHVia2V5" }),
+        "http_put_account_invite_key sends this type; the server reads exactly `pubkey`"
+    );
+
+    // The key the desktop publishes is hcfs-client's derivation, byte for byte.
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+                          abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    let ours = tauri_project_lib::shared_drives::invite_key::account_invite_public_key(PHRASE).expect("derive");
+    let theirs = hcfs_client::client::invite_key::InviteAccountKey::derive(PHRASE)
+        .expect("derive")
+        .public_key();
+    assert_eq!(ours, base64::engine::general_purpose::STANDARD.encode(theirs));
 }
 
 #[test]

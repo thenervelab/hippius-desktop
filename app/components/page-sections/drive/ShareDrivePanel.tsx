@@ -59,6 +59,8 @@ import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import {
   driveInvitesVersionAtom,
   shareDialogAtom,
+  shareDialogTabAtom,
+  type ShareDialogTab,
   shareDriveModalAtom,
   type ShareDriveModalTarget,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -205,6 +207,7 @@ function wireIdentity(
 function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; onClose: () => void }) {
   const queryClient = useQueryClient();
   const setShareDialogTarget = useSetAtom(shareDialogAtom);
+  const setShareDialogTab = useSetAtom(shareDialogTabAtom);
   const refreshSyncPaths = useSetAtom(triggerSyncPathRefreshAtom);
   const memberships = useSharedDriveMemberships();
   const { data: overview } = useStorageOverview();
@@ -273,7 +276,10 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
 
   const { busy, rowError, run } = useRowChanges(onChanged, reload, onNotEntitled);
 
-  const openShareDialog = useCallback(() => {
+  const openShareDialog = useCallback((tab?: ShareDialogTab) => {
+    // "Invite" opens the dialog on By email and "New link" on By link; the
+    // empty state's Share keeps whichever tab was used last.
+    if (tab) setShareDialogTab(tab);
     // Close the panel as the dialog opens: they are two surfaces for one
     // drive, and on a small screen the panel sits above the dialog's layer.
     onClose();
@@ -293,7 +299,7 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
             folderHash: target.folderHash,
           },
     );
-  }, [onClose, setShareDialogTarget, folder, folderPath, pathPrefix, target]);
+  }, [onClose, setShareDialogTarget, setShareDialogTab, folder, folderPath, pathPrefix, target]);
 
   const panel = state.kind === "ready" ? state.panel : null;
   // Before the listing lands, whether links will show is a guess from the
@@ -613,7 +619,7 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
               type="button"
               variant="primary"
               size="auto"
-              onClick={openShareDialog}
+              onClick={() => openShareDialog()}
               className="ml-auto h-[38px] gap-1.5 rounded-[8px] px-4 text-sm font-medium"
             >
               <Icons.Link className="size-4" />
@@ -688,7 +694,8 @@ function PanelContent({
   folder: boolean;
   expectManage: boolean;
   retry: () => void;
-  onShare: () => void;
+  /** Opens the Share dialog, on the given tab or the one used last. */
+  onShare: (tab?: ShareDialogTab) => void;
   /** Whether Invite, New link and Share are offered, or the upgrade card. */
   gate: SharingGate;
   onUpgrade: () => void;
@@ -742,7 +749,7 @@ function PanelContent({
         <GroupHeader id="access-people" title="People" count={1} />
         <PersonItem person={people[0]} ctx={ctx} />
         {gate === "allowed" ? (
-          <EmptyAccess folder={folder} onShare={onShare} />
+          <EmptyAccess folder={folder} onShare={() => onShare()} />
         ) : gate === "loading" ? (
           <SharingActionsSkeleton className="mt-4" />
         ) : null}
@@ -785,7 +792,7 @@ function PanelContent({
             title="People"
             count={peopleCount(panel)}
             highlighted={flash === "people"}
-            action={addAction({ label: "Invite", onClick: onShare })}
+            action={addAction({ label: "Invite", onClick: () => onShare("email") })}
           />
           <ul>
             {peopleShown.slice(0, PANEL_PREVIEW.people).map((person) => (
@@ -834,7 +841,7 @@ function PanelContent({
             title="Links"
             count={`${panel.links.length} active`}
             highlighted={flash === "links"}
-            action={addAction({ label: "New link", onClick: onShare })}
+            action={addAction({ label: "New link", onClick: () => onShare("link") })}
           />
           {ctx.locked && linksShown.length > 0 ? (
             <InlineNotice tone="info" className="mb-1">

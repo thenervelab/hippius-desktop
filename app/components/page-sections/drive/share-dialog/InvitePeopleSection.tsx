@@ -1,7 +1,7 @@
 "use client";
 
-// "Invite people": one address, one role, one button. It only ever calls the
-// email command (`POST /v1/drive-invites/email`), which binds the invite to
+// The Share dialog's "By email" tab: one address, one role, one button. It
+// only ever calls the email command (`POST /v1/drive-invites/email`), which binds the invite to
 // the recipient, so nothing here can mint a link anybody else could use.
 //
 // The address is checked by Rust as it is typed (`check_invite_email`, the
@@ -9,6 +9,7 @@
 // is pressed and can never accept what the send would refuse.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui";
 import Input from "@/components/ui/input";
 import { Select } from "@/components/ui/select/Select";
@@ -16,6 +17,7 @@ import {
   checkInviteEmail,
   emailDriveInvite,
   emailInvitesAvailable,
+  isSessionLocked,
   type DriveTarget,
   type InviteEmailCheck,
 } from "@/app/lib/tauri/sharedDrives";
@@ -25,10 +27,23 @@ import { COMING_SOON_COPY, EMAIL_INVITE_ROLES } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
 import { SectionNoticeView } from "./SectionNoticeView";
 import { noticeForError, type SectionNotice } from "./shareDialogState";
+import { useUnlockThenResume } from "./useUnlockThenResume";
 
 type EmailRole = (typeof EMAIL_INVITE_ROLES)[number];
 
+/** Under the email field, on drives and folders alike. */
+export const EMAIL_INVITE_HINT = "They get their own invite, just for them.";
+/** Added to the hint for a drive while an address is being typed. */
+export const EMAIL_MANAGER_HINT = "To add a Manager, invite them as an Editor, then change their role below.";
+
 const NOT_CHECKED: InviteEmailCheck = { valid: false };
+
+/**
+ * The info toast after a send whose key could not be sealed to the recipient
+ * at once: the invite went out, and an owner or Manager delivers the key once
+ * they open it (automatically while the app is open, or with Approve).
+ */
+export const MAY_NEED_APPROVING = "They may need approving when they open it.";
 
 export function InvitePeopleSection({
   label,
@@ -60,6 +75,10 @@ export function InvitePeopleSection({
   // or pressed Send: a half-typed address is not a mistake yet.
   const [showCheck, setShowCheck] = useState(false);
   const [sending, setSending] = useState(false);
+  // The in-flight guard is a ref, not `sending`: the send resumed after an
+  // unlock runs through `sendRef`, which can still hold the copy of `send`
+  // from the render where `sending` was true, and would refuse itself.
+  const inFlight = useRef(false);
   const [notice, setNotice] = useState<SectionNotice | null>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
   // The mail probe, as a hint only: the section is always offered, and a
@@ -96,10 +115,13 @@ export function InvitePeopleSection({
       });
   }, []);
 
+  const unlockThenResume = useUnlockThenResume();
+  const sendRef = useRef<(asRole: EmailRole, afterUnlock?: boolean) => Promise<void>>(async () => {});
+
   const send = useCallback(
-    async (asRole: EmailRole) => {
+    async (asRole: EmailRole, afterUnlock = false) => {
       setShowCheck(true);
-      if (sending) return;
+      if (inFlight.current) return;
       // Enter can beat the as-you-type answer; ask once more before refusing.
       let verdict = check;
       if (!verdict.valid) {
@@ -108,11 +130,12 @@ export function InvitePeopleSection({
         if (!verdict.valid) return;
       }
       const address = email.trim();
+      inFlight.current = true;
       setSending(true);
       setNotice(null);
       setSentTo(null);
       try {
-        await emailDriveInvite(label, address, {
+        const sent = await emailDriveInvite(label, address, {
           role: asRole,
           target,
           ...(folder ? { pathPrefix: pathPrefix ?? "" } : {}),
@@ -123,8 +146,16 @@ export function InvitePeopleSection({
         setCheck(NOT_CHECKED);
         setShowCheck(false);
         setSentTo(address);
+        if (sent.presealed === false) toast.info(MAY_NEED_APPROVING);
         onSent();
       } catch (err) {
+        // Locked: nothing was sent. Unlock, then send the same address once
+        // more; a cancelled unlock is refused again the same way, and the
+        // address stays in the field either way.
+        if (isSessionLocked(err)) {
+          if (!afterUnlock) unlockThenResume(() => void sendRef.current(asRole, true));
+          return;
+        }
         const next = noticeForError(err);
         if (next.kind === "notEntitled") onNotEntitled?.();
         if (next.kind === "comingSoon" && next.text === COMING_SOON_COPY.email) {
@@ -132,11 +163,15 @@ export function InvitePeopleSection({
         }
         setNotice(next);
       } finally {
+        inFlight.current = false;
         setSending(false);
       }
     },
-    [check, sending, email, label, target, folder, pathPrefix, onSent, onNotEntitled],
+    [check, email, label, target, folder, pathPrefix, onSent, onNotEntitled, unlockThenResume],
   );
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
 
   const sendAsViewer = useCallback(() => {
     setRole("reader");
@@ -150,13 +185,7 @@ export function InvitePeopleSection({
   const invalidMessage = showCheck && !check.valid ? check.message : undefined;
 
   return (
-    <section aria-labelledby="share-invite-people" className="@container">
-      <h3
-        id="share-invite-people"
-        className="mb-2 text-sm font-medium text-grey-10 dark:text-white"
-      >
-        Invite people
-      </h3>
+    <div className="@container">
       <form
         className="flex flex-col gap-2 @xs:flex-row @xs:items-start"
         onSubmit={(e) => {
@@ -185,7 +214,7 @@ export function InvitePeopleSection({
           />
         </div>
         {/* The role and the button appear only once there is an address to
-            send to: at rest the section is one field, like any share sheet. */}
+            send to: at rest the tab is one field, like any share sheet. */}
         {composing ? (
           <div className="flex gap-2">
             <Select
@@ -223,18 +252,14 @@ export function InvitePeopleSection({
         </p>
       ) : null}
 
-      {composing ? (
-        <div className="mt-2 flex flex-col gap-1">
-          <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-            They get their own invite that only works for them.
-          </p>
-          {folder ? null : (
-            <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-              To add a Manager, invite them as an Editor, then change their role below.
-            </p>
-          )}
-        </div>
-      ) : null}
+      {/* What an emailed invite is, at rest too; how to add a Manager (a
+          drive role only) once there is someone to invite. */}
+      <div className="mt-2 flex flex-col gap-1">
+        <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_INVITE_HINT}</p>
+        {composing && !folder ? (
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_MANAGER_HINT}</p>
+        ) : null}
+      </div>
 
       {sentTo ? (
         <InlineNotice tone="success" className="mt-3">
@@ -255,6 +280,6 @@ export function InvitePeopleSection({
           className="mt-3"
         />
       ) : null}
-    </section>
+    </div>
   );
 }

@@ -17,6 +17,24 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Share by email or by link from one place.** The Share dialog now opens
+  with two tabs at the top, By email and By link, instead of separate
+  sections above and below the people list. It remembers the tab you used
+  last, and Manage access's Invite and New link open the matching tab.
+
+- **People you invite by email can join even after you close the app.** If
+  they already have a Hippius account, they can join as soon as they open the
+  invitation, without waiting for you or a Manager to be online.
+- **Sending an email invite asks you to unlock first when the app is locked**,
+  the same way creating a link does, and sends once you have. Cancel and
+  nothing is sent; the address stays typed. If an invite could not be made
+  ready for them straight away, the app says they may need approving when
+  they open it.
+
+- **Share a single folder in every release.** Folder sharing is no longer
+  held to internal builds: share one folder as Viewer or Editor by link or
+  by email, see folders shared with you, and change someone's folders from
+  Manage access.
 - **Shared drives are available in every release, not only beta.** Plus, Max
   and Scale plans can share a drive and invite people from the released app,
   and the plan cards no longer mark the shared team drive as coming soon.
@@ -71,6 +89,23 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **An email invite sent from a locked app always goes out after you
+  unlock.** Unlocking very quickly could leave the invite unsent.
+
+- **The Share a drive picker has room to breathe.** It is now as wide as the
+  Share dialog it opens, so drive names and the upgrade card no longer look
+  cramped.
+
+- **Picking the owner in "Added by" finds their files.** Inside a shared
+  drive, files that show "Owner" in the Added by column because nobody was
+  recorded as adding them now appear when you pick the owner, alongside the
+  files the owner did add. The options show people by name, like the column.
+- **A folder shared with you shows its own size.** In Shared with me, a
+  folder shared on its own shows how big it is and how many files it holds,
+  not the whole drive's figures.
+- **Dropdown values are easy to read in light mode.** Roles and link
+  expiry in the Share dialog and Manage access no longer show in a pale grey
+  that looked disabled.
 - **Invites and links show the right time left.** A 7-day invite sent a moment
   ago now says "7 days", not "6 days", and the Share dialog and Manage access
   always agree on how long an invite or link has.
@@ -103,6 +138,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Shared with Me is always on the Drive page, with Share a drive.** When
+  nothing is shared with you yet, it explains what shared drives are for and
+  links to the guide. Share a drive lets you pick one of your drives and opens
+  its Share dialog.
 - **Share one folder as a Viewer or Editor** (internal test builds only for now), by a single-use link or by email. People you share a folder with see it under Shared with me, can open it without seeing anything above it, and can do what their role allows. Whatever the server does not offer yet (single-folder sharing, Editor on a folder, email invites) says "coming soon" instead of disappearing.
 - **Editors can share a folder by link from a drive someone else owns.** Viewers and frozen drives do not see the option.
 - **Invite people to a shared drive by email.** The owner can send a single-use invitation from the Share dialog, see where each one is on the Links tab, and approve it once the person opens it.

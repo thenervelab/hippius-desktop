@@ -110,6 +110,13 @@ fn seal_invite_key_with(
     let secret = StaticSecret::from(ephemeral_secret);
     let epk = PublicKey::from(&secret);
     let shared = secret.diffie_hellman(&requester);
+    // A low-order recipient key makes the agreement zero whatever our secret
+    // is, and the blob would then open under `HKDF(0, invite_id)`: readable
+    // by the server or anyone holding its database. Never seal to one. The
+    // server refuses such keys too; this does not rely on it.
+    if !shared.was_contributory() {
+        return Err(InviteKeyError::Message("recipient key is not a usable X25519 public key".into()));
+    }
     let mut key = derive_key(shared.as_bytes(), invite_id)?;
 
     let result = (|| {
@@ -139,11 +146,34 @@ fn seal_invite_key_with(
     result
 }
 
+/// BLAKE3 `derive_key` context of the account's invite key: hcfs-client's,
+/// re-exported so there is one definition. The frozen vector below pins it
+/// together with the derivation.
+pub use hcfs_client::client::invite_key::INVITE_ACCOUNT_KEY_CONTEXT;
+
+/// The account's invite PUBLIC key, standard padded base64.
+///
+/// Every account publishes this (`PUT /v1/account/invite-key`) so that
+/// whoever mails it a drive invitation can seal the drive key to it on the
+/// spot, and it can join without the sender being online. Derived, not
+/// stored: `sk = BLAKE3::derive_key(CONTEXT, bip39_seed(master)[..32])`,
+/// `pk = X25519(sk)`, so every device of the account publishes the same key.
+///
+/// The derivation is `hcfs_client::client::invite_key`'s, not a copy of it:
+/// the pair the console and this app arrive at must be the one the server
+/// and every other client agree on. The secret half is zeroed when the pair
+/// drops at the end of this function; only the public half leaves it. The
+/// desktop never opens such a seal (joining stays in the console).
+pub fn account_invite_public_key(master_mnemonic: &str) -> Result<String, InviteKeyError> {
+    let pair = hcfs_client::client::invite_key::InviteAccountKey::derive(master_mnemonic).map_err(|e| InviteKeyError::Message(e.to_string()))?;
+    Ok(STANDARD.encode(pair.public_key()))
+}
+
 /// Open a `sealed_key` with the recipient's secret. The desktop never
 /// receives emailed invites (joining stays in the console), so this exists
 /// to prove the seal round-trips and to pin the console's blob.
 #[cfg(test)]
-fn open_invite_key(sealed_key_b64: &str, secret_key: [u8; 32], invite_id: &str) -> Result<[u8; 32], InviteKeyError> {
+pub(crate) fn open_invite_key(sealed_key_b64: &str, secret_key: [u8; 32], invite_id: &str) -> Result<[u8; 32], InviteKeyError> {
     let raw = STANDARD
         .decode(sealed_key_b64)
         .map_err(|_| InviteKeyError::Message("sealed key is not base64".into()))?;
@@ -257,5 +287,64 @@ mod tests {
     fn stays_inside_the_server_cap() {
         let sealed = seal_invite_key(&[1u8; 32], KAT_REQUESTER_PUBKEY, KAT_INVITE_ID).expect("seal");
         assert!(STANDARD.decode(sealed).expect("b64").len() <= MAX_BLOB_BYTES);
+    }
+
+    /// A low-order key would put the drive key under `HKDF(0, invite_id)`.
+    #[test]
+    fn refuses_to_seal_to_a_low_order_key() {
+        for low_order in [[0u8; 32], {
+            let mut one = [0u8; 32];
+            one[0] = 1;
+            one
+        }] {
+            let err = seal_invite_key(&[1u8; 32], &STANDARD.encode(low_order), KAT_INVITE_ID).expect_err("low-order key");
+            assert!(err.to_string().contains("not a usable"), "{err}");
+        }
+    }
+
+    /// The BIP-39 all-`abandon` test phrase. Public, and never anyone's key.
+    const ABANDON_ART: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+                               abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+
+    /// Frozen: the same public key `hcfs_client::client::invite_key` and the
+    /// console's `invite-account-key.test.ts` pin for this phrase. A drift
+    /// here publishes a key the other clients never sealed to.
+    #[test]
+    fn account_key_matches_the_frozen_vector() {
+        let public = account_invite_public_key(ABANDON_ART).expect("derive");
+        assert_eq!(
+            hex::encode(STANDARD.decode(public).expect("b64")),
+            "e81a8f321eea732b73de791feacfebb4d27fecc08a6cf912874225e6d9b78265"
+        );
+        // The secret half too, as the console's test pins it: a seal to the
+        // published key only helps if the recipient's client opens it with
+        // this exact scalar.
+        let pair = hcfs_client::client::invite_key::InviteAccountKey::derive(ABANDON_ART).expect("derive pair");
+        assert_eq!(
+            hex::encode(pair.secret_key()),
+            "309636ca11f67e064d462e8a085cc69f98c8128eabbc546f098f3e6abf55fec8"
+        );
+    }
+
+    #[test]
+    fn a_seal_to_the_account_key_opens_with_its_secret() {
+        let public = account_invite_public_key(ABANDON_ART).expect("derive");
+        let pair = hcfs_client::client::invite_key::InviteAccountKey::derive(ABANDON_ART).expect("derive pair");
+
+        let sealed = seal_invite_key(&[9u8; 32], &public, KAT_INVITE_ID).expect("seal");
+
+        assert_eq!(open_invite_key(&sealed, *pair.secret_key(), KAT_INVITE_ID).expect("open"), [9u8; 32]);
+    }
+
+    /// The context string is part of the frozen derivation. It is re-exported
+    /// from hcfs-client now; this keeps a later "local copy" honest.
+    #[test]
+    fn the_context_is_the_one_every_client_uses() {
+        assert_eq!(INVITE_ACCOUNT_KEY_CONTEXT, "hippius.hcfs.invite-account-key.v1");
+    }
+
+    #[test]
+    fn an_invalid_mnemonic_derives_nothing() {
+        assert!(account_invite_public_key("not a mnemonic").is_err());
     }
 }

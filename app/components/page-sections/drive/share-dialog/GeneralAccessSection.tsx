@@ -1,7 +1,7 @@
 "use client";
 
-// "General access": an invite link anybody holding it can use (a drive), or
-// a single-use link for one person (a folder). It only ever calls the link
+// The Share dialog's "By link" tab: an invite link anybody holding it can
+// use (a drive), or a single-use link for one person (a folder). It only ever calls the link
 // commands, and a folder target only ever calls `create_folder_invite`: the
 // folder's PRESENCE decides, so an empty folder path is refused by Rust
 // rather than quietly becoming a whole-drive invite.
@@ -10,7 +10,7 @@
 // actually sent, and ways to make another or revoke this one.
 
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Check, Globe, Link2 } from "lucide-react";
+import { Check } from "lucide-react";
 import { Button, Icons } from "@/components/ui";
 import { Select } from "@/components/ui/select/Select";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,7 @@ import { SectionNoticeView } from "./SectionNoticeView";
 import {
   describeCreatedLink,
   generalAccessNote,
+  linkHint,
   noticeForError,
   type SectionNotice,
 } from "./shareDialogState";
@@ -151,121 +152,97 @@ export function GeneralAccessSection({
   );
 
   return (
-    <section aria-labelledby="share-general-access">
-      <h3 id="share-general-access" className="mb-2 text-sm font-medium text-grey-10 dark:text-white">
-        General access
-      </h3>
-      <div className="flex items-start gap-3">
-        <span
-          aria-hidden
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-full",
-            created
-              ? "bg-success-100 text-success-40 dark:bg-success-50/15 dark:text-success-50"
-              : "bg-grey-90 text-grey-50 dark:bg-white/10 dark:text-grey-dark-600",
-          )}
-        >
-          {created ? <Globe className="size-[18px]" /> : <Link2 className="size-[18px]" />}
-        </span>
-
-        <div className="@container grid min-w-0 flex-1 gap-2.5">
-          {created ? (
-            <CreatedLink
-              link={created}
-              folder={folder}
-              busy={running}
-              onAnother={() => setCreated(null)}
-              onRevoke={() => void revoke()}
-            />
-          ) : (
-            <>
-              <div>
-                <p className="text-sm font-medium text-grey-10 dark:text-white">
-                  {folder ? "Invite link for one person" : "Invite link"}
-                </p>
-                <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-                  {generalAccessNote({ folder, role, neverExpires: ttlSecs === NEVER_EXPIRES_SECS })}
-                </p>
+    <div className="@container grid min-w-0 gap-2.5">
+      {created ? (
+        <CreatedLink
+          link={created}
+          folder={folder}
+          busy={running}
+          onAnother={() => setCreated(null)}
+          onRevoke={() => void revoke()}
+        />
+      ) : (
+        <>
+          {/* One row that never wraps: the Access select at a fixed width,
+              the expiry select growing into whatever is left so the row has
+              no empty gap, and the button at its natural width, flush right
+              under Done. Each select sits under a small label; all are 34px
+              tall and bottom-aligned so the button lines up with the selects
+              rather than the labels. The breakpoints key off this column (a
+              container query), not the window, so the dialog at its normal
+              width always gets the row. Only a narrow column stacks: the
+              selects side by side over a full-width button, then each
+              control on its own line at the narrowest. A label always
+              travels with its select. */}
+          <div
+            data-testid="general-access-controls"
+            className="flex flex-col gap-2 @md:flex-row @md:flex-nowrap @md:items-end"
+          >
+            <div className="flex flex-col gap-2 @xs:flex-row @md:contents">
+              <div className="flex min-w-0 flex-col gap-1.5 @xs:flex-1 @md:w-[120px] @md:flex-none">
+                <label htmlFor={roleId} className={FIELD_LABEL}>
+                  Access
+                </label>
+                <Select
+                  id={roleId}
+                  ariaLabel="Link access"
+                  value={role}
+                  onValueChange={(value) => handleRoleChange(value as DriveRole)}
+                  options={roleOptions.map((r) => ({
+                    label: driveRoleLabel(r),
+                    value: r,
+                    description: driveRoleDescription(r),
+                  }))}
+                  size="compact"
+                  minimal
+                />
               </div>
-              {/* One row that never wraps: the Access select at a fixed
-                  width, the expiry select growing into whatever is left so
-                  the row has no empty gap, and the button at its natural
-                  width, flush right under Done. Each select sits under a
-                  small label; all are 34px tall and bottom-aligned so the
-                  button lines up with the selects rather than the labels.
-                  The breakpoints key off this column (a container query),
-                  not the window, so the dialog at its normal width always
-                  gets the row. Only a narrow column stacks: the selects side
-                  by side over a full-width button, then each control on its
-                  own line at the narrowest. A label always travels with its
-                  select. */}
-              <div
-                data-testid="general-access-controls"
-                className="flex flex-col gap-2 @md:flex-row @md:flex-nowrap @md:items-end"
-              >
-                <div className="flex flex-col gap-2 @xs:flex-row @md:contents">
-                  <div className="flex min-w-0 flex-col gap-1.5 @xs:flex-1 @md:w-[120px] @md:flex-none">
-                    <label htmlFor={roleId} className={FIELD_LABEL}>
-                      Access
-                    </label>
-                    <Select
-                      id={roleId}
-                      ariaLabel="Link access"
-                      value={role}
-                      onValueChange={(value) => handleRoleChange(value as DriveRole)}
-                      options={roleOptions.map((r) => ({
-                        label: driveRoleLabel(r),
-                        value: r,
-                        description: driveRoleDescription(r),
-                      }))}
-                      size="compact"
-                      minimal
-                    />
-                  </div>
-                  <div className="flex min-w-0 flex-col gap-1.5 @xs:flex-1 @md:min-w-[140px] @md:flex-1">
-                    <label htmlFor={ttlId} className={FIELD_LABEL}>
-                      Link expires
-                    </label>
-                    <Select
-                      id={ttlId}
-                      ariaLabel="Link expires"
-                      value={String(ttlSecs)}
-                      onValueChange={(value) => setTtlSecs(Number(value))}
-                      options={ttlOptions.map(({ label: text, secs }) => ({ label: text, value: String(secs) }))}
-                      size="compact"
-                      minimal
-                    />
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="auto"
-                  disabled={running}
-                  onClick={() => void mint(role)}
-                  className="h-[34px] w-full shrink-0 gap-1.5 whitespace-nowrap rounded-[8px] px-3.5 text-[13px] font-medium @md:ml-auto @md:w-auto"
-                >
-                  <Icons.Link className="size-3.5" />
-                  {running ? "Creating link…" : "Create link"}
-                </Button>
+              <div className="flex min-w-0 flex-col gap-1.5 @xs:flex-1 @md:min-w-[140px] @md:flex-1">
+                <label htmlFor={ttlId} className={FIELD_LABEL}>
+                  Link expires
+                </label>
+                <Select
+                  id={ttlId}
+                  ariaLabel="Link expires"
+                  value={String(ttlSecs)}
+                  onValueChange={(value) => setTtlSecs(Number(value))}
+                  options={ttlOptions.map(({ label: text, secs }) => ({ label: text, value: String(secs) }))}
+                  size="compact"
+                  minimal
+                />
               </div>
-            </>
-          )}
+            </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="auto"
+              disabled={running}
+              onClick={() => void mint(role)}
+              data-share-link-action=""
+              className="h-[34px] w-full shrink-0 gap-1.5 whitespace-nowrap rounded-[8px] px-3.5 text-[13px] font-medium @md:ml-auto @md:w-auto"
+            >
+              <Icons.Link className="size-3.5" />
+              {running ? "Creating link…" : "Create link"}
+            </Button>
+          </div>
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+            {generalAccessNote({ folder, role, neverExpires: ttlSecs === NEVER_EXPIRES_SECS })}
+          </p>
+        </>
+      )}
 
-          {revoked ? (
-            <InlineNotice tone="success">That link was revoked and no longer works.</InlineNotice>
-          ) : null}
-          {notice ? (
-            <SectionNoticeView
-              notice={notice}
-              viewOnlyLabel="Create as view only"
-              onViewOnly={mintAsViewer}
-              onUpgrade={onUpgrade}
-            />
-          ) : null}
-        </div>
-      </div>
-    </section>
+      {revoked ? (
+        <InlineNotice tone="success">That link was revoked and no longer works.</InlineNotice>
+      ) : null}
+      {notice ? (
+        <SectionNoticeView
+          notice={notice}
+          viewOnlyLabel="Create as view only"
+          onViewOnly={mintAsViewer}
+          onUpgrade={onUpgrade}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -315,9 +292,7 @@ function CreatedLink({
       <div>
         <p className="text-sm font-medium text-grey-10 dark:text-white">Anyone with the link</p>
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-          {folder
-            ? "Works once, for the first person who opens it."
-            : "Anyone with the link can join until it expires."}
+          {linkHint({ folder, neverExpires: link.expiresInSecs >= NEVER_EXPIRES_SECS })}
         </p>
       </div>
       <div

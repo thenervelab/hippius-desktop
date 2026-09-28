@@ -766,6 +766,25 @@ fn approve_email_invite_seals_the_drives_key() {
     );
 }
 
+/// An emailed invite is sealed to the recipient at send, through the same
+/// two helpers Approve uses, and a locked app sends nothing: the key check
+/// comes before the mint, so the frontend can unlock and send again.
+#[test]
+fn an_email_invite_needs_the_key_before_it_is_sent_and_preseals_like_approve() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn email_drive_invite(");
+    let locked = body.find("require_session_key(").expect("the send checks the key is loaded");
+    let mint = body.find("http_email_invite(").expect("then mints");
+    assert!(locked < mint, "a locked app is refused before anything is sent");
+    assert!(body.contains("preseal_row("), "the folder echo decides what is pre-sealed");
+    assert!(body.contains("preseal_landed("), "the sender learns whether it landed");
+
+    let preseal = fn_body(&src, "async fn preseal_minted_invite(");
+    assert!(preseal.contains("invite_seal_keys("), "keys come from the shared helper");
+    assert!(preseal.contains("seal_invite_row("), "sealed and posted by the shared helper");
+    assert!(!preseal.contains("seal_invite_key("), "no second seal path");
+}
+
 fn auto_seal_src() -> String {
     std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shared_drives/auto_seal.rs")).expect("read auto_seal.rs")
 }

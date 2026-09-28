@@ -1,5 +1,5 @@
-// The Share dialog: Invite people, People with access, General access, Done.
-// "Invite people" calls only the email command; "General access" calls only
+// The Share dialog: one box with two tabs (By email | By link), People with
+// access, Done. By email calls only the email command; By link calls only
 // the link commands, and a folder target only ever the folder one. People
 // with access comes from one Rust fold and changes roles in place, putting a
 // refused change back with the reason. Every refusal is shown inline, beside
@@ -17,13 +17,15 @@ import {
   driveInvitesVersionAtom,
   inviteKeyDeliveredVersionAtom,
   shareDialogAtom,
+  shareDialogTabAtom,
   shareDriveModalAtom,
+  type ShareDialogTab,
   type ShareDriveModalTarget,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import type { DriveInviteInfo, ShareAccess } from "@/app/lib/tauri/sharedDrives";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
-// The dialog mounts three sections and a Radix portal; under a loaded
+// The dialog mounts two tab panels, a people list and a Radix portal; under a loaded
 // parallel run the default one second is not always enough to find a row.
 configure({ asyncUtilTimeout: 3000 });
 
@@ -47,6 +49,12 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
+
+// Sending from a locked app runs the unlock (`emailInviteUnlock.test.tsx`
+// covers it); here the app is unlocked.
+vi.mock("@/app/lib/hooks/useUnlockFlow", () => ({
+  useUnlockFlow: () => ({ unlock: vi.fn(async () => {}), busy: false, isOAuth: true }),
+}));
 
 const createDriveInviteMock = vi.fn();
 const createFolderInviteMock = vi.fn();
@@ -81,6 +89,8 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
 });
 
 const INVALID = "Enter one email address, like name@example.com.";
+const EMAIL_HINT = "They get their own invite, just for them.";
+const MANAGER_HINT = "To add a Manager, invite them as an Editor, then change their role below.";
 const UPGRADE_TITLE = "Sharing is available on Plus, Max and Scale plans.";
 const WEEK = 7 * 24 * 60 * 60;
 
@@ -118,9 +128,13 @@ function mailed(id: string, email: string, status: DriveInviteInfo["emailStatus"
   };
 }
 
-function renderDialog(target: ShareDriveModalTarget | null = { label: "team-docs", folderName: "team-docs" }) {
+function renderDialog(
+  target: ShareDriveModalTarget | null = { label: "team-docs", folderName: "team-docs" },
+  tab?: ShareDialogTab,
+) {
   const store = createStore();
   store.set(shareDialogAtom, target);
+  if (tab) store.set(shareDialogTabAtom, tab);
   render(
     <QueryClientProvider client={new QueryClient()}>
       <Provider store={store}>{(<ShareDialog />) as ReactNode}</Provider>
@@ -140,6 +154,19 @@ async function typeEmail(value: string) {
   await waitFor(() => expect(checkInviteEmailMock).toHaveBeenCalledWith(value));
   // Let Rust's verdict land, so Send is enabled before anyone presses it.
   await act(async () => {});
+}
+
+/** Picks a tab by clicking it, as a person would. */
+function showTab(name: "By email" | "By link") {
+  fireEvent.click(screen.getByRole("tab", { name }));
+}
+
+/** A tab's panel, shown or not, found through the tab's aria-controls. */
+function tabPanel(name: "By email" | "By link") {
+  const id = screen.getByRole("tab", { name }).getAttribute("aria-controls")!;
+  const panel = document.getElementById(id)!;
+  expect(panel).toHaveAttribute("role", "tabpanel");
+  return panel;
 }
 
 /** Answers a pending invite's in-row question with "Cancel invite". */
@@ -199,11 +226,17 @@ describe("the dialog", () => {
     expect(screen.getByText("Share “Clients/ACME”")).toBeInTheDocument();
   });
 
-  it("puts Invite people, then People with access, then General access, then one Done", async () => {
+  it("puts the By email | By link box first, then People with access, then one Done", async () => {
     renderDialog();
     await screen.findByText("(1)");
+    const tablist = screen.getByRole("tablist", { name: "How to share" });
+    const people = screen.getByRole("heading", { name: "People with access (1)" });
+    const done = screen.getByRole("button", { name: "Done" });
+    expect(tablist.compareDocumentPosition(people) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(people.compareDocumentPosition(done) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The old separate sections are gone.
     const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-    expect(headings).toEqual(["Invite people", "People with access (1)", "General access"]);
+    expect(headings).toEqual(["People with access (1)"]);
     expect(screen.getAllByRole("button", { name: "Done" })).toHaveLength(1);
     // No Copy link in the footer: copying belongs to a created link.
     expect(screen.queryByRole("button", { name: "Copy link" })).not.toBeInTheDocument();
@@ -229,6 +262,87 @@ describe("the dialog", () => {
   });
 });
 
+describe("the tabs", () => {
+  it("offers By email then By link, and opens on By email", () => {
+    renderDialog();
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((t) => t.textContent)).toEqual(["By email", "By link"]);
+    expect(screen.getByRole("tab", { name: "By email" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "By link" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByLabelText("Email address")).toBeVisible();
+  });
+
+  it("switches panels on a click, each tab tied to its panel", () => {
+    renderDialog();
+    showTab("By link");
+    expect(screen.getByRole("tab", { name: "By link" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Create link" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Email address" })).not.toBeInTheDocument();
+    expect(tabPanel("By link")).toHaveAttribute("aria-labelledby", screen.getByRole("tab", { name: "By link" }).id);
+    showTab("By email");
+    expect(screen.getByRole("textbox", { name: "Email address" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+  });
+
+  it("is one tab stop, moved with the arrow keys, Home and End", () => {
+    renderDialog();
+    const email = screen.getByRole("tab", { name: "By email" });
+    const link = screen.getByRole("tab", { name: "By link" });
+    expect([email.tabIndex, link.tabIndex]).toEqual([0, -1]);
+    email.focus();
+    fireEvent.keyDown(email, { key: "ArrowRight" });
+    expect(link).toHaveFocus();
+    expect(link).toHaveAttribute("aria-selected", "true");
+    expect([email.tabIndex, link.tabIndex]).toEqual([-1, 0]);
+    fireEvent.keyDown(link, { key: "ArrowRight" });
+    expect(email).toHaveFocus();
+    fireEvent.keyDown(email, { key: "End" });
+    expect(link).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(link, { key: "Home" });
+    expect(email).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(email, { key: "ArrowLeft" });
+    expect(link).toHaveFocus();
+  });
+
+  it("really hides the inactive panel, attribute and class, though its flex layout", () => {
+    renderDialog();
+    const link = tabPanel("By link");
+    expect(link).toHaveAttribute("hidden");
+    expect(link.className.split(/\s+/)).toContain("hidden");
+    expect(link).not.toBeVisible();
+    expect(tabPanel("By email")).not.toHaveAttribute("hidden");
+    showTab("By link");
+    expect(tabPanel("By email")).toHaveAttribute("hidden");
+    expect(tabPanel("By email").className.split(/\s+/)).toContain("hidden");
+    expect(tabPanel("By link")).toBeVisible();
+  });
+
+  it("keeps a typed address through a look at By link", async () => {
+    renderDialog();
+    await typeEmail("ada@example.com");
+    showTab("By link");
+    showTab("By email");
+    expect(screen.getByLabelText("Email address")).toHaveValue("ada@example.com");
+    expect(screen.getByRole("button", { name: "Send invite" })).toBeEnabled();
+  });
+
+  it("remembers the tab for the session, across a close and a reopen", () => {
+    const store = renderDialog();
+    showTab("By link");
+    expect(store.get(shareDialogTabAtom)).toBe("link");
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    act(() => store.set(shareDialogAtom, { label: "other-drive", folderName: "other-drive" }));
+    expect(screen.getByRole("tab", { name: "By link" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Create link" })).toBeInTheDocument();
+  });
+
+  it("opens on the tab it is asked for", () => {
+    renderDialog(undefined, "link");
+    expect(screen.getByRole("tab", { name: "By link" })).toHaveAttribute("aria-selected", "true");
+  });
+});
+
 // Sharing is on Plus, Max and Scale. Rust decides (`canShareDrives`); the
 // dialog reads it through `useSharedDrivesInPlan`, mocked here as `plan`.
 describe("a plan without sharing (Free, Starter)", () => {
@@ -237,15 +351,15 @@ describe("a plan without sharing (Free, Starter)", () => {
       members: [{ memberSs58: ANN, role: "writer", memberName: "Ann", memberEmail: "ann@example.com", isYou: false }],
     });
 
-  it("puts the upgrade card where Invite people and General access were", async () => {
+  it("puts the upgrade card in place of the whole tabbed box", async () => {
     plan.included = false;
     renderDialog();
     expect(screen.getByText(UPGRADE_TITLE)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Invite people" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "General access" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("tabpanel", { hidden: true })).toHaveLength(0);
     expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Send invite" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send invite", hidden: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link", hidden: true })).not.toBeInTheDocument();
     // Not an error and not a toast: the card is the whole answer.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(toast.error).not.toHaveBeenCalled();
@@ -265,7 +379,8 @@ describe("a plan without sharing (Free, Starter)", () => {
     flags.folderRoles = true;
     renderDialog(folderTarget());
     expect(screen.getByText(UPGRADE_TITLE)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link", hidden: true })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
   });
 
@@ -300,13 +415,14 @@ describe("a plan without sharing (Free, Starter)", () => {
 });
 
 describe("while the plan is loading", () => {
-  it("shows skeletons where the add-people controls go, and no upgrade card", () => {
+  it("shows one skeleton where the tabbed box goes, and no upgrade card", () => {
     plan.included = undefined;
     renderDialog();
-    expect(screen.getAllByRole("status", { name: "Loading sharing options" })).toHaveLength(2);
+    expect(screen.getAllByRole("status", { name: "Loading sharing options" })).toHaveLength(1);
     expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link", hidden: true })).not.toBeInTheDocument();
     // The people list does not wait on the plan.
     expect(listShareAccessMock).toHaveBeenCalled();
   });
@@ -319,12 +435,13 @@ describe("while the plan is loading", () => {
     // The same target again re-renders the dialog, which reads the answer.
     act(() => store.set(shareDialogAtom, { label: "team-docs", folderName: "team-docs" }));
     expect(await screen.findByLabelText("Email address")).toBeInTheDocument();
+    showTab("By link");
     expect(screen.getByRole("button", { name: "Create link" })).toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "Loading sharing options" })).not.toBeInTheDocument();
   });
 });
 
-describe("Invite people", () => {
+describe("By email", () => {
   it("sends through the email command only, and stays open for the next person", async () => {
     emailDriveInviteMock.mockResolvedValue({ inviteId: "i1" });
     const store = renderDialog();
@@ -358,18 +475,20 @@ describe("Invite people", () => {
     expect(opts).not.toHaveProperty("expiresInSecs");
   });
 
-  it("is one field at rest; the role, Send and help appear once there is text", async () => {
+  it("is one field and one line at rest; the role, Send and the Manager tip appear once there is text", async () => {
     renderDialog();
     expect(screen.getByLabelText("Email address")).toBeInTheDocument();
+    expect(screen.getByText(EMAIL_HINT)).toBeInTheDocument();
     expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send invite" })).not.toBeInTheDocument();
-    expect(screen.queryByText("They get their own invite that only works for them.")).not.toBeInTheDocument();
+    expect(screen.queryByText(MANAGER_HINT)).not.toBeInTheDocument();
     await typeEmail("a");
     expect(screen.getByLabelText("Invite role")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send invite" })).toBeInTheDocument();
-    expect(screen.getByText("They get their own invite that only works for them.")).toBeInTheDocument();
+    expect(screen.getByText(MANAGER_HINT)).toBeInTheDocument();
     await typeEmail("");
     expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
+    expect(screen.getByText(EMAIL_HINT)).toBeInTheDocument();
   });
 
   it("offers Viewer and Editor only, and says how to add a Manager", async () => {
@@ -379,10 +498,8 @@ describe("Invite people", () => {
     expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
     expect(screen.queryByRole("option", { name: "Manager" })).not.toBeInTheDocument();
-    expect(
-      screen.getByText("To add a Manager, invite them as an Editor, then change their role below."),
-    ).toBeInTheDocument();
-    expect(screen.getByText("They get their own invite that only works for them.")).toBeInTheDocument();
+    expect(screen.getByText(MANAGER_HINT)).toBeInTheDocument();
+    expect(screen.getByText(EMAIL_HINT)).toBeInTheDocument();
   });
 
   it("checks the address with Rust and says what is wrong once the field is left", async () => {
@@ -447,15 +564,13 @@ describe("Invite people", () => {
     renderDialog();
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
-    const invite = screen.getByRole("heading", { name: "Invite people" }).closest("section")!;
-    await waitFor(() => expect(invite).toHaveTextContent(text));
+    await waitFor(() => expect(tabPanel("By email")).toHaveTextContent(text));
     // The address stays, so trying again is one click.
     expect(screen.getByLabelText("Email address")).toHaveValue("ada@example.com");
     expect(toast.error).not.toHaveBeenCalled();
     expect(toast.info).not.toHaveBeenCalled();
-    // The link section is untouched.
-    const link = screen.getByRole("heading", { name: "General access" }).closest("section")!;
-    expect(link).not.toHaveTextContent(text);
+    // The link tab is untouched.
+    expect(tabPanel("By link")).not.toHaveTextContent(text);
   });
 
   // The server is the authority: a plan the app thought could share still
@@ -466,8 +581,9 @@ describe("Invite people", () => {
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
     expect(await screen.findByText(UPGRADE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create link", hidden: true })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /People with access/ })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(toast.error).not.toHaveBeenCalled();
@@ -476,7 +592,7 @@ describe("Invite people", () => {
   });
 });
 
-describe("General access", () => {
+describe("By link", () => {
   it("creates through the drive link command only and shows the link with its key hidden", async () => {
     const writeText = installClipboard();
     createDriveInviteMock.mockResolvedValue({
@@ -486,6 +602,7 @@ describe("General access", () => {
       maxUses: 50,
     });
     const store = renderDialog();
+    showTab("By link");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
 
     await waitFor(() =>
@@ -515,6 +632,7 @@ describe("General access", () => {
 
   it("keeps access, expiry and Create link on one non-wrapping row at dialog width", () => {
     renderDialog();
+    showTab("By link");
     const row = screen.getByTestId("general-access-controls");
     const access = screen.getByLabelText("Link access");
     const expires = screen.getByLabelText("Link expires");
@@ -551,6 +669,7 @@ describe("General access", () => {
 
   it("labels the access and expiry selects and ties each label to its select", () => {
     renderDialog();
+    showTab("By link");
     const row = screen.getByTestId("general-access-controls");
     const access = screen.getByLabelText("Link access");
     const expires = screen.getByLabelText("Link expires");
@@ -571,10 +690,27 @@ describe("General access", () => {
     }
   });
 
-  it("says anyone with a drive link can join", () => {
+  it("says anyone with a drive link can join until it expires, or until revoked when it never does", () => {
     renderDialog();
-    expect(screen.getByText("Invite link")).toBeInTheDocument();
+    showTab("By link");
     expect(screen.getByText("Anyone with the link can join until it expires.")).toBeInTheDocument();
+    choose("Link expires", "Never expires");
+    expect(screen.getByText("Anyone with the link can join until you revoke it.")).toBeInTheDocument();
+  });
+
+  it("says a never-expiring link lasts until revoked once it is made", async () => {
+    createDriveInviteMock.mockResolvedValue({
+      inviteUrl: "https://x/invite/t#k=e",
+      role: "writer",
+      expiresInSecs: 3153600000,
+      maxUses: 50,
+    });
+    renderDialog();
+    showTab("By link");
+    choose("Link expires", "Never expires");
+    fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    expect(await screen.findByText("Anyone with the link")).toBeInTheDocument();
+    expect(screen.getByText("Anyone with the link can join until you revoke it.")).toBeInTheDocument();
   });
 
   it("revokes the link it just made, by the id Rust returned", async () => {
@@ -588,6 +724,7 @@ describe("General access", () => {
     });
     revokeDriveInviteMock.mockResolvedValue(undefined);
     const store = renderDialog();
+    showTab("By link");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
     fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "inv-1", undefined));
@@ -598,6 +735,7 @@ describe("General access", () => {
 
   it("offers Viewer, Editor and Manager for a drive, and keeps Manager's limits", () => {
     renderDialog();
+    showTab("By link");
     choose("Link access", "Manager");
     expect(screen.getByLabelText("Link expires")).toHaveTextContent("24 hours");
     expect(screen.getByText(/Works once and expires within 24 hours/)).toBeInTheDocument();
@@ -611,6 +749,7 @@ describe("General access", () => {
       maxUses: 1,
     });
     renderDialog();
+    showTab("By link");
     choose("Link access", "Manager");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
     expect(await screen.findByText("Manager · Expires in 24 hours · Single use")).toBeInTheDocument();
@@ -624,9 +763,9 @@ describe("General access", () => {
   it.each(LINK_CASES)("shows %s inline under the link choices", async (_name, err, text) => {
     createDriveInviteMock.mockRejectedValue(err);
     renderDialog();
+    showTab("By link");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
-    const link = screen.getByRole("heading", { name: "General access" }).closest("section")!;
-    await waitFor(() => expect(link).toHaveTextContent(text));
+    await waitFor(() => expect(tabPanel("By link")).toHaveTextContent(text));
     expect(screen.getByRole("button", { name: "Create link" })).toBeInTheDocument();
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -634,6 +773,7 @@ describe("General access", () => {
   it("turns a 403 not-entitled into the upgrade card", async () => {
     createDriveInviteMock.mockRejectedValue(notReady("SHARED_DRIVES_NOT_ENTITLED"));
     renderDialog();
+    showTab("By link");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
     expect(await screen.findByText(UPGRADE_TITLE)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create link" })).not.toBeInTheDocument();
@@ -652,9 +792,13 @@ describe("a folder target", () => {
       maxUses: 1,
     });
     renderDialog(folderTarget());
-    // No email section, and no mail probe for it.
-    expect(screen.queryByText("Invite people")).not.toBeInTheDocument();
+    // By email says folder email is coming, with no field and no mail probe.
+    expect(tabPanel("By email")).toHaveTextContent(
+      "Email invites for a single folder are coming soon. For now, copy the invite link and send it yourself.",
+    );
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
     expect(emailInvitesAvailableMock).not.toHaveBeenCalled();
+    showTab("By link");
     fireEvent.click(screen.getByLabelText("Link access"));
     expect(screen.queryByRole("option", { name: "Editor" })).not.toBeInTheDocument();
     // Picking the only option closes the list again.
@@ -677,6 +821,7 @@ describe("a folder target", () => {
   it("never falls back to a whole-drive link, even with an empty folder path", async () => {
     createFolderInviteMock.mockRejectedValue({ kind: "Validation", message: "A folder invite needs a folder path." });
     renderDialog(folderTarget(""));
+    showTab("By link");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
     await waitFor(() => expect(createFolderInviteMock).toHaveBeenCalledWith("team-docs", "", expect.anything()));
     expect(createDriveInviteMock).not.toHaveBeenCalled();
@@ -685,7 +830,7 @@ describe("a folder target", () => {
 
   it("says a folder link works once, and offers nothing past 30 days", () => {
     renderDialog(folderTarget());
-    expect(screen.getByText("Invite link for one person")).toBeInTheDocument();
+    showTab("By link");
     expect(screen.getByText("Works once, for the first person who opens it.")).toBeInTheDocument();
     expect(screen.getByLabelText("Link expires")).toHaveTextContent("7 days");
     fireEvent.click(screen.getByLabelText("Link expires"));
@@ -701,6 +846,7 @@ describe("a folder target", () => {
       maxUses: 1,
     });
     renderDialog(folderTarget());
+    showTab("By link");
     choose("Link access", "Editor");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
     await waitFor(() =>
@@ -718,6 +864,7 @@ describe("a folder target", () => {
   it("with folder roles: offers Viewer and Editor on a folder link, never Manager", async () => {
     flags.folderRoles = true;
     renderDialog(folderTarget());
+    showTab("By link");
     fireEvent.click(screen.getByLabelText("Link access"));
     expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
     expect(screen.queryByRole("option", { name: /Manager/ })).not.toBeInTheDocument();
@@ -743,19 +890,20 @@ describe("a folder target", () => {
     expect(createDriveInviteMock).not.toHaveBeenCalled();
   });
 
-  it("says folder sharing is coming soon, inline in the section that asked", async () => {
+  it("says folder sharing is coming soon, inline in the tab that asked", async () => {
     flags.folderRoles = true;
     createFolderInviteMock.mockRejectedValue(notReady("FOLDER_INVITES_UNAVAILABLE"));
     emailDriveInviteMock.mockRejectedValue(notReady("FOLDER_INVITES_UNAVAILABLE"));
     renderDialog(folderTarget());
+    showTab("By link");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
-    const link = screen.getByRole("heading", { name: "General access" }).closest("section")!;
-    await waitFor(() => expect(link).toHaveTextContent("Sharing a single folder is coming soon."));
+    await waitFor(() => expect(tabPanel("By link")).toHaveTextContent("Sharing a single folder is coming soon."));
+    expect(tabPanel("By email")).not.toHaveTextContent("Sharing a single folder is coming soon.");
 
+    showTab("By email");
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
-    const invite = screen.getByRole("heading", { name: "Invite people" }).closest("section")!;
-    await waitFor(() => expect(invite).toHaveTextContent("Sharing a single folder is coming soon."));
+    await waitFor(() => expect(tabPanel("By email")).toHaveTextContent("Sharing a single folder is coming soon."));
   });
 
   it("says folder email is coming soon", async () => {
@@ -797,6 +945,7 @@ describe("a folder target", () => {
       .mockRejectedValueOnce(notReady("FOLDER_EDITOR_INVITES_UNAVAILABLE"))
       .mockResolvedValueOnce({ inviteUrl: "https://x/invite/t#k=e", role: "reader", expiresInSecs: WEEK, maxUses: 1 });
     renderDialog(folderTarget());
+    showTab("By link");
     choose("Link access", "Editor");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
     await screen.findByText(/Editor access for a single folder is coming soon/);
@@ -1121,14 +1270,14 @@ describe("a drive somebody else owns", () => {
     createDriveInviteMock.mockResolvedValue({ inviteUrl: "https://x/invite/t#k=e", inviteId: "i", role: "manager", expiresInSecs: 86400, maxUses: 1 });
     renderDialog(drive);
     await screen.findByText("Ann");
-    expect(screen.getByRole("heading", { name: "Invite people" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "General access" })).toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["By email", "By link"]);
     // Their own row stays text; Ann's has the three drive roles.
     expect(screen.queryByLabelText("Role for Me")).not.toBeInTheDocument();
     choose("Role for Ann", "Manager");
     await waitFor(() =>
       expect(changeDriveMemberRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", { ownerSs58: OWNER, folderHash: "abc" }),
     );
+    showTab("By link");
     choose("Link access", "Manager");
     expect(screen.getByText(/Works once and expires within 24 hours/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
@@ -1148,14 +1297,14 @@ describe("a drive somebody else owns", () => {
     renderDialog(drive);
     await screen.findByText("Ann");
     expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Invite people" })).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "How to share" })).toBeInTheDocument();
   });
 
   it("still shows the card when the server says the owner's plan has no sharing", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([membership("manager")]);
     listShareAccessMock.mockResolvedValue(theirs("manager", true));
     createDriveInviteMock.mockRejectedValue(notReady("SHARED_DRIVES_NOT_ENTITLED"));
-    renderDialog(drive);
+    renderDialog(drive, "link");
     await screen.findByText("Ann");
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
     expect(await screen.findByText(UPGRADE_TITLE)).toBeInTheDocument();
@@ -1166,8 +1315,8 @@ describe("a drive somebody else owns", () => {
     listShareAccessMock.mockResolvedValue(theirs(role, false));
     renderDialog(drive);
     await screen.findByText("Ann");
-    expect(screen.queryByRole("heading", { name: "Invite people" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "General access" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Email address")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Role for Ann")).not.toBeInTheDocument();
     expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
   });

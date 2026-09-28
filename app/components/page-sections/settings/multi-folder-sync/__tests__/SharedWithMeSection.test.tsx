@@ -82,6 +82,7 @@ const listMyDriveMembershipsMock = vi.fn();
 const addSharedDriveMock = vi.fn();
 const listMyFolderGrantsMock = vi.fn().mockResolvedValue([]);
 const leaveSharedDriveByIdentityMock = vi.fn();
+const folderGrantStatsMock = vi.fn();
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
   return {
@@ -91,8 +92,14 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     listMyFolderGrants: (...args: unknown[]) => listMyFolderGrantsMock(...args),
     leaveSharedDriveByIdentity: (...args: unknown[]) =>
       leaveSharedDriveByIdentityMock(...args),
+    folderGrantStats: (...args: unknown[]) => folderGrantStatsMock(...args),
   };
 });
+
+const openUrlMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: (...args: unknown[]) => openUrlMock(...args),
+}));
 
 const openDialogMock = vi.fn();
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -473,6 +480,39 @@ describe("folders shared with me (folder roles)", () => {
 
   // Manager is not a folder role (HCFS #475): a holder never manages the
   // folder, whatever role the listing claims.
+  it("shows the folder's own size and file count, and no member count", async () => {
+    folderGrantStatsMock.mockResolvedValue({ fileCount: 3, totalBytes: 2000, truncated: false });
+    listSharedDriveStatsMock.mockReturnValue(
+      // The DRIVE's totals, which must never stand in for the folder's.
+      new Map([[`${OWNER}:0123456789abcdef`, { totalBytes: 999_999_999, fileCount: 500, updatedAt: 0 }]]),
+    );
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    expect(await screen.findByText("3 files")).toBeInTheDocument();
+    expect(screen.getByText("2 KB")).toBeInTheDocument();
+    expect(folderGrantStatsMock).toHaveBeenCalledWith(OWNER, "0123456789abcdef", "Clients/ACME");
+    expect(screen.queryByText("500 files")).not.toBeInTheDocument();
+    expect(screen.queryByText(/member/)).not.toBeInTheDocument();
+  });
+
+  it("holds a skeleton while the folder's size loads", async () => {
+    folderGrantStatsMock.mockReturnValue(new Promise(() => undefined));
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    expect(screen.getByRole("status", { name: "Loading folder size" })).toBeInTheDocument();
+  });
+
+  it("shows a dash when the folder's size cannot be read", async () => {
+    folderGrantStatsMock.mockRejectedValue({ kind: "Hcfs", message: "boom" });
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    // One retry first (the hook's), so allow for its back-off.
+    expect(
+      await screen.findByTitle("Couldn't read this folder's size", undefined, { timeout: 4000 }),
+    ).toHaveTextContent("—");
+    expect(screen.queryByRole("status", { name: "Loading folder size" })).not.toBeInTheDocument();
+  });
+
   it("offers no Manage access on a shared folder", async () => {
     listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, role: "manager" }]);
     render(<SharedWithMeSection onManageAccess={vi.fn()} />);
@@ -492,5 +532,58 @@ describe("folders shared with me (folder roles)", () => {
     await waitFor(() =>
       expect(leaveSharedDriveByIdentityMock).toHaveBeenCalledWith(OWNER, "0123456789abcdef"),
     );
+  });
+});
+
+describe("on the Drive page (Share a drive)", () => {
+  it("shows the empty state with Share a drive and the docs when nothing is shared", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([]);
+    const onShareDrive = vi.fn();
+    render(<SharedWithMeSection onShareDrive={onShareDrive} />);
+
+    const region = await screen.findByRole("region", { name: "A place for teamwork" });
+    expect(screen.getByText("Shared with Me")).toBeInTheDocument();
+    expect(screen.getByTestId("teamwork-illustration")).toBeInTheDocument();
+    expect(
+      screen.getByText("Share a drive to work on the same encrypted files with your team."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Share a drive/ }));
+    expect(onShareDrive).toHaveBeenCalledTimes(1);
+
+    // Docs open in the browser, never in the app's own window.
+    fireEvent.click(screen.getByRole("link", { name: /How shared drives work/ }));
+    expect(openUrlMock).toHaveBeenCalledWith("https://docs.hippius.com/use/desktop/shared-drives");
+    expect(region).toBeInTheDocument();
+  });
+
+  it("holds skeleton rows while the listing loads, never the empty state", () => {
+    listMyDriveMembershipsMock.mockReturnValue(new Promise(() => undefined));
+    render(<SharedWithMeSection onShareDrive={vi.fn()} />);
+    expect(screen.getByLabelText("Loading drives shared with you")).toBeInTheDocument();
+    expect(screen.queryByText("A place for teamwork")).not.toBeInTheDocument();
+  });
+
+  it("lists shared drives with a Share a drive button in the header", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    const onShareDrive = vi.fn();
+    render(<SharedWithMeSection onShareDrive={onShareDrive} />);
+    await screen.findByText("team-docs");
+    expect(screen.queryByText("A place for teamwork")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Share a drive/ }));
+    expect(onShareDrive).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays hidden on a feature-off server", async () => {
+    listMyDriveMembershipsMock.mockRejectedValue(UNAVAILABLE);
+    const { container } = render(<SharedWithMeSection onShareDrive={vi.fn()} />);
+    await waitFor(() => expect(listMyDriveMembershipsMock).toHaveBeenCalled());
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+  });
+
+  it("stays hidden with the flag off", () => {
+    flagState.sharedDrivesEnabled = false;
+    const { container } = render(<SharedWithMeSection onShareDrive={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

@@ -675,12 +675,35 @@ export function isSharedDrivesNotEntitled(error: unknown): boolean {
   return isNotReady(error, "SHARED_DRIVES_NOT_ENTITLED");
 }
 
+/** What `email_drive_invite` answers. */
+export interface EmailInviteResult {
+  inviteId: string;
+  /**
+   * The drive key (or the folder's key) was sealed to the recipient right
+   * after the mint, so they can join with nobody online.
+   */
+  presealed: boolean;
+}
+
+/**
+ * The session has no key loaded (Rust's `NoEncryptionKey`): an action that
+ * needs the drive key, like sending an emailed invite, was refused before
+ * anything was sent. Run the unlock and try again.
+ */
+export function isSessionLocked(error: unknown): boolean {
+  return isNotReady(error, "NO_ENCRYPTION_KEY");
+}
+
 /**
  * Invite `email` into a drive and have the server send the invitation.
  *
  * Viewer or Editor only (a Manager invite has to be a link), single use,
  * between one hour and thirty days; Rust refuses anything else by name.
- * Returns only the new invite's id: the token exists only in the mail.
+ * Returns the new invite's id (the token exists only in the mail) and
+ * whether the key went up sealed to the recipient right away
+ * (`presealed`); when it did not, they may need approving when they open
+ * it. A locked session is refused before anything is sent
+ * ({@link isSessionLocked}): unlock, then send again.
  */
 export async function emailDriveInvite(
   label: string,
@@ -695,8 +718,8 @@ export async function emailDriveInvite(
      */
     pathPrefix?: string;
   },
-): Promise<{ inviteId: string }> {
-  return invoke<{ inviteId: string }>("email_drive_invite", {
+): Promise<EmailInviteResult> {
+  return invoke<EmailInviteResult>("email_drive_invite", {
     label,
     email,
     role: opts?.role ?? null,
@@ -841,4 +864,28 @@ export interface MyFolderGrantInfo {
  */
 export async function listMyFolderGrants(): Promise<MyFolderGrantInfo[]> {
   return invoke<MyFolderGrantInfo[]>("list_my_folder_grants");
+}
+
+/** What one folder shared with this account holds, over its whole subtree. */
+export interface FolderGrantStats {
+  fileCount: number;
+  totalBytes: number;
+  /** The folder was too wide to read in full: both figures are lower bounds. */
+  truncated: boolean;
+}
+
+/**
+ * The size of ONE folder shared on its own, never its drive's: Rust browses
+ * the folder itself (`folder_grant_stats`), which a holder may do.
+ */
+export async function folderGrantStats(
+  ownerSs58: string,
+  folderHash: string,
+  pathPrefix: string,
+): Promise<FolderGrantStats> {
+  return invoke<FolderGrantStats>("folder_grant_stats", {
+    ownerSs58,
+    folderHash,
+    pathPrefix,
+  });
 }

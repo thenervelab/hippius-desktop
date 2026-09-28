@@ -14,33 +14,51 @@ export type SharedWithMeData =
   | { kind: "unavailable" }
   | { kind: "error" };
 
-export type SharedWithMeView = "hidden" | "rows";
+export type SharedWithMeView = "hidden" | "loading" | "empty" | "rows";
 
 /**
- * Whether the section renders at all. Deliberately binary: most accounts
- * have zero memberships, so every non-rows state — flag off, still
- * loading, empty, feature-off server, or a failed passive fetch — renders
- * NOTHING rather than a headline with a skeleton or an error under it.
- * A section that appears only when there is something to show is the
- * quiet degrade the feature-off rule requires, and it costs a user with
- * memberships at most one frame of absence while the list loads.
+ * What the section renders.
+ *
+ * Where there is nowhere to start sharing from (Settings), it stays quiet:
+ * every non-rows state (flag off, still loading, empty, feature-off server,
+ * a failed passive fetch) renders NOTHING rather than a headline with a
+ * skeleton or an error under it.
+ *
+ * On the Drive page (`alwaysShow`), the section is how people find shared
+ * drives, so it is there whenever the flag is on: skeleton rows until both
+ * listings have answered, then the rows, or the empty state that offers
+ * "Share a drive". A feature-off server still hides it (the quiet degrade
+ * the feature-off rule requires). A failed fetch shows the empty state:
+ * sharing a drive is still possible, and the rows come back on the next
+ * visit.
  */
 export function getSharedWithMeView(
   enabled: boolean,
   data: SharedWithMeData,
   /** Folders shared with this account (folder roles). Rows of their own. */
   folderGrantCount = 0,
+  options: {
+    /** Show the section even with nothing shared (the Drive page). */
+    alwaysShow?: boolean;
+    /** Whether the folder-grant listing has answered. */
+    grantsSettled?: boolean;
+  } = {},
 ): SharedWithMeView {
   if (!enabled) return "hidden";
-  if (folderGrantCount > 0) return "rows";
+  const { alwaysShow = false, grantsSettled = true } = options;
+  const hasMemberships =
+    data.kind === "ready" && data.memberships.length > 0;
+  if (hasMemberships || folderGrantCount > 0) return "rows";
+  if (!alwaysShow) return "hidden";
   switch (data.kind) {
+    case "unavailable":
+      return "hidden";
     case "idle":
     case "loading":
-    case "unavailable":
-    case "error":
-      return "hidden";
+      return "loading";
     case "ready":
-      return data.memberships.length === 0 ? "hidden" : "rows";
+    case "error":
+      return grantsSettled ? "empty" : "loading";
   }
 }
 

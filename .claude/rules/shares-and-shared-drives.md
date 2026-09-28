@@ -27,7 +27,7 @@ The `HIPPIUS_CONSOLE_BASE_URL` runtime override is honored in dev builds and **s
 
 ## Shared drives (cross-account member drives)
 
-An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI gated on `SHARED_DRIVES_ENABLED` (`app/lib/featureFlags.ts`), which is `enabledFrom("beta")`: **off on production, on beta and staging**. The rules file previously claimed it was `true` on every lane; that was wrong. Console splits create vs use (`SHARED_DRIVES` on prod for members/invite accept, `SHARED_DRIVES_CREATE` off prod). Desktop still has one flag covering both mint and use; matching the console split is a follow-up if straightforward; do **not** silently enable create on production. A SECOND gate sits in front of it: the plan (see "Sharing needs Plus, Max or Scale" below). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
+An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI gated on `SHARED_DRIVES_ENABLED` (`app/lib/featureFlags.ts`), which is `true` on **every lane, production included**, as is `FOLDER_ROLES_ENABLED`. Keep them literals, never `enabledFrom(...)`: the feature ships to everyone, and creating shares is held back by the plan gate below, not by the lane. The console splits create vs use (`SHARED_DRIVES` on in production for joining, `SHARED_DRIVES_CREATE` a separate console launch switch); the desktop has one flag for both. A SECOND gate sits in front of it: the plan (see "Sharing needs Plus, Max or Scale" below). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
 
 ### Sharing needs Plus, Max or Scale
 
@@ -123,7 +123,7 @@ owner with `member_owner` (mint, email, approve, revoke, remove, change role, ch
 list invites); the server decides the role (its refusal is the uniform 404). Reads go
 through `resolve_access_target`. `refuse_targeting_the_owner` keeps the owner from being
 removed or re-roled. `apply_manager_invite_caps` clamps a Manager link to 1 use and 24 hours
-before the request; the General access row offers only "24 hours" for Manager and says
+before the request; the Share dialog's By link tab offers only "24 hours" for Manager and says
 "Works once and expires within 24 hours. Managers can invite and remove people."
 `list_access_panel` asks for invites on a member drive only when the member listing says this
 account is a Manager. The sharing marks (`list_owned_drive_sharing`,
@@ -220,6 +220,47 @@ Desktop routing: `classify_sync_error` (`tauri_bridge.rs`) checks the marker BEF
 
 `SHARED_DRIVES_ENABLED` gates only the ADDITIVE surfaces — the "Share drive" menu item + `ShareDriveModal` (invite mint + members tab), the "Shared with me" sections, the owner badge.
 
+**Shared with Me on the Drive page is always there** (`SharedWithMeSection` with `onShareDrive`,
+view from `sharedWithMeState.ts::getSharedWithMeView(..., { alwaysShow, grantsSettled })`):
+skeleton rows until the membership AND folder-grant listings answer, then the rows with a
+"Share a drive" header button, or `SharedWithMeEmptyState` (the shared `NoEntriesFound` card,
+its `illustration`/`footerLink`/`titleId` props; "A place for teamwork", docs link
+`https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`). A feature-off
+server still hides it; a failed fetch shows the empty state. Settings passes no `onShareDrive`
+and keeps the quiet, rows-only section. "Share a drive" opens `share-drive-picker/`
+(`ShareDriveFlow` + `ShareDrivePicker`): own drives only (`folderRows` without `ownerSs58`),
+"Shared with N" / "Shared" / "Not shared" from `useOwnedDriveSharing` (unknown says nothing),
+search above `PICKER_SEARCH_THRESHOLD` (6). The plan gate is `sharingGate({ owner: true })`,
+so Free/Starter get `NotEntitledNotice` (its Upgrade plan goes to `BILLING_ROUTE`) and no
+Continue. Continue CLOSES the picker, then sets `shareDialogAtom` exactly as the row's "Share
+drive..." does, so there is never a dialog over a dialog. No drives: Sync a Folder (the
+page's `startSyncFolder`). Pinned by `ShareDrivePicker.test.tsx`, `SharedWithMeSection.test.tsx`
+and `sharedWithMeState.test.ts`.
+
+**Added by: one rule for the column and the filter** (`lib/shared-drives/uploaderFilter.ts`:
+`uploaderKind`, `matchesUploader`; Rust `uploader_search_values` in
+`sync/fileops/recent_uploads.rs`). The column shows a file with no uploader recorded as
+"Owner"; the server matches one exact `uploaded_by` and never matches a missing uploader to an
+address. So on a drive somebody else owns, the owner option is TWO searches in
+`search_files_in_drive` (the address and `_none`), each read from row 0 to `offset + limit`
+(capped at `MAX_MERGED_ROWS`), merged in the server's order (`compare_search_hits`: the sort
+column, `created_at` desc by default, then `path_hash`), deduped by path hash, then cut. When
+the viewer is the owner the option is "You", recorded rows only, one query. The FE filters the
+result with `matchesUploader` too, so a row is never listed under someone the column would not
+name. Accounts are compared by decoded public key, never text: `same_account` (subxt
+`AccountId32`) in Rust, `lib/utils/ss58.ts::sameAccount` in TypeScript. Options come from
+`buildUploaderOptions`: You, "name (owner)" (owner name from the membership or folder grant),
+members by name, a middle-shortened address only without a name, then "Not recorded (shown as
+Owner)". Pinned by `uploader_merge_tests`, `uploaderFilter.test.ts`, `ss58.test.ts`,
+`addedByOptions.test.ts`.
+
+**A folder grant row shows the folder's own size** (`folder_grant_stats` in
+`sync/fileops/remote.rs`, `useFolderGrantStats`): a holder may browse at and below the grant,
+and each subfolder row of `/browse` carries its subtree totals, so the folder's totals are its
+subfolders' totals plus its own files, paged at most `MAX_STATS_PAGES` (then `truncated`,
+shown as "at least"). Never the drive's totals. Skeleton while loading, dash on failure. No
+member count on a grant row: the server does not expose how many people reach a folder.
+
 **Member-row menu gating is deliberately NOT flag-keyed**: `resolveFolderMenuPlan` keys on the row's `ownerSs58` data alone, so a post-release flag rollback can never restore "Delete from Server" (wrong wire identity) or a plain Remove (leaves a live membership) on an existing member row; `leave_shared_drive` stays wired unconditionally. IPC wrappers in `app/lib/tauri/sharedDrives.ts`.
 
 ### v1 scope cuts
@@ -256,10 +297,17 @@ whole-drive. Pinned by `a_folder_invite_can_never_go_out_as_a_drive_invite` and
 `tests/shared_drive_folder_roles_mock.rs`.
 
 **The Share dialog keeps the two invite kinds apart** (`drive/share-dialog/`, opened by
-setting `shareDialogAtom`). Top to bottom: Invite people, People with access, General
-access, Done. "Invite people" calls only `email_drive_invite` (the address checked as typed
-by `check_invite_email`; the role and Send appear once the field has text); "General
-access" calls only `create_drive_invite` / `create_folder_invite` and describes the result
+setting `shareDialogAtom`). Top to bottom: one box with two tabs, By email | By link
+(`ShareTabs.tsx`, the accessible mode of `components/ui/tabs/TabList` over `TabPanel`s),
+then People with access, then Done. The dialog opens on the tab used last this session
+(`shareDialogTabAtom`, memory only, By email by default); Manage access's "Invite" sets it
+to By email and "New link" to By link before opening. Both panels stay mounted (a typed
+address survives a switch) and the inactive one is hidden by attribute AND class, since a
+flex panel would otherwise beat `[hidden]`. On a plan without sharing the upgrade card
+replaces the whole box. A folder without folder roles keeps the By email tab with the
+folder-email "coming soon" notice. By email calls only `email_drive_invite` (the address
+checked as typed by `check_invite_email`; the role and Send appear once the field has
+text); By link calls only `create_drive_invite` / `create_folder_invite` and describes the result
 from the `role` / `expiresInSecs` / `maxUses` the mint returns, which are what was SENT
 after Rust's defaults and caps, and revokes it by the returned `inviteId`. One mixed form
 let a typed address silently turn a link into an email invite. Refusals route on the
@@ -291,6 +339,36 @@ place of the panel's list, with Back, like a group's full view. The People colum
 flush right: `ROLE_SLOT` is `justify-end`, `ROLE_TEXT` right-aligned, the quiet role select
 pulled right by its own padding (`FLUSH_SELECT`), and a folder holder's Remove (red text,
 `DANGER_TEXT_BUTTON`) comes after the role, last.
+
+**An emailed invitation is pre-sealed at send** (hcfs #514, invite key directory,
+`docs/plans/2026-09-28-invite-key-directory-design.md` in hcfs). Every account publishes an
+X25519 invite key, `blake3::derive_key("hippius.hcfs.invite-account-key.v1", seed[..32])`:
+`invite_key::account_invite_public_key` delegates to `hcfs_client::client::invite_key` (needs
+the hcfs pin at or after a954460d; the frozen vector shared with the console stays pinned here
+and in `hcfs_contract.rs`). The auto-seal task PUTs `/v1/account/invite-key` (body is hcfs-shared's
+`PublishInviteKeyRequest`) once per account per sign-in (`InviteKeyPublishMemo`: a failed publish
+is not recorded and retries next pass, sign-out clears it), only while a session mnemonic is in
+memory, never prompting; `recover_mnemonic` calls `invite_auto_seal.unlocked(account)`, which
+forgets the account and nudges, so a session that started locked publishes right after the unlock.
+**A locked app sends no email invite**: `email_drive_invite` checks `require_session_key` last before
+the mint and answers `NotReady(NoEncryptionKey)`; the Share dialog (`InvitePeopleSection` +
+`useUnlockThenResume`) opens the same unlock as Manage access's locked links (`useUnlockFlow`) and
+re-sends once when the recovery dialog closes; a cancelled unlock is refused again the same way, so
+nothing is sent and the address stays. Refusals that need no key (bad folder, no folder invites on
+the server) come back before any unlock. After the mint, `email_drive_invite` reads `recipient_key`
+and seals to it through the same `invite_seal_keys` + `seal_invite_row` path Approve uses, so a
+recipient with an account joins with nobody online. `recipient_key` is a real key or a server decoy,
+indistinguishable by design: always seal, never branch on it. A folder key is pre-sealed only when
+the mint echoed that exact folder (`preseal_row`, fails closed). Best-effort: any error, a stale row
+or no key leaves the handshake below, and `EmailInviteResult.presealed` is `false`
+(`preseal_landed`), which the dialog words as an info toast, "They may need approving when they open
+it." A pre-seal does not change the listing: the row stays `sent` until the recipient claims, then
+lands `sealed` ("Approved, not joined yet") with no `awaiting_seal` step, so the pending copy needs no
+pre-seal state (and could not have one: a decoy looks the same). The envelope refuses a low-order
+recipient key (`was_contributory`), whose seal would open under `HKDF(0, invite_id)`. Pinned by the
+`invite_key`, `preseal_row` and pre-seal mock-server unit tests in `commands.rs`, the publish-memo
+tests in `auto_seal.rs`, `an_email_invite_needs_the_key_before_it_is_sent_and_preseals_like_approve`,
+`email_invite_mint_and_invite_key_publish_wire_pinned`, and `emailInviteUnlock.test.tsx`.
 
 **Emailed invitations are approved automatically while an owner or a Manager is signed in**
 (`shared_drives/auto_seal.rs`). An opened invitation (`awaiting_seal` with a
@@ -369,7 +447,7 @@ A granted folder is browsed under `grant:<owner>~<hash>~<hex(path)>` (mirrored b
 `shared:` label, and `identity::rooted_path(label, rel)` puts the grant in front of every
 view-relative path: browse, upload, new folder, rename, share by link, folder invites.
 That join lives in ONE function so no IPC addresses a same-named folder at the drive
-root. FE gate: `FOLDER_ROLES_ENABLED` (staging only) alone.
+root. FE gate: `FOLDER_ROLES_ENABLED` (on in every lane) alone.
 
 ## Folder share via link (live browsable)
 

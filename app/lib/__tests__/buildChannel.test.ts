@@ -157,18 +157,14 @@ describe("shared drives is on everywhere", () => {
 });
 
 /**
- * Folder roles are built against a server contract HCFS has not published,
- * so the surface is internal only: on in staging, off in beta and production.
+ * Folder roles are on in every lane now that HCFS #475 is merged and
+ * deployed and the console ships folder sharing in production.
  */
 describe("FOLDER_ROLES_ENABLED", () => {
   const flags = read("app/lib/featureFlags.ts");
 
-  it("is staging only", () => {
-    const gate = flags.match(/FOLDER_ROLES_ENABLED\s*=\s*enabledFrom\("(\w+)"\)/);
-    expect(gate, "FOLDER_ROLES_ENABLED must name its lane").not.toBeNull();
-    const lane = gate![1] as Parameters<typeof isEnabledOn>[0];
-    expect(isEnabledOn(lane, "staging")).toBe(true);
-    expect(isEnabledOn(lane, "beta")).toBe(false);
-    expect(isEnabledOn(lane, "production")).toBe(false);
+  it("is on everywhere", () => {
+    expect(flags).toMatch(/FOLDER_ROLES_ENABLED\s*=\s*true;/);
+    expect(flags).not.toMatch(/FOLDER_ROLES_ENABLED\s*=\s*enabledFrom\(/);
   });
 });
