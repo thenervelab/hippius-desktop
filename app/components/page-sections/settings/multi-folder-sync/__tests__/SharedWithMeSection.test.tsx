@@ -82,6 +82,7 @@ const listMyDriveMembershipsMock = vi.fn();
 const addSharedDriveMock = vi.fn();
 const listMyFolderGrantsMock = vi.fn().mockResolvedValue([]);
 const leaveSharedDriveByIdentityMock = vi.fn();
+const folderGrantStatsMock = vi.fn();
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
   return {
@@ -91,6 +92,7 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     listMyFolderGrants: (...args: unknown[]) => listMyFolderGrantsMock(...args),
     leaveSharedDriveByIdentity: (...args: unknown[]) =>
       leaveSharedDriveByIdentityMock(...args),
+    folderGrantStats: (...args: unknown[]) => folderGrantStatsMock(...args),
   };
 });
 
@@ -478,6 +480,39 @@ describe("folders shared with me (folder roles)", () => {
 
   // Manager is not a folder role (HCFS #475): a holder never manages the
   // folder, whatever role the listing claims.
+  it("shows the folder's own size and file count, and no member count", async () => {
+    folderGrantStatsMock.mockResolvedValue({ fileCount: 3, totalBytes: 2000, truncated: false });
+    listSharedDriveStatsMock.mockReturnValue(
+      // The DRIVE's totals, which must never stand in for the folder's.
+      new Map([[`${OWNER}:0123456789abcdef`, { totalBytes: 999_999_999, fileCount: 500, updatedAt: 0 }]]),
+    );
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    expect(await screen.findByText("3 files")).toBeInTheDocument();
+    expect(screen.getByText("2 KB")).toBeInTheDocument();
+    expect(folderGrantStatsMock).toHaveBeenCalledWith(OWNER, "0123456789abcdef", "Clients/ACME");
+    expect(screen.queryByText("500 files")).not.toBeInTheDocument();
+    expect(screen.queryByText(/member/)).not.toBeInTheDocument();
+  });
+
+  it("holds a skeleton while the folder's size loads", async () => {
+    folderGrantStatsMock.mockReturnValue(new Promise(() => undefined));
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    expect(screen.getByRole("status", { name: "Loading folder size" })).toBeInTheDocument();
+  });
+
+  it("shows a dash when the folder's size cannot be read", async () => {
+    folderGrantStatsMock.mockRejectedValue({ kind: "Hcfs", message: "boom" });
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    // One retry first (the hook's), so allow for its back-off.
+    expect(
+      await screen.findByTitle("Couldn't read this folder's size", undefined, { timeout: 4000 }),
+    ).toHaveTextContent("—");
+    expect(screen.queryByRole("status", { name: "Loading folder size" })).not.toBeInTheDocument();
+  });
+
   it("offers no Manage access on a shared folder", async () => {
     listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, role: "manager" }]);
     render(<SharedWithMeSection onManageAccess={vi.fn()} />);

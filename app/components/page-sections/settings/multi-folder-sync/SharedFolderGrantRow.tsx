@@ -7,12 +7,20 @@
 // access: Manager is not a folder role, so a holder never manages the folder.
 // No "Sync to this computer": syncing a granted folder to disk is not
 // supported.
+//
+// Its size and file count are the FOLDER's own, from browsing the folder
+// (`folder_grant_stats`), never the drive's totals, which would overstate
+// it: a skeleton while they load, a dash if they cannot be read. No member
+// count: the server does not tell a holder how many people reach a folder.
 
 import React from "react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Icons } from "@/components/ui";
+import { Icons, Skeleton } from "@/components/ui";
+import { formatBytes } from "@/lib/utils/formatBytes";
+import { RowDot as Dot } from "@/components/page-sections/drive/folder-list/RowDot";
+import { useFolderGrantStats } from "@/app/lib/hooks/useFolderGrantStats";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import AccountLabel from "@/components/page-sections/drive/AccountLabel";
 import DriveRoleChip from "@/components/page-sections/drive/DriveRoleChip";
@@ -33,6 +41,7 @@ export default function SharedFolderGrantRow({
 }) {
   const view = folderGrantRowView(grant);
   const role = parseDriveRole(grant.role);
+  const size = useFolderGrantStats(grant);
 
   return (
     <div
@@ -79,6 +88,36 @@ export default function SharedFolderGrantRow({
             >
               Frozen
             </span>
+          )}
+          <span className="h-4 w-px flex-shrink-0 bg-grey-80 dark:bg-[#3a3a3a]" />
+          {size.kind === "loading" ? (
+            <span role="status" aria-label="Loading folder size" className="inline-flex items-center">
+              <Skeleton width={96} height={12} className="rounded-full" />
+            </span>
+          ) : size.kind === "failed" ? (
+            <span
+              className="flex items-center gap-1 whitespace-nowrap text-xs text-grey-60 dark:text-grey-dark-600"
+              title="Couldn't read this folder's size"
+            >
+              <Icons.Database className="size-3.5 text-[#1F50BD]" />
+              —
+            </span>
+          ) : (
+            <>
+              <span
+                className="flex items-center gap-1 whitespace-nowrap text-xs text-grey-60 dark:text-grey-dark-600"
+                title={size.stats.truncated ? "At least this much: the folder is too large to count in full" : undefined}
+              >
+                <Icons.Database className="size-3.5 text-[#1F50BD]" />
+                {size.stats.truncated ? "≥ " : ""}
+                {formatBytes(size.stats.totalBytes)}
+              </span>
+              <Dot />
+              <span className="flex items-center gap-1 whitespace-nowrap text-xs text-grey-60 dark:text-grey-dark-600">
+                <Icons.Folders className="size-3.5 text-[#1F50BD]" />
+                {size.stats.fileCount} {size.stats.fileCount === 1 ? "file" : "files"}
+              </span>
+            </>
           )}
         </div>
         <div className="ml-6 mt-1 flex min-w-0 flex-wrap items-center gap-x-1 font-geist text-[13px] font-medium text-[#0A0A0A]/40 dark:text-white/40">
