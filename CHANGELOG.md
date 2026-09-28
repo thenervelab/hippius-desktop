@@ -89,6 +89,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The Share a drive picker has room to breathe.** It is now as wide as the
+  Share dialog it opens, so drive names and the upgrade card no longer look
+  cramped.
+
 - **Picking the owner in "Added by" finds their files.** Inside a shared
   drive, files that show "Owner" in the Added by column because nobody was
   recorded as adding them now appear when you pick the owner, alongside the

@@ -95,7 +95,7 @@ export default function ShareDrivePicker({
       headerLayout="leading"
       title={SHARE_DRIVE_PICKER_TITLE}
       subtitle={SHARE_DRIVE_PICKER_SUBTITLE}
-      maxWidth="max-w-[520px]"
+      maxWidth="max-w-[720px]"
       contentClassName="min-w-0"
     >
       <div className="flex min-w-0 flex-col gap-4 font-geist">
