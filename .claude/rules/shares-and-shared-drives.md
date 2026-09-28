@@ -292,6 +292,21 @@ flush right: `ROLE_SLOT` is `justify-end`, `ROLE_TEXT` right-aligned, the quiet 
 pulled right by its own padding (`FLUSH_SELECT`), and a folder holder's Remove (red text,
 `DANGER_TEXT_BUTTON`) comes after the role, last.
 
+**An emailed invitation is pre-sealed at send** (hcfs invite key directory,
+`docs/plans/2026-09-28-invite-key-directory-design.md` in hcfs). Every account publishes an
+X25519 invite key, `blake3::derive_key("hippius.hcfs.invite-account-key.v1", seed[..32])`
+(`invite_key::account_invite_public_key`, frozen vector shared with `hcfs-client` and the
+console): the auto-seal task PUTs `/v1/account/invite-key` once per task, only while a session
+mnemonic is in memory, never prompting. `email_drive_invite` reads `recipient_key` off the
+mint and seals to it through the same `invite_seal_keys` + `seal_invite_row` path Approve uses,
+so a recipient with an account joins with nobody online. `recipient_key` is a real key or a
+server decoy, indistinguishable by design: always seal, never branch on it. A folder key is
+pre-sealed only when the mint echoed that exact folder (`preseal_row`, fails closed). Best-effort:
+no session mnemonic or any error leaves the handshake below, which is unchanged. The envelope
+refuses a low-order recipient key (`was_contributory`), whose seal would open under
+`HKDF(0, invite_id)`. Pinned by the `invite_key` and `preseal_row` unit tests and
+`a_mint_reads_the_key_to_preseal_to_and_the_folder_echo`.
+
 **Emailed invitations are approved automatically while an owner or a Manager is signed in**
 (`shared_drives/auto_seal.rs`). An opened invitation (`awaiting_seal` with a
 `requester_pubkey`) is sealed and PUT by a Rust background task, the same way Approve

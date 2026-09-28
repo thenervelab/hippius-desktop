@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **People you invite by email can join even after you close the app.** If
+  they already have a Hippius account, they can join as soon as they open the
+  invitation, without waiting for you or a Manager to be online.
+
 - **Share a single folder in every release.** Folder sharing is no longer
   held to internal builds: share one folder as Viewer or Editor by link or
   by email, see folders shared with you, and change someone's folders from
