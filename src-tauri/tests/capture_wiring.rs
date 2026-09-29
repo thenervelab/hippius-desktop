@@ -196,3 +196,78 @@ fn retry_goes_through_the_same_delivery() {
     assert!(body.contains("deliver_and_announce("), "Retry must reuse deliver_and_announce");
     assert!(body.contains("can_retry()"), "only a failed upload can be retried");
 }
+
+/// The camera is the one capture window that must be FILMED: a protected
+/// bubble records as a black hole in the video, and a protected stage makes a
+/// camera-only recording a black rectangle. It still must not take focus.
+#[test]
+fn the_camera_is_filmed_and_never_takes_focus() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "fn open_camera_window(");
+    assert!(
+        body.contains(".content_protected(false)"),
+        "the camera must be left out of content protection, explicitly"
+    );
+    assert!(!body.contains(".content_protected(true)"), "a protected camera films as black");
+    assert!(body.contains(".focused(false)"), "the camera must open without taking focus");
+}
+
+/// The camera page listens for its state and is dragged; a capability for the
+/// wrong label leaves it blank with nothing reported anywhere.
+#[test]
+fn the_camera_capability_matches_its_label_and_holds_core_only() {
+    let src = read("src/capture/commands.rs");
+    let label = src
+        .lines()
+        .find(|l| l.contains("pub const CAMERA_LABEL"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("CAMERA_LABEL is declared");
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-camera.json")).expect("capability parses");
+    let windows: Vec<&str> = capability["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    assert_eq!(windows, vec![label], "capture-camera.json must grant exactly the camera's window");
+    let permissions: Vec<&str> = capability["permissions"]
+        .as_array()
+        .expect("permissions")
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+    assert!(
+        permissions.iter().all(|p| p.starts_with("core:")),
+        "core permissions only: {permissions:?}"
+    );
+    assert!(
+        permissions.contains(&"core:window:allow-start-dragging"),
+        "the bubble is placed by dragging it"
+    );
+    assert!(
+        read("tauri.conf.json").contains("\"capture-camera\""),
+        "tauri.conf.json must list the capture-camera capability"
+    );
+}
+
+/// A signed, hardened build denies the camera silently without this
+/// entitlement: the bubble would say "Camera unavailable" on every release.
+#[test]
+fn the_app_may_use_the_camera_and_says_why() {
+    let entitlements = read("entitlements.plist");
+    assert!(entitlements.contains("<key>com.apple.security.device.camera</key>"));
+    let info = read("Info.plist");
+    assert!(info.contains("<key>NSCameraUsageDescription</key>"));
+}
+
+/// Camera only records the stage window itself, and every way a recording
+/// ends takes the camera away with it.
+#[test]
+fn camera_only_records_the_stage_and_every_ending_removes_the_camera() {
+    let src = read("src/capture/commands.rs");
+    let confirm = fn_body(&src, "pub async fn capture_confirm(");
+    assert!(confirm.contains("CameraShape::Stage") && confirm.contains("camera_window_id("));
+    for ending in ["pub async fn capture_stop(", "pub async fn capture_cancel(", "async fn begin_recording("] {
+        assert!(fn_body(&src, ending).contains("end_camera("), "{ending} must end the camera");
+    }
+}

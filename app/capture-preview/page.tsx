@@ -13,7 +13,8 @@ import {
   type CapturePreviewCard,
 } from "@/app/lib/tauri/capture";
 import type { RemoteUploadProgress } from "@/app/lib/remote-upload/remoteUploadFeed";
-import { AUTO_HIDE_MS, destinationText, hidesItself, statusText, uploadPercent } from "./previewCard";
+import type { FileProgress, SyncSnapshot } from "@/app/lib/types/syncSnapshot";
+import { AUTO_HIDE_MS, canRetry, cardView, destinationText } from "./previewCard";
 
 /**
  * The card that slides into the corner after a capture, like the macOS
@@ -27,6 +28,8 @@ import { AUTO_HIDE_MS, destinationText, hidesItself, statusText, uploadPercent }
 export default function CapturePreviewPage() {
   const [card, setCard] = useState<CapturePreviewCard | null>(null);
   const [row, setRow] = useState<RemoteUploadProgress | null>(null);
+  // The sync engine's rows, for a capture saved into a synced drive.
+  const [syncFiles, setSyncFiles] = useState<FileProgress[]>([]);
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
   const cardId = useRef<number | null>(null);
@@ -36,6 +39,7 @@ export default function CapturePreviewPage() {
     const unlisteners = [
       listen<CapturePreviewCard | null>("capture_preview_changed", (e) => setCard(e.payload)),
       listen<RemoteUploadProgress>("remote_upload_progress", (e) => setRow(e.payload)),
+      listen<SyncSnapshot>("sync_progress_snapshot", (e) => setSyncFiles(e.payload.files)),
     ];
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
@@ -55,18 +59,20 @@ export default function CapturePreviewPage() {
     if (card) void dismissCapturePreview(card.id).catch(() => undefined);
   }, [card]);
 
-  // Once uploaded, the card slides away on its own, unless the pointer is on it.
+  const view = card ? cardView(card, row, syncFiles) : null;
+  const done = view?.done ?? false;
+
+  // Once in the drive, the card slides away on its own, unless the pointer is on it.
   useEffect(() => {
-    if (!card || !hidesItself(card) || hovered) return;
+    if (!done || hovered) return;
     const t = window.setTimeout(dismiss, AUTO_HIDE_MS);
     return () => window.clearTimeout(t);
-  }, [card, hovered, dismiss]);
+  }, [done, hovered, dismiss]);
 
-  if (!card) return null;
-  const percent = uploadPercent(card, row);
-  const failed = card.status.state === "failed";
-  const uploaded = card.status.state === "uploaded";
-  const canCopy = uploaded && card.status.state === "uploaded" && card.status.linkCopied;
+  if (!card || !view) return null;
+  const { percent, failed } = view;
+  const uploaded = done;
+  const canCopy = view.linkCopied;
 
   const copy = () => {
     void copyCapturePreviewLink()
@@ -119,7 +125,7 @@ export default function CapturePreviewPage() {
             {uploaded && <Check className="size-3.5 text-[#30D158]" />}
             {failed && <AlertCircle className="size-3.5 text-[#FF453A]" />}
             <span className="truncate">
-              {statusText(card, percent)} · {destinationText(card)}
+              {view.text} · {destinationText(card)}
             </span>
           </p>
           {!uploaded && !failed && (
@@ -137,13 +143,13 @@ export default function CapturePreviewPage() {
               />
             </div>
           )}
-          {failed && card.status.state === "failed" && (
+          {card.status.state === "failed" && (
             <p className="line-clamp-2 text-[12px] text-white/55">{card.status.message}</p>
           )}
         </div>
 
         <div className="mt-2.5 flex gap-1.5">
-          {failed ? (
+          {canRetry(card) ? (
             <button
               type="button"
               onClick={() => void retryCapturePreview().catch(() => undefined)}

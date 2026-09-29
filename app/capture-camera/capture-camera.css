@@ -1,0 +1,10 @@
+/*
+ * The camera is a small transparent always-on-top window: only the bubble or
+ * the stage is drawn. Clear the shared root background at parse time (same
+ * reason as the overlay).
+ */
+html,
+body {
+  background: transparent !important;
+  overflow: hidden;
+}

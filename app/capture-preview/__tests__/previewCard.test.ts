@@ -1,22 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { destinationText, hidesItself, statusText, uploadPercent } from "@/app/capture-preview/previewCard";
+import { canRetry, cardView, destinationText } from "@/app/capture-preview/previewCard";
 import type { CapturePreviewCard } from "@/app/lib/tauri/capture";
 import type { RemoteUploadProgress } from "@/app/lib/remote-upload/remoteUploadFeed";
+import type { FileProgress } from "@/app/lib/types/syncSnapshot";
+
+const NAME = "Recording 2026-09-29 at 15.42.10.mp4";
 
 const card = (status: CapturePreviewCard["status"]): CapturePreviewCard => ({
   id: 1,
   kind: "recording",
-  fileName: "Recording 2026-09-29 at 15.42.10.mp4",
+  fileName: NAME,
   driveLabel: "Work",
   driveName: "Work",
   remote: false,
   status,
 });
 
-const row = (over: Partial<RemoteUploadProgress> = {}): RemoteUploadProgress => ({
+const remote = (over: Partial<RemoteUploadProgress> = {}): RemoteUploadProgress => ({
   batchId: 1,
-  path: "Captures/Recording 2026-09-29 at 15.42.10.mp4",
-  fileName: "Recording 2026-09-29 at 15.42.10.mp4",
+  path: `Captures/${NAME}`,
+  fileName: NAME,
   label: "Work",
   bytesTransferred: 62,
   totalBytes: 100,
@@ -24,42 +27,61 @@ const row = (over: Partial<RemoteUploadProgress> = {}): RemoteUploadProgress => 
   ...over,
 });
 
-describe("uploadPercent", () => {
+const engine = (over: Partial<FileProgress> = {}): FileProgress =>
+  ({
+    path: `/Users/me/Work/Captures/${NAME}`,
+    fileName: NAME,
+    label: "Work",
+    action: "upload",
+    status: "inProgress",
+    progressPercent: 40,
+    bytesEncrypted: 100,
+    bytesTransferred: 40,
+    totalBytes: 100,
+    ...over,
+  }) as FileProgress;
+
+describe("a direct upload", () => {
   it("follows this capture's own upload row", () => {
-    expect(uploadPercent(card({ state: "uploading" }), row())).toBe(62);
+    expect(cardView(card({ state: "uploading" }), remote(), []).text).toBe("Uploading · 62%");
   });
 
   it("ignores another file's row, or the same name in another drive", () => {
-    expect(uploadPercent(card({ state: "uploading" }), row({ fileName: "other.png" }))).toBeNull();
-    expect(uploadPercent(card({ state: "uploading" }), row({ label: "Photos" }))).toBeNull();
+    expect(cardView(card({ state: "uploading" }), remote({ fileName: "x.png" }), []).percent).toBeNull();
+    expect(cardView(card({ state: "uploading" }), remote({ label: "Photos" }), []).percent).toBeNull();
   });
 
   it("holds at 99 until Rust says it is uploaded", () => {
-    expect(uploadPercent(card({ state: "uploading" }), row({ bytesTransferred: 100 }))).toBe(99);
-    expect(uploadPercent(card({ state: "uploaded", linkCopied: true }), null)).toBe(100);
+    expect(cardView(card({ state: "uploading" }), remote({ bytesTransferred: 100 }), []).percent).toBe(99);
+    const done = cardView(card({ state: "uploaded", linkCopied: true }), null, []);
+    expect(done).toMatchObject({ percent: 100, done: true, text: "Uploaded · link copied" });
   });
 
-  it("has no number while encrypting", () => {
-    expect(uploadPercent(card({ state: "uploading" }), row({ totalBytes: 0 }))).toBeNull();
+  it("offers Retry when it failed", () => {
+    expect(cardView(card({ state: "failed", message: "offline" }), null, []).failed).toBe(true);
+    expect(canRetry(card({ state: "failed", message: "offline" }))).toBe(true);
+    expect(canRetry(card({ state: "syncing", linkCopied: true }))).toBe(false);
   });
 });
 
-describe("the card's words", () => {
-  it("names where the file went", () => {
-    expect(destinationText(card({ state: "uploading" }))).toBe("Work › Captures");
+describe("a capture in a synced drive", () => {
+  const syncing = card({ state: "syncing", linkCopied: true });
+
+  it("waits for the sync queue to pick it up", () => {
+    expect(cardView(syncing, null, [])).toMatchObject({ percent: null, text: "Saved · waiting for sync", done: false });
   });
 
-  it("describes each step", () => {
-    expect(statusText(card({ state: "uploading" }), null)).toBe("Preparing upload…");
-    expect(statusText(card({ state: "uploading" }), 40)).toBe("Uploading · 40%");
-    expect(statusText(card({ state: "uploaded", linkCopied: true }), 100)).toBe("Uploaded · link copied");
-    expect(statusText(card({ state: "uploaded", linkCopied: false }), 100)).toBe("Uploaded · no link");
-    expect(statusText(card({ state: "failed", message: "offline" }), null)).toBe("Couldn't upload");
+  it("follows the sync engine's row for this file", () => {
+    expect(cardView(syncing, null, [engine()]).text).toBe("Uploading · 40%");
+    expect(cardView(syncing, null, [engine({ label: "Other" })]).percent).toBeNull();
   });
 
-  it("hides itself only once the file is uploaded", () => {
-    expect(hidesItself(card({ state: "uploaded", linkCopied: true }))).toBe(true);
-    expect(hidesItself(card({ state: "uploading" }))).toBe(false);
-    expect(hidesItself(card({ state: "failed", message: "x" }))).toBe(false);
+  it("is done when the sync engine says so, not before", () => {
+    expect(cardView(syncing, null, [engine({ status: "completed" })])).toMatchObject({ done: true, percent: 100 });
+    expect(cardView(syncing, null, [engine({ status: "error" })])).toMatchObject({ failed: true, done: false });
   });
+});
+
+it("names where the file went", () => {
+  expect(destinationText(card({ state: "uploading" }))).toBe("Work › Captures");
 });

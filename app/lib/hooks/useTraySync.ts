@@ -373,19 +373,31 @@ export function useTrayInit(isAuthenticated: boolean) {
 
 /** Keep the tray's recording time and click behaviour in step with Rust. */
 function startCaptureWatcher() {
-  void listen<CapturePhase>("capture_state_changed", async (e) => {
-    capturePhaseLatest = e.payload;
-    const title = recordingTrayTitle(e.payload);
+  // One update at a time, newest wins: two phase changes in quick succession
+  // (pause, then stop) used to race, and the older title could land last and
+  // stay beside the icon after the recording was saved.
+  let queue: Promise<void> = Promise.resolve();
+  const apply = (phase: CapturePhase | undefined) => {
+    if (!phase || typeof phase.phase !== "string") return;
+    capturePhaseLatest = phase;
+    const title = recordingTrayTitle(phase);
     if (title === trayTitleShown) return;
     trayTitleShown = title;
-    try {
-      const tray = await TrayIcon.getById(TRAY_ID);
-      await tray?.setTitle(title);
-      await tray?.setTooltip(title ? "Recording. Click to stop." : "Hippius Cloud");
-    } catch (err) {
-      logTrayAction("Failed to update the recording title", err);
-    }
-  });
+    queue = queue
+      .then(async () => {
+        if (title !== trayTitleShown) return; // superseded while queued
+        const tray = await TrayIcon.getById(TRAY_ID);
+        await tray?.setTitle(title);
+        await tray?.setTooltip(title ? "Recording. Click to stop." : "Hippius Cloud");
+      })
+      .catch((err) => logTrayAction("Failed to update the recording title", err));
+  };
+  void listen<CapturePhase>("capture_state_changed", (e) => apply(e.payload));
+  // A reload mid-recording, or an event missed before this listened: start
+  // from the session's real phase rather than from "no recording".
+  void invoke<CapturePhase>("capture_state")
+    .then(apply)
+    .catch(() => undefined);
 }
 
 // Add these explicit debug logs

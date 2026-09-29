@@ -129,6 +129,27 @@ pub async fn choices(pool: &SqlitePool, account_id: &str) -> Result<Vec<Destinat
     Ok(merge_choices(local, remote))
 }
 
+/// Where `label` is synced on this machine, when it is one of this account's
+/// own drives. A capture for such a drive goes into this folder and the sync
+/// engine uploads it, rather than being uploaded directly and then synced
+/// back down as a second copy.
+pub async fn own_local_path(pool: &SqlitePool, account_id: &str, label: &str) -> Result<Option<std::path::PathBuf>> {
+    use sqlx::Row;
+    let owner = crate::auth::account_key::account_key(account_id);
+    let row = sqlx::query(
+        "SELECT path FROM sync_paths
+         WHERE owner = ? AND label = ?
+           AND label != 'migration'
+           AND owner_ss58 IS NULL
+           AND wire_folder_hash IS NULL",
+    )
+    .bind(&owner)
+    .bind(label)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| std::path::PathBuf::from(r.get::<String, _>("path"))))
+}
+
 /// Whether `label` is one of this account's drives synced here.
 pub async fn is_local(pool: &SqlitePool, account_id: &str, label: &str) -> bool {
     own_local_labels(pool, account_id)
@@ -236,6 +257,11 @@ mod tests {
             vec!["Paused".to_string(), "Work".to_string()]
         );
         assert!(is_local(&pool, "5Alice", "Work").await);
+        assert_eq!(
+            own_local_path(&pool, "5Alice", "Work").await.unwrap(),
+            Some(std::path::PathBuf::from("/tmp/Work"))
+        );
+        assert_eq!(own_local_path(&pool, "5Alice", "Team").await.unwrap(), None);
         assert!(!is_local(&pool, "5Alice", "Team").await);
         assert!(own_local_labels(&pool, "5Bob").await.unwrap().is_empty());
     }

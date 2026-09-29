@@ -13,9 +13,33 @@ import ScreenCaptureKit
 @main
 struct HippiusCaptureMain {
     static func main() {
+        // `--list-microphones`: print the microphones as JSON and exit. Rust
+        // offers them in the capture bar and passes the chosen id to "start".
+        if CommandLine.arguments.contains("--list-microphones") {
+            listMicrophones()
+            return
+        }
         let runner = Runner()
         runner.emit(["ok": true, "event": "ready"])
         runner.run()
+    }
+}
+
+/// `[{"id": uniqueID, "name": localizedName}]` on one line.
+func listMicrophones() {
+    let types: [AVCaptureDevice.DeviceType]
+    if #available(macOS 14.0, *) {
+        types = [.microphone, .external]
+    } else {
+        types = [.builtInMicrophone, .externalUnknown]
+    }
+    let devices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .audio, position: .unspecified).devices
+    let list = devices.map { ["id": $0.uniqueID, "name": $0.localizedName] }
+    if let data = try? JSONSerialization.data(withJSONObject: list),
+       let text = String(data: data, encoding: .utf8) {
+        print(text)
+    } else {
+        print("[]")
     }
 }
 
@@ -73,6 +97,7 @@ final class Runner: @unchecked Sendable {
         }
         let microphone = (obj["microphone"] as? Bool) ?? false
         let showClicks = (obj["showClicks"] as? Bool) ?? false
+        let microphoneDeviceId = obj["microphoneDeviceId"] as? String
         let displayId = intU32(obj["displayId"])
         let windowId = intU32(obj["windowId"])
         let crop: CGRect? = {
@@ -96,6 +121,7 @@ final class Runner: @unchecked Sendable {
                     windowId: windowId,
                     crop: crop,
                     microphone: microphone,
+                    microphoneDeviceId: microphoneDeviceId,
                     showClicks: showClicks
                 )
                 result = .success(session)
@@ -228,6 +254,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         windowId: UInt32?,
         crop: CGRect?,
         microphone: Bool,
+        microphoneDeviceId: String?,
         showClicks: Bool
     ) async throws -> RecordSession {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -282,6 +309,9 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         }
         if #available(macOS 15.0, *), microphone {
             config.captureMicrophone = true
+            if let microphoneDeviceId, !microphoneDeviceId.isEmpty {
+                config.microphoneCaptureDeviceID = microphoneDeviceId
+            }
         }
         if #available(macOS 15.0, *), showClicks {
             config.showMouseClicks = true

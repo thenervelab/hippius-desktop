@@ -19,20 +19,35 @@ use crate::error::Result;
 use crate::error::AppError;
 
 /// Options that apply once, at the start of a recording.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
 pub struct RecordOptions {
-    /// Capture the default microphone into the MP4 when the platform can.
+    /// Capture a microphone into the MP4 when the platform can.
     pub microphone: bool,
+    /// Which microphone; `None` is the system default.
+    pub microphone_device: Option<String>,
     /// Draw a ring where the pointer clicks, when the platform can.
     pub show_clicks: bool,
 }
 
-impl Default for RecordOptions {
-    fn default() -> Self {
-        Self {
-            microphone: true,
-            show_clicks: false,
-        }
+/// A microphone the recording can use.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Microphone {
+    /// The platform's device id (AVCaptureDevice.uniqueID on macOS).
+    pub id: String,
+    pub name: String,
+}
+
+/// The microphones a recording can use; empty where recording the microphone
+/// is not supported.
+pub fn list_microphones() -> Vec<Microphone> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::list_microphones()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
     }
 }
 

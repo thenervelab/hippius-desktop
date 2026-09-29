@@ -1,4 +1,4 @@
-import type { CaptureKind, CaptureMode } from "@/app/lib/tauri/capture";
+import type { CaptureDevice, CaptureKind, CaptureMode, CaptureOptions } from "@/app/lib/tauri/capture";
 
 /**
  * What the capture bar shows, decided without React so it can be tested:
@@ -40,7 +40,8 @@ export function confirmLabel(kind: CaptureKind): string {
  * `onThisDisplay` whether the pointer is on this display (a screen hint only
  * makes sense for the screen being pointed at).
  */
-export function barHint(kind: CaptureKind, mode: CaptureMode, hasArea: boolean): string {
+export function barHint(kind: CaptureKind, mode: CaptureMode, hasArea: boolean, cameraOnly = false): string {
+  if (kind === "recording" && cameraOnly) return "Drag your camera where you like, then press Return to record";
   const verb = kind === "recording" ? "record" : "capture";
   if (mode === "window") return `Click a window to ${verb} it`;
   if (mode === "screen") return `Click a screen to ${verb} it, or press Return`;
@@ -56,3 +57,40 @@ export const TIMER_OPTIONS: readonly { secs: number; label: string }[] = [
 
 /** Where remembered areas live: one area, on the display it was drawn on. */
 export const LAST_AREA_KEY = "hippius:capture-last-area";
+
+/**
+ * What a source chip on the recording row says: the chosen device's name, the
+ * default when none is chosen, or "No camera" / "No microphone" when off. A
+ * chosen device that is no longer listed (unplugged) reads as the default,
+ * which is what Rust and the camera fall back to.
+ */
+export function sourceLabel(
+  on: boolean,
+  chosen: string | null,
+  devices: CaptureDevice[],
+  source: "camera" | "microphone",
+): string {
+  if (!on) return source === "camera" ? "No camera" : "No microphone";
+  const match = chosen ? devices.find((d) => d.id === chosen) : undefined;
+  if (match) return match.name;
+  return source === "camera" ? "Default camera" : "Default microphone";
+}
+
+/** A source picked from a chip's menu: `null` device = turn it off. */
+export function pickCamera(options: CaptureOptions, deviceId: string | null | "default"): CaptureOptions {
+  if (deviceId === null) {
+    // Camera off with the screen off would record nothing: the screen comes back.
+    return { ...options, camera: false, screen: true };
+  }
+  return { ...options, camera: true, cameraDevice: deviceId === "default" ? null : deviceId };
+}
+
+export function pickMicrophone(options: CaptureOptions, deviceId: string | null | "default"): CaptureOptions {
+  if (deviceId === null) return { ...options, microphone: false };
+  return { ...options, microphone: true, microphoneDevice: deviceId === "default" ? null : deviceId };
+}
+
+/** The Screen chip: turning the screen off records the camera alone, so the camera comes on. */
+export function toggleScreen(options: CaptureOptions): CaptureOptions {
+  return options.screen ? { ...options, screen: false, camera: true } : { ...options, screen: true };
+}

@@ -7,10 +7,13 @@ import "./capture-overlay.css";
 import {
   cancelCapture,
   confirmCapture,
+  getCaptureCameraContext,
   getCaptureOverlayContext,
   selectCapture,
   setCaptureMode,
   setCapturePending,
+  type CameraShape,
+  type CaptureCameraState,
   type CaptureKind,
   type CaptureMode,
   type CaptureOverlayContext,
@@ -107,6 +110,9 @@ export default function CaptureOverlayPage() {
   const [pointerHere, setPointerHere] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The camera window Rust is showing; a "stage" means the camera alone is
+  // recorded, so there is nothing on the screen to choose.
+  const [cameraShape, setCameraShape] = useState<CameraShape | null>(null);
   const pendingAction = useRef<(() => Promise<void>) | null>(null);
   const submitted = useRef(false);
   const restored = useRef(false);
@@ -140,6 +146,9 @@ export default function CaptureOverlayPage() {
     // No session waiting (it ended while this window was opening): nothing
     // to select, so stand down rather than sit over the screen.
     load().catch(() => void cancelCapture());
+    void getCaptureCameraContext()
+      .then((c) => setCameraShape(c.shape))
+      .catch(() => undefined);
   }, [displayId, load]);
 
   // The bar switched mode on some display: read the context again (window
@@ -152,6 +161,7 @@ export default function CaptureOverlayPage() {
           void load().catch(() => undefined);
         }
       }),
+      listen<CaptureCameraState>("capture_camera_state", (e) => setCameraShape(e.payload.shape)),
       listen<{ displayId: number | null }>("capture_pending_changed", (e) => {
         const other = e.payload.displayId !== null && e.payload.displayId !== displayId;
         setAreaElsewhere(other);
@@ -201,12 +211,13 @@ export default function CaptureOverlayPage() {
 
   const confirm = useCallback(() => {
     if (!context || displayId === null) return;
-    if (context.mode === "window") {
+    const cameraOnly = context.kind === "recording" && cameraShape === "stage";
+    if (context.mode === "window" && !cameraOnly) {
       setNotice(barHint(context.kind, "window", false));
       return;
     }
     withCountdown(() => confirmCapture(displayId));
-  }, [context, displayId, withCountdown]);
+  }, [context, displayId, withCountdown, cameraShape]);
 
   const submitSelection = useCallback(
     (selection: CaptureSelection) => withCountdown(() => selectCapture(selection)),
@@ -233,7 +244,11 @@ export default function CaptureOverlayPage() {
   }, [confirm, countdown]);
 
   if (!context || displayId === null) return null;
-  const { mode, kind } = context;
+  const { kind } = context;
+  const cameraOnly = kind === "recording" && cameraShape === "stage";
+  // Camera only: the stage is what is recorded, so no area, window or screen
+  // is chosen here. "none" switches every selection path below off.
+  const mode: CaptureMode | "none" = cameraOnly ? "none" : context.mode;
   const counting = countdown !== null;
 
   const pointFrom = (e: React.PointerEvent): Point => ({ x: e.clientX, y: e.clientY });
@@ -299,7 +314,7 @@ export default function CaptureOverlayPage() {
   const screenLit = mode === "screen" && pointerHere;
 
   const cursor =
-    counting
+    counting || mode === "none"
       ? "default"
       : mode === "area"
         ? drag?.op === "resize"
@@ -314,7 +329,7 @@ export default function CaptureOverlayPage() {
     void setCaptureMode(nextKind, nextMode).catch((error) => setNotice(errorMessage(error)));
   };
 
-  const hint = notice ?? barHint(kind, mode, Boolean(rect) || areaElsewhere);
+  const hint = notice ?? barHint(kind, context.mode, Boolean(rect) || areaElsewhere, cameraOnly);
   const KindIcon = kind === "recording" ? Video : Camera;
 
   return (
@@ -390,7 +405,9 @@ export default function CaptureOverlayPage() {
           className="pointer-events-none absolute grid size-24 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-5xl font-semibold tabular-nums text-white"
           style={{
             left: highlight ? highlight.x + highlight.width / 2 : "50%",
-            top: highlight ? highlight.y + highlight.height / 2 : "50%",
+            // Camera only: the stage fills the middle and sits above this
+            // window, so the count goes above it.
+            top: highlight ? highlight.y + highlight.height / 2 : cameraOnly ? "11%" : "50%",
           }}
           aria-live="assertive"
         >
@@ -401,7 +418,8 @@ export default function CaptureOverlayPage() {
       {context.hostsBar && !counting && (
         <CaptureBar
           kind={kind}
-          mode={mode}
+          mode={context.mode}
+          cameraOnly={cameraOnly}
           options={context.options}
           destination={context.destination}
           recordingAvailable={context.recordingAvailable}

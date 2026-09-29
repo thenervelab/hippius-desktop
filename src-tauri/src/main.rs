@@ -676,6 +676,11 @@ fn main() {
             crate::capture::commands::capture_sync_shortcut,
             crate::capture::commands::capture_get_shortcut,
             crate::capture::commands::capture_set_shortcut,
+            crate::capture::commands::capture_camera_context,
+            crate::capture::commands::capture_set_cameras,
+            crate::capture::commands::capture_cameras,
+            crate::capture::commands::capture_microphones,
+            crate::capture::commands::capture_camera_toggle,
             get_platform_info,
             is_app_translocated,
             // Finder extension enablement. Registered on every platform (they

@@ -1,9 +1,14 @@
 //! From a file on disk to a link on the clipboard.
 //!
-//! Every step reuses an existing path: the upload is the remote file upload
-//! (same drive resolution, storage gate and upload-widget rows as a dropped
-//! file) and the link is the "share any file on disk" path the Finder uses.
-//! Nothing here encrypts, bills or talks to the server itself.
+//! Every step reuses an existing path. For a drive synced on this machine the
+//! capture is moved into its `Captures` folder and the sync engine uploads it,
+//! like any file the user saves there: one row in the sync queue, and no
+//! second copy synced back down (a direct upload into a synced drive was
+//! downloaded straight back by the engine and listed twice). For a drive
+//! that is only on the server, the upload is the remote file upload (same
+//! drive resolution, storage gate and upload-widget rows as a dropped file).
+//! The link is the "share any file on disk" path the Finder uses. Nothing here
+//! bills or talks to the server itself.
 
 use std::path::Path;
 
@@ -26,6 +31,9 @@ pub struct Delivered {
     /// Why the link is missing, in Rust's words, when it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_error: Option<String>,
+    /// The file went into a synced folder and the sync engine uploads it;
+    /// false when it was uploaded directly.
+    pub via_sync: bool,
 }
 
 /// Upload `file` into the destination's Captures folder and mint a link to it.
@@ -40,35 +48,56 @@ pub struct Delivered {
 /// Whatever the upload refused with, including `NotReady(StorageLimitReached)`
 /// from the storage gate, which the UI answers with the plans dialog.
 pub async fn deliver(state: &AppState, app: tauri::AppHandle, account_id: &str, destination: &CaptureDestination, file: &Path) -> Result<Delivered> {
-    let file_name = file
+    let local_root = if destination.owner_ss58.is_none() {
+        super::destination::own_local_path(state.pool()?, account_id, &destination.label).await?
+    } else {
+        None
+    };
+
+    let (placed, via_sync) = if let Some(root) = local_root {
+        let placed = tokio::task::spawn_blocking({
+            let file = file.to_path_buf();
+            move || place_in_folder(&root.join(CAPTURES_FOLDER), &file)
+        })
+        .await
+        .map_err(|e| AppError::Other(format!("capture move task failed: {e}")))??;
+        // Start a cycle now rather than waiting for the watcher, so the
+        // upload shows in the sync queue straight away.
+        if let Err(e) = crate::sync::control::trigger_sync_now(app.clone()).await {
+            tracing::warn!(error = %e, "capture saved to the sync folder; sync not nudged");
+        }
+        (placed, true)
+    } else {
+        let source = file
+            .to_str()
+            .ok_or_else(|| AppError::Other("Capture path is not valid UTF-8".into()))?
+            .to_string();
+        let failures = crate::sync::remote_upload::upload_files_to_remote_folder_inner(
+            state,
+            app,
+            account_id,
+            &destination.label,
+            Some(CAPTURES_FOLDER.to_string()),
+            &[source],
+            destination.owner_ss58.clone(),
+            destination.folder_hash.clone(),
+        )
+        .await?;
+        if let Some(failure) = failures.into_iter().next() {
+            return Err(AppError::Other(failure.error));
+        }
+        (file.to_path_buf(), false)
+    };
+    let file_name = placed
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| AppError::Other("Capture file has no name".into()))?
         .to_string();
-    let source = file
-        .to_str()
-        .ok_or_else(|| AppError::Other("Capture path is not valid UTF-8".into()))?
-        .to_string();
-
-    let failures = crate::sync::remote_upload::upload_files_to_remote_folder_inner(
-        state,
-        app,
-        account_id,
-        &destination.label,
-        Some(CAPTURES_FOLDER.to_string()),
-        &[source],
-        destination.owner_ss58.clone(),
-        destination.folder_hash.clone(),
-    )
-    .await?;
-    if let Some(failure) = failures.into_iter().next() {
-        return Err(AppError::Other(failure.error));
-    }
 
     let (share_url, link_error) = match crate::shares::commands::share_external_file(
         state,
         account_id,
-        file,
+        &placed,
         hcfs_client::client::share::ShareTtl::Never,
         crate::shares::commands::ShareChoice::Public,
         None,
@@ -87,7 +116,41 @@ pub async fn deliver(state: &AppState, app: tauri::AppHandle, account_id: &str, 
         drive_name: destination.display_name.clone(),
         share_url,
         link_error,
+        via_sync,
     })
+}
+
+/// Move `file` into `dir` (created if needed) under a name nothing there has.
+fn place_in_folder(dir: &Path, file: &Path) -> Result<std::path::PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let name = file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| AppError::Other("Capture file has no name".into()))?;
+    let target = free_name(dir, name, Path::exists);
+    // A rename is atomic on one volume; the capture temp dir and the synced
+    // folder can be on different ones, which is when it fails.
+    if std::fs::rename(file, &target).is_err() {
+        std::fs::copy(file, &target)?;
+        std::fs::remove_file(file)?;
+    }
+    Ok(target)
+}
+
+/// `dir/name`, or the first of `name (2)`, `name (3)`… that `exists` says is free.
+fn free_name(dir: &Path, name: &str, exists: impl Fn(&Path) -> bool) -> std::path::PathBuf {
+    let first = dir.join(name);
+    if !exists(&first) {
+        return first;
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    (2..=9_999)
+        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
+        .find(|p| !exists(p))
+        .unwrap_or(first)
 }
 
 /// The notification a delivered capture posts: `(title, body)`.
@@ -120,7 +183,38 @@ mod tests {
             drive_name: "Work".into(),
             share_url: share_url.map(str::to_string),
             link_error: share_url.is_none().then(|| "boom".into()),
+            via_sync: false,
         }
+    }
+
+    #[test]
+    fn a_capture_never_overwrites_a_file_of_the_same_name() {
+        let dir = Path::new("/drive/Captures");
+        let taken = ["/drive/Captures/Shot.png", "/drive/Captures/Shot (2).png"];
+        let exists = |p: &Path| taken.iter().any(|t| Path::new(t) == p);
+        assert_eq!(free_name(dir, "Shot.png", exists), Path::new("/drive/Captures/Shot (3).png"));
+        assert_eq!(free_name(dir, "Other.png", exists), Path::new("/drive/Captures/Other.png"));
+        assert_eq!(
+            free_name(dir, "README", |p| p == Path::new("/drive/Captures/README")),
+            Path::new("/drive/Captures/README (2)")
+        );
+    }
+
+    #[test]
+    fn a_capture_is_moved_into_the_synced_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("capture-x").join("Shot.png");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"png").unwrap();
+        let captures = tmp.path().join("Work").join("Captures");
+        std::fs::create_dir_all(&captures).unwrap();
+        std::fs::write(captures.join("Shot.png"), b"older").unwrap();
+
+        let placed = place_in_folder(&captures, &src).unwrap();
+        assert_eq!(placed, captures.join("Shot (2).png"));
+        assert_eq!(std::fs::read(&placed).unwrap(), b"png");
+        assert!(!src.exists(), "the temp copy is moved, not left behind");
+        assert_eq!(std::fs::read(captures.join("Shot.png")).unwrap(), b"older");
     }
 
     #[test]

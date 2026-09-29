@@ -36,6 +36,24 @@ pub fn microphone_supported() -> bool {
     macos_at_least(15, 0)
 }
 
+/// The Mac's microphones, from the helper (`--list-microphones` prints them as
+/// JSON and exits). Empty when the helper is missing or recording the
+/// microphone is not supported here.
+pub fn list_microphones() -> Vec<super::Microphone> {
+    if !microphone_supported() {
+        return Vec::new();
+    }
+    let Some(helper) = helper_path() else { return Vec::new() };
+    let Ok(out) = Command::new(helper).arg("--list-microphones").output() else {
+        return Vec::new();
+    };
+    parse_microphones(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_microphones(stdout: &str) -> Vec<super::Microphone> {
+    serde_json::from_str(stdout.trim()).unwrap_or_default()
+}
+
 pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
     if !macos_at_least(13, 0) {
         return Err(AppError::Validation("Screen recording needs macOS 13 or later.".into()));
@@ -85,13 +103,14 @@ pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Resul
         .take()
         .ok_or_else(|| AppError::Other("recording helper has no stdin".into()))?;
 
+    let microphone = options.microphone;
     let start_cmd = StartCommand::from_selection(selection, dest, options)?;
     let mut session = MacosRecorder {
         child: Some(child),
         stdin: Some(stdin),
         events: rx,
         output: dest.to_path_buf(),
-        microphone: options.microphone,
+        microphone,
         running_since: None,
         accumulated: Duration::ZERO,
         paused: false,
@@ -225,6 +244,9 @@ struct StartCommand {
     window_id: Option<u32>,
     crop: Option<CropRect>,
     microphone: bool,
+    /// The microphone's `AVCaptureDevice.uniqueID`; absent = system default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    microphone_device_id: Option<String>,
     /// Ring the pointer where it clicks (ScreenCaptureKit, macOS 15+; the
     /// helper ignores it on older systems).
     show_clicks: bool,
@@ -251,6 +273,7 @@ impl StartCommand {
             window_id: None,
             crop: None,
             microphone: options.microphone,
+            microphone_device_id: options.microphone_device.clone(),
             show_clicks: options.show_clicks,
         };
         match selection {
@@ -401,6 +424,7 @@ mod tests {
             Path::new("/tmp/out.mp4"),
             RecordOptions {
                 microphone: true,
+                microphone_device: Some("BuiltInMicrophoneDevice".into()),
                 show_clicks: true,
             },
         )
@@ -410,8 +434,17 @@ mod tests {
         assert_eq!(v["displayId"], 3);
         assert_eq!(v["crop"]["width"], 100.0);
         assert_eq!(v["microphone"], true);
-        // The Swift helper reads this exact key.
+        // The Swift helper reads these exact keys.
         assert_eq!(v["showClicks"], true);
+        assert_eq!(v["microphoneDeviceId"], "BuiltInMicrophoneDevice");
+    }
+
+    #[test]
+    fn reads_the_helpers_microphone_list_and_survives_garbage() {
+        let mics = parse_microphones(r#"[{"id":"BuiltInMicrophoneDevice","name":"MacBook Pro Microphone"}]"#);
+        assert_eq!(mics.len(), 1);
+        assert_eq!(mics[0].name, "MacBook Pro Microphone");
+        assert!(parse_microphones("helper crashed").is_empty());
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "capture-camera",
+    "description": "Least-privilege capability for the camera bubble / camera-only stage (label capture-camera), which floats over every app while recording. It listens for capture_camera_state, reports the cameras it found through the app-defined capture_set_cameras command (not capability-gated), and is dragged by the user. The camera itself is getUserMedia inside the webview; no plugin is involved. core permissions only.",
+    "windows": ["capture-camera"],
+    "permissions": [
+        "core:default",
+        "core:event:allow-listen",
+        "core:event:allow-unlisten",
+        "core:window:allow-start-dragging"
+    ]
+}

@@ -63,7 +63,8 @@
         "tray-panel",
         "capture-overlay",
         "capture-controls",
-        "capture-preview"
+        "capture-preview",
+        "capture-camera"
       ],
       "dangerousDisableAssetCspModification": [
         "style-src"

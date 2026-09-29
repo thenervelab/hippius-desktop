@@ -22,17 +22,35 @@ pub const TIMER_CHOICES: [u8; 3] = [0, 5, 10];
 /// are not the user moving the pointer away from the Record button.
 pub const RECORDING_COUNTDOWN_SECS: u8 = 3;
 
+/// How the camera appears in a recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CameraShape {
+    /// A small round window over the screen, filmed with it; draggable.
+    Bubble,
+    /// Camera only: a large window in the middle that is itself recorded.
+    Stage,
+}
+
 /// What the bar remembers between captures, on this device.
 ///
 /// Device-wide rather than per account: a timer, the microphone and the last
 /// mode are the habits of the person at the machine, not of a drive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CaptureOptions {
     /// Screenshot timer: 0, 5 or 10 seconds.
     pub timer_secs: u8,
-    /// Record the default microphone with a recording (macOS 15+).
+    /// Record a microphone with a recording (macOS 15+).
     pub microphone: bool,
+    /// Which microphone (a platform device id); `None` is the system default.
+    pub microphone_device: Option<String>,
+    /// Record the screen. Off means camera only.
+    pub screen: bool,
+    /// Show the camera: a bubble filmed with the screen, or on its own.
+    pub camera: bool,
+    /// Which camera (the webview's `deviceId`); `None` is the default one.
+    pub camera_device: Option<String>,
     /// Draw a ring where the pointer clicks in a recording (macOS 15+).
     pub show_clicks: bool,
     /// The bar opens on what was used last.
@@ -45,6 +63,10 @@ impl Default for CaptureOptions {
         Self {
             timer_secs: 0,
             microphone: true,
+            microphone_device: None,
+            screen: true,
+            camera: false,
+            camera_device: None,
             show_clicks: false,
             last_kind: CaptureKind::Screenshot,
             last_mode: CaptureMode::Area,
@@ -54,11 +76,27 @@ impl Default for CaptureOptions {
 
 impl CaptureOptions {
     /// The same options with the timer snapped to a choice the bar offers.
+    /// A recording with neither the screen nor the camera records nothing, so
+    /// turning the screen off turns the camera on.
     #[must_use]
     pub fn normalized(self) -> Self {
         Self {
             timer_secs: if TIMER_CHOICES.contains(&self.timer_secs) { self.timer_secs } else { 0 },
+            camera: self.camera || !self.screen,
             ..self
+        }
+    }
+
+    /// The camera window a capture of `kind` shows while choosing and while
+    /// recording, if any: a bubble filmed with the screen, or a stage that is
+    /// itself what gets recorded (camera only). Screenshots never show one.
+    #[must_use]
+    pub fn camera_shape(&self, kind: CaptureKind) -> Option<CameraShape> {
+        let options = self.clone().normalized();
+        match (kind, options.camera, options.screen) {
+            (CaptureKind::Recording, true, true) => Some(CameraShape::Bubble),
+            (CaptureKind::Recording, true, false) => Some(CameraShape::Stage),
+            _ => None,
         }
     }
 
@@ -66,7 +104,7 @@ impl CaptureOptions {
     #[must_use]
     pub fn countdown_secs(&self, kind: CaptureKind) -> u8 {
         match kind {
-            CaptureKind::Screenshot => self.normalized().timer_secs,
+            CaptureKind::Screenshot => self.clone().normalized().timer_secs,
             CaptureKind::Recording => RECORDING_COUNTDOWN_SECS,
         }
     }
@@ -85,7 +123,7 @@ pub async fn load_options(pool: &SqlitePool) -> Result<CaptureOptions> {
 }
 
 pub async fn save_options(pool: &SqlitePool, options: CaptureOptions) -> Result<()> {
-    let json = serde_json::to_string(&options.normalized())?;
+    let json = serde_json::to_string(&options.clone().normalized())?;
     crate::utils::preferences::save_user_preference_internal(pool, OPTIONS_KEY, &json).await
 }
 
@@ -210,12 +248,34 @@ mod tests {
     }
 
     #[test]
+    fn the_camera_shows_only_for_recordings_and_camera_only_is_a_stage() {
+        let mut o = CaptureOptions::default();
+        assert_eq!(o.camera_shape(CaptureKind::Recording), None);
+        o.camera = true;
+        assert_eq!(o.camera_shape(CaptureKind::Recording), Some(CameraShape::Bubble));
+        assert_eq!(o.camera_shape(CaptureKind::Screenshot), None);
+        o.screen = false;
+        assert_eq!(o.camera_shape(CaptureKind::Recording), Some(CameraShape::Stage));
+    }
+
+    /// Screen off and camera off would record nothing.
+    #[test]
+    fn turning_the_screen_off_turns_the_camera_on() {
+        let o = CaptureOptions {
+            screen: false,
+            camera: false,
+            ..CaptureOptions::default()
+        };
+        assert!(o.normalized().camera);
+    }
+
+    #[test]
     fn an_unknown_timer_reads_as_none() {
         let options = CaptureOptions {
             timer_secs: 7,
             ..CaptureOptions::default()
         };
-        assert_eq!(options.normalized().timer_secs, 0);
+        assert_eq!(options.clone().normalized().timer_secs, 0);
         assert_eq!(options.countdown_secs(CaptureKind::Screenshot), 0);
     }
 
@@ -226,8 +286,9 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({
-                "timerSecs": 0, "microphone": true, "showClicks": false,
-                "lastKind": "screenshot", "lastMode": "area"
+                "timerSecs": 0, "microphone": true, "microphoneDevice": null,
+                "screen": true, "camera": false, "cameraDevice": null,
+                "showClicks": false, "lastKind": "screenshot", "lastMode": "area"
             })
         );
         let partial: CaptureOptions = serde_json::from_value(serde_json::json!({ "timerSecs": 5 })).unwrap();
@@ -248,11 +309,15 @@ mod tests {
         let chosen = CaptureOptions {
             timer_secs: 10,
             microphone: false,
+            microphone_device: Some("BuiltInMicrophoneDevice".into()),
+            screen: true,
+            camera: true,
+            camera_device: Some("abc123".into()),
             show_clicks: true,
             last_kind: CaptureKind::Recording,
             last_mode: CaptureMode::Window,
         };
-        save_options(&pool, chosen).await.unwrap();
+        save_options(&pool, chosen.clone()).await.unwrap();
         assert_eq!(load_options(&pool).await.unwrap(), chosen);
 
         crate::utils::preferences::save_user_preference_internal(&pool, OPTIONS_KEY, "not json")

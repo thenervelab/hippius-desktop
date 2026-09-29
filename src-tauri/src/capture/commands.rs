@@ -17,10 +17,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::bar::{self, CaptureOptions};
+use super::bar::{self, CameraShape, CaptureOptions};
+use super::camera::{self, CameraState};
 use super::destination::{self, CaptureDestination, DestinationChoice};
 use super::preview::{PreviewCard, PreviewStatus};
-use super::recording::{self, RecordOptions, Recorder};
+use super::recording::{self, Microphone, RecordOptions, Recorder};
 use super::screenshot::Selection;
 use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, TransitionError, transition};
 use super::shortcut::{self, ShortcutSetting};
@@ -37,18 +38,29 @@ pub const PENDING_EVENT: &str = "capture_pending_changed";
 pub const PREVIEW_EVENT: &str = "capture_preview_changed";
 /// "Show in folder": the main window opens the drive's Captures folder.
 pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
+/// The camera window's shape or device changed (`camera::CameraState`); the
+/// camera page and the recording pill both read it.
+pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
+/// The camera window listed the cameras it can use.
+pub const CAMERAS_EVENT: &str = "capture_cameras";
 
 /// Overlay windows are labelled `capture-overlay-<display id>`, which is also
 /// the glob the overlay's capability file grants.
 pub const OVERLAY_LABEL_PREFIX: &str = "capture-overlay-";
 pub const CONTROLS_LABEL: &str = "capture-controls";
 pub const PREVIEW_LABEL: &str = "capture-preview";
+pub const CAMERA_LABEL: &str = "capture-camera";
 
 /// The card's window, in logical points; the card fills it.
 const PREVIEW_WIDTH: f64 = 316.0;
 const PREVIEW_HEIGHT: f64 = 290.0;
 /// Gap between the card and the display's bottom-right corner.
-const PREVIEW_MARGIN: f64 = 20.0;
+const PREVIEW_MARGIN: f64 = 16.0;
+/// The recording pill's window, in logical points.
+const CONTROLS_WIDTH: f64 = 340.0;
+const CONTROLS_HEIGHT: f64 = 60.0;
+/// Gap between the pill and the bottom of the usable area.
+const CONTROLS_MARGIN: f64 = 24.0;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -76,6 +88,23 @@ pub struct CaptureState {
     /// The card in the corner, if one is showing.
     preview: Mutex<Option<PreviewCard>>,
     preview_seq: AtomicU64,
+    /// The camera window on screen, and in which shape.
+    camera_shape: Mutex<Option<CameraShape>>,
+    /// The camera this recording started with; the window stays until stop.
+    recording_camera: Mutex<Option<CameraShape>>,
+    /// The bubble was hidden from the pill for part of a recording.
+    camera_hidden: AtomicBool,
+    /// The cameras the camera window found, for the bar's picker. Only the
+    /// webview can name them in a form `getUserMedia` takes back.
+    cameras: Mutex<Vec<CameraDevice>>,
+}
+
+/// A camera the camera window can use, as the webview names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraDevice {
+    pub id: String,
+    pub name: String,
 }
 
 impl CaptureState {
@@ -198,7 +227,7 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
     if (options.last_kind, options.last_mode) != (kind, mode) {
         options.last_kind = kind;
         options.last_mode = mode;
-        if let Err(e) = bar::save_options(pool, options).await {
+        if let Err(e) = bar::save_options(pool, options.clone()).await {
             tracing::warn!(error = %e, "capture bar: last mode not remembered");
         }
     }
@@ -206,6 +235,19 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
     close_preview(&app, &state.capture);
     hide_own_windows(&app, &state.capture);
     let opened = open_capture_ui(&app, &state.capture).await;
+    state.capture.camera_hidden.store(false, Ordering::SeqCst);
+    sync_camera(&app).await;
+    // Load the card and the recording pill while the user is still choosing,
+    // so each appears the moment it is needed instead of after its page loads.
+    let display = state.capture.bar_display.lock().ok().and_then(|g| g.clone());
+    if let Err(e) = open_preview_window(&app, display.as_ref()) {
+        tracing::warn!(error = %e, "capture preview card not prepared");
+    }
+    if kind == CaptureKind::Recording
+        && let Err(e) = open_controls(&app, false)
+    {
+        tracing::warn!(error = %e, "recording controls not prepared");
+    }
     if let Err(e) = opened {
         close_overlays(&app);
         restore_own_windows(&app, &state.capture);
@@ -326,44 +368,175 @@ fn open_overlay(app: &AppHandle, display: &DisplayTarget) -> Result<()> {
     Ok(())
 }
 
-fn open_controls(app: &AppHandle) -> Result<()> {
+/// The recording pill, bottom-centre of the bar's display, above the Dock.
+/// Built hidden while choosing (`show` false) so it is ready to appear the
+/// moment the countdown ends; shown with `show` true.
+fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-    if app.get_webview_window(CONTROLS_LABEL).is_some() {
-        return Ok(());
+    let window = if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
+        w
+    } else {
+        let route = if cfg!(dev) { "capture-controls" } else { "capture-controls.html" };
+        let mut builder = WebviewWindowBuilder::new(app, CONTROLS_LABEL, WebviewUrl::App(route.into()))
+            .title("Hippius recording")
+            .decorations(false)
+            .transparent(true)
+            .shadow(true)
+            .resizable(false)
+            .skip_taskbar(true)
+            .always_on_top(true)
+            .visible_on_all_workspaces(true)
+            .content_protected(true)
+            .focused(false)
+            .inner_size(CONTROLS_WIDTH, CONTROLS_HEIGHT)
+            .visible(false);
+        let display = app.state::<AppState>().capture.bar_display.lock().ok().and_then(|g| g.clone());
+        if let Some(d) = display {
+            let area = work_area(app, &d);
+            builder = builder.position(
+                area.x + (area.width - CONTROLS_WIDTH) / 2.0,
+                area.y + area.height - CONTROLS_HEIGHT - CONTROLS_MARGIN,
+            );
+        }
+        let window = builder
+            .build()
+            .map_err(|e| AppError::Other(format!("Could not open the recording controls: {e}")))?;
+        raise_above_menu_bar(&window);
+        window
+    };
+    if show {
+        show_without_focus(&window);
     }
-    let route = if cfg!(dev) { "capture-controls" } else { "capture-controls.html" };
-    let window = WebviewWindowBuilder::new(app, CONTROLS_LABEL, WebviewUrl::App(route.into()))
-        .title("Hippius recording")
-        .decorations(false)
-        .transparent(true)
-        .shadow(true)
-        .resizable(false)
-        .skip_taskbar(true)
-        .always_on_top(true)
-        .visible_on_all_workspaces(true)
-        .content_protected(true)
-        .inner_size(320.0, 56.0)
-        .visible(false)
-        .build()
-        .map_err(|e| AppError::Other(format!("Could not open the recording controls: {e}")))?;
-
-    // Bottom-centre of the primary display.
-    if let Ok(Some(m)) = window.current_monitor() {
-        let size = m.size();
-        let scale = m.scale_factor();
-        let width = (320.0 * scale) as i32;
-        let height = (56.0 * scale) as i32;
-        let x = (size.width as i32 - width) / 2;
-        let y = size.height as i32 - height - (48.0 * scale) as i32;
-        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-    }
-    raise_above_menu_bar(&window);
-    window
-        .show()
-        .map_err(|e| AppError::Other(format!("Could not show the recording controls: {e}")))?;
-    let _ = window.set_focus();
     Ok(())
+}
+
+/// A display's usable area in logical points: without the menu bar and the
+/// Dock on macOS, without the taskbar on Windows. Windows placed against the
+/// whole display sat under the Dock and looked cut off.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LogicalArea {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+fn display_area(d: &DisplayTarget) -> LogicalArea {
+    let scale = if super::targets::COORDS_ARE_LOGICAL {
+        1.0
+    } else {
+        d.scale_factor.max(1.0)
+    };
+    LogicalArea {
+        x: f64::from(d.x) / scale,
+        y: f64::from(d.y) / scale,
+        width: f64::from(d.width) / scale,
+        height: f64::from(d.height) / scale,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn work_area(app: &AppHandle, d: &DisplayTarget) -> LogicalArea {
+    let full = display_area(d);
+    let id = d.id;
+    let (tx, rx) = std::sync::mpsc::channel();
+    // AppKit is only asked on the main thread.
+    let asked = app.run_on_main_thread(move || {
+        let _ = tx.send(macos_visible_frame(id));
+    });
+    let visible = asked
+        .ok()
+        .and_then(|()| rx.recv_timeout(std::time::Duration::from_millis(500)).ok())
+        .flatten();
+    let Some((vx, vy, vw, vh, primary_height)) = visible else {
+        return full;
+    };
+    // AppKit's origin is the primary display's bottom-left, y up.
+    LogicalArea {
+        x: vx,
+        y: primary_height - (vy + vh),
+        width: vw,
+        height: vh,
+    }
+}
+
+/// `(x, y, width, height)` of the screen with this `CGDirectDisplayID`'s
+/// visible frame in AppKit coordinates, plus the primary screen's height.
+#[cfg(target_os = "macos")]
+fn macos_visible_frame(display_id: u32) -> Option<(f64, f64, f64, f64, f64)> {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::{NSRect, NSString};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    // SAFETY: read-only AppKit queries on the main thread; every object is
+    // checked for nil before it is messaged.
+    unsafe {
+        let screens: id = msg_send![class!(NSScreen), screens];
+        if screens == nil {
+            return None;
+        }
+        let count: usize = msg_send![screens, count];
+        if count == 0 {
+            return None;
+        }
+        let primary: id = msg_send![screens, objectAtIndex: 0usize];
+        let primary_frame: NSRect = msg_send![primary, frame];
+        let key = NSString::alloc(nil).init_str("NSScreenNumber");
+        for i in 0..count {
+            let screen: id = msg_send![screens, objectAtIndex: i];
+            let desc: id = msg_send![screen, deviceDescription];
+            let number: id = msg_send![desc, objectForKey: key];
+            if number == nil {
+                continue;
+            }
+            let n: u32 = msg_send![number, unsignedIntValue];
+            if n == display_id {
+                let vf: NSRect = msg_send![screen, visibleFrame];
+                return Some((vf.origin.x, vf.origin.y, vf.size.width, vf.size.height, primary_frame.size.height));
+            }
+        }
+        None
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn work_area(app: &AppHandle, d: &DisplayTarget) -> LogicalArea {
+    let full = display_area(d);
+    // Windows: the monitor at the display's own origin, in physical pixels.
+    let Ok(monitors) = app.available_monitors() else { return full };
+    let Some(m) = monitors.into_iter().find(|m| m.position().x == d.x && m.position().y == d.y) else {
+        return full;
+    };
+    let area = m.work_area();
+    let scale = m.scale_factor().max(1.0);
+    LogicalArea {
+        x: f64::from(area.position.x) / scale,
+        y: f64::from(area.position.y) / scale,
+        width: f64::from(area.size.width) / scale,
+        height: f64::from(area.size.height) / scale,
+    }
+}
+
+/// Bring a floating window forward without making it the key window, so the
+/// app the user is in keeps the keyboard.
+fn show_without_focus(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc::{msg_send, sel, sel_impl};
+        let target = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            if let Ok(ns_window) = target.ns_window() {
+                let ns_window = ns_window.cast::<objc::runtime::Object>();
+                // SAFETY: this window's live NSWindow, touched on the main thread.
+                let () = unsafe { msg_send![ns_window, orderFrontRegardless] };
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.show();
+    }
 }
 
 /// Tauri's always-on-top level sits BELOW the macOS menu bar, which would
@@ -371,16 +544,30 @@ fn open_controls(app: &AppHandle) -> Result<()> {
 /// impossible to select. Raise it to the screen-saver level.
 #[cfg(target_os = "macos")]
 fn raise_above_menu_bar(window: &tauri::WebviewWindow) {
-    use objc::{msg_send, sel, sel_impl};
     // NSScreenSaverWindowLevel.
-    const LEVEL: i64 = 1000;
+    set_window_level(window, 1000);
+}
+
+/// The camera sits one level above the overlays, so it can be placed while
+/// choosing, and above the pill so a bubble dragged over it stays in view.
+#[cfg(target_os = "macos")]
+fn raise_camera(window: &tauri::WebviewWindow) {
+    set_window_level(window, 1001);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_camera(_window: &tauri::WebviewWindow) {}
+
+#[cfg(target_os = "macos")]
+fn set_window_level(window: &tauri::WebviewWindow, level: i64) {
+    use objc::{msg_send, sel, sel_impl};
     let target = window.clone();
     let _ = window.run_on_main_thread(move || {
         if let Ok(ns_window) = target.ns_window() {
             let ns_window = ns_window.cast::<objc::runtime::Object>();
             // SAFETY: `ns_window` is this window's live NSWindow, and AppKit
             // is only touched here, on the main thread.
-            let () = unsafe { msg_send![ns_window, setLevel: LEVEL] };
+            let () = unsafe { msg_send![ns_window, setLevel: level] };
         }
     });
 }
@@ -472,7 +659,9 @@ pub async fn capture_set_mode(state: tauri::State<'_, AppState>, app: AppHandle,
         last_mode: mode,
         ..bar::load_options(pool).await?
     };
-    bar::save_options(pool, options).await
+    bar::save_options(pool, options).await?;
+    sync_camera(&app).await;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -506,11 +695,19 @@ pub fn capture_set_pending(state: tauri::State<'_, AppState>, app: AppHandle, se
 #[tauri::command]
 pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
     let state = app.state::<AppState>();
-    let CapturePhase::Selecting { mode, .. } = state.capture.current() else {
+    let CapturePhase::Selecting { mode, kind } = state.capture.current() else {
         return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
-    let pending = state.capture.pending.lock().ok().and_then(|g| *g);
-    let selection = bar::resolve_confirm(mode, pending, display_id).map_err(|e| AppError::Validation(e.to_string()))?;
+    let options = bar::load_options(state.pool()?).await?;
+    let selection = if options.camera_shape(kind) == Some(CameraShape::Stage) {
+        // Camera only: what is recorded is the stage window itself.
+        let window_id =
+            camera_window_id(&app).ok_or_else(|| AppError::Validation("The camera isn't on screen yet. Try again in a moment.".into()))?;
+        Selection::Window { window_id }
+    } else {
+        let pending = state.capture.pending.lock().ok().and_then(|g| *g);
+        bar::resolve_confirm(mode, pending, display_id).map_err(|e| AppError::Validation(e.to_string()))?
+    };
     select_inner(&app, selection).await
 }
 
@@ -522,9 +719,11 @@ pub async fn capture_get_options(state: tauri::State<'_, AppState>) -> Result<Ca
 /// Save the bar's Options menu. Returns what was stored (the timer snapped to
 /// a choice the bar offers).
 #[tauri::command]
-pub async fn capture_set_options(state: tauri::State<'_, AppState>, options: CaptureOptions) -> Result<CaptureOptions> {
+pub async fn capture_set_options(state: tauri::State<'_, AppState>, app: AppHandle, options: CaptureOptions) -> Result<CaptureOptions> {
     let options = options.normalized();
-    bar::save_options(state.pool()?, options).await?;
+    bar::save_options(state.pool()?, options.clone()).await?;
+    // Turning the camera on shows it at once, so it can be placed first.
+    sync_camera(&app).await;
     Ok(options)
 }
 
@@ -560,6 +759,15 @@ async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
     let CapturePhase::Selecting { kind, .. } = state.capture.current() else {
         return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
+    // The camera the recording keeps, whatever the options say later. Set
+    // before the phase moves on, so the window is never closed in between.
+    let camera_shape = match kind {
+        CaptureKind::Recording => bar::load_options(state.pool()?).await?.camera_shape(kind),
+        CaptureKind::Screenshot => None,
+    };
+    if let Ok(mut g) = state.capture.recording_camera.lock() {
+        *g = camera_shape;
+    }
     advance(app, &state.capture, CaptureEvent::Selected)?;
     if let Ok(mut g) = state.capture.pending.lock() {
         *g = None;
@@ -579,6 +787,7 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     let path = match taken {
         Ok(path) => path,
         Err(e) => {
+            drop_unused_preview(app, &state.capture);
             let _ = advance(app, &state.capture, CaptureEvent::Failed);
             let _ = app.emit(FAILED_EVENT, FailedPayload { message: e.to_string() });
             return Err(e);
@@ -608,11 +817,18 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     let saved = bar::load_options(state.pool()?).await.unwrap_or_default();
     let options = RecordOptions {
         microphone: saved.microphone && recording::microphone_supported(),
+        microphone_device: saved.microphone_device.clone(),
         show_clicks: saved.show_clicks && recording::show_clicks_supported(),
     };
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     let name = super::naming::capture_file_name(CaptureKind::Recording, chrono::Local::now().naive_local());
     let path = dir.join(name);
+
+    // The pill says "Starting recording…" straight after the countdown; the
+    // recorder can take a second or two to begin.
+    if let Err(e) = open_controls(app, true) {
+        tracing::warn!(error = %e, "recording controls could not open");
+    }
 
     // A still of the first frame, for the preview card once it is saved. Best
     // effort: a recording without a picture on its card is still a recording.
@@ -635,6 +851,7 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
 
     let started = tauri::async_runtime::spawn_blocking({
         let path = path.clone();
+        let options = options.clone();
         move || recording::start(selection, &path, options)
     })
     .await
@@ -644,6 +861,9 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         Ok(r) => r,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&dir);
+            close_controls(app);
+            end_camera(app).await;
+            drop_unused_preview(app, &state.capture);
             restore_own_windows(app, &state.capture);
             let _ = advance(app, &state.capture, CaptureEvent::Failed);
             let _ = app.emit(FAILED_EVENT, FailedPayload { message: e.to_string() });
@@ -663,7 +883,7 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         },
     )?;
     restore_own_windows(app, &state.capture);
-    if let Err(e) = open_controls(app) {
+    if let Err(e) = open_controls(app, true) {
         tracing::warn!(error = %e, "recording controls could not open");
     }
     spawn_tick_loop(app.clone());
@@ -766,11 +986,27 @@ async fn deliver_and_announce(app: &AppHandle, path: &std::path::Path, card_id: 
                 let _ = std::fs::remove_dir_all(dir);
             }
             let _ = app.emit(DELIVERED_EVENT, delivered);
-            let status = PreviewStatus::Uploaded {
-                link_copied: copied,
-                link_error: delivered.link_error.clone(),
+            let status = if delivered.via_sync {
+                PreviewStatus::Syncing {
+                    link_copied: copied,
+                    link_error: delivered.link_error.clone(),
+                }
+            } else {
+                PreviewStatus::Uploaded {
+                    link_copied: copied,
+                    link_error: delivered.link_error.clone(),
+                }
             };
-            let shown = card_id.is_some_and(|id| set_preview_outcome(app, &state.capture, id, status, delivered.share_url.clone()));
+            let shown = card_id.is_some_and(|id| {
+                set_preview_outcome(
+                    app,
+                    &state.capture,
+                    id,
+                    status,
+                    delivered.share_url.clone(),
+                    Some(delivered.file_name.clone()),
+                )
+            });
             if !shown {
                 let (title, body) = super::deliver::delivered_notice(delivered);
                 notify(app, title, body);
@@ -780,7 +1016,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &std::path::Path, card_id: 
             tracing::warn!(error = %e, "capture could not be delivered; kept on disk");
             let _ = app.emit(FAILED_EVENT, FailedPayload { message: e.to_string() });
             if let Some(id) = card_id {
-                set_preview_outcome(app, &state.capture, id, PreviewStatus::Failed { message: e.to_string() }, None);
+                set_preview_outcome(app, &state.capture, id, PreviewStatus::Failed { message: e.to_string() }, None, None);
             }
             let (title, body) = super::deliver::failed_notice(e, path);
             notify(app, title, body);
@@ -825,6 +1061,7 @@ pub async fn capture_stop(state: tauri::State<'_, AppState>, app: AppHandle) -> 
     state.capture.stop_ticks();
     advance(&app, &state.capture, CaptureEvent::Stop)?;
     close_controls(&app);
+    end_camera(&app).await;
 
     let recorder = state
         .capture
@@ -864,8 +1101,11 @@ pub async fn capture_cancel(state: tauri::State<'_, AppState>, app: AppHandle) -
     if let Some(recorder) = state.capture.take_recorder() {
         let _ = tauri::async_runtime::spawn_blocking(move || recorder.cancel()).await;
     }
+    drop_unused_preview(&app, &state.capture);
     restore_own_windows(&app, &state.capture);
-    match advance(&app, &state.capture, CaptureEvent::Cancel) {
+    let cancelled = advance(&app, &state.capture, CaptureEvent::Cancel);
+    end_camera(&app).await;
+    match cancelled {
         Ok(_) => Ok(()),
         // Escape can arrive from more than one overlay; the second finds the
         // session already idle, which is what it asked for.
@@ -951,22 +1191,45 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &std::path::Path
         return None;
     }
     let _ = app.emit(PREVIEW_EVENT, Some(&card));
+    if let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
+        show_without_focus(&w);
+    }
     Some(id)
 }
 
 /// Record how card `id`'s upload went, if it is still the card on screen.
 /// Returns whether it was.
-fn set_preview_outcome(app: &AppHandle, state: &CaptureState, id: u64, status: PreviewStatus, share_url: Option<String>) -> bool {
+fn set_preview_outcome(
+    app: &AppHandle,
+    state: &CaptureState,
+    id: u64,
+    status: PreviewStatus,
+    share_url: Option<String>,
+    file_name: Option<String>,
+) -> bool {
     let updated = {
         let Ok(mut g) = state.preview.lock() else { return false };
-        let Some(next) = g.as_ref().and_then(|c| c.with_outcome(id, status, share_url)) else {
+        let Some(mut next) = g.as_ref().and_then(|c| c.with_outcome(id, status, share_url)) else {
             return false;
         };
+        // A capture moved into a synced folder may have been renamed
+        // ("Shot (2).png"); the card follows the name the sync engine sees.
+        if let Some(name) = file_name {
+            next.file_name = name;
+        }
         *g = Some(next.clone());
         next
     };
     let _ = app.emit(PREVIEW_EVENT, Some(&updated));
     app.get_webview_window(PREVIEW_LABEL).is_some()
+}
+
+/// Close the card's window if it was only prepared (no capture was taken).
+fn drop_unused_preview(app: &AppHandle, state: &CaptureState) {
+    let showing = state.preview.lock().is_ok_and(|g| g.is_some());
+    if !showing && let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
+        let _ = w.close();
+    }
 }
 
 fn close_preview(app: &AppHandle, state: &CaptureState) {
@@ -979,7 +1242,8 @@ fn close_preview(app: &AppHandle, state: &CaptureState) {
 }
 
 /// The card's window in the bottom-right corner of `display` (the one the
-/// capture bar was on), without taking focus from the app the user is in.
+/// capture bar was on), inside its usable area so the Dock never covers it.
+/// Built hidden when a capture starts; `open_preview` shows it.
 fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Result<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -1001,18 +1265,14 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
         // A card is information, not a dialog: typing carries on in the app
         // the user was in.
         .focused(false)
+        .visible(false)
         .inner_size(PREVIEW_WIDTH, PREVIEW_HEIGHT);
     if let Some(d) = display {
-        // Logical points for the builder. On Windows the display is in
-        // physical pixels, so scale it down by that display's own factor.
-        let scale = if super::targets::COORDS_ARE_LOGICAL {
-            1.0
-        } else {
-            d.scale_factor.max(1.0)
-        };
-        let right = (f64::from(d.x) + f64::from(d.width)) / scale;
-        let bottom = (f64::from(d.y) + f64::from(d.height)) / scale;
-        builder = builder.position(right - PREVIEW_WIDTH - PREVIEW_MARGIN, bottom - PREVIEW_HEIGHT - PREVIEW_MARGIN);
+        let area = work_area(app, d);
+        builder = builder.position(
+            area.x + area.width - PREVIEW_WIDTH - PREVIEW_MARGIN,
+            area.y + area.height - PREVIEW_HEIGHT - PREVIEW_MARGIN,
+        );
     }
     builder
         .build()
@@ -1147,4 +1407,200 @@ pub async fn capture_set_shortcut(state: tauri::State<'_, AppState>, app: AppHan
         return Err(e);
     }
     shortcut::save(pool, next).await
+}
+
+// ---------------------------------------------------------------------------
+// The camera window (`camera.rs` decides; this opens, moves and closes it).
+// ---------------------------------------------------------------------------
+
+/// Put the camera window in the shape the session wants now, or take it away,
+/// and tell the camera page and the pill. Called after everything that can
+/// change it: start, mode, options, Record, the pill's toggle, stop, cancel.
+async fn sync_camera(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let options = match state.pool() {
+        Ok(pool) => bar::load_options(pool).await.unwrap_or_default(),
+        Err(_) => CaptureOptions::default(),
+    };
+    let recording = state.capture.recording_camera.lock().ok().and_then(|g| *g);
+    let hidden = state.capture.camera_hidden.load(Ordering::SeqCst);
+    let wanted = camera::wanted_shape(state.capture.current(), &options, recording, hidden);
+    let previous = state
+        .capture
+        .camera_shape
+        .lock()
+        .ok()
+        .and_then(|mut g| std::mem::replace(&mut *g, wanted));
+
+    match (wanted, app.get_webview_window(CAMERA_LABEL)) {
+        (None, Some(window)) => {
+            let _ = window.close();
+        }
+        (None, None) => {}
+        (Some(shape), Some(window)) => {
+            if previous != Some(shape) {
+                place_camera(app, &window, shape);
+            }
+            show_without_focus(&window);
+        }
+        (Some(shape), None) => {
+            if let Err(e) = open_camera_window(app, shape) {
+                tracing::warn!(error = %e, "camera window could not open");
+            }
+        }
+    }
+    let _ = app.emit(
+        CAMERA_STATE_EVENT,
+        CameraState {
+            shape: wanted,
+            hidden,
+            device_id: options.camera_device,
+        },
+    );
+}
+
+/// The recording is over (stopped, cancelled or failed): forget its camera.
+async fn end_camera(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if let Ok(mut g) = state.capture.recording_camera.lock() {
+        *g = None;
+    }
+    state.capture.camera_hidden.store(false, Ordering::SeqCst);
+    sync_camera(app).await;
+}
+
+fn camera_frame(app: &AppHandle, shape: CameraShape) -> Option<camera::Frame> {
+    let display = app.state::<AppState>().capture.bar_display.lock().ok().and_then(|g| g.clone())?;
+    let area = work_area(app, &display);
+    Some(camera::frame(
+        shape,
+        camera::Frame {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+        },
+    ))
+}
+
+fn place_camera(app: &AppHandle, window: &tauri::WebviewWindow, shape: CameraShape) {
+    if let Some(f) = camera_frame(app, shape) {
+        let _ = window.set_size(tauri::LogicalSize::new(f.width, f.height));
+        let _ = window.set_position(tauri::LogicalPosition::new(f.x, f.y));
+    }
+}
+
+fn open_camera_window(app: &AppHandle, shape: CameraShape) -> Result<()> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    let route = if cfg!(dev) { "capture-camera" } else { "capture-camera.html" };
+    let mut builder = WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(route.into()))
+        .title("Hippius camera")
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        // Filmed on purpose: the camera is part of the recording. Every other
+        // capture window is protected; this one must never be.
+        .content_protected(false)
+        .focused(false)
+        // The first click drags the bubble instead of only focusing it.
+        .accept_first_mouse(true)
+        .visible(false);
+    if let Some(f) = camera_frame(app, shape) {
+        builder = builder.inner_size(f.width, f.height).position(f.x, f.y);
+    }
+    let window = builder.build().map_err(|e| AppError::Other(format!("Could not open the camera: {e}")))?;
+    raise_camera(&window);
+    show_without_focus(&window);
+    Ok(())
+}
+
+/// The camera window's system window number, which is what a window
+/// recording is started with. Camera-only recordings record the stage.
+#[cfg(target_os = "macos")]
+fn camera_window_id(app: &AppHandle) -> Option<u32> {
+    use objc::{msg_send, sel, sel_impl};
+
+    let window = app.get_webview_window(CAMERA_LABEL)?;
+    let target = window.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    window
+        .run_on_main_thread(move || {
+            let number = target.ns_window().ok().map(|ns_window| {
+                let ns_window = ns_window.cast::<objc::runtime::Object>();
+                // SAFETY: `ns_window` is this window's live NSWindow, read on
+                // the main thread; `windowNumber` only returns an integer.
+                let n: isize = unsafe { msg_send![ns_window, windowNumber] };
+                n
+            });
+            let _ = tx.send(number);
+        })
+        .ok()?;
+    let number = rx.recv_timeout(std::time::Duration::from_millis(500)).ok().flatten()?;
+    u32::try_from(number).ok().filter(|n| *n > 0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn camera_window_id(_app: &AppHandle) -> Option<u32> {
+    None
+}
+
+/// The camera page's first read: the shape to draw and the device to open.
+#[tauri::command]
+pub async fn capture_camera_context(state: tauri::State<'_, AppState>) -> Result<CameraState> {
+    let options = bar::load_options(state.pool()?).await?;
+    Ok(CameraState {
+        shape: state.capture.camera_shape.lock().ok().and_then(|g| *g),
+        hidden: state.capture.camera_hidden.load(Ordering::SeqCst),
+        device_id: options.camera_device,
+    })
+}
+
+/// The camera page found these cameras; the bar's picker lists them.
+#[tauri::command]
+pub fn capture_set_cameras(state: tauri::State<'_, AppState>, app: AppHandle, cameras: Vec<CameraDevice>) {
+    if let Ok(mut g) = state.capture.cameras.lock() {
+        if *g == cameras {
+            return;
+        }
+        g.clone_from(&cameras);
+    }
+    let _ = app.emit(CAMERAS_EVENT, cameras);
+}
+
+/// The cameras the camera page last reported (empty until it has run once).
+#[tauri::command]
+pub fn capture_cameras(state: tauri::State<'_, AppState>) -> Vec<CameraDevice> {
+    state.capture.cameras.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// The microphones the bar's picker offers. Lists through the recording
+/// helper, so it is empty where recording with a microphone is not available.
+#[tauri::command]
+pub async fn capture_microphones() -> Vec<Microphone> {
+    if !recording::microphone_supported() {
+        return Vec::new();
+    }
+    tauri::async_runtime::spawn_blocking(recording::list_microphones)
+        .await
+        .unwrap_or_default()
+}
+
+/// The pill's camera button: hide or show the bubble mid-recording, returning
+/// whether it is showing now. The
+/// camera-only stage is the recording itself, so it cannot be hidden.
+#[tauri::command]
+pub async fn capture_camera_toggle(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<bool> {
+    let recording = state.capture.recording_camera.lock().ok().and_then(|g| *g);
+    if recording != Some(CameraShape::Bubble) {
+        return Err(AppError::Validation("This recording has no camera bubble to hide.".into()));
+    }
+    let was_hidden = state.capture.camera_hidden.fetch_xor(true, Ordering::SeqCst);
+    sync_camera(&app).await;
+    // Whether the bubble is on screen now.
+    Ok(was_hidden)
 }

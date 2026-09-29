@@ -46,6 +46,14 @@ export interface CaptureOptions {
   /** Screenshot timer: 0, 5 or 10 seconds. */
   timerSecs: number;
   microphone: boolean;
+  /** Which microphone (the helper's id); null = the system default. */
+  microphoneDevice: string | null;
+  /** Record the screen. Off = camera only (Rust turns the camera on). */
+  screen: boolean;
+  /** Show the camera in recordings: a bubble, or the whole video when the screen is off. */
+  camera: boolean;
+  /** Which camera (the webview's `deviceId`); null = the default one. */
+  cameraDevice: string | null;
   showClicks: boolean;
   lastKind: CaptureKind;
   lastMode: CaptureMode;
@@ -70,6 +78,24 @@ export interface CaptureOverlayContext {
   pending: CaptureSelection | null;
 }
 
+/** How the camera shows. Mirrors Rust's `CameraShape`. */
+export type CameraShape = "bubble" | "stage";
+
+/** `capture_camera_state`, for the camera window and the pill. Mirrors Rust's `camera::CameraState`. */
+export interface CaptureCameraState {
+  /** Null when no camera window is up. */
+  shape: CameraShape | null;
+  /** The bubble was hidden from the pill mid-recording. */
+  hidden: boolean;
+  deviceId: string | null;
+}
+
+/** A camera or microphone the bar's pickers offer. */
+export interface CaptureDevice {
+  id: string;
+  name: string;
+}
+
 /** A drive "Save to" offers; `remote` means not synced on this machine. */
 export interface CaptureDestinationChoice {
   label: string;
@@ -79,6 +105,8 @@ export interface CaptureDestinationChoice {
 /** Where a capture's upload is, on its preview card. Mirrors Rust's `PreviewStatus`. */
 export type CapturePreviewStatus =
   | { state: "uploading" }
+  /** In the synced folder; the sync engine is uploading it. */
+  | { state: "syncing"; linkCopied: boolean; linkError?: string }
   | { state: "uploaded"; linkCopied: boolean; linkError?: string }
   | { state: "failed"; message: string };
 
@@ -121,6 +149,8 @@ export interface CaptureDelivered {
   driveName: string;
   shareUrl: string | null;
   linkError?: string;
+  /** Moved into a synced folder; the sync engine uploads it. */
+  viaSync: boolean;
 }
 
 export interface CaptureSupport {
@@ -135,7 +165,9 @@ export interface CaptureSupport {
 // `capture_pending_changed` → `{ displayId: number | null }`,
 // `capture_preview_changed` → `CapturePreviewCard | null`,
 // `capture_show_in_folder` → `CaptureShowInFolder`,
-// `capture_shortcut_pressed` → nothing.
+// `capture_shortcut_pressed` → nothing,
+// `capture_camera_state` → `CaptureCameraState`,
+// `capture_cameras` → `CaptureDevice[]`.
 
 /**
  * Open the capture bar. `kind` and `mode` preselect it (a menu item); left
@@ -203,6 +235,28 @@ export function getCaptureShortcut(): Promise<CaptureShortcutSetting> {
 /** Change the shortcut; `null` turns it off. Refused if another app holds it. */
 export function setCaptureShortcut(accelerator: string | null): Promise<void> {
   return invoke("capture_set_shortcut", { accelerator });
+}
+
+export function getCaptureCameraContext(): Promise<CaptureCameraState> {
+  return invoke("capture_camera_context");
+}
+
+/** The camera window reports the cameras it can open, for the bar's picker. */
+export function setCaptureCameras(cameras: CaptureDevice[]): Promise<void> {
+  return invoke("capture_set_cameras", { cameras });
+}
+
+export function getCaptureCameras(): Promise<CaptureDevice[]> {
+  return invoke("capture_cameras");
+}
+
+export function getCaptureMicrophones(): Promise<CaptureDevice[]> {
+  return invoke("capture_microphones");
+}
+
+/** Hide or show the camera bubble mid-recording; resolves to whether it shows now. */
+export function toggleCaptureCamera(): Promise<boolean> {
+  return invoke("capture_camera_toggle");
 }
 
 export function getCaptureOverlayContext(displayId: number): Promise<CaptureOverlayContext> {

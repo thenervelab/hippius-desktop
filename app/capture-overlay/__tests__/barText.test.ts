@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { barGroups, barHint, confirmLabel, TIMER_OPTIONS } from "@/app/capture-overlay/barText";
+import {
+  barGroups,
+  barHint,
+  confirmLabel,
+  pickCamera,
+  pickMicrophone,
+  sourceLabel,
+  TIMER_OPTIONS,
+  toggleScreen,
+} from "@/app/capture-overlay/barText";
+import type { CaptureOptions } from "@/app/lib/tauri/capture";
+
+const OPTIONS: CaptureOptions = {
+  timerSecs: 0,
+  microphone: false,
+  microphoneDevice: null,
+  screen: true,
+  camera: false,
+  cameraDevice: null,
+  showClicks: false,
+  lastKind: "recording",
+  lastMode: "screen",
+};
 
 describe("the capture bar", () => {
   it("offers screenshots everywhere and recordings only where they work", () => {
@@ -25,5 +47,47 @@ describe("the capture bar", () => {
   /** Rust snaps anything else to no timer (`bar::TIMER_CHOICES`). */
   it("offers only the timers Rust accepts", () => {
     expect(TIMER_OPTIONS.map((t) => t.secs)).toEqual([0, 5, 10]);
+  });
+
+  it("asks the user to place the camera when recording the camera alone", () => {
+    expect(barHint("recording", "area", false, true)).toContain("camera");
+    // A screenshot never records the camera, whatever is saved.
+    expect(barHint("screenshot", "area", false, true)).toBe("Drag to choose what to capture");
+  });
+});
+
+describe("the recording sources", () => {
+  const cams = [
+    { id: "cam1", name: "FaceTime HD Camera" },
+    { id: "cam2", name: "Studio Display Camera" },
+  ];
+
+  it("names the chosen device, the default, or that the source is off", () => {
+    expect(sourceLabel(true, "cam2", cams, "camera")).toBe("Studio Display Camera");
+    expect(sourceLabel(true, null, cams, "camera")).toBe("Default camera");
+    expect(sourceLabel(false, "cam2", cams, "camera")).toBe("No camera");
+    expect(sourceLabel(false, null, [], "microphone")).toBe("No microphone");
+  });
+
+  it("reads an unplugged device as the default, which is what gets used", () => {
+    expect(sourceLabel(true, "gone", cams, "camera")).toBe("Default camera");
+  });
+
+  it("turning the screen off records the camera alone", () => {
+    const off = toggleScreen(OPTIONS);
+    expect(off).toMatchObject({ screen: false, camera: true });
+    expect(toggleScreen(off)).toMatchObject({ screen: true, camera: true });
+  });
+
+  /** Neither screen nor camera would record nothing. */
+  it("turning the camera off while the screen is off brings the screen back", () => {
+    expect(pickCamera({ ...OPTIONS, screen: false, camera: true }, null)).toMatchObject({ screen: true, camera: false });
+  });
+
+  it("picks a device, or the default, and turns the source on", () => {
+    expect(pickCamera(OPTIONS, "cam1")).toMatchObject({ camera: true, cameraDevice: "cam1" });
+    expect(pickCamera({ ...OPTIONS, cameraDevice: "cam1" }, "default")).toMatchObject({ camera: true, cameraDevice: null });
+    expect(pickMicrophone(OPTIONS, "BuiltIn")).toMatchObject({ microphone: true, microphoneDevice: "BuiltIn" });
+    expect(pickMicrophone({ ...OPTIONS, microphone: true }, null)).toMatchObject({ microphone: false });
   });
 });

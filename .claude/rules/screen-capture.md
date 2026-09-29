@@ -50,18 +50,48 @@ click rings come from the saved options, each gated on macOS 15
 `showClicks`). A still of the first frame is taken before the recorder starts,
 for the card.
 
+**Camera and microphone** (`camera.rs`, `app/capture-camera`, label
+`capture-camera`): the bar's recording row (Screen / Camera / Mic chips) saves
+`CaptureOptions.{screen, camera, camera_device, microphone_device}` at once.
+`camera::wanted_shape` decides the window: while selecting it follows the
+options live (so the bubble can be placed before recording); from Record on it
+follows `recording_camera`, frozen in `select_inner` BEFORE the phase moves, so
+a mid-recording option change never pulls the camera out of the video.
+`sync_camera` applies it after every change; every ending calls `end_camera`.
+Bubble = 200 pt round window, bottom-left, filmed with the screen (not filmed
+by a window recording, which is one window only). Screen off = **stage**: a
+centred 16:9 window that `capture_confirm` records as `Selection::Window` by
+its NSWindow `windowNumber`. **The camera window is the one capture window that
+is NOT content-protected** (a protected one films as black), sits at level 1001
+above the overlays, and opens without focus. The webview opens the camera
+(`getUserMedia`, wry grants it) and reports device names via
+`capture_set_cameras`, since only it can name `deviceId`s. Microphones are
+listed by the helper (`--list-microphones`), chosen by
+`microphoneCaptureDeviceID` (macOS 15). Hardened builds need the
+`com.apple.security.device.camera` entitlement or the camera fails silently.
+The pill can hide a bubble (`capture_camera_toggle`), never the stage.
+
 **Preview card** (`app/capture-preview`, label `capture-preview`, `preview.rs`):
-opens when the file exists, bottom-right of the bar's display, `focused(false)`
-+ content-protected. Rust owns its status (`uploading` → `uploaded` /
-`failed`), keyed by a per-capture `id` so a late outcome never lands on a newer
-card; progress comes from `remote_upload_progress`. On success there is NO
+prewarmed hidden at `capture_start`, shown when the file exists, bottom-right
+of the bar display's WORK area (`work_area`: NSScreen `visibleFrame`, not the
+full display, or it sits under the Dock), `focused(false)` + content-protected.
+Rust owns its status (`uploading` → `syncing` / `uploaded` / `failed`),
+keyed by a per-capture `id` so a late outcome never lands on a newer card; progress comes from `remote_upload_progress`. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in
 folder emits `capture_show_in_folder` → `driveFolderRoute(label, remote,
 "Captures")` → the Drive page steps into the folder with the row's own
 `generateFolderUrl`. Retry re-runs `deliver_and_announce` on the kept file.
 
 **Menu bar:** while recording, the tray title shows the time and a tray click
-calls `capture_stop` (`app/lib/tray/trayCaptureState.ts`).
+calls `capture_stop` (`app/lib/tray/trayCaptureState.ts`). Title writes go
+through one serial queue seeded from `capture_state` and drop stale ones:
+async `setTitle` calls finish out of order, and a late "❚❚ 00:10" once stayed
+in the menu bar after the recording was saved.
+
+**Sync queue Show in folder:** each row's folder button fires
+`requestOpenDriveFolder(driveFolderRoute(label, remote, parentOf(path)))`
+(a window event, so the widget needs no router); `TrayNavigationListener`
+navigates and `folderUrlForPath` opens a multi-level path.
 
 **Shortcut** (`shortcut.rs`, `tauri-plugin-global-shortcut`, macOS/Windows):
 default `CommandOrControl+Shift+2`, stored `capture_shortcut_v1` (`off` =
@@ -71,8 +101,13 @@ dialogs (`useStartCapture` brings the main window forward for them). A new
 shortcut is registered before it is saved, so one another app holds is refused
 and the old one stays; no modifier and macOS's ⌘⇧3–6 are refused.
 
-**Delivery reuses, never re-implements**: `upload_files_to_remote_folder_inner`
-+ `share_external_file`. Pinned by `tests/capture_wiring.rs`. Temp under
+**Delivery is local-first for a drive synced here**: the file is moved into
+`<local root>/Captures` (`free_name` never overwrites) and `trigger_sync_now`
+uploads it; the card is `syncing` and follows the sync engine's row. Uploading
+it directly as well made the engine sync it back down, so it showed twice in
+the sync queue. Other drives reuse, never re-implement,
+`upload_files_to_remote_folder_inner`; both then `share_external_file`.
+Pinned by `tests/capture_wiring.rs`. Temp under
 `~/.hippius/capture-tmp/<one dir per capture>`; removed only after upload lands.
 
 ## Rules that fail silently

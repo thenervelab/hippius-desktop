@@ -2,19 +2,22 @@
 
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Mic, Pause, Play, Square, Trash2 } from "lucide-react";
+import { Mic, Pause, Play, Square, Trash2, Video, VideoOff } from "lucide-react";
 import "./capture-controls.css";
 import {
   cancelCapture,
+  getCaptureCameraContext,
   getCaptureState,
   pauseCapture,
   resumeCapture,
   stopCapture,
+  toggleCaptureCamera,
+  type CaptureCameraState,
   type CapturePhase,
 } from "@/app/lib/tauri/capture";
 
 /**
- * Floating recording pill: time, microphone, pause/resume, stop, discard.
+ * Floating recording pill: time, microphone, camera, pause/resume, stop, discard.
  *
  * Rust owns the session; this page only mirrors `capture_state_changed` and
  * invokes pause/resume/stop/cancel. Content-protected by the window builder so
@@ -35,14 +38,17 @@ function isLive(phase: CapturePhase): phase is Extract<CapturePhase, { phase: "r
 export default function CaptureControlsPage() {
   const [phase, setPhase] = useState<CapturePhase>({ phase: "idle" });
   const [busy, setBusy] = useState(false);
+  const [camera, setCamera] = useState<CaptureCameraState | null>(null);
 
   useEffect(() => {
     void getCaptureState().then(setPhase).catch(() => undefined);
-    const unlisten = listen<CapturePhase>("capture_state_changed", (e) => {
-      setPhase(e.payload);
-    });
+    void getCaptureCameraContext().then(setCamera).catch(() => undefined);
+    const unlisteners = [
+      listen<CapturePhase>("capture_state_changed", (e) => setPhase(e.payload)),
+      listen<CaptureCameraState>("capture_camera_state", (e) => setCamera(e.payload)),
+    ];
     return () => {
-      void unlisten.then((fn) => fn());
+      for (const u of unlisteners) void u.then((fn) => fn());
     };
   }, []);
 
@@ -54,12 +60,13 @@ export default function CaptureControlsPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (phase.phase === "finalizing" || phase.phase === "delivering") {
+  const starting = phase.phase === "capturing" && phase.kind === "recording";
+  if (starting || phase.phase === "finalizing" || phase.phase === "delivering") {
     return (
       <div className="flex h-full w-full items-center justify-center">
         <div className="flex items-center gap-3 rounded-full border border-white/10 bg-[#1c1d21]/90 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-xl">
           <span className="size-2 animate-pulse rounded-full bg-[#3167DD]" />
-          {phase.phase === "finalizing" ? "Saving recording…" : "Uploading…"}
+          {starting ? "Starting recording…" : phase.phase === "finalizing" ? "Saving recording…" : "Uploading…"}
         </div>
       </div>
     );
@@ -70,6 +77,10 @@ export default function CaptureControlsPage() {
   }
 
   const paused = phase.phase === "paused";
+  // Only a bubble can be hidden: the camera-only stage IS the recording.
+  // `shape` goes null while hidden, so a hidden bubble is still a bubble here.
+  const hasBubble = camera?.shape === "bubble" || camera?.hidden === true;
+  const bubbleShown = camera?.shape === "bubble" && !camera.hidden;
   const run = async (action: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -101,6 +112,19 @@ export default function CaptureControlsPage() {
         <div className="mx-1 h-4 w-px bg-white/15" />
 
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+          {hasBubble && (
+            <button
+              type="button"
+              disabled={busy}
+              aria-label={bubbleShown ? "Hide camera" : "Show camera"}
+              aria-pressed={bubbleShown}
+              title={bubbleShown ? "Hide the camera (the recording carries on)" : "Show the camera again"}
+              className="rounded-full p-1.5 text-white/90 hover:bg-white/10 disabled:opacity-40"
+              onClick={() => void run(() => toggleCaptureCamera().then(() => undefined))}
+            >
+              {bubbleShown ? <Video className="size-4" /> : <VideoOff className="size-4 text-white/60" />}
+            </button>
+          )}
           <button
             type="button"
             disabled={busy}

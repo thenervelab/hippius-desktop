@@ -77,7 +77,7 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>Hippius needs microphone access to include your voice in screen recordings.</string>
     <key>NSCameraUsageDescription</key>
-    <string>Hippius may need camera access for media features.</string>
+    <string>Hippius needs camera access to show your camera in screen recordings.</string>
     <!-- Removed usage descriptions for system folders to avoid permission prompts at startup.
          The user will use the file picker dialog to explicitly select folders for syncing. -->
     <!-- <key>NSPhotoLibraryUsageDescription</key>

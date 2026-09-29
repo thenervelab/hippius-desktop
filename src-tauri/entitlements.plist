@@ -50,6 +50,10 @@
          with mic on — not at launch. -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- The camera bubble in screen recordings. Without it the hardened
+         runtime denies the camera silently in signed builds. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
     <!-- disable-library-validation removed (audit M-11): the app bundles only its
          own signed dylibs, so letting the notarized process load arbitrary
          UNSIGNED libraries was needless attack surface. VERIFY with a signed +

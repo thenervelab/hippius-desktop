@@ -23,6 +23,14 @@ pub enum PreviewStatus {
         #[serde(skip_serializing_if = "Option::is_none")]
         link_error: Option<String>,
     },
+    /// In the drive's folder on this machine; the sync engine is uploading it,
+    /// and the card follows that upload in the sync queue.
+    #[serde(rename_all = "camelCase")]
+    Syncing {
+        link_copied: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        link_error: Option<String>,
+    },
     /// Not uploaded. The file stays on disk, so Retry sends the same file.
     Failed {
         message: String,
@@ -135,6 +143,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(PreviewStatus::Failed { message: "x".into() }).unwrap(),
             serde_json::json!({ "state": "failed", "message": "x" })
+        );
+        assert_eq!(
+            serde_json::to_value(PreviewStatus::Syncing {
+                link_copied: true,
+                link_error: None
+            })
+            .unwrap(),
+            serde_json::json!({ "state": "syncing", "linkCopied": true })
         );
     }
 }
