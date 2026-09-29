@@ -28,16 +28,10 @@ pub fn recording_supported() -> bool {
 
 pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
     if !macos_at_least(13, 0) {
-        return Err(AppError::Validation(
-            "Screen recording needs macOS 13 or later.".into(),
-        ));
+        return Err(AppError::Validation("Screen recording needs macOS 13 or later.".into()));
     }
-    let helper = helper_path().ok_or_else(|| {
-        AppError::Other(
-            "The screen-recording helper is missing. Rebuild with macos/build-capture-helper.sh."
-                .into(),
-        )
-    })?;
+    let helper =
+        helper_path().ok_or_else(|| AppError::Other("The screen-recording helper is missing. Rebuild with macos/build-capture-helper.sh.".into()))?;
 
     let mut child = Command::new(&helper)
         .stdin(Stdio::piped())
@@ -155,7 +149,7 @@ impl Recorder for MacosRecorder {
 
     fn stop(mut self: Box<Self>) -> Result<PathBuf> {
         self.write_cmd(&SimpleCommand { cmd: "stop" })?;
-        wait_for(&self.events, |e| matches!(e, HelperEvent::Stopped), Duration::from_secs(120))?;
+        wait_for(&self.events, |e| matches!(e, HelperEvent::Stopped), Duration::from_mins(2))?;
         self.freeze_elapsed();
         self.shutdown();
         if !self.output.is_file() {
@@ -166,7 +160,11 @@ impl Recorder for MacosRecorder {
 
     fn cancel(mut self: Box<Self>) -> Result<()> {
         let _ = self.write_cmd(&SimpleCommand { cmd: "cancel" });
-        let _ = wait_for(&self.events, |e| matches!(e, HelperEvent::Cancelled | HelperEvent::Stopped), Duration::from_secs(5));
+        let _ = wait_for(
+            &self.events,
+            |e| matches!(e, HelperEvent::Cancelled | HelperEvent::Stopped),
+            Duration::from_secs(5),
+        );
         self.shutdown();
         if self.output.exists() {
             let _ = std::fs::remove_file(&self.output);
@@ -305,7 +303,7 @@ fn wait_for(rx: &Receiver<HelperEvent>, pred: impl Fn(&HelperEvent) -> bool, tim
         match rx.recv_timeout(left) {
             Ok(HelperEvent::Error(msg)) => return Err(AppError::Other(msg)),
             Ok(ev) if pred(&ev) => return Ok(()),
-            Ok(_) => continue,
+            Ok(_) => {}
             Err(RecvTimeoutError::Timeout) => {
                 return Err(AppError::Other("The recording helper did not respond in time.".into()));
             }

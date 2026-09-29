@@ -126,27 +126,21 @@ pub fn transition(phase: CapturePhase, event: CaptureEvent) -> Result<CapturePha
 
         // Recording: select → start encoder → (pause/resume)* → finalize → deliver.
         (P::Selecting { kind: K::Recording, .. }, E::Selected) => Ok(P::Capturing { kind: K::Recording }),
-        (P::Capturing { kind: K::Recording }, E::RecordingStarted { microphone }) => Ok(P::Recording {
-            elapsed_secs: 0,
-            microphone,
-        }),
-        (P::Recording { elapsed_secs, microphone }, E::Pause) => Ok(P::Paused { elapsed_secs, microphone }),
-        (P::Paused { elapsed_secs, microphone }, E::Resume) => Ok(P::Recording { elapsed_secs, microphone }),
-        (P::Recording { microphone, .. }, E::Tick { elapsed_secs }) => Ok(P::Recording { elapsed_secs, microphone }),
-        (P::Paused { microphone, .. }, E::Tick { elapsed_secs }) => Ok(P::Paused { elapsed_secs, microphone }),
+        (P::Capturing { kind: K::Recording }, E::RecordingStarted { microphone }) => Ok(P::Recording { elapsed_secs: 0, microphone }),
+        // Pausing, or a tick while paused, lands in Paused with the latest time.
+        (P::Recording { elapsed_secs, microphone }, E::Pause) | (P::Paused { microphone, .. }, E::Tick { elapsed_secs }) => {
+            Ok(P::Paused { elapsed_secs, microphone })
+        }
+        // Resuming, or a tick while recording, lands in Recording likewise.
+        (P::Paused { elapsed_secs, microphone }, E::Resume) | (P::Recording { microphone, .. }, E::Tick { elapsed_secs }) => {
+            Ok(P::Recording { elapsed_secs, microphone })
+        }
         (P::Recording { .. } | P::Paused { .. }, E::Stop) => Ok(P::Finalizing),
         (P::Finalizing, E::Captured) => Ok(P::Delivering { kind: K::Recording }),
 
         // Every way a session ends before/after the file exists.
         (P::Delivering { .. }, E::Finished)
-        | (
-            P::Selecting { .. }
-            | P::Capturing { .. }
-            | P::Recording { .. }
-            | P::Paused { .. }
-            | P::Finalizing,
-            E::Failed | E::Cancel,
-        ) => Ok(P::Idle),
+        | (P::Selecting { .. } | P::Capturing { .. } | P::Recording { .. } | P::Paused { .. } | P::Finalizing, E::Failed | E::Cancel) => Ok(P::Idle),
         (P::Delivering { .. }, E::Cancel) => Err(TransitionError::TooLateToCancel),
 
         _ => Err(TransitionError::NotApplicable),
@@ -279,14 +273,7 @@ mod tests {
         use CaptureEvent::*;
         assert_eq!(run(&[SHOT, Selected, Captured, Cancel]), Err(TransitionError::TooLateToCancel));
         assert_eq!(
-            run(&[
-                REC,
-                Selected,
-                RecordingStarted { microphone: false },
-                Stop,
-                Captured,
-                Cancel
-            ]),
+            run(&[REC, Selected, RecordingStarted { microphone: false }, Stop, Captured, Cancel]),
             Err(TransitionError::TooLateToCancel)
         );
     }

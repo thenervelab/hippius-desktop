@@ -34,7 +34,10 @@ fn fn_body(src: &str, sig: &str) -> String {
 fn the_overlay_keeps_itself_out_of_the_capture() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "fn open_overlay(");
-    assert!(body.contains(".content_protected(true)"), "the overlay must be excluded from screen capture");
+    assert!(
+        body.contains(".content_protected(true)"),
+        "the overlay must be excluded from screen capture"
+    );
 }
 
 /// Same rule for the recording control bar — otherwise it films itself.
@@ -42,7 +45,10 @@ fn the_overlay_keeps_itself_out_of_the_capture() {
 fn the_controls_keep_themselves_out_of_the_recording() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "fn open_controls(");
-    assert!(body.contains(".content_protected(true)"), "the control bar must be excluded from screen capture");
+    assert!(
+        body.contains(".content_protected(true)"),
+        "the control bar must be excluded from screen capture"
+    );
 }
 
 /// The overlay's capability must grant the labels the overlays are created
@@ -58,7 +64,12 @@ fn the_overlay_capability_matches_the_overlay_labels() {
     let prefix = prefix_line.split('"').nth(1).expect("prefix is a string literal");
 
     let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-overlay.json")).expect("capability parses");
-    let windows: Vec<&str> = capability["windows"].as_array().expect("windows").iter().filter_map(|w| w.as_str()).collect();
+    let windows: Vec<&str> = capability["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
     assert!(
         windows.contains(&format!("{prefix}*").as_str()),
         "capture-overlay.json must grant {prefix}* — it grants {windows:?}"
@@ -85,7 +96,10 @@ fn the_overlay_capability_grants_nothing_it_does_not_use() {
 fn delivery_reuses_the_existing_upload_and_share_paths() {
     let src = read("src/capture/deliver.rs");
     let body = fn_body(&src, "pub async fn deliver(");
-    assert!(body.contains("upload_files_to_remote_folder_inner("), "the upload must be the remote file upload");
+    assert!(
+        body.contains("upload_files_to_remote_folder_inner("),
+        "the upload must be the remote file upload"
+    );
     assert!(body.contains("share_external_file("), "the link must come from the existing share path");
     for forbidden in ["HcfsClient", "reqwest", "encrypt"] {
         assert!(!body.contains(forbidden), "delivery must not talk to the server itself ({forbidden})");

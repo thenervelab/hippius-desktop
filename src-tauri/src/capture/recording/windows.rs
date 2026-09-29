@@ -16,7 +16,5 @@ pub fn recording_supported() -> bool {
 }
 
 pub fn start(_selection: Selection, _dest: &Path, _options: RecordOptions) -> Result<Box<dyn Recorder>> {
-    Err(AppError::Validation(
-        "Screen recording on Windows is coming in a later update.".into(),
-    ))
+    Err(AppError::Validation("Screen recording on Windows is coming in a later update.".into()))
 }

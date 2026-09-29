@@ -131,9 +131,7 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         return Err(AppError::Validation("Screen capture isn't available on this system yet.".into()));
     }
     if kind == CaptureKind::Recording && !recording::recording_supported() {
-        return Err(AppError::Validation(
-            "Screen recording isn't available on this system yet.".into(),
-        ));
+        return Err(AppError::Validation("Screen recording isn't available on this system yet.".into()));
     }
     let account_id = state.current_account_id()?;
     if destination::load(state.pool()?, &account_id).await?.is_none() {
@@ -371,9 +369,8 @@ pub async fn capture_select(app: AppHandle, selection: Selection) -> Result<()> 
 
 async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
     let state = app.state::<AppState>();
-    let kind = match state.capture.current() {
-        CapturePhase::Selecting { kind, .. } => kind,
-        _ => return Err(AppError::Validation("No capture is waiting for a selection.".into())),
+    let CapturePhase::Selecting { kind, .. } = state.capture.current() else {
+        return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
     advance(app, &state.capture, CaptureEvent::Selected)?;
     close_overlays(app);
