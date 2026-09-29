@@ -43,15 +43,35 @@ pub fn list_microphones() -> Vec<super::Microphone> {
     if !microphone_supported() {
         return Vec::new();
     }
-    let Some(helper) = helper_path() else { return Vec::new() };
-    let Ok(out) = Command::new(helper).arg("--list-microphones").output() else {
-        return Vec::new();
-    };
-    parse_microphones(&String::from_utf8_lossy(&out.stdout))
+    list_devices("--list-microphones")
 }
 
-fn parse_microphones(stdout: &str) -> Vec<super::Microphone> {
-    serde_json::from_str(stdout.trim()).unwrap_or_default()
+/// The Mac's cameras, from the helper (`--list-cameras`), so the bar can offer
+/// them before the camera window has opened one. Empty without the helper.
+pub fn list_cameras() -> Vec<super::MediaDevice> {
+    if !macos_at_least(13, 0) {
+        return Vec::new();
+    }
+    list_devices("--list-cameras")
+}
+
+fn list_devices(flag: &str) -> Vec<super::MediaDevice> {
+    let Some(helper) = helper_path() else { return Vec::new() };
+    // A closed stdin: an older helper that does not know the flag starts a
+    // session instead, and must see end-of-input and exit at once.
+    let Ok(out) = Command::new(helper).arg(flag).stdin(Stdio::null()).output() else {
+        return Vec::new();
+    };
+    parse_devices(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The helper prints one JSON array; anything else (an old helper that does
+/// not know the flag and starts a session instead, a crash) reads as none.
+fn parse_devices(stdout: &str) -> Vec<super::MediaDevice> {
+    stdout
+        .lines()
+        .find_map(|line| serde_json::from_str::<Vec<super::MediaDevice>>(line.trim()).ok())
+        .unwrap_or_default()
 }
 
 pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
@@ -441,10 +461,29 @@ mod tests {
 
     #[test]
     fn reads_the_helpers_microphone_list_and_survives_garbage() {
-        let mics = parse_microphones(r#"[{"id":"BuiltInMicrophoneDevice","name":"MacBook Pro Microphone"}]"#);
+        let mics = parse_devices(r#"[{"id":"BuiltInMicrophoneDevice","name":"MacBook Pro Microphone"}]"#);
         assert_eq!(mics.len(), 1);
         assert_eq!(mics[0].name, "MacBook Pro Microphone");
-        assert!(parse_microphones("helper crashed").is_empty());
+        assert!(!mics[0].is_default, "an older helper sends no default mark");
+        assert!(parse_devices("helper crashed").is_empty());
+    }
+
+    /// The helper marks the system default; the picker puts it first.
+    #[test]
+    fn reads_the_default_mark() {
+        let mics = parse_devices(
+            r#"[{"id":"usb-1","name":"Yeti","isDefault":false},{"id":"BuiltInMicrophoneDevice","name":"MacBook Pro Microphone","isDefault":true}]"#,
+        );
+        assert!(mics[1].is_default && !mics[0].is_default);
+    }
+
+    /// An older helper does not know `--list-cameras`: it announces a session
+    /// and exits on the closed stdin. That reads as no cameras, not an error.
+    #[test]
+    fn a_helper_that_does_not_know_the_flag_lists_nothing() {
+        assert!(parse_devices("{\"ok\":true,\"event\":\"ready\"}\n").is_empty());
+        let cams = parse_devices("[{\"id\":\"0x1\",\"name\":\"FaceTime HD Camera\",\"isDefault\":true}]\n");
+        assert_eq!(cams[0].name, "FaceTime HD Camera");
     }
 
     #[test]

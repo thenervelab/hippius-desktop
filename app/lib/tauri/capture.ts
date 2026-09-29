@@ -52,8 +52,10 @@ export interface CaptureOptions {
   screen: boolean;
   /** Show the camera in recordings: a bubble, or the whole video when the screen is off. */
   camera: boolean;
-  /** Which camera (the webview's `deviceId`); null = the default one. */
+  /** Which camera (a system id, or an older build's webview `deviceId`); null = the default one. */
   cameraDevice: string | null;
+  /** How big the camera bubble is. */
+  cameraSize: CameraSize;
   showClicks: boolean;
   lastKind: CaptureKind;
   lastMode: CaptureMode;
@@ -81,6 +83,9 @@ export interface CaptureOverlayContext {
 /** How the camera shows. Mirrors Rust's `CameraShape`. */
 export type CameraShape = "bubble" | "stage";
 
+/** The bubble's size. Mirrors Rust's `CameraSize`; "full" is the stage's frame, filmed with the screen. */
+export type CameraSize = "small" | "large" | "full";
+
 /** `capture_camera_state`, for the camera window and the pill. Mirrors Rust's `camera::CameraState`. */
 export interface CaptureCameraState {
   /** Null when no camera window is up. */
@@ -88,12 +93,67 @@ export interface CaptureCameraState {
   /** The bubble was hidden from the pill mid-recording. */
   hidden: boolean;
   deviceId: string | null;
+  /** The chosen camera's name: how the webview finds a system-listed camera. */
+  deviceName: string | null;
+  size: CameraSize;
 }
 
-/** A camera or microphone the bar's pickers offer. */
+/** A camera or microphone the bar's pickers offer. Mirrors Rust's `recording::MediaDevice`. */
 export interface CaptureDevice {
   id: string;
   name: string;
+  /** The system's default device of its kind (listed first). */
+  isDefault?: boolean;
+}
+
+/** The share picker's tabs. Mirrors Rust's `share::ShareTab`. */
+export type ShareTab = "window" | "screen";
+
+/** A window the share picker offers. Mirrors Rust's `share::ShareWindow`. */
+export interface ShareWindow {
+  id: number;
+  appName: string;
+  title: string;
+  displayId: number;
+  /** On-screen size in points, for the tile's shape before its picture arrives. */
+  width: number;
+  height: number;
+  thumbnail: string | null;
+  icon: string | null;
+}
+
+/** A display the share picker offers. Mirrors Rust's `share::ShareDisplay`. */
+export interface ShareDisplay {
+  id: number;
+  name: string;
+  isPrimary: boolean;
+  width: number;
+  height: number;
+  thumbnail: string | null;
+}
+
+/** `capture_share_targets`. Mirrors Rust's `share::ShareTargets`. */
+export interface ShareTargets {
+  /** Tags this picker's pictures; `capture_share_art` batches with another token are stale. */
+  token: number;
+  windows: ShareWindow[];
+  displays: ShareDisplay[];
+  /** More pictures are on their way as `capture_share_art` batches. */
+  pending: boolean;
+}
+
+/** One picture for one item. Mirrors Rust's `share::ShareArtItem`. */
+export interface ShareArtItem {
+  tab: ShareTab;
+  id: number;
+  thumbnail?: string;
+  icon?: string;
+}
+
+/** `capture_share_art`. Mirrors Rust's `share::ShareArt`. */
+export interface ShareArt {
+  token: number;
+  items: ShareArtItem[];
 }
 
 /** A drive "Save to" offers; `remote` means not synced on this machine. */
@@ -167,7 +227,10 @@ export interface CaptureSupport {
 // `capture_show_in_folder` → `CaptureShowInFolder`,
 // `capture_shortcut_pressed` → nothing,
 // `capture_camera_state` → `CaptureCameraState`,
-// `capture_cameras` → `CaptureDevice[]`.
+// `capture_cameras` → `CaptureDevice[]`,
+// `capture_options_changed` → `CaptureOptions`,
+// `capture_share_art` → `ShareArt`,
+// `capture_camera_hover` → `boolean` (the camera window only).
 
 /**
  * Open the capture bar. `kind` and `mode` preselect it (a menu item); left
@@ -257,6 +320,26 @@ export function getCaptureMicrophones(): Promise<CaptureDevice[]> {
 /** Hide or show the camera bubble mid-recording; resolves to whether it shows now. */
 export function toggleCaptureCamera(): Promise<boolean> {
   return invoke("capture_camera_toggle");
+}
+
+/** The bubble's size strip: Rust saves it and glides the window to its new frame. */
+export function setCaptureCameraSize(size: CameraSize): Promise<CameraSize> {
+  return invoke("capture_camera_set_size", { size });
+}
+
+/** The × on the bubble: camera off while choosing, bubble hidden mid-recording. */
+export function dismissCaptureCamera(): Promise<void> {
+  return invoke("capture_camera_dismiss");
+}
+
+/** Open "Choose what to share": the list now, pictures as `capture_share_art` batches. */
+export function getCaptureShareTargets(first: ShareTab): Promise<ShareTargets> {
+  return invoke("capture_share_targets", { first });
+}
+
+/** The picker closed: stop taking its pictures. */
+export function finishCaptureShare(token: number): Promise<void> {
+  return invoke("capture_share_done", { token });
 }
 
 export function getCaptureOverlayContext(displayId: number): Promise<CaptureOverlayContext> {

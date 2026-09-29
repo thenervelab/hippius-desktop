@@ -32,6 +32,23 @@ pub enum CameraShape {
     Stage,
 }
 
+/// How big the camera bubble is, chosen from the bubble's own hover strip.
+///
+/// `Full` is the stage's frame (large, centred, 16:9) but still filmed WITH
+/// the screen, the way Loom's "full screen camera" covers the screen for a
+/// moment. Camera only (screen off) is always the stage, whatever this says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CameraSize {
+    Large,
+    Full,
+    /// Also what an unknown stored value reads as, so a row written by a
+    /// newer build still opens the bar (serde wants that variant last).
+    #[default]
+    #[serde(other)]
+    Small,
+}
+
 /// What the bar remembers between captures, on this device.
 ///
 /// Device-wide rather than per account: a timer, the microphone and the last
@@ -51,6 +68,8 @@ pub struct CaptureOptions {
     pub camera: bool,
     /// Which camera (the webview's `deviceId`); `None` is the default one.
     pub camera_device: Option<String>,
+    /// The bubble's size (small, large or full); see [`CameraSize`].
+    pub camera_size: CameraSize,
     /// Draw a ring where the pointer clicks in a recording (macOS 15+).
     pub show_clicks: bool,
     /// The bar opens on what was used last.
@@ -67,6 +86,7 @@ impl Default for CaptureOptions {
             screen: true,
             camera: false,
             camera_device: None,
+            camera_size: CameraSize::Small,
             show_clicks: false,
             last_kind: CaptureKind::Screenshot,
             last_mode: CaptureMode::Area,
@@ -279,6 +299,20 @@ mod tests {
         assert_eq!(options.countdown_secs(CaptureKind::Screenshot), 0);
     }
 
+    /// A size this build does not know (written by a newer one, or edited by
+    /// hand) reads as small rather than failing the whole row.
+    #[test]
+    fn an_unknown_camera_size_reads_as_small() {
+        let o: CaptureOptions = serde_json::from_value(serde_json::json!({ "cameraSize": "huge", "camera": true })).unwrap();
+        assert_eq!(o.camera_size, CameraSize::Small);
+        assert!(o.camera, "the rest of the row still loads");
+        let o: CaptureOptions = serde_json::from_value(serde_json::json!({ "cameraSize": "full" })).unwrap();
+        assert_eq!(o.normalized().camera_size, CameraSize::Full);
+        // A row saved before sizes existed opens on the small bubble.
+        let o: CaptureOptions = serde_json::from_value(serde_json::json!({ "camera": true })).unwrap();
+        assert_eq!(o.camera_size, CameraSize::Small);
+    }
+
     /// The overlay reads these names; a partial or older row still loads.
     #[test]
     fn options_round_trip_and_fill_missing_fields() {
@@ -288,7 +322,7 @@ mod tests {
             serde_json::json!({
                 "timerSecs": 0, "microphone": true, "microphoneDevice": null,
                 "screen": true, "camera": false, "cameraDevice": null,
-                "showClicks": false, "lastKind": "screenshot", "lastMode": "area"
+                "cameraSize": "small", "showClicks": false, "lastKind": "screenshot", "lastMode": "area"
             })
         );
         let partial: CaptureOptions = serde_json::from_value(serde_json::json!({ "timerSecs": 5 })).unwrap();
@@ -313,6 +347,7 @@ mod tests {
             screen: true,
             camera: true,
             camera_device: Some("abc123".into()),
+            camera_size: CameraSize::Large,
             show_clicks: true,
             last_kind: CaptureKind::Recording,
             last_mode: CaptureMode::Window,

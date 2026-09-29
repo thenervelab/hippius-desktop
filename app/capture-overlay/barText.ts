@@ -1,4 +1,4 @@
-import type { CaptureDevice, CaptureKind, CaptureMode, CaptureOptions } from "@/app/lib/tauri/capture";
+import type { CaptureDevice, CaptureKind, CaptureMode, CaptureOptions, ShareTab } from "@/app/lib/tauri/capture";
 
 /**
  * What the capture bar shows, decided without React so it can be tested:
@@ -73,7 +73,25 @@ export function sourceLabel(
   if (!on) return source === "camera" ? "No camera" : "No microphone";
   const match = chosen ? devices.find((d) => d.id === chosen) : undefined;
   if (match) return match.name;
+  const fallback = devices.find((d) => d.isDefault);
+  if (fallback) return fallback.name;
   return source === "camera" ? "Default camera" : "Default microphone";
+}
+
+/**
+ * Whether `device` is the one in use, for its menu's check mark: the chosen
+ * one, or with none chosen (or the chosen one unplugged) the system default,
+ * else the first listed.
+ */
+export function isDeviceInUse(device: CaptureDevice, chosen: string | null, devices: CaptureDevice[]): boolean {
+  if (chosen && devices.some((d) => d.id === chosen)) return device.id === chosen;
+  const fallback = devices.find((d) => d.isDefault) ?? devices[0];
+  return fallback?.id === device.id;
+}
+
+/** Which tab "Choose what to share" opens on for the bar's mode. */
+export function shareTabFor(mode: CaptureMode): ShareTab {
+  return mode === "window" ? "window" : "screen";
 }
 
 /** A source picked from a chip's menu: `null` device = turn it off. */

@@ -17,13 +17,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::bar::{self, CameraShape, CaptureOptions};
+use super::bar::{self, CameraShape, CameraSize, CaptureOptions};
 use super::camera::{self, CameraState};
 use super::destination::{self, CaptureDestination, DestinationChoice};
 use super::preview::{PreviewCard, PreviewStatus};
 use super::recording::{self, Microphone, RecordOptions, Recorder};
 use super::screenshot::Selection;
 use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, TransitionError, transition};
+use super::share;
 use super::shortcut::{self, ShortcutSetting};
 use super::targets::{DisplayTarget, WindowTarget};
 use crate::app_state::AppState;
@@ -43,6 +44,16 @@ pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
 /// The camera window listed the cameras it can use.
 pub const CAMERAS_EVENT: &str = "capture_cameras";
+/// The saved options changed from outside the bar (the camera's own size
+/// strip or its ×); the bar replaces its copy (`bar::CaptureOptions`).
+pub const OPTIONS_EVENT: &str = "capture_options_changed";
+/// More pictures for the share picker (`share::ShareArt`).
+pub const SHARE_ART_EVENT: &str = "capture_share_art";
+/// The pointer went onto or off the camera window (a bool), so its size
+/// controls show only while the pointer is over it. Sent from Rust because a
+/// window that is not the key window does not always get the webview's own
+/// hover events on macOS.
+pub const CAMERA_HOVER_EVENT: &str = "capture_camera_hover";
 
 /// Overlay windows are labelled `capture-overlay-<display id>`, which is also
 /// the glob the overlay's capability file grants.
@@ -96,18 +107,29 @@ pub struct CaptureState {
     recording_camera: Mutex<Option<CameraShape>>,
     /// The bubble was hidden from the pill for part of a recording.
     camera_hidden: AtomicBool,
-    /// The cameras the camera window found, for the bar's picker. Only the
-    /// webview can name them in a form `getUserMedia` takes back.
+    /// The cameras the camera window found (the webview's `deviceId`s). The
+    /// bar's picker falls back to these where the system list is empty.
     cameras: Mutex<Vec<CameraDevice>>,
+    /// The cameras the system lists (the helper on macOS), last read.
+    native_cameras: Mutex<Vec<CameraDevice>>,
+    /// Tags the share picker's picture taking; a new picker, or the picker
+    /// closing, moves it on and the old thread stops.
+    share_seq: AtomicU64,
+    /// Where the bubble was before it went full size, so Small / Large brings
+    /// it back there.
+    bubble_frame: Mutex<Option<camera::Frame>>,
+    /// The pointer is over the camera window (the last hover sent). macOS
+    /// only: elsewhere the webview's own hover events are used.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    camera_hover: AtomicBool,
+    /// Which hover watch is current (see `spawn_camera_hover_watch`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    camera_watch: AtomicU64,
 }
 
-/// A camera the camera window can use, as the webview names it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CameraDevice {
-    pub id: String,
-    pub name: String,
-}
+/// A camera the bar's picker offers: from the system list (a platform id) or
+/// as the camera window's webview names it (its `deviceId`).
+pub type CameraDevice = recording::MediaDevice;
 
 impl CaptureState {
     fn current(&self) -> CapturePhase {
@@ -756,6 +778,137 @@ fn windows_on_display_blocking(_display_id: u32) -> Result<Vec<WindowTarget>> {
 #[tauri::command]
 pub async fn capture_select(app: AppHandle, selection: Selection) -> Result<()> {
     select_inner(&app, selection).await
+}
+
+/// "Choose what to share": every window and display the picker offers, with
+/// what pictures are ready within `share::INLINE_BUDGET`; the rest arrive as
+/// [`SHARE_ART_EVENT`] batches tagged with the returned token, and keep
+/// refreshing until [`capture_share_done`] or the choosing ends. `first` is the
+/// tab the picker opens on, whose pictures are taken first.
+#[tauri::command]
+pub async fn capture_share_targets(app: AppHandle, first: share::ShareTab) -> Result<share::ShareTargets> {
+    let state = app.state::<AppState>();
+    if !matches!(state.capture.current(), CapturePhase::Selecting { .. }) {
+        return Err(AppError::Validation("No capture is waiting for a selection.".into()));
+    }
+    let token = state.capture.share_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<share::ShareMessage>();
+    spawn_share_thread(&app, token, first, tx);
+
+    let deadline = tokio::time::Instant::now() + share::INLINE_BUDGET;
+    let (windows, displays) = match rx.recv().await {
+        Some(share::ShareMessage::List(listed)) => listed?,
+        _ => return Err(AppError::Other("Could not list the windows to share.".into())),
+    };
+    let mut targets = share::ShareTargets {
+        token,
+        windows,
+        displays,
+        pending: true,
+    };
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(share::ShareMessage::Art(item))) => share::apply_art(&mut targets, item),
+            Ok(Some(share::ShareMessage::FirstPassDone)) => {
+                targets.pending = false;
+                break;
+            }
+            Ok(Some(share::ShareMessage::List(_)) | None) | Err(_) => break,
+        }
+    }
+    // Everything after the budget, refreshes included, streams to the picker.
+    let emitter = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut batch = Vec::new();
+        loop {
+            // Pictures that arrive close together go as one batch.
+            let next = if batch.is_empty() {
+                rx.recv().await
+            } else if let Ok(next) = tokio::time::timeout(std::time::Duration::from_millis(80), rx.recv()).await {
+                next
+            } else {
+                flush_share_art(&emitter, token, &mut batch);
+                continue;
+            };
+            match next {
+                Some(share::ShareMessage::Art(item)) => batch.push(item),
+                Some(_) => {}
+                None => break,
+            }
+        }
+        flush_share_art(&emitter, token, &mut batch);
+    });
+    Ok(targets)
+}
+
+fn flush_share_art(app: &AppHandle, token: u64, batch: &mut Vec<share::ShareArtItem>) {
+    if batch.is_empty() {
+        return;
+    }
+    let _ = app.emit(
+        SHARE_ART_EVENT,
+        share::ShareArt {
+            token,
+            items: std::mem::take(batch),
+        },
+    );
+}
+
+/// The picker closed: stop taking its pictures.
+#[tauri::command]
+pub fn capture_share_done(state: tauri::State<'_, AppState>, token: u64) {
+    // Only this picker's run; a newer picker opened since keeps going.
+    let _ = state
+        .capture
+        .share_seq
+        .compare_exchange(token, token + 1, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// The picture taking runs on its own thread: it is all blocking system calls,
+/// and it outlives the command that started it (the refreshes).
+#[cfg(any(target_os = "macos", windows))]
+fn spawn_share_thread(app: &AppHandle, token: u64, first: share::ShareTab, tx: tokio::sync::mpsc::UnboundedSender<share::ShareMessage>) {
+    let keep = app.clone();
+    let icons_app = app.clone();
+    let spawned = std::thread::Builder::new().name("capture-share".into()).spawn(move || {
+        let keep_going = move || {
+            let state = keep.state::<AppState>();
+            state.capture.share_seq.load(Ordering::SeqCst) == token && matches!(state.capture.current(), CapturePhase::Selecting { .. })
+        };
+        let icons: share::IconSource = Box::new(move |pids: &[u32]| app_icons(&icons_app, pids));
+        share::run(first, std::process::id(), &icons, &keep_going, &|m| tx.send(m).is_ok());
+    });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "share picker pictures not started");
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn spawn_share_thread(_app: &AppHandle, _token: u64, _first: share::ShareTab, tx: tokio::sync::mpsc::UnboundedSender<share::ShareMessage>) {
+    let _ = tx.send(share::ShareMessage::List(Err(AppError::Validation(
+        "Screen capture isn't available on this system yet.".into(),
+    ))));
+}
+
+/// App icons for the picker's tiles, read on the main thread (AppKit).
+#[cfg(target_os = "macos")]
+fn app_icons(app: &AppHandle, pids: &[u32]) -> std::collections::HashMap<u32, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let pids = pids.to_vec();
+    if app
+        .run_on_main_thread(move || {
+            let _ = tx.send(share::macos_app_icons(&pids));
+        })
+        .is_err()
+    {
+        return std::collections::HashMap::new();
+    }
+    rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap_or_default()
+}
+
+#[cfg(windows)]
+fn app_icons(_app: &AppHandle, _pids: &[u32]) -> std::collections::HashMap<u32, String> {
+    std::collections::HashMap::new()
 }
 
 async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
@@ -1462,24 +1615,60 @@ async fn sync_camera(app: &AppHandle) {
         (None, None) => {}
         (Some(shape), Some(window)) => {
             if previous != Some(shape) {
-                place_camera(app, &window, shape);
+                place_camera(app, &window, shape, options.camera_size);
             }
             show_without_focus(&window);
         }
         (Some(shape), None) => {
-            if let Err(e) = open_camera_window(app, shape) {
+            if let Err(e) = open_camera_window(app, shape, options.camera_size) {
                 tracing::warn!(error = %e, "camera window could not open");
             }
         }
     }
-    let _ = app.emit(
-        CAMERA_STATE_EVENT,
-        CameraState {
-            shape: wanted,
-            hidden,
-            device_id: options.camera_device,
-        },
-    );
+    if wanted.is_none()
+        && let Ok(mut g) = state.capture.bubble_frame.lock()
+    {
+        *g = None;
+    }
+    let camera_state = camera_state_for(app, wanted, hidden, &options).await;
+    let _ = app.emit(CAMERA_STATE_EVENT, camera_state);
+}
+
+/// What the camera page and the pill are told: the shape, and the chosen
+/// camera by id AND name (the webview finds a platform-listed camera by name).
+async fn camera_state_for(app: &AppHandle, shape: Option<CameraShape>, hidden: bool, options: &CaptureOptions) -> CameraState {
+    let device_name = match &options.camera_device {
+        Some(id) => camera_name(app, id).await,
+        None => None,
+    };
+    CameraState {
+        shape,
+        hidden,
+        device_id: options.camera_device.clone(),
+        device_name,
+        size: options.camera_size,
+    }
+}
+
+/// The name of camera `id`, from the lists already read, else from the
+/// system (once: the list is kept).
+async fn camera_name(app: &AppHandle, id: &str) -> Option<String> {
+    let state = app.state::<AppState>();
+    let known = |list: &Mutex<Vec<CameraDevice>>| list.lock().ok().and_then(|g| g.iter().find(|c| c.id == id).map(|c| c.name.clone()));
+    if let Some(name) = known(&state.capture.native_cameras).or_else(|| known(&state.capture.cameras)) {
+        return Some(name);
+    }
+    let listed = refresh_native_cameras(app).await;
+    listed.into_iter().find(|c| c.id == id).map(|c| c.name)
+}
+
+/// Read the system's cameras again and keep the list.
+async fn refresh_native_cameras(app: &AppHandle) -> Vec<CameraDevice> {
+    let listed = tauri::async_runtime::spawn_blocking(recording::list_cameras).await.unwrap_or_default();
+    if let Ok(mut g) = app.state::<AppState>().capture.native_cameras.lock() {
+        g.clone_from(&listed);
+    }
+    listed
 }
 
 /// The recording is over (stopped, cancelled or failed): forget its camera.
@@ -1492,28 +1681,87 @@ async fn end_camera(app: &AppHandle) {
     sync_camera(app).await;
 }
 
-fn camera_frame(app: &AppHandle, shape: CameraShape) -> Option<camera::Frame> {
+fn bar_work_area(app: &AppHandle) -> Option<camera::Frame> {
     let display = app.state::<AppState>().capture.bar_display.lock().ok().and_then(|g| g.clone())?;
     let area = work_area(app, &display);
-    Some(camera::frame(
-        shape,
-        camera::Frame {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: area.height,
-        },
-    ))
+    Some(camera::Frame {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: area.height,
+    })
 }
 
-fn place_camera(app: &AppHandle, window: &tauri::WebviewWindow, shape: CameraShape) {
-    if let Some(f) = camera_frame(app, shape) {
+fn camera_frame(app: &AppHandle, shape: CameraShape, size: CameraSize) -> Option<camera::Frame> {
+    Some(camera::frame(shape, size, bar_work_area(app)?))
+}
+
+fn place_camera(app: &AppHandle, window: &tauri::WebviewWindow, shape: CameraShape, size: CameraSize) {
+    if let Some(f) = camera_frame(app, shape, size) {
+        set_camera_frame(window, f, false);
+    }
+}
+
+/// Move and size the camera window in one step. On macOS `animate` lets AppKit
+/// glide it there (`-[NSWindow setFrame:display:animate:]`), which is smoother
+/// than any series of moves from here; elsewhere it jumps, and the page's own
+/// fade covers it.
+fn set_camera_frame(window: &tauri::WebviewWindow, f: camera::Frame, animate: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::foundation::{NSPoint, NSRect, NSSize};
+        use objc::{class, msg_send, sel, sel_impl};
+
+        let target = window.clone();
+        let hopped = window.run_on_main_thread(move || {
+            let Ok(ns_window) = target.ns_window() else { return };
+            let ns_window = ns_window.cast::<objc::runtime::Object>();
+            // SAFETY: this window's live NSWindow and the screen list, both
+            // touched on the main thread; `screens` is checked before use.
+            unsafe {
+                let screens: cocoa::base::id = msg_send![class!(NSScreen), screens];
+                let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+                if count == 0 {
+                    return;
+                }
+                let primary: cocoa::base::id = msg_send![screens, objectAtIndex: 0usize];
+                let primary_frame: NSRect = msg_send![primary, frame];
+                // AppKit's origin is the primary display's bottom-left, y up.
+                let rect = NSRect::new(
+                    NSPoint::new(f.x, primary_frame.size.height - (f.y + f.height)),
+                    NSSize::new(f.width, f.height),
+                );
+                let animate = if animate { objc::runtime::YES } else { objc::runtime::NO };
+                let () = msg_send![ns_window, setFrame: rect display: objc::runtime::YES animate: animate];
+            }
+        });
+        if hopped.is_err() {
+            let _ = window.set_size(tauri::LogicalSize::new(f.width, f.height));
+            let _ = window.set_position(tauri::LogicalPosition::new(f.x, f.y));
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = animate;
         let _ = window.set_size(tauri::LogicalSize::new(f.width, f.height));
         let _ = window.set_position(tauri::LogicalPosition::new(f.x, f.y));
     }
 }
 
-fn open_camera_window(app: &AppHandle, shape: CameraShape) -> Result<()> {
+/// The camera window's frame now, in logical points (it may have been dragged).
+fn current_camera_frame(window: &tauri::WebviewWindow) -> Option<camera::Frame> {
+    let scale = window.scale_factor().ok()?;
+    let pos = window.outer_position().ok()?.to_logical::<f64>(scale);
+    let size = window.outer_size().ok()?.to_logical::<f64>(scale);
+    Some(camera::Frame {
+        x: pos.x,
+        y: pos.y,
+        width: size.width,
+        height: size.height,
+    })
+}
+
+fn open_camera_window(app: &AppHandle, shape: CameraShape, size: CameraSize) -> Result<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
     let route = if cfg!(dev) { "capture-camera" } else { "capture-camera.html" };
@@ -1533,14 +1781,60 @@ fn open_camera_window(app: &AppHandle, shape: CameraShape) -> Result<()> {
         // The first click drags the bubble instead of only focusing it.
         .accept_first_mouse(true)
         .visible(false);
-    if let Some(f) = camera_frame(app, shape) {
+    if let Some(f) = camera_frame(app, shape, size) {
         builder = builder.inner_size(f.width, f.height).position(f.x, f.y);
     }
     let window = builder.build().map_err(|e| AppError::Other(format!("Could not open the camera: {e}")))?;
     raise_camera(&window);
     show_without_focus(&window);
+    spawn_camera_hover_watch(app.clone());
     Ok(())
 }
+
+/// Tell the camera page when the pointer is over it, so its size controls
+/// show on hover and are gone otherwise (the window is filmed). AppKit does
+/// not reliably deliver hover to a webview whose window is not the key window,
+/// and the camera never is, so this asks where the pointer is instead. Runs
+/// while the camera window exists.
+#[cfg(target_os = "macos")]
+fn spawn_camera_hover_watch(app: AppHandle) {
+    use cocoa::foundation::NSPoint;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    tauri::async_runtime::spawn(async move {
+        let primary_height = tauri::async_runtime::spawn_blocking(list_displays_blocking)
+            .await
+            .ok()
+            .and_then(std::result::Result::ok)
+            .and_then(|d| d.iter().find(|d| d.is_primary).or_else(|| d.first()).map(|d| f64::from(d.height)));
+        let Some(primary_height) = primary_height else { return };
+        let state = app.state::<AppState>();
+        // One watch at a time: a camera window reopened while an older watch
+        // is still between ticks retires that one.
+        let generation = state.capture.camera_watch.fetch_add(1, Ordering::SeqCst) + 1;
+        state.capture.camera_hover.store(false, Ordering::SeqCst);
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(120));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if state.capture.camera_watch.load(Ordering::SeqCst) != generation {
+                break;
+            }
+            let Some(window) = app.get_webview_window(CAMERA_LABEL) else { break };
+            let Some(frame) = current_camera_frame(&window) else { continue };
+            // SAFETY: a class method that only reads the pointer position.
+            let p: NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
+            let over = frame.contains(p.x, primary_height - p.y);
+            if state.capture.camera_hover.swap(over, Ordering::SeqCst) != over {
+                let _ = app.emit_to(CAMERA_LABEL, CAMERA_HOVER_EVENT, over);
+            }
+        }
+    });
+}
+
+/// Elsewhere the webview's own hover events are enough.
+#[cfg(not(target_os = "macos"))]
+fn spawn_camera_hover_watch(_app: AppHandle) {}
 
 /// The camera window's system window number, which is what a window
 /// recording is started with. Camera-only recordings record the stage.
@@ -1574,31 +1868,130 @@ fn camera_window_id(_app: &AppHandle) -> Option<u32> {
 
 /// The camera page's first read: the shape to draw and the device to open.
 #[tauri::command]
-pub async fn capture_camera_context(state: tauri::State<'_, AppState>) -> Result<CameraState> {
+pub async fn capture_camera_context(app: AppHandle) -> Result<CameraState> {
+    let state = app.state::<AppState>();
     let options = bar::load_options(state.pool()?).await?;
-    Ok(CameraState {
-        shape: state.capture.camera_shape.lock().ok().and_then(|g| *g),
-        hidden: state.capture.camera_hidden.load(Ordering::SeqCst),
-        device_id: options.camera_device,
-    })
+    let shape = state.capture.camera_shape.lock().ok().and_then(|g| *g);
+    let hidden = state.capture.camera_hidden.load(Ordering::SeqCst);
+    Ok(camera_state_for(&app, shape, hidden, &options).await)
 }
 
-/// The camera page found these cameras; the bar's picker lists them.
+/// The camera page found these cameras (its own `deviceId`s). The bar lists
+/// them only where the system list is empty (see [`camera_list`]).
 #[tauri::command]
 pub fn capture_set_cameras(state: tauri::State<'_, AppState>, app: AppHandle, cameras: Vec<CameraDevice>) {
+    let cameras = recording::tidy_devices(cameras);
+    let native = state.capture.native_cameras.lock().map(|g| g.clone()).unwrap_or_default();
     if let Ok(mut g) = state.capture.cameras.lock() {
         if *g == cameras {
             return;
         }
         g.clone_from(&cameras);
     }
-    let _ = app.emit(CAMERAS_EVENT, cameras);
+    let _ = app.emit(CAMERAS_EVENT, camera_list(native, cameras));
 }
 
-/// The cameras the camera page last reported (empty until it has run once).
+/// The cameras the bar offers: the system's list when it has one (it exists
+/// before any camera has been opened, and names every camera), else what the
+/// camera window reported. Never a mix: the two use different ids for the
+/// same camera, and the menu would list it twice.
+#[must_use]
+pub fn camera_list(native: Vec<CameraDevice>, webview: Vec<CameraDevice>) -> Vec<CameraDevice> {
+    if native.is_empty() { webview } else { native }
+}
+
+/// The cameras the bar offers, read afresh (the bar asks each time its camera
+/// menu opens, so a camera plugged in since shows up).
 #[tauri::command]
-pub fn capture_cameras(state: tauri::State<'_, AppState>) -> Vec<CameraDevice> {
-    state.capture.cameras.lock().map(|g| g.clone()).unwrap_or_default()
+pub async fn capture_cameras(app: AppHandle) -> Vec<CameraDevice> {
+    let native = refresh_native_cameras(&app).await;
+    let webview = app.state::<AppState>().capture.cameras.lock().map(|g| g.clone()).unwrap_or_default();
+    camera_list(native, webview)
+}
+
+/// The bubble's size strip: small, large or full. Saved with the options (so
+/// the next recording opens at the same size), and the window glides to its
+/// new frame, anchored where the user put it.
+#[tauri::command]
+pub async fn capture_camera_set_size(app: AppHandle, size: CameraSize) -> Result<CameraSize> {
+    let state = app.state::<AppState>();
+    let pool = state.pool()?;
+    let mut options = bar::load_options(pool).await?;
+    let previous = options.camera_size;
+    options.camera_size = size;
+    bar::save_options(pool, options.clone()).await?;
+    // The bar holds a copy of the options and saves it whole on its next
+    // change; it must not write the old size back.
+    let _ = app.emit(OPTIONS_EVENT, options.clone().normalized());
+
+    let shape = state.capture.camera_shape.lock().ok().and_then(|g| *g);
+    let hidden = state.capture.camera_hidden.load(Ordering::SeqCst);
+    // The page restyles (round / 16:9) as the window starts to move.
+    let camera_state = camera_state_for(&app, shape, hidden, &options).await;
+    let _ = app.emit(CAMERA_STATE_EVENT, camera_state);
+
+    // Only a bubble changes size; the camera-only stage is the recording.
+    if shape != Some(CameraShape::Bubble) || previous == size {
+        return Ok(size);
+    }
+    let (Some(window), Some(area)) = (app.get_webview_window(CAMERA_LABEL), bar_work_area(&app)) else {
+        return Ok(size);
+    };
+    let current = current_camera_frame(&window);
+    let target = match camera::bubble_side(size) {
+        None => {
+            // Going full: remember where the bubble was, to go back there.
+            if previous != CameraSize::Full
+                && let Ok(mut g) = state.capture.bubble_frame.lock()
+            {
+                *g = current;
+            }
+            camera::frame(CameraShape::Bubble, size, area)
+        }
+        Some(side) => {
+            let from = if previous == CameraSize::Full {
+                state.capture.bubble_frame.lock().ok().and_then(|g| *g)
+            } else {
+                current
+            };
+            match from {
+                Some(from) => camera::resize_bubble(from, side, area),
+                None => camera::frame(CameraShape::Bubble, size, area),
+            }
+        }
+    };
+    set_camera_frame(&window, target, true);
+    Ok(size)
+}
+
+/// The × on the bubble's strip. While choosing it turns the camera off (the
+/// choice the bar's camera menu would make); mid-recording it hides the
+/// bubble, as the pill's camera button does, and the recording carries on.
+#[tauri::command]
+pub async fn capture_camera_dismiss(app: AppHandle) -> Result<()> {
+    let state = app.state::<AppState>();
+    match state.capture.current() {
+        CapturePhase::Selecting { .. } => {
+            let pool = state.pool()?;
+            let options = bar::load_options(pool).await?;
+            if !options.screen {
+                return Err(AppError::Validation("Camera only records the camera; turn the screen on first.".into()));
+            }
+            let options = CaptureOptions { camera: false, ..options };
+            bar::save_options(pool, options.clone()).await?;
+            let _ = app.emit(OPTIONS_EVENT, options.normalized());
+        }
+        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } => {
+            let recording = state.capture.recording_camera.lock().ok().and_then(|g| *g);
+            if recording != Some(CameraShape::Bubble) {
+                return Err(AppError::Validation("This recording has no camera bubble to hide.".into()));
+            }
+            state.capture.camera_hidden.store(true, Ordering::SeqCst);
+        }
+        _ => return Ok(()),
+    }
+    sync_camera(&app).await;
+    Ok(())
 }
 
 /// The microphones the bar's picker offers. Lists through the recording

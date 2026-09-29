@@ -29,13 +29,54 @@ pub struct RecordOptions {
     pub show_clicks: bool,
 }
 
-/// A microphone the recording can use.
+/// A microphone or camera the bar's pickers offer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Microphone {
-    /// The platform's device id (AVCaptureDevice.uniqueID on macOS).
+pub struct MediaDevice {
+    /// The platform's device id (AVCaptureDevice.uniqueID on macOS), or for a
+    /// camera the webview named, its `deviceId`.
     pub id: String,
     pub name: String,
+    /// The system's default input of this kind.
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+pub type Microphone = MediaDevice;
+
+/// A device list as the pickers show it: each device once (the helper
+/// gathers them from more than one macOS API, which overlap), nameless or
+/// id-less entries dropped, and the system default first so "Default" in the
+/// menu is the device it will really be.
+#[must_use]
+pub fn tidy_devices(devices: Vec<MediaDevice>) -> Vec<MediaDevice> {
+    let mut out: Vec<MediaDevice> = Vec::with_capacity(devices.len());
+    for d in devices {
+        let id = d.id.trim();
+        let name = d.name.trim();
+        if id.is_empty() || name.is_empty() {
+            continue;
+        }
+        match out.iter_mut().find(|seen| seen.id == id) {
+            Some(seen) => seen.is_default |= d.is_default,
+            None => out.push(MediaDevice {
+                id: id.to_string(),
+                name: name.to_string(),
+                is_default: d.is_default,
+            }),
+        }
+    }
+    // Only one default: the first one reported wins.
+    let mut default_seen = false;
+    for d in &mut out {
+        if d.is_default {
+            d.is_default = !default_seen;
+            default_seen = true;
+        }
+    }
+    // Stable: the rest keep the order the system lists them in.
+    out.sort_by_key(|d| !d.is_default);
+    out
 }
 
 /// The microphones a recording can use; empty where recording the microphone
@@ -43,7 +84,21 @@ pub struct Microphone {
 pub fn list_microphones() -> Vec<Microphone> {
     #[cfg(target_os = "macos")]
     {
-        macos::list_microphones()
+        tidy_devices(macos::list_microphones())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+}
+
+/// The cameras the system has, named as the system names them. Listed by the
+/// helper on macOS so the bar can offer them before the camera window has
+/// ever opened; empty elsewhere (the camera window names them there).
+pub fn list_cameras() -> Vec<MediaDevice> {
+    #[cfg(target_os = "macos")]
+    {
+        tidy_devices(macos::list_cameras())
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -118,5 +173,54 @@ pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Resul
     {
         let _ = (selection, dest, options);
         Err(AppError::Validation("Screen recording isn't available on this system yet.".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dev(id: &str, name: &str, is_default: bool) -> MediaDevice {
+        MediaDevice {
+            id: id.into(),
+            name: name.into(),
+            is_default,
+        }
+    }
+
+    /// The helper merges AVFoundation's and Core Audio's lists, which name
+    /// most devices twice; the menu must show each once.
+    #[test]
+    fn a_device_listed_twice_shows_once_and_keeps_its_default_mark() {
+        let tidy = tidy_devices(vec![
+            dev("BuiltInMicrophoneDevice", "MacBook Pro Microphone", false),
+            dev("usb-1", "Yeti Stereo Microphone", false),
+            dev("BuiltInMicrophoneDevice", "MacBook Pro Microphone", true),
+        ]);
+        assert_eq!(tidy.len(), 2);
+        assert_eq!(tidy[0], dev("BuiltInMicrophoneDevice", "MacBook Pro Microphone", true));
+    }
+
+    #[test]
+    fn the_default_device_comes_first_and_the_rest_keep_their_order() {
+        let tidy = tidy_devices(vec![
+            dev("a", "Studio Display Microphone", false),
+            dev("b", "iPhone Microphone", false),
+            dev("c", "AirPods Pro", true),
+            dev("d", "BlackHole 2ch", false),
+        ]);
+        let names: Vec<&str> = tidy.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["AirPods Pro", "Studio Display Microphone", "iPhone Microphone", "BlackHole 2ch"]);
+    }
+
+    #[test]
+    fn nameless_devices_are_dropped_and_only_one_is_default() {
+        let tidy = tidy_devices(vec![
+            dev("", "Ghost", true),
+            dev("x", "  ", false),
+            dev("a", " Mic A ", true),
+            dev("b", "Mic B", true),
+        ]);
+        assert_eq!(tidy, vec![dev("a", "Mic A", true), dev("b", "Mic B", false)]);
     }
 }

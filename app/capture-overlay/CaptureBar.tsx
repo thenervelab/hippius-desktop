@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AppWindow, Check, ChevronDown, Mic, MicOff, Monitor, MonitorOff, SquareDashed, Video, VideoOff, X } from "lucide-react";
+import { AppWindow, Check, ChevronDown, LayoutGrid, Mic, MicOff, Monitor, MonitorOff, SquareDashed, Video, VideoOff, X } from "lucide-react";
 import {
   getCaptureCameras,
   getCaptureDestinationChoices,
@@ -15,17 +15,21 @@ import {
   type CaptureKind,
   type CaptureMode,
   type CaptureOptions,
+  type ShareTab,
 } from "@/app/lib/tauri/capture";
 import {
   barGroups,
   confirmLabel,
+  isDeviceInUse,
   pickCamera,
   pickMicrophone,
+  shareTabFor,
   sourceLabel,
   TIMER_OPTIONS,
   toggleScreen,
   type BarMode,
 } from "./barText";
+import MicMeter from "./MicMeter";
 
 /**
  * The capture bar: the macOS ⌘⇧5-style toolbar at the bottom of the display
@@ -173,76 +177,108 @@ function OptionsMenu({
   );
 }
 
-const CHIP =
-  "flex h-8 max-w-[13rem] items-center gap-1.5 rounded-full border px-3 text-[12.5px] transition-colors disabled:cursor-not-allowed disabled:opacity-45";
-const CHIP_ON = "border-white/15 bg-white/15 text-white hover:bg-white/20";
-const CHIP_OFF = "border-white/10 bg-black/30 text-white/60 hover:bg-white/10 hover:text-white";
-
 type SourceMenu = "camera" | "microphone";
 
-/** A camera or microphone chip, with its device menu. */
-function SourceChip({
-  source,
+/** An on/off switch, macOS style, on the right of a source row. */
+function Switch({ on, label, disabled, onToggle }: { on: boolean; label: string; disabled?: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onToggle}
+      className={`relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+        on ? "bg-[#30D158]" : "bg-white/20"
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`absolute top-[2px] size-[14px] rounded-full bg-white shadow transition-[left] ${on ? "left-[14px]" : "left-[2px]"}`}
+      />
+    </button>
+  );
+}
+
+/**
+ * One source row, Loom style: an icon, what is in use (a device menu for the
+ * camera and microphone), and a switch. The switch is the on/off; the menu
+ * only chooses which device, and picking one turns the source on.
+ */
+function SourceRow({
+  icon: Icon,
+  label,
   on,
-  chosen,
+  menuLabel,
   devices,
+  chosen,
   open,
   disabled,
   disabledReason,
+  extra,
   onOpen,
   onPick,
+  onToggle,
 }: {
-  source: SourceMenu;
+  icon: typeof Monitor;
+  label: string;
   on: boolean;
-  chosen: string | null;
-  devices: CaptureDevice[];
-  open: boolean;
+  /** The device menu's name; no menu for a row without devices (Screen). */
+  menuLabel?: string;
+  devices?: CaptureDevice[];
+  chosen?: string | null;
+  open?: boolean;
   disabled?: boolean;
   disabledReason?: string;
-  onOpen: () => void;
-  onPick: (deviceId: string | null | "default") => void;
+  extra?: React.ReactNode;
+  onOpen?: () => void;
+  onPick?: (deviceId: string) => void;
+  onToggle: () => void;
 }) {
-  const Icon = source === "camera" ? (on ? Video : VideoOff) : on ? Mic : MicOff;
-  const label = sourceLabel(on && !disabled, chosen, devices, source);
-  const noun = source === "camera" ? "camera" : "microphone";
+  const hasMenu = !!menuLabel && !!onOpen;
+  const noun = (menuLabel ?? label).toLowerCase();
   return (
-    <div className="relative">
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={`${source === "camera" ? "Camera" : "Microphone"}: ${label}`}
-        title={disabled ? disabledReason : label}
-        disabled={disabled}
-        onClick={onOpen}
-        className={`${CHIP} ${on && !disabled ? CHIP_ON : CHIP_OFF}`}
-      >
-        <Icon className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate">{label}</span>
-        <ChevronDown className="size-3 shrink-0 opacity-70" />
-      </button>
-      {open && (
+    <div className="relative flex items-center gap-2.5 px-2.5 py-1.5" title={disabled ? disabledReason : undefined}>
+      <Icon className={`size-4 shrink-0 ${on && !disabled ? "text-white" : "text-white/45"}`} />
+      {hasMenu ? (
+        <button
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={`${menuLabel}: ${label}`}
+          disabled={disabled}
+          onClick={onOpen}
+          className={`flex min-w-0 flex-1 items-center gap-1 rounded-[6px] px-1 py-0.5 text-left text-[12.5px] hover:bg-white/10 disabled:cursor-not-allowed disabled:hover:bg-transparent ${
+            on && !disabled ? "text-white" : "text-white/55"
+          }`}
+        >
+          <span className="min-w-0 truncate">{label}</span>
+          <ChevronDown className="size-3 shrink-0 opacity-70" />
+        </button>
+      ) : (
+        <span className={`min-w-0 flex-1 truncate px-1 text-[12.5px] ${on ? "text-white" : "text-white/55"}`}>{label}</span>
+      )}
+      {extra}
+      <Switch on={on && !disabled} label={menuLabel ?? label} disabled={disabled} onToggle={onToggle} />
+      {open && devices && onPick && (
         <div
           role="menu"
           aria-label={`Choose a ${noun}`}
-          className="absolute bottom-[calc(100%+8px)] left-1/2 max-h-[50vh] w-60 -translate-x-1/2 overflow-y-auto rounded-[12px] border border-white/10 bg-[#1c1d21]/95 p-1.5 shadow-[0_18px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+          className="absolute bottom-[calc(100%+6px)] left-2 right-2 z-10 max-h-[50vh] overflow-y-auto rounded-[12px] border border-white/10 bg-[#1c1d21]/95 p-1.5 shadow-[0_18px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl"
         >
-          <MenuRow role="menuitemradio" checked={!on} onSelect={() => onPick(null)}>
-            {source === "camera" ? "No camera" : "No microphone"}
-          </MenuRow>
           {devices.length === 0 ? (
-            <MenuRow role="menuitemradio" checked={on} onSelect={() => onPick("default")}>
-              {source === "camera" ? "Default camera" : "Default microphone"}
-            </MenuRow>
+            <p className="px-2.5 py-1.5 text-[13px] text-white/50">Only the default {noun} was found</p>
           ) : (
             devices.map((d) => (
               <MenuRow
                 key={d.id}
                 role="menuitemradio"
-                checked={on && (chosen === d.id || (!chosen && d === devices[0]))}
+                checked={on && isDeviceInUse(d, chosen ?? null, devices)}
                 onSelect={() => onPick(d.id)}
               >
                 {d.name}
+                {d.isDefault && <span className="ml-1.5 text-white/40">Default</span>}
               </MenuRow>
             ))
           )}
@@ -253,12 +289,14 @@ function SourceChip({
 }
 
 /**
- * The recording row above the bar, Loom style: record the screen or not,
- * which camera (a bubble filmed with the screen, or the camera alone), and
- * which microphone. Each change is saved at once, so the camera appears as
- * soon as it is turned on and can be placed before recording.
+ * The recording sources above the bar, Loom style: one row each for the
+ * screen, the camera and the microphone, with a switch to turn each on or
+ * off and a menu to pick the device. Each change is saved at once, so the
+ * camera appears as soon as it is turned on and can be placed before
+ * recording. The lists are read again whenever a menu opens, so a device
+ * plugged in since shows up.
  */
-function SourcesRow({
+function SourcesPanel({
   options,
   microphoneAvailable,
   onOptions,
@@ -270,71 +308,98 @@ function SourcesRow({
   const [menu, setMenu] = useState<SourceMenu | null>(null);
   const [cameras, setCameras] = useState<CaptureDevice[]>([]);
   const [microphones, setMicrophones] = useState<CaptureDevice[]>([]);
-  const rowRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const readCameras = useCallback(() => {
+    void getCaptureCameras()
+      .then(setCameras)
+      .catch(() => undefined);
+  }, []);
+  const readMicrophones = useCallback(() => {
+    if (!microphoneAvailable) return;
+    void getCaptureMicrophones()
+      .then(setMicrophones)
+      .catch(() => undefined);
+  }, [microphoneAvailable]);
 
   useEffect(() => {
-    // Cameras are named by the camera window once it has opened one.
-    void getCaptureCameras().then(setCameras).catch(() => undefined);
+    readCameras();
+    // The camera window reports what it finds where the system has no list.
     const unlisten = listen<CaptureDevice[]>("capture_cameras", (e) => setCameras(e.payload));
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, []);
+  }, [readCameras]);
 
   useEffect(() => {
-    if (microphoneAvailable) void getCaptureMicrophones().then(setMicrophones).catch(() => undefined);
-  }, [microphoneAvailable]);
+    readMicrophones();
+  }, [readMicrophones]);
 
   useEffect(() => {
     if (!menu) return;
     const onDown = (e: PointerEvent) => {
-      if (rowRef.current && !rowRef.current.contains(e.target as Node)) setMenu(null);
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) setMenu(null);
     };
     window.addEventListener("pointerdown", onDown, true);
     return () => window.removeEventListener("pointerdown", onDown, true);
   }, [menu]);
+
+  const toggleMenu = (which: SourceMenu) => {
+    setMenu((m) => (m === which ? null : which));
+    if (which === "camera") readCameras();
+    else readMicrophones();
+  };
 
   const pick = (next: CaptureOptions) => {
     setMenu(null);
     onOptions(next);
   };
 
+  const micOn = options.microphone && microphoneAvailable;
+  const micName =
+    microphones.find((d) => d.id === options.microphoneDevice)?.name ?? microphones.find((d) => d.isDefault)?.name ?? null;
+
   return (
     <div
-      ref={rowRef}
+      ref={panelRef}
       role="group"
       aria-label="Recording sources"
-      className="flex flex-wrap items-center justify-center gap-1.5 rounded-full border border-white/10 bg-[#1c1d21]/85 p-1 shadow-[0_10px_28px_rgba(0,0,0,0.4)] backdrop-blur-xl"
+      className="w-[300px] max-w-[calc(100vw-32px)] rounded-[14px] border border-white/10 bg-[#1c1d21]/85 p-1 shadow-[0_10px_28px_rgba(0,0,0,0.4)] backdrop-blur-xl"
     >
-      <button
-        type="button"
-        aria-pressed={options.screen}
-        title={options.screen ? "Recording the screen. Click to record the camera only." : "Camera only. Click to record the screen too."}
-        onClick={() => pick(toggleScreen(options))}
-        className={`${CHIP} ${options.screen ? CHIP_ON : CHIP_OFF}`}
-      >
-        {options.screen ? <Monitor className="size-3.5" /> : <MonitorOff className="size-3.5" />}
-        {options.screen ? "Screen" : "No screen"}
-      </button>
-      <SourceChip
-        source="camera"
-        on={options.camera}
-        chosen={options.cameraDevice}
-        devices={cameras}
-        open={menu === "camera"}
-        onOpen={() => setMenu((m) => (m === "camera" ? null : "camera"))}
-        onPick={(id) => pick(pickCamera(options, id))}
+      <SourceRow
+        icon={options.screen ? Monitor : MonitorOff}
+        label={options.screen ? "Screen" : "Camera only"}
+        on={options.screen}
+        onToggle={() => pick(toggleScreen(options))}
       />
-      <SourceChip
-        source="microphone"
+      <SourceRow
+        icon={options.camera ? Video : VideoOff}
+        label={sourceLabel(options.camera, options.cameraDevice, cameras, "camera")}
+        menuLabel="Camera"
+        on={options.camera}
+        devices={cameras}
+        chosen={options.cameraDevice}
+        open={menu === "camera"}
+        onOpen={() => toggleMenu("camera")}
+        onPick={(id) => pick(pickCamera(options, id))}
+        onToggle={() => pick(pickCamera(options, options.camera ? null : (options.cameraDevice ?? "default")))}
+      />
+      <SourceRow
+        icon={micOn ? Mic : MicOff}
+        label={sourceLabel(micOn, options.microphoneDevice, microphones, "microphone")}
+        menuLabel="Microphone"
         on={options.microphone}
-        chosen={options.microphoneDevice}
         devices={microphones}
+        chosen={options.microphoneDevice}
         open={menu === "microphone"}
         disabled={!microphoneAvailable}
         disabledReason="Recording the microphone needs macOS 15 or later"
-        onOpen={() => setMenu((m) => (m === "microphone" ? null : "microphone"))}
+        extra={micOn ? <MicMeter deviceName={micName} /> : null}
+        onOpen={() => toggleMenu("microphone")}
         onPick={(id) => pick(pickMicrophone(options, id))}
+        onToggle={() =>
+          pick(pickMicrophone(options, options.microphone ? null : (options.microphoneDevice ?? "default")))
+        }
       />
     </div>
   );
@@ -352,6 +417,8 @@ export interface CaptureBarProps {
   /** Recording the camera alone: no area, window or screen to choose. */
   cameraOnly: boolean;
   onMode: (kind: CaptureKind, mode: CaptureMode) => void;
+  /** Open "Choose what to share" on this tab. */
+  onChoose: (tab: ShareTab) => void;
   onConfirm: () => void;
   onCancel: () => void;
   onOptionsSaved: (options: CaptureOptions) => void;
@@ -394,7 +461,7 @@ export default function CaptureBar(props: CaptureBarProps) {
     >
       <p className="rounded-full bg-black/70 px-3.5 py-1.5 text-[13px] text-white/90 shadow-lg">{hint}</p>
       {kind === "recording" && (
-        <SourcesRow options={options} microphoneAvailable={props.microphoneAvailable} onOptions={saveOptions} />
+        <SourcesPanel options={options} microphoneAvailable={props.microphoneAvailable} onOptions={saveOptions} />
       )}
       <div
         role="toolbar"
@@ -428,6 +495,20 @@ export default function CaptureBar(props: CaptureBarProps) {
           </div>
         ))}
         <span aria-hidden className="mx-1.5 h-6 w-px bg-white/15" />
+        {!props.cameraOnly && (
+          <button
+            type="button"
+            title="Choose a window or screen from a list"
+            onClick={() => {
+              setMenuOpen(false);
+              props.onChoose(shareTabFor(mode));
+            }}
+            className="flex h-9 items-center gap-1.5 rounded-[8px] px-2.5 text-[13px] text-white/85 hover:bg-white/10 hover:text-white"
+          >
+            <LayoutGrid className="size-3.5" />
+            Choose…
+          </button>
+        )}
         <div ref={menuRef} className="relative">
           <button
             type="button"

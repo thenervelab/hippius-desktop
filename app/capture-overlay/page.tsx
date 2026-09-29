@@ -16,15 +16,19 @@ import {
   type CaptureCameraState,
   type CaptureKind,
   type CaptureMode,
+  type CaptureOptions,
   type CaptureOverlayContext,
   type CapturePhase,
   type CaptureSelection,
   type CaptureWindowTarget,
   type LogicalRect,
+  type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import CaptureBar from "./CaptureBar";
+import SharePicker from "./SharePicker";
 import { barHint, LAST_AREA_KEY } from "./barText";
+import { selectionFor, type SharePick } from "./sharePickerState";
 import {
   dragRect,
   fitRect,
@@ -113,6 +117,8 @@ export default function CaptureOverlayPage() {
   // The camera window Rust is showing; a "stage" means the camera alone is
   // recorded, so there is nothing on the screen to choose.
   const [cameraShape, setCameraShape] = useState<CameraShape | null>(null);
+  // "Choose what to share" is open on this tab; it owns the keyboard then.
+  const [picker, setPicker] = useState<ShareTab | null>(null);
   const pendingAction = useRef<(() => Promise<void>) | null>(null);
   const submitted = useRef(false);
   const restored = useRef(false);
@@ -162,6 +168,11 @@ export default function CaptureOverlayPage() {
         }
       }),
       listen<CaptureCameraState>("capture_camera_state", (e) => setCameraShape(e.payload.shape)),
+      // The camera's own size strip or its × saved the options: keep the
+      // bar's copy current, or its next save would write the old one back.
+      listen<CaptureOptions>("capture_options_changed", (e) =>
+        setContext((c) => (c ? { ...c, options: e.payload } : c)),
+      ),
       listen<{ displayId: number | null }>("capture_pending_changed", (e) => {
         const other = e.payload.displayId !== null && e.payload.displayId !== displayId;
         setAreaElsewhere(other);
@@ -224,8 +235,19 @@ export default function CaptureOverlayPage() {
     [withCountdown],
   );
 
+  const chooseShared = useCallback(
+    (pick: SharePick) => {
+      setPicker(null);
+      submitSelection(selectionFor(pick));
+    },
+    [submitSelection],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The picker answers Return (share the pick) and Escape (close it,
+      // leaving the capture bar up) itself.
+      if (picker !== null) return;
       if (e.key === "Escape") {
         if (countdown !== null) {
           // Esc during the countdown stops it, not the whole capture.
@@ -241,7 +263,7 @@ export default function CaptureOverlayPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirm, countdown]);
+  }, [confirm, countdown, picker]);
 
   if (!context || displayId === null) return null;
   const { kind } = context;
@@ -427,12 +449,26 @@ export default function CaptureOverlayPage() {
           showClicksAvailable={context.showClicksAvailable}
           hint={hint}
           onMode={onMode}
+          onChoose={(tab) => {
+            setNotice(null);
+            setPicker(tab);
+          }}
           onConfirm={confirm}
           onCancel={() => void cancelCapture()}
           onOptionsSaved={(options) =>
             setContext((c) => (c ? { ...c, options, countdownSecs: kind === "recording" ? c.countdownSecs : options.timerSecs } : c))
           }
           onDestinationSaved={(destination) => setContext((c) => (c ? { ...c, destination } : c))}
+        />
+      )}
+
+      {context.hostsBar && picker !== null && !counting && (
+        <SharePicker
+          kind={kind}
+          firstTab={picker}
+          barDisplayId={displayId}
+          onChoose={chooseShared}
+          onClose={() => setPicker(null)}
         />
       )}
     </div>

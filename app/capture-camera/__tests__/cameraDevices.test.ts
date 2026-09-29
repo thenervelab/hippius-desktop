@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { camerasFrom, videoConstraints } from "../cameraDevices";
+import { camerasAreNamed, camerasFrom, resolveCameraId, videoConstraints } from "../cameraDevices";
 
 const dev = (kind: MediaDeviceKind, deviceId: string, label = "") => ({ kind, deviceId, label });
 
@@ -37,5 +37,34 @@ describe("videoConstraints", () => {
 
   it("asks for the default camera when none is chosen", () => {
     expect(videoConstraints(null).deviceId).toBeUndefined();
+  });
+});
+
+describe("resolveCameraId", () => {
+  const devices = [
+    dev("videoinput", "default", "FaceTime HD Camera"),
+    dev("videoinput", "w1", "FaceTime HD Camera"),
+    dev("videoinput", "w2", "Studio Display Camera (05ac:1112)"),
+  ];
+
+  /** The bar lists the system's cameras, whose ids the webview never uses. */
+  it("finds a system-listed camera by its name", () => {
+    expect(resolveCameraId(devices, "0x1234AVCaptureId", "Studio Display Camera")).toBe("w2");
+    expect(resolveCameraId(devices, "0x1234AVCaptureId", "FaceTime HD Camera")).toBe("w1");
+  });
+
+  it("keeps a webview id chosen by an older build", () => {
+    expect(resolveCameraId(devices, "w2", null)).toBe("w2");
+  });
+
+  it("falls back to the default when the camera is gone or unnamed", () => {
+    expect(resolveCameraId(devices, "gone", "Continuity Camera")).toBeNull();
+    expect(resolveCameraId([dev("videoinput", "w1")], "sys", "FaceTime HD Camera")).toBeNull();
+    expect(resolveCameraId(devices, null, null)).toBeNull();
+  });
+
+  it("knows when the webview cannot name its cameras yet", () => {
+    expect(camerasAreNamed([dev("videoinput", "w1")])).toBe(false);
+    expect(camerasAreNamed(devices)).toBe(true);
   });
 });

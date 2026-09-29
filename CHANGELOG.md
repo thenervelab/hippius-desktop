@@ -157,9 +157,18 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Screenshots work on Mac and Windows; Windows recording follows later.
   Available in internal builds first.
 - **Show your face while you record, like Loom (Mac).** Above the capture bar,
-  choose whether to record the screen, which camera and which microphone. The
-  camera appears as a round bubble you can drag anywhere and hide from the
-  recording pill, or, with the screen turned off, records on its own.
+  switch the screen, camera and microphone on or off and pick which camera and
+  microphone, with a level meter that shows the microphone hears you. The
+  camera appears as a round bubble you can drag anywhere; hover it to make it
+  small, large or full size, or to hide it. With the screen turned off, the
+  camera records on its own.
+- **Choose exactly what to share from a list.** Choose… on the capture bar
+  opens a Window and an Entire Screen tab with a live picture of every window
+  and screen, the way video calls ask, so you can pick a window hidden behind
+  others.
+- **Every microphone shows up (Mac).** USB, Bluetooth, iPhone and virtual
+  microphones are listed with the system default first, and cameras are
+  listed before the camera has ever been turned on.
 - **Captures save straight into your synced drive folder.** When the capture
   drive is synced on this Mac, the file lands in its Captures folder at once and
   syncs from there, so it shows up once in the sync queue instead of twice, and

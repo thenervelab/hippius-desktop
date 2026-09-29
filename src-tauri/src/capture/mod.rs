@@ -15,6 +15,7 @@ pub mod preview;
 pub mod recording;
 pub mod screenshot;
 pub mod session;
+pub mod share;
 pub mod shortcut;
 pub mod targets;
 pub mod thumbnail;

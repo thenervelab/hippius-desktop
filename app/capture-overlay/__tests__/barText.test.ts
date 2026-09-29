@@ -3,8 +3,10 @@ import {
   barGroups,
   barHint,
   confirmLabel,
+  isDeviceInUse,
   pickCamera,
   pickMicrophone,
+  shareTabFor,
   sourceLabel,
   TIMER_OPTIONS,
   toggleScreen,
@@ -18,6 +20,7 @@ const OPTIONS: CaptureOptions = {
   screen: true,
   camera: false,
   cameraDevice: null,
+  cameraSize: "small",
   showClicks: false,
   lastKind: "recording",
   lastMode: "screen",
@@ -71,6 +74,29 @@ describe("the recording sources", () => {
 
   it("reads an unplugged device as the default, which is what gets used", () => {
     expect(sourceLabel(true, "gone", cams, "camera")).toBe("Default camera");
+  });
+
+  /** The system marks its default microphone; the bar names it rather than "Default". */
+  it("names the system default when nothing is chosen", () => {
+    const mics = [
+      { id: "BuiltIn", name: "MacBook Pro Microphone" },
+      { id: "usb", name: "Yeti Stereo Microphone", isDefault: true },
+    ];
+    expect(sourceLabel(true, null, mics, "microphone")).toBe("Yeti Stereo Microphone");
+    expect(sourceLabel(true, "gone", mics, "microphone")).toBe("Yeti Stereo Microphone");
+    expect(isDeviceInUse(mics[1], null, mics)).toBe(true);
+    expect(isDeviceInUse(mics[0], null, mics)).toBe(false);
+    expect(isDeviceInUse(mics[0], "BuiltIn", mics)).toBe(true);
+    // Unplugged: the check mark moves to what is actually used.
+    expect(isDeviceInUse(mics[1], "gone", mics)).toBe(true);
+    // No default marked: the first listed, as the system uses.
+    expect(isDeviceInUse(cams[0], null, cams)).toBe(true);
+  });
+
+  it("opens the share picker on the tab for the bar's mode", () => {
+    expect(shareTabFor("window")).toBe("window");
+    expect(shareTabFor("screen")).toBe("screen");
+    expect(shareTabFor("area")).toBe("screen");
   });
 
   it("turning the screen off records the camera alone", () => {

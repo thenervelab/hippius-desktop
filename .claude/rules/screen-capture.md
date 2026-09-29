@@ -3,6 +3,8 @@ paths:
   - "src-tauri/src/capture/**"
   - "app/capture-overlay/**"
   - "app/capture-controls/**"
+  - "app/capture-camera/**"
+  - "app/capture-preview/**"
   - "app/components/capture/**"
   - "app/lib/capture/**"
   - "macos/HippiusCapture/**"
@@ -54,25 +56,62 @@ click rings come from the saved options, each gated on macOS 15
 for the card.
 
 **Camera and microphone** (`camera.rs`, `app/capture-camera`, label
-`capture-camera`): the bar's recording row (Screen / Camera / Mic chips) saves
-`CaptureOptions.{screen, camera, camera_device, microphone_device}` at once.
+`capture-camera`): the bar's Loom-style sources panel (Screen / Camera / Mic
+rows, each a switch plus a device menu) saves
+`CaptureOptions.{screen, camera, camera_device, camera_size, microphone_device}`
+at once. The mic row's level meter (`MicMeter`) opens the mic in the overlay
+webview, found by name (`inputIdByName`); it unmounts with the bar before
+the countdown so it never holds the device while recording.
 `camera::wanted_shape` decides the window: while selecting it follows the
 options live (so the bubble can be placed before recording); from Record on it
 follows `recording_camera`, frozen in `select_inner` BEFORE the phase moves, so
 a mid-recording option change never pulls the camera out of the video.
 `sync_camera` applies it after every change; every ending calls `end_camera`.
-Bubble = 200 pt round window, bottom-left, filmed with the screen (not filmed
-by a window recording, which is one window only). Screen off = **stage**: a
+Bubble = bottom-left, filmed with the screen (not filmed by a window
+recording, which is one window only), sized by `CameraSize`: small 200 pt,
+large 340 pt (round), full = the stage's 16:9 frame. The hover strip on the
+bubble (small / large / full / ×) calls `capture_camera_set_size` (saved,
+then the window glides via `camera::resize_bubble`, which keeps a bubble in
+its corner or grows it from its centre, always on screen) and
+`capture_camera_dismiss` (camera off while choosing, bubble hidden
+mid-recording). Both emit `capture_options_changed` so the bar never saves a
+stale copy back. Hover comes from Rust (`capture_camera_hover`, polling the
+pointer against the frame) because a non-key window does not reliably get
+webview hover on macOS. Screen off = **stage**: a
 centred 16:9 window that `capture_confirm` records as `Selection::Window` by
 its NSWindow `windowNumber`. **The camera window is the one capture window that
 is NOT content-protected** (a protected one films as black), sits at level 1001
-above the overlays, and opens without focus. The webview opens the camera
-(`getUserMedia`, wry grants it) and reports device names via
-`capture_set_cameras`, since only it can name `deviceId`s. Microphones are
-listed by the helper (`--list-microphones`), chosen by
-`microphoneCaptureDeviceID` (macOS 15). Hardened builds need the
-`com.apple.security.device.camera` entitlement or the camera fails silently.
-The pill can hide a bubble (`capture_camera_toggle`), never the stage.
+above the overlays, and opens without focus. **Devices:** the helper lists
+cameras (`--list-cameras`, so the bar has them before any camera opened) and
+microphones (`--list-microphones`: AVFoundation plus Core Audio inputs, the
+system default marked and first; macOS 14's `.external` type covered cameras
+only, which is why USB and virtual mics were missing). The webview's
+`deviceId`s never match those ids, so `capture_camera_state` carries
+`deviceName` and the camera page finds the camera by name
+(`resolveCameraId`), opening the default first only when the webview cannot
+name cameras yet; it reopens on `devicechange` or an ended track, keeping a
+still-correct stream. `capture_set_cameras` remains the fallback list where
+the system has none (`camera_list`, never a mix: the two id spaces would list
+a camera twice). The mic is chosen by `microphoneCaptureDeviceID` (macOS 15).
+Hardened builds need the `com.apple.security.device.camera` entitlement or the
+camera fails silently. The pill can hide a bubble (`capture_camera_toggle`),
+never the stage.
+
+**Share picker** ("Choose what to share", `share.rs`,
+`app/capture-overlay/SharePicker`): the bar's Choose… button opens Window /
+Entire Screen tabs of live pictures. `capture_share_targets(first)` answers
+the list plus whatever pictures are ready within `INLINE_BUDGET` (300 ms);
+the rest stream as `capture_share_art` batches tagged with a token, refreshed
+every `REFRESH_EVERY` until `capture_share_done(token)` or the choosing ends.
+A stale token's batch is ignored (`mergeShareArt`). The list drops Hippius's
+own windows, untitled ones, system chrome (`HIDDEN_OWNERS`), off-screen ones
+and anything under 80x60 pt. Choosing calls the same `capture_select` as an
+overlay click. While it is open the picker owns Return / Escape / arrows (the
+overlay page skips its own key handler) and stops pointer events from
+reaching the selection surface, or a click would pick the window under it.
+Keep the logic module named `sharePickerState.ts`: a `sharePicker.ts` beside
+`SharePicker.tsx` resolves as the component's import on a case-insensitive
+disk.
 
 **Preview card** (`app/capture-preview`, label `capture-preview`, `preview.rs`):
 prewarmed hidden at `capture_start`, shown when the file exists, bottom-right

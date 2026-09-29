@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
@@ -16,7 +17,13 @@ struct HippiusCaptureMain {
         // `--list-microphones`: print the microphones as JSON and exit. Rust
         // offers them in the capture bar and passes the chosen id to "start".
         if CommandLine.arguments.contains("--list-microphones") {
-            listMicrophones()
+            printDevices(listMicrophones())
+            return
+        }
+        // `--list-cameras`: the same for cameras, so the bar can offer them
+        // before the camera window has opened one.
+        if CommandLine.arguments.contains("--list-cameras") {
+            printDevices(listCameras())
             return
         }
         let runner = Runner()
@@ -25,22 +32,114 @@ struct HippiusCaptureMain {
     }
 }
 
-/// `[{"id": uniqueID, "name": localizedName}]` on one line.
-func listMicrophones() {
-    let types: [AVCaptureDevice.DeviceType]
-    if #available(macOS 14.0, *) {
-        types = [.microphone, .external]
-    } else {
-        types = [.builtInMicrophone, .externalUnknown]
-    }
-    let devices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .audio, position: .unspecified).devices
-    let list = devices.map { ["id": $0.uniqueID, "name": $0.localizedName] }
+/// One device as Rust reads it (`recording::MediaDevice`).
+struct ListedDevice {
+    let id: String
+    let name: String
+    var isDefault: Bool
+}
+
+/// `[{"id": uniqueID, "name": localizedName, "isDefault": bool}]` on one line.
+/// Rust drops repeats and puts the default first (`recording::tidy_devices`).
+func printDevices(_ devices: [ListedDevice]) {
+    let list = devices.map { ["id": $0.id, "name": $0.name, "isDefault": $0.isDefault] as [String: Any] }
     if let data = try? JSONSerialization.data(withJSONObject: list),
        let text = String(data: data, encoding: .utf8) {
         print(text)
     } else {
         print("[]")
     }
+}
+
+/// Every audio input on the Mac: built-in, USB, Bluetooth, Continuity
+/// (iPhone), display and virtual devices (Loopback, BlackHole, meeting apps).
+///
+/// Two sources, merged: AVFoundation's discovery session, and Core Audio's own
+/// device list. The discovery session alone leaves some devices out
+/// (`.external` on macOS 14 is cameras only; older type lists miss virtual
+/// devices), while Core Audio sees every device with an input stream. A Core
+/// Audio device's UID is the same string as `AVCaptureDevice.uniqueID`, which
+/// is what ScreenCaptureKit's `microphoneCaptureDeviceID` takes.
+func listMicrophones() -> [ListedDevice] {
+    var types: [AVCaptureDevice.DeviceType]
+    if #available(macOS 14.0, *) {
+        types = [.microphone]
+    } else {
+        types = [.builtInMicrophone, .externalUnknown]
+    }
+    let discovered = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .audio, position: .unspecified).devices
+    let defaultId = AVCaptureDevice.default(for: .audio)?.uniqueID ?? coreAudioDefaultInputUID()
+    var out = discovered.map { ListedDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: $0.uniqueID == defaultId) }
+    for device in coreAudioInputDevices() where !out.contains(where: { $0.id == device.id }) {
+        out.append(ListedDevice(id: device.id, name: device.name, isDefault: device.id == defaultId))
+    }
+    return out
+}
+
+/// Every camera: built-in, USB, display cameras, Continuity Camera and Desk
+/// View. Names are `localizedName`, which is also the label the webview gives
+/// the same camera, so the camera window can find it by name.
+func listCameras() -> [ListedDevice] {
+    var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
+    if #available(macOS 14.0, *) {
+        types += [.external, .continuityCamera, .deskViewCamera]
+    } else {
+        types += [.externalUnknown, .deskViewCamera]
+    }
+    let devices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video, position: .unspecified).devices
+    let defaultId = AVCaptureDevice.default(for: .video)?.uniqueID
+    return devices.map { ListedDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: $0.uniqueID == defaultId) }
+}
+
+private func coreAudioProperty(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+    AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+}
+
+private func coreAudioString(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+    var address = coreAudioProperty(selector)
+    var value: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value)
+    guard status == noErr, let value else { return nil }
+    return value.takeRetainedValue() as String
+}
+
+/// Whether the device has at least one input channel.
+private func coreAudioHasInput(_ device: AudioObjectID) -> Bool {
+    var address = coreAudioProperty(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeInput)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0 else { return false }
+    let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+    defer { raw.deallocate() }
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else { return false }
+    let buffers = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+    return buffers.contains { $0.mNumberChannels > 0 }
+}
+
+private func coreAudioInputDevices() -> [(id: String, name: String)] {
+    var address = coreAudioProperty(kAudioHardwarePropertyDevices)
+    var size: UInt32 = 0
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else { return [] }
+    var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+    guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &ids) == noErr else { return [] }
+    return ids.compactMap { device in
+        guard coreAudioHasInput(device),
+              let uid = coreAudioString(device, kAudioDevicePropertyDeviceUID),
+              let name = coreAudioString(device, kAudioObjectPropertyName)
+        else { return nil }
+        return (uid, name)
+    }
+}
+
+private func coreAudioDefaultInputUID() -> String? {
+    var address = coreAudioProperty(kAudioHardwarePropertyDefaultInputDevice)
+    var device = AudioObjectID(0)
+    var size = UInt32(MemoryLayout<AudioObjectID>.size)
+    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr,
+          device != 0
+    else { return nil }
+    return coreAudioString(device, kAudioDevicePropertyDeviceUID)
 }
 
 final class Runner: @unchecked Sendable {
