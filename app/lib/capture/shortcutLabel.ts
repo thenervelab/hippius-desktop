@@ -50,6 +50,15 @@ function keyName(part: string): string {
 }
 
 export function formatAccelerator(accelerator: string, mac: boolean): string {
+  const keys = acceleratorKeys(accelerator, mac);
+  return mac ? keys.join("") : keys.join("+");
+}
+
+/**
+ * The shortcut as separate keys, modifiers first in the system's order, so
+ * each can be drawn as its own keycap: ["⇧", "⌘", "2"] or ["Ctrl", "Shift", "2"].
+ */
+export function acceleratorKeys(accelerator: string, mac: boolean): string[] {
   const parts = accelerator.split("+").map((p) => p.trim()).filter(Boolean);
   const mods = new Set<(typeof MAC_ORDER)[number]>();
   const keys: string[] = [];
@@ -59,8 +68,7 @@ export function formatAccelerator(accelerator: string, mac: boolean): string {
     else keys.push(keyName(part));
   }
   const ordered = MAC_ORDER.filter((m) => mods.has(m));
-  if (mac) return `${ordered.map((m) => MAC_SYMBOL[m]).join("")}${keys.join("")}`;
-  return [...ordered.map((m) => OTHER_NAME[m]), ...keys].join("+");
+  return [...ordered.map((m) => (mac ? MAC_SYMBOL[m] : OTHER_NAME[m])), ...keys];
 }
 
 /** Whether this is a Mac, for the symbols. */

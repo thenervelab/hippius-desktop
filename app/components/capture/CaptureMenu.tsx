@@ -21,7 +21,8 @@ import {
   captureSupportedAtom,
 } from "@/app/lib/capture/captureFlow";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
-import { formatAccelerator, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
+import { acceleratorKeys, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
+import ShortcutKeys from "./ShortcutKeys";
 import { getCaptureShortcut, type CaptureMode } from "@/app/lib/tauri/capture";
 import { SECONDARY_PILL_CLASSES } from "@/app/components/page-sections/drive/uploadActions";
 
@@ -30,7 +31,7 @@ import { SECONDARY_PILL_CLASSES } from "@/app/components/page-sections/drive/upl
 // define, so an unstyled menu has no background at all and its items sit
 // unreadable over whatever is behind it — invisible in dark mode.
 const CONTENT_CLASSES = cn(
-  "min-w-[13rem] rounded-lg p-1.5",
+  "min-w-[15rem] rounded-lg p-1.5",
   "bg-white border border-grey-80",
   "dark:bg-black-500 dark:border-black-300",
   "shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.3)]",
@@ -70,18 +71,18 @@ const REC_ITEMS: { mode: CaptureMode; label: string; icon: typeof Scan }[] = [
  * Record items appear only when `capture_support.recording` is true (macOS
  * with the helper built).
  */
-export default function CaptureMenu({ className }: { className?: string }) {
+export default function CaptureMenu({ className, iconClassName }: { className?: string; iconClassName?: string }) {
   const supported = useAtomValue(captureSupportedAtom);
   const recording = useAtomValue(captureRecordingAtom);
   const setDialog = useSetAtom(captureDialogAtom);
   const startCapture = useStartCapture();
-  const [shortcut, setShortcut] = useState<string | null>(null);
+  const [shortcut, setShortcut] = useState<string[]>([]);
 
   useEffect(() => {
     if (!SCREEN_CAPTURE_ENABLED || !supported) return;
     getCaptureShortcut()
-      .then((s) => setShortcut(s.accelerator ? formatAccelerator(s.accelerator, isMacPlatform()) : null))
-      .catch(() => setShortcut(null));
+      .then((s) => setShortcut(s.accelerator ? acceleratorKeys(s.accelerator, isMacPlatform()) : []))
+      .catch(() => setShortcut([]));
   }, [supported]);
 
   if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
@@ -95,17 +96,15 @@ export default function CaptureMenu({ className }: { className?: string }) {
           className={cn(SECONDARY_PILL_CLASSES, className)}
           title="Take a screenshot or start a recording"
         >
-          <Camera className="size-4 shrink-0" />
+          <Camera className={cn("size-4 shrink-0", iconClassName)} />
           Capture
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" aria-label="Capture" className={CONTENT_CLASSES}>
+      <DropdownMenuContent align="start" aria-label="Capture" className={CONTENT_CLASSES}>
         <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => void startCapture()}>
           <ScanLine className="size-4" />
           <span className="flex-1">Open capture bar</span>
-          {shortcut && (
-            <kbd className="font-geist text-[12px] font-medium text-grey-50 dark:text-grey-dark-600">{shortcut}</kbd>
-          )}
+          <ShortcutKeys keys={shortcut} className="ml-4" />
         </DropdownMenuItem>
         <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
         <DropdownMenuLabel className={LABEL_CLASSES}>Screenshot</DropdownMenuLabel>

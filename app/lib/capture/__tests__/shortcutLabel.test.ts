@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceleratorFromEvent, formatAccelerator } from "../shortcutLabel";
+import { acceleratorFromEvent, formatAccelerator, acceleratorKeys } from "../shortcutLabel";
 
 describe("formatAccelerator", () => {
   it("shows a Mac shortcut in the system's own symbols and order", () => {
@@ -31,5 +31,13 @@ describe("acceleratorFromEvent", () => {
   it("waits while only modifiers are held", () => {
     expect(acceleratorFromEvent(press("ShiftLeft", { shiftKey: true }))).toBeNull();
     expect(acceleratorFromEvent(press("MetaLeft", { metaKey: true }))).toBeNull();
+  });
+});
+
+describe("acceleratorKeys", () => {
+  it("splits a shortcut into one keycap per key, modifiers first", () => {
+    expect(acceleratorKeys("CommandOrControl+Shift+2", true)).toEqual(["⇧", "⌘", "2"]);
+    expect(acceleratorKeys("CommandOrControl+Shift+2", false)).toEqual(["Ctrl", "Shift", "2"]);
+    expect(acceleratorKeys("Alt+Control+KeyC", true)).toEqual(["⌃", "⌥", "C"]);
   });
 });

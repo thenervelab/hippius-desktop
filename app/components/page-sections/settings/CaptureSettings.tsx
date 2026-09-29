@@ -7,7 +7,8 @@ import { Camera, Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
 import { captureDialogAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
-import { acceleratorFromEvent, formatAccelerator, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
+import { acceleratorFromEvent, acceleratorKeys, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
+import ShortcutKeys from "@/app/components/capture/ShortcutKeys";
 import {
   getCaptureDestination,
   getCaptureShortcut,
@@ -81,7 +82,7 @@ export default function CaptureSettings() {
 
   if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
 
-  const current = setting?.accelerator ? formatAccelerator(setting.accelerator, mac) : null;
+  const current = setting?.accelerator ? acceleratorKeys(setting.accelerator, mac) : null;
   const isDefault = setting ? setting.accelerator === setting.defaultAccelerator : true;
 
   return (
@@ -107,9 +108,7 @@ export default function CaptureSettings() {
           {recording ? (
             <span className={`${KBD} animate-pulse`}>Waiting…</span>
           ) : current ? (
-            <kbd className={KBD} aria-label={`Shortcut ${current}`}>
-              {current}
-            </kbd>
+            <ShortcutKeys keys={current} size="md" />
           ) : (
             <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
           )}

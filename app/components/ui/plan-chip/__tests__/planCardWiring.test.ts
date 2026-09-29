@@ -41,15 +41,14 @@ describe("the Drive header shows the plan card, not a standing plans button", ()
   // beside a breadcrumb that is the thing worth reading up there.
   it("draws the card only on the folder list", () => {
     // The card is rendered inside the `showPlanCard ?` branch and nowhere else.
-    expect(drivePage).toMatch(/showPlanCard \? \([\s\S]*?<PlanSummaryCard \/>[\s\S]*?\) : null/);
+    expect(drivePage).toMatch(/showPlanCard \? (?:\([\s\S]*?)?<PlanSummaryCard \/>(?:[\s\S]*?\))? : null/);
     expect(drivePage.match(/<PlanSummaryCard \/>/g)).toHaveLength(1);
   });
 
-  // Capture shares the folder-list branch: inside a drive it lives in that
-  // drive's toolbar, and a second one in the page header would show it twice.
-  it("puts Capture on the folder list only, beside the card", () => {
-    expect(drivePage).toMatch(/showPlanCard \? \([\s\S]*?<CaptureMenu \/>[\s\S]*?\) : null/);
-    expect(drivePage.match(/<CaptureMenu \/>/g)).toHaveLength(1);
+  // Capture leads the folder list's own toolbar and the open drive's; one in
+  // the page header as well would show it twice.
+  it("keeps Capture out of the page header", () => {
+    expect(drivePage).not.toContain("<CaptureMenu");
   });
 
   // The bug this replaced: the page asked the URL, and the URL does not know.
