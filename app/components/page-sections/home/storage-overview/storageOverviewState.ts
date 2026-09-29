@@ -150,3 +150,16 @@ export function formatPercentLabel(percent: number): string {
   return `${Math.round(percent)}%`;
 }
 
+/**
+ * What sits opposite the used/total reading on the storage card and plan
+ * chip: the overage string when the account is past capacity, otherwise
+ * the (clamped) percent. Never pair "12.56 GB of 10.00 GB" with "100%".
+ */
+export function getUsageAsideLabel(input: {
+  percent: number;
+  overDisplay: string | null | undefined;
+}): string {
+  if (input.overDisplay) return input.overDisplay;
+  return formatPercentLabel(input.percent);
+}
+

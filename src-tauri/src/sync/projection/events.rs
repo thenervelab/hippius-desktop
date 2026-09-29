@@ -453,12 +453,8 @@ mod tests {
     /// into the Drive table, Recent Files, the tray and the persisted
     /// failure row. `zero_balance` is a live production body.
     ///
-    /// Mapped to `ServerError { status: 402 }`, which is exactly where these
-    /// bodies landed BEFORE the bump: they arrived as
-    /// `UploadFailed("Server returned 402 …")` and `classify` re-parsed them
-    /// into that. Restoring prior behaviour is the right call for a
-    /// dependency bump; giving quota denials their own user-facing copy is a
-    /// product change and belongs in its own PR.
+    /// Mapped to `ServerError { status: 402 }` with storage-full copy — not
+    /// the credits `InsufficientBalance` path, and never the raw debug string.
     #[test]
     fn upstream_quota_denied_reads_as_a_402_not_a_debug_string() {
         use hcfs_client::engine::events::FileFailureKind as K;
@@ -470,12 +466,21 @@ mod tests {
                 matches!(payload, FileFailureKindPayload::ServerError { status: 402 }),
                 "QuotaDenied({body:?}) must not fall through to the debug-string wildcard, got {payload:?}"
             );
+            let reason = payload.display_reason();
+            assert_eq!(reason, QUOTA_DENIED_DISPLAY_REASON);
             assert!(
-                !payload.display_reason().contains("QuotaDenied"),
-                "the raw variant name must never reach the user: {}",
-                payload.display_reason()
+                !reason.contains("QuotaDenied") && !reason.contains("402"),
+                "raw variant / status must never reach the user: {reason}"
             );
+            assert!(!reason.to_lowercase().contains("try again"), "retry copy is wrong for quota: {reason}");
         }
+    }
+
+    #[test]
+    fn display_reason_402_is_storage_full_not_try_again() {
+        let kind = FileFailureKindPayload::ServerError { status: 402 };
+        assert_eq!(kind.display_reason(), QUOTA_DENIED_DISPLAY_REASON);
+        assert!(!kind.is_transient());
     }
 
     /// `Decryption` arrived with the hcfs bump to 02191cc, for the same
@@ -1158,6 +1163,14 @@ pub const SESSION_LIMIT_MARKER: &str = "Too many active upload sessions";
 /// the persisted-row `failureMessage()` stay word-aligned.
 const SESSION_LIMIT_DISPLAY_REASON: &str = "Too many uploads in progress — will retry.";
 
+/// User-facing copy for HTTP 402 / `QuotaDenied` (storage full or no plan
+/// entitlement — not the typed credits `InsufficientBalance` path).
+///
+/// Deliberately does NOT say "Please try again": retrying will not free
+/// capacity. Must stay word-identical to the FE's `QUOTA_DENIED_MESSAGE`.
+/// Short form matches Drive toolbar disabled tooltips ("Storage full. …").
+const QUOTA_DENIED_DISPLAY_REASON: &str = "Storage full. Upgrade your plan or free up space.";
+
 /// User-facing copy for a local file that vanished between plan and open.
 /// The next cycle's plan will not include it. Do not blame the connection.
 const GONE_DISPLAY_REASON: &str = "File disappeared before upload — will retry.";
@@ -1327,6 +1340,9 @@ impl FileFailureKindPayload {
                 dollars(*balance_cents),
             ),
             Self::ServerError { status: 429 } => SESSION_LIMIT_DISPLAY_REASON.to_string(),
+            // 402 without cents is storage / entitlement (QuotaDenied), not
+            // the typed InsufficientBalance credits path above.
+            Self::ServerError { status: 402 } => QUOTA_DENIED_DISPLAY_REASON.to_string(),
             Self::ServerError { status } => format!("Server error ({status}). Please try again."),
             Self::Network => NETWORK_DISPLAY_REASON.to_string(),
             Self::Gone => GONE_DISPLAY_REASON.to_string(),
@@ -1377,19 +1393,12 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // cents (`zero_balance`, `drive_quota_exceeded`,
             // `drive_not_entitled`, or a 402 with no `error` field).
             //
-            // Mapped to the 402 it is, which is exactly where these bodies
-            // landed before hcfs split 402 handling: they arrived as
-            // `UploadFailed("Server returned 402 …")` and `classify`
-            // re-parsed them into `ServerError { status: 402 }`. Without
-            // this arm the upstream `#[non_exhaustive]` wildcard below
-            // renders the variant's DEBUG form, putting the literal string
-            // `QuotaDenied { error: "zero_balance" }` in front of the user.
-            //
-            // NOT routed to `InsufficientBalance`: that payload requires the
-            // balance/required cents these bodies do not carry, and it drives
-            // the credits banner. Giving quota denials their own copy would
-            // be better product behaviour and is a deliberate change to make
-            // on its own, not a side effect of a dependency bump.
+            // Mapped to `ServerError { status: 402 }` so `display_reason`
+            // can phrase storage-full copy without inventing a new IPC
+            // variant. NOT routed to `InsufficientBalance`: that payload
+            // requires balance/required cents these bodies do not carry,
+            // and it drives the credits banner ("Top up") — wrong CTA for
+            // plan/storage overage.
             K::QuotaDenied { .. } => Self::ServerError { status: 402 },
             K::Network => Self::Network,
             // The transfer succeeded and the ciphertext would not open. hcfs

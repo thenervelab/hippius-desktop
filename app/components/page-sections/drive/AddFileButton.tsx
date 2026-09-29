@@ -43,6 +43,11 @@ type AddButtonProps = {
    */
   iconClassName?: string;
   disabled?: boolean; // Optional external disabled state
+  /**
+   * The polled eligibility check already says uploads will be refused.
+   * Click opens the upgrade dialog instead of the file picker.
+   */
+  storageBlocked?: boolean;
   defaultFolderLabel?: string | null;
   // When set, the dialog opens UploadFilesFlow in `mode="folder"` so files
   // are uploaded into a specific nested subfolder instead of the root of
@@ -78,6 +83,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       className,
       iconClassName = "size-4",
       disabled: externalDisabled,
+      storageBlocked = false,
       defaultFolderLabel,
       nestedUpload,
     },
@@ -94,7 +100,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     );
     const isLoading = uploadingState !== "idle";
     const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
-    const { checkEligibility } = useCreditCheck();
+    const { requireUploadRoom } = useCreditCheck();
 
     // Expose methods to parent components
     useImperativeHandle(
@@ -103,8 +109,11 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         // Same gate order as the button's own click: eligibility first,
         // then a configured drive, so a surface that opens this by ref
         // cannot skip a check the button applies.
+        // Toolbar / context menu: when blocked the control is disabled and
+        // must not open the subscribe dialog. Drop paths use openWith*.
         open: async () => {
-          if (!(await checkEligibility("file-upload"))) return;
+          if (storageBlocked) return;
+          if (!(await requireUploadRoom("file-upload", false))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -115,8 +124,9 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           setDroppedPaths(null);
           setIsOpen(true);
         },
+        // Drag-and-drop: still explain via the dialog when blocked.
         openWithFiles: async (files: FileList) => {
-          if (!(await checkEligibility("file-upload"))) return;
+          if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -128,7 +138,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           setIsOpen(true);
         },
         openWithPaths: async (paths: string[]) => {
-          if (!(await checkEligibility("file-upload"))) return;
+          if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -141,7 +151,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         isDialogOpen: () => isOpen,
       }),
-      [isOpen, hasConfiguredDrives, checkEligibility],
+      [isOpen, hasConfiguredDrives, requireUploadRoom, storageBlocked],
     );
 
     // Memoize title to prevent recalculation
@@ -154,21 +164,34 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       setDroppedPaths(null);
     }, []);
 
-    // Handle external events
+    // Handle external events — same gate as the button click so a drop or
+    // empty-state "Upload a File" cannot open the picker on a no-plan or
+    // full account.
     useEffect(() => {
       const handleDroppedFiles = (event: Event) => {
         const customEvent = event as CustomEvent;
         if (customEvent.detail?.files && !isOpen) {
-          setDroppedFiles(customEvent.detail.files);
-          setIsOpen(true);
+          void (async () => {
+            if (!(await requireUploadRoom("file-upload", storageBlocked))) {
+              return;
+            }
+            setDroppedFiles(customEvent.detail.files);
+            setIsOpen(true);
+          })();
         }
       };
 
+      // Empty-state "Upload a File" click. When blocked that empty state
+      // already swaps to Subscribe/Upgrade; do not open the dialog here.
       const handleOpenModal = () => {
-        if (!isOpen) {
+        if (isOpen || storageBlocked) return;
+        void (async () => {
+          if (!(await requireUploadRoom("file-upload", false))) {
+            return;
+          }
           setDroppedFiles(null);
           setIsOpen(true);
-        }
+        })();
       };
 
       window.addEventListener(HIPPIUS_DROP_EVENT, handleDroppedFiles);
@@ -178,7 +201,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         window.removeEventListener(HIPPIUS_DROP_EVENT, handleDroppedFiles);
         window.removeEventListener(HIPPIUS_OPEN_MODAL_EVENT, handleOpenModal);
       };
-    }, [isOpen]);
+    }, [isOpen, requireUploadRoom, storageBlocked]);
 
     // Render current step content - memoized to prevent unnecessary re-renders
     const renderStepContent = useMemo(() => {
@@ -232,7 +255,9 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
             className,
           )}
           onClick={async () => {
-            if (!(await checkEligibility("file-upload"))) return;
+            // Toolbar: disabled when blocked. Do not open the dialog here.
+            if (storageBlocked) return;
+            if (!(await requireUploadRoom("file-upload", false))) return;
             if (!hasConfiguredDrives) {
               toast.warning(
                 "Set up a sync folder in Settings → Sync & Storage before uploading.",
@@ -243,7 +268,12 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
             setDroppedPaths(null);
             setIsOpen(true);
           }}
-          disabled={isLoading || externalDisabled}
+          disabled={isLoading || externalDisabled || storageBlocked}
+          title={
+            storageBlocked
+              ? "Storage full. Upgrade or subscribe to upload."
+              : UPLOAD_FILE_LABEL
+          }
         >
           {isLoading ? (
             <Loader2 className={cn("animate-spin", iconClassName)} />

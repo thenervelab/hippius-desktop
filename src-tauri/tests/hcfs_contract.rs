@@ -29,8 +29,8 @@ use hcfs_client::drive::remote::derive_encryption_key;
 use hcfs_client::mnemonic_blob::{MnemonicBlobError, open_mnemonic, seal_mnemonic};
 use hcfs_shared::network::{
     AcceptDriveInviteRequest, AcceptDriveInviteResponse, CreateDriveInviteRequest, CreateDriveInviteResponse, DriveInviteMetaResponse,
-    DriveMemberEntry, DriveMembersResponse, DriveMembershipEntry, DriveMembershipsResponse, ListFolderEntriesResult, RegisterFolderEntriesRequest,
-    UnregisterFolderEntriesRequest,
+    DriveMemberEntry, DriveMembersResponse, DriveMembershipEntry, DriveMembershipsResponse, EmailDriveInviteResponse, ListFolderEntriesResult,
+    PublishInviteKeyRequest, RegisterFolderEntriesRequest, UnregisterFolderEntriesRequest,
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
@@ -310,10 +310,12 @@ fn create_drive_invite_request_wire_pinned() {
         max_uses: Some(5),
         role: None,
         owner_ss58: None,
+        path_prefix: None,
     };
 
     let json = serde_json::to_value(&req).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+    // path_prefix is skip_serializing_if None — whole-drive mint omits it.
     assert_eq!(
         keys,
         ["expires_in_secs", "folder_hash", "max_uses", "owner_ss58", "role"]
@@ -326,26 +328,83 @@ fn create_drive_invite_request_wire_pinned() {
     assert_eq!(decoded.folder_hash, "0123456789abcdef");
     assert_eq!(decoded.expires_in_secs, Some(3600));
     assert_eq!(decoded.max_uses, Some(5));
+    assert!(decoded.path_prefix.is_none());
+
+    let folder = CreateDriveInviteRequest {
+        folder_hash: "0123456789abcdef".to_string(),
+        expires_in_secs: Some(3600),
+        max_uses: Some(1),
+        role: Some("reader".into()),
+        owner_ss58: None,
+        path_prefix: Some("Clients/ACME".into()),
+    };
+    let folder_json = serde_json::to_value(&folder).expect("serialize folder");
+    assert_eq!(folder_json.get("path_prefix").and_then(|v| v.as_str()), Some("Clients/ACME"));
 
     // Both limits are `#[serde(default)]`: a body carrying only folder_hash
     // must deserialize with the server-default sentinels (None).
     let minimal: CreateDriveInviteRequest = serde_json::from_str(r#"{"folder_hash":"h"}"#).expect("minimal body deserializes");
     assert_eq!(minimal.expires_in_secs, None);
     assert_eq!(minimal.max_uses, None);
+    assert!(minimal.path_prefix.is_none());
 }
 
 #[test]
 fn create_drive_invite_response_wire_pinned() {
     let resp: CreateDriveInviteResponse = serde_json::from_str(r#"{"invite_token":"tok_abc"}"#).expect("deserialize");
     assert_eq!(resp.invite_token, "tok_abc");
+    assert!(resp.path_prefix.is_none());
 
     let json = serde_json::to_value(&resp).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
     assert_eq!(
         keys,
         ["invite_token"].into_iter().collect::<BTreeSet<_>>(),
-        "CreateDriveInviteResponse must carry exactly the invite_token key"
+        "CreateDriveInviteResponse must omit path_prefix when absent"
     );
+
+    let folder: CreateDriveInviteResponse = serde_json::from_str(r#"{"invite_token":"tok_abc","path_prefix":"Clients/ACME"}"#).expect("deserialize");
+    assert_eq!(folder.path_prefix.as_deref(), Some("Clients/ACME"));
+}
+
+/// The emailed-invite mint (hcfs #514): the desktop reads `recipient_key`
+/// and the folder echo off what the server serializes, and the account
+/// invite-key publish sends exactly the server's request body.
+#[test]
+fn email_invite_mint_and_invite_key_publish_wire_pinned() {
+    use tauri_project_lib::shared_drives::commands::MintedEmailInvite;
+
+    for path_prefix in [None, Some("Clients/ACME".to_string())] {
+        let server = serde_json::to_string(&EmailDriveInviteResponse {
+            invite_id: "a".repeat(64),
+            path_prefix: path_prefix.clone(),
+            recipient_key: "cHVia2V5".to_string(),
+        })
+        .expect("serialize");
+        let ours: MintedEmailInvite = serde_json::from_str(&server).expect("the desktop parses the server's mint");
+        assert_eq!(ours.invite_id, "a".repeat(64));
+        assert_eq!(ours.path_prefix, path_prefix);
+        assert_eq!(ours.recipient_key.as_deref(), Some("cHVia2V5"));
+    }
+
+    let body = serde_json::to_value(PublishInviteKeyRequest {
+        pubkey: "cHVia2V5".to_string(),
+    })
+    .expect("serialize");
+    assert_eq!(
+        body,
+        serde_json::json!({ "pubkey": "cHVia2V5" }),
+        "http_put_account_invite_key sends this type; the server reads exactly `pubkey`"
+    );
+
+    // The key the desktop publishes is hcfs-client's derivation, byte for byte.
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+                          abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    let ours = tauri_project_lib::shared_drives::invite_key::account_invite_public_key(PHRASE).expect("derive");
+    let theirs = hcfs_client::client::invite_key::InviteAccountKey::derive(PHRASE)
+        .expect("derive")
+        .public_key();
+    assert_eq!(ours, base64::engine::general_purpose::STANDARD.encode(theirs));
 }
 
 #[test]
@@ -381,6 +440,7 @@ fn drive_invite_meta_response_wire_pinned() {
 fn accept_drive_invite_request_wire_pinned() {
     let req = AcceptDriveInviteRequest {
         grant_blob: "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=".to_string(),
+        path_prefix: None,
     };
 
     let json = serde_json::to_value(&req).expect("serialize");
@@ -388,11 +448,18 @@ fn accept_drive_invite_request_wire_pinned() {
     assert_eq!(
         keys,
         ["grant_blob"].into_iter().collect::<BTreeSet<_>>(),
-        "AcceptDriveInviteRequest must carry exactly the grant_blob key"
+        "AcceptDriveInviteRequest must omit path_prefix when absent"
     );
 
     let decoded: AcceptDriveInviteRequest = serde_json::from_value(json).expect("deserialize");
     assert_eq!(decoded.grant_blob, "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=");
+
+    let folder = AcceptDriveInviteRequest {
+        grant_blob: "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=".to_string(),
+        path_prefix: Some("Clients/ACME".into()),
+    };
+    let folder_json = serde_json::to_value(&folder).expect("serialize");
+    assert_eq!(folder_json.get("path_prefix").and_then(|v| v.as_str()), Some("Clients/ACME"));
 }
 
 /// `already_owner` is the field that replaced the earlier `already` bool: it
@@ -405,6 +472,7 @@ fn accept_drive_invite_response_wire_pinned() {
         folder_hash: "0123456789abcdef".to_string(),
         already_owner: false,
         role: "writer".to_string(),
+        path_prefix: None,
     };
     let json = serde_json::to_value(&member_accept).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
@@ -468,8 +536,35 @@ fn drive_memberships_response_wire_pinned() {
         ["created_at", "display_label", "folder_hash", "grant_blob", "owner_ss58", "role"]
             .into_iter()
             .collect::<BTreeSet<_>>(),
-        "DriveMembershipEntry wire keys must stay exactly these snake_case names"
+        "DriveMembershipEntry baseline keys (profile/frozen/member_count omitted when unset)"
     );
+}
+
+/// Newer HCFS fields on memberships (hcfs #455 + freeze): optional on the wire.
+#[test]
+fn drive_memberships_profile_and_freeze_fields_parse() {
+    let resp: DriveMembershipsResponse = serde_json::from_str(
+        r#"{
+            "memberships": [{
+                "owner_ss58": "5Owner",
+                "owner_name": "Ada",
+                "folder_hash": "0123456789abcdef",
+                "role": "writer",
+                "grant_blob": "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=",
+                "display_label": "team-docs",
+                "created_at": "2026-08-20T00:00:00Z",
+                "member_count": 3,
+                "frozen": true,
+                "frozen_until": "2026-10-01T00:00:00Z"
+            }]
+        }"#,
+    )
+    .expect("deserialize");
+    let entry = &resp.memberships[0];
+    assert_eq!(entry.owner_name.as_deref(), Some("Ada"));
+    assert_eq!(entry.member_count, 3);
+    assert!(entry.frozen);
+    assert_eq!(entry.frozen_until.as_deref(), Some("2026-10-01T00:00:00Z"));
 }
 
 /// The owner-side members listing (`GET /v1/drives/{fh}/members`), consumed
@@ -478,18 +573,22 @@ fn drive_memberships_response_wire_pinned() {
 #[test]
 fn drive_members_response_wire_pinned() {
     let resp: DriveMembersResponse =
-        serde_json::from_str(r#"{"members": [{"member_ss58": "5Member", "role": "writer", "created_at": "2026-08-20T00:00:00Z"}]}"#)
+        serde_json::from_str(r#"{"members": [{"member_ss58": "5Member", "role": "writer", "created_at": "2026-08-20T00:00:00Z", "member_name": "Grace", "member_email": "grace@example.com"}]}"#)
             .expect("deserialize");
     let entry = &resp.members[0];
     assert_eq!(entry.member_ss58, "5Member");
     assert_eq!(entry.role, "writer");
     assert_eq!(entry.created_at, "2026-08-20T00:00:00Z");
+    assert_eq!(entry.member_name.as_deref(), Some("Grace"));
+    assert_eq!(entry.member_email.as_deref(), Some("grace@example.com"));
 
     let json = serde_json::to_value(&DriveMemberEntry { ..entry.clone() }).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["created_at", "member_ss58", "role"].into_iter().collect::<BTreeSet<_>>(),
+        ["created_at", "member_email", "member_name", "member_ss58", "role"]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
         "DriveMemberEntry wire keys must stay exactly these snake_case names, and never a grant blob"
     );
 }

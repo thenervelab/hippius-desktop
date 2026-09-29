@@ -5,18 +5,25 @@ import StorageStateItem from "./StorageStateItem";
 interface StorageStateListProps {
   storageUsed: string;
   numberOfFiles: number;
+  /**
+   * Console parity: "Drive size:" inside someone else's drive, "Total size:"
+   * on a Shared with me list, "Storage Used:" on own drives. Never the old
+   * catch-all "Total Storage:".
+   */
+  storageLabel?: string;
 }
 
 const StorageStateList: FC<StorageStateListProps> = ({
   storageUsed,
   numberOfFiles,
+  storageLabel = "Storage Used:",
 }) => {
   return (
     <div className="flex items-center gap-[5.5px] whitespace-nowrap">
       <StorageStateItem
         icon={<Database className="size-[14px]" strokeWidth={1.5} />}
         value={storageUsed}
-        label="Total Storage:"
+        label={storageLabel}
       />
       <span
         aria-hidden

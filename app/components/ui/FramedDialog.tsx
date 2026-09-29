@@ -12,7 +12,17 @@ export interface FramedDialogProps {
   onClose: () => void;
   /** A node, not a string, so a heading can carry a muted lead line. */
   title: ReactNode;
-  icon: ReactNode;
+  /** The badge above a centered title. Not drawn by the `leading` header. */
+  icon?: ReactNode;
+  /**
+   * `centered` (default): icon badge and a large centered title, the
+   * decision-dialog look. `leading`: a compact left-aligned title with an
+   * optional `subtitle` beside the close button, for dialogs that are mostly
+   * lists and forms (the Share dialog).
+   */
+  headerLayout?: "centered" | "leading";
+  /** One muted line under a `leading` title. */
+  subtitle?: ReactNode;
   children: ReactNode;
   contentClassName?: string;
   cardClassName?: string;
@@ -49,6 +59,8 @@ export function FramedDialog({
   iconBgClassName = "bg-[#3167dd]",
   stepIndicator,
   preventClose = false,
+  headerLayout = "centered",
+  subtitle,
 }: FramedDialogProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -144,37 +156,59 @@ export function FramedDialog({
                   contentClassName,
                 )}
               >
-                {/* Icon badge sits on top of the shared Decoration grid.
-                    Decoration handles both modes — radial white-fade in
-                    light, Gaussian-blurred ellipse mask in dark — so we
-                    don't need separate WebGL / CSS-grid backgrounds and
-                    every dialog (stake, unstake, confirm, withdraw,
-                    settings…) gets the same hippius-web-style grid. */}
-                <div className="relative mx-auto mb-3 flex size-12 shrink-0 items-center justify-center sm:size-14">
-                  <Decoration
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 size-full"
-                  />
-                  <div
-                    className={cn(
-                      "relative flex size-8 items-center justify-center rounded-lg",
-                      iconBgClassName,
-                    )}
-                  >
-                    {icon}
+                {headerLayout === "leading" ? (
+                  // Compact header: title and subtitle on the left, clear of
+                  // the close button in the top-right corner.
+                  <div className={cn("mb-4 min-w-0 pr-8", preventClose && "pr-0")}>
+                    <Dialog.Title
+                      className={cn(
+                        "min-w-0 truncate text-left text-lg font-semibold leading-7 text-[#0a0a0a] dark:text-white",
+                        titleClassName,
+                      )}
+                    >
+                      {title}
+                    </Dialog.Title>
+                    {subtitle ? (
+                      <div className="mt-0.5 min-w-0 text-left text-[13px] leading-5 text-grey-50 dark:text-grey-dark-600">
+                        {subtitle}
+                      </div>
+                    ) : null}
                   </div>
-                </div>
+                ) : (
+                  <>
+                    {/* Icon badge sits on top of the shared Decoration grid.
+                        Decoration handles both modes (radial white-fade in
+                        light, Gaussian-blurred ellipse mask in dark), so we
+                        don't need separate WebGL / CSS-grid backgrounds and
+                        every dialog (stake, unstake, confirm, withdraw,
+                        settings…) gets the same hippius-web-style grid. */}
+                    <div className="relative mx-auto mb-3 flex size-12 shrink-0 items-center justify-center sm:size-14">
+                      <Decoration
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 size-full"
+                      />
+                      <div
+                        className={cn(
+                          "relative flex size-8 items-center justify-center rounded-lg",
+                          iconBgClassName,
+                        )}
+                      >
+                        {icon}
+                      </div>
+                    </div>
 
-                {/* Title */}
-                <Dialog.Title
-                  className={cn(
-                    "mb-2 text-center text-[22px] font-semibold leading-tight text-[#0a0a0a] dark:text-white",
-                    "sm:text-[28px] sm:leading-9",
-                    titleClassName,
-                  )}
-                >
-                  {title}
-                </Dialog.Title>
+                    {/* Title */}
+                    <Dialog.Title
+                      className={cn(
+                        "mb-2 text-center text-[22px] font-semibold leading-tight text-[#0a0a0a] dark:text-white",
+                        "sm:text-[28px] sm:leading-9",
+                        titleClassName,
+                      )}
+                    >
+                      {title}
+                    </Dialog.Title>
+                  </>
+                )}
 
                 {/* Body */}
                 {children}

@@ -63,6 +63,7 @@ fn pinned_reasons() -> Vec<(&'static str, &'static str)> {
         ("NETWORK_DISPLAY_REASON", "network"),
         ("GONE_DISPLAY_REASON", "gone"),
         ("SESSION_LIMIT_DISPLAY_REASON", "session-limit 429"),
+        ("QUOTA_DENIED_DISPLAY_REASON", "storage-quota 402"),
     ]
 }
 

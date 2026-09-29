@@ -14,6 +14,10 @@ interface SyncFileEntry {
   sync_status?: string;
   /** SS58 of whoever uploaded this revision, when the server attributes it. */
   uploaded_by?: string | null;
+  /** Display name beside uploaded_by (hcfs #455). */
+  uploaded_by_name?: string | null;
+  /** Uploader email beside uploaded_by (hcfs #455); absent when unknown. */
+  uploaded_by_email?: string | null;
 }
 
 interface GroupedListing {
@@ -351,6 +355,8 @@ export function useNestedFolderListing({
           // `remote://` source only ever reached folder rows.
           remoteDriveLabel: remote ? label || undefined : undefined,
           uploadedBy: entry.uploaded_by || undefined,
+          uploadedByName: entry.uploaded_by_name || undefined,
+          uploadedByEmail: entry.uploaded_by_email || undefined,
           syncStatus:
             (entry.sync_status as FormattedUserFile["syncStatus"]) ??
             "unknown",

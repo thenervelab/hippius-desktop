@@ -11,6 +11,13 @@ import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 export const UNDECRYPTABLE_MESSAGE =
   "Can't be decrypted on this device — needs to be re-uploaded or removed.";
 
+/**
+ * HTTP 402 / storage-quota denial (not typed credits `insufficientBalance`).
+ * Must stay word-identical to Rust's `QUOTA_DENIED_DISPLAY_REASON`.
+ */
+export const QUOTA_DENIED_MESSAGE =
+  "Storage full. Upgrade your plan or free up space.";
+
 /** Format a cents integer as a `$x.xx` string (loss-free; divide only here). */
 function dollars(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
@@ -34,9 +41,12 @@ export function failureMessage(rec: FileFailureRecord): string {
     }
     case "serverError":
       // Must read identically to Rust's
-      // `FileFailureKindPayload::ServerError { 429 }::display_reason()`.
+      // `FileFailureKindPayload::ServerError { status }::display_reason()`.
       if (rec.httpStatus === 429) {
         return "Too many uploads in progress — will retry.";
+      }
+      if (rec.httpStatus === 402) {
+        return QUOTA_DENIED_MESSAGE;
       }
       return rec.httpStatus != null
         ? `Server error (${rec.httpStatus}). Please try again.`

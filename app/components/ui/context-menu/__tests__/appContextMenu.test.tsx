@@ -83,6 +83,28 @@ describe("the right-click menu only appears where files live", () => {
     expect(screen.queryByText("Sync a Folder")).not.toBeInTheDocument();
   });
 
+  it("disables upload items when uploadsBlocked without running them", () => {
+    let ran = false;
+    mount({
+      onUploadFile: () => {
+        ran = true;
+      },
+      onUploadFolder: () => {
+        ran = true;
+      },
+      onSyncFolder: () => {
+        ran = true;
+      },
+      uploadsBlocked: true,
+    });
+    rightClickBackground();
+    const uploadFile = screen.getByRole("menuitem", { name: /Upload File/i });
+    expect(uploadFile).toBeDisabled();
+    fireEvent.click(uploadFile);
+    expect(ran).toBe(false);
+    expect(screen.getByRole("menuitem", { name: /New Folder/i })).not.toBeDisabled();
+  });
+
   // Navigating away unregisters. A menu left floating would run the
   // previous page's handlers over the new page.
   it("closes when the surface unregisters", () => {

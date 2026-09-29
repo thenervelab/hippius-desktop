@@ -7,6 +7,7 @@ import { MoreVertical, Download, FolderOpen, Link2, Pencil } from "lucide-react"
 import { useAtomValue } from "jotai";
 import {
   folderShareFeatureEnabledAtom,
+  memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -17,10 +18,14 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   offersShareAction,
+  offersWriteAction,
   FOLDER_SHARE_DISABLED_TOOLTIP,
   shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
-import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import {
+  useMemberDriveLabels,
+  useWritableMemberDriveLabels,
+} from "@/app/lib/hooks/useSharedDriveRoles";
 import { cn } from "@/lib/utils";
 
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -92,6 +97,10 @@ const CardView: FC<CardViewProps> = ({
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
+  // Whether a folder in one of those drives may be shared by link: an
+  // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
+  const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
+  const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
@@ -342,7 +351,10 @@ const CardView: FC<CardViewProps> = ({
                           ...((file.isFolder ||
                             file.syncStatus === "synced") &&
                           shareEnabled &&
-                          offersShareAction(file, memberDriveLabels)
+                          offersShareAction(file, memberDriveLabels, {
+            memberFolderShares,
+            writableMemberDriveLabels,
+          })
                             ? [
                                 {
                                   icon: <Link2 className="size-4" />,
@@ -374,9 +386,11 @@ const CardView: FC<CardViewProps> = ({
                                 },
                               ]
                             : []),
-                          // Rename — same local-presence gating as the
-                          // table-view 3-dots menu (shared `canRenameFile`).
-                          {
+                          // Rename: same local-presence gating as the
+                          // table-view 3-dots menu (shared `canRenameFile`),
+                          // and absent where the role cannot write.
+                          ...(offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels)
+                            ? [{
                             icon: <Pencil className="size-4" />,
                             itemTitle: "Rename",
                             disabled: !canRenameFile(file),
@@ -393,7 +407,8 @@ const CardView: FC<CardViewProps> = ({
                                 setRenameModalFile(file);
                               }
                             },
-                          },
+                          }]
+                            : []),
                           // Delete: disabled for unpinned files, hidden for
                           // cloud-only rows — the delete pipeline removes the
                           // LOCAL copy and lets sync propagate, which a

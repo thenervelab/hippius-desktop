@@ -14,6 +14,7 @@ import {
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
+import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMark";
 import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
@@ -313,6 +314,14 @@ const FileCard: React.FC<FileCardProps> = ({
               // `subFolderPath` is the same URL param that prop carries.
               folderRelativePath={folderShareRelativePath(file, subFolderPath)}
               onManageShare={() => router.push("/shares")}
+              className="ml-1.5"
+            />
+            {/* Shared on its own. Compact: the card's name strip is narrow. */}
+            <FolderSharingMark
+              label={file.label}
+              folderPath={folderShareRelativePath(file, subFolderPath)}
+              folderName={file.name}
+              compact
               className="ml-1.5"
             />
           </div>

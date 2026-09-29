@@ -2,6 +2,7 @@
 
 pub mod app_location;
 pub mod bookmarks;
+pub mod display_email;
 pub mod logs;
 pub mod platform_info;
 pub mod preferences;

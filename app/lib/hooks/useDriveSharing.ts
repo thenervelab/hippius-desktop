@@ -52,6 +52,12 @@ export interface DriveSharing {
    * Viewer.
    */
   canWrite: boolean;
+  /**
+   * People on a drive shared WITH this account, owner excluded, when the
+   * membership listing says (`member_count`). `null` for an own drive and
+   * when unknown: never draw "0 people" from absence.
+   */
+  memberCount: number | null;
 }
 
 const NOT_SHARED: DriveSharing = {
@@ -60,6 +66,7 @@ const NOT_SHARED: DriveSharing = {
   role: null,
   canManage: false,
   canWrite: true,
+  memberCount: null,
 };
 
 /**
@@ -106,6 +113,7 @@ export function useDriveSharing(label: string | null | undefined): DriveSharing 
         isOwner: !membership,
         role: role ?? undefined,
       }),
+      memberCount: membership?.memberCount ?? null,
     };
   }, [label, membership, own]);
 }

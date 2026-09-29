@@ -32,6 +32,10 @@ vi.mock("@/app/lib/wallet-auth-context", () => ({
   useWalletAuth: () => ({ polkadotAddress: "5TestAddress" }),
 }));
 
+vi.mock("@/app/lib/hooks/api/useStorageOverview", () => ({
+  useStorageOverview: () => ({ data: { source: "free", usedBytes: 0, totalBytes: 10_000_000_000 } }),
+}));
+
 function renderWithStore() {
   const store = createStore();
   const wrapper = ({ children }: { children: React.ReactNode }) => (

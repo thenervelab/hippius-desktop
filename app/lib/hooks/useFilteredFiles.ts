@@ -22,6 +22,11 @@ export interface FileFilterRequest {
     folderTab?: string | null;
     /** FE-only: fires recursive search so nested excluded rows are found. */
     excludedOnly?: boolean;
+    /**
+     * Exact uploader ss58, or `_none` for unrecorded. Server-side on
+     * `search_files_in_drive`; selecting alone must still run the search.
+     */
+    uploadedBy?: string;
 }
 
 export interface UseFilteredFilesResult<T> {

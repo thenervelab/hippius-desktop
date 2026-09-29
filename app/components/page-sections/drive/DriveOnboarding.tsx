@@ -5,7 +5,7 @@ import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import {
-  createDriveInviteDialogAtom,
+  shareDialogAtom,
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
@@ -65,7 +65,8 @@ import {
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue, useSetAtom } from "jotai";
-
+import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import ShareDriveFlow from "./share-drive-picker/ShareDriveFlow";
 interface DriveOnboardingProps {
   // Fired when a folder is added or a remote folder is synced. `newLabel`
   // is the unique label of the newly added/synced folder; the parent uses
@@ -87,6 +88,18 @@ interface DriveOnboardingProps {
     folderHash: string;
     displayLabel: string;
   }) => void;
+  /** Open a FOLDER shared with this account, rooted at that folder. */
+  onOpenFolderGrant?: (grant: {
+    ownerSs58: string;
+    folderHash: string;
+    pathPrefix: string;
+    folderName: string;
+  }) => void;
+  /**
+   * Polled plan gate: uploads / sync will be refused. Clicks open the
+   * upgrade dialog instead of the folder picker.
+   */
+  isStorageFull?: boolean;
 }
 
 const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
@@ -94,14 +107,17 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSelectFolder,
   onOpenRemoteFolder,
   onOpenSharedDrive,
+  onOpenFolderGrant,
+  isStorageFull = false,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const driveStatuses = useAtomValue(driveStatusesAtom);
+  const { requireUploadRoom } = useCreditCheck();
   const sharedDriveRoles = useSharedDriveRoles();
   const sharedDrivesInPlan = useSharedDrivesInPlan();
   const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
-  const setInviteDialogTarget = useSetAtom(createDriveInviteDialogAtom);
+  const setInviteDialogTarget = useSetAtom(shareDialogAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -123,6 +139,9 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  // "Share a drive" from Shared with Me: the picker of this account's own
+  // drives. Continue hands over to the Share dialog, closing this first.
+  const [sharePickerOpen, setSharePickerOpen] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
 
   // Remove folder dialog state. `mode: "leave"` is the member-drive
@@ -147,11 +166,25 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // here run exactly what the toolbar buttons above the list run.
   const contextActions = useMemo(
     () => ({
-      onUploadFile: () => void addButtonRef.current?.open(),
-      onUploadFolder: () => setIsFolderUploadOpen(true),
-      onSyncFolder: () => setShowAddDialog(true),
+      // Keep handlers registered so the menu can list the items as
+      // disabled when blocked, rather than hiding them.
+      onUploadFile: () => {
+        if (isStorageFull) return;
+        void addButtonRef.current?.open();
+      },
+      onUploadFolder: async () => {
+        if (isStorageFull) return;
+        if (!(await requireUploadRoom("folder-upload", false))) return;
+        setIsFolderUploadOpen(true);
+      },
+      onSyncFolder: async () => {
+        if (isStorageFull) return;
+        if (!(await requireUploadRoom("folder-sync", false))) return;
+        setShowAddDialog(true);
+      },
+      uploadsBlocked: isStorageFull,
     }),
-    [],
+    [requireUploadRoom, isStorageFull],
   );
   usePageContextActions(contextActions);
   const [pauseDialog, setPauseDialog] = useState<{
@@ -592,6 +625,22 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     ),
   );
 
+  // The drives the picker offers: this account's own, the same set the
+  // sharing marks are asked about.
+  const ownDriveLabels = useMemo(
+    () => folderRows.filter((r) => !r.ownerSs58).map((r) => r.folderName),
+    [folderRows],
+  );
+
+  // The Sync a Folder action, wherever it is offered on this page.
+  const startSyncFolder = async () => {
+    if (isStorageFull) return;
+    if (!(await requireUploadRoom("folder-sync", false))) {
+      return;
+    }
+    setShowAddDialog(true);
+  };
+
   // Opening a row: a local folder selects it, a remote one opens the
   // browsable server view. Both were row clicks before; they still are.
   const handleOpenRow = (row: FolderRow) => {
@@ -684,8 +733,19 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                   <Button
                     variant="defaultStable"
                     size="auto"
-                    title={UPLOAD_FOLDER_HINT}
-                    onClick={() => setIsFolderUploadOpen(true)}
+                    title={
+                      isStorageFull
+                        ? "Storage full. Upgrade your plan to upload."
+                        : UPLOAD_FOLDER_HINT
+                    }
+                    disabled={isStorageFull}
+                    onClick={async () => {
+                      if (isStorageFull) return;
+                      if (!(await requireUploadRoom("folder-upload", false))) {
+                        return;
+                      }
+                      setIsFolderUploadOpen(true);
+                    }}
                     className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
                   >
                     <ArrowUpToLine className="size-3.5 shrink-0" />
@@ -694,10 +754,8 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                   <AddButton
                     ref={addButtonRef}
                     defaultFolderLabel={firstLocalLabel}
+                    storageBlocked={isStorageFull}
                     className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
-                    // Matches the Upload Folder button beside it. This row
-                    // is 12px, so the button's default 16px glyph read as
-                    // oversized next to its own label.
                     iconClassName="size-3.5"
                   />
                   <span
@@ -709,8 +767,13 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
               <Button
                 variant="primary"
                 size="auto"
-                title={SYNC_FOLDER_HINT}
-                onClick={() => setShowAddDialog(true)}
+                title={
+                  isStorageFull
+                    ? "Storage full. Upgrade or subscribe to sync a folder."
+                    : SYNC_FOLDER_HINT
+                }
+                disabled={isStorageFull}
+                onClick={startSyncFolder}
                 className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
               >
                 <RefreshCw className="size-3" strokeWidth={2} />
@@ -721,7 +784,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           onOpenRow={handleOpenRow}
           buildActions={buildRowActions}
           emptyState={
-            <FolderListEmptyState onSyncFolder={() => setShowAddDialog(true)} />
+            <FolderListEmptyState
+              disabled={isStorageFull}
+              onSyncFolder={startSyncFolder}
+            />
           }
         />
 
@@ -732,11 +798,13 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             sees nothing here; the header card covers them. */}
         <FreshAccountPlans hasFolders={folderRows.length > 0} isLoading={isLoading} />
 
-        {/* Flag-gated; renders nothing unless drives are shared with this
-            account. onDriveAdded routes the new label to the breadcrumb
-            exactly like a freshly added local folder. */}
+        {/* Flag-gated; always shown here, with "Share a drive" when nothing
+            is shared with this account yet. onDriveAdded routes the new label
+            to the breadcrumb exactly like a freshly added local folder. */}
         <SharedWithMeSection
+          onShareDrive={() => setSharePickerOpen(true)}
           onOpenDrive={onOpenSharedDrive}
+          onOpenFolderGrant={onOpenFolderGrant}
           onManageAccess={setShareDriveTarget}
           onDriveAdded={(label) => {
             loadFolders();
@@ -747,6 +815,15 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       </div>
 
       {/* ──────── Dialogs ──────── */}
+      {sharePickerOpen && (
+        <ShareDriveFlow
+          drives={ownDriveLabels}
+          sharingByLabel={ownDriveSharing}
+          loading={isLoading}
+          onClose={() => setSharePickerOpen(false)}
+          onAddDrive={() => void startSyncFolder()}
+        />
+      )}
       <FolderUploadDialog
         open={isFolderUploadOpen}
         onClose={() => setIsFolderUploadOpen(false)}

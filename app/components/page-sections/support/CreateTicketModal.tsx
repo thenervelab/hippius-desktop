@@ -11,10 +11,11 @@ import {
   inputFieldShellClassName,
 } from "@/components/ui/input";
 import { Ticket as TicketIcon, DocumentUpload } from "@/components/ui/icons";
-import { SelectOptions, type SelectOption } from "@/components/ui/select/SelectOptions";
+import { SelectOptions } from "@/components/ui/select/SelectOptions";
 import { cn } from "@/lib/utils";
 import { getFilePartsFromFileName } from "@/app/lib/utils/getFilePartsFromFileName";
 import { selectFilePath } from "@/app/lib/utils/tauri";
+import { ticketCategories } from "./ticketCategories";
 
 export interface CreateTicketData {
   subject: string;
@@ -33,12 +34,6 @@ type Props = {
   onSubmit: (data: CreateTicketData) => void;
   isLoading?: boolean;
 };
-
-export const categories: SelectOption[] = [
-  { value: "billing", label: "Account & Billing" },
-  { value: "storage", label: "Storage (Arion & S3)" },
-  { value: "general", label: "General" },
-];
 
 const severities: Array<{
   value: CreateTicketData["priority"];
@@ -180,7 +175,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
               <SelectOptions
                 value={category}
                 onValueChange={setCategory}
-                options={categories}
+                options={ticketCategories}
                 placeholder="Choose category"
                 disabled={isLoading}
                 triggerClassName={controlClassName}

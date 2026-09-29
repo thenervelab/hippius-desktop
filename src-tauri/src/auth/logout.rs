@@ -82,6 +82,10 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
     //     CAS refuse to start a fresh subscription.
     crate::blockchain::subscription::stop_block_subscription_inner(&app).await;
 
+    // 1b'. Stop delivering emailed invitation keys: the task seals with this
+    //      session's key, which is about to go.
+    app.state::<crate::app_state::AppState>().invite_auto_seal.stop().await;
+
     // 1c. Tear down the VM-connection VPN: leave the NetBird overlay and close
     //     every localhost forward, so the next signed-in account can't inherit
     //     the previous tenant's live `127.0.0.1:<port>` forwards. No-op on

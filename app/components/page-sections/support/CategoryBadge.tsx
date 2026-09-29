@@ -2,7 +2,7 @@
 
 import React from "react";
 import { cn } from "@/lib/utils";
-import { categories } from "./CreateTicketModal";
+import { ticketCategoryLabel } from "./ticketCategories";
 
 interface CategoryBadgeProps {
   category: string;
@@ -13,8 +13,7 @@ const CategoryBadge: React.FC<CategoryBadgeProps> = ({
   category,
   className,
 }) => {
-  const categoryConfig = categories.find((c) => c.value === category);
-  const label = categoryConfig?.label || category;
+  const label = ticketCategoryLabel(category);
 
   return (
     <span

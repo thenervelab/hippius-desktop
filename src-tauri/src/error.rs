@@ -191,6 +191,24 @@ pub enum NotReadyKind {
     /// to. Raised by `capture::commands::capture_start` so the FE opens the
     /// destination picker and retries, rather than guessing a drive.
     CaptureDestinationUnset,
+    /// The server cannot send drive invitations by email (`503
+    /// email_invites_unavailable`: no mail service configured). The FE keeps
+    /// the "Invite by email" option and says, inline, that email invites are
+    /// coming soon; link invites are unaffected.
+    EmailInvitesUnavailable,
+    /// The server refused a FOLDER invite because folder invites are off
+    /// there (`400` "folder invites are not enabled"), or it predates them.
+    /// The FE says sharing a single folder is coming soon. Never answered by
+    /// minting a whole-drive invite instead.
+    FolderInvitesUnavailable,
+    /// The server refused an Editor folder invite because writer folder
+    /// grants are off there (`400` "writer folder invites are not enabled",
+    /// or the older "a folder invite is always a reader invite"). A Viewer
+    /// folder invite still works.
+    FolderEditorInvitesUnavailable,
+    /// The server refused to MAIL a folder invite (`400` "folder invites
+    /// cannot be mailed yet; mint a link instead"). The link works.
+    FolderEmailInvitesUnavailable,
 }
 
 impl NotReadyKind {
@@ -220,6 +238,10 @@ impl NotReadyKind {
             Self::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
             Self::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
             Self::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
+            Self::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
+            Self::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
+            Self::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
+            Self::FolderEmailInvitesUnavailable => "FOLDER_EMAIL_INVITES_UNAVAILABLE",
         }
     }
 }
@@ -274,7 +296,25 @@ impl std::fmt::Display for NotReadyKind {
                 write!(f, "Shared drives are not available on this server.")
             }
             Self::SharedDrivesNotEntitled => {
-                write!(f, "Shared drives need a Plus, Max, or Scale plan.")
+                write!(f, "Sharing needs a Plus, Max or Scale plan.")
+            }
+            Self::EmailInvitesUnavailable => {
+                write!(f, "Email invites are coming soon. For now, copy the invite link and send it yourself.")
+            }
+            Self::FolderInvitesUnavailable => {
+                write!(f, "Sharing a single folder is coming soon.")
+            }
+            Self::FolderEditorInvitesUnavailable => {
+                write!(
+                    f,
+                    "Editor access for a single folder is coming soon. You can share it as view only for now."
+                )
+            }
+            Self::FolderEmailInvitesUnavailable => {
+                write!(
+                    f,
+                    "Email invites for a single folder are coming soon. For now, copy the invite link and send it yourself."
+                )
             }
             Self::ScreenRecordingPermission => {
                 write!(f, "Hippius needs permission to record your screen before it can take a capture.")
@@ -740,6 +780,10 @@ mod tests {
                 NotReadyKind::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
                 NotReadyKind::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
                 NotReadyKind::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
+                NotReadyKind::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
+                NotReadyKind::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
+                NotReadyKind::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
+                NotReadyKind::FolderEmailInvitesUnavailable => "FOLDER_EMAIL_INVITES_UNAVAILABLE",
             }
         }
         for kind in [
@@ -764,6 +808,10 @@ mod tests {
             NotReadyKind::SharedDrivesNotEntitled,
             NotReadyKind::ScreenRecordingPermission,
             NotReadyKind::CaptureDestinationUnset,
+            NotReadyKind::EmailInvitesUnavailable,
+            NotReadyKind::FolderInvitesUnavailable,
+            NotReadyKind::FolderEditorInvitesUnavailable,
+            NotReadyKind::FolderEmailInvitesUnavailable,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");

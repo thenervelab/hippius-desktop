@@ -1,0 +1,14 @@
+[
+  { "input": "ada@example.com", "shown": "ada@example.com", "note": "a real address is shown" },
+  { "input": "  ada@example.com  ", "shown": "ada@example.com", "note": "a real address is trimmed" },
+  { "input": "", "shown": null, "note": "empty" },
+  { "input": "   ", "shown": null, "note": "whitespace only" },
+  { "input": "user_5hwknpywfcvfgm6fs2pprg8hbcxwudvpgoxmao3oc6ohqtcl@hippius.local", "shown": null, "note": "a system placeholder is hidden" },
+  { "input": "USER_ABC@Hippius.Local", "shown": null, "note": "the domain check ignores case" },
+  { "input": "  user_abc@hippius.local \n", "shown": null, "note": "padding does not hide a placeholder" },
+  { "input": "ada@hippius.local.example.com", "shown": "ada@hippius.local.example.com", "note": "a longer domain that starts the same is real" },
+  { "input": "ada@nothippius.local", "shown": "ada@nothippius.local", "note": "a different domain ending the same is real" },
+  { "input": "ada@mail.hippius.local", "shown": "ada@mail.hippius.local", "note": "only the exact placeholder domain is hidden" },
+  { "input": "hippius.local", "shown": "hippius.local", "note": "no @, so not an address on that domain" },
+  { "input": "ada@hippius.io", "shown": "ada@hippius.io", "note": "a real Hippius address is shown" }
+]

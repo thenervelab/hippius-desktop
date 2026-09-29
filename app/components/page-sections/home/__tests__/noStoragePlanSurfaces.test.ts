@@ -12,6 +12,7 @@ const read = (rel: string) =>
 const card = read("../storage-overview/index.tsx");
 const page = read("../index.tsx");
 const banner = read("../NoStoragePlanBanner.tsx");
+const overBanner = read("../OverQuotaBanner.tsx");
 
 /**
  * The no-plan state is split across two elements on purpose: the banner
@@ -74,5 +75,19 @@ describe("the Overview page's no-plan banner", () => {
   // drifts from it.
   it("reuses the shared banner frame", () => {
     expect(banner).toContain("StatusBanner");
+  });
+});
+
+describe("the Overview page's over-quota banner", () => {
+  it("sits above the storage card beside the no-plan banner", () => {
+    const overAt = page.indexOf("<OverQuotaBanner");
+    const gridAt = page.indexOf("<StorageOverviewCard");
+    expect(overAt).toBeGreaterThan(-1);
+    expect(overAt).toBeLessThan(gridAt);
+  });
+
+  it("reads the Rust overage rather than inventing one", () => {
+    expect(overBanner).toContain("overview?.overDisplay");
+    expect(overBanner).toContain("getOverQuotaBanner");
   });
 });

@@ -1,9 +1,10 @@
 // "Shared with me" — drives other accounts invited this one into, fed by
 // `list_my_drive_memberships`. Rendered in BOTH MultiFolderSyncManager
-// (settings) and DriveOnboarding (files page); flag-gated and silent in
-// every non-rows state (see `sharedWithMeState.ts::getSharedWithMeView`):
-// a feature-off server, a failed passive fetch, or zero memberships all
-// render nothing — never a toast, never an empty headline.
+// (settings) and DriveOnboarding (files page), flag-gated. In Settings it is
+// silent in every non-rows state; on the Drive page (`onShareDrive` given)
+// it is always there, with skeleton rows while loading and the "A place for
+// teamwork" empty state offering "Share a drive" when nothing is shared
+// (see `sharedWithMeState.ts::getSharedWithMeView`). Never a toast.
 //
 // An unsynced row's "Sync locally" runs: folder picker (last-browse-dir
 // chain) → `add_shared_drive` → the drive lands in the NORMAL lists,
@@ -14,7 +15,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Users } from "lucide-react";
+import { Plus, Users } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 
@@ -25,7 +26,10 @@ import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { buildSharedDriveActions } from "./sharedDriveRowActions";
 import { SettingsCard } from "../SettingsCard";
-import { middleTruncate } from "@/lib/utils/middleTruncate";
+import FolderRowSkeleton from "./FolderRowSkeleton";
+import SharedWithMeEmptyState, { SHARE_A_DRIVE_LABEL } from "./SharedWithMeEmptyState";
+import AccountLabel from "@/components/page-sections/drive/AccountLabel";
+import { frozenNotice } from "@/app/lib/shared-drives/writeRefusal";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRowDate } from "@/components/page-sections/drive/folder-list/formatRowDate";
 import { RowDot as Dot } from "@/components/page-sections/drive/folder-list/RowDot";
@@ -41,18 +45,27 @@ import {
   leaveSharedDriveByIdentity,
   listMyDriveMemberships,
   type DriveMembershipInfo,
+  type MyFolderGrantInfo,
 } from "@/app/lib/tauri/sharedDrives";
 import {
   getLastBrowseDirectory,
   saveLastBrowseDirectory,
 } from "@/app/lib/utils/userPreferencesDb";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { parseDriveRole } from "@/app/lib/shared-drives/roles";
+import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import {
+  folderGrantRowView,
   getMembershipRowAction,
   getSharedWithMeView,
   type SharedWithMeData,
 } from "./sharedWithMeState";
+import SharedFolderGrantRow from "./SharedFolderGrantRow";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  MY_FOLDER_GRANTS_QUERY_KEY,
+  useMyFolderGrants,
+} from "@/app/lib/hooks/useSharedDriveRoles";
+import type { ShareDriveModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
 
 interface SharedWithMeSectionProps {
   /**
@@ -72,23 +85,46 @@ interface SharedWithMeSectionProps {
     displayLabel: string;
   }) => void;
   /**
-   * Open the manage-access panel for a drive this account manages. Offered
-   * only on a drive synced here — the manage IPCs resolve a local label.
+   * Open the manage-access panel for a drive this account manages. The
+   * target names the owner's drive when it is not synced here.
    */
-  onManageAccess?: (target: { label: string; folderName: string }) => void;
+  onManageAccess?: (target: ShareDriveModalTarget) => void;
+  /**
+   * Open a FOLDER shared with this account (folder roles), rooted at that
+   * folder. Omitted where there is nowhere to browse to.
+   */
+  onOpenFolderGrant?: (grant: {
+    ownerSs58: string;
+    folderHash: string;
+    pathPrefix: string;
+    folderName: string;
+  }) => void;
   /**
    * Fired after `add_shared_drive` succeeds with the allocated local
    * label — the parent refreshes its drive lists (and may navigate to
    * the new drive).
    */
   onDriveAdded?: (label: string) => void;
+  /**
+   * Start sharing one of this account's own drives (the picker). Given on
+   * the Drive page, where it also keeps the section on screen with nothing
+   * shared yet: the empty state and the header button both call it.
+   */
+  onShareDrive?: () => void;
 }
 
 export function SharedWithMeSection({
   onDriveAdded,
   onOpenDrive,
   onManageAccess,
+  onOpenFolderGrant,
+  onShareDrive,
 }: SharedWithMeSectionProps) {
+  const queryClient = useQueryClient();
+  // Folders shared with this account: only once folder roles are on (the
+  // hook fetches nothing otherwise), each its own row below the drives.
+  const { grants: folderGrants, isSettled: grantsSettled } = useMyFolderGrants();
+  const [leaveGrant, setLeaveGrant] = useState<MyFolderGrantInfo | null>(null);
   const [data, setData] = useState<SharedWithMeData>({ kind: "idle" });
   // The row whose add_shared_drive call is in flight, keyed by
   // `${ownerSs58}:${folderHash}` (the membership's wire identity).
@@ -187,17 +223,79 @@ export function SharedWithMeSection({
     [onDriveAdded, load],
   );
 
-  if (getSharedWithMeView(SHARED_DRIVES_ENABLED, data) === "hidden") return null;
+  /**
+   * Leaving a folder removes this account's access to the drive's granted
+   * folders (the server's member DELETE clears every grant on that drive).
+   */
+  const leaveFolderGrant = async (grant: MyFolderGrantInfo) => {
+    try {
+      await leaveSharedDriveByIdentity(grant.ownerSs58, grant.folderHash);
+      toast.success(`Left "${folderGrantRowView(grant).folderName}"`);
+      await queryClient.invalidateQueries({ queryKey: [MY_FOLDER_GRANTS_QUERY_KEY] });
+    } catch (err) {
+      if (isSharedDrivesUnavailable(err)) return;
+      toast.error(`Could not leave the folder: ${errorMessage(err)}`);
+    }
+  };
+
+  const view = getSharedWithMeView(SHARED_DRIVES_ENABLED, data, folderGrants.length, {
+    alwaysShow: Boolean(onShareDrive),
+    grantsSettled,
+  });
+  if (view === "hidden") return null;
   const memberships = data.kind === "ready" ? data.memberships : [];
 
+  if (view === "loading" || view === "empty") {
+    return (
+      <SettingsCard label="Shared with Me" icon={<Users className="size-4" />}>
+        {view === "loading" || !onShareDrive ? (
+          <div aria-busy="true" aria-label="Loading drives shared with you">
+            <FolderRowSkeleton />
+            <FolderRowSkeleton />
+          </div>
+        ) : (
+          <SharedWithMeEmptyState onShareDrive={onShareDrive} />
+        )}
+      </SettingsCard>
+    );
+  }
+
   return (
-    <SettingsCard label="Shared with Me" icon={<Users className="size-4" />}>
+    <SettingsCard
+      label="Shared with Me"
+      icon={<Users className="size-4" />}
+      headerAction={
+        onShareDrive ? (
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={onShareDrive}
+            className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
+          >
+            <Plus className="size-3.5" aria-hidden />
+            {SHARE_A_DRIVE_LABEL}
+          </Button>
+        ) : undefined
+      }
+    >
       <div className="max-h-[420px] overflow-y-auto">
         {memberships.map((membership) => {
           const key = `${membership.ownerSs58}:${membership.folderHash}`;
           const action = getMembershipRowAction(membership);
           const role = parseDriveRole(membership.role);
-          const canManage = role === "manager";
+          // A Manager manages this drive for its owner, from here as from
+          // inside it. A Viewer or an Editor gets the role and Leave.
+          const canManage = canManageDrive({ isOwner: false, role });
+          const manageTarget: ShareDriveModalTarget = {
+            // A synced drive resolves by its local label; one that is not
+            // names its wire identity instead.
+            label: action.kind === "synced" ? action.localLabel : membership.displayLabel,
+            folderName: membership.displayLabel,
+            ...(action.kind === "synced"
+              ? {}
+              : { ownerSs58: membership.ownerSs58, folderHash: membership.folderHash }),
+          };
+          const manage = canManage && onManageAccess ? () => onManageAccess(manageTarget) : undefined;
           const stats = statsByDrive.get(sharedDriveStatsKey(membership));
           return (
             <div
@@ -236,6 +334,7 @@ export function SharedWithMeSection({
               className={cn(
                 "flex items-center justify-between gap-3 p-3 hover:bg-grey-light-400 dark:hover:bg-white/5",
                 onOpenDrive && "cursor-pointer",
+                membership.frozen && "opacity-80",
               )}
             >
               <div className="min-w-0 flex-1">
@@ -255,6 +354,14 @@ export function SharedWithMeSection({
                       carries the same ordering the roles do, so a list can
                       be read for access at a glance. */}
                   <DriveRoleChip role={role} />
+                  {membership.frozen && (
+                    <span
+                      className="flex-shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-grey-50 dark:text-grey-dark-600"
+                      title={frozenNotice(membership.frozenUntil)}
+                    >
+                      Frozen
+                    </span>
+                  )}
                   {action.kind === "synced" && (
                     <span className="flex-shrink-0 whitespace-nowrap text-[11px] font-medium text-[#04c870]">
                       Synced here
@@ -289,12 +396,21 @@ export function SharedWithMeSection({
                     </>
                   )}
                 </div>
-                <p
-                  className="ml-6 mt-1 truncate font-geist text-[13px] font-medium text-[#0A0A0A]/40 dark:text-white/40"
-                  title={membership.ownerSs58}
-                >
-                  Shared by {middleTruncate(membership.ownerSs58, 22)}
-                </p>
+                <div className="ml-6 mt-1 flex min-w-0 items-center gap-1 font-geist text-[13px] font-medium text-[#0A0A0A]/40 dark:text-white/40">
+                  <span className="shrink-0">Shared by</span>
+                  <AccountLabel
+                    ss58={membership.ownerSs58}
+                    name={membership.ownerName}
+                  />
+                  {/* Zero and absent both draw nothing — never fake "0 members"
+                      off a missing count (console OwnerCell parity). */}
+                  {membership.memberCount ? (
+                    <span className="shrink-0 whitespace-nowrap">
+                      · {membership.memberCount}{" "}
+                      {membership.memberCount === 1 ? "member" : "members"}
+                    </span>
+                  ) : null}
+                </div>
               </div>
 
               {/* Managing access is a manager's likely next action, so it
@@ -303,28 +419,12 @@ export function SharedWithMeSection({
               {/* No longer conditional on a local copy: the manage calls
                   address the drive by its wire identity, so a manager can
                   manage one they have never synced here. */}
-              {canManage && onManageAccess && (
+              {manage && (
                 <Button
                   variant="ghost"
                   size="auto"
-                  onClick={() =>
-                    onManageAccess({
-                      // A synced drive resolves by its local label; one that
-                      // is not names its wire identity instead.
-                      label:
-                        action.kind === "synced"
-                          ? action.localLabel
-                          : membership.displayLabel,
-                      folderName: membership.displayLabel,
-                      ...(action.kind === "synced"
-                        ? {}
-                        : {
-                            ownerSs58: membership.ownerSs58,
-                            folderHash: membership.folderHash,
-                          }),
-                    })
-                  }
-                  className="row-action-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-grey-80 px-2.5 text-xs font-medium text-grey-30 transition-colors hover:bg-grey-90 dark:border-white/10 dark:text-grey-dark-600 dark:hover:bg-white/10"
+                  onClick={manage}
+                  className="row-action-area mt-0.5 h-8 flex-shrink-0 rounded-md border border-primary-50 px-2.5 text-xs font-medium text-primary-50 transition-colors hover:bg-primary-50/10 dark:border-primary-brand-dark dark:text-primary-brand-dark dark:hover:bg-primary-50/15"
                 >
                   Manage access
                 </Button>
@@ -346,6 +446,7 @@ export function SharedWithMeSection({
                         })
                     : undefined,
                   onSyncLocally: () => void syncLocally(membership),
+                  onManageAccess: manage,
                   onLeave: () => setLeaveTarget(membership),
                 })}
               >
@@ -361,7 +462,47 @@ export function SharedWithMeSection({
             </div>
           );
         })}
+        {folderGrants.map((grant) => {
+          const view = folderGrantRowView(grant);
+          return (
+            <SharedFolderGrantRow
+              key={view.key}
+              grant={grant}
+              onOpen={
+                onOpenFolderGrant
+                  ? () =>
+                      onOpenFolderGrant({
+                        ownerSs58: grant.ownerSs58,
+                        folderHash: grant.folderHash,
+                        pathPrefix: view.path,
+                        folderName: view.folderName,
+                      })
+                  : undefined
+              }
+              onLeave={() => setLeaveGrant(grant)}
+            />
+          );
+        })}
       </div>
+
+      <ConfirmationDialog
+        open={leaveGrant !== null}
+        onClose={() => setLeaveGrant(null)}
+        onBack={() => setLeaveGrant(null)}
+        onConfirm={() => {
+          const target = leaveGrant;
+          setLeaveGrant(null);
+          if (target) void leaveFolderGrant(target);
+        }}
+        heading="Leave shared folder"
+        icon={<Icons.Trash className="size-4 text-white" />}
+        iconBgColor="bg-[#fc7d73]"
+        confirmVariant="destructive"
+        confirmButtonClassName="text-white"
+        button="Leave folder"
+        text={`Leave "${leaveGrant ? folderGrantRowView(leaveGrant).folderName : ""}"?`}
+        helperText="You lose access to it, and to any other folder of the same drive shared with you. The owner can invite you again."
+      />
 
       <ConfirmationDialog
         open={leaveTarget !== null}

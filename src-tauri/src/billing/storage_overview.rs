@@ -239,6 +239,11 @@ pub struct StorageOverview {
     pub used_display: String,
     pub total_display: String,
     pub free_display: String,
+    /// Present when usage exceeds capacity (downgrade / over free). The FE
+    /// shows this instead of the clamped "100%" so "12.56 GB of 10.00 GB"
+    /// is never paired with a percent that pretends the account is merely
+    /// full. Authored here for the same H-109 reason as the other labels.
+    pub over_display: Option<String>,
     /// What the header should offer — see [`PlanAction`]. Render this;
     /// never re-derive it from `source` / `percent` / `plan` on the FE.
     pub plan_action: PlanAction,
@@ -256,6 +261,13 @@ pub struct StorageOverview {
     /// copy of it in TypeScript is one that drifts the first time a
     /// sign-in method is added.
     pub free_tier_entitled: bool,
+    /// Whether this account's plan lets it share drives and folders (Plus,
+    /// Max and Scale do; Free and Starter do not). Decided once in
+    /// [`crate::billing::sharing_entitlement`]; a plan that could not be
+    /// loaded reads `true`, leaving the verdict to the server's own
+    /// `shared_drives_not_entitled` gate. The FE renders this and never
+    /// re-derives it from `plan.code`.
+    pub can_share_drives: bool,
 }
 
 /// Pure composition of the overview from its inputs.
@@ -306,6 +318,9 @@ fn finish_overview(
     let percent = percent_of(used_bytes, total_bytes);
     // Decide here, where every input is already resolved, so no surface
     // has to combine source + percent + funding + balance for itself.
+    // From the plan alone; `get_storage_overview` refines it with whether
+    // the subscriptions could be read at all.
+    let can_share_drives = crate::billing::sharing_entitlement::resolve_can_share_drives(plan.as_ref(), Some(&serde_json::Value::Null), true);
     let plan_action = match resolve_plan_action(source, percent, plan.as_ref()) {
         PlanAction::None if plan.as_ref().is_some_and(|p| credits_short_for_renewal(p, credits_hip.as_deref())) => PlanAction::TopUpCredits,
         decided => decided,
@@ -321,9 +336,24 @@ fn finish_overview(
         used_display: labels.used,
         total_display: labels.total,
         free_display: labels.free,
+        over_display: format_over_display(used_bytes, total_bytes),
         plan_action,
         free_tier_entitled,
+        can_share_drives,
     }
+}
+
+/// "2.56 GB over your plan" when usage exceeds capacity; `None` otherwise.
+///
+/// Replaces the clamped percent on the card/chip so a post-downgrade
+/// account is not told it is both over the plan and exactly 100% full.
+fn format_over_display(used_bytes: u64, total_bytes: u64) -> Option<String> {
+    if total_bytes == 0 || used_bytes <= total_bytes {
+        return None;
+    }
+    let over = used_bytes - total_bytes;
+    let idx = si_unit_index(over);
+    Some(format!("{} over your plan", format_si(over, idx, true)))
 }
 
 struct OverviewLabels {
@@ -664,6 +694,11 @@ pub async fn get_storage_overview(
     );
 
     let stats = stats_result?;
+    // Whether each subscription read succeeded, before the soft defaults
+    // below erase the difference: a plan that could not be loaded must not
+    // read as the free tier to the sharing rule.
+    let drive_sub_read = drive_sub_result.is_ok();
+    let legacy_read = active_result.is_ok();
     let drive_sub = drive_sub_result.unwrap_or_else(|_| serde_json::json!({ "active": false }));
     let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
     let active = active_result.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
@@ -710,6 +745,8 @@ pub async fn get_storage_overview(
         free_tier_entitled(provider.as_deref()),
     );
     overview.used_pending = used_pending(stats.total_bytes, local_bytes);
+    overview.can_share_drives =
+        crate::billing::sharing_entitlement::resolve_can_share_drives(overview.plan.as_ref(), drive_sub_read.then_some(&drive_sub), legacy_read);
 
     // The header states this the moment the balance is short; the
     // notification waits until the renewal is close. Raised from here
@@ -731,6 +768,41 @@ pub async fn get_storage_overview(
     Ok(overview)
 }
 
+/// Whether the signed-in account's plan lets it share, without the rest of
+/// the overview.
+///
+/// For the background email-invite delivery (`shared_drives::auto_seal`),
+/// which follows the same plan rule as inviting and must not pay for the
+/// indexer read and the local disk walk just to learn it. Reads the same
+/// three subscription answers [`get_storage_overview`] reads and decides
+/// through the same [`crate::billing::sharing_entitlement::resolve_can_share_drives`],
+/// so the two can never disagree: a subscription that could not be read
+/// leaves the verdict to the server, exactly as the overview does.
+///
+/// # Errors
+///
+/// [`AppError::Auth`] when nobody is signed in.
+pub(crate) async fn fetch_can_share_drives(state: &crate::app_state::AppState) -> Result<bool, AppError> {
+    let account_id = state.current_session_account()?;
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
+    let (drive_sub_result, drive_plans_result, active_result) = tokio::join!(
+        client.get::<serde_json::Value>("/api/drive/subscription/", &account_id),
+        client.get::<serde_json::Value>("/api/drive/plans/", &account_id),
+        client.get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id),
+    );
+    let drive_sub_read = drive_sub_result.is_ok();
+    let legacy_read = active_result.is_ok();
+    let drive_sub = drive_sub_result.unwrap_or_else(|_| serde_json::json!({ "active": false }));
+    let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
+    let active = active_result.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
+    let plan = plan_from_drive_subscription(&drive_sub, &drive_plans).or_else(|| plan_from_subscription(&active));
+    Ok(crate::billing::sharing_entitlement::resolve_can_share_drives(
+        plan.as_ref(),
+        drive_sub_read.then_some(&drive_sub),
+        legacy_read,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,6 +811,21 @@ mod tests {
     /// across IPC to catch it going missing. A gate written against `name`
     /// silently stops matching when marketing renames a tier, which is the
     /// bug this field exists to end.
+    /// The sharing verdict reaches the frontend under the name it reads.
+    #[test]
+    fn the_sharing_verdict_reaches_the_wire() {
+        let free = serde_json::to_value(build_overview(0, None, Some(10 * BYTES_PER_GB), None, true)).unwrap();
+        assert_eq!(free["canShareDrives"], false, "the free tier cannot share");
+        let starter = PlanInfo {
+            code: "solo".into(),
+            ..pro_plan(1)
+        };
+        let starter = serde_json::to_value(build_overview(0, Some(starter), None, None, true)).unwrap();
+        assert_eq!(starter["canShareDrives"], false, "Starter cannot share");
+        let max = serde_json::to_value(build_overview(0, Some(pro_plan(1)), None, None, true)).unwrap();
+        assert_eq!(max["canShareDrives"], true, "Max can share");
+    }
+
     #[test]
     fn plan_info_sends_the_code_as_well_as_the_name() {
         let json = serde_json::to_value(pro_plan(100)).unwrap();
@@ -1002,6 +1089,23 @@ mod tests {
         assert!((overview.percent - 100.0).abs() < 1e-9);
         // Raw byte counts stay honest even while the percent clamps.
         assert_eq!(overview.used_bytes, 2000 * BYTES_PER_GB);
+        // The card shows how far over rather than a contradictory 100%.
+        assert_eq!(overview.over_display.as_deref(), Some("1.00 TB over your plan"));
+    }
+
+    #[test]
+    fn under_quota_has_no_over_display() {
+        let overview = build_overview(500 * BYTES_PER_GB, Some(pro_plan(1000)), None, None, true);
+        assert!(overview.over_display.is_none());
+    }
+
+    #[test]
+    fn free_tier_over_quota_names_the_overage() {
+        // OAuth free floor is 10 GB (fallback when the catalogue is unread).
+        let overview = build_overview(12_560_000_000, None, None, None, true);
+        assert_eq!(overview.source, CapacitySource::Free);
+        assert!((overview.percent - 100.0).abs() < 1e-9);
+        assert_eq!(overview.over_display.as_deref(), Some("2.56 GB over your plan"));
     }
 
     #[test]

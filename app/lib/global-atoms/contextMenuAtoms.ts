@@ -38,6 +38,12 @@ export interface PageContextActions {
   onUploadFile?: () => void;
   onUploadFolder?: () => void;
   onSyncFolder?: () => void;
+  /**
+   * When true, upload / sync menu items stay listed but are not clickable.
+   * Matches toolbar buttons (disabled, no dialog). Drag-and-drop still
+   * opens the subscribe/upgrade dialog on its own path.
+   */
+  uploadsBlocked?: boolean;
   /** Where New Folder creates. Defaults to the main drive's root. */
   newFolderTarget?: NewFolderTarget;
 }

@@ -122,7 +122,9 @@ use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files_in_drive};
 use crate::sync::rekey_probe::probe_rekey_recovery;
-use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped};
+use crate::sync::remote::{
+    cache_remote_file, download_remote_file, folder_grant_stats, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped,
+};
 use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, rename_remote_folder};
 use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
@@ -448,6 +450,7 @@ fn main() {
             rename_remote_folder,
             create_remote_folder,
             list_remote_folder_grouped,
+            folder_grant_stats,
             download_remote_file,
             cache_remote_file,
             get_thumbnail,
@@ -473,13 +476,27 @@ fn main() {
             // Shared drives (owner invites/members + member add/leave).
             crate::shared_drives::commands::create_drive_invite,
             crate::shared_drives::commands::list_drive_members,
+            crate::shared_drives::commands::list_drive_folder_grants,
+            crate::shared_drives::commands::replace_folder_grants,
+            crate::shared_drives::commands::list_share_access,
+            crate::shared_drives::commands::list_access_panel,
+            crate::shared_drives::commands::create_folder_invite,
             crate::shared_drives::commands::remove_drive_member,
             crate::shared_drives::commands::change_drive_member_role,
             crate::shared_drives::commands::list_drive_invites,
+            crate::shared_drives::commands::email_drive_invite,
+            crate::shared_drives::commands::email_invites_available,
+            crate::shared_drives::commands::check_invite_email,
+            crate::shared_drives::commands::approve_email_invite,
+            crate::shared_drives::auto_seal::start_invite_auto_seal,
+            crate::shared_drives::auto_seal::stop_invite_auto_seal,
+            crate::shared_drives::auto_seal::nudge_invite_auto_seal,
             crate::shared_drives::commands::list_owned_drive_sharing,
+            crate::shared_drives::commands::list_owned_folder_sharing,
             crate::shared_drives::commands::list_shared_drive_stats,
             crate::shared_drives::commands::revoke_drive_invite,
             crate::shared_drives::commands::list_my_drive_memberships,
+            crate::shared_drives::commands::list_my_folder_grants,
             crate::shared_drives::commands::leave_shared_drive,
             crate::shared_drives::commands::leave_shared_drive_by_identity,
             crate::shared_drives::commands::add_shared_drive,

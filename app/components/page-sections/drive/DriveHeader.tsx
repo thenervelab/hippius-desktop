@@ -12,6 +12,7 @@ import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
 import DriveSharingHeaderMark from "./DriveSharingHeaderMark";
+import { FolderSharingHeaderMark } from "./FolderSharingMark";
 import SyncFolderBreadcrumb, {
   BreadcrumbSegment,
 } from "./SyncFolderBreadcrumb";
@@ -21,6 +22,7 @@ import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
+import type { UploaderOption } from "./AddedByFilter";
 import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
 import type { DateRange } from "@/app/lib/types/dateRange";
 import { useAtomValue } from "jotai";
@@ -41,7 +43,6 @@ import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
 import RemoteFolderUploadButton from "./RemoteFolderUploadButton";
 import CaptureMenu from "@/app/components/capture/CaptureMenu";
-import { BILLING_ROUTE } from "@/app/lib/routes";
 
 
 const VIEW_TOGGLE_BUTTON_BASE =
@@ -60,6 +61,8 @@ interface DriveHeaderProps {
   isRefetching?: boolean;
   isFetching?: boolean;
   formattedStorageSize: string;
+  /** Console parity — see StorageStateList. Defaults to "Storage Used:". */
+  storageLabel?: string;
   allFilteredDataLength: number;
   viewMode: "list" | "card";
   setViewMode: (mode: "list" | "card") => void;
@@ -106,6 +109,10 @@ interface DriveHeaderProps {
   onExcludedOnlyChange?: (excludedOnly: boolean) => void;
   /** See `shouldOfferExcludedFilter` — hidden on a drive with no rules. */
   showExcludedFilter?: boolean;
+  /** Shared-drive "Added by" options; omit when the drive is not shared. */
+  addedByOptions?: UploaderOption[];
+  selectedUploadedBy?: string;
+  onUploadedByChange?: (ss58: string | undefined) => void;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
@@ -164,6 +171,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   isRefetching = false,
   isFetching = false,
   formattedStorageSize,
+  storageLabel = "Storage Used:",
   allFilteredDataLength,
   viewMode,
   setViewMode,
@@ -190,6 +198,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   onFileSizesChange,
   onExcludedOnlyChange,
   showExcludedFilter = false,
+  addedByOptions,
+  selectedUploadedBy,
+  onUploadedByChange,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
@@ -216,7 +227,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
     onSetFolderUploadOpen ?? setIsFolderUploadOpenLocal;
   const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
-  const { checkEligibility } = useCreditCheck();
+  const { requireUploadRoom } = useCreditCheck();
 
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
@@ -247,8 +258,14 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           <Button
             variant="defaultStable"
             size="auto"
+            disabled={isStorageFull}
             onClick={async () => {
-              if (!(await checkEligibility("folder-upload"))) return;
+              // Disabled when blocked: do not open dialog from the button.
+              // Drag-and-drop still opens the dialog via DriveContent.
+              if (isStorageFull) return;
+              if (!(await requireUploadRoom("folder-upload", false))) {
+                return;
+              }
               if (!hasConfiguredDrives) {
                 toast.warning(
                   "Set up a sync folder in Settings → Sync & Storage before uploading.",
@@ -258,7 +275,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               setIsFolderUploadOpen(true);
             }}
             className={SECONDARY_PILL_CLASSES}
-            title={UPLOAD_FOLDER_LABEL}
+            title={
+              isStorageFull
+                ? "Storage full. Upgrade your plan to upload."
+                : UPLOAD_FOLDER_LABEL
+            }
           >
             <ArrowUpToLine className="size-4 shrink-0" />
             {UPLOAD_FOLDER_BUTTON_LABEL}
@@ -316,11 +337,13 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             label={remoteUpload.label}
             parentPath={remoteUpload.parentPath}
             onUploaded={remoteUpload.onUploaded}
+            storageBlocked={isStorageFull}
           />
           <RemoteUploadButton
             label={remoteUpload.label}
             parentPath={remoteUpload.parentPath}
             onUploaded={remoteUpload.onUploaded}
+            storageBlocked={isStorageFull}
           />
         </>
       )}
@@ -344,6 +367,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         <AddButton
             ref={addButtonRef}
             defaultFolderLabel={defaultFolderLabel}
+            storageBlocked={isStorageFull}
             nestedUpload={
               isNested && nestedFolderName
                 ? {
@@ -357,20 +381,18 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           />
       ) : null}
 
-      {/* Start Syncing button - show for empty sync paths or no sync paths.
-          When the user is out of credits the sync flow is a dead-end (every
-          upload would 402), so the button dims and reroutes to the plans
-          page — same destination as the out-of-storage empty-state CTA. */}
+      {/* Start Syncing: when storage is blocked the control is disabled
+          (not a dialog-on-click). Drops still explain via the dialog. */}
       {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
         <StartSyncingButton
           onClick={
             isStorageFull
-              ? () => push(BILLING_ROUTE)
+              ? undefined
               : isRecentFiles && hasNoSyncPaths
                 ? onNavigateToSettings
                 : onStartSyncing
           }
-          className={isStorageFull ? "opacity-50" : undefined}
+          disabled={isStorageFull}
         />
       )}
 
@@ -493,6 +515,15 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                 displayName={openDriveDisplayName}
                 browsedSharedDrive={browsedSharedDrive}
               />
+              {/* Inside a folder shared on its own, that folder's mark. The
+                  drive mark above counts whole-drive people only, this one
+                  the folder's, so nobody is counted twice. */}
+              {isNested && !browsedSharedDrive ? (
+                <FolderSharingHeaderMark
+                  label={openDriveLabel}
+                  folderPath={nestedSubfolderPath}
+                />
+              ) : null}
             </div>
             <div className="flex items-center gap-3 flex-wrap ml-auto">
               {refreshButton}
@@ -533,6 +564,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   onFileSizesChange={onFileSizesChange}
                   onExcludedOnlyChange={onExcludedOnlyChange}
                   showExcludedFilter={showExcludedFilter}
+                  addedByOptions={addedByOptions}
+                  selectedUploadedBy={selectedUploadedBy}
+                  onUploadedByChange={onUploadedByChange}
                 />
                 <div className="flex items-center gap-3 shrink-0">
                   {/* Stats are hidden inside a nested folder — the totals
@@ -541,6 +575,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   {!isNested && (
                     <StorageStateList
                       storageUsed={formattedStorageSize}
+                      storageLabel={storageLabel}
                       numberOfFiles={allFilteredDataLength || 0}
                     />
                   )}
