@@ -23,8 +23,26 @@ body {
   animation: capture-card-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+/* The time left before a finished card slides away; restarted on leave. */
+@keyframes capture-card-timer {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.capture-card-timer {
+  transform-origin: left;
+  animation: capture-card-timer linear forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .capture-card-enter {
     animation: none;
+  }
+  .capture-card-timer {
+    display: none;
   }
 }

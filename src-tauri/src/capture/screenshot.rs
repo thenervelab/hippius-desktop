@@ -41,7 +41,7 @@ pub fn fresh_capture_dir(root: &Path) -> std::io::Result<PathBuf> {
 
 #[cfg(any(target_os = "macos", windows))]
 mod os {
-    use super::{Path, Selection};
+    use super::Selection;
     use crate::capture::geometry::crop_rect;
     use crate::capture::targets::{DisplayTarget, list_displays};
     use crate::error::{AppError, Result};
@@ -63,9 +63,9 @@ mod os {
         Ok((monitor, target))
     }
 
-    /// Take the screenshot `selection` describes and write it as a PNG at
-    /// `dest`. Blocking: call it from `spawn_blocking`.
-    pub fn capture_to_png(selection: Selection, dest: &Path) -> Result<()> {
+    /// Take the screenshot `selection` describes, in memory. Blocking: call
+    /// it from `spawn_blocking`.
+    pub fn capture_image(selection: Selection) -> Result<image::RgbaImage> {
         let image = match selection {
             Selection::Screen { display_id } => display_by_id(display_id)?.0.capture_image().map_err(|e| capture_err(&e))?,
             Selection::Window { window_id } => xcap::Window::all()
@@ -88,14 +88,30 @@ mod os {
                 xcap::image::imageops::crop_imm(&full, crop.x, crop.y, crop.width, crop.height).to_image()
             }
         };
-        image
-            .save_with_format(dest, xcap::image::ImageFormat::Png)
-            .map_err(|e| AppError::Other(format!("Could not save the screenshot: {e}")))
+        Ok(image)
     }
 }
 
 #[cfg(any(target_os = "macos", windows))]
-pub use os::capture_to_png;
+pub use os::capture_image;
+
+/// Write a screenshot as a PNG. Fast compression: a Retina screenshot at the
+/// default level took most of a second, which the user waited through before
+/// the card appeared; the file is a little larger and loses nothing.
+///
+/// # Errors
+///
+/// [`AppError::Other`] when the file cannot be written.
+pub fn save_png(image: &image::RgbaImage, dest: &Path) -> crate::error::Result<()> {
+    use crate::error::AppError;
+    use image::ImageEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+
+    let file = std::fs::File::create(dest).map_err(|e| AppError::Other(format!("Could not save the screenshot: {e}")))?;
+    PngEncoder::new_with_quality(std::io::BufWriter::new(file), CompressionType::Fast, FilterType::Adaptive)
+        .write_image(image.as_raw(), image.width(), image.height(), image::ExtendedColorType::Rgba8)
+        .map_err(|e| AppError::Other(format!("Could not save the screenshot: {e}")))
+}
 
 #[cfg(test)]
 mod tests {
@@ -135,5 +151,16 @@ mod tests {
         assert_ne!(a, b);
         assert!(a.is_dir() && b.is_dir());
         assert!(a.starts_with(root.path()));
+    }
+
+    /// A fast-compressed PNG is still the exact picture.
+    #[test]
+    fn a_saved_screenshot_reads_back_pixel_for_pixel() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Screenshot.png");
+        let mut img = image::RgbaImage::from_pixel(64, 40, image::Rgba([49, 103, 221, 255]));
+        img.put_pixel(3, 5, image::Rgba([255, 0, 0, 128]));
+        save_png(&img, &path).unwrap();
+        assert_eq!(image::open(&path).unwrap().to_rgba8(), img);
     }
 }

@@ -9,8 +9,12 @@ import type { FileProgress } from "@/app/lib/types/syncSnapshot";
  * for a drive synced here, the sync engine's own row (`sync_progress_snapshot`).
  */
 
-/** How long a finished card stays before it slides away, unless hovered. */
-export const AUTO_HIDE_MS = 6000;
+/**
+ * How long a finished card stays before it slides away. Hovering holds it
+ * for as long as the pointer is on it, and leaving starts the full time
+ * again, so reaching for a button never races the card.
+ */
+export const AUTO_HIDE_MS = 10_000;
 
 export interface CardView {
   /** 0 to 100, or null while nothing has been sent yet. */

@@ -37,8 +37,11 @@ on, window = must be clicked). Window/screen clicks still call `capture_select`.
 The countdown (timer for screenshots, always 3 s for recordings,
 `CaptureOptions::countdown_secs`) runs in the overlay BEFORE it confirms.
 
-**Screenshot:** selection → PNG on `spawn_blocking` → preview card → delivery →
-`capture_delivered` / `capture_failed`.
+**Screenshot:** selection → pixels in memory (`screenshot::capture_image`) and
+the card's JPEG from them (`thumbnail::from_image`) → preview card shown →
+only then the PNG is written (`save_png`, fast compression) → delivery →
+`capture_delivered` / `capture_failed`. Writing and re-decoding the PNG
+before the card cost most of a second on Retina.
 
 **Recording:** same selection, then Rust starts the platform `Recorder`
 (macOS: Swift helper over JSON stdin/stdout) → `/capture-controls` bar
@@ -74,7 +77,9 @@ The pill can hide a bubble (`capture_camera_toggle`), never the stage.
 **Preview card** (`app/capture-preview`, label `capture-preview`, `preview.rs`):
 prewarmed hidden at `capture_start`, shown when the file exists, bottom-right
 of the bar display's WORK area (`work_area`: NSScreen `visibleFrame`, not the
-full display, or it sits under the Dock), `focused(false)` + content-protected.
+full display, or it sits under the Dock), `focused(false)` + content-protected +
+`accept_first_mouse(true)` (never key, so without it every button needed two
+clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered.
 Rust owns its status (`uploading` → `syncing` / `uploaded` / `failed`),
 keyed by a per-capture `id` so a late outcome never lands on a newer card; progress comes from `remote_upload_progress`. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in

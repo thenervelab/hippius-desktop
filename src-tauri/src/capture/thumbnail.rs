@@ -23,6 +23,16 @@ const JPEG_QUALITY: u8 = 80;
 /// [`AppError::Other`] when the file cannot be read or encoded.
 pub fn data_url(path: &Path) -> Result<String> {
     let image = image::open(path).map_err(|e| AppError::Other(format!("Could not read the capture for its preview: {e}")))?;
+    from_image(&image)
+}
+
+/// The same, from a capture still in memory: no second decode of the PNG,
+/// which is what lets the card open before the file is even written.
+///
+/// # Errors
+///
+/// [`AppError::Other`] when the JPEG cannot be encoded.
+pub fn from_image(image: &image::DynamicImage) -> Result<String> {
     let thumb = image.thumbnail(MAX_WIDTH, MAX_HEIGHT).to_rgb8();
     let mut bytes = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(Cursor::new(&mut bytes), JPEG_QUALITY)

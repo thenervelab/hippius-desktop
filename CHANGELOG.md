@@ -164,6 +164,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   drive is synced on this Mac, the file lands in its Captures folder at once and
   syncs from there, so it shows up once in the sync queue instead of twice, and
   the preview card no longer sits under the Dock.
+- **A quicker, easier capture card.** It appears as soon as a screenshot is
+  taken, its buttons work on the first click, clicking the picture opens the
+  folder, and it stays for 10 seconds, or for as long as the pointer is on it.
+- **Capture sits with the upload buttons** on the Drive page, and its menu
+  shows the shortcut as clear, readable keys.
 - **Show in folder from the sync queue.** Each file in the sync widget has a
   folder button that opens the Drive folder it is in, however deep.
 - **Shared with Me is always on the Drive page, with Share a drive.** When

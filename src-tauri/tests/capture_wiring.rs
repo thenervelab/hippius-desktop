@@ -127,6 +127,11 @@ fn the_preview_card_stays_out_of_captures_and_never_takes_focus() {
     let body = fn_body(&src, "fn open_preview_window(");
     assert!(body.contains(".content_protected(true)"), "the card must be excluded from screen capture");
     assert!(body.contains(".focused(false)"), "the card must open without taking focus");
+    // Never key, so without first-mouse its buttons swallow the first click.
+    assert!(
+        body.contains(".accept_first_mouse(true)"),
+        "the card's buttons must answer the first click"
+    );
 }
 
 /// Same silent failure as the overlay: a capability for the wrong label leaves

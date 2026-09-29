@@ -53,7 +53,9 @@ pub const CAMERA_LABEL: &str = "capture-camera";
 
 /// The card's window, in logical points; the card fills it.
 const PREVIEW_WIDTH: f64 = 316.0;
-const PREVIEW_HEIGHT: f64 = 290.0;
+/// Tall enough for the picture, two lines, the progress or timer bar and the
+/// buttons; at 290 the top of the picture was clipped.
+const PREVIEW_HEIGHT: f64 = 330.0;
 /// Gap between the card and the display's bottom-right corner.
 const PREVIEW_MARGIN: f64 = 16.0;
 /// The recording pill's window, in logical points.
@@ -389,6 +391,8 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             .visible_on_all_workspaces(true)
             .content_protected(true)
             .focused(false)
+            // Pause and Stop answer the first click, like the card's buttons.
+            .accept_first_mouse(true)
             .inner_size(CONTROLS_WIDTH, CONTROLS_HEIGHT)
             .visible(false);
         let display = app.state::<AppState>().capture.bar_display.lock().ok().and_then(|g| g.clone());
@@ -780,29 +784,33 @@ async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
     }
 }
 
+/// The pixels are read, the card opens with its picture, and only then is the
+/// PNG written: the card no longer waits for an encode and a second decode.
 async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> {
     let state = app.state::<AppState>();
     let taken = take_screenshot(selection).await;
     restore_own_windows(app, &state.capture);
-    let path = match taken {
-        Ok(path) => path,
-        Err(e) => {
-            drop_unused_preview(app, &state.capture);
-            let _ = advance(app, &state.capture, CaptureEvent::Failed);
-            let _ = app.emit(FAILED_EVENT, FailedPayload { message: e.to_string() });
-            return Err(e);
-        }
-    };
-    advance(app, &state.capture, CaptureEvent::Captured)?;
-
-    let thumbnail = {
-        let path = path.clone();
-        tauri::async_runtime::spawn_blocking(move || super::thumbnail::data_url(&path).ok())
-            .await
-            .ok()
-            .flatten()
+    let (image, thumbnail, path) = match taken {
+        Ok(taken) => taken,
+        Err(e) => return screenshot_failed(app, e),
     };
     let card_id = open_preview(app, CaptureKind::Screenshot, &path, thumbnail).await;
+
+    let written = {
+        let path = path.clone();
+        tauri::async_runtime::spawn_blocking(move || super::screenshot::save_png(&image, &path))
+            .await
+            .map_err(|e| AppError::Other(format!("capture task failed: {e}")))
+            .and_then(|r| r)
+    };
+    if let Err(e) = written {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        close_preview(app, &state.capture);
+        return screenshot_failed(app, e);
+    }
+    advance(app, &state.capture, CaptureEvent::Captured)?;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         deliver_and_announce(&app, &path, card_id).await;
@@ -832,22 +840,13 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
 
     // A still of the first frame, for the preview card once it is saved. Best
     // effort: a recording without a picture on its card is still a recording.
-    let poster = {
-        let poster_path = dir.join("poster.png");
-        tauri::async_runtime::spawn_blocking(move || {
-            let made = capture_blocking(selection, &poster_path)
-                .ok()
-                .and_then(|()| super::thumbnail::data_url(&poster_path).ok());
-            let _ = std::fs::remove_file(&poster_path);
-            made
-        })
-        .await
-        .ok()
-        .flatten()
-    };
-    if let Ok(mut g) = state.capture.poster.lock() {
-        *g = poster;
-    }
+    // Taken in memory and alongside the recorder's start, so it adds nothing
+    // to the wait before recording begins.
+    let poster_task = tauri::async_runtime::spawn_blocking(move || {
+        capture_blocking(selection)
+            .ok()
+            .and_then(|image| super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(image)).ok())
+    });
 
     let started = tauri::async_runtime::spawn_blocking({
         let path = path.clone();
@@ -856,6 +855,11 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     })
     .await
     .map_err(|e| AppError::Other(format!("recording task failed: {e}")))?;
+
+    let poster = poster_task.await.ok().flatten();
+    if let Ok(mut g) = state.capture.poster.lock() {
+        *g = poster;
+    }
 
     let recorder = match started {
         Ok(r) => r,
@@ -923,28 +927,43 @@ fn spawn_tick_loop(app: AppHandle) {
     });
 }
 
-async fn take_screenshot(selection: Selection) -> Result<std::path::PathBuf> {
+fn screenshot_failed(app: &AppHandle, e: AppError) -> Result<()> {
+    let state = app.state::<AppState>();
+    drop_unused_preview(app, &state.capture);
+    let _ = advance(app, &state.capture, CaptureEvent::Failed);
+    let _ = app.emit(FAILED_EVENT, FailedPayload { message: e.to_string() });
+    Err(e)
+}
+
+/// The screenshot in memory, its card picture, and where it will be written.
+async fn take_screenshot(selection: Selection) -> Result<(image::RgbaImage, Option<String>, std::path::PathBuf)> {
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     let name = super::naming::capture_file_name(CaptureKind::Screenshot, chrono::Local::now().naive_local());
     let path = dir.join(name);
-    let dest = path.clone();
-    let written = tauri::async_runtime::spawn_blocking(move || capture_blocking(selection, &dest))
-        .await
-        .map_err(|e| AppError::Other(format!("capture task failed: {e}")))?;
-    if let Err(e) = written {
-        let _ = std::fs::remove_dir_all(&dir);
-        return Err(e);
+    let taken = tauri::async_runtime::spawn_blocking(move || {
+        let image = capture_blocking(selection)?;
+        let thumbnail = super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(image.clone())).ok();
+        Ok::<_, AppError>((image, thumbnail))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("capture task failed: {e}")))
+    .and_then(|r| r);
+    match taken {
+        Ok((image, thumbnail)) => Ok((image, thumbnail, path)),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            Err(e)
+        }
     }
-    Ok(path)
 }
 
 #[cfg(any(target_os = "macos", windows))]
-fn capture_blocking(selection: Selection, dest: &std::path::Path) -> Result<()> {
-    super::screenshot::capture_to_png(selection, dest)
+fn capture_blocking(selection: Selection) -> Result<image::RgbaImage> {
+    super::screenshot::capture_image(selection)
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-fn capture_blocking(_selection: Selection, _dest: &std::path::Path) -> Result<()> {
+fn capture_blocking(_selection: Selection) -> Result<image::RgbaImage> {
     Err(AppError::Validation("Screen capture isn't available on this system yet.".into()))
 }
 
@@ -1265,6 +1284,10 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
         // A card is information, not a dialog: typing carries on in the app
         // the user was in.
         .focused(false)
+        // Without this the card's first click only brings Hippius forward
+        // (the card is never the key window), so Show in folder and Copy
+        // link looked dead: every button needed a second click.
+        .accept_first_mouse(true)
         .visible(false)
         .inner_size(PREVIEW_WIDTH, PREVIEW_HEIGHT);
     if let Some(d) = display {

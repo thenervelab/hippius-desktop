@@ -32,6 +32,8 @@ export default function CapturePreviewPage() {
   const [syncFiles, setSyncFiles] = useState<FileProgress[]>([]);
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
+  // Bumped each time the pointer leaves, so the timer bar starts over.
+  const [timerRun, setTimerRun] = useState(0);
   const cardId = useRef<number | null>(null);
 
   useEffect(() => {
@@ -67,12 +69,14 @@ export default function CapturePreviewPage() {
     if (!done || hovered) return;
     const t = window.setTimeout(dismiss, AUTO_HIDE_MS);
     return () => window.clearTimeout(t);
-  }, [done, hovered, dismiss]);
+  }, [done, hovered, dismiss, timerRun]);
 
   if (!card || !view) return null;
   const { percent, failed } = view;
   const uploaded = done;
   const canCopy = view.linkCopied;
+
+  const showInFolder = () => void showCapturePreviewInFolder().catch(() => undefined);
 
   const copy = () => {
     void copyCapturePreviewLink()
@@ -87,8 +91,15 @@ export default function CapturePreviewPage() {
     <div className="flex h-full w-full items-end justify-end p-1.5">
       <div
         className="capture-card-enter relative w-full overflow-hidden rounded-[14px] border border-white/10 bg-[#1c1d21]/92 p-2.5 text-white shadow-[0_16px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl font-[system-ui,-apple-system,'Segoe_UI',sans-serif]"
+        // Mouse events too: a window that is not key may get no pointer events
+        // on some WebViews, and the hold must work there as well.
         onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
+        onMouseEnter={() => setHovered(true)}
+        onPointerLeave={() => {
+          setHovered(false);
+          setTimerRun((n) => n + 1);
+        }}
+        onMouseLeave={() => setHovered(false)}
         role="status"
         aria-live="polite"
       >
@@ -101,9 +112,15 @@ export default function CapturePreviewPage() {
           <X className="size-3.5" />
         </button>
 
-        <div className="relative aspect-[16/10] w-full overflow-hidden rounded-[9px] bg-white/5">
+        <button
+          type="button"
+          onClick={canRetry(card) ? undefined : showInFolder}
+          aria-label={`Show ${card.fileName} in its folder`}
+          title="Show in folder"
+          className="group relative block aspect-[16/10] w-full overflow-hidden rounded-[9px] bg-white/5 outline-none focus-visible:ring-2 focus-visible:ring-[#5B8BEF]"
+        >
           {card.thumbnail ? (
-            // eslint-disable-next-line @next/next/no-img-element -- a data: URL from Rust; next/image does not apply.
+            // A data: URL from Rust; next/image does not apply.
             <img src={card.thumbnail} alt="" className="size-full object-cover" />
           ) : (
             <div className="grid size-full place-items-center text-white/40">
@@ -115,7 +132,14 @@ export default function CapturePreviewPage() {
               <Video className="size-3" /> Recording
             </span>
           )}
-        </div>
+          {!canRetry(card) && (
+            <span className="pointer-events-none absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition duration-150 group-hover:bg-black/35 group-hover:opacity-100">
+              <span className="flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-[12px] font-medium">
+                <FolderOpen className="size-3.5" /> Show in folder
+              </span>
+            </span>
+          )}
+        </button>
 
         <div className="mt-2.5 flex flex-col gap-1 px-0.5">
           <p className="truncate text-[13px] font-semibold" title={card.fileName}>
@@ -143,6 +167,15 @@ export default function CapturePreviewPage() {
               />
             </div>
           )}
+          {done && !hovered && (
+            <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-white/10" aria-hidden>
+              <div
+                key={timerRun}
+                className="capture-card-timer h-full bg-white/35"
+                style={{ animationDuration: `${AUTO_HIDE_MS}ms` }}
+              />
+            </div>
+          )}
           {card.status.state === "failed" && (
             <p className="line-clamp-2 text-[12px] text-white/55">{card.status.message}</p>
           )}
@@ -160,7 +193,7 @@ export default function CapturePreviewPage() {
           ) : (
             <button
               type="button"
-              onClick={() => void showCapturePreviewInFolder().catch(() => undefined)}
+              onClick={showInFolder}
               className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-[8px] bg-[#3167DD] text-[12px] font-semibold hover:bg-[#2a5bc6]"
             >
               <FolderOpen className="size-3.5" /> Show in folder
