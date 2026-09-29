@@ -480,7 +480,7 @@ describe("folders shared with me (folder roles)", () => {
 
   // Manager is not a folder role (HCFS #475): a holder never manages the
   // folder, whatever role the listing claims.
-  it("shows the folder's own size and file count, and no member count", async () => {
+  it("shows the folder's own size and file count, and no member count when none is sent", async () => {
     folderGrantStatsMock.mockResolvedValue({ fileCount: 3, totalBytes: 2000, truncated: false });
     listSharedDriveStatsMock.mockReturnValue(
       // The DRIVE's totals, which must never stand in for the folder's.
@@ -492,6 +492,24 @@ describe("folders shared with me (folder roles)", () => {
     expect(screen.getByText("2 KB")).toBeInTheDocument();
     expect(folderGrantStatsMock).toHaveBeenCalledWith(OWNER, "0123456789abcdef", "Clients/ACME");
     expect(screen.queryByText("500 files")).not.toBeInTheDocument();
+    expect(screen.queryByText(/member/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [3, "· 3 members"],
+    [1, "· 1 member"],
+  ])("shows the folder's own member count (%i)", async (memberCount, text) => {
+    listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, memberCount }]);
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    expect(screen.getByText((_t, el) => el?.tagName === "SPAN" && el.textContent === text)).toBeInTheDocument();
+  });
+
+  it("draws no member count from a zero", async () => {
+    listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, memberCount: 0 }]);
+    render(<SharedWithMeSection />);
+    await screen.findByText("ACME");
+    expect(screen.getByText("Grace")).toBeInTheDocument();
     expect(screen.queryByText(/member/)).not.toBeInTheDocument();
   });
 
