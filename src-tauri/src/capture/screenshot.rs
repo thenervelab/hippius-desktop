@@ -2,12 +2,12 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::geometry::LogicalRect;
 
 /// What the user chose in the overlay.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "target", rename_all = "camelCase")]
 pub enum Selection {
     /// A dragged rectangle, in `display_id`'s local logical points.

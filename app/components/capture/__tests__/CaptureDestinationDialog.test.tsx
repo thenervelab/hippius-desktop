@@ -25,7 +25,10 @@ function renderOpen(
   resumeKind: "screenshot" | "recording" | null = resumeMode ? "screenshot" : null,
 ) {
   const store = createStore();
-  store.set(captureDialogAtom, { kind: "destination", resumeKind, resumeMode });
+  store.set(captureDialogAtom, {
+    kind: "destination",
+    resume: resumeMode && resumeKind ? { kind: resumeKind, mode: resumeMode } : null,
+  });
   render(
     <Provider store={store}>
       <CaptureDestinationDialog />

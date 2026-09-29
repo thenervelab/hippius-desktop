@@ -662,6 +662,20 @@ fn main() {
             crate::capture::commands::capture_open_permission_settings,
             crate::capture::commands::capture_get_destination,
             crate::capture::commands::capture_set_destination,
+            crate::capture::commands::capture_set_mode,
+            crate::capture::commands::capture_set_pending,
+            crate::capture::commands::capture_confirm,
+            crate::capture::commands::capture_get_options,
+            crate::capture::commands::capture_set_options,
+            crate::capture::commands::capture_destination_choices,
+            crate::capture::commands::capture_preview_context,
+            crate::capture::commands::capture_preview_copy_link,
+            crate::capture::commands::capture_preview_show_in_folder,
+            crate::capture::commands::capture_preview_dismiss,
+            crate::capture::commands::capture_preview_retry,
+            crate::capture::commands::capture_sync_shortcut,
+            crate::capture::commands::capture_get_shortcut,
+            crate::capture::commands::capture_set_shortcut,
             get_platform_info,
             is_app_translocated,
             // Finder extension enablement. Registered on every platform (they
@@ -748,6 +762,12 @@ fn main() {
     // (after `setup`/`on_window_event`) keeps the gate to a single line.
     #[cfg(feature = "e2e-webdriver")]
     let builder = builder.plugin(tauri_plugin_webdriver::init());
+
+    // The capture bar's system-wide shortcut. Registered later, from Rust, once
+    // the saved choice is read (`capture_sync_shortcut`); the plugin only
+    // carries the handler.
+    #[cfg(any(target_os = "macos", windows))]
+    let builder = builder.plugin(crate::capture::shortcut::plugin());
 
     info!("Running Tauri application...");
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");

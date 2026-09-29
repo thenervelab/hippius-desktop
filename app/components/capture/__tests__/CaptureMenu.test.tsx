@@ -8,7 +8,15 @@ import { Provider, createStore } from "jotai";
 import CaptureMenu from "../CaptureMenu";
 import { captureSupportedAtom } from "@/app/lib/capture/captureFlow";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn((cmd: string) =>
+    Promise.resolve(
+      cmd === "capture_get_shortcut"
+        ? { accelerator: "CommandOrControl+Shift+2", defaultAccelerator: "CommandOrControl+Shift+2" }
+        : null,
+    ),
+  ),
+}));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 // Reachability given the feature is on; which lane it is on is pinned by
 // the flag's own tests.

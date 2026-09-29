@@ -50,6 +50,12 @@ const CAPTURE_OVERLAY_ROUTE = "/capture-overlay";
 const CAPTURE_CONTROLS_ROUTE = "/capture-controls";
 
 /**
+ * The capture preview card (`app/capture-preview`), in a screen corner after
+ * a capture. Same provider rules as the overlay: no auth stack, theme only.
+ */
+const CAPTURE_PREVIEW_ROUTE = "/capture-preview";
+
+/**
  * Toaster that follows the user's resolved theme rather than the OS
  * (`theme="system"` reads prefers-color-scheme directly, which diverges
  * when the user forces Light/Dark in settings). The Tailwind `dark:`
@@ -101,7 +107,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     pathname?.startsWith(TRAY_PANEL_ROUTE) ||
     pathname?.startsWith(E2E_ROUTE) ||
     pathname?.startsWith(CAPTURE_OVERLAY_ROUTE) ||
-    pathname?.startsWith(CAPTURE_CONTROLS_ROUTE)
+    pathname?.startsWith(CAPTURE_CONTROLS_ROUTE) ||
+    pathname?.startsWith(CAPTURE_PREVIEW_ROUTE)
   ) {
     // The popover skips the app providers but still mounts the theme
     // provider so it follows the System/Light/Dark preference (shared

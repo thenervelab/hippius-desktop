@@ -270,6 +270,9 @@ objc = "0.2"
 # screenshots through the xdg-desktop-portal instead (follow-up).
 xcap = "0.9"
 keepawake = "=0.6.0"
+# The capture bar's system-wide shortcut (default Cmd/Ctrl+Shift+2), macOS and
+# Windows only like capture itself. Registered from Rust; no JS permission.
+tauri-plugin-global-shortcut = "2"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }

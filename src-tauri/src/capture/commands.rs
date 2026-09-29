@@ -1,22 +1,29 @@
 //! The capture IPCs and the session that ties them together.
 //!
-//! Flow: `capture_start` opens one transparent overlay per display →
-//! the overlay calls `capture_select` (or `capture_cancel`) → a screenshot is
-//! taken at once, or a recording starts with a floating control bar →
-//! delivery runs in the background → `capture_delivered` / `capture_failed`.
-//! Every phase change is broadcast as `capture_state_changed`, which is the
-//! only thing the surfaces read.
+//! Flow: `capture_start` opens one transparent overlay per display, and the
+//! overlay under the pointer draws the capture bar (`bar.rs`). The bar can
+//! switch what is captured (`capture_set_mode`); an area drawn on any display
+//! is held here (`capture_set_pending`) so the bar's Capture button can take
+//! it (`capture_confirm`), and a window or screen click answers directly
+//! (`capture_select`). A screenshot is taken at once, or a recording starts
+//! with a floating control bar. Either way the preview card opens in the
+//! corner (`preview.rs`) while delivery runs in the background →
+//! `capture_delivered` / `capture_failed`. Every phase change is broadcast as
+//! `capture_state_changed`, which is the only thing the surfaces read.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::destination::{self, CaptureDestination};
+use super::bar::{self, CaptureOptions};
+use super::destination::{self, CaptureDestination, DestinationChoice};
+use super::preview::{PreviewCard, PreviewStatus};
 use super::recording::{self, RecordOptions, Recorder};
 use super::screenshot::Selection;
 use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, TransitionError, transition};
+use super::shortcut::{self, ShortcutSetting};
 use super::targets::{DisplayTarget, WindowTarget};
 use crate::app_state::AppState;
 use crate::error::{AppError, NotReadyKind, Result};
@@ -24,11 +31,24 @@ use crate::error::{AppError, NotReadyKind, Result};
 pub const STATE_CHANGED_EVENT: &str = "capture_state_changed";
 pub const DELIVERED_EVENT: &str = "capture_delivered";
 pub const FAILED_EVENT: &str = "capture_failed";
+/// An area was drawn (or cleared) on one display; the others drop theirs.
+pub const PENDING_EVENT: &str = "capture_pending_changed";
+/// The preview card's content changed (new capture, upload finished).
+pub const PREVIEW_EVENT: &str = "capture_preview_changed";
+/// "Show in folder": the main window opens the drive's Captures folder.
+pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
 
 /// Overlay windows are labelled `capture-overlay-<display id>`, which is also
 /// the glob the overlay's capability file grants.
 pub const OVERLAY_LABEL_PREFIX: &str = "capture-overlay-";
 pub const CONTROLS_LABEL: &str = "capture-controls";
+pub const PREVIEW_LABEL: &str = "capture-preview";
+
+/// The card's window, in logical points; the card fills it.
+const PREVIEW_WIDTH: f64 = 316.0;
+const PREVIEW_HEIGHT: f64 = 290.0;
+/// Gap between the card and the display's bottom-right corner.
+const PREVIEW_MARGIN: f64 = 20.0;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -47,6 +67,15 @@ pub struct CaptureState {
     recorder: Mutex<Option<Box<dyn Recorder>>>,
     /// Cancels the elapsed-time tick task.
     tick_cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// The display the capture bar is on; the preview card opens there too.
+    bar_display: Mutex<Option<DisplayTarget>>,
+    /// The area drawn so far, on whichever display, for the Capture button.
+    pending: Mutex<Option<Selection>>,
+    /// A still of a recording's first frame, for its preview card.
+    poster: Mutex<Option<String>>,
+    /// The card in the corner, if one is showing.
+    preview: Mutex<Option<PreviewCard>>,
+    preview_seq: AtomicU64,
 }
 
 impl CaptureState {
@@ -119,22 +148,28 @@ fn close_controls(app: &AppHandle) {
     }
 }
 
-/// Start a capture: check it can happen, then put an overlay on every display.
+/// Start a capture: check it can happen, then put an overlay on every display
+/// with the capture bar on the one under the pointer.
+///
+/// `kind` and `mode` preselect the bar (a Capture menu item, the tray); left
+/// out, the bar opens on whatever was used last.
 ///
 /// Refusals are structured so the UI can answer each one:
 /// `NotReady(CaptureDestinationUnset)` → the drive picker,
 /// `NotReady(ScreenRecordingPermission)` → the permission explainer.
 /// A capture already in progress is brought forward, not refused.
 #[tauri::command]
-pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, kind: CaptureKind, mode: CaptureMode) -> Result<()> {
+pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, kind: Option<CaptureKind>, mode: Option<CaptureMode>) -> Result<()> {
     if !CAPTURE_SUPPORTED {
         return Err(AppError::Validation("Screen capture isn't available on this system yet.".into()));
     }
-    if kind == CaptureKind::Recording && !recording::recording_supported() {
+    let recording_ok = recording::recording_supported();
+    if kind == Some(CaptureKind::Recording) && !recording_ok {
         return Err(AppError::Validation("Screen recording isn't available on this system yet.".into()));
     }
     let account_id = state.current_account_id()?;
-    if destination::load(state.pool()?, &account_id).await?.is_none() {
+    let pool = state.pool()?;
+    if destination::load(pool, &account_id).await?.is_none() {
         return Err(AppError::NotReady(NotReadyKind::CaptureDestinationUnset));
     }
     if !super::permissions::screen_capture_granted() {
@@ -142,6 +177,15 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         super::permissions::request_screen_capture();
         return Err(AppError::NotReady(NotReadyKind::ScreenRecordingPermission));
     }
+
+    let mut options = bar::load_options(pool).await?;
+    let kind = match kind {
+        Some(k) => k,
+        // Last time was a recording on a Mac that has since lost the helper.
+        None if options.last_kind == CaptureKind::Recording && !recording_ok => CaptureKind::Screenshot,
+        None => options.last_kind,
+    };
+    let mode = mode.unwrap_or(options.last_mode);
 
     match advance(&app, &state.capture, CaptureEvent::Start { kind, mode }) {
         Ok(_) => {}
@@ -151,9 +195,17 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         }
         Err(e) => return Err(e),
     }
+    if (options.last_kind, options.last_mode) != (kind, mode) {
+        options.last_kind = kind;
+        options.last_mode = mode;
+        if let Err(e) = bar::save_options(pool, options).await {
+            tracing::warn!(error = %e, "capture bar: last mode not remembered");
+        }
+    }
 
+    close_preview(&app, &state.capture);
     hide_own_windows(&app, &state.capture);
-    let opened = open_capture_ui(&app, mode).await;
+    let opened = open_capture_ui(&app, &state.capture).await;
     if let Err(e) = opened {
         close_overlays(&app);
         restore_own_windows(&app, &state.capture);
@@ -174,22 +226,50 @@ fn focus_active_ui(app: &AppHandle, state: &CaptureState) {
     }
 }
 
-/// Put up the overlays — or, for a whole screen on a single display, skip
-/// the choice nobody needs to make and capture straight away.
-async fn open_capture_ui(app: &AppHandle, mode: CaptureMode) -> Result<()> {
+/// Put an overlay on every display and choose which one carries the bar.
+async fn open_capture_ui(app: &AppHandle, state: &CaptureState) -> Result<()> {
     let displays = tauri::async_runtime::spawn_blocking(list_displays_blocking)
         .await
         .map_err(|e| AppError::Other(format!("display listing task failed: {e}")))??;
     if displays.is_empty() {
         return Err(AppError::Other("No display to capture.".into()));
     }
-    if mode == CaptureMode::Screen && displays.len() == 1 {
-        return select_inner(app, Selection::Screen { display_id: displays[0].id }).await;
+    let host = bar::bar_display(&displays, cursor_point(app, &displays));
+    if let Ok(mut g) = state.bar_display.lock() {
+        *g = displays.iter().find(|d| Some(d.id) == host).cloned();
+    }
+    if let Ok(mut g) = state.pending.lock() {
+        *g = None;
     }
     for display in &displays {
         open_overlay(app, display)?;
     }
     Ok(())
+}
+
+/// The pointer, in the displays' own space: points with a top-left origin on
+/// macOS (AppKit reports bottom-left, y up, from the primary display), and
+/// physical pixels on Windows, as `targets::list_displays` reports them.
+#[cfg(target_os = "macos")]
+fn cursor_point(_app: &AppHandle, displays: &[DisplayTarget]) -> Option<(f64, f64)> {
+    use cocoa::foundation::NSPoint;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let primary = displays.iter().find(|d| d.is_primary).or_else(|| displays.first())?;
+    // SAFETY: `+[NSEvent mouseLocation]` is a class method that only reads
+    // the current pointer position and returns it by value.
+    let p: NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
+    Some((p.x, f64::from(primary.height) - p.y))
+}
+
+#[cfg(windows)]
+fn cursor_point(app: &AppHandle, _displays: &[DisplayTarget]) -> Option<(f64, f64)> {
+    app.cursor_position().ok().map(|p| (p.x, p.y))
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn cursor_point(_app: &AppHandle, _displays: &[DisplayTarget]) -> Option<(f64, f64)> {
+    None
 }
 
 #[cfg(any(target_os = "macos", windows))]
@@ -316,7 +396,7 @@ fn focus_overlays(app: &AppHandle) {
     }
 }
 
-/// What an overlay needs to draw itself.
+/// What an overlay needs to draw itself, and the capture bar with it.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayContext {
@@ -325,6 +405,17 @@ pub struct OverlayContext {
     pub kind: CaptureKind,
     /// Pickable windows on this display, front first — only in window mode.
     pub windows: Vec<WindowTarget>,
+    /// Whether this overlay draws the capture bar (one display does).
+    pub hosts_bar: bool,
+    pub options: CaptureOptions,
+    /// Seconds to count down once Capture / Record is pressed.
+    pub countdown_secs: u8,
+    pub recording_available: bool,
+    pub microphone_available: bool,
+    pub show_clicks_available: bool,
+    pub destination: Option<CaptureDestination>,
+    /// The area already drawn, on this display or another.
+    pub pending: Option<Selection>,
 }
 
 #[tauri::command]
@@ -339,12 +430,109 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
     } else {
         Vec::new()
     };
+    let pool = state.pool()?;
+    let options = bar::load_options(pool).await?;
+    let destination = match state.current_account_id() {
+        Ok(account_id) => destination::load(pool, &account_id).await?,
+        Err(_) => None,
+    };
+    let hosts_bar = state
+        .capture
+        .bar_display
+        .lock()
+        .is_ok_and(|g| g.as_ref().is_some_and(|d| d.id == display_id));
+    let pending = state.capture.pending.lock().ok().and_then(|g| *g);
     Ok(OverlayContext {
         mode,
         display_id,
         kind,
         windows,
+        hosts_bar,
+        countdown_secs: options.countdown_secs(kind),
+        options,
+        recording_available: recording::recording_supported(),
+        microphone_available: recording::microphone_supported(),
+        show_clicks_available: recording::show_clicks_supported(),
+        destination,
+        pending,
     })
+}
+
+/// The capture bar switched what to capture. The overlays re-read their
+/// context on the state event, and the choice is remembered for next time.
+#[tauri::command]
+pub async fn capture_set_mode(state: tauri::State<'_, AppState>, app: AppHandle, kind: CaptureKind, mode: CaptureMode) -> Result<()> {
+    if kind == CaptureKind::Recording && !recording::recording_supported() {
+        return Err(AppError::Validation("Screen recording isn't available on this system yet.".into()));
+    }
+    advance(&app, &state.capture, CaptureEvent::SetMode { kind, mode })?;
+    let pool = state.pool()?;
+    let options = CaptureOptions {
+        last_kind: kind,
+        last_mode: mode,
+        ..bar::load_options(pool).await?
+    };
+    bar::save_options(pool, options).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingPayload {
+    /// The display holding the drawn area, or `None` when it was cleared.
+    display_id: Option<u32>,
+}
+
+/// An overlay drew, moved or cleared its area. One area at a time: the other
+/// displays drop theirs on [`PENDING_EVENT`].
+#[tauri::command]
+pub fn capture_set_pending(state: tauri::State<'_, AppState>, app: AppHandle, selection: Option<Selection>) -> Result<()> {
+    if !matches!(state.capture.current(), CapturePhase::Selecting { .. }) {
+        return Err(AppError::Validation("No capture is waiting for a selection.".into()));
+    }
+    let display_id = match selection {
+        None => None,
+        Some(Selection::Area { display_id, .. }) => Some(display_id),
+        Some(_) => return Err(AppError::Validation("Only an area can be held for the Capture button.".into())),
+    };
+    {
+        let mut g = state.capture.pending.lock()?;
+        *g = selection;
+    }
+    let _ = app.emit(PENDING_EVENT, PendingPayload { display_id });
+    Ok(())
+}
+
+/// The bar's Capture / Record button, pressed on `display_id`.
+#[tauri::command]
+pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
+    let state = app.state::<AppState>();
+    let CapturePhase::Selecting { mode, .. } = state.capture.current() else {
+        return Err(AppError::Validation("No capture is waiting for a selection.".into()));
+    };
+    let pending = state.capture.pending.lock().ok().and_then(|g| *g);
+    let selection = bar::resolve_confirm(mode, pending, display_id).map_err(|e| AppError::Validation(e.to_string()))?;
+    select_inner(&app, selection).await
+}
+
+#[tauri::command]
+pub async fn capture_get_options(state: tauri::State<'_, AppState>) -> Result<CaptureOptions> {
+    bar::load_options(state.pool()?).await
+}
+
+/// Save the bar's Options menu. Returns what was stored (the timer snapped to
+/// a choice the bar offers).
+#[tauri::command]
+pub async fn capture_set_options(state: tauri::State<'_, AppState>, options: CaptureOptions) -> Result<CaptureOptions> {
+    let options = options.normalized();
+    bar::save_options(state.pool()?, options).await?;
+    Ok(options)
+}
+
+/// The drives "Save to" offers: this account's own, synced here or not.
+#[tauri::command]
+pub async fn capture_destination_choices(state: tauri::State<'_, AppState>) -> Result<Vec<DestinationChoice>> {
+    let account_id = state.current_account_id()?;
+    destination::choices(state.pool()?, &account_id).await
 }
 
 #[cfg(any(target_os = "macos", windows))]
@@ -373,6 +561,9 @@ async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
         return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
     advance(app, &state.capture, CaptureEvent::Selected)?;
+    if let Ok(mut g) = state.capture.pending.lock() {
+        *g = None;
+    }
     close_overlays(app);
 
     match kind {
@@ -395,9 +586,17 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     };
     advance(app, &state.capture, CaptureEvent::Captured)?;
 
+    let thumbnail = {
+        let path = path.clone();
+        tauri::async_runtime::spawn_blocking(move || super::thumbnail::data_url(&path).ok())
+            .await
+            .ok()
+            .flatten()
+    };
+    let card_id = open_preview(app, CaptureKind::Screenshot, &path, thumbnail).await;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        deliver_and_announce(&app, &path).await;
+        deliver_and_announce(&app, &path, card_id).await;
         let state = app.state::<AppState>();
         let _ = advance(&app, &state.capture, CaptureEvent::Finished);
     });
@@ -406,10 +605,33 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
 
 async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     let state = app.state::<AppState>();
-    let options = RecordOptions { microphone: true };
+    let saved = bar::load_options(state.pool()?).await.unwrap_or_default();
+    let options = RecordOptions {
+        microphone: saved.microphone && recording::microphone_supported(),
+        show_clicks: saved.show_clicks && recording::show_clicks_supported(),
+    };
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     let name = super::naming::capture_file_name(CaptureKind::Recording, chrono::Local::now().naive_local());
     let path = dir.join(name);
+
+    // A still of the first frame, for the preview card once it is saved. Best
+    // effort: a recording without a picture on its card is still a recording.
+    let poster = {
+        let poster_path = dir.join("poster.png");
+        tauri::async_runtime::spawn_blocking(move || {
+            let made = capture_blocking(selection, &poster_path)
+                .ok()
+                .and_then(|()| super::thumbnail::data_url(&poster_path).ok());
+            let _ = std::fs::remove_file(&poster_path);
+            made
+        })
+        .await
+        .ok()
+        .flatten()
+    };
+    if let Ok(mut g) = state.capture.poster.lock() {
+        *g = poster;
+    }
 
     let started = tauri::async_runtime::spawn_blocking({
         let path = path.clone();
@@ -512,7 +734,10 @@ struct FailedPayload {
     message: String,
 }
 
-async fn deliver_and_announce(app: &AppHandle, path: &std::path::Path) {
+/// Upload the capture and mint its link, then say how it went: on the preview
+/// card when one is showing (`card_id`), and as a system notification only
+/// when the upload failed, since the card already shows a success.
+async fn deliver_and_announce(app: &AppHandle, path: &std::path::Path, card_id: Option<u64>) {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     use tauri_plugin_notification::NotificationExt;
 
@@ -526,28 +751,46 @@ async fn deliver_and_announce(app: &AppHandle, path: &std::path::Path) {
     }
     .await;
 
-    let (title, body) = match &outcome {
+    match &outcome {
         Ok(delivered) => {
-            if let Some(url) = &delivered.share_url
-                && let Err(e) = app.clipboard().write_text(url.clone())
-            {
-                tracing::warn!(error = %e, "capture link minted but not copied");
+            let mut copied = false;
+            if let Some(url) = &delivered.share_url {
+                if let Err(e) = app.clipboard().write_text(url.clone()) {
+                    tracing::warn!(error = %e, "capture link minted but not copied");
+                } else {
+                    copied = true;
+                }
             }
             // The upload landed, so the plaintext copy has served its purpose.
             if let Some(dir) = path.parent() {
                 let _ = std::fs::remove_dir_all(dir);
             }
             let _ = app.emit(DELIVERED_EVENT, delivered);
-            super::deliver::delivered_notice(delivered)
+            let status = PreviewStatus::Uploaded {
+                link_copied: copied,
+                link_error: delivered.link_error.clone(),
+            };
+            let shown = card_id.is_some_and(|id| set_preview_outcome(app, &state.capture, id, status, delivered.share_url.clone()));
+            if !shown {
+                let (title, body) = super::deliver::delivered_notice(delivered);
+                notify(app, title, body);
+            }
         }
         Err(e) => {
             tracing::warn!(error = %e, "capture could not be delivered; kept on disk");
             let _ = app.emit(FAILED_EVENT, FailedPayload { message: e.to_string() });
-            super::deliver::failed_notice(e, path)
+            if let Some(id) = card_id {
+                set_preview_outcome(app, &state.capture, id, PreviewStatus::Failed { message: e.to_string() }, None);
+            }
+            let (title, body) = super::deliver::failed_notice(e, path);
+            notify(app, title, body);
         }
-    };
-    if let Err(e) = app.notification().builder().title(title).body(body).show() {
-        tracing::warn!(error = %e, "capture notification not shown");
+    }
+
+    fn notify(app: &AppHandle, title: String, body: String) {
+        if let Err(e) = app.notification().builder().title(title).body(body).show() {
+            tracing::warn!(error = %e, "capture notification not shown");
+        }
     }
 }
 
@@ -602,9 +845,11 @@ pub async fn capture_stop(state: tauri::State<'_, AppState>, app: AppHandle) -> 
     };
     advance(&app, &state.capture, CaptureEvent::Captured)?;
 
+    let poster = state.capture.poster.lock().ok().and_then(|mut g| g.take());
+    let card_id = open_preview(&app, CaptureKind::Recording, &path, poster).await;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        deliver_and_announce(&app, &path).await;
+        deliver_and_announce(&app, &path, card_id).await;
         let state = app.state::<AppState>();
         let _ = advance(&app, &state.capture, CaptureEvent::Finished);
     });
@@ -670,4 +915,236 @@ pub async fn capture_get_destination(state: tauri::State<'_, AppState>) -> Resul
 pub async fn capture_set_destination(state: tauri::State<'_, AppState>, destination: CaptureDestination) -> Result<()> {
     let account_id = state.current_account_id()?;
     destination::save(state.pool()?, &account_id, &destination).await
+}
+
+// ── The preview card ────────────────────────────────────────────────────────
+
+/// Show the card for a capture that is about to upload. Returns its id, or
+/// `None` when the card could not be opened (the notification covers it).
+async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &std::path::Path, thumbnail: Option<String>) -> Option<u64> {
+    let state = app.state::<AppState>();
+    let account_id = state.current_account_id().ok()?;
+    let pool = state.pool().ok()?;
+    let destination = destination::load(pool, &account_id).await.ok().flatten()?;
+    let remote = !destination::is_local(pool, &account_id, &destination.label).await;
+    let file_name = path.file_name()?.to_str()?.to_string();
+
+    let id = state.capture.preview_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    let card = PreviewCard {
+        id,
+        kind,
+        file_name,
+        drive_label: destination.label.clone(),
+        drive_name: destination.display_name.clone(),
+        remote,
+        thumbnail,
+        status: PreviewStatus::Uploading,
+        share_url: None,
+        file_path: path.to_path_buf(),
+    };
+    if let Ok(mut g) = state.capture.preview.lock() {
+        *g = Some(card.clone());
+    }
+    let display = state.capture.bar_display.lock().ok().and_then(|g| g.clone());
+    if let Err(e) = open_preview_window(app, display.as_ref()) {
+        tracing::warn!(error = %e, "capture preview card could not open");
+        return None;
+    }
+    let _ = app.emit(PREVIEW_EVENT, Some(&card));
+    Some(id)
+}
+
+/// Record how card `id`'s upload went, if it is still the card on screen.
+/// Returns whether it was.
+fn set_preview_outcome(app: &AppHandle, state: &CaptureState, id: u64, status: PreviewStatus, share_url: Option<String>) -> bool {
+    let updated = {
+        let Ok(mut g) = state.preview.lock() else { return false };
+        let Some(next) = g.as_ref().and_then(|c| c.with_outcome(id, status, share_url)) else {
+            return false;
+        };
+        *g = Some(next.clone());
+        next
+    };
+    let _ = app.emit(PREVIEW_EVENT, Some(&updated));
+    app.get_webview_window(PREVIEW_LABEL).is_some()
+}
+
+fn close_preview(app: &AppHandle, state: &CaptureState) {
+    if let Ok(mut g) = state.preview.lock() {
+        *g = None;
+    }
+    if let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
+        let _ = w.close();
+    }
+}
+
+/// The card's window in the bottom-right corner of `display` (the one the
+/// capture bar was on), without taking focus from the app the user is in.
+fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Result<()> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    if app.get_webview_window(PREVIEW_LABEL).is_some() {
+        return Ok(());
+    }
+    let route = if cfg!(dev) { "capture-preview" } else { "capture-preview.html" };
+    let mut builder = WebviewWindowBuilder::new(app, PREVIEW_LABEL, WebviewUrl::App(route.into()))
+        .title("Hippius capture")
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        // Out of any later screenshot or recording, like the bar itself.
+        .content_protected(true)
+        // A card is information, not a dialog: typing carries on in the app
+        // the user was in.
+        .focused(false)
+        .inner_size(PREVIEW_WIDTH, PREVIEW_HEIGHT);
+    if let Some(d) = display {
+        // Logical points for the builder. On Windows the display is in
+        // physical pixels, so scale it down by that display's own factor.
+        let scale = if super::targets::COORDS_ARE_LOGICAL {
+            1.0
+        } else {
+            d.scale_factor.max(1.0)
+        };
+        let right = (f64::from(d.x) + f64::from(d.width)) / scale;
+        let bottom = (f64::from(d.y) + f64::from(d.height)) / scale;
+        builder = builder.position(right - PREVIEW_WIDTH - PREVIEW_MARGIN, bottom - PREVIEW_HEIGHT - PREVIEW_MARGIN);
+    }
+    builder
+        .build()
+        .map_err(|e| AppError::Other(format!("Could not open the capture preview: {e}")))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn capture_preview_context(state: tauri::State<'_, AppState>) -> Option<PreviewCard> {
+    state.capture.preview.lock().ok().and_then(|g| g.clone())
+}
+
+/// Copy link on the card: the link minted for this capture, again.
+#[tauri::command]
+pub fn capture_preview_copy_link(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let url = state
+        .capture
+        .preview
+        .lock()?
+        .as_ref()
+        .and_then(|c| c.share_url.clone())
+        .ok_or_else(|| AppError::Validation("This capture has no link yet.".into()))?;
+    app.clipboard()
+        .write_text(url)
+        .map_err(|e| AppError::Other(format!("Could not copy the link: {e}")))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowInFolderPayload {
+    label: String,
+    remote: bool,
+    subfolder: String,
+    file_name: String,
+}
+
+/// Show in folder: bring Hippius forward on the drive's Captures folder.
+#[tauri::command]
+pub fn capture_preview_show_in_folder(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    let card = state
+        .capture
+        .preview
+        .lock()?
+        .clone()
+        .ok_or_else(|| AppError::Validation("There is no capture to show.".into()))?;
+    if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = main.unminimize();
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    let _ = app.emit(
+        SHOW_IN_FOLDER_EVENT,
+        ShowInFolderPayload {
+            label: card.drive_label,
+            remote: card.remote,
+            subfolder: super::naming::CAPTURES_FOLDER.to_string(),
+            file_name: card.file_name,
+        },
+    );
+    close_preview(&app, &state.capture);
+    Ok(())
+}
+
+/// The card closed itself (its timer, or ×). Only card `id`: a newer card that
+/// opened in the meantime stays.
+#[tauri::command]
+pub fn capture_preview_dismiss(state: tauri::State<'_, AppState>, app: AppHandle, id: u64) {
+    let current = state.capture.preview.lock().ok().and_then(|g| g.as_ref().map(|c| c.id));
+    if current == Some(id) {
+        close_preview(&app, &state.capture);
+    }
+}
+
+/// Retry on a card whose upload failed: the same file, the same way.
+#[tauri::command]
+pub fn capture_preview_retry(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    let card = {
+        let mut g = state.capture.preview.lock()?;
+        let card = g
+            .as_ref()
+            .filter(|c| c.can_retry())
+            .cloned()
+            .ok_or_else(|| AppError::Validation("There is nothing to retry.".into()))?;
+        let uploading = PreviewCard {
+            status: PreviewStatus::Uploading,
+            ..card
+        };
+        *g = Some(uploading.clone());
+        uploading
+    };
+    let _ = app.emit(PREVIEW_EVENT, Some(&card));
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        deliver_and_announce(&app, &card.file_path, Some(card.id)).await;
+    });
+    Ok(())
+}
+
+// ── The system-wide shortcut ────────────────────────────────────────────────
+
+/// Register the saved shortcut. Called when the signed-in app mounts; a
+/// shortcut another app took since is logged, not raised, so start-up never
+/// fails over it (Settings says so when the user looks).
+#[tauri::command]
+pub async fn capture_sync_shortcut(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    let accelerator = shortcut::load(state.pool()?).await?;
+    if let Err(e) = shortcut::apply(&app, accelerator.as_deref()) {
+        tracing::warn!(error = %e, "capture shortcut not registered");
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>) -> Result<ShortcutSetting> {
+    Ok(ShortcutSetting {
+        accelerator: shortcut::load(state.pool()?).await?,
+        default_accelerator: shortcut::DEFAULT_SHORTCUT.to_string(),
+    })
+}
+
+/// Change the shortcut (`None` turns it off). Registered before it is saved,
+/// so a shortcut another app holds is refused and the old one stays.
+#[tauri::command]
+pub async fn capture_set_shortcut(state: tauri::State<'_, AppState>, app: AppHandle, accelerator: Option<String>) -> Result<()> {
+    let pool = state.pool()?;
+    let previous = shortcut::load(pool).await?;
+    let next = accelerator.as_deref().map(str::trim).filter(|a| !a.is_empty());
+    if let Err(e) = shortcut::apply(&app, next) {
+        let _ = shortcut::apply(&app, previous.as_deref());
+        return Err(e);
+    }
+    shortcut::save(pool, next).await
 }

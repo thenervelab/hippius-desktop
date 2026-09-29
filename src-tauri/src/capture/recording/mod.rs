@@ -23,11 +23,40 @@ use crate::error::AppError;
 pub struct RecordOptions {
     /// Capture the default microphone into the MP4 when the platform can.
     pub microphone: bool,
+    /// Draw a ring where the pointer clicks, when the platform can.
+    pub show_clicks: bool,
 }
 
 impl Default for RecordOptions {
     fn default() -> Self {
-        Self { microphone: true }
+        Self {
+            microphone: true,
+            show_clicks: false,
+        }
+    }
+}
+
+/// Whether the platform can draw click rings into a recording.
+pub fn show_clicks_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::show_clicks_supported()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Whether the platform can record the microphone with a recording.
+pub fn microphone_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::microphone_supported()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
     }
 }
 

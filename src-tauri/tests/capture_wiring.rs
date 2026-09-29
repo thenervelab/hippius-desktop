@@ -117,3 +117,82 @@ fn the_temp_copy_is_removed_only_after_the_upload_lands() {
     assert!(ok_arm < removal && removal < err_arm, "remove_dir_all must sit in the success arm only");
     assert_eq!(body.matches("remove_dir_all").count(), 1, "exactly one removal, on success");
 }
+
+/// The preview card floats over whatever the user captures next, and it is
+/// information, not a dialog: it must stay out of captures and must not take
+/// the keyboard from the app the user is typing in.
+#[test]
+fn the_preview_card_stays_out_of_captures_and_never_takes_focus() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "fn open_preview_window(");
+    assert!(body.contains(".content_protected(true)"), "the card must be excluded from screen capture");
+    assert!(body.contains(".focused(false)"), "the card must open without taking focus");
+}
+
+/// Same silent failure as the overlay: a capability for the wrong label leaves
+/// the card with no event permission, so it never learns the upload finished.
+#[test]
+fn the_preview_capability_matches_its_label_and_holds_core_only() {
+    let src = read("src/capture/commands.rs");
+    let label = src
+        .lines()
+        .find(|l| l.contains("pub const PREVIEW_LABEL"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("PREVIEW_LABEL is declared");
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-preview.json")).expect("capability parses");
+    let windows: Vec<&str> = capability["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    assert_eq!(windows, vec![label], "capture-preview.json must grant exactly the card's window");
+    for permission in capability["permissions"].as_array().expect("permissions") {
+        let name = permission.as_str().unwrap_or_default();
+        assert!(
+            name.starts_with("core:"),
+            "the capture card must hold core permissions only, found {name}"
+        );
+    }
+    let conf = read("tauri.conf.json");
+    assert!(
+        conf.contains("\"capture-preview\""),
+        "tauri.conf.json must list the capture-preview capability"
+    );
+}
+
+/// A command that is declared but not registered fails only when the surface
+/// that calls it is used, with "command not found" in a window nobody watches.
+#[test]
+fn every_capture_command_is_registered() {
+    let src = read("src/capture/commands.rs");
+    let main = read("src/main.rs");
+    let mut found = 0;
+    let lines: Vec<&str> = src.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() != "#[tauri::command]" {
+            continue;
+        }
+        let sig = lines.get(i + 1).copied().unwrap_or_default();
+        let name = sig
+            .split("fn ")
+            .nth(1)
+            .and_then(|rest| rest.split(['(', '<']).next())
+            .expect("a command signature follows #[tauri::command]");
+        found += 1;
+        assert!(
+            main.contains(&format!("crate::capture::commands::{name},")),
+            "{name} is a capture command but main.rs does not register it"
+        );
+    }
+    assert!(found >= 25, "expected the capture commands to be found, got {found}");
+}
+
+/// Retry on the card sends the same file the same way, never a second path.
+#[test]
+fn retry_goes_through_the_same_delivery() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "pub fn capture_preview_retry(");
+    assert!(body.contains("deliver_and_announce("), "Retry must reuse deliver_and_announce");
+    assert!(body.contains("can_retry()"), "only a failed upload can be retried");
+}

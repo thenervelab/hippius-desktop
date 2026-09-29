@@ -141,8 +141,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (_event: string, handler: (e: { payload: unknown }) => void) => {
-    mocks.setSnapshotListener(handler);
+  listen: vi.fn(async (event: string, handler: (e: { payload: unknown }) => void) => {
+    // Only the snapshot watcher's handler: the tray also listens for the
+    // capture state (recording time in the menu bar).
+    if (event === "sync_progress_snapshot") mocks.setSnapshotListener(handler);
     return () => {
       /* noop unlisten */
     };

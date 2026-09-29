@@ -719,8 +719,8 @@ function TrayCaptureButton() {
     <button
       type="button"
       onClick={() => void captureFromTray()}
-      aria-label="Capture an area of the screen"
-      title="Capture an area"
+      aria-label="Capture or record the screen"
+      title="Capture or record (opens the capture bar)"
       className="relative flex h-9 w-9 items-center justify-center rounded-lg text-black transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/10"
     >
       <Camera className="size-[14px] shrink-0 opacity-40" />
@@ -731,7 +731,8 @@ function TrayCaptureButton() {
 async function captureFromTray() {
   try {
     await invoke("hide_tray_panel");
-    await emit("hippius:tray-capture", { mode: "area" });
+    // No mode: the capture bar opens on whatever was used last.
+    await emit("hippius:tray-capture", {});
   } catch (error) {
     console.error("[TrayPanel] Failed to start a capture:", error);
   }

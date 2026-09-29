@@ -65,6 +65,77 @@ pub async fn save(pool: &SqlitePool, account_id: &str, destination: &CaptureDest
     crate::utils::preferences::save_user_preference_internal(pool, &key_for(account_id), &value).await
 }
 
+/// A drive the capture bar offers under "Save to", with whether it is synced
+/// on this machine. `remote` is what decides how "Show in folder" opens it:
+/// a synced drive and a server-only one open through different paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DestinationChoice {
+    pub label: String,
+    pub remote: bool,
+}
+
+/// Own drives synced here first, then own drives only on the server, each
+/// once. A drive synced here is also on the server; listing it twice would
+/// offer one drive by two routes.
+#[must_use]
+pub fn merge_choices(local: Vec<String>, remote: Vec<String>) -> Vec<DestinationChoice> {
+    let mut out: Vec<DestinationChoice> = Vec::with_capacity(local.len() + remote.len());
+    for label in local {
+        if !label.trim().is_empty() && !out.iter().any(|c| c.label == label) {
+            out.push(DestinationChoice { label, remote: false });
+        }
+    }
+    for label in remote {
+        if !label.trim().is_empty() && !out.iter().any(|c| c.label == label) {
+            out.push(DestinationChoice { label, remote: true });
+        }
+    }
+    out
+}
+
+/// This account's own drives synced on this machine, paused ones included (a
+/// capture uploads straight to the server, so pausing sync does not stop it).
+/// Drives shared with this account and the migration pseudo-drive are not
+/// offered: captures go to a drive the user owns.
+pub async fn own_local_labels(pool: &SqlitePool, account_id: &str) -> Result<Vec<String>> {
+    use sqlx::Row;
+    let owner = crate::auth::account_key::account_key(account_id);
+    let rows = sqlx::query(
+        "SELECT label FROM sync_paths
+         WHERE owner = ?
+           AND label != 'migration'
+           AND owner_ss58 IS NULL
+           AND wire_folder_hash IS NULL
+         ORDER BY label",
+    )
+    .bind(&owner)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(|row| row.get::<String, _>("label")).collect())
+}
+
+/// Every drive the capture bar can save to. The server half degrades to
+/// nothing when it cannot be read, so the synced drives are still offered.
+pub async fn choices(pool: &SqlitePool, account_id: &str) -> Result<Vec<DestinationChoice>> {
+    let local = own_local_labels(pool, account_id).await?;
+    let remote = match crate::sync::folders::list_remote_folders_internal(pool, account_id).await {
+        Ok(folders) => folders.into_iter().map(|f| f.label).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "capture drive list: remote drives unavailable, offering synced drives only");
+            Vec::new()
+        }
+    };
+    Ok(merge_choices(local, remote))
+}
+
+/// Whether `label` is one of this account's drives synced here.
+pub async fn is_local(pool: &SqlitePool, account_id: &str, label: &str) -> bool {
+    own_local_labels(pool, account_id)
+        .await
+        .is_ok_and(|labels| labels.iter().any(|l| l == label))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +184,60 @@ mod tests {
         };
         assert!(matches!(save(&pool, "5Alice", &half).await, Err(AppError::Validation(_))));
         assert_eq!(load(&pool, "5Alice").await.unwrap(), None);
+    }
+
+    #[test]
+    fn choices_list_synced_drives_first_and_each_drive_once() {
+        let merged = merge_choices(
+            vec!["Work".into(), "Photos".into()],
+            vec!["Photos".into(), "Archive".into(), String::new(), "Work".into()],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                DestinationChoice {
+                    label: "Work".into(),
+                    remote: false
+                },
+                DestinationChoice {
+                    label: "Photos".into(),
+                    remote: false
+                },
+                DestinationChoice {
+                    label: "Archive".into(),
+                    remote: true
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn only_own_drives_are_offered_and_paused_ones_count() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::utils::schema::ensure_table_schema(&pool).await.unwrap();
+        let owner = crate::auth::account_key::account_key("5Alice");
+        for (label, member, paused) in [("Work", false, 0), ("Paused", false, 1), ("Team", true, 0), ("migration", false, 0)] {
+            sqlx::query(
+                "INSERT INTO sync_paths (owner, path, type, label, is_paused, owner_ss58, wire_folder_hash, timestamp)
+                 VALUES (?, ?, 'private', ?, ?, ?, ?, 0)",
+            )
+            .bind(&owner)
+            .bind(format!("/tmp/{label}"))
+            .bind(label)
+            .bind(paused)
+            .bind(member.then_some("5Owner"))
+            .bind(member.then_some("abcd"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            own_local_labels(&pool, "5Alice").await.unwrap(),
+            vec!["Paused".to_string(), "Work".to_string()]
+        );
+        assert!(is_local(&pool, "5Alice", "Work").await);
+        assert!(!is_local(&pool, "5Alice", "Team").await);
+        assert!(own_local_labels(&pool, "5Bob").await.unwrap().is_empty());
     }
 
     #[tokio::test]

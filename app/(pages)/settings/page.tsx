@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import AppearanceSettings from "@/components/page-sections/settings/AppearanceSettings";
+import CaptureSettings from "@/components/page-sections/settings/CaptureSettings";
 import ReleaseChannelSettings from "@/components/page-sections/settings/ReleaseChannelSettings";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
@@ -189,6 +190,8 @@ function SettingsContent() {
                 when this build carries no extension (Rust answers
                 `unsupported`), so a dev binary shows nothing here. */}
             {isMacPlatform() && <FinderExtensionSetting />}
+            {/* Screen capture: hides itself off-lane or where unsupported. */}
+            <CaptureSettings />
           </>
         )}
 

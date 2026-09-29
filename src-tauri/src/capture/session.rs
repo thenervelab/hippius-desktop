@@ -68,6 +68,12 @@ pub enum CaptureEvent {
         kind: CaptureKind,
         mode: CaptureMode,
     },
+    /// The capture bar switched what is being captured (screenshot or
+    /// recording; area, window or screen) before anything was chosen.
+    SetMode {
+        kind: CaptureKind,
+        mode: CaptureMode,
+    },
     /// The user made a choice in the overlay.
     Selected,
     /// A recording has begun writing frames.
@@ -117,7 +123,9 @@ pub fn transition(phase: CapturePhase, event: CaptureEvent) -> Result<CapturePha
     use CaptureKind as K;
     use CapturePhase as P;
     match (phase, event) {
-        (P::Idle, E::Start { kind, mode }) => Ok(P::Selecting { kind, mode }),
+        // Starting, or the capture bar switching mode before anything is
+        // chosen, both land in Selecting.
+        (P::Idle, E::Start { kind, mode }) | (P::Selecting { .. }, E::SetMode { kind, mode }) => Ok(P::Selecting { kind, mode }),
         (_, E::Start { .. }) => Err(TransitionError::AlreadyActive),
 
         // Screenshot: select → grab pixels → deliver.
@@ -286,6 +294,28 @@ mod tests {
         assert_eq!(
             run(&[REC, Selected, RecordingStarted { microphone: true }, Failed]),
             Ok(CapturePhase::Idle)
+        );
+    }
+
+    #[test]
+    fn the_bar_switches_mode_only_while_selecting() {
+        use CaptureEvent::*;
+        let to_window_recording = SetMode {
+            kind: CaptureKind::Recording,
+            mode: CaptureMode::Window,
+        };
+        assert_eq!(
+            run(&[SHOT, to_window_recording]),
+            Ok(CapturePhase::Selecting {
+                kind: CaptureKind::Recording,
+                mode: CaptureMode::Window
+            })
+        );
+        assert_eq!(transition(CapturePhase::Idle, to_window_recording), Err(TransitionError::NotApplicable));
+        assert_eq!(run(&[SHOT, Selected, to_window_recording]), Err(TransitionError::NotApplicable));
+        assert_eq!(
+            run(&[REC, Selected, RecordingStarted { microphone: false }, to_window_recording]),
+            Err(TransitionError::NotApplicable)
         );
     }
 

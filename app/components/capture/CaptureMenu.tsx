@@ -1,7 +1,8 @@
 "use client";
 
 import { useAtomValue, useSetAtom } from "jotai";
-import { AppWindow, Camera, Monitor, Scan, Settings2, Video } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AppWindow, Camera, Monitor, Scan, ScanLine, Settings2, Video } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -20,7 +21,8 @@ import {
   captureSupportedAtom,
 } from "@/app/lib/capture/captureFlow";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
-import type { CaptureMode } from "@/app/lib/tauri/capture";
+import { formatAccelerator, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
+import { getCaptureShortcut, type CaptureMode } from "@/app/lib/tauri/capture";
 import { SECONDARY_PILL_CLASSES } from "@/app/components/page-sections/drive/uploadActions";
 
 // Explicit colours, as every menu in the app sets them: the shared
@@ -58,8 +60,10 @@ const REC_ITEMS: { mode: CaptureMode; label: string; icon: typeof Scan }[] = [
 ];
 
 /**
- * The Drive header's Capture menu: screenshot or record an area, a window or
- * a screen, straight into the drive with the link copied.
+ * The Drive header's Capture menu. "Open capture bar" (and the system-wide
+ * shortcut it shows) opens the bar on whatever was used last; each item below
+ * opens it with that mode already chosen. Everything lands in the drive with
+ * the link copied.
  *
  * Renders nothing unless the feature is on for this lane AND Rust says this
  * platform can capture — a menu whose every item fails is worse than none.
@@ -71,6 +75,14 @@ export default function CaptureMenu({ className }: { className?: string }) {
   const recording = useAtomValue(captureRecordingAtom);
   const setDialog = useSetAtom(captureDialogAtom);
   const startCapture = useStartCapture();
+  const [shortcut, setShortcut] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!SCREEN_CAPTURE_ENABLED || !supported) return;
+    getCaptureShortcut()
+      .then((s) => setShortcut(s.accelerator ? formatAccelerator(s.accelerator, isMacPlatform()) : null))
+      .catch(() => setShortcut(null));
+  }, [supported]);
 
   if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
 
@@ -88,6 +100,14 @@ export default function CaptureMenu({ className }: { className?: string }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" aria-label="Capture" className={CONTENT_CLASSES}>
+        <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => void startCapture()}>
+          <ScanLine className="size-4" />
+          <span className="flex-1">Open capture bar</span>
+          {shortcut && (
+            <kbd className="font-geist text-[12px] font-medium text-grey-50 dark:text-grey-dark-600">{shortcut}</kbd>
+          )}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
         <DropdownMenuLabel className={LABEL_CLASSES}>Screenshot</DropdownMenuLabel>
         {SHOT_ITEMS.map(({ mode, label, icon: Icon }) => (
           <DropdownMenuItem
@@ -123,7 +143,7 @@ export default function CaptureMenu({ className }: { className?: string }) {
         <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
         <DropdownMenuItem
           className={ITEM_CLASSES}
-          onSelect={() => setDialog({ kind: "destination", resumeKind: null, resumeMode: null })}
+          onSelect={() => setDialog({ kind: "destination", resume: null })}
         >
           <Settings2 className="size-4" />
           Change capture drive…

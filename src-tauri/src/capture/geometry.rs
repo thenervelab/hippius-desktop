@@ -6,14 +6,14 @@
 //! getting it wrong is silent: on a Retina display a selection read as pixels
 //! crops the top-left quarter of what the user chose, and nothing errors.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A selection in logical points, relative to the top-left of its display.
 ///
 /// `width` and `height` may be negative: a drag up or left reports its
 /// starting corner and a negative extent, and [`crop_rect`] normalises it
 /// rather than making every overlay remember to.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LogicalRect {
     pub x: f64,
     pub y: f64,

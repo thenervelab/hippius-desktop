@@ -11,12 +11,19 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
  * start a capture — the Drive header, the tray, the shortcut — lands the user
  * in the same dialog, mounted once by `CaptureHost`.
  *
- * The destination dialog carries the kind+mode it interrupted, so choosing a
- * drive carries straight on into that capture instead of making the user start
- * over.
+ * The destination dialog carries the capture it interrupted (`resume`), so
+ * choosing a drive carries straight on into it instead of making the user
+ * start over. `kind` and `mode` are left out when the bar was opening on
+ * whatever was used last; `resume` is null when the dialog was opened only to
+ * change the drive.
  */
+export interface CaptureResume {
+  kind?: CaptureKind;
+  mode?: CaptureMode;
+}
+
 export type CaptureDialog =
-  | { kind: "destination"; resumeKind: CaptureKind | null; resumeMode: CaptureMode | null }
+  | { kind: "destination"; resume: CaptureResume | null }
   | { kind: "permission" };
 
 export const captureDialogAtom = atom<CaptureDialog | null>(null);

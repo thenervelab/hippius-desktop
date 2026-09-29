@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Circle, Pause, Play, Square, X } from "lucide-react";
+import { Mic, Pause, Play, Square, Trash2 } from "lucide-react";
 import "./capture-controls.css";
 import {
   cancelCapture,
@@ -14,11 +14,12 @@ import {
 } from "@/app/lib/tauri/capture";
 
 /**
- * Floating recording control bar: timer, pause/resume, stop, cancel.
+ * Floating recording pill: time, microphone, pause/resume, stop, discard.
  *
  * Rust owns the session; this page only mirrors `capture_state_changed` and
  * invokes pause/resume/stop/cancel. Content-protected by the window builder so
- * it stays out of the recording.
+ * it stays out of the recording, and draggable by its body. The same dark
+ * glass as the capture bar; the menu bar carries a second Stop (tray title).
  */
 
 function formatElapsed(secs: number): string {
@@ -56,7 +57,7 @@ export default function CaptureControlsPage() {
   if (phase.phase === "finalizing" || phase.phase === "delivering") {
     return (
       <div className="flex h-full w-full items-center justify-center">
-        <div className="flex items-center gap-3 rounded-full bg-black/85 px-4 py-2 text-sm text-white shadow-lg">
+        <div className="flex items-center gap-3 rounded-full border border-white/10 bg-[#1c1d21]/90 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-xl">
           <span className="size-2 animate-pulse rounded-full bg-[#3167DD]" />
           {phase.phase === "finalizing" ? "Saving recording…" : "Uploading…"}
         </div>
@@ -82,14 +83,20 @@ export default function CaptureControlsPage() {
   return (
     <div className="flex h-full w-full items-center justify-center">
       <div
-        className="flex items-center gap-2 rounded-full border border-white/10 bg-black/85 px-3 py-1.5 text-white shadow-lg"
+        className="flex items-center gap-2 rounded-full border border-white/10 bg-[#1c1d21]/90 py-1.5 pl-3.5 pr-1.5 text-white shadow-[0_10px_28px_rgba(0,0,0,0.45)] backdrop-blur-xl"
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+        title="Drag to move"
       >
-        <Circle className={`size-2.5 ${paused ? "fill-amber-400 text-amber-400" : "fill-red-500 text-red-500"}`} />
-        <span className="min-w-[3.25rem] font-mono text-sm tabular-nums tracking-tight">
+        <span
+          aria-hidden
+          className={`size-2.5 rounded-full ${paused ? "bg-amber-400" : "animate-pulse bg-[#FF453A] shadow-[0_0_0_3px_rgba(255,69,58,0.25)]"}`}
+        />
+        <span className="min-w-[3.25rem] font-mono text-sm tabular-nums tracking-tight" aria-label="Recording time">
           {formatElapsed(phase.elapsedSecs)}
         </span>
-        {phase.microphone && <span className="text-[11px] text-white/50">Mic</span>}
+        {phase.microphone && (
+          <Mic className="size-3.5 text-white/60" aria-label="Recording the microphone" />
+        )}
 
         <div className="mx-1 h-4 w-px bg-white/15" />
 
@@ -117,12 +124,12 @@ export default function CaptureControlsPage() {
           <button
             type="button"
             disabled={busy}
-            aria-label="Cancel recording"
-            title="Cancel"
+            aria-label="Discard recording"
+            title="Discard (nothing is saved)"
             className="rounded-full p-1.5 text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-40"
             onClick={() => void run(cancelCapture)}
           >
-            <X className="size-4" />
+            <Trash2 className="size-4" />
           </button>
         </div>
       </div>

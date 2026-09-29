@@ -72,6 +72,7 @@ final class Runner: @unchecked Sendable {
             return
         }
         let microphone = (obj["microphone"] as? Bool) ?? false
+        let showClicks = (obj["showClicks"] as? Bool) ?? false
         let displayId = intU32(obj["displayId"])
         let windowId = intU32(obj["windowId"])
         let crop: CGRect? = {
@@ -94,7 +95,8 @@ final class Runner: @unchecked Sendable {
                     displayId: displayId,
                     windowId: windowId,
                     crop: crop,
-                    microphone: microphone
+                    microphone: microphone,
+                    showClicks: showClicks
                 )
                 result = .success(session)
             } catch {
@@ -225,7 +227,8 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         displayId: UInt32?,
         windowId: UInt32?,
         crop: CGRect?,
-        microphone: Bool
+        microphone: Bool,
+        showClicks: Bool
     ) async throws -> RecordSession {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let filter: SCContentFilter
@@ -279,6 +282,9 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         }
         if #available(macOS 15.0, *), microphone {
             config.captureMicrophone = true
+        }
+        if #available(macOS 15.0, *), showClicks {
+            config.showMouseClicks = true
         }
 
         try? FileManager.default.removeItem(at: outputURL)

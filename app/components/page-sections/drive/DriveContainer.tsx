@@ -108,6 +108,8 @@ import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { toast } from "sonner";
 import { cn } from "@/app/lib/utils";
+import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import UploadingHereStrip from "./UploadingHereStrip";
 
 /**
  * Rows per page in the browsed file list.
@@ -374,6 +376,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `driveFolderRoute`.
   const urlOpenLabel = getParam("openLabel");
   const urlOpenRemote = getParam("openRemote") === "1";
+  // …and one level into it (a capture's "Show in folder" → Captures).
+  const urlOpenSubfolder = getParam("openSubfolder");
   const urlMainReqHash = getParam("mainReqHash");
   const isNested =
     !isRecentFiles &&
@@ -1568,9 +1572,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // fights the rule that Drive opens on the list. Explicitly asking for a
   // folder is the exception to that rule, not a contradiction of it.
   const openedFromUrlRef = useRef(false);
+  // The subfolder to step into once the drive's rows have loaded. A ref, not
+  // the param: the param is cleared as soon as the drive opens.
+  const pendingSubfolderRef = useRef<string | null>(null);
   useEffect(() => {
     if (!urlOpenLabel || openedFromUrlRef.current) return;
     openedFromUrlRef.current = true;
+    pendingSubfolderRef.current = urlOpenSubfolder || null;
     if (urlOpenRemote) {
       handleSelectRemoteFolderFromCards(urlOpenLabel);
     } else {
@@ -1580,10 +1588,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   }, [
     urlOpenLabel,
     urlOpenRemote,
+    urlOpenSubfolder,
     handleSelectFolderFromCards,
     handleSelectRemoteFolderFromCards,
     router,
   ]);
+
+  // Step into the requested subfolder the way a click on its row does, so the
+  // URL is built by the same code and nothing about it is guessed here. Given
+  // up once the drive's root has loaded without it.
+  useEffect(() => {
+    const wanted = pendingSubfolderRef.current;
+    if (!wanted || isNested || isOnLocalView || isLoading) return;
+    pendingSubfolderRef.current = null;
+    const row = allData.find(
+      (f) => f.isFolder && (f.actualFileName === wanted || f.name === wanted),
+    );
+    if (row) router.push(generateFolderUrl(row, getParam).url);
+  }, [allData, isNested, isOnLocalView, isLoading, router, getParam]);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
   // the user is on the Local cards view (DriveOnboarding); otherwise the
@@ -2328,6 +2350,15 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
               >
                 {!isRecentFiles && (
                   <>
+                    <div className="empty:hidden px-3 pt-3 sm:px-4">
+                      <UploadingHereStrip
+                        label={
+                          remoteUploadLabel ??
+                          (isOnLocalView ? null : activeSyncFolderLabel)
+                        }
+                        subPath={isNested ? (urlSubFolderPath ?? "") : ""}
+                      />
+                    </div>
                     {driveContent}
                     {browsePager}
                   </>

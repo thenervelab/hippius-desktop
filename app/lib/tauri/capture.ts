@@ -41,12 +41,71 @@ export interface CaptureWindowTarget extends LogicalRect {
   title: string;
 }
 
+/** What the capture bar remembers, on this device. Mirrors Rust's `CaptureOptions`. */
+export interface CaptureOptions {
+  /** Screenshot timer: 0, 5 or 10 seconds. */
+  timerSecs: number;
+  microphone: boolean;
+  showClicks: boolean;
+  lastKind: CaptureKind;
+  lastMode: CaptureMode;
+}
+
 export interface CaptureOverlayContext {
   mode: CaptureMode;
   displayId: number;
   kind: CaptureKind;
   /** Front first; empty outside window mode. */
   windows: CaptureWindowTarget[];
+  /** Whether this overlay draws the capture bar (one display does). */
+  hostsBar: boolean;
+  options: CaptureOptions;
+  /** Seconds to count down once Capture / Record is pressed. */
+  countdownSecs: number;
+  recordingAvailable: boolean;
+  microphoneAvailable: boolean;
+  showClicksAvailable: boolean;
+  destination: CaptureDestination | null;
+  /** The area already drawn, on this display or another. */
+  pending: CaptureSelection | null;
+}
+
+/** A drive "Save to" offers; `remote` means not synced on this machine. */
+export interface CaptureDestinationChoice {
+  label: string;
+  remote: boolean;
+}
+
+/** Where a capture's upload is, on its preview card. Mirrors Rust's `PreviewStatus`. */
+export type CapturePreviewStatus =
+  | { state: "uploading" }
+  | { state: "uploaded"; linkCopied: boolean; linkError?: string }
+  | { state: "failed"; message: string };
+
+/** The preview card in the corner. Mirrors Rust's `PreviewCard`. */
+export interface CapturePreviewCard {
+  id: number;
+  kind: CaptureKind;
+  fileName: string;
+  driveLabel: string;
+  driveName: string;
+  remote: boolean;
+  thumbnail?: string;
+  status: CapturePreviewStatus;
+}
+
+/** `capture_show_in_folder`: open this drive's Captures folder. */
+export interface CaptureShowInFolder {
+  label: string;
+  remote: boolean;
+  subfolder: string;
+  fileName: string;
+}
+
+export interface CaptureShortcutSetting {
+  /** The active shortcut, or null when turned off. */
+  accelerator: string | null;
+  defaultAccelerator: string;
 }
 
 /** The drive captures are filed in. Owner + hash only for a shared drive. */
@@ -72,10 +131,78 @@ export interface CaptureSupport {
 
 // Events (listened for by name at each call site, so the IPC contract test
 // checks them against Rust): `capture_state_changed` → `CapturePhase`,
-// `capture_delivered` → `CaptureDelivered`, `capture_failed` → `{ message }`.
+// `capture_delivered` → `CaptureDelivered`, `capture_failed` → `{ message }`,
+// `capture_pending_changed` → `{ displayId: number | null }`,
+// `capture_preview_changed` → `CapturePreviewCard | null`,
+// `capture_show_in_folder` → `CaptureShowInFolder`,
+// `capture_shortcut_pressed` → nothing.
 
-export function startCapture(kind: CaptureKind, mode: CaptureMode): Promise<void> {
-  return invoke("capture_start", { kind, mode });
+/**
+ * Open the capture bar. `kind` and `mode` preselect it (a menu item); left
+ * out, it opens on what was used last.
+ */
+export function startCapture(kind?: CaptureKind, mode?: CaptureMode): Promise<void> {
+  return invoke("capture_start", { kind: kind ?? null, mode: mode ?? null });
+}
+
+export function setCaptureMode(kind: CaptureKind, mode: CaptureMode): Promise<void> {
+  return invoke("capture_set_mode", { kind, mode });
+}
+
+/** Hold (or clear) the area drawn on this display for the Capture button. */
+export function setCapturePending(selection: CaptureSelection | null): Promise<void> {
+  return invoke("capture_set_pending", { selection });
+}
+
+/** The capture bar's Capture / Record button, pressed on `displayId`. */
+export function confirmCapture(displayId: number): Promise<void> {
+  return invoke("capture_confirm", { displayId });
+}
+
+export function getCaptureOptions(): Promise<CaptureOptions> {
+  return invoke("capture_get_options");
+}
+
+export function setCaptureOptions(options: CaptureOptions): Promise<CaptureOptions> {
+  return invoke("capture_set_options", { options });
+}
+
+export function getCaptureDestinationChoices(): Promise<CaptureDestinationChoice[]> {
+  return invoke("capture_destination_choices");
+}
+
+export function getCapturePreview(): Promise<CapturePreviewCard | null> {
+  return invoke("capture_preview_context");
+}
+
+export function copyCapturePreviewLink(): Promise<void> {
+  return invoke("capture_preview_copy_link");
+}
+
+export function showCapturePreviewInFolder(): Promise<void> {
+  return invoke("capture_preview_show_in_folder");
+}
+
+export function dismissCapturePreview(id: number): Promise<void> {
+  return invoke("capture_preview_dismiss", { id });
+}
+
+export function retryCapturePreview(): Promise<void> {
+  return invoke("capture_preview_retry");
+}
+
+/** Register the saved system-wide shortcut (called when the app mounts). */
+export function syncCaptureShortcut(): Promise<void> {
+  return invoke("capture_sync_shortcut");
+}
+
+export function getCaptureShortcut(): Promise<CaptureShortcutSetting> {
+  return invoke("capture_get_shortcut");
+}
+
+/** Change the shortcut; `null` turns it off. Refused if another app holds it. */
+export function setCaptureShortcut(accelerator: string | null): Promise<void> {
+  return invoke("capture_set_shortcut", { accelerator });
 }
 
 export function getCaptureOverlayContext(displayId: number): Promise<CaptureOverlayContext> {

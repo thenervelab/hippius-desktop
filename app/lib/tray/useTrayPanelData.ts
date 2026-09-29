@@ -12,6 +12,11 @@ import {
   type UploadFeedItem,
 } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { useRetainedCompletedUploads } from "@/app/lib/upload-feed/useRetainedCompletedUploads";
+import {
+  applyRemoteUpload,
+  mergeRemoteUploads,
+  type RemoteUploadProgress,
+} from "@/app/lib/remote-upload/remoteUploadFeed";
 
 /**
  * Account / credits summary for the tray popover header + footer.
@@ -62,6 +67,10 @@ export function useTrayPanelData() {
   const [menu, setMenu] = useState<TrayMenuData | null>(null);
   const [recentUploads, setRecentUploads] = useState<FormattedUserFile[]>([]);
   const [snapshot, setSnapshot] = useState<SyncSnapshot>(EMPTY_SNAPSHOT);
+  // Uploads that go straight to the server (a capture, a file dropped on a
+  // drive not synced here): outside the engine's snapshot, so folded in the
+  // same way the main window's sync widget folds them.
+  const [remoteUploads, setRemoteUploads] = useState<Record<string, RemoteUploadProgress>>({});
   // Latest finalized block + chain connectivity, mirrored from the Rust block
   // subscription's `block_number_updated` broadcast (the same feed the main
   // window's ProfileCard reads). `null` until the first block arrives.
@@ -229,6 +238,19 @@ export function useTrayPanelData() {
         console.error("[TrayPanel] snapshot listener failed:", error),
       );
 
+    let unlistenRemote: (() => void) | undefined;
+    void listen<RemoteUploadProgress>("remote_upload_progress", (event) => {
+      setRemoteUploads((current) => applyRemoteUpload(current, event.payload));
+      // A finished upload is in the server list now; pull it in.
+      if (event.payload.status === "completed") void refresh();
+    })
+      .then((un) => {
+        unlistenRemote = un;
+      })
+      .catch((error) =>
+        console.error("[TrayPanel] remote upload listener failed:", error),
+      );
+
     // Chat unread: seed once (the popover is prewarmed before any message
     // arrives, and a count set before this webview listened would be missed),
     // then mirror the broadcast.
@@ -270,13 +292,19 @@ export function useTrayPanelData() {
       unlistenFocus?.();
       unlistenShown?.();
       unlistenSnapshot?.();
+      unlistenRemote?.();
       unlistenChatUnread?.();
       unlistenBlock?.();
     };
   }, [refresh]);
 
+  const liveSnapshot = useMemo(
+    () => mergeRemoteUploads(snapshot, remoteUploads),
+    [snapshot, remoteUploads],
+  );
+
   const retainedCompleted = useRetainedCompletedUploads(
-    snapshot.files,
+    liveSnapshot.files,
     recentUploads,
   );
 
@@ -284,17 +312,17 @@ export function useTrayPanelData() {
     () =>
       mergeUploadFeed({
         recentUploads,
-        snapshotFiles: snapshot.files,
+        snapshotFiles: liveSnapshot.files,
         retainedCompleted,
         limit: FEED_LIMIT,
       }),
-    [recentUploads, snapshot.files, retainedCompleted],
+    [recentUploads, liveSnapshot.files, retainedCompleted],
   );
 
   return {
     menu,
     feed,
-    snapshot,
+    snapshot: liveSnapshot,
     blockNumber,
     isConnected,
     unreadCount,

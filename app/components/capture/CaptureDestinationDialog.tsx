@@ -24,8 +24,7 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 export default function CaptureDestinationDialog() {
   const [dialog, setDialog] = useAtom(captureDialogAtom);
   const open = dialog?.kind === "destination";
-  const resumeKind = open ? dialog.resumeKind : null;
-  const resumeMode = open ? dialog.resumeMode : null;
+  const resume = open ? dialog.resume : null;
   const [label, setLabel] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const startCapture = useStartCapture();
@@ -45,8 +44,8 @@ export default function CaptureDestinationDialog() {
     try {
       await setCaptureDestination({ label, displayName: label });
       setDialog(null);
-      if (resumeKind && resumeMode) {
-        void startCapture(resumeKind, resumeMode);
+      if (resume) {
+        void startCapture(resume.kind, resume.mode);
       } else {
         toast.success(`Captures will be saved to ${label}`);
       }
@@ -95,7 +94,7 @@ export default function CaptureDestinationDialog() {
             onClick={() => void save()}
             className="h-[44px] flex-1 rounded-[6px] text-sm font-medium"
           >
-            {resumeMode ? "Save and capture" : "Save"}
+            {resume ? "Save and capture" : "Save"}
           </Button>
         </div>
       </div>

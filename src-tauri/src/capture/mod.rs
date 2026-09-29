@@ -3,13 +3,17 @@
 //!
 //! Design and phasing: `docs/plans/2026-09-22-screen-capture.md`.
 
+pub mod bar;
 pub mod commands;
 pub mod deliver;
 pub mod destination;
 pub mod geometry;
 pub mod naming;
 pub mod permissions;
+pub mod preview;
 pub mod recording;
 pub mod screenshot;
 pub mod session;
+pub mod shortcut;
 pub mod targets;
+pub mod thumbnail;

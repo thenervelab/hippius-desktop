@@ -26,6 +26,16 @@ pub fn recording_supported() -> bool {
     macos_at_least(13, 0) && helper_path().is_some()
 }
 
+/// ScreenCaptureKit draws click rings from macOS 15.
+pub fn show_clicks_supported() -> bool {
+    macos_at_least(15, 0)
+}
+
+/// The microphone joins the recording from macOS 15.
+pub fn microphone_supported() -> bool {
+    macos_at_least(15, 0)
+}
+
 pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
     if !macos_at_least(13, 0) {
         return Err(AppError::Validation("Screen recording needs macOS 13 or later.".into()));
@@ -215,6 +225,9 @@ struct StartCommand {
     window_id: Option<u32>,
     crop: Option<CropRect>,
     microphone: bool,
+    /// Ring the pointer where it clicks (ScreenCaptureKit, macOS 15+; the
+    /// helper ignores it on older systems).
+    show_clicks: bool,
 }
 
 #[derive(Serialize)]
@@ -238,6 +251,7 @@ impl StartCommand {
             window_id: None,
             crop: None,
             microphone: options.microphone,
+            show_clicks: options.show_clicks,
         };
         match selection {
             Selection::Screen { display_id } => cmd.display_id = Some(display_id),
@@ -385,7 +399,10 @@ mod tests {
                 },
             },
             Path::new("/tmp/out.mp4"),
-            RecordOptions { microphone: true },
+            RecordOptions {
+                microphone: true,
+                show_clicks: true,
+            },
         )
         .unwrap();
         let v = serde_json::to_value(&cmd).unwrap();
@@ -393,6 +410,8 @@ mod tests {
         assert_eq!(v["displayId"], 3);
         assert_eq!(v["crop"]["width"], 100.0);
         assert_eq!(v["microphone"], true);
+        // The Swift helper reads this exact key.
+        assert_eq!(v["showClicks"], true);
     }
 
     #[test]

@@ -138,15 +138,24 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
-- **Record your screen straight into Hippius (Mac).** Pick an area, a window or
-  a full screen from the Capture menu, then pause, resume or stop from a small
-  floating bar. The video lands in Captures with a share link copied, same as
-  screenshots. Needs macOS 13+, and microphone audio on macOS 15+. Windows
-  recording follows later; screenshots already work there.
-- **Take a screenshot straight into Hippius.** Capture an area, a window or a
-  whole screen from the Drive page or the menu bar icon. It is saved to a Captures
-  folder in the drive you choose, and a share link is copied so you can paste it
-  right away. Available on Mac and Windows in internal builds first.
+- **Take a screenshot or record your screen straight into Hippius.** Press
+  ⇧⌘2 (Ctrl+Shift+2 on Windows) from any app, or use Capture on the Drive page
+  or the menu bar icon, and a capture bar like macOS's own appears: capture or
+  record the whole screen, one window or an area you can resize. Options set
+  the drive, a 5 or 10 second timer, the microphone and mouse-click rings, and
+  the bar remembers your last area and mode. Change or turn off the shortcut in
+  Settings, Sync & Storage.
+- **See your capture upload, and jump to it.** A preview card slides into the
+  corner with the upload's progress, then "link copied". Show in folder opens
+  the drive's Captures folder, where the file is shown arriving; the upload is
+  also in the sync widget and the menu bar popover. If an upload fails, Retry
+  sends the same file again.
+- **Recording controls you can always reach (Mac).** A 3 second countdown
+  starts every recording. A small pill shows the time, the microphone, pause,
+  stop and discard, and the menu bar shows the time too: click the Hippius icon
+  to stop. Needs macOS 13+, with the microphone and click rings on macOS 15+.
+  Screenshots work on Mac and Windows; Windows recording follows later.
+  Available in internal builds first.
 - **Shared with Me is always on the Drive page, with Share a drive.** When
   nothing is shared with you yet, it explains what shared drives are for and
   links to the guide. Share a drive lets you pick one of your drives and opens

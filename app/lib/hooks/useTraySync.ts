@@ -17,6 +17,8 @@ import { useAtom } from "jotai";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { deriveTrayIconState } from "@/app/lib/tray/trayIconState";
+import { recordingTrayTitle, trayClickStopsRecording } from "@/app/lib/tray/trayCaptureState";
+import type { CapturePhase } from "@/app/lib/tauri/capture";
 import { isLinuxPlatform as detectLinuxPlatform } from "@/lib/utils/isMacPlatform";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
@@ -44,6 +46,12 @@ let openVmItem: MenuItem | null = null;
    resets the snapshot to an empty cycle. Owned by the sync-activity watcher;
    the pure transition logic lives in `tray/trayIconState.ts`. */
 let latchedComplete = false;
+
+/* ─ Screen recording in the menu bar ─────────────────────────────
+   Mirrors `capture_state_changed` so the click handler can decide
+   synchronously, and the title is only set when it changes. */
+let capturePhaseLatest: CapturePhase = { phase: "idle" };
+let trayTitleShown: string | null = null;
 let latchedSnapshot: SyncSnapshot | null = null;
 
 /* ─ Backend payload types ─────────────────────────────────────── */
@@ -247,6 +255,15 @@ async function handleTrayClick(event: TrayIconEvent) {
   ) {
     return;
   }
+  // While recording, the icon is the Stop button, as macOS's own is.
+  if (trayClickStopsRecording(capturePhaseLatest)) {
+    try {
+      await invoke("capture_stop");
+    } catch (e) {
+      logTrayAction("Failed to stop the recording from the tray", e);
+    }
+    return;
+  }
   try {
     if (!isAuthenticatedLatest) {
       await openAppWindow();
@@ -349,8 +366,26 @@ export function useTrayInit(isAuthenticated: boolean) {
       // disables the context-menu items) after the tray exists.
       startSyncActivityWatcher();
       startLoginStatusWatcher();
+      startCaptureWatcher();
     })();
   }, []);
+}
+
+/** Keep the tray's recording time and click behaviour in step with Rust. */
+function startCaptureWatcher() {
+  void listen<CapturePhase>("capture_state_changed", async (e) => {
+    capturePhaseLatest = e.payload;
+    const title = recordingTrayTitle(e.payload);
+    if (title === trayTitleShown) return;
+    trayTitleShown = title;
+    try {
+      const tray = await TrayIcon.getById(TRAY_ID);
+      await tray?.setTitle(title);
+      await tray?.setTooltip(title ? "Recording. Click to stop." : "Hippius Cloud");
+    } catch (err) {
+      logTrayAction("Failed to update the recording title", err);
+    }
+  });
 }
 
 // Add these explicit debug logs
