@@ -108,8 +108,8 @@ import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { toast } from "sonner";
 import { cn } from "@/app/lib/utils";
-import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import UploadingHereStrip from "./UploadingHereStrip";
+import { folderUrlForPath } from "./openFolderPath";
 
 /**
  * Rows per page in the browsed file list.
@@ -1594,17 +1594,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     router,
   ]);
 
-  // Step into the requested subfolder the way a click on its row does, so the
-  // URL is built by the same code and nothing about it is guessed here. Given
-  // up once the drive's root has loaded without it.
+  // Step into the requested folder the way a click on its row does, so the
+  // URL is built by the same code and nothing about it is guessed here. A
+  // deeper path ("Photos/2024") continues from that row's URL exactly as a
+  // breadcrumb jump does. Given up once the drive's root has loaded without
+  // the first folder.
   useEffect(() => {
     const wanted = pendingSubfolderRef.current;
     if (!wanted || isNested || isOnLocalView || isLoading) return;
     pendingSubfolderRef.current = null;
-    const row = allData.find(
-      (f) => f.isFolder && (f.actualFileName === wanted || f.name === wanted),
-    );
-    if (row) router.push(generateFolderUrl(row, getParam).url);
+    const url = folderUrlForPath(allData, wanted, getParam);
+    if (url) router.push(url);
   }, [allData, isNested, isOnLocalView, isLoading, router, getParam]);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
