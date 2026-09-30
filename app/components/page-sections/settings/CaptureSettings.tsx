@@ -110,6 +110,10 @@ export default function CaptureSettings() {
   if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
 
   const current = setting?.accelerator ? acceleratorKeys(setting.accelerator, mac) : null;
+  // The saved shortcut did not register when the app started (Rust's words,
+  // naming another copy of Hippius when that is what holds it). A refusal
+  // from a change just made takes its place.
+  const problem = recording ? null : (setting?.problem ?? null);
   const isDefault = setting ? setting.accelerator === setting.defaultAccelerator : true;
 
   return (
@@ -124,9 +128,9 @@ export default function CaptureSettings() {
                 ? "Press the new shortcut, with Command, Control or Option. Esc cancels."
                 : "Opens the capture bar from any app, to take a screenshot or start a recording."}
             </p>
-            {error && (
+            {(error ?? problem) && (
               <p role="alert" className="mt-1 text-sm text-error-50">
-                {error}
+                {error ?? problem}
               </p>
             )}
           </div>

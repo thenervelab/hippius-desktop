@@ -105,6 +105,31 @@ describe("the capture shortcut recorder", () => {
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("Another app is already using that shortcut.");
   });
+
+  // The installed Hippius held Cmd+Shift+2 while a development build ran:
+  // the saved shortcut never registered, and Settings said nothing.
+  it("says when the saved shortcut is not working, and who holds it", async () => {
+    tauri.onInvoke("capture_get_shortcut", () => ({
+      accelerator,
+      defaultAccelerator: DEFAULT,
+      problem: "Another copy of Hippius is using this shortcut. Quit it, or choose another.",
+    }));
+    tauri.onInvoke("capture_get_destination", () => ({ label: "Work", displayName: "Work" }));
+    const store = createStore();
+    store.set(captureSupportedAtom, true);
+    render(
+      <Provider store={store}>
+        <CaptureSettings />
+      </Provider>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Another copy of Hippius is using this shortcut. Quit it, or choose another.",
+    );
+    // Choosing another hides it while the keys are being pressed (the first
+    // Change is the shortcut's; the second is the drive's).
+    fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });
 
 describe("the capture card's recording row", () => {

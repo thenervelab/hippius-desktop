@@ -31,8 +31,10 @@ const Home: React.FC = () => {
         <div className="px-3">
           {/* No plan card up here: the Storage and Plan cards immediately
               below already carry the plan, the usage and Manage/Upgrade,
-              with the room to show them properly. */}
-          <PageHeader showPlanCard={false} showCapture />
+              with the room to show them properly. Capture sits in the
+              Recent Files toolbar beside Folder and File, as it does in a
+              drive's toolbar, not up here on its own. */}
+          <PageHeader showPlanCard={false} />
           <div className="mt-3">
             {/* Above the pair, not inside either one: it is about both
                 of them, and it is the only thing on the page worth

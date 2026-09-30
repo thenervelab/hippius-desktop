@@ -67,6 +67,87 @@ pub struct ShortcutSetting {
     /// The active shortcut, or `None` when turned off.
     pub accelerator: Option<String>,
     pub default_accelerator: String,
+    /// Why the saved shortcut is not working right now (it could not be
+    /// registered when the app started), in Rust's words; `None` when it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+}
+
+/// The refusal when the system says the shortcut is taken.
+pub const HELD_BY_ANOTHER_APP: &str = "Another app is already using that shortcut. Choose another.";
+/// The same refusal when a second Hippius is running (the installed app
+/// beside a development build, say): the likely holder is that copy.
+pub const HELD_BY_ANOTHER_HIPPIUS: &str = "Another copy of Hippius is using this shortcut. Quit it, or choose another.";
+
+/// The sentence for a shortcut the system refused to register.
+#[must_use]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+pub fn held_message(another_hippius_running: bool) -> &'static str {
+    if another_hippius_running {
+        HELD_BY_ANOTHER_HIPPIUS
+    } else {
+        HELD_BY_ANOTHER_APP
+    }
+}
+
+/// Whether a running app is another copy of Hippius: not this process, and
+/// either this app's bundle identifier or the app's name (a development
+/// build runs unbundled, under its binary's name).
+#[must_use]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn is_other_hippius(pid: i32, own_pid: i32, bundle_id: Option<&str>, name: Option<&str>, identifier: &str) -> bool {
+    pid != own_pid && (bundle_id == Some(identifier) || name.is_some_and(|n| n.eq_ignore_ascii_case("hippius")))
+}
+
+/// Whether another copy of Hippius is running, from the system's list of
+/// running apps (one call, no process scan).
+#[cfg(target_os = "macos")]
+fn another_hippius_running(identifier: &str) -> bool {
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let Ok(own) = i32::try_from(std::process::id()) else {
+        return false;
+    };
+    let text = |s: cocoa::base::id| -> Option<String> {
+        if s.is_null() {
+            return None;
+        }
+        // SAFETY: `s` is a non-nil NSString; UTF8String is valid while it lives.
+        let c: *const std::os::raw::c_char = unsafe { msg_send![s, UTF8String] };
+        (!c.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(c) }.to_string_lossy().into_owned())
+    };
+    objc::rc::autoreleasepool(|| {
+        // SAFETY: read-only NSWorkspace / NSRunningApplication queries, which
+        // may be made from any thread; every object is checked for nil.
+        unsafe {
+            let workspace: cocoa::base::id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            if workspace.is_null() {
+                return false;
+            }
+            let apps: cocoa::base::id = msg_send![workspace, runningApplications];
+            if apps.is_null() {
+                return false;
+            }
+            let count: usize = msg_send![apps, count];
+            (0..count).any(|i| {
+                let app: cocoa::base::id = msg_send![apps, objectAtIndex: i];
+                if app.is_null() {
+                    return false;
+                }
+                let pid: i32 = msg_send![app, processIdentifier];
+                let bundle: cocoa::base::id = msg_send![app, bundleIdentifier];
+                let name: cocoa::base::id = msg_send![app, localizedName];
+                is_other_hippius(pid, own, text(bundle).as_deref(), text(name).as_deref(), identifier)
+            })
+        }
+    })
+}
+
+/// Windows has no cheap equivalent worth the risk here; the plain refusal
+/// is said instead.
+#[cfg(windows)]
+fn another_hippius_running(_identifier: &str) -> bool {
+    false
 }
 
 /// The saved shortcut: the default when never set, `None` when turned off.
@@ -138,8 +219,10 @@ pub fn apply(app: &tauri::AppHandle, accelerator: Option<&str>) -> Result<()> {
         return Ok(());
     };
     let shortcut = validate(accelerator)?;
-    gs.register(shortcut)
-        .map_err(|_| AppError::Validation("Another app is already using that shortcut. Choose another.".into()))
+    gs.register(shortcut).map_err(|_| {
+        let identifier = app.config().identifier.clone();
+        AppError::Validation(held_message(another_hippius_running(&identifier)).into())
+    })
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
@@ -255,5 +338,24 @@ mod tests {
         assert_eq!(load(&pool).await.unwrap(), None);
         save(&pool, Some("Control+Alt+C")).await.unwrap();
         assert_eq!(load(&pool).await.unwrap().as_deref(), Some("Control+Alt+C"));
+    }
+
+    /// The installed Hippius held Cmd+Shift+2 while a development build ran:
+    /// Settings says which app holds it when it is another copy of Hippius.
+    #[test]
+    fn a_shortcut_held_by_another_hippius_says_so() {
+        assert_eq!(
+            held_message(true),
+            "Another copy of Hippius is using this shortcut. Quit it, or choose another."
+        );
+        assert_eq!(held_message(false), "Another app is already using that shortcut. Choose another.");
+        // The installed app, by its bundle identifier.
+        assert!(is_other_hippius(20, 10, Some("hippius.com"), Some("Hippius"), "hippius.com"));
+        // A development build, unbundled, by its name.
+        assert!(is_other_hippius(20, 10, None, Some("Hippius"), "hippius.com"));
+        // Not this process, and not another app.
+        assert!(!is_other_hippius(10, 10, Some("hippius.com"), Some("Hippius"), "hippius.com"));
+        assert!(!is_other_hippius(20, 10, Some("com.apple.Safari"), Some("Safari"), "hippius.com"));
+        assert!(!is_other_hippius(20, 10, None, None, "hippius.com"));
     }
 }

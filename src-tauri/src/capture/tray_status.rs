@@ -87,6 +87,48 @@ pub fn tray_click_action(phase: CapturePhase) -> TrayClickAction {
     }
 }
 
+/// Where a left click on the tray icon goes, all things considered. Rust
+/// receives the click itself (`tray::panel::on_tray_icon_event`); it used to
+/// arrive through a callback the main window's webview registered when it
+/// made the icon, and a reload of that webview left the icon clicking into
+/// nothing, so the popover stopped opening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayClickRoute {
+    /// A recording is running or paused: its pill comes back.
+    ShowRecordingControls,
+    /// Nobody is signed in: the popover has nothing to show, so the main
+    /// window comes forward on its sign-in screen.
+    OpenMainWindow,
+    /// The popover opens (or closes, if it is open).
+    TogglePanel,
+}
+
+/// The route for a left click. A recording wins over everything (it cannot
+/// outlive a sign-out, but its pill must never be unreachable); otherwise a
+/// signed-out click opens the app and a signed-in one the popover, in every
+/// other phase, a finished capture's Idle included.
+#[must_use]
+pub fn tray_click_route(signed_in: bool, phase: CapturePhase) -> TrayClickRoute {
+    match (tray_click_action(phase), signed_in) {
+        (TrayClickAction::ShowRecordingControls, _) => TrayClickRoute::ShowRecordingControls,
+        (TrayClickAction::OpenPanel, false) => TrayClickRoute::OpenMainWindow,
+        (TrayClickAction::OpenPanel, true) => TrayClickRoute::TogglePanel,
+    }
+}
+
+/// Whether the tray needs writing: only when its text changes. The icon is
+/// then left alone through a screenshot (every phase of one clears), and a
+/// status item is not resized and re-hit-tested on phase changes that show
+/// nothing. `last` is what was written last, `None` before the first write
+/// (which matches an idle icon: no title and the normal tooltip).
+#[must_use]
+pub fn tray_needs_write(last: Option<&TrayText>, next: &TrayText) -> bool {
+    match last {
+        Some(last) => last != next,
+        None => *next != tray_text_for(CapturePhase::Idle),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +222,70 @@ mod tests {
         for phase in not_recording() {
             assert_eq!(tray_click_action(phase), TrayClickAction::OpenPanel, "{phase:?}");
         }
+    }
+
+    #[test]
+    fn a_click_is_routed_in_every_phase() {
+        for phase in not_recording() {
+            assert_eq!(tray_click_route(true, phase), TrayClickRoute::TogglePanel, "{phase:?}");
+            assert_eq!(tray_click_route(false, phase), TrayClickRoute::OpenMainWindow, "{phase:?}");
+        }
+        for phase in [RECORDING, PAUSED] {
+            assert_eq!(tray_click_route(true, phase), TrayClickRoute::ShowRecordingControls);
+            assert_eq!(tray_click_route(false, phase), TrayClickRoute::ShowRecordingControls);
+        }
+    }
+
+    /// The popover that stopped opening: after a capture the session is back
+    /// at Idle, and a click there opens the popover like any other time.
+    #[test]
+    fn a_click_after_a_finished_capture_opens_the_popover() {
+        use crate::capture::session::{CaptureEvent, transition};
+        let shot = [
+            CaptureEvent::Start {
+                kind: CaptureKind::Screenshot,
+                mode: CaptureMode::Area,
+            },
+            CaptureEvent::Selected,
+            CaptureEvent::Captured,
+        ];
+        let after_shot = shot.iter().try_fold(CapturePhase::Idle, |p, &e| transition(p, e)).unwrap();
+        assert_eq!(after_shot, CapturePhase::Idle);
+        assert_eq!(tray_click_route(true, after_shot), TrayClickRoute::TogglePanel);
+
+        let recording = [
+            CaptureEvent::Start {
+                kind: CaptureKind::Recording,
+                mode: CaptureMode::Screen,
+            },
+            CaptureEvent::Selected,
+            CaptureEvent::RecordingStarted { microphone: false },
+            CaptureEvent::Stop,
+            CaptureEvent::Captured,
+        ];
+        let after_recording = recording.iter().try_fold(CapturePhase::Idle, |p, &e| transition(p, e)).unwrap();
+        assert_eq!(after_recording, CapturePhase::Idle);
+        assert_eq!(tray_click_route(true, after_recording), TrayClickRoute::TogglePanel);
+        // A cancelled or failed one too.
+        for end in [CaptureEvent::Cancel, CaptureEvent::Failed] {
+            let phase = transition(RECORDING, end).unwrap();
+            assert_eq!(tray_click_route(true, phase), TrayClickRoute::TogglePanel, "{end:?}");
+        }
+    }
+
+    #[test]
+    fn the_tray_is_written_only_when_its_text_changes() {
+        let idle = tray_text_for(CapturePhase::Idle);
+        // A screenshot never touches the icon: every phase of it is idle text.
+        assert!(!tray_needs_write(None, &idle));
+        for phase in not_recording() {
+            assert!(!tray_needs_write(Some(&idle), &tray_text_for(phase)), "{phase:?}");
+        }
+        // A recording writes its time each second, and clears once at the end.
+        let t42 = tray_text_for(RECORDING);
+        assert!(tray_needs_write(None, &t42));
+        assert!(tray_needs_write(Some(&idle), &t42));
+        assert!(!tray_needs_write(Some(&t42), &t42));
+        assert!(tray_needs_write(Some(&t42), &idle));
     }
 }

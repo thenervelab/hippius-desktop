@@ -88,6 +88,30 @@ describe("the preview card", () => {
     expect(dismissed()).toBe(1);
   });
 
+  // Uploaded before its link was made: it stays until Rust says it settled,
+  // so it can still say the link was copied.
+  it("waits for its link before sliding away", async () => {
+    await setup(
+      card({ state: "uploaded", linkCopied: false }, 1, {}, { link: { state: "creating" }, linkText: "Creating link…", settled: false }),
+    );
+    expect(document.querySelector("[aria-live]")).toHaveTextContent("Uploaded · Creating link…");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_HIDE_MS * 2);
+    });
+    expect(dismissed()).toBe(0);
+    await act(() =>
+      tauri.emitEvent(
+        "capture_preview_changed",
+        linked({ state: "uploaded", linkCopied: true }, 1),
+      ),
+    );
+    expect(document.querySelector("[aria-live]")).toHaveTextContent("Uploaded · Public link copied");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_HIDE_MS + 10);
+    });
+    expect(dismissed()).toBe(1);
+  });
+
   // Reaching for a button must never race the card.
   it("holds while the pointer is on it and starts the full time again on leave", async () => {
     await setup(card({ state: "uploaded", linkCopied: true }));
@@ -207,13 +231,33 @@ describe("the card's actions (Rust decides which)", () => {
     expect(called("capture_preview_mint_link")).toBe(1);
   });
 
-  it("reveals the file in the system's file manager", async () => {
+  it("reveals the file in the system's file manager from the More menu", async () => {
     await setup(linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true }));
-    fireEvent.click(screen.getByRole("button", { name: /^Show in (Finder|Explorer|file manager)$/ }));
+    // Not a button of its own on the row: the row keeps every label on one line.
+    expect(screen.queryByRole("button", { name: /^Show in (Finder|Explorer|file manager)$/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    const reveal = screen.getByRole("menuitem", { name: /^Show in (Finder|Explorer|file manager)$/ });
+    expect(reveal).toHaveFocus();
+    fireEvent.click(reveal);
     await act(async () => {
       await Promise.resolve();
     });
     expect(called("capture_preview_reveal")).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("moves through the More menu with the arrow keys", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true, revokeLink: true }));
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    const [first, second] = screen.getAllByRole("menuitem");
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(second).toHaveFocus();
+    expect(second).toHaveTextContent("Revoke link");
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(second).toHaveFocus();
   });
 
   it("revokes the link from the More menu, and Escape closes the menu", async () => {
@@ -232,6 +276,47 @@ describe("the card's actions (Rust decides which)", () => {
     });
     expect(called("capture_preview_revoke_link")).toBe(1);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  // "Show in folder" broke onto two lines beside Copy link, Show in Finder
+  // and More. The row is now one primary, one compact secondary and at most
+  // one icon button, and no label can wrap.
+  it("keeps every action on one line, in every state", async () => {
+    const states: CapturePreviewCard[] = [
+      card({ state: "uploading" }),
+      linked({ state: "syncing", linkCopied: true }, 1, { reveal: true, revokeLink: true }),
+      linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true, revokeLink: true }),
+      card({ state: "uploaded", linkCopied: false }, 1, { mintLink: true, reveal: true }),
+      card(failed("offline"), 1, { retry: true, discard: true }),
+      card(failed("Your storage is full.", "storageFull"), 1, { retry: true, discard: true, upgrade: true }),
+      card({ ...failed("offline"), retryable: false }),
+    ];
+    for (const [i, c] of states.entries()) {
+      const view = await setup({ ...c, id: i + 1 });
+      const row = screen.getByTestId("capture-actions");
+      const buttons = Array.from(row.querySelectorAll("button"));
+      expect(buttons.length, `state ${i}`).toBeLessThanOrEqual(3);
+      for (const b of buttons) {
+        const icon = b.classList.contains("size-8");
+        if (!icon) expect(b, `state ${i}: ${b.textContent}`).toHaveClass("whitespace-nowrap");
+        else expect(b, `state ${i}`).toHaveAttribute("aria-label");
+      }
+      // At most one takes the spare room; the rest are sized to their labels.
+      expect(buttons.filter((b) => b.classList.contains("flex-1")).length, `state ${i}`).toBe(1);
+      view.unmount();
+    }
+  });
+
+  it("turns Discard into an icon when Upgrade and Retry are there too", async () => {
+    await setup(card(failed("Your storage is full.", "storageFull"), 1, { retry: true, discard: true, upgrade: true }));
+    const discard = screen.getByRole("button", { name: "Discard" });
+    expect(discard).toHaveAttribute("title", "Discard");
+    expect(discard).not.toHaveTextContent("Discard");
+    fireEvent.click(discard);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_discard")).toBe(1);
   });
 
   it("offers nothing Rust did not", async () => {

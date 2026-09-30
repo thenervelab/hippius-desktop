@@ -29,14 +29,21 @@ export interface CardView {
   text: string;
   /** The file is in the drive. */
   done: boolean;
+  /** Rust says the card is finished (in the drive, link settled): it may slide away. */
+  settled: boolean;
   failed: boolean;
 }
 
-/** `path` is this card's file: the drive-relative `Captures/<name>`, or a local path ending in it. */
+/**
+ * `path` is this card's file: the drive-relative `Captures/<name>`, or a local
+ * path ending in it. Compared in NFC, as Rust does (`same_drive_path`): a name
+ * macOS wrote decomposed ("e" plus an accent) is the same name.
+ */
 function sameFile(card: CapturePreviewCard, row: { path: string; label: string } | null | undefined): boolean {
   if (!row || row.label !== card.driveLabel) return false;
-  const path = row.path.replace(/\\/g, "/");
-  return path === card.relPath || path.endsWith(`/${card.relPath}`);
+  const path = row.path.replace(/\\/g, "/").normalize("NFC");
+  const rel = card.relPath.normalize("NFC");
+  return path === rel || path.endsWith(`/${rel}`);
 }
 
 export function cardView(
@@ -52,6 +59,7 @@ export function cardView(
         percent,
         text: percent === null ? "Preparing upload…" : `Uploading · ${percent}%`,
         done: false,
+        settled: false,
         failed: false,
       };
     }
@@ -62,13 +70,20 @@ export function cardView(
         percent,
         text: percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`,
         done: false,
+        settled: false,
         failed: false,
       };
     }
     case "uploaded":
-      return { percent: 100, text: joinLink("Uploaded", card.linkText), done: true, failed: false };
+      return {
+        percent: 100,
+        text: joinLink("Uploaded", card.linkText),
+        done: true,
+        settled: card.settled ?? true,
+        failed: false,
+      };
     case "failed":
-      return { percent: null, text: "Couldn't upload", done: false, failed: true };
+      return { percent: null, text: "Couldn't upload", done: false, settled: false, failed: true };
   }
 }
 

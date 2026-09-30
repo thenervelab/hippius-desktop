@@ -39,9 +39,16 @@ import { AUTO_HIDE_MS, cardView, destinationText, wantsProgress } from "./previe
 /** How long "Copied" shows before the button reads "Copy link" again. */
 const COPIED_MS = 1500;
 
-const ACTION = "flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-[8px] px-2 text-[12px]";
-const SECONDARY = `${ACTION} bg-white/10 font-medium ${GLASS_BUTTON}`;
+// Every label stays on one line (`whitespace-nowrap`): the card is 316 pt
+// wide, and "Show in folder" once broke in two beside three other buttons.
+// The row is one primary that takes the room left (`flex-1`, `min-w-0`), a
+// compact secondary sized to its label (`shrink-0`) and at most one 32 pt
+// icon button; the rest of the actions live in the More menu.
+const ACTION = "flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-[8px] px-2.5 text-[12px]";
+const PRIMARY_ACTION = `${ACTION} min-w-0 flex-1 ${GLASS_PRIMARY}`;
+const SECONDARY_ACTION = `${ACTION} shrink-0 bg-white/10 font-medium ${GLASS_BUTTON}`;
 const ICON_ACTION = `grid size-8 shrink-0 place-items-center rounded-[8px] bg-white/10 ${GLASS_BUTTON}`;
+const MENU_ITEM = `flex h-8 w-full items-center gap-2 whitespace-nowrap rounded-[7px] px-2.5 text-left text-[12px] ${GLASS_BUTTON}`;
 
 /**
  * The card that slides into the corner after a capture, like the macOS
@@ -53,9 +60,11 @@ const ICON_ACTION = `grid size-8 shrink-0 place-items-center rounded-[8px] bg-wh
  * thumbnail are: it floats over other apps.
  *
  * Rust decides the buttons (`card.actions`) and words the link
- * (`card.linkText`); the card only draws them. Actions are one row of at
- * most two text buttons plus two icon buttons, and Revoke link sits in the
- * "More" menu, so the row never wraps.
+ * (`card.linkText`); the card only draws them. Actions are one row: one
+ * primary (Show in folder), one compact secondary (Copy link / Create link)
+ * and a "More" menu holding Show in Finder / Explorer and Revoke link, so no
+ * label ever wraps. A failed card offers Upgrade / Retry / Discard the same
+ * way, Discard becoming an icon when all three are there.
  *
  * Sized for Rust's 316 x 330 pt window in every state (16:9 picture, the
  * failure reason on one line with the whole of it in the tooltip): the card
@@ -74,7 +83,7 @@ export default function CapturePreviewPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const menuButton = useRef<HTMLButtonElement | null>(null);
-  const menuItem = useRef<HTMLButtonElement | null>(null);
+  const menu = useRef<HTMLDivElement | null>(null);
   const cardId = useRef<number | null>(null);
   const copiedTimer = useRef<number | null>(null);
 
@@ -131,15 +140,26 @@ export default function CapturePreviewPage() {
     if (card) void dismissCapturePreview(card.id).catch(() => undefined);
   }, [card]);
 
-  // The menu takes the keyboard while open: focus on its item, Escape closes it.
+  // The menu takes the keyboard while open: focus on its first item, arrows
+  // move between items, Escape closes it and gives focus back to More.
   useEffect(() => {
     if (!menuOpen) return;
-    menuItem.current?.focus();
+    const items = () => Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+    items()[0]?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMenuOpen(false);
+        menuButton.current?.focus();
+        return;
+      }
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      const list = items();
+      if (list.length === 0) return;
       e.preventDefault();
-      setMenuOpen(false);
-      menuButton.current?.focus();
+      const at = list.indexOf(document.activeElement as HTMLButtonElement);
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      list[(at + step + list.length) % list.length]?.focus();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -147,13 +167,16 @@ export default function CapturePreviewPage() {
 
   const view = card ? cardView(card, row, syncFiles) : null;
   const done = view?.done ?? false;
+  const settled = view?.settled ?? false;
 
-  // Once in the drive, the card slides away on its own, unless the pointer is on it.
+  // Once in the drive with its link settled, the card slides away on its own,
+  // unless the pointer is on it. Not before the link: it would go before it
+  // could say the link was copied.
   useEffect(() => {
-    if (!done || hovered) return;
+    if (!settled || hovered) return;
     const t = window.setTimeout(dismiss, AUTO_HIDE_MS);
     return () => window.clearTimeout(t);
-  }, [done, hovered, dismiss, timerRun]);
+  }, [settled, hovered, dismiss, timerRun]);
 
   if (!card || !view) return null;
   const { percent, failed } = view;
@@ -237,7 +260,7 @@ export default function CapturePreviewPage() {
           )}
           {!failed && (
             <span className="pointer-events-none absolute inset-0 grid place-items-center bg-[#000]/0 opacity-0 transition duration-150 group-hover:bg-[#000]/35 group-hover:opacity-100 motion-reduce:transition-none">
-              <span className="flex items-center gap-1.5 rounded-full bg-[#000]/70 px-3 py-1 text-[12px] font-medium">
+              <span className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#000]/70 px-3 py-1 text-[12px] font-medium">
                 <FolderOpen className="size-3.5" /> Show in folder
               </span>
             </span>
@@ -272,7 +295,7 @@ export default function CapturePreviewPage() {
               />
             </div>
           )}
-          {done && (
+          {settled && (
             // Stays put while hovered, paused, so the card does not change
             // height under the pointer; leaving starts it over.
             <div className="h-0.5 overflow-hidden rounded-full bg-white/10" aria-hidden data-testid="auto-hide-timer">
@@ -290,11 +313,11 @@ export default function CapturePreviewPage() {
           )}
         </div>
 
-        <div className="relative mt-2 flex gap-1.5">
+        <div className="relative mt-2 flex gap-1.5" data-testid="capture-actions">
           {failed ? (
             <>
               {actions.upgrade && (
-                <button type="button" onClick={() => run(upgradeFromCapturePreview)} className={`${ACTION} ${GLASS_PRIMARY}`}>
+                <button type="button" onClick={() => run(upgradeFromCapturePreview)} className={PRIMARY_ACTION}>
                   <Sparkles aria-hidden className="size-3.5 shrink-0" /> Upgrade
                 </button>
               )}
@@ -303,50 +326,52 @@ export default function CapturePreviewPage() {
                   type="button"
                   disabled={busy}
                   onClick={() => run(retryCapturePreview)}
-                  className={actions.upgrade ? SECONDARY : `${ACTION} ${GLASS_PRIMARY}`}
+                  className={actions.upgrade ? SECONDARY_ACTION : PRIMARY_ACTION}
                 >
                   <RotateCw aria-hidden className="size-3.5 shrink-0" /> Retry
                 </button>
               )}
-              {actions.discard && (
-                <button type="button" disabled={busy} onClick={() => run(discardCapturePreview)} className={SECONDARY}>
-                  <Trash2 aria-hidden className="size-3.5 shrink-0" /> Discard
-                </button>
-              )}
+              {actions.discard &&
+                (actions.upgrade && actions.retry ? (
+                  // Three text buttons do not fit on one line: Discard becomes an icon.
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label="Discard"
+                    title="Discard"
+                    onClick={() => run(discardCapturePreview)}
+                    className={ICON_ACTION}
+                  >
+                    <Trash2 aria-hidden className="size-4" />
+                  </button>
+                ) : (
+                  <button type="button" disabled={busy} onClick={() => run(discardCapturePreview)} className={SECONDARY_ACTION}>
+                    <Trash2 aria-hidden className="size-3.5 shrink-0" /> Discard
+                  </button>
+                ))}
               {!actions.retry && !actions.upgrade && (
                 // The sync queue retries a synced capture on its own.
-                <button type="button" onClick={showInFolder} className={`${ACTION} ${GLASS_PRIMARY}`}>
+                <button type="button" onClick={showInFolder} className={PRIMARY_ACTION}>
                   <FolderOpen aria-hidden className="size-3.5 shrink-0" /> Show in folder
                 </button>
               )}
             </>
           ) : (
             <>
-              <button type="button" onClick={showInFolder} className={`${ACTION} ${GLASS_PRIMARY}`}>
+              <button type="button" onClick={showInFolder} className={PRIMARY_ACTION}>
                 <FolderOpen aria-hidden className="size-3.5 shrink-0" /> Show in folder
               </button>
               {actions.mintLink ? (
-                <button type="button" disabled={busy} onClick={() => run(mintCapturePreviewLink)} className={SECONDARY}>
+                <button type="button" disabled={busy} onClick={() => run(mintCapturePreviewLink)} className={SECONDARY_ACTION}>
                   <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
                 </button>
               ) : (
-                <button type="button" disabled={!actions.copyLink} onClick={copy} className={SECONDARY}>
+                <button type="button" disabled={!actions.copyLink} onClick={copy} className={SECONDARY_ACTION}>
                   {copied ? <Check aria-hidden className="size-3.5 shrink-0" /> : <Link2 aria-hidden className="size-3.5 shrink-0" />}
                   {copied ? "Copied" : "Copy link"}
                 </button>
               )}
-              {actions.reveal && (
-                <button
-                  type="button"
-                  aria-label={`Show in ${fileManager}`}
-                  title={`Show in ${fileManager}`}
-                  onClick={() => run(revealCapturePreview)}
-                  className={ICON_ACTION}
-                >
-                  <FolderSearch aria-hidden className="size-4" />
-                </button>
-              )}
-              {actions.revokeLink && (
+              {(actions.reveal || actions.revokeLink) && (
                 <button
                   ref={menuButton}
                   type="button"
@@ -360,23 +385,43 @@ export default function CapturePreviewPage() {
                   <MoreHorizontal aria-hidden className="size-4" />
                 </button>
               )}
-              {menuOpen && actions.revokeLink && (
+              {menuOpen && (actions.reveal || actions.revokeLink) && (
                 // Opens upward over the picture: the card sits at the window's
                 // bottom edge, so there is no room below.
-                <div role="menu" aria-label="More" className={`absolute bottom-10 right-0 z-10 min-w-[150px] rounded-[10px] p-1 ${GLASS_PANEL}`}>
-                  <button
-                    ref={menuItem}
-                    type="button"
-                    role="menuitem"
-                    disabled={busy}
-                    onClick={() => {
-                      setMenuOpen(false);
-                      run(revokeCapturePreviewLink);
-                    }}
-                    className={`flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[12px] ${GLASS_BUTTON}`}
-                  >
-                    <X aria-hidden className="size-3.5" /> Revoke link
-                  </button>
+                <div
+                  ref={menu}
+                  role="menu"
+                  aria-label="More"
+                  className={`absolute bottom-10 right-0 z-10 min-w-[170px] rounded-[10px] p-1 ${GLASS_PANEL}`}
+                >
+                  {actions.reveal && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        run(revealCapturePreview);
+                      }}
+                      className={MENU_ITEM}
+                    >
+                      <FolderSearch aria-hidden className="size-3.5 shrink-0" /> Show in {fileManager}
+                    </button>
+                  )}
+                  {actions.revokeLink && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        run(revokeCapturePreviewLink);
+                      }}
+                      className={MENU_ITEM}
+                    >
+                      <X aria-hidden className="size-3.5 shrink-0" /> Revoke link
+                    </button>
+                  )}
                 </div>
               )}
             </>

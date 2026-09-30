@@ -124,9 +124,22 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   highlights it for a few seconds, even in a folder of dozens of files.
 - **When recording is not available, Hippius says why.** On a Mac whose copy
   of Hippius was built without screen recording, or that runs a macOS older
-  than 13, the Record options stay on the capture bar, the Capture menu and
+  than 13, the Record options stay on the capture bar, the Record button and
   in Settings, greyed out with the reason, instead of disappearing and
   leaving only screenshots.
+- **The capture card moves on as soon as your capture is in the drive.** It
+  could sit on "Preparing upload" while the sync queue already showed the
+  file synced. It now follows the upload, says Uploaded once it lands, and
+  waits for the link before it slides away.
+- **The capture card's buttons stay on one line.** Show in folder and Copy
+  link sit side by side, and Show in Finder and Revoke link are in the More
+  menu.
+- **Clicking the Hippius icon in the menu bar always opens its menu**, even
+  after the app reloaded in the background.
+- **Screenshot and Record are on Overview too**, in the Recent Files toolbar
+  beside Folder and File, where they sit on the Drive page.
+- **Settings says when the capture shortcut is not working**, and when
+  another copy of Hippius is holding it.
 
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.

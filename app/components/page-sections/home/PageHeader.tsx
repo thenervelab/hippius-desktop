@@ -7,7 +7,6 @@ import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
 import PlanActionButton from "@/components/ui/plan-chip/PlanActionButton";
-import CaptureButtons from "@/components/capture/CaptureButtons";
 import { usePlanActionView } from "@/components/ui/plan-chip/usePlanActionView";
 import { cn } from "@/app/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
@@ -46,10 +45,6 @@ interface PageHeaderProps {
    * Active Plan chips + Top-up button) with the supplied node. Used by
    * the wallet page to slot in the ActiveWalletSelector instead. */
   rightSlot?: ReactNode;
-  /** Offer the screen-capture menu. Overview only: this header is also the
-   * Billing, Wallet, Referrals and Plans header, where a Capture button has
-   * nothing to do with the page. */
-  showCapture?: boolean;
 }
 
 const PageHeader: FC<PageHeaderProps> = ({
@@ -59,7 +54,6 @@ const PageHeader: FC<PageHeaderProps> = ({
   showTopUpCredits = true,
   showPlanCard = true,
   rightSlot,
-  showCapture = false,
 }) => {
   // Auth-account stake — see the comment in `useStaking` on why the
   // home / billing / overview headers read the auth account rather
@@ -116,9 +110,6 @@ const PageHeader: FC<PageHeaderProps> = ({
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-3">
-      {/* Screenshot straight into Hippius from the Overview too, not only
-          from inside Drive. Renders nothing where capture is unavailable. */}
-      {showCapture && <CaptureButtons />}
       {rightSlot ? (
         <div className="flex items-center justify-end">{rightSlot}</div>
       ) : showPlanCard ? (

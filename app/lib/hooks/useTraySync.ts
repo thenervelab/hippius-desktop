@@ -1,5 +1,5 @@
 "use client";
-import { TrayIcon, type TrayIconEvent } from "@tauri-apps/api/tray";
+import { TrayIcon } from "@tauri-apps/api/tray";
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -106,8 +106,9 @@ async function refreshLoginStatus(): Promise<boolean> {
 
 /* ─ Right-click context menu ──────────────────────────────────── */
 //
-// The tray icon's LEFT click opens the custom popover window (see
-// `handleTrayClick`). Its RIGHT click shows this small native menu —
+// The tray icon's LEFT click opens the custom popover window (Rust receives
+// it: `tray::panel::on_tray_icon_event`). Its RIGHT click shows this small
+// native menu:
 // Open Files, Open Virtual Machines, Quit Hippius. "Open Hippius" is
 // deliberately omitted because the popover already has an Open Hippius
 // button. The menu is attached with `showMenuOnLeftClick: false` so it
@@ -222,60 +223,35 @@ async function buildTrayContextMenu(): Promise<Menu> {
   });
 }
 
-// Mirror of the auth context's `isAuthenticated`, kept at module scope so the
-// tray `action` callback (a plain closure, not a React component) can read the
-// current value synchronously. This is the SAME flag that decides whether the
-// app shows its login screen, so the tray matches the visible UI exactly —
-// unlike Rust's `AuthInfo.substrate_address`, which stays set for a session
-// restored from disk even while the UI is logged out. Updated by `useTrayInit`.
-let isAuthenticatedLatest = false;
-
 /**
- * Tray-icon click handler. When signed in, a left-click forwards the icon's
- * screen rectangle (`event.rect`) to the Rust `toggle_tray_panel` command,
- * which anchors and toggles the popover (it replaced the old native menu).
- * During a screen recording Rust shows the recording's pill instead of the
- * popover; that decision is Rust's alone, and this handler never reads the
- * capture phase. When signed out, the popover (credits/uploads/account) is meaningless, so the
- * click reveals the main window's login screen instead.
+ * Tell Rust whether the app on screen is signed in. Rust receives the tray
+ * icon's clicks itself (`tray::panel::on_tray_icon_event`) and uses this to
+ * choose between the popover and the main window's sign-in screen. It is the
+ * auth context's `isAuthenticated`, the value that decides whether the login
+ * screen shows, NOT Rust's `AuthInfo.substrate_address` (that stays set for a
+ * session restored from disk while the UI shows the login screen).
  *
- * Right/middle clicks are ignored. Tray click events never fire on Linux, so
- * this handler is a no-op there; on Linux the native menu's "Open Hippius" item
- * (`openHippiusFromTray`) reveals the main window instead of the popover — see
- * the CLAUDE.md note.
+ * The click used to come here, through the `action` callback given to
+ * `TrayIcon.new`. That callback belongs to this page: after a reload the icon
+ * kept calling a callback that no longer existed and the popover stopped
+ * opening. Rust's listener belongs to the app and cannot go stale; the page
+ * only reports state, which it sends again whenever it loads.
  */
-async function handleTrayClick(event: TrayIconEvent) {
-  if (
-    event.type !== "Click" ||
-    event.button !== "Left" ||
-    event.buttonState !== "Up"
-  ) {
-    return;
-  }
+async function reportSignedIn(signedIn: boolean) {
   try {
-    if (!isAuthenticatedLatest) {
-      await openAppWindow();
-      return;
-    }
-    await invoke("toggle_tray_panel", {
-      rect: {
-        x: event.rect.position.x,
-        y: event.rect.position.y,
-        width: event.rect.size.width,
-        height: event.rect.size.height,
-      },
-    });
+    await invoke("tray_set_signed_in", { signedIn });
   } catch (e) {
-    logTrayAction("Failed to toggle tray panel", e);
+    logTrayAction("Failed to report sign-in to the tray", e);
   }
 }
 
 /* ─ Public: create tray once ──────────────────────────────────── */
 
 export function useTrayInit(isAuthenticated: boolean) {
-  // Keep the module-level mirror in sync so `handleTrayClick` (the tray
-  // `action` closure) sees the current auth state synchronously.
-  isAuthenticatedLatest = isAuthenticated;
+  // Rust decides what a tray click opens; it needs to know who is signed in.
+  useEffect(() => {
+    void reportSignedIn(isAuthenticated);
+  }, [isAuthenticated]);
 
   // Use atom to watch for sync percentage changes
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
@@ -329,14 +305,14 @@ export function useTrayInit(isAuthenticated: boolean) {
       const existingTray = await TrayIcon.getById(TRAY_ID);
 
       if (!existingTray) {
-        // macOS/Windows: left-click → custom popover (via `handleTrayClick`);
+        // macOS/Windows: left-click → the popover, decided and opened by Rust
+        // (no `action` here: a callback of this page dies with a reload);
         // right-click → the small native context menu (Open Files / Open VM /
         // Quit). `showMenuOnLeftClick: false` keeps the left click on the
         // popover. Linux: the icon fires no left-click event, so the menu must
         // show on left-click (`showMenuOnLeftClick: isLinuxPlatform`) and it
         // includes an "Open Hippius" entry (added by `buildTrayContextMenu`) as
-        // the only way to reach the popover there. `action` stays attached
-        // (harmless no-op on Linux).
+        // the only way to reach the app there.
         const contextMenu = await buildTrayContextMenu();
         await TrayIcon.new({
           id: TRAY_ID,
@@ -345,9 +321,17 @@ export function useTrayInit(isAuthenticated: boolean) {
           tooltip: "Hippius Cloud",
           menu: contextMenu,
           showMenuOnLeftClick: isLinuxPlatform,
-          action: handleTrayClick,
         });
         trayIconState = "default";
+      } else {
+        // The page reloaded under a live icon. Its context menu's items call
+        // back into the page that made them, which is gone: attach a fresh
+        // menu so right-click works again.
+        try {
+          await existingTray.setMenu(await buildTrayContextMenu());
+        } catch (e) {
+          logTrayAction("Failed to re-attach the tray menu", e);
+        }
       }
 
       // Watch sync snapshots (drives the icon) and login status (enables/
@@ -466,9 +450,9 @@ async function setTrayIconSyncing(
       if (currentTray) await currentTray.close();
 
       // Rebuild + re-attach the context menu (a fresh menu, since the previous
-      // one belonged to the closed icon). Left-click toggles the popover via
-      // `handleTrayClick` on macOS/Windows; on Linux it shows the menu (whose
-      // "Open Hippius" entry opens the popover) — see the creation path.
+      // one belonged to the closed icon). Left-click is Rust's on
+      // macOS/Windows; on Linux it shows the menu (whose "Open Hippius"
+      // entry opens the app), see the creation path.
       const contextMenu = await buildTrayContextMenu();
       await TrayIcon.new({
         id: TRAY_ID,
@@ -477,7 +461,6 @@ async function setTrayIconSyncing(
         tooltip: "Hippius Cloud",
         menu: contextMenu,
         showMenuOnLeftClick: isLinuxPlatform,
-        action: handleTrayClick,
       });
 
       trayIconState = newState;

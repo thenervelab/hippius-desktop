@@ -34,7 +34,7 @@ use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, Trans
 use super::share;
 use super::shortcut::{self, ShortcutAction, ShortcutSetting};
 use super::targets::{DisplayTarget, WindowTarget};
-use super::tray_status::{self, TrayClickAction, TrayText};
+use super::tray_status::{self, TrayClickRoute, TrayText};
 use crate::app_state::AppState;
 use crate::error::{AppError, NotReadyKind, Result};
 
@@ -128,6 +128,11 @@ pub struct CaptureState {
     /// The newest `seq` written to the tray, so a tray write that ran late
     /// never puts an older time back (see [`show_phase_in_tray`]).
     tray_seq: AtomicU64,
+    /// What the tray was last given, so it is written only when that changes.
+    tray_last: Mutex<Option<TrayText>>,
+    /// Why the saved shortcut could not be registered at start-up, for
+    /// Settings (`ShortcutSetting::problem`); cleared once one registers.
+    shortcut_problem: Mutex<Option<String>>,
     /// Whether the main window was on screen when the capture started, so it
     /// comes back only if it was there to begin with.
     restore_main: AtomicBool,
@@ -319,7 +324,12 @@ fn show_phase_in_tray(app: &AppHandle, event: PhaseEvent) {
     let posted = app.run_on_main_thread(move || {
         let state = handle.state::<AppState>();
         if newest_for_tray(&state.capture.tray_seq, event.seq) {
-            write_tray_text(&handle, &tray_status::tray_text_for(event.phase));
+            let text = tray_status::tray_text_for(event.phase);
+            let mut last = lock(&state.capture.tray_last);
+            if tray_status::tray_needs_write(last.as_ref(), &text) {
+                write_tray_text(&handle, &text);
+                *last = Some(text);
+            }
         }
     });
     if let Err(e) = posted {
@@ -335,9 +345,10 @@ fn newest_for_tray(shown: &AtomicU64, seq: u64) -> bool {
 
 /// The icon is created by the main window (`useTraySync.ts`) under
 /// [`tray_status::TRAY_ID`]; before it exists there is nothing to write.
-/// Written on every phase change, not only when the text differs: the
-/// frontend recreates the icon when a sync icon fails to apply, and the new
-/// icon starts with no title, so the next tick puts it back.
+/// Written only when the text changes ([`tray_status::tray_needs_write`]),
+/// so a screenshot never touches the status item. The frontend may recreate
+/// the icon (a sync icon that failed to apply) with no title; mid-recording
+/// the next second's tick writes the time back.
 fn write_tray_text(app: &AppHandle, text: &TrayText) {
     let Some(tray) = app.tray_by_id(tray_status::TRAY_ID) else {
         return;
@@ -353,22 +364,23 @@ fn write_tray_text(app: &AppHandle, text: &TrayText) {
     }
 }
 
-/// A left click on the tray icon, asked by `tray::panel::toggle_tray_panel`
-/// before it opens the popover. During a recording the click brings the
-/// recording's pill back, without taking the keyboard from the app being
-/// recorded, and does NOT stop it (the pill has Stop); the popover does not
-/// open. Any other time the popover opens as usual.
-pub fn on_tray_click(app: &AppHandle) -> TrayClickAction {
+/// A left click on the tray icon, received by `tray::panel` before it opens
+/// anything. During a recording the click brings the recording's pill back,
+/// without taking the keyboard from the app being recorded, and does NOT
+/// stop it (the pill has Stop); the popover does not open. Otherwise the
+/// route is the popover, or the main window when nobody is signed in
+/// ([`tray_status::tray_click_route`]).
+pub fn on_tray_click(app: &AppHandle, signed_in: bool) -> TrayClickRoute {
     let state = app.state::<AppState>();
-    let action = tray_status::tray_click_action(state.capture.current());
-    if action == TrayClickAction::ShowRecordingControls {
+    let route = tray_status::tray_click_route(signed_in, state.capture.current());
+    if route == TrayClickRoute::ShowRecordingControls {
         if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
             show_without_focus(&w);
         } else {
             tracing::warn!("tray click during a recording found no recording controls");
         }
     }
-    action
+    route
 }
 
 fn transition_error(e: TransitionError) -> AppError {
@@ -1884,13 +1896,14 @@ fn capture_blocking(_selection: Selection) -> Result<image::RgbaImage> {
 /// card when one is showing (`card_id`), and as a system notification only
 /// when the upload failed, since the card already shows a success.
 ///
+/// Two steps, each told to the card as it happens: the file is put in the
+/// drive (a synced capture is then followed in the sync queue at once), and
+/// only then is its link made. The card used to hear nothing until both were
+/// done, so it said "Preparing upload" through the whole upload and the mint.
+///
 /// A card goes to the drive it names (Retry included), even if the capture
 /// drive was changed since.
-#[allow(clippy::too_many_lines)]
 async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>) {
-    use tauri_plugin_clipboard_manager::ClipboardExt;
-    use tauri_plugin_notification::NotificationExt;
-
     let state = app.state::<AppState>();
     let started_ms = chrono::Utc::now().timestamp_millis();
     let card_destination = card_id.and_then(|id| {
@@ -1909,82 +1922,43 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                 .ok_or(AppError::NotReady(NotReadyKind::CaptureDestinationUnset))?,
         };
         let mint_link = bar::load_options(pool).await.map_or(true, |o| o.copy_link);
-        let delivered = super::deliver::deliver(&state, app.clone(), &account_id, &destination, path, mint_link).await?;
-        Ok::<_, AppError>((delivered, destination))
+        let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
+        Ok::<_, AppError>((account_id, destination, mint_link, placed))
     }
     .await;
 
-    match &outcome {
-        Ok((delivered, destination)) => {
-            let mut copied = false;
-            if let Some(url) = &delivered.share_url {
-                if let Err(e) = app.clipboard().write_text(url.clone()) {
-                    tracing::warn!(error = %e, "capture link minted but not copied");
-                } else {
-                    copied = true;
-                }
-            }
-            // The upload landed, so the plaintext copy has served its purpose,
-            // unless a direct upload still needs it to make a link later.
+    match outcome {
+        Ok((account_id, destination, mint_link, placed)) => {
+            announce_placed(app, card_id, &destination, &placed, mint_link, started_ms);
+            let minted = if mint_link {
+                super::deliver::link_for(&state, &account_id, &destination, &placed).await
+            } else {
+                super::deliver::Minted::default()
+            };
+            let delivered = super::deliver::Delivered::from_parts(&placed, &minted, &destination.display_name);
+            let copied = copy_link_to_clipboard(app, delivered.share_url.as_deref());
+            // The upload landed (or, synced, the file is in the drive's own
+            // folder), so the temp copy has served its purpose, unless a
+            // direct upload still needs it to make a link later.
             let keep = super::deliver::keep_temp_after_upload(delivered.via_sync, delivered.share_url.is_some());
             if !keep && let Some(dir) = path.parent() {
                 let _ = std::fs::remove_dir_all(dir);
             }
-            let _ = app.emit(DELIVERED_EVENT, delivered);
-            let link = match (&delivered.share_url, &delivered.link_error) {
-                (Some(_), _) => LinkState::Public { copied },
-                (None, Some(message)) => LinkState::Failed { message: message.clone() },
-                (None, None) => LinkState::None,
-            };
-            let status = if delivered.via_sync {
-                PreviewStatus::Syncing {
-                    link_copied: copied,
-                    link_error: delivered.link_error.clone(),
-                }
-            } else {
-                PreviewStatus::Uploaded {
-                    link_copied: copied,
-                    link_error: delivered.link_error.clone(),
-                }
-            };
-            let placed = (delivered.via_sync || keep).then(|| delivered.placed.clone());
-            let shown = card_id.is_some_and(|id| {
-                update_card(app, &state.capture, id, |card| {
-                    card.status = status;
-                    card.share_url.clone_from(&delivered.share_url);
-                    card.share_token.clone_from(&delivered.share_token);
-                    card.link = link;
-                    card.placed_path = placed;
-                    // A capture moved into a synced folder may have been
-                    // renamed ("Shot (2).png"); the card follows that name.
-                    card.file_name.clone_from(&delivered.file_name);
-                    card.rel_path = super::preview::rel_path_for(&delivered.file_name);
-                })
-            });
-            if delivered.via_sync
-                && let Some(id) = card_id
-            {
-                spawn_sync_follow(
-                    app.clone(),
-                    id,
-                    destination.label.clone(),
-                    super::preview::rel_path_for(&delivered.file_name),
-                    started_ms,
-                );
-            }
+            let _ = app.emit(DELIVERED_EVENT, &delivered);
+            let shown = card_id.is_some_and(|id| announce_link(app, &state.capture, id, &delivered, copied, keep));
             if !shown {
-                let (title, body) = super::deliver::delivered_notice(delivered);
+                let (title, body) = super::deliver::delivered_notice(&delivered);
                 notify(app, title, body);
             }
         }
         Err(e) => {
             tracing::warn!(error = %e, "capture could not be delivered; kept on disk");
-            let message = super::deliver::failure_copy(e);
+            let message = super::deliver::failure_copy(&e);
             let shown = card_id.is_some_and(|id| {
                 update_card(app, &state.capture, id, |card| {
                     card.status = PreviewStatus::Failed {
                         message: message.clone(),
-                        reason: super::deliver::failure_reason(e),
+                        reason: super::deliver::failure_reason(&e),
                         retryable: path.exists(),
                     };
                 })
@@ -1996,26 +1970,101 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                     card_showing: shown,
                 },
             );
-            let (title, body) = super::deliver::failed_notice(e, shown);
+            let (title, body) = super::deliver::failed_notice(&e, shown);
             notify(app, title, body);
-        }
-    }
-
-    fn notify(app: &AppHandle, title: String, body: String) {
-        if let Err(e) = app.notification().builder().title(title).body(body).show() {
-            tracing::warn!(error = %e, "capture notification not shown");
         }
     }
 }
 
-/// Follow the sync engine's row for a capture delivered into a synced
-/// folder, and move its card to Uploaded (or Failed) from Rust. The row is
-/// matched by the drive and the file's path in it, never by its name alone,
-/// and is found in the finished list too, so an upload that completed before
-/// the card started following still counts.
+fn notify(app: &AppHandle, title: String, body: String) {
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        tracing::warn!(error = %e, "capture notification not shown");
+    }
+}
+
+/// Put `url` on the clipboard; whether it got there.
+fn copy_link_to_clipboard(app: &AppHandle, url: Option<&str>) -> bool {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let Some(url) = url else { return false };
+    match app.clipboard().write_text(url.to_string()) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "capture link minted but not copied");
+            false
+        }
+    }
+}
+
+/// The file is in the drive: the card says so at once. A synced capture is
+/// `syncing` and its card follows the engine from now on (the upload may
+/// well finish before the link does); a direct upload is already on the
+/// server. The link, when one is wanted, shows as being made.
+fn announce_placed(
+    app: &AppHandle,
+    card_id: Option<u64>,
+    destination: &CaptureDestination,
+    placed: &super::deliver::Placed,
+    mint_link: bool,
+    started_ms: i64,
+) {
+    let Some(id) = card_id else { return };
+    let state = app.state::<AppState>();
+    let rel_path = super::preview::rel_path_for(&placed.file_name);
+    update_card(app, &state.capture, id, |card| {
+        card.status = if placed.via_sync {
+            PreviewStatus::Syncing {
+                link_copied: false,
+                link_error: None,
+            }
+        } else {
+            PreviewStatus::Uploaded {
+                link_copied: false,
+                link_error: None,
+            }
+        };
+        card.link = if mint_link { LinkState::Creating } else { LinkState::None };
+        card.placed_path = Some(placed.placed.clone());
+        // A capture moved into a synced folder may have been renamed
+        // ("Shot (2).png"); the card follows that name.
+        card.file_name.clone_from(&placed.file_name);
+        card.rel_path.clone_from(&rel_path);
+    });
+    if placed.via_sync {
+        spawn_sync_follow(app.clone(), id, destination.label.clone(), rel_path, started_ms);
+    }
+}
+
+/// The link is made (or not): the card says which, keeping whatever the
+/// upload reached meanwhile. Returns whether a card window is there to show it.
+fn announce_link(app: &AppHandle, state: &CaptureState, id: u64, delivered: &super::deliver::Delivered, copied: bool, keep: bool) -> bool {
+    let link = match (&delivered.share_url, &delivered.link_error) {
+        (Some(_), _) => LinkState::Public { copied },
+        (None, Some(message)) => LinkState::Failed { message: message.clone() },
+        (None, None) => LinkState::None,
+    };
+    let placed = (delivered.via_sync || keep).then(|| delivered.placed.clone());
+    update_card(app, state, id, |card| {
+        card.status = with_link_fields(&card.status, copied, delivered.link_error.clone());
+        card.share_url.clone_from(&delivered.share_url);
+        card.share_token.clone_from(&delivered.share_token);
+        card.link = link;
+        card.placed_path = placed;
+    })
+}
+
+/// Follow the sync engine for a capture delivered into a synced folder, and
+/// move its card to Uploaded (or Failed) from Rust. The file is matched by
+/// the drive and its path in it, never by its name alone, and the engine is
+/// asked everywhere it answers (`sync_facts`): the live row, the finished
+/// list (a small file finishes in seconds and leaves the session) and the
+/// set of files it knows are on the server. A card with a public link whose
+/// file the engine lost track of is finished by the bounded fallback in
+/// [`super::preview::link_fallback_applies`].
 fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, since_ms: i64) {
     tauri::async_runtime::spawn(async move {
-        let deadline = tokio::time::Instant::now() + SYNC_FOLLOW_LIMIT;
+        let started = tokio::time::Instant::now();
+        let deadline = started + SYNC_FOLLOW_LIMIT;
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -2033,7 +2082,11 @@ fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, s
             ) {
                 break;
             }
-            let row = sync_row(&state.sync, &label, &rel_path, since_ms);
+            let mut row = sync_facts(&state.sync, &label, &rel_path, since_ms).row();
+            if super::preview::link_fallback_applies(&card, &row, started.elapsed(), state.sync.is_any_sync_in_progress()) {
+                tracing::info!(card = id, "capture card finished by its link: the sync engine has no row for it");
+                row = super::preview::SyncRow::Completed;
+            }
             if let Some(next) = super::preview::status_after_sync_row(&card, &row) {
                 let done = matches!(next, PreviewStatus::Uploaded { .. });
                 update_card(&app, &state.capture, id, |c| c.status = next);
@@ -2045,32 +2098,43 @@ fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, s
     });
 }
 
-/// The engine's row for `rel_path` on `label`, from the live session or the
-/// finished list.
-fn sync_row(sync: &hcfs_client::engine::runner::SyncRunner, label: &str, rel_path: &str, since_ms: i64) -> super::preview::SyncRow {
-    use super::preview::SyncRow;
+/// What the engine says about `rel_path` on `label`: its row in the live
+/// session, a finished upload of it since `since_ms`, and whether its set of
+/// files on the server holds it.
+fn sync_facts(sync: &hcfs_client::engine::runner::SyncRunner, label: &str, rel_path: &str, since_ms: i64) -> super::preview::SyncFacts {
+    use super::preview::{SyncFacts, SyncRow, same_drive_path};
     use hcfs_client::engine::progress::state::{FileAction, FileStatus};
+    use unicode_normalization::UnicodeNormalization;
 
-    // Windows paths may come back with backslashes.
-    let same = |path: &str| path.replace('\\', "/") == rel_path;
-    let progress = sync.progress.lock_state();
-    let live = progress.current_session.as_ref().and_then(|s| {
-        s.files
-            .values()
-            .find(|f| &*f.label == label && f.action == FileAction::Upload && same(&f.path))
-    });
-    if let Some(file) = live {
-        return match file.status {
-            FileStatus::Completed => SyncRow::Completed,
-            FileStatus::Error => SyncRow::Failed(file.error.as_deref().map(str::to_string)),
-            _ => SyncRow::Working,
-        };
-    }
-    let finished = progress
-        .recent_files
-        .iter()
-        .any(|r| &*r.label == label && r.action == FileAction::Upload && r.completed_at >= since_ms && same(&r.path));
-    if finished { SyncRow::Completed } else { SyncRow::Absent }
+    // An upload's row reads `Encrypt` while it is being encrypted.
+    let upload = |a: &FileAction| matches!(a, FileAction::Upload | FileAction::Encrypt);
+    let (live, finished) = {
+        let progress = sync.progress.lock_state();
+        let live = progress
+            .current_session
+            .as_ref()
+            .and_then(|s| {
+                s.files
+                    .values()
+                    .find(|f| &*f.label == label && upload(&f.action) && same_drive_path(&f.path, rel_path))
+            })
+            .map(|file| match file.status {
+                FileStatus::Completed => SyncRow::Completed,
+                FileStatus::Error => SyncRow::Failed(file.error.as_deref().map(str::to_string)),
+                _ => SyncRow::Working,
+            });
+        let finished = progress
+            .recent_files
+            .iter()
+            .any(|r| &*r.label == label && upload(&r.action) && r.completed_at >= since_ms && same_drive_path(&r.path, rel_path));
+        (live, finished)
+    };
+    // The set is keyed by the engine's own spelling: ours (NFC) or macOS's
+    // decomposed one. Looked up, never scanned (it can hold every file).
+    let decomposed: String = rel_path.nfd().collect();
+    let on_server =
+        crate::finder_bridge::badges::is_synced(sync, label, rel_path) || crate::finder_bridge::badges::is_synced(sync, label, &decomposed);
+    SyncFacts { live, finished, on_server }
 }
 
 // ── Recording controls ──────────────────────────────────────────────────────
@@ -2325,6 +2389,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         link: LinkState::None,
         link_text: None,
         actions: super::preview::CardActions::default(),
+        settled: false,
         share_url: None,
         share_token: None,
         file_path: path.to_path_buf(),
@@ -2690,10 +2755,23 @@ pub fn capture_preview_retry(state: tauri::State<'_, AppState>, app: AppHandle) 
 #[tauri::command]
 pub async fn capture_sync_shortcut(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
     let accelerator = shortcut::load(state.pool()?).await?;
-    if let Err(e) = shortcut::apply(&app, accelerator.as_deref()) {
-        tracing::warn!(error = %e, "capture shortcut not registered");
-    }
+    let problem = match shortcut::apply(&app, accelerator.as_deref()) {
+        Ok(()) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "capture shortcut not registered");
+            Some(shortcut_problem_text(&e))
+        }
+    };
+    *lock(&state.capture.shortcut_problem) = problem;
     Ok(())
+}
+
+/// Rust's sentence for a shortcut that did not register, as Settings shows it.
+fn shortcut_problem_text(e: &AppError) -> String {
+    match e {
+        AppError::Validation(message) => message.clone(),
+        other => other.to_string(),
+    }
 }
 
 #[tauri::command]
@@ -2701,6 +2779,7 @@ pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>) -> Result<S
     Ok(ShortcutSetting {
         accelerator: shortcut::load(state.pool()?).await?,
         default_accelerator: shortcut::DEFAULT_SHORTCUT.to_string(),
+        problem: lock(&state.capture.shortcut_problem).clone(),
     })
 }
 
@@ -2715,6 +2794,7 @@ pub async fn capture_set_shortcut(state: tauri::State<'_, AppState>, app: AppHan
         let _ = shortcut::apply(&app, previous.as_deref());
         return Err(e);
     }
+    lock(&state.capture.shortcut_problem).take();
     shortcut::save(pool, next).await
 }
 
@@ -3522,6 +3602,45 @@ mod tests {
         state.apply(CaptureEvent::Stop, &mut write).unwrap();
         state.apply(CaptureEvent::Captured, &mut write).unwrap();
         assert_eq!(tray, ["", "", "◼ 00:00", "◼ 00:14", "❚❚ 00:14", "◼ 00:14", "◼ 00:15", "", ""]);
+    }
+
+    /// What actually reaches the status item: only changes. A screenshot
+    /// writes nothing, a recording its time and one clear at the end.
+    #[test]
+    fn the_tray_is_written_only_when_the_text_changes() {
+        let calls = Arc::new(Calls::default());
+        let state = CaptureState::default();
+        let written = std::cell::RefCell::new(Vec::<String>::new());
+        let write = |e: PhaseEvent| {
+            if newest_for_tray(&state.tray_seq, e.seq) {
+                let text = tray_status::tray_text_for(e.phase);
+                let mut last = lock(&state.tray_last);
+                if tray_status::tray_needs_write(last.as_ref(), &text) {
+                    written.borrow_mut().push(text.title.clone());
+                    *last = Some(text);
+                }
+            }
+        };
+        let shot = CaptureEvent::Start {
+            kind: CaptureKind::Screenshot,
+            mode: CaptureMode::Area,
+        };
+        state.apply(shot, write).unwrap();
+        state.apply(CaptureEvent::Selected, write).unwrap();
+        state.apply(CaptureEvent::Captured, write).unwrap();
+        assert!(written.borrow().is_empty(), "a screenshot leaves the icon alone: {written:?}");
+        state.apply(START_REC, write).unwrap();
+        state.apply(CaptureEvent::Selected, write).unwrap();
+        assert!(state.adopt_recorder(FakeRecorder::boxed(&calls), write).is_ok());
+        state.apply(CaptureEvent::Tick { elapsed_secs: 1 }, write).unwrap();
+        state.apply(CaptureEvent::Stop, write).unwrap();
+        state.apply(CaptureEvent::Captured, write).unwrap();
+        assert_eq!(*written.borrow(), ["◼ 00:00", "◼ 00:01", ""]);
+        assert_eq!(
+            state.current(),
+            CapturePhase::Idle,
+            "the session ends at Idle, where a click opens the popover"
+        );
     }
 
     /// A tray write posted from a worker that runs after a newer one (run

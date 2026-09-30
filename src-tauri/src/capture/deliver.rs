@@ -52,26 +52,37 @@ pub fn keep_temp_after_upload(via_sync: bool, has_link: bool) -> bool {
     !via_sync && !has_link
 }
 
-/// Upload `file` into the destination's Captures folder and, when
-/// `mint_link`, mint a public link to it.
+/// Where a capture is once it has been put in the drive, before any link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placed {
+    /// The file on this machine: in the synced folder, or the temp copy a
+    /// direct upload read from.
+    pub placed: std::path::PathBuf,
+    /// The file went into a synced folder and the sync engine uploads it;
+    /// false when it was uploaded directly (and so is on the server now).
+    pub via_sync: bool,
+    /// Its name in `Captures` (a synced folder may have renamed it).
+    pub file_name: String,
+}
+
+/// Put `file` in the destination's Captures folder: moved into the drive's
+/// folder on this machine (the sync engine uploads it), or uploaded
+/// directly to a drive that is only on the server.
+///
+/// A synced capture returns as soon as it is in the folder. The cycle that
+/// uploads it is started, not waited for: waiting meant waiting for a whole
+/// sync round of every drive, the upload included, and the card said
+/// "Preparing upload" all that time although the sync queue already showed
+/// the file synced. The card follows the engine instead (`spawn_sync_follow`).
 ///
 /// A failed upload is an `Err` and leaves `file` where it is: a long recording
-/// must not be lost because the network dropped at the end. A failed LINK is
-/// not an error — the capture is safely in the drive, and the notification
-/// says the link could not be made rather than that the capture failed.
+/// must not be lost because the network dropped at the end.
 ///
 /// # Errors
 ///
 /// Whatever the upload refused with, including `NotReady(StorageLimitReached)`
 /// from the storage gate, which the UI answers with the plans dialog.
-pub async fn deliver(
-    state: &AppState,
-    app: tauri::AppHandle,
-    account_id: &str,
-    destination: &CaptureDestination,
-    file: &Path,
-    mint_link: bool,
-) -> Result<Delivered> {
+pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, destination: &CaptureDestination, file: &Path) -> Result<Placed> {
     let local_root = if destination.owner_ss58.is_none() {
         super::destination::own_local_path(state.pool()?, account_id, &destination.label).await?
     } else {
@@ -86,10 +97,12 @@ pub async fn deliver(
         .await
         .map_err(|e| AppError::Other(format!("capture move task failed: {e}")))??;
         // Start a cycle now rather than waiting for the watcher, so the
-        // upload shows in the sync queue straight away.
-        if let Err(e) = crate::sync::control::trigger_sync_now(app.clone()).await {
-            tracing::warn!(error = %e, "capture saved to the sync folder; sync not nudged");
-        }
+        // upload shows in the sync queue straight away. Not awaited: see above.
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::sync::control::trigger_sync_now(app).await {
+                tracing::warn!(error = %e, "capture saved to the sync folder; sync not nudged");
+            }
+        });
         (placed, true)
     } else {
         let source = file
@@ -117,33 +130,57 @@ pub async fn deliver(
         .and_then(|n| n.to_str())
         .ok_or_else(|| AppError::Other("Capture file has no name".into()))?
         .to_string();
+    Ok(Placed { placed, via_sync, file_name })
+}
 
-    let source = if via_sync {
+/// What minting a placed capture's link came to.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Minted {
+    pub share_url: Option<String>,
+    pub share_token: Option<String>,
+    /// Why there is no link, in Rust's words, when there is none.
+    pub link_error: Option<String>,
+}
+
+/// Mint the public link to a placed capture. A failed LINK is not an error:
+/// the capture is safely in the drive, and the card says the link could not
+/// be made rather than that the capture failed.
+pub async fn link_for(state: &AppState, account_id: &str, destination: &CaptureDestination, placed: &Placed) -> Minted {
+    let source = if placed.via_sync {
         LinkSource::Synced {
             label: destination.label.clone(),
-            rel_path: super::preview::rel_path_for(&file_name),
+            rel_path: super::preview::rel_path_for(&placed.file_name),
         }
     } else {
-        LinkSource::External(placed.clone())
+        LinkSource::External(placed.placed.clone())
     };
-    let (share_url, share_token, link_error) = if mint_link {
-        match mint(state, account_id, &source).await {
-            Ok(link) => (Some(link.share_url), Some(link.share_token), None),
-            Err(message) => (None, None, Some(message)),
-        }
-    } else {
-        (None, None, None)
-    };
+    match mint(state, account_id, &source).await {
+        Ok(link) => Minted {
+            share_url: Some(link.share_url),
+            share_token: Some(link.share_token),
+            link_error: None,
+        },
+        Err(message) => Minted {
+            link_error: Some(message),
+            ..Minted::default()
+        },
+    }
+}
 
-    Ok(Delivered {
-        file_name,
-        drive_name: destination.display_name.clone(),
-        share_url,
-        link_error,
-        via_sync,
-        share_token,
-        placed,
-    })
+impl Delivered {
+    /// The broadcast and notification shape for a placed capture and its link.
+    #[must_use]
+    pub fn from_parts(placed: &Placed, minted: &Minted, drive_name: &str) -> Self {
+        Self {
+            file_name: placed.file_name.clone(),
+            drive_name: drive_name.to_string(),
+            share_url: minted.share_url.clone(),
+            link_error: minted.link_error.clone(),
+            via_sync: placed.via_sync,
+            share_token: minted.share_token.clone(),
+            placed: placed.placed.clone(),
+        }
+    }
 }
 
 /// Where a capture's link is made from.

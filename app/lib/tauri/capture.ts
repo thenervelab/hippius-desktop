@@ -222,7 +222,8 @@ export type CaptureLinkState =
   | { state: "none" }
   | { state: "public"; copied: boolean }
   | { state: "failed"; message: string }
-  | { state: "revoked" };
+  | { state: "revoked" }
+  | { state: "creating" };
 
 /** Which buttons the card offers now; Rust decides. Mirrors Rust's `CardActions`. */
 export interface CapturePreviewActions {
@@ -254,6 +255,12 @@ export interface CapturePreviewCard {
   /** Rust's line about the link ("Public link copied"); absent = say nothing. */
   linkText?: string;
   actions: CapturePreviewActions;
+  /**
+   * In the drive with its link settled (Rust's `settled`): only then does the
+   * card slide away on its own. Absent from an older backend = settled once
+   * uploaded.
+   */
+  settled?: boolean;
 }
 
 /** `capture_show_in_folder`: open this drive's Captures folder. */
@@ -268,6 +275,8 @@ export interface CaptureShortcutSetting {
   /** The active shortcut, or null when turned off. */
   accelerator: string | null;
   defaultAccelerator: string;
+  /** Why the saved shortcut is not working now (Rust's sentence); absent when it is. */
+  problem?: string;
 }
 
 /** The drive captures are filed in. Owner + hash only for a shared drive. */
