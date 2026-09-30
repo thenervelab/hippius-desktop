@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { inputIdByName, levelFrom, litBars } from "./micLevel";
+import { deviceIdByName } from "@/app/lib/capture/devices";
+import { levelFrom, litBars } from "./micLevel";
 
 const BARS = 5;
 
@@ -25,7 +26,7 @@ export default function MicMeter({ deviceName }: { deviceName: string | null }) 
       const media = navigator.mediaDevices;
       if (!media?.getUserMedia || typeof AudioContext === "undefined") return;
       const devices = await media.enumerateDevices();
-      const id = inputIdByName(devices, deviceName);
+      const id = deviceIdByName(devices, "audioinput", deviceName);
       const s = await media.getUserMedia({ audio: id ? { deviceId: { exact: id } } : true, video: false });
       if (cancelled) {
         s.getTracks().forEach((t) => t.stop());
@@ -61,7 +62,7 @@ export default function MicMeter({ deviceName }: { deviceName: string | null }) 
   }, [deviceName]);
 
   return (
-    <span aria-hidden className="flex h-3.5 items-end gap-[2px]" title="Microphone level">
+    <span aria-hidden className="flex h-3.5 items-end gap-[2px]">
       {Array.from({ length: BARS }, (_, i) => (
         <span
           key={i}

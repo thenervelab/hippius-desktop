@@ -49,11 +49,6 @@ function keyName(part: string): string {
   return (m ? m[1] : part).toUpperCase();
 }
 
-export function formatAccelerator(accelerator: string, mac: boolean): string {
-  const keys = acceleratorKeys(accelerator, mac);
-  return mac ? keys.join("") : keys.join("+");
-}
-
 /**
  * The shortcut as separate keys, modifiers first in the system's order, so
  * each can be drawn as its own keycap: ["⇧", "⌘", "2"] or ["Ctrl", "Shift", "2"].
@@ -81,20 +76,53 @@ export function isMacPlatform(): boolean {
  * only modifiers are held (the recorder waits for the key). Uses `e.code`, so
  * Option+2 records "2", not the "™" it types.
  */
-export function acceleratorFromEvent(e: {
+type KeyPress = {
   code: string;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
-}): string | null {
-  const key = /^(Key[A-Z]|Digit[0-9]|F[0-9]{1,2})$/.test(e.code) ? e.code.replace(/^(Key|Digit)/, "") : null;
-  if (!key) return null;
-  const mods = [
+};
+
+const SHORTCUT_KEY = /^(Key[A-Z]|Digit[0-9]|F[0-9]{1,2})$/;
+const MODIFIER_CODE = /^(Shift|Control|Alt|Meta|OS)(Left|Right)?$|^CapsLock$|^Fn$/;
+
+function heldModifiers(e: KeyPress): string[] {
+  return [
     e.ctrlKey ? "Control" : null,
     e.altKey ? "Alt" : null,
     e.shiftKey ? "Shift" : null,
     e.metaKey ? "Command" : null,
   ].filter((m): m is string => m !== null);
-  return [...mods, key].join("+");
+}
+
+export function acceleratorFromEvent(e: KeyPress): string | null {
+  const key = SHORTCUT_KEY.test(e.code) ? e.code.replace(/^(Key|Digit)/, "") : null;
+  if (!key) return null;
+  return [...heldModifiers(e), key].join("+");
+}
+
+/**
+ * What the shortcut recorder makes of one key event, so it can answer every
+ * press the way macOS's own recorder does: the modifiers held so far drawn
+ * live, a finished shortcut saved, and a key it cannot use explained rather
+ * than ignored. Rust still decides whether a finished shortcut is allowed.
+ */
+export type RecorderKey =
+  | { kind: "modifiers"; accelerator: string }
+  | { kind: "shortcut"; accelerator: string }
+  | { kind: "unsupported" };
+
+export function recorderKey(e: KeyPress): RecorderKey {
+  if (MODIFIER_CODE.test(e.code)) return { kind: "modifiers", accelerator: heldModifiers(e).join("+") };
+  const accelerator = acceleratorFromEvent(e);
+  return accelerator ? { kind: "shortcut", accelerator } : { kind: "unsupported" };
+}
+
+/** Why a key cannot be a shortcut, in the recorder's own words. */
+export const UNSUPPORTED_SHORTCUT_KEY = "Use a letter, a number or an F key, together with a modifier.";
+
+/** The confirm key's name on this platform: "Return" on a Mac, "Enter" elsewhere. */
+export function enterKeyName(mac = isMacPlatform()): string {
+  return mac ? "Return" : "Enter";
 }

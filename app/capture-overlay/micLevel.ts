@@ -28,21 +28,3 @@ export function litBars(level: number, bars: number): number {
   if (!(level > 0)) return 0;
   return Math.min(bars, Math.max(1, Math.round(level * bars)));
 }
-
-/**
- * The webview's `deviceId` for the microphone the bar chose, found by name:
- * the helper lists microphones by the system's own ids, which the webview
- * never uses. Null means the default input.
- */
-export function inputIdByName(
-  devices: Pick<MediaDeviceInfo, "kind" | "deviceId" | "label">[],
-  name: string | null,
-): string | null {
-  if (!name) return null;
-  const inputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId && d.deviceId !== "default");
-  const wanted = name.trim().toLowerCase();
-  const exact = inputs.find((d) => d.label.trim().toLowerCase() === wanted);
-  // Some webviews add " (Built-in)" or a USB id to the label.
-  const loose = exact ?? inputs.find((d) => d.label.toLowerCase().includes(wanted));
-  return loose?.deviceId ?? null;
-}
