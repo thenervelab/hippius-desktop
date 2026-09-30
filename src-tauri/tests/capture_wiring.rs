@@ -469,6 +469,7 @@ fn the_card_and_session_commands_are_registered() {
         "capture_preview_revoke_link",
         "capture_preview_reveal",
         "capture_preview_discard",
+        "capture_preview_upgrade",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),

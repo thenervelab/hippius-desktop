@@ -46,6 +46,8 @@ pub const PENDING_EVENT: &str = "capture_pending_changed";
 pub const PREVIEW_EVENT: &str = "capture_preview_changed";
 /// "Show in folder": the main window opens the drive's Captures folder.
 pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
+/// The card's Upgrade: the main window opens the storage plans.
+pub const OPEN_PLANS_EVENT: &str = "capture_open_plans";
 /// The camera window's shape or device changed (`camera::CameraState`); the
 /// camera page and the recording pill both read it.
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
@@ -2534,6 +2536,17 @@ pub fn capture_preview_show_in_folder(state: tauri::State<'_, AppState>, app: Ap
         },
     );
     close_preview(&app, &state.capture);
+    Ok(())
+}
+
+/// The card's Upgrade, offered when the upload failed because the plan is
+/// full: the main window comes forward on the plans. The card stays, so the
+/// capture can be retried once there is room.
+#[tauri::command]
+pub fn capture_preview_upgrade(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    card_for(&state.capture, |c| c.actions.upgrade, "There is no capture waiting for more storage.")?;
+    show_main_window(&app);
+    let _ = app.emit(OPEN_PLANS_EVENT, ());
     Ok(())
 }
 

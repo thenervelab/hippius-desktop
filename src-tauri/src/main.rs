@@ -692,6 +692,7 @@ fn main() {
             crate::capture::commands::capture_preview_revoke_link,
             crate::capture::commands::capture_preview_reveal,
             crate::capture::commands::capture_preview_discard,
+            crate::capture::commands::capture_preview_upgrade,
             get_platform_info,
             is_app_translocated,
             // Finder extension enablement. Registered on every platform (they

@@ -100,6 +100,9 @@ pub struct CardActions {
     pub revoke_link: bool,
     /// Reveal the file in Finder / Explorer (a drive synced here).
     pub reveal: bool,
+    /// Open the storage plans in the main window: the upload failed because
+    /// the plan is full, which Retry alone cannot fix.
+    pub upgrade: bool,
 }
 
 /// Everything the card shows, plus what its buttons need.
@@ -219,6 +222,13 @@ impl PreviewCard {
             mint_link: in_drive && !has_link && self.placed_path.is_some(),
             revoke_link: has_link && self.share_token.is_some(),
             reveal: !self.remote && in_drive && self.placed_path.is_some(),
+            upgrade: matches!(
+                self.status,
+                PreviewStatus::Failed {
+                    reason: FailureReason::StorageFull,
+                    ..
+                }
+            ),
         }
     }
 
@@ -422,6 +432,18 @@ mod tests {
         let c = card(3).with_outcome(3, failed(false), None).unwrap();
         assert_eq!(c.actions, CardActions::default());
         assert!(!c.is_parkable());
+
+        // A full plan: Upgrade as well as Retry; any other failure has none.
+        let full = PreviewStatus::Failed {
+            message: "Your storage is full.".into(),
+            reason: FailureReason::StorageFull,
+            retryable: true,
+        };
+        let c = card(5).with_outcome(5, full, None).unwrap();
+        assert!(c.actions.upgrade && c.actions.retry);
+        assert!(!card(6).with_outcome(6, failed(true), None).unwrap().actions.upgrade);
+        let json = serde_json::to_value(c.actions).unwrap();
+        assert_eq!(json["upgrade"], true, "sent as `upgrade`");
     }
 
     #[test]
@@ -467,7 +489,7 @@ mod tests {
                 "linkText": "Public link copied",
                 "actions": {
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
-                    "revokeLink": true, "reveal": true
+                    "revokeLink": true, "reveal": true, "upgrade": false
                 }
             })
         );
