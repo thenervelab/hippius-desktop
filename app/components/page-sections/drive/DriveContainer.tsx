@@ -109,7 +109,7 @@ import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { toast } from "sonner";
 import { cn } from "@/app/lib/utils";
 import UploadingHereStrip from "./UploadingHereStrip";
-import { folderUrlForPath } from "./openFolderPath";
+import { resolvePendingFolder, shouldOpenFromUrl, type PendingFolder } from "./openFolderPath";
 
 /**
  * Rows per page in the browsed file list.
@@ -1567,18 +1567,25 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Settings, where clicking a row used to land on the folder list and
   // leave the user to find the folder again.
   //
-  // Runs once and clears the param: without the clear, going back to the
-  // list and refreshing would drop the user into the folder again, which
-  // fights the rule that Drive opens on the list. Explicitly asking for a
-  // folder is the exception to that rule, not a contradiction of it.
-  const openedFromUrlRef = useRef(false);
+  // Runs once per request and clears the param: without the clear, going
+  // back to the list and refreshing would drop the user into the folder
+  // again, which fights the rule that Drive opens on the list. Explicitly
+  // asking for a folder is the exception to that rule, not a contradiction
+  // of it. Keyed on the request, not the mount (`shouldOpenFromUrl`): this
+  // page stays mounted across "Show in folder" clicks.
+  const openedFromUrlRef = useRef<string | null>(null);
   // The subfolder to step into once the drive's rows have loaded. A ref, not
   // the param: the param is cleared as soon as the drive opens.
-  const pendingSubfolderRef = useRef<string | null>(null);
+  const pendingSubfolderRef = useRef<PendingFolder | null>(null);
   useEffect(() => {
-    if (!urlOpenLabel || openedFromUrlRef.current) return;
-    openedFromUrlRef.current = true;
-    pendingSubfolderRef.current = urlOpenSubfolder || null;
+    const decision = shouldOpenFromUrl(openedFromUrlRef.current, {
+      label: urlOpenLabel,
+      remote: Boolean(urlOpenRemote),
+      subfolder: urlOpenSubfolder || null,
+    });
+    openedFromUrlRef.current = decision.key;
+    if (!decision.open || !urlOpenLabel) return;
+    pendingSubfolderRef.current = urlOpenSubfolder ? { path: urlOpenSubfolder, missedOn: null } : null;
     if (urlOpenRemote) {
       handleSelectRemoteFolderFromCards(urlOpenLabel);
     } else {
@@ -1597,14 +1604,15 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Step into the requested folder the way a click on its row does, so the
   // URL is built by the same code and nothing about it is guessed here. A
   // deeper path ("Photos/2024") continues from that row's URL exactly as a
-  // breadcrumb jump does. Given up once the drive's root has loaded without
-  // the first folder.
+  // breadcrumb jump does. When the drive's root has loaded without the
+  // first folder, it waits for one refresh of the listing before giving up
+  // (`resolvePendingFolder`): a first capture creates its Captures folder.
   useEffect(() => {
     const wanted = pendingSubfolderRef.current;
     if (!wanted || isNested || isOnLocalView || isLoading) return;
-    pendingSubfolderRef.current = null;
-    const url = folderUrlForPath(allData, wanted, getParam);
-    if (url) router.push(url);
+    const next = resolvePendingFolder(wanted, allData, getParam);
+    pendingSubfolderRef.current = next.pending;
+    if (next.url) router.push(next.url);
   }, [allData, isNested, isOnLocalView, isLoading, router, getParam]);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
