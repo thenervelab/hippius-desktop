@@ -7,7 +7,12 @@ import { Camera, Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
 import { captureDialogAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
-import { acceleratorFromEvent, acceleratorKeys, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
+import {
+  acceleratorKeys,
+  isMacPlatform,
+  recorderKey,
+  UNSUPPORTED_SHORTCUT_KEY,
+} from "@/app/lib/capture/shortcutLabel";
 import ShortcutKeys from "@/app/components/capture/ShortcutKeys";
 import {
   getCaptureDestination,
@@ -33,6 +38,8 @@ export default function CaptureSettings() {
   const setDialog = useSetAtom(captureDialogAtom);
   const [setting, setSetting] = useState<CaptureShortcutSetting | null>(null);
   const [recording, setRecording] = useState(false);
+  // The modifiers held so far while recording ("Shift+Command"), drawn live.
+  const [held, setHeld] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [driveName, setDriveName] = useState<string | null>(null);
   const mac = isMacPlatform();
@@ -62,8 +69,13 @@ export default function CaptureSettings() {
   );
 
   // While recording, the next key press with a modifier becomes the shortcut.
+  // The modifiers show as they are pressed and released, and a key that
+  // cannot be a shortcut says so instead of leaving "Waiting…" up.
   useEffect(() => {
-    if (!recording) return;
+    if (!recording) {
+      setHeld("");
+      return;
+    }
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -71,13 +83,26 @@ export default function CaptureSettings() {
         setRecording(false);
         return;
       }
-      const accelerator = acceleratorFromEvent(e);
-      if (!accelerator) return;
-      setRecording(false);
-      void save(accelerator);
+      const press = recorderKey(e);
+      if (press.kind === "modifiers") {
+        setHeld(press.accelerator);
+      } else if (press.kind === "unsupported") {
+        setError(UNSUPPORTED_SHORTCUT_KEY);
+      } else {
+        setRecording(false);
+        void save(press.accelerator);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      const press = recorderKey(e);
+      if (press.kind === "modifiers") setHeld(press.accelerator);
     };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
   }, [recording, save]);
 
   if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
@@ -105,14 +130,27 @@ export default function CaptureSettings() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {recording ? (
-            <span className={`${KBD} animate-pulse`}>Waiting…</span>
+          {recording && held ? (
+            <span aria-live="polite">
+              <ShortcutKeys keys={acceleratorKeys(held, mac)} size="md" />
+            </span>
+          ) : recording ? (
+            <span aria-live="polite" className={`${KBD} animate-pulse motion-reduce:animate-none`}>
+              Waiting…
+            </span>
           ) : current ? (
             <ShortcutKeys keys={current} size="md" />
           ) : (
             <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
           )}
-          <Button variant="defaultStable" size="sm" onClick={() => setRecording((r) => !r)}>
+          <Button
+            variant="defaultStable"
+            size="sm"
+            onClick={() => {
+              setError(null);
+              setRecording((r) => !r);
+            }}
+          >
             {recording ? "Cancel" : "Change"}
           </Button>
           {!recording && !isDefault && (
