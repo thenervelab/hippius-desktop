@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Entitlements for Contents/MacOS/HippiusCapture, the screen-recording helper.
+  Signed with these by macos/embed-capture-helper.sh, under the hardened
+  runtime, NOT with the app's src-tauri/entitlements.plist.
+
+  The helper is the process that opens the microphone (ScreenCaptureKit's
+  captureMicrophone), and under the hardened runtime that process needs
+  audio-input itself: without it a signed build records a silent mic track
+  and nothing reports an error. ScreenCaptureKit needs no entitlement (Screen
+  Recording is a TCC grant, attributed to Hippius as the responsible
+  process). No camera (the camera bubble is filmed from the screen), no JIT,
+  no library-validation exception (system frameworks only), no sandbox.
+  Pinned by src-tauri/tests/release_lane_pins.rs.
+-->
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

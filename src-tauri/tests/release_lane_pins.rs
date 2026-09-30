@@ -557,7 +557,7 @@ fn no_lane_publishes_before_verifying_the_artifacts() {
 /// only point of control is ahead of the upload, in the same script.
 ///
 /// A staging DMG that looks complete and is not costs testers days — the same
-/// reasoning that makes the lane stamp ` - NO FINDER EXTENSION` onto the release
+/// reasoning that makes the lane stamp ` - NO FINDER EXTENSION OR RECORDING` onto the release
 /// name when it builds without notarization creds.
 #[test]
 fn staging_verifies_before_it_uploads() {
@@ -669,5 +669,124 @@ fn the_frontend_reads_the_same_channel_variable_rust_does() {
         config.contains("RELEASE_CHANNEL:"),
         "next.config.ts must expose the channel to the bundle as RELEASE_CHANNEL, which is the \
          name app/lib/buildChannel.ts reads"
+    );
+}
+
+/// Non-comment lines of a shell script, trimmed.
+fn code_lines(script: &str) -> Vec<&str> {
+    script
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
+
+fn position_of(lines: &[&str], needle: &str) -> Option<usize> {
+    lines.iter().position(|line| line.contains(needle))
+}
+
+/// The screen-recording helper is not a Tauri artifact: every macOS release
+/// job must build it, universal, before finalizing.
+///
+/// A release app looks for `Contents/MacOS/HippiusCapture` and nowhere else,
+/// and without it the app hides every Record action and lists no cameras or
+/// microphones. Nothing errors and nothing is annotated; testers only notice
+/// that "recording is missing". The build step runs before the long Tauri
+/// build so a Swift error fails the job in seconds; the finalize script
+/// builds it again (cached) and embeds that.
+#[test]
+fn every_macos_release_job_builds_the_recording_helper() {
+    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
+        let jobs = workflow_jobs(lane);
+        let finalizer = only_job_running(&jobs, "macos/finalize-macos-release.sh", lane);
+        let lines = code_lines(&jobs[&finalizer].script);
+
+        let build = position_of(&lines, "macos/build-capture-helper.sh --universal").unwrap_or_else(|| {
+            panic!(
+                "{lane}'s {finalizer} job never runs `macos/build-capture-helper.sh --universal`, so its \
+                 macOS build ships with no screen recording"
+            )
+        });
+        let finalize = position_of(&lines, "macos/finalize-macos-release.sh").expect("the finalize step runs");
+        assert!(
+            build < finalize,
+            "{lane} builds the recording helper only after finalizing, when nothing embeds it any more"
+        );
+    }
+}
+
+/// The finalize script embeds and signs the helper BEFORE the step that
+/// re-signs the app last; embedding it afterwards would break the app's seal
+/// and fail notarization. Signing needs the hardened runtime, a secure
+/// timestamp and the helper's own entitlements, of which `audio-input` is
+/// the silent one: without it a signed build records a silent microphone.
+#[test]
+fn the_recording_helper_is_embedded_and_signed_before_the_app_is_sealed() {
+    let finalize = repo_file("../macos/finalize-macos-release.sh");
+    let lines = code_lines(&finalize);
+    let built = position_of(&lines, "build-capture-helper.sh\" --universal").expect("finalize builds the universal helper");
+    let embedded = position_of(&lines, "embed-capture-helper.sh").expect("finalize embeds the helper");
+    let sealed = position_of(&lines, "embed-finder-extension.sh").expect("finalize embeds the extension and re-signs the app");
+    assert!(built < embedded && embedded < sealed, "helper: build, embed, then the app is re-signed");
+
+    let embed = repo_file("../macos/embed-capture-helper.sh");
+    assert!(embed.contains("entitlements=\"${script_dir}/CaptureHelper.entitlements\""));
+    let signing = embed.split("codesign --force").nth(1).expect("embed-capture-helper.sh signs the helper");
+    for flag in ["--options runtime", "--timestamp", "--entitlements \"${entitlements}\""] {
+        assert!(signing.contains(flag), "the release signing of the helper lacks {flag}");
+    }
+
+    let entitlements = repo_file("../macos/CaptureHelper.entitlements");
+    let squashed: String = entitlements.split_whitespace().collect();
+    assert!(
+        squashed.contains("<key>com.apple.security.device.audio-input</key><true/>"),
+        "the helper must be allowed the microphone"
+    );
+    assert!(
+        !entitlements.contains("allow-jit"),
+        "the helper runs no JIT; keep its entitlements minimal"
+    );
+}
+
+/// `verify-macos-artifacts.sh` must open the helper in both artifacts, or a
+/// release without recording publishes as quietly as v0.5.0 did without its
+/// Finder extension.
+#[test]
+fn the_artifact_check_fails_without_the_recording_helper() {
+    let verify = repo_file("../macos/verify-macos-artifacts.sh");
+    let bundle_checks = verify
+        .split("check_app_bundle() {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .expect("verify-macos-artifacts.sh has check_app_bundle");
+    assert!(
+        code_lines(bundle_checks).iter().any(|line| line.starts_with("check_capture_helper ")),
+        "check_app_bundle no longer checks the recording helper"
+    );
+    let helper_checks = verify
+        .split("check_capture_helper() {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .expect("verify-macos-artifacts.sh defines check_capture_helper");
+    for needle in [
+        "Contents/MacOS/HippiusCapture",
+        "check_universal",
+        "com.apple.security.device.audio-input",
+        "(runtime)",
+        "Timestamp=",
+    ] {
+        assert!(helper_checks.contains(needle), "check_capture_helper no longer checks {needle}");
+    }
+}
+
+/// A release build must not probe the CI checkout path `CARGO_MANIFEST_DIR`
+/// bakes in; a stray file there would be executed. Only debug builds look in
+/// the Swift package.
+#[test]
+fn a_release_build_looks_for_the_recording_helper_only_inside_the_app() {
+    let recorder = repo_file("src/capture/recording/macos.rs");
+    assert!(
+        recorder.contains("#[cfg(not(debug_assertions))]\n    let dev_package: Option<PathBuf> = None;"),
+        "helper_path must not look outside the app bundle in release builds"
     );
 }
