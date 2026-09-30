@@ -253,14 +253,14 @@ as raw pointers.
 
 ### 6. One mixed audio track on Windows and Linux
 
-The macOS helper writes system audio and the microphone as **two** AAC tracks
-(`main.swift`: a 128 kbps stereo input and a 64 kbps mono input). Browser
-`<video>` elements and most web players play only the first audio track, so a
-recording shared by link may be heard without its narration. Windows and Linux
-mix mic and system audio into one stereo 160 kbps AAC track (mic centred, the
-system mix ducked 6 dB while the mic is active is a later nicety). Filed as a
-macOS follow-up to confirm and, if confirmed, mix there too (see "macOS items
-this plan found").
+The macOS helper used to write system audio and the microphone as **two** AAC
+tracks. Browser `<video>` elements and most web players play only the first
+audio track, so a recording shared by link was heard without its narration.
+macOS now mixes them into one stereo 48 kHz 160 kbps AAC track (`AudioMixer`
+in `main.swift`: mic +6 dB with a soft limiter, system audio only when the
+user turns on `systemAudio`, off by default). Windows and Linux do the same:
+one stereo 160 kbps AAC track (mic centred, the system mix ducked 6 dB while
+the mic is active is a later nicety).
 
 ### 7. Rust owns every platform difference
 
@@ -795,10 +795,11 @@ supported display (1280 x 720) and at 200 % scale.
 
 Not part of this plan's phases, recorded so they are not lost:
 
-1. **Two audio tracks.** The helper writes system audio and the microphone as
-   separate AAC tracks; web players usually play only the first, so narration
-   may be missing when a recording is watched through a share link. Confirm in
-   Chrome and Firefox with a mic-only recording, and mix if confirmed.
+1. **Two audio tracks.** Confirmed and fixed: the helper now mixes the
+   microphone and (only when `systemAudio` is on, off by default) the system
+   audio into one stereo 48 kHz AAC track, `AudioMixer` in `main.swift`. The
+   start command carries `systemAudio` and, for a window recording,
+   `cameraWindowId`; `HelperRecorder` must send both.
 2. The audit's claim that xcap keeps a GDI fallback with `wgc` is wrong for
    0.9.8 (compile-time switch); corrected here.
 
