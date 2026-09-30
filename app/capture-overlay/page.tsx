@@ -9,6 +9,7 @@ import {
   confirmCapture,
   getCaptureCameraContext,
   getCaptureOverlayContext,
+  refreshCaptureWindows,
   selectCapture,
   setCaptureMode,
   setCapturePending,
@@ -25,13 +26,14 @@ import {
   type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { CAPTURE_ACCENT } from "@/app/lib/capture/glass";
+import { CAPTURE_ACCENT, GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
 import CaptureBar from "./CaptureBar";
 import SharePicker from "./SharePicker";
 import { barHint, LAST_AREA_KEY } from "./barText";
 import { isFromControl } from "./keyNav";
 import { selectionFor, type SharePick } from "./sharePickerState";
+import { pollWindows } from "./windowRefresh";
 import {
   dragRect,
   fitRect,
@@ -135,6 +137,8 @@ export default function CaptureOverlayPage() {
   // The area this overlay last handed to Rust, drawn again when Rust says
   // this display holds the pending area (see `applyPending`).
   const handedOver = useRef<LogicalRect | null>(null);
+  // Where the pointer last was, so a refreshed window list re-picks the hover.
+  const lastPoint = useRef<Point | null>(null);
   // What the key handler needs from the latest render, without re-binding.
   const latest = useRef<{ rect: LogicalRect | null; nudge: ((next: LogicalRect) => void) | null }>({
     rect: null,
@@ -252,6 +256,32 @@ export default function CaptureOverlayPage() {
     return () => window.clearTimeout(t);
   }, [countdown]);
 
+  /** Go now: the numeral clicked, or Return while counting. The effect above runs the waiting action. */
+  const skipCountdown = useCallback(() => {
+    setCountdown((c) => (c !== null && c > 0 ? 0 : c));
+  }, []);
+
+  // Window mode: ask Rust for this display's windows again while the bar is
+  // up, so a window that moved or opened highlights where it is now. Stops
+  // with the mode, the count, or a hidden page.
+  const pollingWindows =
+    displayId !== null &&
+    context?.mode === "window" &&
+    !(context.kind === "recording" && cameraShape === "stage") &&
+    countdown === null &&
+    !inFlight;
+  useEffect(() => {
+    if (!pollingWindows || displayId === null) return;
+    return pollWindows(
+      () => refreshCaptureWindows(displayId),
+      (windows) => {
+        setContext((c) => (c && c.mode === "window" ? { ...c, windows } : c));
+        const at = lastPoint.current;
+        setHovered((prev) => (prev && at ? windowAt(windows, at) : prev));
+      },
+    );
+  }, [pollingWindows, displayId]);
+
   const confirm = useCallback(() => {
     if (!context || displayId === null) return;
     const cameraOnly = context.kind === "recording" && cameraShape === "stage";
@@ -299,6 +329,7 @@ export default function CaptureOverlayPage() {
       if (isFromControl(e.target)) return;
       if (e.key === "Enter") {
         if (countdown === null) confirm();
+        else if (!inFlightRef.current) skipCountdown();
         return;
       }
       if (countdown !== null || inFlightRef.current) return;
@@ -311,7 +342,7 @@ export default function CaptureOverlayPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirm, countdown, picker]);
+  }, [confirm, countdown, picker, skipCountdown]);
 
   if (!context || displayId === null) return null;
   const { kind } = context;
@@ -348,6 +379,7 @@ export default function CaptureOverlayPage() {
 
   const onPointerMove = (e: React.PointerEvent) => {
     const p = pointFrom(e);
+    lastPoint.current = p;
     setPointerHere(true);
     if (counting) return;
     if (mode === "window") setHovered(windowAt(context.windows, p));
@@ -488,9 +520,15 @@ export default function CaptureOverlayPage() {
       </p>
 
       {countdown !== null && countdown > 0 && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute grid size-24 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-[#000]/60 text-5xl font-semibold tabular-nums text-white"
+        // Clicking the count goes at once, as Return does.
+        <button
+          type="button"
+          aria-label={`${kind === "recording" ? "Record" : "Capture"} now`}
+          title={`${kind === "recording" ? "Record" : "Capture"} now (${enterKey})`}
+          onClick={skipCountdown}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          className={`absolute grid size-24 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center rounded-full bg-[#000]/60 text-5xl font-semibold tabular-nums text-white hover:bg-[#000]/75 ${GLASS_FOCUS}`}
           style={{
             left: highlight ? highlight.x + highlight.width / 2 : "50%",
             // Camera only: the stage fills the middle and sits above this
@@ -498,8 +536,8 @@ export default function CaptureOverlayPage() {
             top: highlight ? highlight.y + highlight.height / 2 : cameraOnly ? "11%" : "50%",
           }}
         >
-          {countdown}
-        </div>
+          <span aria-hidden>{countdown}</span>
+        </button>
       )}
 
       {context.hostsBar && !counting && (
@@ -512,6 +550,8 @@ export default function CaptureOverlayPage() {
           recordingAvailable={context.recordingAvailable}
           microphoneAvailable={context.microphoneAvailable}
           showClicksAvailable={context.showClicksAvailable}
+          cameraOnlyAvailable={context.cameraOnlyAvailable}
+          cameraFilmed={context.cameraFilmed}
           hint={hint}
           enterKey={enterKey}
           onMode={onMode}
@@ -521,8 +561,11 @@ export default function CaptureOverlayPage() {
           }}
           onConfirm={confirm}
           onCancel={() => void cancelCapture()}
-          onOptionsSaved={(options) =>
-            setContext((c) => (c ? { ...c, options, countdownSecs: kind === "recording" ? c.countdownSecs : options.timerSecs } : c))
+          onOptionsSaved={(saved) =>
+            // Rust says what the countdown and the camera are now; the bar does not work them out.
+            setContext((c) =>
+              c ? { ...c, options: saved.options, countdownSecs: saved.countdownSecs, cameraFilmed: saved.cameraFilmed } : c,
+            )
           }
           onDestinationSaved={(destination) => setContext((c) => (c ? { ...c, destination } : c))}
         />

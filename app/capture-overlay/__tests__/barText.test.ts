@@ -25,6 +25,8 @@ const OPTIONS: CaptureOptions = {
   showClicks: false,
   lastKind: "recording",
   lastMode: "screen",
+  copyLink: true,
+  recordCountdownSecs: 3,
 };
 
 describe("the capture bar", () => {

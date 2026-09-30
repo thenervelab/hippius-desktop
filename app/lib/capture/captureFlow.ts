@@ -34,6 +34,9 @@ export const captureSupportedAtom = atom<boolean>(false);
 /** Whether Record actions should be offered (macOS helper present). */
 export const captureRecordingAtom = atom<boolean>(false);
 
+/** What System Settings calls the Screen Recording pane on this Mac (Rust's `permissionPane`); null until known. */
+export const capturePermissionPaneAtom = atom<string | null>(null);
+
 /** What `capture_start`'s refusal asks the UI to do next. */
 export type CaptureRefusal =
   | { next: "choose-destination" }

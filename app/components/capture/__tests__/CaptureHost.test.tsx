@@ -29,7 +29,7 @@ vi.mock("../CapturePermissionDialog", () => ({ default: () => null }));
 
 import CaptureHost from "../CaptureHost";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
-import { captureDialogAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import { captureDialogAtom, capturePermissionPaneAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
 
 beforeEach(() => {
   tauri.reset();
@@ -37,7 +37,13 @@ beforeEach(() => {
   h.toastError.mockReset();
   h.notifyFilesMutated.mockReset();
   h.openAppWindow.mockClear();
-  tauri.onInvoke("capture_support", () => ({ supported: true, recording: true, reason: null }));
+  tauri.onInvoke("capture_support", () => ({
+    supported: true,
+    recording: true,
+    cameraOnly: true,
+    screenRecordingPermission: true,
+    permissionPane: "Screen & System Audio Recording",
+  }));
   tauri.onInvoke("capture_sync_shortcut", () => null);
   tauri.onInvoke("capture_start", () => null);
 });
@@ -56,6 +62,7 @@ describe("CaptureHost", () => {
   it("learns what the platform can do and registers the saved shortcut", async () => {
     const store = mountHost();
     await waitFor(() => expect(store.get(captureSupportedAtom)).toBe(true));
+    expect(store.get(capturePermissionPaneAtom)).toBe("Screen & System Audio Recording");
     await waitFor(() => expect(tauri.core.invoke.mock.calls.some(([c]) => c === "capture_sync_shortcut")).toBe(true));
   });
 
@@ -71,8 +78,21 @@ describe("CaptureHost", () => {
     mountHost();
     await act(() => tauri.emitEvent("capture_delivered", { fileName: "a.png" }));
     expect(h.notifyFilesMutated).toHaveBeenCalledWith({}, "5Grw");
-    await act(() => tauri.emitEvent("capture_failed", { message: "Could not upload the capture." }));
+    await act(() => tauri.emitEvent("capture_failed", { message: "Could not upload the capture.", cardShowing: false }));
     expect(h.toastError).toHaveBeenCalledWith("Could not upload the capture.");
+  });
+
+  // The preview card already says it; a toast would say it twice.
+  it("leaves a failure the card is showing to the card", async () => {
+    mountHost();
+    await act(() => tauri.emitEvent("capture_failed", { message: "Could not upload the capture.", cardShowing: true }));
+    expect(h.toastError).not.toHaveBeenCalled();
+  });
+
+  it("opens the plans on the card's Upgrade", async () => {
+    mountHost();
+    await act(() => tauri.emitEvent("capture_open_plans", null));
+    expect(h.push).toHaveBeenCalledWith("/settings?section=billing");
   });
 
   it("starts a capture from the shortcut and the tray, on the last mode or the asked one", async () => {

@@ -1,5 +1,5 @@
 import { deviceIdByName } from "@/app/lib/capture/devices";
-import type { CapturePhase } from "@/app/lib/tauri/capture";
+import type { CaptureCameraState } from "@/app/lib/tauri/capture";
 import type { CaptureDevice } from "@/app/lib/tauri/capture";
 
 /**
@@ -50,17 +50,18 @@ export function camerasAreNamed(devices: Pick<MediaDeviceInfo, "kind" | "label">
 /**
  * Whether the bubble's size strip is drawn. Only while choosing: the camera
  * window is filmed with the screen, so a strip shown mid-recording ended up
- * in the video. Unknown (the first read not back yet) counts as no.
+ * in the video. Rust says when a recording is starting or running
+ * (`recording`); nothing drawn before the first state arrives.
  */
-export function stripShown(phase: CapturePhase | null): boolean {
-  return phase?.phase === "selecting";
+export function stripShown(camera: CaptureCameraState | null): boolean {
+  return camera?.shape === "bubble" && !camera.recording;
 }
 
 /**
- * What the bubble's × does, named for the phase: while choosing it turns the
- * camera off (saved in the options); while recording it only hides the
- * bubble, and the pill brings it back.
+ * What the bubble's × does: while choosing it turns the camera off (saved in
+ * the options); while recording it only hides the bubble, and the pill
+ * brings it back.
  */
-export function cameraCloseLabel(phase: CapturePhase | null): string {
-  return phase?.phase === "recording" || phase?.phase === "paused" ? "Hide camera" : "Turn camera off";
+export function cameraCloseLabel(camera: CaptureCameraState | null): string {
+  return camera?.recording ? "Hide camera" : "Turn camera off";
 }

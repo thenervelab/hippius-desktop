@@ -31,11 +31,15 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
     showClicks: false,
     lastKind: "screenshot",
     lastMode: "area",
+    copyLink: true,
+    recordCountdownSecs: 3,
   },
   countdownSecs: 0,
   recordingAvailable: true,
   microphoneAvailable: true,
   showClicksAvailable: true,
+  cameraOnlyAvailable: true,
+  cameraFilmed: true,
   destination: { label: "Work", displayName: "Work" },
   pending: { target: "area", displayId: 1, rect: AREA },
   ...over,
@@ -45,7 +49,16 @@ let confirm: ReturnType<typeof vi.fn>;
 
 function setup(over: Partial<CaptureOverlayContext> = {}) {
   tauri.onInvoke("capture_overlay_context", () => context(over));
-  tauri.onInvoke("capture_camera_context", () => ({ shape: null, hidden: false, deviceId: null, deviceName: null, size: "small" }));
+  tauri.onInvoke("capture_camera_context", () => ({
+    shape: null,
+    hidden: false,
+    deviceId: null,
+    deviceName: null,
+    size: "small",
+    recording: false,
+    cameraFilmed: true,
+  }));
+  tauri.onInvoke("capture_refresh_windows", () => []);
   tauri.onInvoke("capture_destination_choices", () => [{ label: "Work", remote: false }]);
   tauri.onInvoke("capture_cameras", () => []);
   tauri.onInvoke("capture_microphones", () => []);
@@ -105,7 +118,10 @@ describe("the capture overlay's keyboard", () => {
     setup();
     fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
     await screen.findByRole("menuitemradio", { name: /Work/ });
-    const items = screen.getAllByRole("menuitemradio");
+    // Every item, the radios and the copy-link checkbox, in menu order.
+    const items = Array.from(
+      screen.getByRole("menu", { name: "Capture options" }).querySelectorAll<HTMLElement>('[role^="menuitem"]'),
+    );
     // Focus starts inside the menu, on a chosen item.
     expect(items).toContain(document.activeElement);
     expect(document.activeElement).toHaveAttribute("aria-checked", "true");
@@ -229,9 +245,150 @@ describe("the pending area across displays", () => {
   it("draws its own area again when Rust says it holds it", async () => {
     setup();
     expect(await screen.findByText("400 × 300")).toBeInTheDocument();
-    await act(() => tauri.emitEvent("capture_pending_changed", { displayId: 2 }));
+    await act(() => tauri.emitEvent("capture_pending_changed", { displayId: 2, rect: { x: 0, y: 0, width: 50, height: 50 } }));
     expect(screen.queryByText("400 × 300")).toBeNull();
-    await act(() => tauri.emitEvent("capture_pending_changed", { displayId: 1 }));
+    await act(() => tauri.emitEvent("capture_pending_changed", { displayId: 1, rect: AREA }));
     expect(screen.getByText("400 × 300")).toBeInTheDocument();
+  });
+});
+
+describe("skipping the countdown", () => {
+  it("takes the capture at once on Return while counting", async () => {
+    setup({ countdownSecs: 3 });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    vi.useFakeTimers();
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(screen.getByText("Capturing in 3")).toBeInTheDocument();
+    expect(confirm).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "Enter" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    // The count that was left never fires a second capture.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the capture at once when the number is clicked", async () => {
+    setup({ countdownSecs: 5 });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    vi.useFakeTimers();
+    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Capture now" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Capture now" })).toBeNull();
+  });
+});
+
+describe("the Options menu", () => {
+  const saved = (options: CaptureOverlayContext["options"], countdownSecs: number) => ({
+    options,
+    countdownSecs,
+    cameraFilmed: true,
+  });
+
+  it("offers a recording countdown, and the overlay counts what Rust says", async () => {
+    tauri.onInvoke("capture_set_options", (args) => {
+      const { options } = args as { options: CaptureOverlayContext["options"] };
+      return saved(options, options.recordCountdownSecs);
+    });
+    setup({ kind: "recording", countdownSecs: 3 });
+    fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
+    const five = await screen.findByRole("menuitemradio", { name: "5 seconds" });
+    expect(screen.getByRole("menuitemradio", { name: "3 seconds" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemradio", { name: "None" })).toBeInTheDocument();
+    fireEvent.click(five);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: expect.objectContaining({ recordCountdownSecs: 5 }),
+      }),
+    );
+    await waitFor(() => expect(screen.getByRole("menuitemradio", { name: "5 seconds" })).toHaveAttribute("aria-checked", "true"));
+    fireEvent.keyDown(window, { key: "Escape" });
+    vi.useFakeTimers();
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(screen.getByText("Recording in 5")).toBeInTheDocument();
+  });
+
+  it("turns copying a share link after capture on and off", async () => {
+    tauri.onInvoke("capture_set_options", (args) => saved((args as { options: CaptureOverlayContext["options"] }).options, 0));
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
+    const copy = await screen.findByRole("menuitemcheckbox", { name: "Copy a share link after capture" });
+    expect(copy).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(copy);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: expect.objectContaining({ copyLink: false }),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("menuitemcheckbox", { name: "Copy a share link after capture" })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      ),
+    );
+  });
+});
+
+describe("the recording sources", () => {
+  it("says when a window recording leaves the camera out", async () => {
+    setup({ kind: "recording", mode: "window", pending: null, cameraFilmed: false });
+    expect(await screen.findByText("Camera is only recorded with the entire screen or an area.")).toBeInTheDocument();
+  });
+
+  it("says nothing about the camera when it is filmed", async () => {
+    setup({ kind: "recording" });
+    await screen.findByRole("group", { name: "Recording sources" });
+    expect(screen.queryByText("Camera is only recorded with the entire screen or an area.")).toBeNull();
+  });
+
+  it("offers camera only (the Screen switch) only where Rust can record it", async () => {
+    setup({ kind: "recording", cameraOnlyAvailable: false });
+    await screen.findByRole("group", { name: "Recording sources" });
+    expect(screen.queryByRole("switch", { name: "Screen" })).toBeNull();
+    expect(screen.getByRole("switch", { name: "Camera" })).toBeInTheDocument();
+  });
+});
+
+describe("window mode's live window list", () => {
+  const refreshes = () => tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_refresh_windows").length;
+
+  it("asks Rust for this display's windows while in window mode, and stops when the mode changes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    setup({ mode: "window", pending: null });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(refreshes()).toBeGreaterThanOrEqual(1);
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_refresh_windows", { displayId: 1 });
+
+    tauri.onInvoke("capture_overlay_context", () => context({ mode: "area" }));
+    await act(() => tauri.emitEvent("capture_state_changed", { phase: "selecting", kind: "screenshot", mode: "area", seq: 2 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    const after = refreshes();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(refreshes()).toBe(after);
+  });
+
+  it("does not poll outside window mode", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    setup();
+    await screen.findByRole("toolbar", { name: "Capture" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(refreshes()).toBe(0);
   });
 });

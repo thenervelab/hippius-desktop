@@ -319,6 +319,14 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
       "capture_camera_dismiss",
       "capture_share_targets",
       "capture_share_done",
+      "capture_refresh_windows",
+      "capture_restart",
+      "capture_request_permission",
+      "capture_preview_mint_link",
+      "capture_preview_revoke_link",
+      "capture_preview_reveal",
+      "capture_preview_discard",
+      "capture_preview_upgrade",
     ];
     const missing = required.filter((c) => !registered.has(c));
     expect(

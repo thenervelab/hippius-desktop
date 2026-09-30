@@ -2,32 +2,46 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AlertCircle, Check, FolderOpen, Link2, RotateCw, Video, X } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  FolderOpen,
+  FolderSearch,
+  Link2,
+  MoreHorizontal,
+  RotateCw,
+  Sparkles,
+  Trash2,
+  Video,
+  X,
+} from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import "./capture-preview.css";
 import {
   copyCapturePreviewLink,
+  discardCapturePreview,
   dismissCapturePreview,
   getCapturePreview,
+  mintCapturePreviewLink,
   retryCapturePreview,
+  revealCapturePreview,
+  revokeCapturePreviewLink,
   showCapturePreviewInFolder,
+  upgradeFromCapturePreview,
   type CapturePreviewCard,
 } from "@/app/lib/tauri/capture";
 import type { RemoteUploadProgress } from "@/app/lib/remote-upload/remoteUploadFeed";
 import type { FileProgress, SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 import { GLASS_BUTTON, GLASS_FOCUS, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
-import {
-  AUTO_HIDE_MS,
-  canRetry,
-  cardView,
-  destinationText,
-  wantsProgress,
-  watchSyncRow,
-  type SyncWatch,
-} from "./previewCard";
+import { fileManagerLabel } from "@/app/lib/utils/isMacPlatform";
+import { AUTO_HIDE_MS, cardView, destinationText, wantsProgress } from "./previewCard";
 
 /** How long "Copied" shows before the button reads "Copy link" again. */
 const COPIED_MS = 1500;
+
+const ACTION = "flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-[8px] px-2 text-[12px]";
+const SECONDARY = `${ACTION} bg-white/10 font-medium ${GLASS_BUTTON}`;
+const ICON_ACTION = `grid size-8 shrink-0 place-items-center rounded-[8px] bg-white/10 ${GLASS_BUTTON}`;
 
 /**
  * The card that slides into the corner after a capture, like the macOS
@@ -37,6 +51,11 @@ const COPIED_MS = 1500;
  *
  * Dark glass whatever the app's theme, as the capture bar and macOS's own
  * thumbnail are: it floats over other apps.
+ *
+ * Rust decides the buttons (`card.actions`) and words the link
+ * (`card.linkText`); the card only draws them. Actions are one row of at
+ * most two text buttons plus two icon buttons, and Revoke link sits in the
+ * "More" menu, so the row never wraps.
  *
  * Sized for Rust's 316 x 330 pt window in every state (16:9 picture, the
  * failure reason on one line with the whole of it in the tooltip): the card
@@ -48,11 +67,14 @@ export default function CapturePreviewPage() {
   const [row, setRow] = useState<RemoteUploadProgress | null>(null);
   // The sync engine's rows, for a capture saved into a synced drive.
   const [syncFiles, setSyncFiles] = useState<FileProgress[]>([]);
-  const [syncWatch, setSyncWatch] = useState<SyncWatch | null>(null);
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
   // Bumped each time the pointer leaves, so the timer bar starts over.
   const [timerRun, setTimerRun] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const menuButton = useRef<HTMLButtonElement | null>(null);
+  const menuItem = useRef<HTMLButtonElement | null>(null);
   const cardId = useRef<number | null>(null);
   const copiedTimer = useRef<number | null>(null);
 
@@ -81,17 +103,11 @@ export default function CapturePreviewPage() {
   // snapshots a second, hundreds of rows each.
   const following = wantsProgress(card) ? card : null;
   const followingId = following?.id ?? null;
-  const followRef = useRef(following);
-  followRef.current = following;
   useEffect(() => {
     if (followingId === null) return;
     const unlisteners = [
       listen<RemoteUploadProgress>("remote_upload_progress", (e) => setRow(e.payload)),
-      listen<SyncSnapshot>("sync_progress_snapshot", (e) => {
-        setSyncFiles(e.payload.files);
-        const now = followRef.current;
-        if (now) setSyncWatch((prev) => watchSyncRow(prev, now, e.payload));
-      }),
+      listen<SyncSnapshot>("sync_progress_snapshot", (e) => setSyncFiles(e.payload.files)),
     ];
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
@@ -104,6 +120,7 @@ export default function CapturePreviewPage() {
       cardId.current = card.id;
       setRow(null);
       setSyncFiles([]);
+      setMenuOpen(false);
       clearCopied();
     }
   }, [card, clearCopied]);
@@ -114,7 +131,21 @@ export default function CapturePreviewPage() {
     if (card) void dismissCapturePreview(card.id).catch(() => undefined);
   }, [card]);
 
-  const view = card ? cardView(card, row, syncFiles, syncWatch) : null;
+  // The menu takes the keyboard while open: focus on its item, Escape closes it.
+  useEffect(() => {
+    if (!menuOpen) return;
+    menuItem.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setMenuOpen(false);
+      menuButton.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
+
+  const view = card ? cardView(card, row, syncFiles) : null;
   const done = view?.done ?? false;
 
   // Once in the drive, the card slides away on its own, unless the pointer is on it.
@@ -127,8 +158,18 @@ export default function CapturePreviewPage() {
   if (!card || !view) return null;
   const { percent, failed } = view;
   const uploaded = done;
-  const canCopy = view.linkCopied;
+  const actions = card.actions;
   const failure = card.status.state === "failed" ? card.status.message : null;
+  const fileManager = fileManagerLabel();
+
+  /** One card action at a time; Rust reports what went wrong on the card itself. */
+  const run = (action: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    void action()
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  };
 
   const showInFolder = () => void showCapturePreviewInFolder().catch(() => undefined);
 
@@ -176,7 +217,7 @@ export default function CapturePreviewPage() {
 
         <button
           type="button"
-          onClick={canRetry(card) ? undefined : showInFolder}
+          onClick={failed ? undefined : showInFolder}
           aria-label={`Show ${card.fileName} in its folder`}
           title="Show in folder"
           className={`group relative block aspect-[16/9] w-full overflow-hidden rounded-[9px] bg-white/5 ${GLASS_FOCUS}`}
@@ -194,7 +235,7 @@ export default function CapturePreviewPage() {
               <Video className="size-3" /> Recording
             </span>
           )}
-          {!canRetry(card) && (
+          {!failed && (
             <span className="pointer-events-none absolute inset-0 grid place-items-center bg-[#000]/0 opacity-0 transition duration-150 group-hover:bg-[#000]/35 group-hover:opacity-100 motion-reduce:transition-none">
               <span className="flex items-center gap-1.5 rounded-full bg-[#000]/70 px-3 py-1 text-[12px] font-medium">
                 <FolderOpen className="size-3.5" /> Show in folder
@@ -249,33 +290,97 @@ export default function CapturePreviewPage() {
           )}
         </div>
 
-        <div className="mt-2 flex gap-1.5">
-          {canRetry(card) ? (
-            <button
-              type="button"
-              onClick={() => void retryCapturePreview().catch(() => undefined)}
-              className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-[8px] text-[12px] ${GLASS_PRIMARY}`}
-            >
-              <RotateCw aria-hidden className="size-3.5" /> Retry
-            </button>
+        <div className="relative mt-2 flex gap-1.5">
+          {failed ? (
+            <>
+              {actions.upgrade && (
+                <button type="button" onClick={() => run(upgradeFromCapturePreview)} className={`${ACTION} ${GLASS_PRIMARY}`}>
+                  <Sparkles aria-hidden className="size-3.5 shrink-0" /> Upgrade
+                </button>
+              )}
+              {actions.retry && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => run(retryCapturePreview)}
+                  className={actions.upgrade ? SECONDARY : `${ACTION} ${GLASS_PRIMARY}`}
+                >
+                  <RotateCw aria-hidden className="size-3.5 shrink-0" /> Retry
+                </button>
+              )}
+              {actions.discard && (
+                <button type="button" disabled={busy} onClick={() => run(discardCapturePreview)} className={SECONDARY}>
+                  <Trash2 aria-hidden className="size-3.5 shrink-0" /> Discard
+                </button>
+              )}
+              {!actions.retry && !actions.upgrade && (
+                // The sync queue retries a synced capture on its own.
+                <button type="button" onClick={showInFolder} className={`${ACTION} ${GLASS_PRIMARY}`}>
+                  <FolderOpen aria-hidden className="size-3.5 shrink-0" /> Show in folder
+                </button>
+              )}
+            </>
           ) : (
-            <button
-              type="button"
-              onClick={showInFolder}
-              className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-[8px] text-[12px] ${GLASS_PRIMARY}`}
-            >
-              <FolderOpen aria-hidden className="size-3.5" /> Show in folder
-            </button>
+            <>
+              <button type="button" onClick={showInFolder} className={`${ACTION} ${GLASS_PRIMARY}`}>
+                <FolderOpen aria-hidden className="size-3.5 shrink-0" /> Show in folder
+              </button>
+              {actions.mintLink ? (
+                <button type="button" disabled={busy} onClick={() => run(mintCapturePreviewLink)} className={SECONDARY}>
+                  <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
+                </button>
+              ) : (
+                <button type="button" disabled={!actions.copyLink} onClick={copy} className={SECONDARY}>
+                  {copied ? <Check aria-hidden className="size-3.5 shrink-0" /> : <Link2 aria-hidden className="size-3.5 shrink-0" />}
+                  {copied ? "Copied" : "Copy link"}
+                </button>
+              )}
+              {actions.reveal && (
+                <button
+                  type="button"
+                  aria-label={`Show in ${fileManager}`}
+                  title={`Show in ${fileManager}`}
+                  onClick={() => run(revealCapturePreview)}
+                  className={ICON_ACTION}
+                >
+                  <FolderSearch aria-hidden className="size-4" />
+                </button>
+              )}
+              {actions.revokeLink && (
+                <button
+                  ref={menuButton}
+                  type="button"
+                  aria-label="More"
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  title="More"
+                  onClick={() => setMenuOpen((open) => !open)}
+                  className={ICON_ACTION}
+                >
+                  <MoreHorizontal aria-hidden className="size-4" />
+                </button>
+              )}
+              {menuOpen && actions.revokeLink && (
+                // Opens upward over the picture: the card sits at the window's
+                // bottom edge, so there is no room below.
+                <div role="menu" aria-label="More" className={`absolute bottom-10 right-0 z-10 min-w-[150px] rounded-[10px] p-1 ${GLASS_PANEL}`}>
+                  <button
+                    ref={menuItem}
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      run(revokeCapturePreviewLink);
+                    }}
+                    className={`flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[12px] ${GLASS_BUTTON}`}
+                  >
+                    <X aria-hidden className="size-3.5" /> Revoke link
+                  </button>
+                </div>
+              )}
+            </>
           )}
-          <button
-            type="button"
-            disabled={!canCopy}
-            onClick={copy}
-            className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-[8px] bg-white/10 text-[12px] font-medium ${GLASS_BUTTON}`}
-          >
-            {copied ? <Check aria-hidden className="size-3.5" /> : <Link2 aria-hidden className="size-3.5" />}
-            {copied ? "Copied" : "Copy link"}
-          </button>
         </div>
       </div>
     </div>

@@ -19,7 +19,6 @@ describe("the menu bar during a recording", () => {
     expect(trayClickStopsRecording({ phase: "recording", elapsedSecs: 1, microphone: false })).toBe(true);
     expect(trayClickStopsRecording({ phase: "paused", elapsedSecs: 1, microphone: false })).toBe(true);
     expect(trayClickStopsRecording({ phase: "selecting", kind: "recording", mode: "area" })).toBe(false);
-    expect(trayClickStopsRecording({ phase: "delivering", kind: "recording" })).toBe(false);
   });
 });
 

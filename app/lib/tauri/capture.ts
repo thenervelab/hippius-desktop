@@ -21,9 +21,7 @@ export type CapturePhase =
   | { phase: "capturing"; kind: CaptureKind }
   | { phase: "recording"; elapsedSecs: number; microphone: boolean }
   | { phase: "paused"; elapsedSecs: number; microphone: boolean }
-  | { phase: "finalizing" }
-  /** @deprecated Rust no longer sends it: the session is Idle once the file exists. */
-  | { phase: "delivering"; kind: CaptureKind };
+  | { phase: "finalizing" };
 
 /**
  * `capture_state_changed` and `capture_state`: the phase plus `seq`, a number
@@ -72,12 +70,10 @@ export interface CaptureOptions {
   /** Rust keeps these from `capture_start` / `capture_set_mode`; the bar's copy is ignored on save. */
   lastKind: CaptureKind;
   lastMode: CaptureMode;
-  // Always sent by Rust. Optional only until every caller that builds an
-  // options object by hand includes them; a missing one saves as its default.
   /** Mint a public link after upload and copy it (default true). Off = filed only; the card can still make one. */
-  copyLink?: boolean;
+  copyLink: boolean;
   /** Recording countdown: 0, 3 or 5 seconds (default 3; anything else reads as 3). */
-  recordCountdownSecs?: number;
+  recordCountdownSecs: number;
 }
 
 /** `capture_set_options` (via `saveCaptureOptions`). Mirrors Rust's `SavedOptions`. */
@@ -219,9 +215,7 @@ export type CapturePreviewStatus =
   | { state: "syncing"; linkCopied: boolean; linkError?: string }
   | { state: "uploaded"; linkCopied: boolean; linkError?: string }
   /** `message` is Rust's sentence; `retryable` = Retry applies (false when the sync queue retries it). */
-  // `reason` and `retryable` are always sent by Rust; optional until every
-  // hand-built status in the tests includes them.
-  | { state: "failed"; message: string; reason?: CaptureFailureReason; retryable?: boolean };
+  | { state: "failed"; message: string; reason: CaptureFailureReason; retryable: boolean };
 
 /** What the card says about the link. Mirrors Rust's `LinkState`. */
 export type CaptureLinkState =
@@ -240,6 +234,8 @@ export interface CapturePreviewActions {
   revokeLink: boolean;
   /** Reveal in Finder / Show in Explorer. */
   reveal: boolean;
+  /** Open the storage plans: the upload failed because the plan is full. */
+  upgrade: boolean;
 }
 
 /** The preview card in the corner. Mirrors Rust's `PreviewCard`. */
@@ -252,14 +248,12 @@ export interface CapturePreviewCard {
   remote: boolean;
   thumbnail?: string;
   status: CapturePreviewStatus;
-  // `relPath`, `link` and `actions` are always sent by Rust; optional until
-  // every hand-built card in the tests includes them.
   /** `Captures/<fileName>`: the sync engine's row path, to join the percent on. */
-  relPath?: string;
-  link?: CaptureLinkState;
+  relPath: string;
+  link: CaptureLinkState;
   /** Rust's line about the link ("Public link copied"); absent = say nothing. */
   linkText?: string;
-  actions?: CapturePreviewActions;
+  actions: CapturePreviewActions;
 }
 
 /** `capture_show_in_folder`: open this drive's Captures folder. */
@@ -318,6 +312,7 @@ export interface CaptureFailed {
 // `capture_pending_changed` → `CapturePendingChanged`,
 // `capture_preview_changed` → `CapturePreviewCard | null`,
 // `capture_show_in_folder` → `CaptureShowInFolder`,
+// `capture_open_plans` → nothing (the card's Upgrade),
 // `capture_shortcut_pressed` → nothing,
 // `capture_camera_state` → `CaptureCameraState`,
 // `capture_cameras` → `CaptureDevice[]`,
@@ -403,6 +398,11 @@ export function revealCapturePreview(): Promise<void> {
 /** Throw away a capture that could not be uploaded (its file is deleted). */
 export function discardCapturePreview(): Promise<void> {
   return invoke("capture_preview_discard");
+}
+
+/** Upgrade (a full plan): the main window comes forward on the storage plans. */
+export function upgradeFromCapturePreview(): Promise<void> {
+  return invoke("capture_preview_upgrade");
 }
 
 /** Register the saved system-wide shortcut (called when the app mounts). */

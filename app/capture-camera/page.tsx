@@ -13,7 +13,6 @@ import {
   setCaptureCameraSize,
   type CameraSize,
   type CaptureCameraState,
-  type CapturePhase,
 } from "@/app/lib/tauri/capture";
 import { GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { stepIndex } from "@/app/capture-overlay/keyNav";
@@ -31,8 +30,10 @@ import { camerasAreNamed, camerasFrom, cameraCloseLabel, resolveCameraId, stripS
  * be placed before recording starts.
  *
  * The size strip exists only while choosing: this window is filmed, so a
- * strip that appeared under the pointer mid-recording was in the video. The
- * pill hides the bubble while recording. While choosing the strip is always
+ * strip that appeared under the pointer mid-recording was in the video.
+ * Rust's camera state says when a recording is starting or running
+ * (`recording`), so the page follows no phase of its own. The pill hides
+ * the bubble while recording. While choosing the strip is always
  * in the page (faded out until the pointer or keyboard focus is on it), so
  * Tab reaches it; the arrow keys move along it.
  */
@@ -50,8 +51,6 @@ function SizeIcon({ size }: { size: CameraSize }) {
 
 export default function CaptureCameraPage() {
   const [camera, setCamera] = useState<CaptureCameraState | null>(null);
-  // The session's phase; null until known, and the strip waits for it.
-  const [phase, setPhase] = useState<CapturePhase | null>(null);
   const [failed, setFailed] = useState(false);
   const stripRef = useRef<HTMLDivElement | null>(null);
   // Rust reports the pointer over the window (a window that is not key does
@@ -68,24 +67,16 @@ export default function CaptureCameraPage() {
   const run = useRef(0);
 
   useEffect(() => {
-    // The first reads can answer late (the context may start the helper to
-    // name the camera); an event that landed first is newer, so they give way.
+    // The first read can answer late (the context may start the helper to
+    // name the camera); an event that landed first is newer, so it gives way.
     let heardCamera = false;
-    let heardPhase = false;
     void getCaptureCameraContext()
       .then((c) => !heardCamera && setCamera(c))
-      .catch(() => undefined);
-    void getCaptureState()
-      .then((p) => !heardPhase && setPhase(p))
       .catch(() => undefined);
     const unlisteners = [
       listen<CaptureCameraState>("capture_camera_state", (e) => {
         heardCamera = true;
         setCamera(e.payload);
-      }),
-      listen<CapturePhase>("capture_state_changed", (e) => {
-        heardPhase = true;
-        setPhase(e.payload);
       }),
       listen<boolean>("capture_camera_hover", (e) => setHoverRust(e.payload)),
     ];
@@ -213,9 +204,9 @@ export default function CaptureCameraPage() {
   const round = bubble && camera.size !== "full";
   // The strip is for the bubble only (the camera-only stage is the
   // recording), and only while choosing.
-  const hasStrip = bubble && stripShown(phase);
+  const hasStrip = bubble && stripShown(camera);
   const hovered = hoverRust || hoverDom;
-  const closeLabel = cameraCloseLabel(phase);
+  const closeLabel = cameraCloseLabel(camera);
 
   const onStripKey = (e: React.KeyboardEvent) => {
     const buttons = Array.from(stripRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);

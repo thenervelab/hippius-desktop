@@ -63,6 +63,16 @@ export const TIMER_OPTIONS: readonly { secs: number; label: string }[] = [
   { secs: 10, label: "10 seconds" },
 ];
 
+/** The recording countdown choices, as Rust accepts them (`record_countdown_secs`). */
+export const RECORD_COUNTDOWN_OPTIONS: readonly { secs: number; label: string }[] = [
+  { secs: 0, label: "None" },
+  { secs: 3, label: "3 seconds" },
+  { secs: 5, label: "5 seconds" },
+];
+
+/** The camera row's line when the camera would not be in the video (a window recording). */
+export const CAMERA_NOT_FILMED = "Camera is only recorded with the entire screen or an area.";
+
 /** Where remembered areas live: one area, on the display it was drawn on. */
 export const LAST_AREA_KEY = "hippius:capture-last-area";
 

@@ -7,25 +7,28 @@ import {
   getCaptureCameras,
   getCaptureDestinationChoices,
   getCaptureMicrophones,
+  saveCaptureOptions,
   setCaptureDestination,
-  setCaptureOptions,
   type CaptureDestination,
   type CaptureDestinationChoice,
   type CaptureDevice,
   type CaptureKind,
   type CaptureMode,
   type CaptureOptions,
+  type CaptureSavedOptions,
   type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { MODE_ICON } from "@/app/lib/capture/modes";
 import { GLASS_BAR, GLASS_BUTTON, GLASS_FOCUS, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
 import {
   barGroups,
+  CAMERA_NOT_FILMED,
   chooseLabel,
   confirmLabel,
   isDeviceInUse,
   pickCamera,
   pickMicrophone,
+  RECORD_COUNTDOWN_OPTIONS,
   shareTabFor,
   sourceLabel,
   TIMER_OPTIONS,
@@ -214,19 +217,41 @@ function OptionsMenu({
           ))}
         </>
       ) : (
-        showClicksAvailable && (
-          <>
-            <MenuHeading>Recording</MenuHeading>
+        <>
+          <MenuHeading>Recording countdown</MenuHeading>
+          {RECORD_COUNTDOWN_OPTIONS.map((t) => (
             <MenuRow
-              role="menuitemcheckbox"
-              checked={options.showClicks}
-              onSelect={() => onOptions({ ...options, showClicks: !options.showClicks })}
+              key={t.secs}
+              role="menuitemradio"
+              checked={options.recordCountdownSecs === t.secs}
+              onSelect={() => onOptions({ ...options, recordCountdownSecs: t.secs })}
             >
-              Show mouse clicks
+              {t.label}
             </MenuRow>
-          </>
-        )
+          ))}
+          {showClicksAvailable && (
+            <>
+              <MenuHeading>Recording</MenuHeading>
+              <MenuRow
+                role="menuitemcheckbox"
+                checked={options.showClicks}
+                onSelect={() => onOptions({ ...options, showClicks: !options.showClicks })}
+              >
+                Show mouse clicks
+              </MenuRow>
+            </>
+          )}
+        </>
       )}
+
+      <MenuHeading>After capture</MenuHeading>
+      <MenuRow
+        role="menuitemcheckbox"
+        checked={options.copyLink}
+        onSelect={() => onOptions({ ...options, copyLink: !options.copyLink })}
+      >
+        Copy a share link after capture
+      </MenuRow>
     </div>
   );
 }
@@ -374,6 +399,8 @@ function SourceRow({
 function SourcesPanel({
   options,
   microphoneAvailable,
+  cameraOnlyAvailable,
+  cameraFilmed,
   menu,
   cameraTrigger,
   microphoneTrigger,
@@ -383,6 +410,10 @@ function SourcesPanel({
 }: {
   options: CaptureOptions;
   microphoneAvailable: boolean;
+  /** The Screen switch (off = camera only) is offered only where Rust can record the camera alone. */
+  cameraOnlyAvailable: boolean;
+  /** Whether the camera would be in the video for the mode chosen now (Rust's answer). */
+  cameraFilmed: boolean;
   menu: OpenMenu | null;
   cameraTrigger: React.RefObject<HTMLButtonElement | null>;
   microphoneTrigger: React.RefObject<HTMLButtonElement | null>;
@@ -435,18 +466,21 @@ function SourcesPanel({
 
   return (
     <div role="group" aria-label="Recording sources" className={`w-[300px] max-w-[calc(100vw-32px)] rounded-[14px] p-1 ${GLASS_BAR}`}>
-      <SourceRow
-        icon={options.screen ? Monitor : MonitorOff}
-        label="Screen"
-        on={options.screen}
-        caption={options.screen ? null : "Recording the camera only"}
-        onToggle={() => pick(toggleScreen(options))}
-      />
+      {cameraOnlyAvailable && (
+        <SourceRow
+          icon={options.screen ? Monitor : MonitorOff}
+          label="Screen"
+          on={options.screen}
+          caption={options.screen ? null : "Recording the camera only"}
+          onToggle={() => pick(toggleScreen(options))}
+        />
+      )}
       <SourceRow
         icon={options.camera ? Video : VideoOff}
         label={sourceLabel(options.camera, options.cameraDevice, cameras, "camera")}
         menuLabel="Camera"
         on={options.camera}
+        caption={cameraFilmed ? null : CAMERA_NOT_FILMED}
         devices={cameras}
         chosen={options.cameraDevice}
         open={menu === "camera"}
@@ -487,6 +521,10 @@ interface Props {
   recordingAvailable: boolean;
   microphoneAvailable: boolean;
   showClicksAvailable: boolean;
+  /** Camera only (the Screen switch) can be recorded here. */
+  cameraOnlyAvailable: boolean;
+  /** Whether the camera, if on, is in the video for this mode. */
+  cameraFilmed: boolean;
   hint: string;
   /** "Return" on a Mac, "Enter" elsewhere, for the hint and the tooltips. */
   enterKey?: string;
@@ -497,7 +535,8 @@ interface Props {
   onChoose: (tab: ShareTab) => void;
   onConfirm: () => void;
   onCancel: () => void;
-  onOptionsSaved: (options: CaptureOptions) => void;
+  /** What Rust stored, with the countdown and whether the camera is filmed for the mode chosen now. */
+  onOptionsSaved: (saved: CaptureSavedOptions) => void;
   onDestinationSaved: (destination: CaptureDestination) => void;
 }
 
@@ -579,7 +618,7 @@ export default function CaptureBar(props: Props) {
   }, [menu, triggerFor]);
 
   const saveOptions = (next: CaptureOptions) => {
-    setCaptureOptions(next)
+    saveCaptureOptions(next)
       .then(props.onOptionsSaved)
       .catch(() => undefined);
   };
@@ -617,6 +656,8 @@ export default function CaptureBar(props: Props) {
         <SourcesPanel
           options={options}
           microphoneAvailable={props.microphoneAvailable}
+          cameraOnlyAvailable={props.cameraOnlyAvailable}
+          cameraFilmed={props.cameraFilmed}
           menu={menu}
           cameraTrigger={cameraTrigger}
           microphoneTrigger={microphoneTrigger}

@@ -2,28 +2,31 @@
 
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Mic, Pause, Play, Square, Trash2, Video, VideoOff } from "lucide-react";
+import { Mic, Pause, Play, RotateCcw, Square, Trash2, Video, VideoOff } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
   cancelCapture,
   getCaptureCameraContext,
   getCaptureState,
   pauseCapture,
+  restartCapture,
   resumeCapture,
   stopCapture,
   toggleCaptureCamera,
   type CaptureCameraState,
   type CapturePhase,
+  type CapturePhaseEvent,
 } from "@/app/lib/tauri/capture";
 import { GLASS_BAR, GLASS_BUTTON, GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { mmss } from "@/app/lib/capture/time";
 import { discardNeedsConfirm } from "./discard";
 
 /**
- * Floating recording pill: time, microphone, camera, pause/resume, stop, discard.
+ * Floating recording pill: time, microphone, camera, pause/resume, restart,
+ * stop, discard.
  *
  * Rust owns the session; this page only mirrors `capture_state_changed` and
- * invokes pause/resume/stop/cancel. Content-protected by the window builder so
+ * invokes pause/resume/restart/stop/cancel. Content-protected by the window builder so
  * it stays out of the recording, and draggable by its body
  * (`data-tauri-drag-region`). The same dark glass as the capture bar; the
  * menu bar carries a second Stop (tray title).
@@ -31,7 +34,8 @@ import { discardNeedsConfirm } from "./discard";
  * Escape does nothing here. The pill becomes the key window as soon as it is
  * clicked (Pause, say), so a stray Escape meant for another app landed here
  * and threw a recording away. Discarding is the trash button only, and past
- * a few seconds it asks first.
+ * a few seconds it asks first. Restart throws the take away too, so it asks
+ * the same question.
  */
 
 function isLive(phase: CapturePhase): phase is Extract<CapturePhase, { phase: "recording" | "paused" }> {
@@ -41,29 +45,45 @@ function isLive(phase: CapturePhase): phase is Extract<CapturePhase, { phase: "r
 const PILL = `flex items-center rounded-full ${GLASS_BAR}`;
 const ICON_BUTTON = `grid size-7 place-items-center rounded-full ${GLASS_BUTTON}`;
 
+/** What the pill is asking before it throws the recording away. */
+type Question = "discard" | "restart";
+
+const QUESTION: Record<Question, { title: string; body: string; confirm: string }> = {
+  discard: { title: "Discard this recording?", body: "Nothing will be saved.", confirm: "Discard" },
+  restart: { title: "Restart this recording?", body: "What you recorded is thrown away.", confirm: "Restart" },
+};
+
 export default function CaptureControlsPage() {
   const [phase, setPhase] = useState<CapturePhase>({ phase: "idle" });
   const [busy, setBusy] = useState(false);
   const [camera, setCamera] = useState<CaptureCameraState | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<Question | null>(null);
   const keepRef = useRef<HTMLButtonElement | null>(null);
+  // The button to give focus back to once the question is answered "keep".
+  const focusBack = useRef<Question | null>(null);
   const trashRef = useRef<HTMLButtonElement | null>(null);
+  const restartRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
-    // A first read that answers after an event would put an older phase back.
-    let heardPhase = false;
+    // Rust numbers every phase: an older one (a first read that answers
+    // after an event) never puts a stale phase back.
+    let seq = -1;
+    const take = (p: CapturePhaseEvent) => {
+      if (typeof p.seq === "number") {
+        if (p.seq <= seq) return;
+        seq = p.seq;
+      }
+      setPhase(p);
+    };
     let heardCamera = false;
     void getCaptureState()
-      .then((p) => !heardPhase && setPhase(p))
+      .then(take)
       .catch(() => undefined);
     void getCaptureCameraContext()
       .then((c) => !heardCamera && setCamera(c))
       .catch(() => undefined);
     const unlisteners = [
-      listen<CapturePhase>("capture_state_changed", (e) => {
-        heardPhase = true;
-        setPhase(e.payload);
-      }),
+      listen<CapturePhaseEvent>("capture_state_changed", (e) => take(e.payload)),
       listen<CaptureCameraState>("capture_camera_state", (e) => {
         heardCamera = true;
         setCamera(e.payload);
@@ -77,17 +97,25 @@ export default function CaptureControlsPage() {
   const live = isLive(phase);
   // The question goes when the recording ends some other way (the tray's Stop).
   useEffect(() => {
-    if (!live) setConfirming(false);
+    if (!live) setConfirming(null);
   }, [live]);
 
-  // Asking: Escape and "Keep recording" both mean no, and focus starts on no.
+  // Asking: Escape and "Keep recording" both mean no, and focus starts on
+  // no. Answered no, focus goes back to the button that asked (it is drawn
+  // again only once the question is gone).
   useEffect(() => {
-    if (!confirming) return;
+    if (!confirming) {
+      const back = focusBack.current;
+      focusBack.current = null;
+      if (back) (back === "restart" ? restartRef : trashRef).current?.focus();
+      return;
+    }
     keepRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      setConfirming(false);
+      focusBack.current = confirming;
+      setConfirming(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -106,12 +134,12 @@ export default function CaptureControlsPage() {
   };
 
   const starting = phase.phase === "capturing" && phase.kind === "recording";
-  if (starting || phase.phase === "finalizing" || phase.phase === "delivering") {
+  if (starting || phase.phase === "finalizing") {
     return (
       <div className="flex h-full w-full items-center justify-center">
         <div role="status" className={`${PILL} gap-3 px-4 py-2 text-sm`}>
           <span aria-hidden className="size-2 animate-pulse rounded-full bg-[#3167DD] motion-reduce:animate-none" />
-          {starting ? "Starting recording…" : phase.phase === "finalizing" ? "Saving recording…" : "Uploading…"}
+          {starting ? "Starting recording…" : "Saving recording…"}
         </div>
       </div>
     );
@@ -122,29 +150,30 @@ export default function CaptureControlsPage() {
   }
 
   if (confirming) {
+    const question = QUESTION[confirming];
     return (
       <div className="flex h-full w-full items-center justify-center">
         <div
           role="alertdialog"
-          aria-labelledby="discard-title"
-          aria-describedby="discard-body"
+          aria-labelledby="question-title"
+          aria-describedby="question-body"
           className={`${PILL} max-w-full gap-1.5 py-1.5 pl-3 pr-1.5`}
         >
           {/* Sized for the pill's 340 pt window: the text column wraps before anything clips. */}
           <div className="min-w-0 flex-1 leading-tight">
-            <p id="discard-title" className="text-[11.5px] font-semibold">
-              Discard this recording?
+            <p id="question-title" className="text-[11.5px] font-semibold">
+              {question.title}
             </p>
-            <p id="discard-body" className="text-[11px] text-white/70">
-              Nothing will be saved.
+            <p id="question-body" className="text-[11px] text-white/70">
+              {question.body}
             </p>
           </div>
           <button
             ref={keepRef}
             type="button"
             onClick={() => {
-              setConfirming(false);
-              trashRef.current?.focus();
+              focusBack.current = confirming;
+              setConfirming(null);
             }}
             className={`h-7 shrink-0 rounded-full bg-white/10 px-2 text-[11.5px] font-medium ${GLASS_BUTTON}`}
           >
@@ -153,15 +182,27 @@ export default function CaptureControlsPage() {
           <button
             type="button"
             disabled={busy}
-            onClick={() => void run(cancelCapture)}
+            onClick={() => {
+              setConfirming(null);
+              void run(confirming === "restart" ? restartCapture : cancelCapture);
+            }}
             className={`h-7 shrink-0 rounded-full bg-[#D70015] px-2.5 text-[11.5px] font-semibold text-white hover:bg-[#b80012] disabled:opacity-40 ${GLASS_FOCUS}`}
           >
-            Discard
+            {question.confirm}
           </button>
         </div>
       </div>
     );
   }
+
+  /** Throw the take away (discard, or restart on the same selection), asking first past a few seconds. */
+  const throwAway = (question: Question) => {
+    if (discardNeedsConfirm(phase.elapsedSecs)) {
+      setConfirming(question);
+    } else {
+      void run(question === "restart" ? restartCapture : cancelCapture);
+    }
+  };
 
   const paused = phase.phase === "paused";
   // Only a bubble can be hidden: the camera-only stage IS the recording.
@@ -216,6 +257,17 @@ export default function CaptureControlsPage() {
             {paused ? <Play className="size-4 fill-current" /> : <Pause className="size-4" />}
           </button>
           <button
+            ref={restartRef}
+            type="button"
+            disabled={busy}
+            aria-label="Restart recording"
+            title="Restart (throws this take away)"
+            className={ICON_BUTTON}
+            onClick={() => throwAway("restart")}
+          >
+            <RotateCcw className="size-4" />
+          </button>
+          <button
             type="button"
             disabled={busy}
             aria-label="Stop recording"
@@ -232,10 +284,7 @@ export default function CaptureControlsPage() {
             aria-label="Discard recording"
             title="Discard (nothing is saved)"
             className={ICON_BUTTON}
-            onClick={() => {
-              if (discardNeedsConfirm(phase.elapsedSecs)) setConfirming(true);
-              else void run(cancelCapture);
-            }}
+            onClick={() => throwAway("discard")}
           >
             <Trash2 className="size-4" />
           </button>
