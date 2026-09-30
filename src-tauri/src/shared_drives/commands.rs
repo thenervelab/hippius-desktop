@@ -2221,10 +2221,12 @@ pub fn check_invite_email(email: String) -> InviteEmailCheck {
     invite_email_check(&email)
 }
 
-/// What a server from before hcfs #521 answers a mailed Manager invite with,
-/// matched exactly: a plain `bad_request` with no slug of its own, and no
-/// capability flag to ask first. Nothing was sent.
-const MANAGER_EMAIL_UNSUPPORTED: &str = "manager invites must be sent as a link";
+/// What a server from before hcfs #521 answers a mailed Manager invite with
+/// (`email_drive_invite` in hcfs-server's `drives/routes.rs`), matched
+/// exactly: a plain `bad_request` with no slug of its own, and no capability
+/// flag to ask first. Nothing was sent.
+const MANAGER_EMAIL_UNSUPPORTED: &str =
+    "manager invites must be sent as a link, not by email; invite as a writer and change the role after they join";
 
 /// Map a failed `POST /v1/drive-invites/email`.
 ///
@@ -4523,7 +4525,8 @@ mod tests {
         match classify_email_invite_error(
             StatusCode::BAD_REQUEST,
             None,
-            r#"{"error":"bad_request","message":"manager invites must be sent as a link"}"#,
+            // Byte for byte what hcfs main sent before #521.
+            r#"{"error":"bad_request","message":"manager invites must be sent as a link, not by email; invite as a writer and change the role after they join"}"#,
         ) {
             AppError::Validation(msg) => assert!(msg.contains("Send a Manager link"), "{msg}"),
             other => panic!("old-server manager refusal must be worded, got {other:?}"),

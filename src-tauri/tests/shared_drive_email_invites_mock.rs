@@ -116,7 +116,12 @@ async fn a_manager_email_mint_is_sent_within_the_manager_day() {
 async fn an_old_server_refusing_a_manager_email_says_to_send_a_link() {
     let err = failing(
         StatusCode::BAD_REQUEST,
-        serde_json::json!({ "error": "bad_request", "message": "manager invites must be sent as a link" }),
+        // Byte for byte what hcfs main sent before #521.
+        serde_json::json!({
+            "error": "bad_request",
+            "message": "manager invites must be sent as a link, not by email; \
+                        invite as a writer and change the role after they join",
+        }),
         None,
     )
     .await;

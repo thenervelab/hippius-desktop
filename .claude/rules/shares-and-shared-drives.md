@@ -102,9 +102,10 @@ extend it on the first key request, so the recipient has 24 hours to claim and a
 would be a 400) and refuses Manager on a folder (`resolve_folder_role`, keyed on the
 request's `path_prefix`); the By email tab offers Manager only on a drive
 (`emailInviteRolesFor`) and says "Works once and expires within 24 hours, so they need to
-join by then" (`emailInviteNote`). A server from before #521 answers
-"manager invites must be sent as a link" and sends nothing; `classify_email_invite_error`
-words that as "send a Manager link instead" (no capability flag exists to ask first).
+join by then" (`emailInviteNote`). A server from before #521 answers a 400
+"manager invites must be sent as a link, not by email; ..." and sends nothing;
+`classify_email_invite_error` matches that full message exactly (`MANAGER_EMAIL_UNSUPPORTED`)
+and words it as "send a Manager link instead" (no capability flag exists to ask first).
 `drive_role_from_wire` keeps the three roles and reads anything else as
 `reader` in every listing (members, memberships, invites, `fold_share_access`,
 `fold_access_panel`, `member_access_for`); `parseDriveRole` does the same on the FE.
