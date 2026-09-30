@@ -116,6 +116,19 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Show in folder points out the file.** From a capture's card or the sync
   queue, the folder opens on the page that holds the file, scrolls to it and
   highlights it for a few seconds, even in a folder of dozens of files.
+- **The capture card moves on as soon as your capture is in the drive.** It
+  could sit on "Preparing upload" while the sync queue already showed the
+  file synced. It now follows the upload, says Uploaded once it lands, and
+  waits for the link before it slides away.
+- **The capture card's buttons stay on one line.** Show in folder and Copy
+  link sit side by side, and Show in Finder and Revoke link are in the More
+  menu.
+- **Clicking the Hippius icon in the menu bar always opens its menu**, even
+  after the app reloaded in the background.
+- **Capture is on Overview too**, in the Recent Files toolbar beside Folder
+  and File, where it sits on the Drive page.
+- **Settings says when the capture shortcut is not working**, and when
+  another copy of Hippius is holding it.
 
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.

@@ -193,18 +193,38 @@ stays mounted and pauses, or the card changes height under the pointer).
 It must fit 316 x 330 in every state: it sits at the window's bottom, so an
 overflow clips the TOP (the close button first). Hence the 16:9 picture and
 the one-line failure reason with the full text in `title`, and ONE row of
-actions (at most two text buttons plus two 32 pt icon buttons; Revoke link
-lives in the "More" menu, which opens upward over the picture and takes
-Escape). It listens to upload progress only while `uploading` / `syncing`
+actions where no label wraps (`whitespace-nowrap` on every text button): one
+primary that takes the spare room (Show in folder, or Upgrade / Retry), one
+compact secondary sized to its label (Copy link / Create link / Retry /
+Discard) and at most one 32 pt icon button with an `aria-label`. Show in
+Finder / Explorer and Revoke link live in the "More" menu (opens upward over
+the picture, focus on its first item, arrows move, Escape closes and refocuses
+More); with Upgrade, Retry and Discard all present, Discard is the icon.
+Pinned by `previewPage.test.tsx` across every state. It listens to upload progress only while `uploading` / `syncing`
 (`wantsProgress`): it is prewarmed hidden at every capture start. The page
 only draws the percent of a row joined on label + `relPath`; it never decides
 from a progress row that a capture is done or failed (a "completed" row still
 shows 99% until Rust says `uploaded`).
 Rust owns its status (`uploading` → `syncing` / `uploaded` / `failed`),
-keyed by a per-capture `id` so a late outcome never lands on a newer card; progress comes from `remote_upload_progress`. A `syncing` card is moved
-on by Rust (`spawn_sync_follow`), following the engine's row by label +
-`relPath` in the live session OR `recent_files` (completed rows leave the
-snapshot, and a small file can finish before the card starts following).
+keyed by a per-capture `id` so a late outcome never lands on a newer card; progress comes from `remote_upload_progress`.
+Delivery tells the card twice (`deliver_and_announce`): `deliver::place`
+puts the file in the drive and `announce_placed` makes the card `syncing`
+(synced) or `uploaded` (direct) with `LinkState::Creating` ("Creating
+link…") at once; only then `deliver::link_for` mints and `announce_link`
+settles the link, keeping whatever status the upload reached. Telling the card
+only after both held it on "Preparing upload" (= `uploading`) through the
+whole upload and mint. A `syncing` card is moved on by Rust
+(`spawn_sync_follow`, started at placement), from `sync_facts`: the live
+session row, `recent_files` (completed rows leave the session) and the
+engine's synced set (`finder_bridge::badges::is_synced`, looked up in NFC
+and NFD, never scanned), matched by label + `preview::same_drive_path` (NFC,
+`\` → `/`, leading `/` dropped, absolute paths ending in `relPath`, never
+trimmed). A row whose upload is still encrypting reads `Encrypt`, so both
+actions count. Bounded fallback: a `syncing` card with a public link, no row
+anywhere and an idle engine for `LINK_FALLBACK_AFTER` (45 s) is marked
+uploaded (`link_fallback_applies`). `PreviewCard.settled` (uploaded and the
+link not `Creating`) is what the card's auto-hide waits for, so it never slides
+away before it can say the link was copied.
 Rust also owns `link` (`LinkState`), `linkText` ("Public link copied") and
 `actions` (`CardActions`: retry, discard, copyLink, mintLink, revokeLink,
 reveal, upgrade) through `PreviewCard::refreshed`; every change goes through
@@ -244,6 +264,8 @@ when its `seq` is newer than the one it shows. It drags by
 phase broadcast goes through `emit_phase`, which also calls
 `show_phase_in_tray`: the title is the time for Recording ("◼ 00:15") and
 Paused ("❚❚ 00:15") and EMPTY for every other phase (`tray_status::tray_title_for`).
+It is written only when the text changes (`tray_needs_write` against
+`tray_last`), so a screenshot never touches the status item.
 Empty, never `None`: `tray-icon` ignores a `None` title on macOS, which is
 what left a saved recording's time frozen in the menu bar. Windows has no
 title, so the tooltip carries the time (`tray_text_for`). The write is POSTED
@@ -251,11 +273,14 @@ to the main thread (`run_on_main_thread`), never awaited: it runs under the
 phase lock and `set_title` blocks on the main thread, where a sync command may
 be waiting for that lock. A late write is dropped by `seq`
 (`newest_for_tray`). The icon is found by `tray_status::TRAY_ID`
-(= `TRAY_ID` in `useTraySync.ts`). A tray click reaches `toggle_tray_panel`,
-which first asks `commands::on_tray_click`: Recording/Paused shows the pill
-without focus and returns (no popover, never a stop; the pill has Stop), any
-other phase opens the popover. Pinned by `tray_status` unit tests, the
-`commands.rs` session tests and `tests/capture_wiring.rs`. The camera and card
+(= `TRAY_ID` in `useTraySync.ts`). A left click reaches Rust's own tray
+listener (`Builder::on_tray_icon_event` → `tray::panel::on_tray_icon_event`),
+never a webview callback (see tray.md), which asks `commands::on_tray_click`:
+`tray_status::tray_click_route` sends Recording/Paused to the pill (without
+focus; never a stop, the pill has Stop), a signed-out click to the main
+window, anything else (Idle after a capture included) to the popover. Pinned
+by `tray_status` unit tests, the `commands.rs` session tests and
+`tests/capture_wiring.rs`. The camera and card
 pages keep the "an event beats a late first read" rule; the pill compares
 `seq`.
 
@@ -294,11 +319,17 @@ start's refusals reach the same dialogs (`useStartCapture`). `logout_full`
 calls `end_for_logout` first: cancels a live capture, forgets the cards,
 unregisters the shortcut. A new
 shortcut is registered before it is saved, so one another app holds is refused
-and the old one stays; no modifier and macOS's ⌘⇧3–6 are refused.
+and the old one stays; no modifier and macOS's ⌘⇧3–6 are refused. A refusal
+names another copy of Hippius when one is running (`shortcut::held_message`,
+from NSWorkspace's running apps by bundle id or name; Windows says the plain
+sentence). A saved shortcut that did not register at start-up is kept in
+`CaptureState.shortcut_problem` and shown by Settings (`ShortcutSetting.problem`).
 
 **Delivery is local-first for a drive synced here**: the file is moved into
 `<local root>/Captures` (`free_name` never overwrites) and `trigger_sync_now`
-uploads it; the card is `syncing` and follows the sync engine's row. Uploading
+uploads it, STARTED in a spawned task, never awaited (it runs a whole sync
+round of every drive, the upload included); the card is `syncing` and
+follows the sync engine. Uploading
 it directly as well made the engine sync it back down, so it showed twice in
 the sync queue. A PAUSED drive counts as remote (`own_local_path` filters
 `is_paused`), or the card waited on sync forever. The move never overwrites
@@ -419,7 +450,9 @@ window recording must each finish with a playable file.
 ## Where Capture is offered
 
 The shortcut; Drive toolbar menu ("Open capture bar" + preselecting items),
-Files list (showPlanCard branch), Overview (`showCapture`), tray popover's
+Files list (showPlanCard branch), Overview's Recent Files toolbar (just
+before Folder and File, as in a drive's toolbar; never in the shared home
+`PageHeader`, which Billing, Wallet, Referrals and Plans use too), tray popover's
 labelled Capture button (`TrayCaptureButton`, opens the bar on the last mode;
 its slot is held while support is asked). Mode names and icons come from
 `app/lib/capture/modes.ts` on every surface: "Capture an area / a window /
