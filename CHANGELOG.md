@@ -156,6 +156,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   to stop. Needs macOS 13+, with the microphone and click rings on macOS 15+.
   Screenshots work on Mac and Windows; Windows recording follows later.
   Available in internal builds first.
+- **Sharp recordings that keep what you recorded (Mac).** Recordings are
+  saved at your screen's full resolution, so text stays crisp on Retina
+  displays, at a file size you can still share. Pausing leaves no frozen gap
+  and the sound stays in step with the picture. If a recording stops by
+  itself, for example because a display was unplugged or the recorded window
+  closed, what was recorded is saved and shared as usual. Recording checks
+  there is enough free disk space before it starts.
 - **Show your face while you record, like Loom (Mac).** Above the capture bar,
   switch the screen, camera and microphone on or off and pick which camera and
   microphone, with a level meter that shows the microphone hears you. The

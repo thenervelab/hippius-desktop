@@ -5,7 +5,7 @@ import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
-/// HippiusCapture — a tiny ScreenCaptureKit → H.264/AAC MP4 helper.
+/// HippiusCapture: a tiny ScreenCaptureKit to H.264/AAC MP4 helper.
 ///
 /// Spoken to over stdin/stdout as one JSON object per line. Rust owns the
 /// session; this process only encodes. Commands carry an optional `"id"`,

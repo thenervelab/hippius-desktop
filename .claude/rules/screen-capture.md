@@ -166,11 +166,59 @@ Pinned by `tests/capture_wiring.rs`. Temp under
   the window labels and hold `core:` permissions only.
 - **macOS Screen Recording** checked before capturing; grant needs relaunch.
 - **Refusals** matched on `subkind` in `classifyCaptureRefusal`.
-- **Helper:** build with `macos/build-capture-helper.sh`; embed release apps
-  with `macos/embed-capture-helper.sh`. Rust resolves it next to `current_exe`
-  or under `macos/HippiusCapture/.build/`.
+- **Helper:** build with `macos/build-capture-helper.sh` (`--universal` for
+  release). It is NOT a Tauri `externalBin`: `finalize-macos-release.sh`
+  embeds it as `Contents/MacOS/HippiusCapture` and signs it with
+  `macos/CaptureHelper.entitlements` (see macos-packaging.md). A release app
+  looks ONLY there (`helper_candidates`); debug builds also try
+  `macos/HippiusCapture/.build/{release,out/Products/Release,apple/...,debug}`.
+  No helper = no Record actions and no camera or microphone lists, silently.
 - **Destination** per account (`capture_destination_v1:<account_key>`); own
   drives only for now.
+
+## The recording helper (`macos/HippiusCapture/Sources/main.swift`)
+
+**Protocol.** One JSON object per line each way. Every command carries an
+`id` the reply echoes; `wait_for` skips a reply with another id (a late
+answer to an earlier command). `ready` and `stream_stopped` carry none.
+`{"ok":false,"event":"stream_stopped","error","saved"}` is unprompted: the
+stream ended on its own (display unplugged, window closed, permission
+revoked, sleep) or the writer failed, and the helper has already finished the
+file. The Rust reader thread records it (and a helper whose stdout closed) in
+`Shared`; `Recorder::take_death` hands it out once; `spawn_tick_loop` then
+calls `capture_stop`, whose `stop()` salvages the file (`kept_after`: a
+finished file, or at least `MIN_PARTIAL_BYTES` of fragments) and delivers it.
+stderr lines are diagnostics and are logged at `warn`.
+
+**Media rules that fail silently:**
+- ScreenCaptureKit sends `.idle` screen samples with no picture whenever the
+  screen is still. Appending one fails the writer for good, so only
+  `SCFrameStatus.complete` frames with an image buffer are appended.
+- A plain CLI has no window-server connection: `SCContentFilter(
+  desktopIndependentWindow:)` aborts in `CGS_REQUIRE_INIT` unless
+  `CGMainDisplayID()` ran first (top of `main`).
+- Size is in pixels, `sourceRect` in points: the output is the region times
+  the backing scale (`pointPixelScale` on 14+, the display mode on 13),
+  aligned outward to even pixels (`alignToPixels`) and capped at a 3840 long
+  edge. H.264 High, keyframe every 2 s, bit rate by pixel count (about 14 Mbps
+  at 1080p, 2..28 Mbps), sRGB tagged BT.709.
+- Pause cuts time out: samples are retimed on the writer queue by the host
+  time of every finished pause (`place`), video and audio alike, and samples
+  inside a pause are dropped. SCK timestamps are host-clock time. The last
+  frame is repeated at Stop so a still screen does not end the video early.
+- `movieFragmentInterval` is 2 s, so a killed helper leaves a playable file;
+  stdin closing (the app died) FINISHES the file and keeps it. Only `cancel`
+  deletes.
+- The camera stage is a window owned by the app (`owningApplication.processID
+  == getppid()`), trimmed by `stageInset` (12 pt: the page's `p-1.5` margin
+  plus the corner of `rounded-[18px]`) so its transparent corners and ring are
+  not filmed as black. Pinned against `app/capture-camera/page.tsx`.
+- `recording::start` refuses below `MIN_FREE_BYTES` (2 GB) free with a message
+  saying so. The macOS version is read once (`macos_version`, `OnceLock`).
+
+Driving the helper by hand (JSON on stdin, probe with AVFoundation) is the
+fastest check: a 3 s display recording, an area with pause/resume, and a
+window recording must each finish with a playable file.
 
 ## Where Capture is offered
 
