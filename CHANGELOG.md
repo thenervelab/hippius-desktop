@@ -17,6 +17,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Screenshot and Record are one click away in Drive.** The Capture menu is
+  now two buttons, Screenshot and Record, on the Drive page and inside every
+  drive (including drives shared with you), with "…" beside them for the
+  capture shortcut and choosing which drive captures go to. On a narrow
+  window they shrink to icons.
+
 - **Share by email or by link from one place.** The Share dialog now opens
   with two tabs at the top, By email and By link, instead of separate
   sections above and below the people list. It remembers the tab you used

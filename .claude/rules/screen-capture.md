@@ -418,13 +418,26 @@ window recording must each finish with a playable file.
 
 ## Where Capture is offered
 
-The shortcut; Drive toolbar menu ("Open capture bar" + preselecting items),
-Files list (showPlanCard branch), Overview (`showCapture`), tray popover's
-labelled Capture button (`TrayCaptureButton`, opens the bar on the last mode;
-its slot is held while support is asked). Mode names and icons come from
-`app/lib/capture/modes.ts` on every surface: "Capture an area / a window /
-entire screen". Record modes only when
-`capture_support.recording`. Settings › Sync & Storage has the Capture card
-(shortcut, drive). Pinned by `tests/capture_wiring.rs` (content protection,
-focus, capabilities, every command registered, retry path).
-`CaptureMenu` styles its own `DropdownMenuContent` (theme has no `bg-popover`).
+The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
+**Screenshot** (`startCapture("screenshot")`) and **Record**
+(`startCapture("recording")`), each opening the bar on its kind's last mode,
+plus one "…" menu (Open capture bar with the shortcut's keycaps, Change
+capture drive…). A "…" rather than a chevron per button: the two items belong
+to neither kind, and one extra control costs less toolbar than two. Rendered in
+the folder list's toolbar (`DriveOnboarding`, `size="compact"`, 26px), the
+in-drive toolbar (`DriveHeader`, every drive, a Viewer's shared drive included:
+a capture is filed in the capture drive, not the open one) and Overview
+(`PageHeader`'s `showCapture`). Labels show at `@[52rem]` of the app's scroll
+`@container`; below it the buttons are icons named by `aria-label` + `title`.
+Record's state comes from ONE helper, `recordAvailability`
+(`app/lib/capture/recordAvailability.ts`): hidden off macOS without recording,
+shown `aria-disabled` with the reason on a Mac without it (not `disabled`, which
+would swallow the tooltip). The tray popover has its labelled Capture button
+(`TrayCaptureButton`, opens the bar on the last mode; its slot is held while
+support is asked). Mode names and icons come from `app/lib/capture/modes.ts`.
+Settings › Sync & Storage has the Capture card (shortcut, drive). Pinned by
+`CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`
+and `tests/capture_wiring.rs` (content protection, focus, capabilities, every
+command registered, retry path). The "…" menu styles its own
+`DropdownMenuContent` (theme has no `bg-popover`). `CaptureMenu.tsx` has no
+call site left and can be deleted.

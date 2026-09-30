@@ -34,7 +34,7 @@ import {
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
 import { Button } from "@/components/ui/button";
 import FolderList from "./folder-list/FolderList";
-import CaptureMenu from "@/app/components/capture/CaptureMenu";
+import CaptureButtons from "@/app/components/capture/CaptureButtons";
 import FolderListEmptyState from "./folder-list/FolderListEmptyState";
 import DriveStatusBanner from "./service-status/DriveStatusBanner";
 import FreshAccountPlans from "./FreshAccountPlans";
@@ -731,10 +731,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             <div className="flex flex-wrap items-center justify-end gap-2">
               {/* Capture first: it files into the capture drive, not a
                   drive picked here, so it is not gated on canUpload. */}
-              <CaptureMenu
-                className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium tracking-normal"
-                iconClassName="size-3.5"
-              />
+              <CaptureButtons size="compact" />
               {canUpload && (
                 <>
                   <Button

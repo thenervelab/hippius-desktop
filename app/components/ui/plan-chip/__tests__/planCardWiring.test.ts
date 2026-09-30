@@ -49,6 +49,7 @@ describe("the Drive header shows the plan card, not a standing plans button", ()
   // the page header as well would show it twice.
   it("keeps Capture out of the page header", () => {
     expect(drivePage).not.toContain("<CaptureMenu");
+    expect(drivePage).not.toContain("<CaptureButtons");
   });
 
   // The bug this replaced: the page asked the URL, and the URL does not know.

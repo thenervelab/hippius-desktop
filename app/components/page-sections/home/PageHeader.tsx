@@ -7,7 +7,7 @@ import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
 import PlanActionButton from "@/components/ui/plan-chip/PlanActionButton";
-import CaptureMenu from "@/components/capture/CaptureMenu";
+import CaptureButtons from "@/components/capture/CaptureButtons";
 import { usePlanActionView } from "@/components/ui/plan-chip/usePlanActionView";
 import { cn } from "@/app/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
@@ -118,7 +118,7 @@ const PageHeader: FC<PageHeaderProps> = ({
       <div className="flex flex-wrap items-center justify-end gap-3">
       {/* Screenshot straight into Hippius from the Overview too, not only
           from inside Drive. Renders nothing where capture is unavailable. */}
-      {showCapture && <CaptureMenu />}
+      {showCapture && <CaptureButtons />}
       {rightSlot ? (
         <div className="flex items-center justify-end">{rightSlot}</div>
       ) : showPlanCard ? (

@@ -42,7 +42,7 @@ import {
 import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
 import RemoteFolderUploadButton from "./RemoteFolderUploadButton";
-import CaptureMenu from "@/app/components/capture/CaptureMenu";
+import CaptureButtons from "@/app/components/capture/CaptureButtons";
 
 
 const VIEW_TOGGLE_BUTTON_BASE =
@@ -529,7 +529,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               {refreshButton}
               {/* Not gated on the open drive's role: a capture is filed in
                   the capture drive the user chose, not the one on screen. */}
-              <CaptureMenu />
+              <CaptureButtons />
               {actionButtons}
             </div>
           </div>
