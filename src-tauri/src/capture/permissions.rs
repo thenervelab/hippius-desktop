@@ -49,31 +49,45 @@ pub fn request_screen_capture() -> bool {
 /// The System Settings pane where the user switches the permission on.
 pub const SCREEN_RECORDING_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 
-/// The macOS major version, read once per launch. `None` off macOS or when
-/// it cannot be read.
+/// `(major, minor)` of this Mac's macOS, read once per launch. `None` off
+/// macOS or when it cannot be read.
 ///
-/// `sw_vers` is asked once and remembered: a version does not change while
-/// the app runs, and a process spawn per question adds up on a slow disk.
+/// The one cache every capture check shares (the permission pane's name and
+/// the recording feature gates): `sw_vers` is a process spawn, the answer
+/// cannot change while the app runs, and every surface that shows a Capture
+/// button asks several times.
+#[must_use]
+pub fn macos_version() -> Option<(u64, u64)> {
+    static VERSION: std::sync::OnceLock<Option<(u64, u64)>> = std::sync::OnceLock::new();
+    *VERSION.get_or_init(read_macos_version)
+}
+
+/// The macOS major version, from [`macos_version`].
 #[must_use]
 pub fn macos_major() -> Option<u64> {
-    static MAJOR: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *MAJOR.get_or_init(read_macos_major)
+    macos_version().map(|(major, _)| major)
 }
 
 #[cfg(target_os = "macos")]
-fn read_macos_major() -> Option<u64> {
+fn read_macos_version() -> Option<(u64, u64)> {
     let out = std::process::Command::new("/usr/bin/sw_vers").arg("-productVersion").output().ok()?;
-    parse_major(&String::from_utf8_lossy(&out.stdout))
+    parse_version(&String::from_utf8_lossy(&out.stdout))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn read_macos_major() -> Option<u64> {
+fn read_macos_version() -> Option<(u64, u64)> {
     None
 }
 
-/// `"14.6.1"` → 14.
-fn parse_major(version: &str) -> Option<u64> {
-    version.trim().split('.').next()?.parse().ok()
+/// `"15.1.1\n"` to `(15, 1)`, `"26"` to `(26, 0)`; anything unreadable is
+/// `None`, which no feature gate passes.
+fn parse_version(text: &str) -> Option<(u64, u64)> {
+    let mut parts = text.trim().split('.').map(|p| p.parse::<u64>().ok());
+    match (parts.next().flatten(), parts.next()) {
+        (Some(major), None) => Some((major, 0)),
+        (Some(major), Some(Some(minor))) => Some((major, minor)),
+        _ => None,
+    }
 }
 
 /// What System Settings calls the Screen Recording pane on this Mac, for the
@@ -132,11 +146,24 @@ mod tests {
     }
 
     #[test]
-    fn a_version_string_reads_as_its_major() {
-        assert_eq!(parse_major("14.6.1\n"), Some(14));
-        assert_eq!(parse_major("26.0"), Some(26));
-        assert_eq!(parse_major(""), None);
-        assert_eq!(parse_major("x.y"), None);
+    fn a_version_string_reads_as_major_and_minor() {
+        assert_eq!(parse_version("14.6.1\n"), Some((14, 6)));
+        assert_eq!(parse_version("15.1.1\n"), Some((15, 1)));
+        assert_eq!(parse_version("26\n"), Some((26, 0)));
+        assert_eq!(parse_version("13.0"), Some((13, 0)));
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("garbage"), None);
+        assert_eq!(parse_version("14.x"), None);
+        assert_eq!(parse_version("x.y"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_version_is_read_once() {
+        let first = macos_version();
+        assert!(first.is_some_and(|v| v >= (11, 0)), "the app floor is 11.0, got {first:?}");
+        assert_eq!(macos_version(), first);
+        assert_eq!(macos_major(), first.map(|(m, _)| m));
     }
 
     /// macOS prompts once; asking again shows nothing, so the second press

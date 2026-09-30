@@ -272,6 +272,14 @@ jobs:
       - name: Install macOS packaging tools
         run: brew install xcodegen create-dmg
 
+      # The screen-recording helper, built universal BEFORE the long Tauri build
+      # so a Swift error fails the job in seconds rather than after it.
+      # finalize-macos-release.sh embeds and signs it (Contents/MacOS); a
+      # release app without it hides every Record action and says nothing.
+      # Pinned by tests/release_lane_pins.rs.
+      - name: Build the screen-recording helper
+        run: bash macos/build-capture-helper.sh --universal
+
       # Apple code signing. The sandbox exceptions the Finder extension needs are honoured
       # only to code signed by Team V28B5X732P, so a real Developer ID cert is
       # required (the preview build was previously ad-hoc/unsigned). The CERT

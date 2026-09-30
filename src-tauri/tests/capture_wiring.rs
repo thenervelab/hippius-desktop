@@ -358,6 +358,19 @@ fn stop_closes_the_file_before_the_camera_goes() {
 }
 
 /// A start that could not open its overlays takes down everything it put up.
+/// A recording that ends on its own (display unplugged, helper crashed) must
+/// end the session as Stop does, through `stop_inner`, so the saved part is
+/// delivered; the tick loop would otherwise count on over a dead recorder.
+#[test]
+fn a_recording_that_dies_is_stopped_and_delivered() {
+    let src = read("src/capture/commands.rs");
+    let tick = fn_body(&src, "fn tick_once(");
+    assert!(tick.contains("take_death()"), "the tick must ask whether the recorder died");
+    assert!(tick.contains("stop_inner(&app)"), "a dead recorder ends through stop_inner");
+    assert!(tick.contains("return Tick::Done"), "the tick loop ends once the recorder died");
+    assert!(!tick.contains("capture_stop("), "the command wrapper is not the internal path");
+}
+
 #[test]
 fn a_start_that_fails_takes_its_windows_down() {
     let src = read("src/capture/commands.rs");

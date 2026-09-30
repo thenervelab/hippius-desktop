@@ -322,11 +322,12 @@ and `TAURI_UPDATER_PUBKEY_STAGING` are retired and can be deleted from the
 repository.
 
 A **staging** build with no App Store Connect key still succeeds, but it embeds
-**no Finder extension** and is unsigned. That is deliberate — staging is also
-used to test everything unrelated to Finder — and it is announced loudly: a
-`::error::` annotation, ` - NO FINDER EXTENSION` appended to the release name,
-and a warning block in the release body. Do not use such a build to test
-"Share with Hippius".
+**no Finder extension and no screen-recording helper** and is unsigned. That is
+deliberate (staging is also used to test everything unrelated to Finder), and
+it is announced loudly: a `::error::` annotation,
+` - NO FINDER EXTENSION OR RECORDING` appended to the release name, and a
+warning block in the release body. Do not use such a build to test
+"Share with Hippius" or recording.
 
 A **beta** build in the same situation fails the job instead. See the last
 paragraph of "How each lane's updater is wired" for why the trade differs.

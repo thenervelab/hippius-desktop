@@ -1730,17 +1730,30 @@ fn tick_once(app: &AppHandle) -> Tick {
     // `try_lock`: a pause or resume holds the recorder while the helper
     // answers (up to seconds). The tick skips a beat rather than blocking an
     // async worker for that long.
-    let elapsed = match state.capture.recorder.try_lock() {
+    let (elapsed, died) = match state.capture.recorder.try_lock() {
         Ok(guard) => match guard.as_ref() {
-            Some(r) => r.elapsed_secs(),
+            Some(r) => (r.elapsed_secs(), r.take_death()),
             None => return Tick::Done,
         },
         Err(std::sync::TryLockError::Poisoned(p)) => match p.into_inner().as_ref() {
-            Some(r) => r.elapsed_secs(),
+            Some(r) => (r.elapsed_secs(), r.take_death()),
             None => return Tick::Done,
         },
         Err(std::sync::TryLockError::WouldBlock) => return Tick::Continue,
     };
+    // The recording ended on its own (display gone, helper crashed): end the
+    // session as Stop would, delivering what was saved, instead of counting
+    // on. Spawned, because `stop_inner` stops this very loop.
+    if let Some(e) = died {
+        tracing::warn!(error = %e, "recording ended on its own; saving what was recorded");
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = stop_inner(&app).await {
+                tracing::warn!(error = %e, "could not save the recording that ended on its own");
+            }
+        });
+        return Tick::Done;
+    }
     if !matches!(state.capture.current(), CapturePhase::Recording { .. } | CapturePhase::Paused { .. }) {
         return Tick::Done;
     }
