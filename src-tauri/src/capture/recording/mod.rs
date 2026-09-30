@@ -13,10 +13,12 @@ pub mod windows;
 use std::path::Path;
 
 use super::screenshot::Selection;
-use crate::error::Result;
+use crate::error::{AppError, Result};
 
-#[cfg(not(any(target_os = "macos", windows)))]
-use crate::error::AppError;
+/// Free space a recording needs before it starts. A Retina recording runs to
+/// a few GB an hour; below this the writer would fail part way through and
+/// the user would learn at Stop.
+pub const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Options that apply once, at the start of a recording.
 #[derive(Debug, Clone, Default)]
@@ -141,6 +143,44 @@ pub trait Recorder: Send {
     /// Wall-clock seconds of recorded content (pauses do not advance this).
     fn elapsed_secs(&self) -> u64;
     fn microphone(&self) -> bool;
+    /// The recording ended on its own (the stream stopped, the display went
+    /// away, the backend crashed). Returned once; `stop` then hands back
+    /// whatever was saved, so the caller should stop and deliver.
+    fn take_death(&self) -> Option<AppError> {
+        None
+    }
+}
+
+/// Refuse to start with less than `MIN_FREE_BYTES` free where the recording
+/// is written, with a message that says what to do.
+pub fn ensure_room_to_record(dir: &Path) -> Result<()> {
+    match free_bytes(dir) {
+        Some(free) if free < MIN_FREE_BYTES => Err(not_enough_room(free)),
+        _ => Ok(()),
+    }
+}
+
+fn not_enough_room(free: u64) -> AppError {
+    #[allow(clippy::cast_precision_loss)]
+    let gb = free as f64 / (1024.0 * 1024.0 * 1024.0);
+    AppError::Validation(format!(
+        "Not enough free disk space to record: {gb:.1} GB left, and a recording needs at least 2 GB. Free up some space and try again."
+    ))
+}
+
+/// Bytes free for an unprivileged writer on the volume holding `dir`; `None`
+/// when the platform cannot say (the recording then goes ahead).
+#[cfg(unix)]
+fn free_bytes(dir: &Path) -> Option<u64> {
+    // f_bavail counts f_frsize units, not f_bsize (see sync::migrate).
+    let stat = nix::sys::statvfs::statvfs(dir).ok()?;
+    #[allow(clippy::unnecessary_cast)]
+    Some(stat.fragment_size() as u64 * stat.blocks_available() as u64)
+}
+
+#[cfg(not(unix))]
+fn free_bytes(_dir: &Path) -> Option<u64> {
+    None
 }
 
 /// Whether this build can start a recording right now (OS + helper present).
@@ -161,6 +201,9 @@ pub fn recording_supported() -> bool {
 
 /// Start recording `selection` into `dest` (an `.mp4` path).
 pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
+    if let Some(dir) = dest.parent() {
+        ensure_room_to_record(dir)?;
+    }
     #[cfg(target_os = "macos")]
     {
         macos::start(selection, dest, options)
@@ -211,6 +254,24 @@ mod tests {
         ]);
         let names: Vec<&str> = tidy.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["AirPods Pro", "Studio Display Microphone", "iPhone Microphone", "BlackHole 2ch"]);
+    }
+
+    #[test]
+    fn a_full_disk_is_refused_with_a_message_that_says_what_to_do() {
+        let msg = not_enough_room(512 * 1024 * 1024).to_string();
+        assert!(msg.contains("0.5 GB left"), "{msg}");
+        assert!(msg.contains("at least 2 GB"), "{msg}");
+    }
+
+    #[test]
+    fn a_volume_with_room_is_let_through() {
+        // The temp dir's volume has room on any machine that can build this.
+        let dir = tempfile::tempdir().unwrap();
+        if free_bytes(dir.path()).is_some_and(|free| free >= MIN_FREE_BYTES) {
+            assert!(ensure_room_to_record(dir.path()).is_ok());
+        }
+        // A path that does not exist cannot be measured and is not refused.
+        assert!(ensure_room_to_record(Path::new("/definitely/not/here")).is_ok());
     }
 
     #[test]
