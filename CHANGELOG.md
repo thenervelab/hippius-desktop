@@ -159,13 +159,15 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Show your face while you record, like Loom (Mac).** Above the capture bar,
   switch the screen, camera and microphone on or off and pick which camera and
   microphone, with a level meter that shows the microphone hears you. The
-  camera appears as a round bubble you can drag anywhere; hover it to make it
-  small, large or full size, or to hide it. With the screen turned off, the
-  camera records on its own.
-- **Choose exactly what to share from a list.** Choose… on the capture bar
-  opens a Window and an Entire Screen tab with a live picture of every window
-  and screen, the way video calls ask, so you can pick a window hidden behind
-  others.
+  camera appears as a round bubble you can drag anywhere; before you record,
+  hover it (or Tab to it) to make it small, large or full size, or to turn it
+  off, and those controls never appear in the video. With the screen turned
+  off, the camera records on its own.
+- **Choose exactly what to share from a list.** Choose window… or Choose
+  screen… on the capture bar opens a Window and an Entire screen tab with a
+  live picture of every window and screen, the way video calls ask, so you can
+  pick a window hidden behind others. The frontmost window is picked, so
+  Return shares it, and the arrow keys move through the list.
 - **Every microphone shows up (Mac).** USB, Bluetooth, iPhone and virtual
   microphones are listed with the system default first, and cameras are
   listed before the camera has ever been turned on.
@@ -180,6 +182,23 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   shows the shortcut as clear, readable keys.
 - **Show in folder from the sync queue.** Each file in the sync widget has a
   folder button that opens the Drive folder it is in, however deep.
+- **A recording is never thrown away by a stray key (Mac).** Escape does
+  nothing on the recording controls, and discarding a recording longer than
+  five seconds asks "Discard this recording?" first. The controls can be
+  dragged out of the way.
+- **The capture bar works from the keyboard and with a screen reader.**
+  Escape closes an open menu before it closes the bar, Return on a focused
+  button presses that button, the arrow keys nudge a drawn area (Shift for
+  bigger steps), and the countdown and hints are read aloud.
+- **The capture card fits in every state**, a failed upload included, and
+  Show in folder opens the folder every time, even a Captures folder the
+  capture has just created. A capture saved into a synced drive is shown
+  arriving in its folder as well.
+- **Capture is easier to find and name.** The menu bar has a labelled Capture
+  button, the Drive menu and the bar use the same words ("Capture an area",
+  "Capture a window", "Capture entire screen"), and the shortcut setting shows
+  the keys as you hold them and says when a key cannot be used.
+- **Capture windows open with less to load**, so the bar appears sooner.
 - **Shared with Me is always on the Drive page, with Share a drive.** When
   nothing is shared with you yet, it explains what shared drives are for and
   links to the guide. Share a drive lets you pick one of your drives and opens
