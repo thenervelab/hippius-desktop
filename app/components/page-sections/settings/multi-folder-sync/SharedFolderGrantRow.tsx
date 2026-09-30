@@ -1,9 +1,11 @@
 "use client";
 
 // One FOLDER shared with this account (folder roles, HCFS #475): its own row
-// in "Shared with me", beside the whole drives. It names the folder, the
-// drive it lives in and who owns it, carries the role chip (Viewer or
-// Editor), and offers Open (rooted at the folder) and Leave. No Manage
+// in "Shared with me", beside the whole drives. It names the folder and who
+// owns it, carries the "Folder in a drive" chip and the role chip (Viewer or
+// Editor), and offers Open (rooted at the folder) and Leave. It does not
+// name the drive the folder lives in, as the console does not: the owner
+// shared a folder, not the drive. No Manage
 // access: Manager is not a folder role, so a holder never manages the folder.
 // No "Sync to this computer": syncing a granted folder to disk is not
 // supported.
@@ -11,8 +13,9 @@
 // Its size and file count are the FOLDER's own, from browsing the folder
 // (`folder_grant_stats`), never the drive's totals, which would overstate
 // it: a skeleton while they load, a dash if they cannot be read. The member
-// count is the people holding a grant on exactly this folder, the viewer
-// included; it is omitted when the server does not send one.
+// count is the server's count of people with access to this folder, the
+// viewer included and the owner left out; it is omitted when the server
+// does not send one.
 
 import React from "react";
 
@@ -25,11 +28,12 @@ import { useFolderGrantStats } from "@/app/lib/hooks/useFolderGrantStats";
 import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
 import AccountLabel from "@/components/page-sections/drive/AccountLabel";
 import DriveRoleChip from "@/components/page-sections/drive/DriveRoleChip";
+import FolderGrantChip from "@/components/page-sections/drive/FolderGrantChip";
 import { frozenNotice } from "@/app/lib/shared-drives/writeRefusal";
 import { parseDriveRole } from "@/app/lib/shared-drives/roles";
 import type { MyFolderGrantInfo } from "@/app/lib/tauri/sharedDrives";
 import { buildFolderGrantActions } from "./sharedDriveRowActions";
-import { folderGrantRowView } from "./sharedWithMeState";
+import { folderGrantMemberCountTitle, folderGrantRowView } from "./sharedWithMeState";
 
 export default function SharedFolderGrantRow({
   grant,
@@ -81,6 +85,9 @@ export default function SharedFolderGrantRow({
           >
             {view.folderName}
           </span>
+          {/* Before the role, as on the console: what the row IS comes
+              before what you may do in it. */}
+          <FolderGrantChip />
           <DriveRoleChip role={role} />
           {grant.frozen && (
             <span
@@ -122,15 +129,15 @@ export default function SharedFolderGrantRow({
           )}
         </div>
         <div className="ml-6 mt-1 flex min-w-0 flex-wrap items-center gap-x-1 font-geist text-[13px] font-medium text-[#0A0A0A]/40 dark:text-white/40">
-          <span className="min-w-0 truncate" title={view.driveName}>
-            In {view.driveName}
-          </span>
-          <span className="shrink-0">· Shared by</span>
+          <span className="shrink-0">Shared by</span>
           <AccountLabel ss58={grant.ownerSs58} name={grant.ownerName} />
           {/* Zero and absent both draw nothing — never fake "0 members"
               off a missing count, as on a whole-drive row. */}
           {grant.memberCount ? (
-            <span className="shrink-0 whitespace-nowrap">
+            <span
+              className="shrink-0 whitespace-nowrap"
+              title={folderGrantMemberCountTitle(grant.memberCount)}
+            >
               · {grant.memberCount} {grant.memberCount === 1 ? "member" : "members"}
             </span>
           ) : null}

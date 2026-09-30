@@ -88,21 +88,32 @@ export interface FolderGrantRowView {
   key: string;
   /** The folder's own name: the last segment of its path. */
   folderName: string;
-  /** The drive it lives in, as its owner named it. */
-  driveName: string;
   /** The full folder path, for the hover. */
   path: string;
 }
 
 export function folderGrantRowView(
-  grant: Pick<MyFolderGrantInfo, "ownerSs58" | "folderHash" | "pathPrefix" | "displayLabel">,
+  grant: Pick<MyFolderGrantInfo, "ownerSs58" | "folderHash" | "pathPrefix">,
 ): FolderGrantRowView {
   const path = grant.pathPrefix.replace(/^\/+|\/+$/g, "");
   const segments = path.split("/").filter(Boolean);
   return {
     key: `${grant.ownerSs58}:${grant.folderHash}:${path}`,
     folderName: segments[segments.length - 1] ?? path,
-    driveName: grant.displayLabel,
     path,
   };
+}
+
+/**
+ * The hover on a shared folder's member count, in the console's words
+ * (`MembersCell`). The count is everyone with access to the folder, this
+ * account included, and leaves the drive's owner out, so the owner is named
+ * apart: "only you have access" would be false on every folder. "Have
+ * access", not "can open": a frozen owner's drive admits nobody until it
+ * lifts, and the row says frozen on its own.
+ */
+export function folderGrantMemberCountTitle(memberCount: number): string {
+  return memberCount === 1
+    ? "Only you and the drive's owner have access to this folder"
+    : `${memberCount} people have access to this folder, you included, plus the drive's owner`;
 }

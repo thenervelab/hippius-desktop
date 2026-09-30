@@ -16,10 +16,14 @@ import { cn } from "@/lib/utils";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
-import { useSharedDriveMembershipByIdentity } from "@/app/lib/hooks/useSharedDriveRoles";
+import {
+  useFolderGrantForLabel,
+  useSharedDriveMembershipByIdentity,
+} from "@/app/lib/hooks/useSharedDriveRoles";
 import { driveRowSharing, managedDriveCountMark } from "@/app/lib/shared-drives/driveRowSharing";
 import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import DriveRoleChip from "./DriveRoleChip";
+import FolderGrantChip from "./FolderGrantChip";
 
 export default function DriveSharingHeaderMark({
   label,
@@ -37,10 +41,31 @@ export default function DriveSharingHeaderMark({
   browsedSharedDrive?: { ownerSs58: string; folderHash: string } | null;
 }) {
   const setShareTarget = useSetAtom(shareDriveModalAtom);
-  const bySynced = useDriveSharing(browsedSharedDrive ? null : label);
+  // A folder shared on its own (a `grant:` label) is not a drive this account
+  // owns or belongs to, so neither drive lookup applies: asking the owned
+  // listing about it would treat somebody else's folder as an own drive.
+  const folderGrant = useFolderGrantForLabel(label);
+  const bySynced = useDriveSharing(
+    browsedSharedDrive || folderGrant.isGrant ? null : label,
+  );
   const byIdentity = useSharedDriveMembershipByIdentity(browsedSharedDrive);
 
   if (!SHARED_DRIVES_ENABLED || !label) return null;
+
+  // Inside a folder shared on its own the header says so, as the row that
+  // opened it did: the same "Folder in a drive" chip, then the role once the
+  // grant listing names it. The breadcrumb already names the folder, and the
+  // drive's name is not shown, as on the row.
+  if (folderGrant.isGrant) {
+    return (
+      <div className="flex min-w-0 items-center gap-2">
+        <FolderGrantChip />
+        {folderGrant.grant ? (
+          <DriveRoleChip role={parseDriveRole(folderGrant.grant.role)} />
+        ) : null}
+      </div>
+    );
+  }
 
   // A browsed drive is somebody else's by construction, so it reads as
   // "with-me" and its role comes straight off the membership.

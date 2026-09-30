@@ -456,10 +456,19 @@ describe("folders shared with me (folder roles)", () => {
     getDefaultStore().set(serverCapabilitiesAtom, null);
   });
 
-  it("lists a shared folder as its own row, naming its drive and owner", async () => {
+  it("lists a shared folder as its own row, marked as a folder in a drive, naming its owner", async () => {
     render(<SharedWithMeSection />);
     expect(await screen.findByText("ACME")).toBeInTheDocument();
-    expect(screen.getByText("In team-docs")).toBeInTheDocument();
+    // Marked as one folder of somebody's drive, not a whole shared drive.
+    const chip = screen.getByText("Folder in a drive");
+    expect(chip.closest("span[title]")).toHaveAttribute(
+      "title",
+      "A folder within someone's drive, shared with you on its own",
+    );
+    // The drive's name is not the recipient's to see (console parity): the
+    // subtitle no longer leads with "In <drive>".
+    expect(screen.queryByText(/team-docs/)).not.toBeInTheDocument();
+    expect(screen.getByText("Shared by")).toBeInTheDocument();
     expect(screen.getByText("Grace")).toBeInTheDocument();
     expect(screen.getByText("Editor")).toBeInTheDocument();
     // Never offered: syncing a granted folder to disk is out of scope.
@@ -502,7 +511,21 @@ describe("folders shared with me (folder roles)", () => {
     listMyFolderGrantsMock.mockResolvedValue([{ ...GRANT, memberCount }]);
     render(<SharedWithMeSection />);
     await screen.findByText("ACME");
-    expect(screen.getByText((_t, el) => el?.tagName === "SPAN" && el.textContent === text)).toBeInTheDocument();
+    const count = screen.getByText((_t, el) => el?.tagName === "SPAN" && el.textContent === text);
+    // The count leaves the owner out, so the hover names them apart.
+    expect(count.getAttribute("title")).toMatch(/drive's owner/);
+  });
+
+  it("marks only the folder, never a whole shared drive beside it", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([
+      membership({ displayLabel: "whole-drive", folderHash: "fedcba9876543210" }),
+    ]);
+    render(<SharedWithMeSection onOpenDrive={vi.fn()} />);
+    await screen.findByText("ACME");
+    expect(await screen.findByText("whole-drive")).toBeInTheDocument();
+    expect(screen.getAllByText("Folder in a drive")).toHaveLength(1);
+    const driveRow = screen.getByRole("button", { name: "Open whole-drive" });
+    expect(driveRow).not.toHaveTextContent("Folder in a drive");
   });
 
   it("draws no member count from a zero", async () => {
