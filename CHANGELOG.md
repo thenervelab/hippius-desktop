@@ -138,6 +138,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Invite a Manager by email.** The By email tab now offers Manager for a
+  whole drive. The invite works once and expires after 24 hours, so the
+  person needs to join within a day.
+
 - **Shared with Me is always on the Drive page, with Share a drive.** When
   nothing is shared with you yet, it explains what shared drives are for and
   links to the guide. Share a drive lets you pick one of your drives and opens

@@ -108,14 +108,11 @@ export const EMAIL_INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: numb
   INVITE_TTL_OPTIONS.filter((o) => o.secs <= 30 * 24 * 60 * 60);
 
 /**
- * Roles an emailed invitation may confer. A Manager invite has to be a link:
- * the server caps those at a day, and a mailed one would expire before it
- * could be approved.
+ * Roles an emailed invitation to a whole drive may confer. A Manager one
+ * (HCFS #521) is single use and expires within 24 hours, clamped in Rust
+ * (`resolve_email_invite`). A folder offers {@link FOLDER_INVITE_ROLES}.
  */
-export const EMAIL_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> = [
-  "reader",
-  "writer",
-];
+export const EMAIL_INVITE_ROLES: ReadonlyArray<DriveRole> = ["reader", "writer", "manager"];
 
 /**
  * Roles a FOLDER may be shared with: Viewer and Editor. Manager is not a
@@ -125,6 +122,11 @@ export const FOLDER_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> =
   "reader",
   "writer",
 ];
+
+/** The roles the By email tab offers: Manager on a whole drive only. */
+export function emailInviteRolesFor(folder: boolean): ReadonlyArray<DriveRole> {
+  return folder ? FOLDER_INVITE_ROLES : EMAIL_INVITE_ROLES;
+}
 
 /**
  * Lifetimes a folder invite may carry: at most 30 days (the server's cap),

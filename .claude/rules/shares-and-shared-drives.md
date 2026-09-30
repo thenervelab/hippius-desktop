@@ -95,10 +95,18 @@ A whole drive is shared as Viewer (`reader`), Editor (`writer`) or Manager (`man
 `WIRE_ROLES` in `shared_drives/commands.rs` and `DRIVE_ROLES` in
 `app/lib/shared-drives/roles.ts`. A FOLDER is Viewer or Editor only (`FOLDER_ROLES`,
 `FOLDER_INVITE_ROLES`): the server refuses `manager` on a folder invite and a grant, and
-`grant_role` reads it as `reader`. An emailed invitation is Viewer or Editor too
-(`resolve_email_invite` refuses Manager by name; the server 400s it because its one-day cap
-would expire before the key is delivered): the dialog says "invite them as an Editor, then
-change their role". `drive_role_from_wire` keeps the three roles and reads anything else as
+`grant_role` reads it as `reader`. An emailed invitation to a whole drive may be Manager
+(hcfs #521): the server makes it single use, 400s a lifetime over one day, and does not
+extend it on the first key request, so the recipient has 24 hours to claim and accept.
+`resolve_email_invite` clamps it to `MANAGER_INVITE_MAX_SECS` (the omitted 7-day default
+would be a 400) and refuses Manager on a folder (`resolve_folder_role`, keyed on the
+request's `path_prefix`); the By email tab offers Manager only on a drive
+(`emailInviteRolesFor`) and says "Works once and expires within 24 hours, so they need to
+join by then" (`emailInviteNote`). A server from before #521 answers a 400
+"manager invites must be sent as a link, not by email; ..." and sends nothing;
+`classify_email_invite_error` matches that full message exactly (`MANAGER_EMAIL_UNSUPPORTED`)
+and words it as "send a Manager link instead" (no capability flag exists to ask first).
+`drive_role_from_wire` keeps the three roles and reads anything else as
 `reader` in every listing (members, memberships, invites, `fold_share_access`,
 `fold_access_panel`, `member_access_for`); `parseDriveRole` does the same on the FE.
 
@@ -106,7 +114,8 @@ What the server lets a Manager do (hcfs `hcfs-server/src/drives/routes.rs`,
 `resolve_drive_manager` with `ManagementRequirement::ManagesMembers`, and
 `docs/public/api/shared-drives.md`): mint whole-drive links of any role, Manager included
 (capped at 1 use and 24 hours, over-cap is a 400, `MANAGER_USES_CAP` /
-`MANAGER_EXPIRES_CAP_SECS`), mint folder invites, email Viewer/Editor invitations, change
+`MANAGER_EXPIRES_CAP_SECS`), mint folder invites, email invitations of any whole-drive role
+(Manager under the same caps), change
 anyone's role but their own (to Manager too, and another Manager's), remove members and
 folder holders, change a holder's folders, list and revoke invites by id, and seal an
 emailed invitation's key (any Manager). Always by naming the owner: `owner_ss58` in a mint
@@ -140,7 +149,7 @@ access alone. Plan gate: `sharingGate` asks this account's plan only on an own d
 only the server's 403 `shared_drives_not_entitled` shows the upgrade card. Pinned by
 `management_commands_route_through_the_manager_gate`,
 `the_owner_or_manager_rule_lives_in_one_place`,
-`manager_invites_are_links_within_the_server_caps` (`tests/shared_drive_wiring.rs`),
+`manager_invites_stay_within_the_server_caps` (`tests/shared_drive_wiring.rs`),
 `a_manager_names_the_owner_on_every_management_call` (mock server), the `commands.rs`,
 `access_panel.rs` and `auto_seal.rs` unit tests, and `ShareDialog.test.tsx`,
 `ShareDrivePanel.test.tsx`, `DriveSharingHeaderMark.test.tsx`,

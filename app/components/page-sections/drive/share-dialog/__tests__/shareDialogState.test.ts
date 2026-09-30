@@ -3,6 +3,7 @@ import {
   couldNotChangeAccess,
   describeLinkLifetime,
   describeLinkUses,
+  emailInviteNote,
   expiresInLabel,
   generalAccessNote,
   linkHint,
@@ -85,6 +86,20 @@ describe("generalAccessNote", () => {
     expect(generalAccessNote({ folder: false, role: "reader", neverExpires: false })).toBe(
       "Anyone with the link can join until it expires.",
     );
+  });
+});
+
+describe("emailInviteNote", () => {
+  it("says a mailed Manager invite is single use and has to be taken up within 24 hours", () => {
+    const note = emailInviteNote({ folder: false, role: "manager" });
+    expect(note).toMatch(/^Works once and expires within 24 hours/);
+    expect(note).toMatch(/join by then/);
+  });
+
+  it("says nothing for Viewer or Editor, or on a folder", () => {
+    expect(emailInviteNote({ folder: false, role: "reader" })).toBeNull();
+    expect(emailInviteNote({ folder: false, role: "writer" })).toBeNull();
+    expect(emailInviteNote({ folder: true, role: "manager" })).toBeNull();
   });
 });
 
