@@ -569,8 +569,8 @@ describe("By email", () => {
     ],
     [
       "rate limited (429), with the wait",
-      notReady("RATE_LIMITED", "Too many invitations sent recently. Try again in 3 minutes."),
-      "Too many invitations sent recently. Try again in 3 minutes.",
+      notReady("RATE_LIMITED", "You've sent too many invites to this address today. Try again in 24h."),
+      "You've sent too many invites to this address today. Try again in 24h.",
     ],
     [
       "the send failed (502)",

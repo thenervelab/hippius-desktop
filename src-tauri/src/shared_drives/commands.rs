@@ -2266,7 +2266,7 @@ fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: 
     if code == 429 || envelope.error == "rate_limited" {
         let wait = envelope.retry_after_secs.or(retry_after_header);
         return AppError::NotReady(NotReadyKind::RateLimited {
-            message: rate_limited_message(wait),
+            message: rate_limited_message(&envelope.message, wait),
         });
     }
     if code == 502 || envelope.error == "mail_send_failed" {
@@ -2275,26 +2275,71 @@ fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: 
     classify_error_status(status, body)
 }
 
-/// "Try again in N minutes" for a rate-limited mint, rounded UP so the user is
-/// never told a time at which the server will still refuse them.
-fn rate_limited_message(retry_after_secs: Option<u64>) -> String {
+/// Said when the server's reason is missing or not one we know.
+const RATE_LIMITED_GENERIC: &str = "Too many invites sent recently.";
+
+/// The server's rate limit reasons (`mail/quota.rs` in hcfs-server), matched
+/// case-insensitively, and how each reads here.
+const RATE_LIMIT_REASONS: &[(&str, &str)] = &[
+    (
+        "This address was already invited to this drive recently",
+        "This address was invited to this drive a few minutes ago.",
+    ),
+    (
+        "You have sent too many invitations to this address in the last day",
+        "You've sent too many invites to this address today.",
+    ),
+    (
+        "Too many invitations sent in the last hour",
+        "You've sent too many invites in the last hour.",
+    ),
+    ("Too many invitations sent in the last day", "You've sent too many invites today."),
+    (
+        "This drive has sent too many invitations in the last day",
+        "This drive has sent too many invites today.",
+    ),
+];
+
+/// The server's rate limit reason in plain words, or the generic sentence.
+fn rate_limit_reason(server_message: &str) -> &'static str {
+    let key = server_message.trim();
+    let key = key.strip_suffix('.').unwrap_or(key);
+    RATE_LIMIT_REASONS
+        .iter()
+        .find(|(server, _)| server.eq_ignore_ascii_case(key))
+        .map_or(RATE_LIMITED_GENERIC, |(_, plain)| plain)
+}
+
+/// A wait as a person reads it: "less than a minute", "5 minutes", "5h 10m",
+/// "24h", and past two days "2d 3h". Always rounded UP, so the user is never
+/// told a time at which the server will still refuse them.
+fn format_retry_wait(secs: u64) -> String {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    if secs < MINUTE {
+        return "less than a minute".into();
+    }
+    if secs > 2 * DAY {
+        let hours = secs.div_ceil(HOUR);
+        let (days, rest) = (hours / 24, hours % 24);
+        return if rest == 0 { format!("{days}d") } else { format!("{days}d {rest}h") };
+    }
+    let minutes = secs.div_ceil(MINUTE);
+    if minutes < 60 {
+        return format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" });
+    }
+    let (hours, rest) = (minutes / 60, minutes % 60);
+    if rest == 0 { format!("{hours}h") } else { format!("{hours}h {rest}m") }
+}
+
+/// Which limit a rate-limited invite hit, then how long to wait:
+/// "You've sent too many invites to this address today. Try again in 24h."
+fn rate_limited_message(server_message: &str, retry_after_secs: Option<u64>) -> String {
+    let reason = rate_limit_reason(server_message);
     match retry_after_secs {
-        Some(secs) if secs >= 3600 => {
-            let hours = secs.div_ceil(3600);
-            format!(
-                "Too many invitations sent recently. Try again in {hours} hour{}.",
-                if hours == 1 { "" } else { "s" }
-            )
-        }
-        Some(secs) if secs >= 60 => {
-            let minutes = secs.div_ceil(60);
-            format!(
-                "Too many invitations sent recently. Try again in {minutes} minute{}.",
-                if minutes == 1 { "" } else { "s" }
-            )
-        }
-        Some(secs) => format!("Too many invitations sent recently. Try again in {} seconds.", secs.max(1)),
-        None => "Too many invitations sent recently. Try again later.".into(),
+        Some(secs) => format!("{reason} Try again in {}.", format_retry_wait(secs)),
+        None => format!("{reason} Try again later."),
     }
 }
 
@@ -4497,12 +4542,67 @@ mod tests {
     }
 
     #[test]
-    fn rate_limited_message_rounds_up() {
-        assert!(rate_limited_message(Some(61)).contains("2 minutes"));
-        assert!(rate_limited_message(Some(60)).contains("1 minute."));
-        assert!(rate_limited_message(Some(3601)).contains("2 hours"));
-        assert!(rate_limited_message(Some(5)).contains("5 seconds"));
-        assert!(rate_limited_message(None).contains("later"));
+    fn format_retry_wait_rounds_up_into_hours_and_minutes() {
+        for (secs, want) in [
+            (0, "less than a minute"),
+            (59, "less than a minute"),
+            (60, "1 minute"),
+            (61, "2 minutes"),
+            (3599, "1h"),
+            (3600, "1h"),
+            (3660, "1h 1m"),
+            (18_600, "5h 10m"),
+            (86_340, "23h 59m"),
+            (86_400, "24h"),
+            (90_061, "25h 2m"),
+            (172_800, "48h"),
+            (172_801, "2d 1h"),
+            (183_600, "2d 3h"),
+            (259_200, "3d"),
+        ] {
+            assert_eq!(format_retry_wait(secs), want, "{secs}s");
+        }
+    }
+
+    #[test]
+    fn rate_limited_message_keeps_the_server_reason() {
+        for (server, plain) in RATE_LIMIT_REASONS {
+            assert_eq!(rate_limit_reason(server), *plain);
+            assert_eq!(rate_limit_reason(&format!("  {}. ", server.to_uppercase())), *plain);
+        }
+        assert_eq!(
+            rate_limit_reason("This address was already invited to this drive recently"),
+            "This address was invited to this drive a few minutes ago."
+        );
+        assert_eq!(
+            rate_limit_reason("You have sent too many invitations to this address in the last day"),
+            "You've sent too many invites to this address today."
+        );
+        assert_eq!(
+            rate_limit_reason("Too many invitations sent in the last hour"),
+            "You've sent too many invites in the last hour."
+        );
+        assert_eq!(
+            rate_limit_reason("Too many invitations sent in the last day"),
+            "You've sent too many invites today."
+        );
+        assert_eq!(
+            rate_limit_reason("This drive has sent too many invitations in the last day"),
+            "This drive has sent too many invites today."
+        );
+        assert_eq!(rate_limit_reason(""), RATE_LIMITED_GENERIC);
+        assert_eq!(rate_limit_reason("slow down"), RATE_LIMITED_GENERIC);
+
+        assert_eq!(
+            rate_limited_message("You have sent too many invitations to this address in the last day", Some(86_400)),
+            "You've sent too many invites to this address today. Try again in 24h."
+        );
+        assert_eq!(
+            rate_limited_message("Too many invitations sent in the last day", Some(86_340)),
+            "You've sent too many invites today. Try again in 23h 59m."
+        );
+        assert_eq!(rate_limited_message("", None), "Too many invites sent recently. Try again later.");
+        assert!(!rate_limited_message("x", Some(90_061)).contains('\u{2014}'));
     }
 
     #[test]

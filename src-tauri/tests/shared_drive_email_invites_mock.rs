@@ -210,19 +210,27 @@ async fn rate_limit_says_how_long_to_wait() {
     )
     .await;
     match err {
-        AppError::NotReady(NotReadyKind::RateLimited { message }) => assert!(message.contains("3 minutes"), "{message}"),
+        AppError::NotReady(NotReadyKind::RateLimited { message }) => {
+            assert_eq!(message, "Too many invites sent recently. Try again in 3 minutes.");
+        }
         other => panic!("expected RateLimited, got {other:?}"),
     }
 
-    // The header is the fallback when the body carries no figure.
+    // The header is the fallback when the body carries no figure, and the
+    // server's reason says which limit was hit.
     let err = failing(
         StatusCode::TOO_MANY_REQUESTS,
-        serde_json::json!({"error": "rate_limited", "message": "slow down"}),
-        Some("7200"),
+        serde_json::json!({
+            "error": "rate_limited",
+            "message": "You have sent too many invitations to this address in the last day",
+        }),
+        Some("86400"),
     )
     .await;
     match err {
-        AppError::NotReady(NotReadyKind::RateLimited { message }) => assert!(message.contains("2 hours"), "{message}"),
+        AppError::NotReady(NotReadyKind::RateLimited { message }) => {
+            assert_eq!(message, "You've sent too many invites to this address today. Try again in 24h.");
+        }
         other => panic!("expected RateLimited, got {other:?}"),
     }
 }

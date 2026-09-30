@@ -89,6 +89,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A rate limited email invite says which limit you hit and the wait in
+  hours and minutes**, such as "You've sent too many invites to this address
+  today. Try again in 24h."
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.
 
