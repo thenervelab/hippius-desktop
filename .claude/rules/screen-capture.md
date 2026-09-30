@@ -15,7 +15,8 @@ paths:
 # Screen capture
 
 Screenshots and (on macOS) recordings of an area, a window or a whole display,
-filed in `<drive>/Captures` with a public share link copied. Design and
+filed in `<drive>/Captures`, with a public share link copied unless
+`CaptureOptions.copyLink` is off. Design and
 phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
 `SCREEN_CAPTURE_ENABLED = enabledFrom("staging")`, and behind Rust's
 `capture_support` for the platform: **screenshots on macOS and Windows**;
@@ -57,9 +58,19 @@ the overlay BEFORE it confirms. `capture_set_options` returns `SavedOptions
 shortcut's mode). The last area per display is Rust's
 (`capture_last_areas_v1`, `bar::fit_area`), seeded as `pending` at start. The
 window-mode refusal is `ConfirmError::NeedsWindowClick`; the bar shows Rust's
-message. `capture_refresh_windows(displayId)` re-lists windows for live hover.
-Camera only is macOS-only (`camera_only_supported`, `for_system` turns the
-screen back on elsewhere).
+message. `capture_refresh_windows(displayId)` re-lists windows for live hover:
+the overlay polls it every `WINDOW_REFRESH_MS` (700 ms, `pollWindows`, one
+request at a time) only while `mode === "window"`, the page is visible and no
+countdown or capture is running. The bar saves through `saveCaptureOptions`
+and takes `countdownSecs` and `cameraFilmed` from Rust's answer; it never
+works them out. The Options menu holds the drive, the screenshot timer or the
+recording countdown (None / 3 / 5 seconds), Show mouse clicks, and "Copy a
+share link after capture" (`copyLink`). Clicking the countdown numeral or
+pressing Return while counting runs the waiting action at once. Camera only
+is macOS-only (`camera_only_supported`, `for_system` turns the screen back on
+elsewhere); the sources panel shows the Screen switch only when
+`cameraOnlyAvailable`, and the camera row says "Camera is only recorded with
+the entire screen or an area." whenever `cameraFilmed` is false.
 
 **Screenshot:** selection → pixels in memory (`screenshot::capture_image`) and
 the card's JPEG from them (`thumbnail::from_image`) → preview card shown →
@@ -115,17 +126,18 @@ recording, which is one window only: `cameraFilmed` in `CameraState` and
 drawn area's bottom-left (`camera::bubble_in_area`) so it is filmed. Sized by
 `CameraSize`: small 200 pt, large 340 pt (round), full = the stage's 16:9
 frame, which stays above the bar block (`BAR_BLOCK_HEIGHT`, it sits at a
-higher level than the overlay). `CameraState.recording` lets the page hide its
-strip while recording. `sync_camera` holds `camera_lock` for its whole run. The hover strip on the
+higher level than the overlay). `sync_camera` holds `camera_lock` for its whole run. The hover strip on the
 bubble (small / large / full / ×) calls `capture_camera_set_size` (saved,
 then the window glides via `camera::resize_bubble`, which keeps a bubble in
 its corner or grows it from its centre, always on screen) and
 `capture_camera_dismiss` (camera off while choosing, bubble hidden
 mid-recording). Both emit `capture_options_changed` so the bar never saves a
-stale copy back. The strip exists only while the phase is `selecting`
-(`stripShown`, from `capture_state` + `capture_state_changed`): the camera
-window is filmed, so a strip shown mid-recording was in the video; the pill
-hides the bubble instead. While choosing it is always mounted, faded until
+stale copy back. The strip exists only on a bubble that is not recording
+(`stripShown`, from `CameraState.recording`, which Rust sets from Capturing a
+recording on; the camera page follows no phase of its own): the camera window
+is filmed, so a strip shown mid-recording was in the video; the pill hides
+the bubble instead. The × is "Turn camera off" while choosing and "Hide
+camera" while recording (`cameraCloseLabel`). While choosing it is always mounted, faded until
 hovered or focused, so Tab reaches it. No native `title` on this window.
 Hover comes from Rust (`capture_camera_hover`, polling the
 pointer against the frame) because a non-key window does not reliably get
@@ -178,11 +190,14 @@ clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer ba
 stays mounted and pauses, or the card changes height under the pointer).
 It must fit 316 x 330 in every state: it sits at the window's bottom, so an
 overflow clips the TOP (the close button first). Hence the 16:9 picture and
-the one-line failure reason with the full text in `title`. It listens to
-upload progress only while `uploading` / `syncing` (`wantsProgress`): it is
-prewarmed hidden at every capture start. For a synced drive `watchSyncRow`
-remembers the engine finishing the file, because a finished row leaves later
-snapshots (until Rust owns that outcome).
+the one-line failure reason with the full text in `title`, and ONE row of
+actions (at most two text buttons plus two 32 pt icon buttons; Revoke link
+lives in the "More" menu, which opens upward over the picture and takes
+Escape). It listens to upload progress only while `uploading` / `syncing`
+(`wantsProgress`): it is prewarmed hidden at every capture start. The page
+only draws the percent of a row joined on label + `relPath`; it never decides
+from a progress row that a capture is done or failed (a "completed" row still
+shows 99% until Rust says `uploaded`).
 Rust owns its status (`uploading` → `syncing` / `uploaded` / `failed`),
 keyed by a per-capture `id` so a late outcome never lands on a newer card; progress comes from `remote_upload_progress`. A `syncing` card is moved
 on by Rust (`spawn_sync_follow`), following the engine's row by label +
@@ -190,18 +205,22 @@ on by Rust (`spawn_sync_follow`), following the engine's row by label +
 snapshot, and a small file can finish before the card starts following).
 Rust also owns `link` (`LinkState`), `linkText` ("Public link copied") and
 `actions` (`CardActions`: retry, discard, copyLink, mintLink, revokeLink,
-reveal) through `PreviewCard::refreshed`; every change goes through
-`update_card`. Failure copy is `deliver::failure_copy` (offline / storage full
+reveal, upgrade) through `PreviewCard::refreshed`; every change goes through
+`update_card`. The card draws exactly those buttons and says `linkText` after
+"Uploaded". `upgrade` (a `storageFull` failure) calls `capture_preview_upgrade`,
+which brings the main window forward and emits `capture_open_plans`;
+`CaptureHost` routes it to `BILLING_ROUTE`, where every upgrade prompt goes.
+Reveal is labelled "Show in Finder" / "Show in Explorer" (`fileManagerLabel`). Failure copy is `deliver::failure_copy` (offline / storage full
 / Rust's own `Validation` text; never a transport error), with `reason` and
-`retryable`. `capture_failed` carries `cardShowing`; the notification never
-names a path. A failed card closed by the user is PARKED and comes back on the
+`retryable`. `capture_failed` carries `cardShowing`, and `CaptureHost` shows no toast
+when it is true (the card already says it); the notification never names a
+path. A failed card closed by the user is PARKED and comes back on the
 next `capture_start`, until retried or discarded. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in
 folder emits `capture_show_in_folder` → `driveFolderRoute(label, remote,
 "Captures")` → the Drive page steps into the folder with the row's own
-`generateFolderUrl`. Retry re-runs `deliver_and_announce` on the kept file, to the card's own
-`destination` (not whatever the capture drive is now).
-`generateFolderUrl`. Retry re-runs `deliver_and_announce` on the kept file.
+`generateFolderUrl`. Retry re-runs `deliver_and_announce` on the kept file, to
+the card's own `destination` (not whatever the capture drive is now).
 `DriveContainer` handles each open request once (`shouldOpenFromUrl`, keyed on
 the params, not the mount: the page stays mounted across clicks) and waits
 one listing refresh for a subfolder that is not listed yet
@@ -209,8 +228,12 @@ one listing refresh for a subfolder that is not listed yet
 compare in NFC and are never trimmed.
 
 **Recording pill:** Escape does nothing there (the pill turns key when
-clicked, so a stray Escape discarded recordings). The trash discards under
-`DISCARD_CONFIRM_SECS` (5 s) at once and asks first from then on. It drags by
+clicked, so a stray Escape discarded recordings). The trash and Restart
+(`capture_restart`, which throws the take away) act at once under
+`DISCARD_CONFIRM_SECS` (5 s) and ask first from then on; "Keep recording"
+and Escape at the question give focus back to the button that asked. There is
+no mic mute: the helper has no command for it. The pill applies a phase only
+when its `seq` is newer than the one it shows. It drags by
 `data-tauri-drag-region` (`-webkit-app-region` is Electron-only), which needs
 `core:window:allow-start-dragging` in `capture-controls.json`.
 
@@ -220,8 +243,8 @@ through one serial queue (`createTrayTitleQueue`) and drop stale ones: async
 `setTitle` calls finish out of order, and a late "❚❚ 00:10" once stayed in
 the menu bar after the recording was saved. `followCapturePhase` listens
 BEFORE it reads `capture_state` and drops that read if an event came first.
-The same "an event beats a late first read" rule holds in the pill, camera
-and card pages.
+The same "an event beats a late first read" rule holds in the camera and card
+pages; the pill compares `seq` instead.
 
 **Sync queue Show in folder:** each row's folder button fires
 `requestOpenDriveFolder(driveFolderRoute(label, remote, parentOf(path)))`
@@ -300,7 +323,10 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   (`data-tauri-drag-region`), so its capability has
   `core:window:allow-start-dragging`.
 - **macOS Screen Recording** checked before capturing; grant needs relaunch.
-  `permissions::macos_major` reads the version once per launch.
+  The macOS version is read once per launch, in ONE cache
+  (`permissions::macos_version`, `(major, minor)`): the permission pane's
+  name (`macos_major`) and the recording gates (`recording::macos_at_least`)
+  both read it.
 - **Refusals** matched on `subkind` in `classifyCaptureRefusal`.
 - **Helper:** build with `macos/build-capture-helper.sh` (`--universal` for
   release). It is NOT a Tauri `externalBin`: `finalize-macos-release.sh`
@@ -321,8 +347,9 @@ answer to an earlier command). `ready` and `stream_stopped` carry none.
 stream ended on its own (display unplugged, window closed, permission
 revoked, sleep) or the writer failed, and the helper has already finished the
 file. The Rust reader thread records it (and a helper whose stdout closed) in
-`Shared`; `Recorder::take_death` hands it out once; `spawn_tick_loop` then
-calls `capture_stop`, whose `stop()` salvages the file (`kept_after`: a
+`Shared`; `Recorder::take_death` hands it out once; `tick_once` then spawns
+`stop_inner` (never the `capture_stop` command) and ends the tick loop, and
+the recorder's `stop()` salvages the file (`kept_after`: a
 finished file, or at least `MIN_PARTIAL_BYTES` of fragments) and delivers it.
 stderr lines are diagnostics and are logged at `warn`.
 
@@ -350,7 +377,7 @@ stderr lines are diagnostics and are logged at `warn`.
   plus the corner of `rounded-[18px]`) so its transparent corners and ring are
   not filmed as black. Pinned against `app/capture-camera/page.tsx`.
 - `recording::start` refuses below `MIN_FREE_BYTES` (2 GB) free with a message
-  saying so. The macOS version is read once (`macos_version`, `OnceLock`).
+  saying so.
 
 Driving the helper by hand (JSON on stdin, probe with AVFoundation) is the
 fastest check: a 3 s display recording, an area with pause/resume, and a

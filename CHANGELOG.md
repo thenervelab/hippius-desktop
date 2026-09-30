@@ -107,6 +107,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **The capture bar follows your displays.** Unplugging one closes its part of
   the bar and forgets an area drawn on it; the camera stage no longer covers
   the bar on a small screen.
+- **A failed capture upload is reported once**, on its card, instead of on the
+  card and in a pop-up in Hippius as well.
 
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.
@@ -165,14 +167,16 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   the bar remembers your last area and mode. Change or turn off the shortcut in
   Settings, Sync & Storage.
 - **See your capture upload, and jump to it.** A preview card slides into the
-  corner with the upload's progress, then "link copied". Show in folder opens
-  the drive's Captures folder, where the file is shown arriving; the upload is
-  also in the sync widget and the menu bar popover. If an upload fails, Retry
-  sends the same file again.
-- **Recording controls you can always reach (Mac).** A 3 second countdown
-  starts every recording. A small pill shows the time, the microphone, pause,
-  stop and discard, and the menu bar shows the time too: click the Hippius icon
-  to stop. Needs macOS 13+, with the microphone and click rings on macOS 15+.
+  corner with the upload's progress, then whether the public link was copied.
+  Show in folder opens the drive's Captures folder, where the file is shown
+  arriving; the upload is also in the sync widget and the menu bar popover. If
+  an upload fails, Retry sends the same file again and Discard throws it away;
+  when your storage is full, Upgrade opens the plans in Hippius.
+- **Recording controls you can always reach (Mac).** A countdown starts every
+  recording: 3 seconds unless you pick none or 5 in Options, and clicking the
+  number or pressing Return starts at once. A small pill shows the time, the
+  microphone, pause, restart, stop and discard, and the menu bar shows the time
+  too: click the Hippius icon to stop. Needs macOS 13+, with the microphone and click rings on macOS 15+.
   Screenshots work on Mac and Windows; Windows recording follows later.
   Available in internal builds first.
 - **Sharp recordings that keep what you recorded (Mac).** Recordings are
@@ -180,8 +184,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   displays, at a file size you can still share. Pausing leaves no frozen gap
   and the sound stays in step with the picture. If a recording stops by
   itself, for example because a display was unplugged or the recorded window
-  closed, what was recorded is saved and shared as usual. Recording checks
-  there is enough free disk space before it starts.
+  closed, what was recorded is saved and shared as usual.
 - **Show your face while you record, like Loom (Mac).** Above the capture bar,
   switch the screen, camera and microphone on or off and pick which camera and
   microphone, with a level meter that shows the microphone hears you. The
@@ -215,14 +218,15 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   by default, and the card now says so. Turn it off to only file the capture;
   the card can make a link later, revoke one, or show the file in Finder or
   Explorer when the drive is synced on this computer.
-- **More control while recording (Mac).** Choose a 0, 3 or 5 second countdown,
-  restart a recording without leaving the bar, and the camera bubble sits
-  inside the area you are recording so it is always in the video. The camera
-  tells you when a window recording will not include it.
+- **Restart a take without starting over (Mac).** Restart on the recording
+  controls throws the current take away and records the same area, window or
+  screen again. The camera bubble sits inside the area you are recording so it
+  is always in the video, and the camera row says when a window recording will
+  not include it.
 - **A recording is never thrown away by a stray key (Mac).** Escape does
-  nothing on the recording controls, and discarding a recording longer than
-  five seconds asks "Discard this recording?" first. The controls can be
-  dragged out of the way.
+  nothing on the recording controls, and discarding or restarting a recording
+  of five seconds or more asks first. The controls can be dragged out of the
+  way.
 - **The capture bar works from the keyboard and with a screen reader.**
   Escape closes an open menu before it closes the bar, Return on a focused
   button presses that button, the arrow keys nudge a drawn area (Shift for
@@ -236,6 +240,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   "Capture a window", "Capture entire screen"), and the shortcut setting shows
   the keys as you hold them and says when a key cannot be used.
 - **Capture windows open with less to load**, so the bar appears sooner.
+- **Picking a window follows your windows.** While you choose a window, the
+  highlight keeps up with windows that move, open or close.
+- **Allowing screen recording takes one click (Mac).** Open System Settings
+  shows macOS's own prompt the first time and the right settings pane after
+  that, named the way your version of macOS names it.
 - **The capture bar's hints, the camera's controls and the countdown sit on a
   dark backing**, so they stay readable over a light screen.
 - **Shared with Me is always on the Drive page, with Share a drive.** When
