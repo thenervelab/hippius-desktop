@@ -17,16 +17,11 @@ import { useAtom } from "jotai";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { deriveTrayIconState } from "@/app/lib/tray/trayIconState";
-import {
-  createTrayTitleQueue,
-  followCapturePhase,
-  recordingTrayTitle,
-  trayClickStopsRecording,
-} from "@/app/lib/tray/trayCaptureState";
-import type { CapturePhase } from "@/app/lib/tauri/capture";
 import { isLinuxPlatform as detectLinuxPlatform } from "@/lib/utils/isMacPlatform";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
+// Rust finds the icon by this id (`capture::tray_status::TRAY_ID`): it writes
+// a recording's time beside it and decides what a click does mid-recording.
 const TRAY_ID = "hippius-tray";
 
 // add cached icon paths + state
@@ -52,10 +47,6 @@ let openVmItem: MenuItem | null = null;
    the pure transition logic lives in `tray/trayIconState.ts`. */
 let latchedComplete = false;
 
-/* ─ Screen recording in the menu bar ─────────────────────────────
-   Mirrors `capture_state_changed` so the click handler can decide
-   synchronously, and the title is only set when it changes. */
-let capturePhaseLatest: CapturePhase = { phase: "idle" };
 let latchedSnapshot: SyncSnapshot | null = null;
 
 /* ─ Backend payload types ─────────────────────────────────────── */
@@ -243,7 +234,9 @@ let isAuthenticatedLatest = false;
  * Tray-icon click handler. When signed in, a left-click forwards the icon's
  * screen rectangle (`event.rect`) to the Rust `toggle_tray_panel` command,
  * which anchors and toggles the popover (it replaced the old native menu).
- * When signed out, the popover (credits/uploads/account) is meaningless, so the
+ * During a screen recording Rust shows the recording's pill instead of the
+ * popover; that decision is Rust's alone, and this handler never reads the
+ * capture phase. When signed out, the popover (credits/uploads/account) is meaningless, so the
  * click reveals the main window's login screen instead.
  *
  * Right/middle clicks are ignored. Tray click events never fire on Linux, so
@@ -257,15 +250,6 @@ async function handleTrayClick(event: TrayIconEvent) {
     event.button !== "Left" ||
     event.buttonState !== "Up"
   ) {
-    return;
-  }
-  // While recording, the icon is the Stop button, as macOS's own is.
-  if (trayClickStopsRecording(capturePhaseLatest)) {
-    try {
-      await invoke("capture_stop");
-    } catch (e) {
-      logTrayAction("Failed to stop the recording from the tray", e);
-    }
     return;
   }
   try {
@@ -370,30 +354,8 @@ export function useTrayInit(isAuthenticated: boolean) {
       // disables the context-menu items) after the tray exists.
       startSyncActivityWatcher();
       startLoginStatusWatcher();
-      startCaptureWatcher();
     })();
   }, []);
-}
-
-/** Keep the tray's recording time and click behaviour in step with Rust. */
-function startCaptureWatcher() {
-  const writeTitle = createTrayTitleQueue(
-    async (title) => {
-      const tray = await TrayIcon.getById(TRAY_ID);
-      await tray?.setTitle(title);
-      await tray?.setTooltip(title ? "Recording. Click to stop." : "Hippius Cloud");
-    },
-    (err) => logTrayAction("Failed to update the recording title", err),
-  );
-  void followCapturePhase(
-    (onPhase) => listen<CapturePhase>("capture_state_changed", (e) => onPhase(e.payload)),
-    () => invoke<CapturePhase>("capture_state"),
-    (phase) => {
-      if (!phase || typeof phase.phase !== "string") return;
-      capturePhaseLatest = phase;
-      void writeTitle(recordingTrayTitle(phase));
-    },
-  ).catch((err) => logTrayAction("Failed to follow the capture state", err));
 }
 
 // Add these explicit debug logs

@@ -19,3 +19,4 @@ pub mod share;
 pub mod shortcut;
 pub mod targets;
 pub mod thumbnail;
+pub mod tray_status;

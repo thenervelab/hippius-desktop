@@ -477,3 +477,49 @@ fn the_card_and_session_commands_are_registered() {
         );
     }
 }
+
+/// The menu bar's recording time is written by Rust on every phase change.
+/// Every broadcast goes through `emit_phase` (the transitions, the
+/// rebroadcast and the recorder's adoption), and `emit_phase` writes the
+/// tray; a broadcast that skipped it left the last time beside the icon.
+#[test]
+fn every_phase_change_updates_the_tray() {
+    let src = read("src/capture/commands.rs");
+    let emit = fn_body(&src, "fn emit_phase(");
+    assert!(emit.contains("show_phase_in_tray(app, event)"), "emit_phase must write the tray");
+    assert_eq!(
+        src.matches("STATE_CHANGED_EVENT,").count(),
+        1,
+        "capture_state_changed is emitted only by emit_phase"
+    );
+    assert!(fn_body(&src, "fn advance(").contains("emit_phase(app, e)"));
+    for call in ["rebroadcast(|e| emit_phase(", "adopt_recorder(recorder, |e| emit_phase("] {
+        assert!(src.contains(call), "{call} must broadcast through emit_phase");
+    }
+    // Posted, never waited for: it runs under the phase lock.
+    let show = fn_body(&src, "fn show_phase_in_tray(");
+    assert!(show.contains("run_on_main_thread"));
+    assert!(show.contains("newest_for_tray("), "a late write must not bring an older time back");
+    // An empty title, because `tray-icon` ignores `None` on macOS.
+    let write = fn_body(&src, "fn write_tray_text(");
+    assert!(write.contains("set_title(Some("), "the title is cleared with an empty string, never None");
+    assert!(write.contains("set_tooltip("), "Windows reads the time from the tooltip");
+}
+
+/// A tray click during a recording shows the pill and never reaches the
+/// popover or Stop; the webview no longer decides it.
+#[test]
+fn the_tray_click_asks_the_capture_first() {
+    let panel = read("src/tray/panel.rs");
+    let toggle = fn_body(&panel, "pub fn toggle_tray_panel(");
+    let ask = toggle.find("on_tray_click(&app)").expect("toggle_tray_panel asks the capture");
+    let open = toggle.find("build_panel(").expect("toggle_tray_panel builds the panel");
+    assert!(ask < open, "the capture is asked before the popover opens");
+    let on_click = fn_body(&read("src/capture/commands.rs"), "pub fn on_tray_click(");
+    assert!(on_click.contains("show_without_focus("), "the pill comes back without focus");
+    assert!(!on_click.contains("stop_inner("), "a tray click never stops the recording");
+    let hook = std::fs::read_to_string(format!("{}/../app/lib/hooks/useTraySync.ts", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    for gone in ["capture_stop", "setTitle(", "capture_state_changed"] {
+        assert!(!hook.contains(gone), "useTraySync must not own the recording's tray ({gone})");
+    }
+}

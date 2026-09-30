@@ -121,6 +121,14 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
     // `AuthInfo.substrate_address` is NOT used here because it stays populated
     // for a session restored from disk even while the UI is on the login
     // screen — gating on it would wrongly open the popover for a logged-out UI.
+    // (A recording cannot outlive a sign-out: `end_for_logout` cancels it.)
+
+    // During a recording the click brings the recording's pill back instead
+    // (Rust decides; the webview only forwards the click).
+    if crate::capture::commands::on_tray_click(&app) == crate::capture::tray_status::TrayClickAction::ShowRecordingControls {
+        return Ok(());
+    }
+
     let win = match app.get_webview_window(PANEL_LABEL) {
         Some(w) => w,
         None => build_panel(&app)?,

@@ -34,6 +34,7 @@ use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, Trans
 use super::share;
 use super::shortcut::{self, ShortcutAction, ShortcutSetting};
 use super::targets::{DisplayTarget, WindowTarget};
+use super::tray_status::{self, TrayClickAction, TrayText};
 use crate::app_state::AppState;
 use crate::error::{AppError, NotReadyKind, Result};
 
@@ -124,6 +125,9 @@ pub struct CaptureState {
     phase: Mutex<Option<CapturePhase>>,
     /// Numbers every phase broadcast ([`PhaseEvent::seq`]).
     phase_seq: AtomicU64,
+    /// The newest `seq` written to the tray, so a tray write that ran late
+    /// never puts an older time back (see [`show_phase_in_tray`]).
+    tray_seq: AtomicU64,
     /// Whether the main window was on screen when the capture started, so it
     /// comes back only if it was there to begin with.
     restore_main: AtomicBool,
@@ -293,8 +297,78 @@ fn advance(app: &AppHandle, state: &CaptureState, event: CaptureEvent) -> Result
     state.apply(event, |e| emit_phase(app, e))
 }
 
+/// Every phase broadcast goes through here (pinned by
+/// `tests/capture_wiring.rs`), so the tray follows every change: the webview
+/// hears the event, and the menu bar's title is written by Rust.
 fn emit_phase(app: &AppHandle, event: PhaseEvent) {
     let _ = app.emit(STATE_CHANGED_EVENT, event);
+    show_phase_in_tray(app, event);
+}
+
+/// Write the phase's time (or no time) beside the tray icon.
+///
+/// Posted to the main thread and NOT waited for: this runs under the phase
+/// lock, and `TrayIcon::set_title` blocks until the main thread runs it,
+/// while a synchronous command on the main thread may itself be waiting for
+/// the phase lock (`capture_state`, `toggle_tray_panel`). Waiting here would
+/// deadlock the two. Posted writes run in order; one posted from a worker
+/// can still land after a newer one run inline on the main thread, so each
+/// write checks it is the newest ([`newest_for_tray`]).
+fn show_phase_in_tray(app: &AppHandle, event: PhaseEvent) {
+    let handle = app.clone();
+    let posted = app.run_on_main_thread(move || {
+        let state = handle.state::<AppState>();
+        if newest_for_tray(&state.capture.tray_seq, event.seq) {
+            write_tray_text(&handle, &tray_status::tray_text_for(event.phase));
+        }
+    });
+    if let Err(e) = posted {
+        tracing::debug!(error = %e, "could not update the tray for the capture phase");
+    }
+}
+
+/// Whether `seq` is newer than any phase the tray has shown, recording it
+/// if so. A rebroadcast carries a new `seq`, so it is written again.
+fn newest_for_tray(shown: &AtomicU64, seq: u64) -> bool {
+    shown.fetch_max(seq, Ordering::SeqCst) < seq
+}
+
+/// The icon is created by the main window (`useTraySync.ts`) under
+/// [`tray_status::TRAY_ID`]; before it exists there is nothing to write.
+/// Written on every phase change, not only when the text differs: the
+/// frontend recreates the icon when a sync icon fails to apply, and the new
+/// icon starts with no title, so the next tick puts it back.
+fn write_tray_text(app: &AppHandle, text: &TrayText) {
+    let Some(tray) = app.tray_by_id(tray_status::TRAY_ID) else {
+        return;
+    };
+    // Empty, not `None`: `tray-icon` ignores a `None` title on macOS, which
+    // is what left a saved recording's time stuck in the menu bar. Windows
+    // has no title; the tooltip carries the time there.
+    if let Err(e) = tray.set_title(Some(text.title.as_str())) {
+        tracing::debug!(error = %e, "could not set the tray title");
+    }
+    if let Err(e) = tray.set_tooltip(Some(text.tooltip.as_str())) {
+        tracing::debug!(error = %e, "could not set the tray tooltip");
+    }
+}
+
+/// A left click on the tray icon, asked by `tray::panel::toggle_tray_panel`
+/// before it opens the popover. During a recording the click brings the
+/// recording's pill back, without taking the keyboard from the app being
+/// recorded, and does NOT stop it (the pill has Stop); the popover does not
+/// open. Any other time the popover opens as usual.
+pub fn on_tray_click(app: &AppHandle) -> TrayClickAction {
+    let state = app.state::<AppState>();
+    let action = tray_status::tray_click_action(state.capture.current());
+    if action == TrayClickAction::ShowRecordingControls {
+        if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
+            show_without_focus(&w);
+        } else {
+            tracing::warn!("tray click during a recording found no recording controls");
+        }
+    }
+    action
 }
 
 fn transition_error(e: TransitionError) -> AppError {
@@ -3411,6 +3485,42 @@ mod tests {
         assert!(seen[0].seq < seen[1].seq);
         assert_eq!(seen[1].phase, CapturePhase::Idle);
         assert_eq!(state.snapshot().seq, seen[1].seq, "a seed carries the latest number");
+    }
+
+    /// The tray follows the broadcasts: a whole recording, from Record to
+    /// saved, as the tray would write it. The last write clears the time.
+    #[test]
+    fn a_saved_recording_leaves_no_time_in_the_menu_bar() {
+        let calls = Arc::new(Calls::default());
+        let state = CaptureState::default();
+        let mut tray = Vec::new();
+        let mut write = |e: PhaseEvent| {
+            if newest_for_tray(&state.tray_seq, e.seq) {
+                tray.push(tray_status::tray_text_for(e.phase).title);
+            }
+        };
+        state.apply(START_REC, &mut write).unwrap();
+        state.apply(CaptureEvent::Selected, &mut write).unwrap();
+        assert!(state.adopt_recorder(FakeRecorder::boxed(&calls), &mut write).is_ok());
+        state.apply(CaptureEvent::Tick { elapsed_secs: 14 }, &mut write).unwrap();
+        state.apply(CaptureEvent::Pause, &mut write).unwrap();
+        state.apply(CaptureEvent::Resume, &mut write).unwrap();
+        state.apply(CaptureEvent::Tick { elapsed_secs: 15 }, &mut write).unwrap();
+        state.apply(CaptureEvent::Stop, &mut write).unwrap();
+        state.apply(CaptureEvent::Captured, &mut write).unwrap();
+        assert_eq!(tray, ["", "", "◼ 00:00", "◼ 00:14", "❚❚ 00:14", "◼ 00:14", "◼ 00:15", "", ""]);
+    }
+
+    /// A tray write posted from a worker that runs after a newer one (run
+    /// inline on the main thread) is dropped, so a stale time never returns.
+    #[test]
+    fn a_late_tray_write_never_puts_an_older_time_back() {
+        let shown = AtomicU64::new(0);
+        assert!(newest_for_tray(&shown, 1));
+        assert!(newest_for_tray(&shown, 3));
+        assert!(!newest_for_tray(&shown, 2), "older than what the tray shows");
+        assert!(!newest_for_tray(&shown, 3), "already shown");
+        assert!(newest_for_tray(&shown, 4));
     }
 
     #[test]

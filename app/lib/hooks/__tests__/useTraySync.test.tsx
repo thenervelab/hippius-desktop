@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
   const setIconCalls: string[] = [];
   const invokeCmds: string[] = [];
   const windowActions: string[] = [];
+  const listenedEvents: string[] = [];
   let snapshotListener: ((e: { payload: unknown }) => void) | null = null;
 
   // A syncing snapshot — only the fields `deriveTrayIconState` reads matter.
@@ -109,6 +110,7 @@ const mocks = vi.hoisted(() => {
     setIconCalls,
     invokeCmds,
     windowActions,
+    listenedEvents,
     SYNCING_SNAPSHOT,
     setSnapshotListener: (h: (e: { payload: unknown }) => void) => {
       snapshotListener = h;
@@ -142,8 +144,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (event: string, handler: (e: { payload: unknown }) => void) => {
-    // Only the snapshot watcher's handler: the tray also listens for the
-    // capture state (recording time in the menu bar).
+    mocks.listenedEvents.push(event);
     if (event === "sync_progress_snapshot") mocks.setSnapshotListener(handler);
     return () => {
       /* noop unlisten */
@@ -169,6 +170,7 @@ async function mountTray(isAuth = true, opts: { failSetIconOnce?: boolean } = {}
   mocks.setIconCalls.length = 0;
   mocks.invokeCmds.length = 0;
   mocks.windowActions.length = 0;
+  mocks.listenedEvents.length = 0;
   mocks.MockTrayIcon.current = null;
   mocks.MockTrayIcon.failSetIconOnce = opts.failSetIconOnce ?? false;
 
@@ -309,6 +311,17 @@ describe("useTrayInit — tray click", () => {
     await action(leftClick());
     expect(mocks.invokeCmds).toContain("toggle_tray_panel");
     expect(mocks.windowActions).not.toContain("openApp");
+  });
+
+  // Rust owns the recording's part in the tray (title and click): the
+  // webview's copy of the phase once went stale and left the time stuck.
+  it("leaves the recording's title and click to Rust", async () => {
+    await mountTray(true);
+    const action = await trayAction();
+    await action(leftClick());
+    expect(mocks.invokeCmds).not.toContain("capture_stop");
+    expect(mocks.invokeCmds).not.toContain("capture_state");
+    expect(mocks.listenedEvents).not.toContain("capture_state_changed");
   });
 
   it("reveals the main window on a left-click while signed out", async () => {
