@@ -26,6 +26,17 @@ phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
 unsupported until its desktop-portal path lands. Windows recording is stubbed
 behind the `Recorder` trait (`capture_support.recording == false`).
 
+**Windows and Linux parity plan:** `docs/plans/2026-10-01-capture-windows-linux.md`.
+Read it before touching a non-macOS capture path. Its load-bearing decisions:
+Windows and Linux record in a child process of the app
+(`Hippius --capture-recorder`) speaking the Swift helper's JSON protocol
+through one shared `HelperRecorder`; Windows = WGC + Media Foundation
+fragmented MP4 + WASAPI, no ffmpeg; Linux = portals (`ashpd`, on the zbus 5
+already in the graph) on Wayland, x11rb and `ximagesrc` on X11, GStreamer from
+the distro for the file; Wayland has no overlay (the system picker chooses);
+per-platform rollout lives in Rust (`capture::rollout`), not in new frontend
+flags. Note: xcap 0.9.8's `wgc` feature has no GDI fallback.
+
 ## Flow
 
 **Start:** `capture_start(kind?, mode?)` opens an overlay per display; the one
