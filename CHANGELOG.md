@@ -15,6 +15,98 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-09-29
+
+Shared drives are here for everyone. On a Plus, Max or Scale plan you can share
+a whole drive, or a single folder, with the people you work with, choose what
+each of them can do, and change or take back their access at any time. People
+you share with see it under Shared with me and keep it in sync on their own
+computer.
+
+### Added
+
+- **Shared drives, in the released app.** Share a drive as Viewer, Editor or
+  Manager. A Manager can invite people, change roles, remove people and revoke
+  links on a drive they do not own, from the same Share dialog, Manage access and
+  drive header the owner uses. A Manager link works once and expires within 24
+  hours, and the owner always keeps their access. The plan cards no longer mark
+  the shared team drive as coming soon.
+- **Share one folder as a Viewer or Editor**, by link or by email. People you
+  share a folder with see it under Shared with me, can open it without seeing
+  anything above it, and can do what their role allows. An Editor can upload
+  into it. Anything the server does not offer yet says "coming soon" instead of
+  disappearing.
+- **Invite people by email.** Send a single-use invitation from the Share
+  dialog. If they already have a Hippius account they can join as soon as they
+  open it, even when your app is closed. Otherwise the app lets them in on its
+  own while you, or a Manager of the drive, are signed in, and tells you
+  "{name} can join {drive}." Approve is still there as a fallback.
+- **Shared with me is always on the Drive page, with Share a drive.** When
+  nothing is shared with you yet, it explains what shared drives are for and
+  links to the guide. Share a drive lets you pick one of your drives and opens
+  its Share dialog.
+- **Shared drives show people by name.** People with access, invite links,
+  Shared with me, the Added by column and File Details name each person, with
+  their full address and email on hover.
+- **Viewer and Editor read as coloured badges**, the same ones the web console
+  uses, so a list of drives can be read for access at a glance.
+- **Editors can share a folder by link from a drive someone else owns**, and
+  can upload into a shared drive they are only browsing, without keeping a copy
+  of it on this computer.
+
+### Changed
+
+- **One Share dialog for a drive or a folder**, with two tabs at the top, By
+  email and By link, so typing an address never turns a link into an
+  invitation by mistake. It remembers the tab you used last, explains problems
+  right where they happen, and stays open so you can invite several people in
+  a row.
+- **The Share dialog shows who has access**: the owner, everyone in the drive
+  or folder, and invitations still waiting. Change someone's role or remove
+  them right there, approve an invitation that is waiting, and revoke a link
+  you just made.
+- **Manage access is one list**: the people who have the drive or folder,
+  invitations still waiting, and every link with how often it was used and
+  when it expires. On a big drive it shows the newest people, invitations and
+  links first, with a bar to jump between them and "Show all" to search and
+  filter.
+- **Changing which folders someone can open lets you add a folder too**, as
+  Viewer or Editor, not only take folders away.
+- **Removing someone, cancelling an invitation, revoking a link or leaving
+  asks right in that row**, instead of opening a second window on top. Escape
+  or Cancel puts the row back.
+- **Sharing is part of the Plus, Max and Scale plans.** On Free and Starter,
+  the Share dialog and Manage access show a short note with an "Upgrade plan"
+  button in place of inviting people or creating links. You can still see who
+  has access and remove people or links.
+- **Sending an email invite asks you to unlock first when the app is locked**,
+  the same way creating a link does, and sends once you have. Cancel and
+  nothing is sent; the address stays typed.
+
+### Fixed
+
+- **An email invite sent from a locked app always goes out after you unlock.**
+  Unlocking very quickly could leave the invite unsent.
+- **Sharing one folder no longer marks the whole drive as shared.** A folder
+  you shared on its own carries its own "Shared" mark and Manage access button,
+  on its row and in its header.
+- **Picking the owner in "Added by" finds their files**, including files with
+  no uploader recorded, which the column shows as "Owner".
+- **A folder shared with you shows its own size** in Shared with me, not the
+  whole drive's figures.
+- **Invites and links show the right time left.** A 7-day invite sent a moment
+  ago says "7 days", and the Share dialog and Manage access always agree.
+- **Long names, emails and wallet addresses stay readable.** They are shortened
+  in the middle to fit, so you still see how an address starts and ends. Hover
+  to see it in full.
+- **A frozen shared drive says until when in plain words**, instead of a raw
+  timestamp.
+- **Accounts that sign in with an access key or a wallet no longer show a
+  made-up `@hippius.local` email.** The account menu, sharing and Manage access
+  show the name or the wallet address instead.
+- **Dropdown values are easy to read in light mode**, and the Share a drive
+  picker is as wide as the Share dialog it opens.
+
 ## [0.6.4] - 2026-09-23
 
 ### Added

@@ -1,15 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect } from "react";
 import { KeyRound } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { activeRecoveryCheckAtom } from "@/app/lib/global-atoms/recoveryAtoms";
 import { checkRecoveryState } from "@/app/lib/utils/recovery";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useUnlockFlow } from "@/app/lib/hooks/useUnlockFlow";
 
 interface SyncReauthRequiredAlertProps {
   className?: string;
@@ -56,12 +53,7 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
 }) => {
   const needsReauth = useAtomValue(syncRequiresReauthAtom);
   const setNeedsReauth = useSetAtom(syncRequiresReauthAtom);
-  const setRecoveryCheck = useSetAtom(activeRecoveryCheckAtom);
-  const { authType } = useWalletAuth();
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-
-  const isOAuth = authType === "oauth";
+  const { unlock, busy, isOAuth } = useUnlockFlow();
 
   // Self-dismiss a stale banner.
   //
@@ -90,46 +82,7 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
 
   if (!needsReauth) return null;
 
-  const goToSeedPhraseForm = () => {
-    // `?reauth=1` keeps the login page from bouncing an authenticated user
-    // home, so the seed-phrase form is actually reachable (audit R-13).
-    router.push("/login?reauth=1");
-  };
-
-  const handleReauth = async () => {
-    if (!isOAuth) {
-      goToSeedPhraseForm();
-      return;
-    }
-    // OAuth: ask Rust which recovery flow applies right now. A blob on
-    // the server → Unlock dialog; probe failure → retry dialog. `proceed`
-    // splits: healthy means the banner is simply stale, and only an
-    // unopenable local mnemonic falls back to the seed phrase.
-    setBusy(true);
-    try {
-      const check = await checkRecoveryState();
-      if (check.recommendedFlow !== "proceed") {
-        setRecoveryCheck(check);
-      } else if (check.canDecryptLocal) {
-        // Nothing to unlock and nothing wrong: Rust says local is
-        // authoritative. Sending the user to the sign-in screen here read as
-        // being logged out for no reason.
-        setNeedsReauth(false);
-        toast.success("Sync is unlocked on this device.");
-      } else {
-        // Unopenable local mnemonic with nothing on the server to unlock:
-        // the seed phrase is the only remaining way back in.
-        goToSeedPhraseForm();
-      }
-    } catch (err) {
-      console.error("[SyncReauthRequiredAlert] recovery check failed:", err);
-      toast.error(
-        "Couldn't check your account's recovery state. Check your connection and try again."
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
+  const handleReauth = () => void unlock();
 
   const title = isOAuth
     ? "Sync needs your unlock password"

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   driveRowSharing,
   rolesByLocalLabel,
+  writableMemberDriveLabels,
+  manageableMemberDriveLabels,
 } from "@/app/lib/shared-drives/driveRowSharing";
 
 const OWNER = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -151,5 +153,64 @@ describe("a drive whose invites have all lapsed", () => {
 
   it("leaves a drive with no invites and no members unmarked", () => {
     expect(driveRowSharing({ totalInviteCount: 0 }).isShared).toBe(false);
+  });
+});
+
+describe("writableMemberDriveLabels", () => {
+  const m = (role: string, over: Record<string, unknown> = {}) => ({
+    ownerSs58: "5Owner",
+    folderHash: `h-${role}`,
+    role,
+    localLabel: null as string | null,
+    ...over,
+  });
+
+  it("holds Editors and Managers, under both spellings of the drive", () => {
+    const set = writableMemberDriveLabels([
+      m("writer", { localLabel: "team" }),
+      m("manager"),
+      m("reader", { localLabel: "readonly" }),
+    ]);
+    expect(set.has("team")).toBe(true);
+    expect(set.has("shared:5Owner~h-writer")).toBe(true);
+    expect(set.has("shared:5Owner~h-manager")).toBe(true);
+    expect(set.has("readonly")).toBe(false);
+    expect(set.has("shared:5Owner~h-reader")).toBe(false);
+  });
+
+  it("leaves a frozen drive out, whatever the role", () => {
+    const set = writableMemberDriveLabels([m("manager", { frozen: true, localLabel: "cold" })]);
+    expect(set.size).toBe(0);
+  });
+
+  it("degrades an unknown role to no write access", () => {
+    expect(writableMemberDriveLabels([m("owner")]).size).toBe(0);
+  });
+});
+
+describe("folder grants in the label sets", () => {
+  const grant = (role: string, over: Record<string, unknown> = {}) => ({
+    ownerSs58: "5Owner",
+    folderHash: "h",
+    pathPrefix: `Clients/${role}`,
+    role,
+    ...over,
+  });
+
+  it("adds a granted folder's grant: label where its role allows", () => {
+    const writable = writableMemberDriveLabels([], [grant("writer"), grant("reader")]);
+    expect([...writable]).toEqual(["grant:5Owner~h~436c69656e74732f777269746572"]);
+  });
+
+  it("never makes a granted folder manageable: Manager is not a folder role", () => {
+    const manageable = manageableMemberDriveLabels([
+      { ownerSs58: "5Owner", folderHash: "h", role: "manager", localLabel: null },
+    ]);
+    expect([...manageable]).toEqual(["shared:5Owner~h"]);
+    expect([...manageable].some((l) => l.startsWith("grant:"))).toBe(false);
+  });
+
+  it("leaves a frozen grant out", () => {
+    expect(writableMemberDriveLabels([], [grant("writer", { frozen: true })]).size).toBe(0);
   });
 });

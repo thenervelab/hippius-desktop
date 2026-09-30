@@ -671,6 +671,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                   <UploaderCell
                     uploadedBy={childFile.uploadedBy}
                     uploadedByName={childFile.uploadedByName}
+                    uploadedByEmail={childFile.uploadedByEmail}
                     isFolder={childFile.isFolder}
                     sessionSs58={accountId ?? undefined}
                     driveOwnerSs58={driveOwnerSs58}

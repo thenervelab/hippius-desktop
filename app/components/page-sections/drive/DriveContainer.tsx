@@ -68,15 +68,18 @@ import {
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useUploaderOptions } from "./AddedByFilter";
+import { matchesUploader } from "@/app/lib/shared-drives/uploaderFilter";
 import {
   useMemberDriveLabels,
   useSharedDriveMembership,
   useSharedDriveMembershipByIdentity,
+  useFolderGrantForLabel,
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
 import {
   makeSharedDriveLabel,
+  makeFolderGrantLabel,
   parseSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
 import { isMemberDriveLabel } from "@/app/lib/utils/folderShareGating";
@@ -604,11 +607,23 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
           folderHash: filterSyncedMembership.membership.folderHash,
         }
       : undefined;
+  // The owner's name, for the owner's filter option and the column's hover:
+  // from the membership of a drive shared with this account, or the folder
+  // grant for a shared folder. On an own drive the owner is "You".
+  const addedByBrowsedMembership =
+    useSharedDriveMembershipByIdentity(browsedSharedDrive).membership;
+  const addedByBrowsedGrant = useFolderGrantForLabel(
+    browsedSharedDrive ? remoteUploadLabel : null,
+  ).grant;
+  const addedByOwnerName = browsedSharedDrive
+    ? (addedByBrowsedMembership?.ownerName ?? addedByBrowsedGrant?.ownerName)
+    : filterSyncedMembership.membership?.ownerName;
   const addedByOptions = useUploaderOptions(
     showAddedByFilter ? filterDriveLabel : null,
     addedByOwnerSs58,
     polkadotAddress ?? undefined,
     addedByTarget,
+    addedByOwnerName,
   );
 
   const nestedListing = useNestedFolderListing({
@@ -837,8 +852,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // applied to the current level's listing. This is the console-parity
   // behaviour the user asked for: filters reach across every nested
   // folder instead of stopping at the rows currently loaded in memory.
+  // Rust already asks the server for exactly the rows the chosen "Added by"
+  // covers (the owner is two queries, merged). Checking them here against
+  // the column's own rule means a row is never listed under a person the
+  // column would not name, whatever the server sent.
+  const uploaderFilteredSearchResults = useMemo(
+    () =>
+      filterState.uploadedBy
+        ? remoteSearchResults.filter((f) =>
+            matchesUploader(f, filterState.uploadedBy, {
+              sessionSs58: polkadotAddress ?? undefined,
+              driveOwnerSs58: addedByOwnerSs58,
+            }),
+          )
+        : remoteSearchResults,
+    [remoteSearchResults, filterState.uploadedBy, polkadotAddress, addedByOwnerSs58],
+  );
   const filteredData = useRemoteSearch
-    ? remoteSearchResults
+    ? uploaderFilteredSearchResults
     : useRecursiveResults
       ? recursiveResults
       : inMemoryFilteredData;
@@ -1489,6 +1520,30 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     [],
   );
 
+  /**
+   * Open a FOLDER somebody shared with this account (folder roles), rooted at
+   * that folder: its `grant:` label carries the folder, and Rust puts it in
+   * front of every path the view sends, so nothing above it is reachable.
+   */
+  const handleOpenFolderGrant = useCallback(
+    (grant: {
+      ownerSs58: string;
+      folderHash: string;
+      pathPrefix: string;
+      folderName: string;
+    }) => {
+      const label = makeFolderGrantLabel(grant);
+      setSharedDriveNames((prev) =>
+        prev.get(label) === grant.folderName
+          ? prev
+          : new Map(prev).set(label, grant.folderName),
+      );
+      setActiveRemoteLabel(label);
+      setIsOnLocalView(false);
+    },
+    [],
+  );
+
   // Clicking "Drive" in the sidebar returns to the folder list from
   // wherever the user is — a folder, a nested subfolder, a remote drive.
   //
@@ -1594,23 +1649,36 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const syncedMembership = useSharedDriveMembership(
     browsedSharedDrive ? null : openDriveLabel,
   );
+  // A granted FOLDER (folder roles) has no membership at all: its role and
+  // frozen state come from the grant this account holds.
+  const openFolderGrant = useFolderGrantForLabel(openDriveLabel);
   const openDriveFrozen = Boolean(
-    browsedSharedDrive
-      ? browsedMembership.membership?.frozen
-      : syncedMembership.membership?.frozen,
+    openFolderGrant.isGrant
+      ? openFolderGrant.grant?.frozen
+      : browsedSharedDrive
+        ? browsedMembership.membership?.frozen
+        : syncedMembership.membership?.frozen,
   );
   // The role this account holds on the open drive, for the refusal wording.
-  const openDriveRole = browsedSharedDrive
-    ? browsedMembership.membership
-      ? parseDriveRole(browsedMembership.membership.role)
+  const openDriveRole = openFolderGrant.isGrant
+    ? openFolderGrant.grant
+      ? parseDriveRole(openFolderGrant.grant.role)
       : null
-    : syncedDriveRole;
+    : browsedSharedDrive
+      ? browsedMembership.membership
+        ? parseDriveRole(browsedMembership.membership.role)
+        : null
+      : syncedDriveRole;
   const openDriveWriteRefusal = driveWriteRefusal(openDriveRole, {
     frozen: openDriveFrozen,
   });
 
   const openDriveCanWrite = openDriveFrozen
     ? false
+    : openFolderGrant.isGrant
+      ? // Rust decides it: an Editor grant on a server with writer grants
+        // on. A writer grant while the server has writes off only fails.
+        Boolean(openFolderGrant.grant?.canWrite)
     : browsedSharedDrive
       ? canWriteToDrive({
           isOwner: false,
@@ -1979,6 +2047,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -1998,6 +2067,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -2013,6 +2083,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
         onOpenSharedDrive={handleOpenSharedDrive}
+        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -2113,6 +2184,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 }
                 showUploadedBy={showAddedByFilter}
                 driveOwnerSs58={addedByOwnerSs58}
+                driveOwnerName={addedByOwnerName}
               />
             );
 

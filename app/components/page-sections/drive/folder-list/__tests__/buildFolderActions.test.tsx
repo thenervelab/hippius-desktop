@@ -16,7 +16,10 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 // happens to be gated to is a separate decision, pinned in
 // `buildChannel.test.ts`; without this mock these tests silently become
 // assertions about the release lane and fail the moment it changes.
-vi.mock("@/app/lib/featureFlags", () => ({ SHARED_DRIVES_ENABLED: true }));
+vi.mock("@/app/lib/featureFlags", () => ({
+  SHARED_DRIVES_ENABLED: true,
+  FOLDER_ROLES_ENABLED: false,
+}));
 
 const localRow = (over: Partial<SyncFolder> = {}): FolderRow => {
   const folder: SyncFolder = {

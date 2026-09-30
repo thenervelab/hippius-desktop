@@ -9,6 +9,7 @@ import MigrationChecker from "./MigrationChecker";
 import InsufficientCreditsDialog from "@/components/page-sections/drive/InsufficientCreditsDialog";
 import FailedFilesListener from "./FailedFilesListener";
 import FinderShareListener from "./FinderShareListener";
+import InviteAutoSealListener from "./InviteAutoSealListener";
 import FailedFilesModal from "@/components/page-sections/drive/FailedFilesModal";
 import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
 import RenameDialog from "@/components/page-sections/drive/RenameDialog";
@@ -34,6 +35,8 @@ export default function ProtectedLayout({
           <ConflictEventListener />
           <FailedFilesListener />
           <FinderShareListener />
+          {/* Delivers emailed invitation keys; does nothing while SHARED_DRIVES_ENABLED is off. */}
+          <InviteAutoSealListener />
           <MigrationChecker />
           <InsufficientCreditsDialog />
           <FailedFilesModal />

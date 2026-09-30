@@ -28,7 +28,8 @@ use tokio::net::TcpListener;
 
 use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::shared_drives::commands::{
-    MemberDriveInstall, MintInvite, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
+    MemberDriveInstall, MintInvite, http_change_member_role, http_create_invite, http_list_invites, http_list_memberships, http_remove_member,
+    http_revoke_invite, install_member_drive,
 };
 use tauri_project_lib::shared_drives::grant;
 use tauri_project_lib::shared_drives::invite_token::invite_id_for_token;
@@ -211,6 +212,84 @@ async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
         .await
         .expect_err("bad bearer must fail");
     assert!(matches!(err, AppError::Auth(_)), "got {err:?}");
+}
+
+/// A Manager acts on a drive they do not own through the delegated owner
+/// path: `owner_ss58` in the mint body, `?owner=` on the role change, the
+/// invite listing and the revoke. A Manager link goes out as `manager`.
+#[tokio::test]
+async fn a_manager_names_the_owner_on_every_management_call() {
+    type Seen = Arc<Mutex<Vec<(String, Option<String>, Option<serde_json::Value>)>>>;
+    let seen: Seen = Arc::default();
+    let (mint, patch, list, revoke) = (seen.clone(), seen.clone(), seen.clone(), seen.clone());
+    let base = serve(
+        Router::new()
+            .route(
+                "/v1/drive-invites",
+                post(move |Json(body): Json<serde_json::Value>| async move {
+                    mint.lock().unwrap().push(("mint".into(), None, Some(body)));
+                    Json(serde_json::json!({ "invite_token": "tok", "invite_id": "id1" }))
+                }),
+            )
+            .route(
+                "/v1/drives/{hash}/members/{member}",
+                axum::routing::patch(move |uri: axum::http::Uri, Json(body): Json<serde_json::Value>| async move {
+                    patch.lock().unwrap().push(("patch".into(), uri.query().map(str::to_string), Some(body)));
+                    StatusCode::NO_CONTENT
+                }),
+            )
+            .route(
+                "/v1/drives/{hash}/invites",
+                get(move |uri: axum::http::Uri| async move {
+                    list.lock().unwrap().push(("list".into(), uri.query().map(str::to_string), None));
+                    Json(serde_json::json!({ "invites": [] }))
+                }),
+            )
+            .route(
+                "/v1/drives/{hash}/invites/{id}",
+                delete(move |uri: axum::http::Uri| async move {
+                    revoke.lock().unwrap().push(("revoke".into(), uri.query().map(str::to_string), None));
+                    StatusCode::NO_CONTENT
+                }),
+            ),
+    )
+    .await;
+    let http = reqwest::Client::new();
+    let owner = Some(OWNER_SS58);
+
+    http_create_invite(
+        &http,
+        &base,
+        BEARER,
+        MintInvite {
+            role: "manager",
+            expires_in_secs: 86_400,
+            max_uses: 1,
+            owner,
+            ..mint_args(WIRE_HASH)
+        },
+    )
+    .await
+    .expect("a Manager link");
+    http_change_member_role(&http, &base, BEARER, WIRE_HASH, "5Member", "manager", owner)
+        .await
+        .expect("made a Manager");
+    http_list_invites(&http, &base, BEARER, WIRE_HASH, owner).await.expect("listed");
+    http_revoke_invite(&http, &base, BEARER, WIRE_HASH, "id1", owner).await.expect("revoked");
+
+    let seen = seen.lock().unwrap();
+    let body = seen[0].2.as_ref().expect("mint body");
+    assert_eq!(body["owner_ss58"], OWNER_SS58, "the mint names the owner in its body");
+    assert_eq!(body["role"], "manager");
+    assert_eq!(
+        (body["max_uses"].clone(), body["expires_in_secs"].clone()),
+        (serde_json::json!(1), serde_json::json!(86_400))
+    );
+    let owner_query = format!("owner={OWNER_SS58}");
+    for (call, query, _) in &seen[1..] {
+        assert_eq!(query.as_deref(), Some(owner_query.as_str()), "{call} names the owner");
+    }
+    assert_eq!(seen[1].2.as_ref().expect("patch body")["role"], "manager");
 }
 
 #[tokio::test]
@@ -705,5 +784,6 @@ fn mint_args(folder_hash: &str) -> MintInvite<'_> {
         max_uses: 5,
         role: "writer",
         owner: None,
+        path_prefix: None,
     }
 }

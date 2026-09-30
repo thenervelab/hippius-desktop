@@ -8,6 +8,7 @@ import {
   listOwnedDriveSharing,
   type DriveSharingSummary,
 } from "@/app/lib/tauri/sharedDrives";
+import { OWNED_FOLDER_SHARING_QUERY_KEY } from "./useOwnedFolderSharing";
 
 /** What a drive row needs to know about its own sharing. */
 export type DriveSharing = Omit<DriveSharingSummary, "label">;
@@ -68,15 +69,27 @@ export function useOwnedDriveSharing(
   }, [data]);
 }
 
-/** Refresh every drive row's sharing state after a mutation. */
-export function invalidateOwnedDriveSharing(queryClient: QueryClient): Promise<void> {
-  return queryClient.invalidateQueries({
-    queryKey: [OWNED_DRIVE_SHARING_QUERY_KEY],
-  });
+/**
+ * Refresh every drive row's sharing state after a mutation, and the open
+ * drive's folder marks with it: an invite or a removal may be a folder's.
+ */
+export async function invalidateOwnedDriveSharing(
+  queryClient: QueryClient,
+): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: [OWNED_DRIVE_SHARING_QUERY_KEY],
+    }),
+    queryClient.invalidateQueries({
+      queryKey: [OWNED_FOLDER_SHARING_QUERY_KEY],
+    }),
+  ]);
 }
 
 /**
- * Whether a drive has been shared at all.
+ * Whether a drive has been shared at all, as a whole. A drive where only a
+ * folder was shared is not: the counts are whole-drive only (Rust leaves
+ * folder invites and folder holders out), and the folder carries the mark.
  *
  * Any invite counts, not just a live one. Keying on live links alone made a
  * drive whose invites had lapsed look exactly like one that was never shared

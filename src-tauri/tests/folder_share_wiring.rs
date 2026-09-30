@@ -40,9 +40,8 @@ fn the_mint_funnel_refuses_member_drives() {
     let body = mint_funnel_body();
     assert!(
         body.contains("identity.is_member"),
-        "create_folder_share_inner must refuse member drives: folder shares are owner-mint-only \
-         (server v1), and a member's derived key is not the owner-chain drive key the fragment \
-         must carry"
+        "create_folder_share_inner must route member drives to their own gated mint: the server \
+         needs owner_ss58 there, and only an Editor or Manager may share"
     );
 }
 

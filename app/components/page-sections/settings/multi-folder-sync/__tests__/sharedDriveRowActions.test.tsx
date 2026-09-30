@@ -2,7 +2,10 @@
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
 
-import { buildSharedDriveActions } from "../sharedDriveRowActions";
+import {
+  buildFolderGrantActions,
+  buildSharedDriveActions,
+} from "../sharedDriveRowActions";
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
 
 const MEMBERSHIP: DriveMembershipInfo = {
@@ -48,6 +51,19 @@ describe("a shared-drive row's actions", () => {
     expect(titles(build({ isSynced: true }))).not.toContain("Sync to this computer");
   });
 
+  // Only a Manager is handed the manage handler; the item follows it, just
+  // before Leave.
+  it("offers Manage access only when the row may manage the drive", () => {
+    const onManageAccess = vi.fn();
+    const items = build({ role: "manager", onManageAccess });
+    const ts = titles(items);
+    expect(ts).toContain("Manage access");
+    expect(ts.indexOf("Manage access")).toBe(ts.length - 2);
+    items.find((i) => String(i.itemTitle) === "Manage access")?.onItemClick?.();
+    expect(onManageAccess).toHaveBeenCalled();
+    expect(titles(build())).not.toContain("Manage access");
+  });
+
   it("always offers leaving, as the destructive item", () => {
     const items = build();
     const leave = items.at(-1);
@@ -80,5 +96,15 @@ describe("a shared-drive row's actions", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(onSyncLocally).toHaveBeenCalledTimes(1);
     expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a shared folder row", () => {
+  it("offers Open and Leave, and never syncing to this computer", () => {
+    expect(titles(buildFolderGrantActions({ onOpen: vi.fn(), onLeave: vi.fn() }))).toEqual([
+      "Open",
+      "Leave folder",
+    ]);
+    expect(titles(buildFolderGrantActions({ onLeave: vi.fn() }))).toEqual(["Leave folder"]);
   });
 });

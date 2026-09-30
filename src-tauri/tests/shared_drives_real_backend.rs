@@ -472,6 +472,7 @@ async fn member_accept_and_install(env: &LiveEnv, http: &reqwest::Client, owner:
             role: "writer",
             // The owner's own mint; a manager's delegated mint names the owner.
             owner: None,
+            path_prefix: None,
         },
     )
     .await

@@ -9,6 +9,7 @@ import { openAppLink } from "@/app/lib/utils/links";
 import cn from "@/app/lib/utils/cn";
 import { Icons } from "../ui";
 import BoxSimple from "../ui/icons/BoxSimple";
+import MiddleTruncate from "../ui/MiddleTruncate";
 import {
   ChevronDown,
   Setting,
@@ -279,21 +280,14 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           (shrink-0) always renders. */}
       <span className="flex w-full min-w-0 items-center gap-1.5">
         {/* The sign-in identity for an OAuth account, the address for a
-            mnemonic one — in TWO spans so the browser does the measuring
-            and this only says where it may cut.
-            
-            The head shrinks and ellipsizes; the tail (an email's TLD)
-            never does. That is what keeps ".com" on screen at any rail
-            width, and it replaces the character budget that kept being
-            wrong — a count cannot know the window, the zoom or the font,
-            so its output was itself clipped from the end, losing exactly
-            what it was protecting. */}
-        <span className="flex min-w-0 items-baseline text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] text-left">
-          <span className="min-w-0 truncate">{identity.primary.head}</span>
-          {identity.primary.tail && (
-            <span className="shrink-0">{identity.primary.tail}</span>
-          )}
-        </span>
+            mnemonic one, shortened in the MIDDLE to the rail's width
+            (`MiddleTruncate`): an email keeps its domain, an address both
+            ends. Nothing is shortened by a character count first, since a
+            count cannot know the window, the zoom or the font. */}
+        <MiddleTruncate
+          text={identity.primary}
+          className="text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] text-left"
+        />
         {withChevron && (
           <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60 transition-transform duration-200 group-data-[state=open]:rotate-180" />
         )}
@@ -306,9 +300,11 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           signed in as". */}
       <span className="flex items-center gap-1 mt-1 w-full min-w-0">
         <BoxSimple className="size-[13px] text-black-700 dark:text-grey-light-600 flex-shrink-0" />
-        <span className="min-w-0 truncate text-[10px] font-medium leading-[14px] text-primary-50 dark:text-primary-brand-dark tracking-[-0.2px]">
-          {truncatedAddress}
-        </span>
+        <MiddleTruncate
+          text={identity.address}
+          kind="address"
+          className="text-[10px] font-medium leading-[14px] text-primary-50 dark:text-primary-brand-dark tracking-[-0.2px]"
+        />
       </span>
     </span>
   );
@@ -425,9 +421,10 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate font-geist text-[13px] font-medium leading-[1.2] tracking-[-0.28px] text-grey-10 dark:text-white">
-                    {identity.menuName}
-                  </span>
+                  <MiddleTruncate
+                    text={identity.menuName}
+                    className="flex-1 font-geist text-[13px] font-medium leading-[1.2] tracking-[-0.28px] text-grey-10 dark:text-white"
+                  />
                   {identity.providerLabel && (
                     <span className="flex shrink-0 items-center gap-1 rounded-full border border-[#e3e3e3] bg-[#f5f5f5] px-1.5 py-0.5 dark:border-[#313131] dark:bg-[#222222]">
                       {/* GitHub and Apple are monochrome marks drawn in
@@ -444,9 +441,11 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
                   )}
                 </span>
                 {identity.menuEmail && (
-                  <span className="mt-0.5 truncate font-geist text-[11px] font-medium leading-4 tracking-[-0.2px] text-[#52525c] dark:text-[#a3a3a3]">
-                    {identity.menuEmail}
-                  </span>
+                  <MiddleTruncate
+                    text={identity.menuEmail}
+                    kind="email"
+                    className="mt-0.5 font-geist text-[11px] font-medium leading-4 tracking-[-0.2px] text-[#52525c] dark:text-[#a3a3a3]"
+                  />
                 )}
               </span>
             </div>
@@ -468,9 +467,17 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           className={menuItemClass}
         >
           <WalletMinimal className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-left font-geist">
-            {copied ? "Copied!" : truncatedAddress}
-          </span>
+          {copied ? (
+            <span className="min-w-0 flex-1 truncate text-left font-geist">Copied!</span>
+          ) : (
+            <MiddleTruncate
+              text={identity.address}
+              kind="address"
+              // The item's aria-label already names the address.
+              srText={false}
+              className="flex-1 text-left font-geist"
+            />
+          )}
           <span className="relative size-4 shrink-0">
             <Copy
               className={cn(

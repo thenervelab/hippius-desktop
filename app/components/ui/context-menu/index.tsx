@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Download, Link2, Trash2, FolderOpen, Pencil } from "lucide-react";
+import { Download, Link2, Trash2, FolderOpen, Pencil, FolderInput } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -9,12 +9,24 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   offersShareAction,
+  offersWriteAction,
+  isMemberDriveLabel,
   FOLDER_SHARE_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderShareGating";
-import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import {
+  canShareFolderGrant,
+  folderGrantPathPrefix,
+  FOLDER_GRANT_DISABLED_TOOLTIP,
+} from "@/app/lib/utils/folderGrantGating";
+import {
+  useManageableMemberDriveLabels,
+  useMemberDriveLabels,
+  useWritableMemberDriveLabels,
+  useFolderShareInviteOffered,
+} from "@/app/lib/hooks/useSharedDriveRoles";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
@@ -26,12 +38,13 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
 import {
+  shareDialogAtom,
   folderShareFeatureEnabledAtom,
+  memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
-
-
 
 interface ContextMenuProps {
   x: number;
@@ -60,6 +73,14 @@ interface ContextMenuProps {
    * of mid-sync files.
    */
   onRename?: (file: FormattedUserFile) => void;
+  /**
+   * The drive-relative folder the listing is showing (the table's
+   * `currentSubfolderPath`). A folder row may carry only its basename, so
+   * "Share folder" resolves its path against this, the same way "Share via
+   * link" does; without it a nested folder would resolve to a same-named
+   * folder at the drive root.
+   */
+  basePath?: string | null;
 }
 
 export default function FileContextMenu({
@@ -73,14 +94,25 @@ export default function FileContextMenu({
   onFileDownload,
   onShareFile,
   onRename,
+  basePath,
 }: ContextMenuProps) {
   const [mounted, setMounted] = useState(false);
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
+  // "Share folder" is live: always behind the folder-roles flag, else once
+  // the server advertises folder grants.
+  const folderInvitesOffered = useFolderShareInviteOffered();
+  const setInviteDialogTarget = useSetAtom(shareDialogAtom);
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
+  // Whether a folder in one of those drives may be shared by link: an
+  // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
+  const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
+  const writableMemberDriveLabels = useWritableMemberDriveLabels();
+  const folderRolesEnabled = FOLDER_ROLES_ENABLED;
+  const manageableMemberDriveLabels = useManageableMemberDriveLabels();
 
   useEffect(() => {
     setMounted(true);
@@ -234,7 +266,10 @@ export default function FileContextMenu({
           */}
           {(file.isFolder || file.syncStatus === "synced")
             && shareEnabled
-            && offersShareAction(file, memberDriveLabels)
+            && offersShareAction(file, memberDriveLabels, {
+            memberFolderShares,
+            writableMemberDriveLabels,
+          })
             && onShareFile && (
               <button
                 // `menuItemClass` hard-codes cursor-pointer and hover styling
@@ -262,7 +297,49 @@ export default function FileContextMenu({
               </button>
             )}
 
-          {onRename && (
+          {/* Share folder: a folder invite. Join is console-only. */}
+          {SHARED_DRIVES_ENABLED
+            && file.isFolder
+            && canShareFolderGrant(
+              file,
+              folderInvitesOffered,
+              memberDriveLabels,
+              folderRolesEnabled ? manageableMemberDriveLabels : undefined,
+            ) && (
+              <button
+                className={menuItemClass}
+                onClick={() => {
+                  if (!file.label) return;
+                  const pathPrefix = folderGrantPathPrefix(file, basePath);
+                  if (!pathPrefix) return;
+                  setInviteDialogTarget({
+                    label: file.label,
+                    folderName: file.name,
+                    pathPrefix,
+                  });
+                  onClose();
+                }}
+              >
+                <FolderInput className="size-4" />
+                <span>Share folder</span>
+              </button>
+            )}
+
+          {file.isFolder
+            && SHARED_DRIVES_ENABLED
+            && !folderInvitesOffered
+            && !isMemberDriveLabel(file.label, memberDriveLabels) && (
+              <button
+                className={cn(menuItemClass, "opacity-60 cursor-not-allowed")}
+                disabled
+                title={FOLDER_GRANT_DISABLED_TOOLTIP}
+              >
+                <FolderInput className="size-4" />
+                <span>Share folder</span>
+              </button>
+            )}
+
+          {onRename && offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels) && (
             <button
               // No `pointer-events-none` here: it would stop the element
               // from ever being a hover target, making the `title` tooltip

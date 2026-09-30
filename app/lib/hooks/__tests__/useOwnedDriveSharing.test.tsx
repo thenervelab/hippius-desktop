@@ -15,7 +15,10 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   };
 });
 
-vi.mock("@/app/lib/featureFlags", () => ({ SHARED_DRIVES_ENABLED: true }));
+vi.mock("@/app/lib/featureFlags", () => ({
+  SHARED_DRIVES_ENABLED: true,
+  FOLDER_ROLES_ENABLED: false,
+}));
 
 import {
   invalidateOwnedDriveSharing,

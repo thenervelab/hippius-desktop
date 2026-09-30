@@ -158,6 +158,9 @@ pub struct UserFileEntry {
     /// Display name beside `uploaded_by` (hcfs #455). Absent when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploaded_by_name: Option<String>,
+    /// Uploader email beside `uploaded_by` (hcfs #455). Absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploaded_by_email: Option<String>,
 }
 
 /// Whether a given `sync_status` value should contribute to per-label
@@ -339,6 +342,7 @@ pub async fn get_user_files(
                 deleted: false,
                 uploaded_by: None,
                 uploaded_by_name: None,
+                uploaded_by_email: None,
             });
         }
     }
@@ -503,6 +507,7 @@ fn walk_disk_files_std(
             deleted: false,
             uploaded_by: None,
             uploaded_by_name: None,
+            uploaded_by_email: None,
         });
     }
 }
@@ -651,6 +656,7 @@ pub async fn search_user_files_recursive(
                 deleted: false,
                 uploaded_by: None,
                 uploaded_by_name: None,
+                uploaded_by_email: None,
             });
         }
     }
@@ -956,6 +962,7 @@ mod tests {
             // would omit them when None — same rule as RemoteFileEntry).
             uploaded_by: Some("5Member".to_string()),
             uploaded_by_name: Some("Ada".to_string()),
+            uploaded_by_email: Some("ada@example.com".to_string()),
         };
         let json = serde_json::to_value(&entry).expect("serialize UserFileEntry");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
@@ -981,6 +988,7 @@ mod tests {
             "deleted",
             "uploadedBy",
             "uploadedByName",
+            "uploadedByEmail",
         ]
         .into_iter()
         .map(String::from)
@@ -1001,6 +1009,7 @@ mod tests {
         assert_eq!(json["fileId"], "0".repeat(64), "file_id must serialize under key `fileId`");
         assert_eq!(json["uploadedBy"], "5Member");
         assert_eq!(json["uploadedByName"], "Ada");
+        assert_eq!(json["uploadedByEmail"], "ada@example.com");
     }
 
     /// `filter_file_entries` must accept the rows the FE BUILDS ITSELF for
@@ -1076,6 +1085,7 @@ mod tests {
             deleted: false,
             uploaded_by: None,
             uploaded_by_name: None,
+            uploaded_by_email: None,
         }
     }
 

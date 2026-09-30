@@ -11,6 +11,8 @@ interface InfoTooltipProps {
   tooltipContent?: ReactNode;
   side?: "top" | "right" | "bottom" | "left";
   disabled?: boolean;
+  /** Makes the trigger reachable by keyboard; focus opens the tooltip. */
+  tabIndex?: number;
 }
 
 const CustomTooltip2: React.FC<InfoTooltipProps> = ({
@@ -22,6 +24,7 @@ const CustomTooltip2: React.FC<InfoTooltipProps> = ({
   showInfo,
   side = undefined,
   disabled = false,
+  tabIndex,
 }) => {
   if (disabled) {
     return (
@@ -40,7 +43,7 @@ const CustomTooltip2: React.FC<InfoTooltipProps> = ({
     <Tooltip.Provider>
       <Tooltip.Root delayDuration={200}>
         <Tooltip.Trigger asChild>
-          <div className={`inline-block ${className}`}>
+          <div className={`inline-block ${className}`} tabIndex={tabIndex}>
             {children}
             {showInfo && (
               <Icons.QuestionCircle

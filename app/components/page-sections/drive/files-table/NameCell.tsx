@@ -10,6 +10,7 @@ import { Video } from "lucide-react";
 import { Icons } from "@/components/ui";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
+import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMark";
 import SyncQueueOverallProgress from "@/app/(pages)/SyncQueueOverallProgress";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import {
@@ -362,6 +363,12 @@ const NameCell: FC<NameCellProps> = ({
     : getParam("subFolderPath", "");
 
   const effectiveMainFolderHash = mainFolderHash || arionHash;
+  const folderRelativePath = isFolder
+    ? folderShareRelativePath(
+        { name: rawName, actualFileName: actualName },
+        subFolderPath,
+      )
+    : undefined;
 
   // Build the folder path for navigation
   const {
@@ -389,7 +396,9 @@ const NameCell: FC<NameCellProps> = ({
   };
 
   return (
-    <div className={cn("w-full min-w-0", className)} draggable={false}>
+    // `@container`: the folder sharing mark's Manage access button reads the
+    // name cell's width to choose between words and an icon.
+    <div className={cn("@container w-full min-w-0", className)} draggable={false}>
       {isFolder ? (
         <Link
           href={folderUrl}
@@ -404,20 +413,27 @@ const NameCell: FC<NameCellProps> = ({
               className="text-grey-20 dark:text-grey-light-100 transition"
               textClassName="hover:text-primary-40 hover:underline"
               suffix={
-                <SharedLinkBadge
-                  label={label}
-                  actualName={actualName}
-                  isFolder
-                  // `subFolderPath` already folds `parentSubFolderPath` in
-                  // (see above), so this resolves the same drive-relative
-                  // path the share menu item mints with.
-                  folderRelativePath={folderShareRelativePath(
-                    { name: rawName, actualFileName: actualName },
-                    subFolderPath,
-                  )}
-                  onManageShare={onManageShare}
-                  className="ml-1.5"
-                />
+                <>
+                  <SharedLinkBadge
+                    label={label}
+                    actualName={actualName}
+                    isFolder
+                    // `subFolderPath` already folds `parentSubFolderPath` in
+                    // (see above), so this resolves the same drive-relative
+                    // path the share menu item mints with.
+                    folderRelativePath={folderRelativePath}
+                    onManageShare={onManageShare}
+                    className="ml-1.5"
+                  />
+                  {/* Shared on its own (a folder invite or grant): the same
+                      path the "Share folder" item invites to. */}
+                  <FolderSharingMark
+                    label={label}
+                    folderPath={folderRelativePath}
+                    folderName={rawName}
+                    className="ml-1.5"
+                  />
+                </>
               }
             />
           </div>

@@ -28,7 +28,9 @@ use crate::sync::files::UserFileEntry;
 use crate::sync::mnemonic::folder_hash;
 use hcfs_shared::network::{NetworkResponse, SearchFileHit, SearchFilesResponse};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use tracing::{debug, warn};
 
 /// Default recent-upload count — matches the console's `LAST_UPLOADS_CARD_LIMIT`
@@ -217,6 +219,7 @@ fn map_search_hit_to_entry(
         // not reach UploaderCell as a blank name (it falls back to "Owner").
         uploaded_by: hit.file.uploaded_by.clone().filter(|s| !s.is_empty()),
         uploaded_by_name: hit.file.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        uploaded_by_email: crate::sync::remote::present_email(hit.file.uploaded_by_email.as_deref()),
     })
 }
 
@@ -228,7 +231,7 @@ fn map_search_hit_to_entry(
 /// (sort column, file extension) are translated to the server's wire params by
 /// [`build_search_query`], keeping that translation — the business logic — in
 /// Rust rather than the frontend.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFilesParams {
     /// Free-text file-name query (`q`). Trimmed; omitted when blank.
@@ -405,6 +408,19 @@ async fn fetch_search_files(
     search_ss58: &str,
     query: &[(&'static str, String)],
 ) -> Result<Vec<UserFileEntry>> {
+    let page = fetch_search_page(state, session_account, search_ss58, query).await?;
+    map_search_hits(state, session_account, &page.files).await
+}
+
+/// One page of `/search_files`, as the server sent it: the hits, and whether
+/// more exist past them. See [`fetch_search_files`] for the arguments and
+/// errors.
+async fn fetch_search_page(
+    state: &AppState,
+    session_account: &str,
+    search_ss58: &str,
+    query: &[(&'static str, String)],
+) -> Result<hcfs_shared::network::SearchFilesResult> {
     let account_id = session_account;
     let pool = state.pool()?;
 
@@ -451,16 +467,17 @@ async fn fetch_search_files(
         AppError::Hcfs(format!("search_files parse error: {e}"))
     })?;
 
-    let result = match parsed {
-        NetworkResponse::Success(result) => result,
-        NetworkResponse::Conflict(c) => {
-            return Err(AppError::Hcfs(format!("search_files conflict: {}", c.message)));
-        }
-        NetworkResponse::Error(e) => {
-            return Err(AppError::Hcfs(format!("search_files error: {} ({})", e.message, e.error)));
-        }
-    };
+    match parsed {
+        NetworkResponse::Success(result) => Ok(result),
+        NetworkResponse::Conflict(c) => Err(AppError::Hcfs(format!("search_files conflict: {}", c.message))),
+        NetworkResponse::Error(e) => Err(AppError::Hcfs(format!("search_files error: {} ({})", e.message, e.error))),
+    }
+}
 
+/// Map `/search_files` hits onto [`UserFileEntry`], overlaying the local
+/// sync-root map so previews/downloads resolve for drives configured here.
+async fn map_search_hits(state: &AppState, account_id: &str, hits: &[SearchFileHit]) -> Result<Vec<UserFileEntry>> {
+    let pool = state.pool()?;
     // Build label → local sync-root map so previews/downloads resolve for
     // drives configured on this device.
     let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, account_id, "fetch_search_files").await;
@@ -481,12 +498,123 @@ async fn fetch_search_files(
     // pending case. The slice is small (interactive palette), so ≤ MAX_LIMIT
     // stats per call is negligible.
     let path_exists = |p: &str| std::path::Path::new(p).exists();
-    let entries = result
-        .files
+    Ok(hits
         .iter()
         .filter_map(|hit| map_search_hit_to_entry(hit, &hash_to_drive, &path_exists))
-        .collect();
-    Ok(entries)
+        .collect())
+}
+
+// ─── "Added by": the owner is two queries ───────────────────────────────────
+
+/// `uploaded_by` value the server reads as "no uploader recorded" (hcfs
+/// #456). Mirrored by `UPLOADED_BY_UNRECORDED` in
+/// `app/lib/shared-drives/uploaderFilter.ts`.
+pub(crate) const UPLOADED_BY_UNRECORDED: &str = "_none";
+
+/// Most rows one merged "Added by" search reads per query. Each query is
+/// read from its first row up to `offset + limit` so the merge is exact; this
+/// bounds how far that can go.
+const MAX_MERGED_ROWS: usize = 1_000;
+
+/// The same account, whatever SS58 prefix each side was written in: the
+/// decoded public keys are compared, not the text. Two values that do not
+/// decode match only when identical.
+pub(crate) fn same_account(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    match (subxt::utils::AccountId32::from_str(a), subxt::utils::AccountId32::from_str(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// The `uploaded_by` values to ask the server for, one query each, whose
+/// union is exactly the rows the ADDED BY column names as the choice.
+///
+/// The column shows a file with no uploader recorded as the owner's, while
+/// the server matches one value exactly and never matches a missing uploader
+/// to an address. So picking the owner (on a drive somebody else owns) takes
+/// two queries: the owner's address and the unrecorded sentinel. Everything
+/// else is one. When the viewer is the owner their option is "You", and the
+/// column calls only recorded rows "You", so it stays one query.
+///
+/// The FE holds the same rule for the column (`uploaderKind` /
+/// `matchesUploader` in `app/lib/shared-drives/uploaderFilter.ts`).
+fn uploader_search_values(selected: Option<&str>, session_ss58: &str, owner_ss58: &str) -> Vec<String> {
+    let Some(selected) = selected.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    if selected != UPLOADED_BY_UNRECORDED && !same_account(selected, session_ss58) && same_account(selected, owner_ss58) {
+        return vec![selected.to_string(), UPLOADED_BY_UNRECORDED.to_string()];
+    }
+    vec![selected.to_string()]
+}
+
+/// The order `/search_files` returns rows in: the chosen column
+/// (`created_at` newest first when none is chosen), then `path_hash`.
+fn compare_search_hits(a: &SearchFileHit, b: &SearchFileHit, sort_by: Option<&str>, sort_order: Option<&str>) -> Ordering {
+    let sort_by = sort_by.map(str::trim).filter(|s| !s.is_empty());
+    let ascending = sort_by.is_some() && sort_order.is_some_and(|o| o.trim().eq_ignore_ascii_case("asc"));
+    let key = match sort_by.map(map_sort_column) {
+        Some("file_name") => a.file.file_name.as_deref().unwrap_or("").cmp(b.file.file_name.as_deref().unwrap_or("")),
+        Some("size_bytes") => a.file.size_bytes.cmp(&b.file.size_bytes),
+        _ => a.file.created_at.cmp(&b.file.created_at),
+    };
+    let key = if ascending { key } else { key.reverse() };
+    key.then_with(|| a.file.path_hash.cmp(&b.file.path_hash))
+}
+
+/// Merge several `/search_files` streams, each read from its first row, into
+/// one list in the server's order, and cut the page `[offset, offset+limit)`.
+///
+/// Every row of the true merged page sits within the first `offset + limit`
+/// rows of its own stream, so reading each stream that far makes the page
+/// exact. A file in both (a race with an upload) is listed once.
+fn merge_search_streams(
+    streams: Vec<Vec<SearchFileHit>>,
+    sort_by: Option<&str>,
+    sort_order: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Vec<SearchFileHit> {
+    let mut seen = HashSet::new();
+    let mut rows: Vec<SearchFileHit> = streams.into_iter().flatten().filter(|hit| seen.insert(hit.file.path_hash)).collect();
+    rows.sort_by(|a, b| compare_search_hits(a, b, sort_by, sort_order));
+    rows.into_iter().skip(offset).take(limit).collect()
+}
+
+/// Read one `uploaded_by` stream from its first row, `want` rows at most.
+async fn fetch_search_stream(
+    state: &AppState,
+    session_account: &str,
+    search_ss58: &str,
+    params: &SearchFilesParams,
+    uploaded_by: &str,
+    want: usize,
+) -> Result<Vec<SearchFileHit>> {
+    let mut hits: Vec<SearchFileHit> = Vec::new();
+    while hits.len() < want {
+        let page_params = SearchFilesParams {
+            uploaded_by: Some(uploaded_by.to_string()),
+            offset: Some(hits.len()),
+            limit: Some((want - hits.len()).min(MAX_LIMIT)),
+            ..params.clone()
+        };
+        let query = build_search_query(&page_params);
+        let page = fetch_search_page(state, session_account, search_ss58, &query).await?;
+        let returned = page.files.len();
+        hits.extend(page.files);
+        if !page.has_more || returned == 0 {
+            break;
+        }
+    }
+    hits.truncate(want);
+    Ok(hits)
 }
 
 /// Fetch the account's most recent uploads from the HCFS server.
@@ -583,8 +711,24 @@ pub async fn search_files_in_drive(
         ..params
     };
     debug!(account_id = %account_id, label = %label, "Scoped file search via HCFS /search_files");
-    let query = build_search_query(&scoped);
-    fetch_search_files(state.inner(), &account_id, &identity.wire_ss58, &query).await
+
+    // The owner of somebody else's drive is two queries (see
+    // `uploader_search_values`); everything else is the one request.
+    let values = uploader_search_values(scoped.uploaded_by.as_deref(), &account_id, &identity.wire_ss58);
+    if values.len() < 2 {
+        let query = build_search_query(&scoped);
+        return fetch_search_files(state.inner(), &account_id, &identity.wire_ss58, &query).await;
+    }
+
+    let offset = scoped.offset.unwrap_or(0);
+    let limit = scoped.limit.unwrap_or(SEARCH_DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let want = (offset + limit).min(MAX_MERGED_ROWS);
+    let mut streams = Vec::with_capacity(values.len());
+    for value in &values {
+        streams.push(fetch_search_stream(state.inner(), &account_id, &identity.wire_ss58, &scoped, value, want).await?);
+    }
+    let page = merge_search_streams(streams, scoped.sort_by.as_deref(), scoped.sort_order.as_deref(), offset, limit);
+    map_search_hits(state.inner(), &account_id, &page).await
 }
 
 #[cfg(test)]
@@ -683,6 +827,7 @@ mod tests {
         assert_eq!(entry.file_id, "0".repeat(64));
         assert_eq!(entry.uploaded_by, None);
         assert_eq!(entry.uploaded_by_name, None);
+        assert_eq!(entry.uploaded_by_email, None, "an absent key means unknown");
     }
 
     /// Regression: Added-by filter uses `/search_files`, and UploaderCell
@@ -706,11 +851,13 @@ mod tests {
             "file_name": "report.pdf",
             "uploaded_by": "5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb",
             "uploaded_by_name": "  Grace Hopper  ",
+            "uploaded_by_email": " grace@example.com ",
         });
         let hit: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
         let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
         assert_eq!(entry.uploaded_by.as_deref(), Some("5CV9U536UM4LJxxxxxxxxxxxxxxxxxxxxxxxxxxxxMFXb"));
         assert_eq!(entry.uploaded_by_name.as_deref(), Some("Grace Hopper"));
+        assert_eq!(entry.uploaded_by_email.as_deref(), Some("grace@example.com"));
     }
 
     #[test]
@@ -1102,5 +1249,132 @@ mod tests {
             prop_assert_eq!(normalize_rel_path(&once), once.as_str());
             prop_assert!(!once.starts_with('/'));
         }
+    }
+}
+
+#[cfg(test)]
+mod uploader_merge_tests {
+    use super::*;
+    use serde_json::json;
+
+    // One account, three prefixes: generic (42), Polkadot (0), Kusama (2).
+    const ALICE_GENERIC: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+    const ALICE_POLKADOT: &str = "15oF4uVJwmo4TdGW7VfQxNLavjCXviqxT9S1MgbjMNHr6Sp5";
+    const ALICE_KUSAMA: &str = "HNZata7iMYWmk5RvZRTiAsSDhV8366zq2YGb3tLH5Upf74F";
+    const BOB: &str = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+
+    fn hit(id: u8, created_at: i64, size: u64, name: &str, uploaded_by: Option<&str>) -> SearchFileHit {
+        let mut value = json!({
+            "folder_hash": "abc",
+            "folder_label": "Team",
+            "path_hash": vec![id; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": size,
+            "revision_seq": 1u64,
+            "revision_id": vec![0u8; 32],
+            "created_at": created_at,
+            "updated_at": created_at,
+            "file_name": name,
+        });
+        if let Some(by) = uploaded_by {
+            value["uploaded_by"] = json!(by);
+        }
+        serde_json::from_value(value).expect("hit fixture must deserialize")
+    }
+
+    fn ids(rows: &[SearchFileHit]) -> Vec<u8> {
+        rows.iter().map(|h| h.file.path_hash[0]).collect()
+    }
+
+    #[test]
+    fn one_account_is_one_account_whatever_its_prefix() {
+        assert!(same_account(ALICE_GENERIC, ALICE_POLKADOT));
+        assert!(same_account(ALICE_KUSAMA, ALICE_GENERIC));
+        assert!(!same_account(ALICE_GENERIC, BOB));
+        // Values that do not decode match only themselves.
+        assert!(same_account("not-an-address", "not-an-address"));
+        assert!(!same_account("not-an-address", "also-not"));
+        assert!(!same_account("", ""));
+    }
+
+    /// The bug: every row read "Owner" (nothing recorded) and picking the
+    /// owner sent only the address, which the server never matches to a row
+    /// with no uploader. The owner of someone else's drive is two queries.
+    #[test]
+    fn the_owner_is_asked_for_by_address_and_as_not_recorded() {
+        assert_eq!(
+            uploader_search_values(Some(BOB), ALICE_GENERIC, BOB),
+            vec![BOB.to_string(), "_none".to_string()]
+        );
+        // Written under another prefix, still the owner.
+        assert_eq!(uploader_search_values(Some(ALICE_POLKADOT), BOB, ALICE_GENERIC).len(), 2);
+    }
+
+    #[test]
+    fn everyone_else_is_one_query() {
+        assert!(uploader_search_values(None, ALICE_GENERIC, BOB).is_empty());
+        assert!(uploader_search_values(Some("  "), ALICE_GENERIC, BOB).is_empty());
+        // The viewer is "You", recorded rows only, even on their own drive.
+        assert_eq!(
+            uploader_search_values(Some(ALICE_GENERIC), ALICE_GENERIC, ALICE_GENERIC),
+            vec![ALICE_GENERIC.to_string()]
+        );
+        assert_eq!(
+            uploader_search_values(Some(ALICE_GENERIC), ALICE_GENERIC, BOB),
+            vec![ALICE_GENERIC.to_string()]
+        );
+        // A member, and "Not recorded" on its own.
+        assert_eq!(
+            uploader_search_values(Some(ALICE_GENERIC), BOB, "5Other"),
+            vec![ALICE_GENERIC.to_string()]
+        );
+        assert_eq!(uploader_search_values(Some("_none"), ALICE_GENERIC, BOB), vec!["_none".to_string()]);
+    }
+
+    #[test]
+    fn two_streams_merge_newest_first_as_the_server_orders() {
+        let owner = vec![
+            hit(1, 50, 1, "a", Some(BOB)),
+            hit(2, 30, 1, "b", Some(BOB)),
+            hit(3, 10, 1, "c", Some(BOB)),
+        ];
+        let unrecorded = vec![hit(4, 40, 1, "d", None), hit(5, 20, 1, "e", None)];
+        let page = merge_search_streams(vec![owner, unrecorded], None, None, 0, 50);
+        assert_eq!(ids(&page), vec![1, 4, 2, 5, 3]);
+    }
+
+    #[test]
+    fn a_later_page_is_cut_from_the_merged_order() {
+        let owner = vec![
+            hit(1, 50, 1, "a", Some(BOB)),
+            hit(2, 30, 1, "b", Some(BOB)),
+            hit(3, 10, 1, "c", Some(BOB)),
+        ];
+        let unrecorded = vec![hit(4, 40, 1, "d", None), hit(5, 20, 1, "e", None)];
+        let page = merge_search_streams(vec![owner, unrecorded], None, None, 2, 2);
+        assert_eq!(ids(&page), vec![2, 5]);
+    }
+
+    #[test]
+    fn the_merge_follows_the_chosen_sort_and_breaks_ties_by_path_hash() {
+        let a = vec![hit(9, 1, 300, "zeta", Some(BOB)), hit(2, 1, 100, "alpha", Some(BOB))];
+        let b = vec![hit(5, 1, 200, "mid", None), hit(1, 1, 100, "beta", None)];
+        let by_name = merge_search_streams(vec![a.clone(), b.clone()], Some("name"), Some("asc"), 0, 10);
+        assert_eq!(ids(&by_name), vec![2, 1, 5, 9]);
+        let by_size_desc = merge_search_streams(vec![a, b], Some("size"), Some("desc"), 0, 10);
+        // 100 twice: path hash 1 before 2.
+        assert_eq!(ids(&by_size_desc), vec![9, 5, 1, 2]);
+    }
+
+    #[test]
+    fn a_file_in_both_streams_is_listed_once() {
+        let page = merge_search_streams(
+            vec![vec![hit(1, 5, 1, "a", Some(BOB))], vec![hit(1, 5, 1, "a", Some(BOB))]],
+            None,
+            None,
+            0,
+            10,
+        );
+        assert_eq!(ids(&page), vec![1]);
     }
 }

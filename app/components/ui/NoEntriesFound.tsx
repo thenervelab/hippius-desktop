@@ -68,6 +68,18 @@ interface NoEntriesFoundProps {
    *   is blocked because the user has insufficient credits).
    */
   variant?: NoEntriesVariant;
+  /**
+   * Drawn above the title in place of the default illustration, for an empty
+   * state that pictures what the section is for rather than only saying it.
+   */
+  illustration?: React.ReactNode;
+  /**
+   * A quiet link under the actions, such as the docs for the feature. It
+   * shows the footer on its own when there is no button.
+   */
+  footerLink?: React.ReactNode;
+  /** `id` for the title, when a region is named by it (`aria-labelledby`). */
+  titleId?: string;
 }
 
 const NoEntriesFound = ({
@@ -93,6 +105,9 @@ const NoEntriesFound = ({
   containerClassName,
   children,
   variant = "default",
+  illustration,
+  footerLink,
+  titleId,
 }: NoEntriesFoundProps) => {
   const isNoCredits = variant === "noCredits";
   const LightIllustration = isNoCredits
@@ -145,7 +160,8 @@ const NoEntriesFound = ({
     [onSecondaryButtonClick],
   );
 
-  const hasFooter = !!buttonText || !!secondaryButtonText;
+  const hasButtons = !!buttonText || !!secondaryButtonText;
+  const hasFooter = hasButtons || !!footerLink;
 
   return (
     <div
@@ -175,8 +191,15 @@ const NoEntriesFound = ({
           {children ? (
             children
           ) : (
-            <div className="flex gap-5 items-center">
-              {!hideIllustration && (
+            <div
+              className={cn(
+                "flex gap-5",
+                illustration ? "flex-col items-start gap-3" : "items-center",
+              )}
+            >
+              {illustration ? (
+                <div className="flex">{illustration}</div>
+              ) : !hideIllustration && (
                 <div className="shrink-0">
                   <LightIllustration className="block dark:hidden" />
                   <DarkIllustration className="hidden dark:block" />
@@ -184,7 +207,10 @@ const NoEntriesFound = ({
               )}
               <div className="flex-1 min-w-0 flex flex-col gap-[6px]">
                 <div className="flex items-start gap-5 w-full">
-                  <h3 className="flex-1 text-[18px] font-medium leading-6 tracking-[-0.54px] text-[#171717] dark:text-white">
+                  <h3
+                    id={titleId}
+                    className="flex-1 text-[18px] font-medium leading-6 tracking-[-0.54px] text-[#171717] dark:text-white"
+                  >
                     {title}
                   </h3>
                   {onClose && (
@@ -208,88 +234,102 @@ const NoEntriesFound = ({
 
         {/* Footer */}
         {hasFooter && (
-          <div className="bg-white border-t border-[#ebebeb] px-3 sm:px-5 py-[14px] rounded-b-[12px] dark:bg-[#161616] dark:border-[#313131] flex gap-4 items-center justify-end">
-            {secondaryButtonText && (
-              <Button
-                type="button"
-                variant="defaultStable"
-                size="auto"
-                onClick={handleSecondaryClick}
-                disabled={isSecondaryLoading}
-                // The card body sits on bg-grey-light-600, which is the
-                // same tone as defaultStable's bg-grey-90 — the button
-                // would vanish without an explicit surface. White + a
-                // neutral border restores contrast while keeping the
-                // secondary read; the !-overrides win over the variant's
-                // baked-in bg/hover so the chip stays legible in both
-                // themes and picks up the variant's hover/active animations.
+          <div className="bg-white border-t border-[#ebebeb] px-3 sm:px-5 py-[14px] rounded-b-[12px] dark:bg-[#161616] dark:border-[#313131]">
+            {hasButtons && (
+              <div className="flex gap-4 items-center justify-end">
+                {secondaryButtonText && (
+                  <Button
+                    type="button"
+                    variant="defaultStable"
+                    size="auto"
+                    onClick={handleSecondaryClick}
+                    disabled={isSecondaryLoading}
+                    // The card body sits on bg-grey-light-600, which is the
+                    // same tone as defaultStable's bg-grey-90 — the button
+                    // would vanish without an explicit surface. White + a
+                    // neutral border restores contrast while keeping the
+                    // secondary read; the !-overrides win over the variant's
+                    // baked-in bg/hover so the chip stays legible in both
+                    // themes and picks up the variant's hover/active animations.
+                    className={cn(
+                      "flex-1 h-9 rounded-[10px] gap-1 px-3 py-2",
+                      "text-[14px] font-medium tracking-[-0.28px]",
+                      "!bg-white !text-[#5c5c5c] border border-[#ebebeb] shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)] hover:!bg-grey-light-700",
+                      "dark:!bg-[rgba(255,255,255,0.03)] dark:!text-white dark:border-[#313131] dark:hover:!bg-[#2c2c2c]",
+                    )}
+                  >
+                    {isSecondaryLoading ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <span className="flex items-center gap-2 px-1">
+                        {secondaryButtonIcon}
+                        <span>{secondaryButtonText}</span>
+                      </span>
+                    )}
+                  </Button>
+                )}
+                {buttonText &&
+                  (disabled ? (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            disabled
+                            className="flex-1 h-9 rounded-[10px] flex items-center justify-center gap-1.5 bg-grey-90 border border-grey-80 text-grey-50 cursor-not-allowed text-sm font-medium"
+                          >
+                            <Upload className="size-4" />
+                            <span>{buttonText}</span>
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{disabledMessage}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : isNoCredits ? (
+                    // Plain button instead of CreateButton — CreateButton is
+                    // pinned to variant="primary" (bg-primary-50) and the
+                    // tailwind-merge pass collapses the override, so we
+                    // bypass the variant indirection and write the warning
+                    // colour directly.
+    
+                    <Button
+                      variant="warning"
+                      size="auto"
+                      onClick={handlePrimaryClick}
+                      disabled={isLoading}
+                      className={cn(
+                        "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
+                        "font-geist  leading-[1.109] flex-1 h-9 rounded-[10px] px-3 text-[14px] font-medium tracking-[-0.28px]",
+                      )}
+                    >
+                      {isLoading ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <span>{buttonText}</span>
+                      )}
+                    </Button>
+                  ) : (
+                    <CreateButton
+                      text={buttonText}
+                      isLoading={isLoading}
+                      onClick={handlePrimaryClick}
+                      icon={buttonIcon}
+                      className="flex-1 h-9 rounded-[10px] px-3 text-[14px] font-medium tracking-[-0.28px]"
+                    />
+                  ))}
+              </div>
+            )}
+            {footerLink ? (
+              <div
                 className={cn(
-                  "flex-1 h-9 rounded-[10px] gap-1 px-3 py-2",
-                  "text-[14px] font-medium tracking-[-0.28px]",
-                  "!bg-white !text-[#5c5c5c] border border-[#ebebeb] shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)] hover:!bg-grey-light-700",
-                  "dark:!bg-[rgba(255,255,255,0.03)] dark:!text-white dark:border-[#313131] dark:hover:!bg-[#2c2c2c]",
+                  "flex text-sm",
+                  hasButtons ? "mt-3 justify-center" : "justify-start",
                 )}
               >
-                {isSecondaryLoading ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <span className="flex items-center gap-2 px-1">
-                    {secondaryButtonIcon}
-                    <span>{secondaryButtonText}</span>
-                  </span>
-                )}
-              </Button>
-            )}
-            {buttonText &&
-              (disabled ? (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        disabled
-                        className="flex-1 h-9 rounded-[10px] flex items-center justify-center gap-1.5 bg-grey-90 border border-grey-80 text-grey-50 cursor-not-allowed text-sm font-medium"
-                      >
-                        <Upload className="size-4" />
-                        <span>{buttonText}</span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{disabledMessage}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              ) : isNoCredits ? (
-                // Plain button instead of CreateButton — CreateButton is
-                // pinned to variant="primary" (bg-primary-50) and the
-                // tailwind-merge pass collapses the override, so we
-                // bypass the variant indirection and write the warning
-                // colour directly.
-
-                <Button
-                  variant="warning"
-                  size="auto"
-                  onClick={handlePrimaryClick}
-                  disabled={isLoading}
-                  className={cn(
-                    "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
-                    "font-geist  leading-[1.109] flex-1 h-9 rounded-[10px] px-3 text-[14px] font-medium tracking-[-0.28px]",
-                  )}
-                >
-                  {isLoading ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <span>{buttonText}</span>
-                  )}
-                </Button>
-              ) : (
-                <CreateButton
-                  text={buttonText}
-                  isLoading={isLoading}
-                  onClick={handlePrimaryClick}
-                  icon={buttonIcon}
-                  className="flex-1 h-9 rounded-[10px] px-3 text-[14px] font-medium tracking-[-0.28px]"
-                />
-              ))}
+                {footerLink}
+              </div>
+            ) : null}
           </div>
         )}
       </NoEntriesBackgroundContainer>

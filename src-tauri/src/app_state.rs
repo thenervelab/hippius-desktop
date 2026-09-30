@@ -237,6 +237,10 @@ pub struct AppState {
     /// Mutex held only for the snapshot read at revoke time and the
     /// snapshot write at end of list — lock duration is microseconds.
     pub share_active_list_cache: Mutex<HashMap<String, Vec<hcfs_client::client::share::ShareSummary>>>,
+    /// The background task that delivers emailed invitations' keys while
+    /// the owner is signed in. Started by the frontend, stopped on sign-out.
+    /// See `crate::shared_drives::auto_seal`.
+    pub invite_auto_seal: crate::shared_drives::auto_seal::AutoSealState,
     /// Per-wallet rate limiter for password operations. See
     /// `crate::wallet::rate_limit` for the policy. Process-local — no
     /// persistence across app restarts (intentional: against a
@@ -354,6 +358,7 @@ impl AppState {
             recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
             recovery_lock: tokio::sync::Mutex::new(()),
             share_active_list_cache: Mutex::new(HashMap::new()),
+            invite_auto_seal: crate::shared_drives::auto_seal::AutoSealState::default(),
             wallet_rate_limit: Arc::new(crate::wallet::rate_limit::RateLimitState::new()),
             vpn: Arc::new(crate::vpn::VpnState::new(crate::vpn::engine::default_engine())),
             #[cfg(any(unix, windows))]

@@ -1,23 +1,23 @@
 "use client";
 
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
-import { planSupportsSharedDrives } from "@/app/lib/shared-drives/planEntitlement";
 
 /**
- * Whether the account's plan includes shared drives.
+ * Whether the account's plan lets it share drives and folders.
  *
- * `undefined` while the overview is still loading, which the menu resolver
- * reads as "permitted": a control that appears a moment late is jank, but one
- * that appears and then vanishes reads as a bug. The server's
- * `shared_drives_not_entitled` gate is the authority either way.
+ * Rust decides (`billing/sharing_entitlement.rs`, sent as `canShareDrives`
+ * on the storage overview): Plus, Max and Scale can, Free and Starter
+ * cannot. This hook only reads the answer; it never looks at the plan code.
+ *
+ * - `undefined` while the overview is still loading, so a surface can show
+ *   a placeholder instead of flashing the upgrade prompt.
+ * - `true` when the overview could not be loaded at all: a plan that cannot
+ *   be read blocks nothing, and the server's `shared_drives_not_entitled`
+ *   refusal is still the authority (it shows the same upgrade prompt).
  */
 export function useSharedDrivesInPlan(): boolean | undefined {
-  const { data: overview, isLoading } = useStorageOverview();
-  if (isLoading && !overview) return undefined;
-  // The CODE, never the display name: a marketing label changes without a
-  // release and a gate written against it stops matching silently. A missing
-  // `plan` object is the free tier (`null`); a plan whose code the rail did
-  // not report is unknown, and `planSupportsSharedDrives` leaves that to the
-  // server rather than refusing it here.
-  return planSupportsSharedDrives(overview?.plan ? (overview.plan.code ?? "") : null);
+  const { data: overview, isError } = useStorageOverview();
+  if (overview) return overview.canShareDrives !== false;
+  if (isError) return true;
+  return undefined;
 }

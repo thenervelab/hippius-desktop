@@ -28,3 +28,22 @@ export function driveWriteRefusal(
   if (role !== "reader") return null;
   return `You have ${driveRoleLabel("reader")} access to this drive, so you can open and download files but not add them. Ask whoever shared it with you to make you an ${driveRoleLabel("writer")}.`;
 }
+
+/**
+ * The hover text on a frozen drive's badge. The server sends `frozen_until`
+ * as RFC 3339, which is not something to put in front of a person, so it is
+ * read as a date; an unparseable or absent value falls back to the plain
+ * statement rather than "Invalid Date".
+ */
+export function frozenNotice(frozenUntil?: string | null): string {
+  const until = frozenUntil ? new Date(frozenUntil) : null;
+  if (until && !Number.isNaN(until.getTime())) {
+    const date = until.toLocaleDateString("en-US", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+    return `Frozen until ${date}. Files can be opened but not changed.`;
+  }
+  return "This drive is frozen. Files can be opened but not changed.";
+}

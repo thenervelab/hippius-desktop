@@ -63,7 +63,7 @@ describe("UploaderCell", () => {
     expect(screen.queryByText("Owner")).toBeNull();
   });
 
-  it("shows truncated ss58 for another member when no name is sent", () => {
+  it("shows the ss58, shortened in the middle, for another member when no name is sent", () => {
     render(
       <UploaderCell
         uploadedBy={OTHER}
@@ -78,8 +78,26 @@ describe("UploaderCell", () => {
     const cell = screen.getByText((_, el) => el?.getAttribute("data-ss58") === OTHER);
     expect(cell).toBeInTheDocument();
     expect(cell.textContent).not.toBe("Owner");
-    expect(cell.textContent?.includes("…") || (cell.textContent?.length ?? 0) <= 28).toBe(
-      true,
+    // The whole address goes to a line that shortens it in the middle to the
+    // column's width; no character budget first, no end ellipsis after.
+    const line = cell.querySelector("[data-middle-truncate]");
+    expect(line).not.toBeNull();
+    expect(line?.className).not.toMatch(/\btruncate\b/);
+  });
+});
+
+describe("UploaderCell attribution keys", () => {
+  it("renders the name, never the email, when both keys are present", () => {
+    render(
+      <UploaderCell
+        uploadedBy={OTHER}
+        uploadedByName="Grace Hopper"
+        uploadedByEmail="grace@example.com"
+        sessionSs58={VIEWER}
+        driveOwnerSs58={OWNER}
+      />,
     );
+    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.queryByText("grace@example.com")).toBeNull();
   });
 });
