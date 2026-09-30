@@ -29,14 +29,138 @@ pub fn capture_tmp_root() -> crate::error::Result<PathBuf> {
     Ok(home.join(".hippius").join("capture-tmp"))
 }
 
+/// Every capture directory starts with this.
+const DIR_PREFIX: &str = "capture-";
+
 /// A fresh directory for ONE capture, so its file can carry its real name
 /// (the upload takes the name from the file) without colliding with another.
+///
+/// Both the root and the directory are the user's alone (0700): a capture is
+/// plaintext pixels of whatever was on screen.
 pub fn fresh_capture_dir(root: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
-    let dir = tempfile::Builder::new().prefix("capture-").tempdir_in(root)?;
+    owner_only(root)?;
+    let dir = tempfile::Builder::new().prefix(DIR_PREFIX).tempdir_in(root)?;
+    owner_only(dir.path())?;
     // Kept, not dropped: delivery removes it once the upload has landed, and
-    // a failed upload leaves it for the user to find.
+    // a failed upload leaves it for Retry.
     Ok(dir.keep())
+}
+
+#[cfg(unix)]
+fn owner_only(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+/// Windows: the profile folder is already the user's alone.
+#[cfg(not(unix))]
+fn owner_only(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// An empty capture directory left this long is from a crash or an abandoned
+/// start, and is removed at launch.
+pub const ORPHAN_AGE: std::time::Duration = std::time::Duration::from_hours(24);
+
+/// A directory holding only leftovers (a poster still, partial fragments)
+/// is kept this long before it goes.
+pub const LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_hours(7 * 24);
+
+/// What a capture directory holds, as far as removing it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirContents {
+    Empty,
+    /// Nothing anyone would want back: the card's poster still, fragments.
+    OnlyLeftovers,
+    /// A capture (a non-empty `.mp4`, `.mov` or `.png` that is not the
+    /// poster). The recorder keeps a playable MP4 when the app dies
+    /// mid-recording; such a directory is NEVER removed automatically.
+    Media,
+}
+
+/// What `dir` holds (see [`DirContents`]). Unreadable reads as media, so a
+/// directory that cannot be inspected is kept.
+pub fn dir_contents(dir: &Path) -> DirContents {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return DirContents::Media;
+    };
+    let mut any = false;
+    for entry in entries.flatten() {
+        any = true;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        let size = entry.metadata().map_or(1, |m| m.len());
+        if ["mp4", "mov", "png"].contains(&ext.as_str()) && name != "poster.png" && size > 0 {
+            return DirContents::Media;
+        }
+    }
+    if any { DirContents::OnlyLeftovers } else { DirContents::Empty }
+}
+
+/// Whether a capture-tmp entry can be removed at launch: one of ours (a
+/// directory named `capture-…`), not the file of a card still showing, and
+/// either empty for [`ORPHAN_AGE`] or only leftovers for [`LEFTOVER_AGE`].
+/// A directory with a capture in it is never removed, and one whose age is
+/// unknown stays.
+#[must_use]
+pub fn is_orphan(name: &str, is_dir: bool, age: Option<std::time::Duration>, referenced: bool, contents: DirContents) -> bool {
+    if !is_dir || !name.starts_with(DIR_PREFIX) || referenced {
+        return false;
+    }
+    let Some(age) = age else { return false };
+    match contents {
+        DirContents::Empty => age >= ORPHAN_AGE,
+        DirContents::OnlyLeftovers => age >= LEFTOVER_AGE,
+        DirContents::Media => false,
+    }
+}
+
+/// Remove the orphaned capture directories under `root`; returns how many.
+/// `referenced` are directories something still points at.
+pub fn reclaim_orphans(root: &Path, now: std::time::SystemTime, referenced: &[PathBuf]) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        let age = meta.modified().ok().and_then(|m| now.duration_since(m).ok());
+        let name = entry.file_name();
+        let referenced = referenced.iter().any(|r| r == &path);
+        let contents = if meta.is_dir() { dir_contents(&path) } else { DirContents::Media };
+        if is_orphan(&name.to_string_lossy(), meta.is_dir(), age, referenced, contents) && std::fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Recording needs at least this much free space where the file is written.
+pub const MIN_FREE_TO_RECORD: u64 = 2 * 1024 * 1024 * 1024;
+
+/// The refusal when `available` bytes are too few to record, or `None`.
+/// An unknown amount does not refuse: a check that cannot run must not stop
+/// a recording that would have fit.
+#[must_use]
+pub fn space_refusal(available: Option<u64>) -> Option<crate::error::AppError> {
+    (available? < MIN_FREE_TO_RECORD)
+        .then(|| crate::error::AppError::Validation("There isn't enough free disk space to record. Free up at least 2 GB and try again.".into()))
+}
+
+/// Free bytes on the volume holding `path` (or its nearest existing parent).
+#[cfg(unix)]
+pub fn available_space(path: &Path) -> Option<u64> {
+    let existing = path.ancestors().find(|p| p.exists())?;
+    let stat = nix::sys::statvfs::statvfs(existing).ok()?;
+    // f_bavail counts f_frsize units (see `sync::migrate::check_disk_space`).
+    #[allow(clippy::useless_conversion)]
+    Some(u64::from(stat.fragment_size()).saturating_mul(u64::from(stat.blocks_available())))
+}
+
+#[cfg(not(unix))]
+pub fn available_space(_path: &Path) -> Option<u64> {
+    None
 }
 
 #[cfg(any(target_os = "macos", windows))]
@@ -141,6 +265,87 @@ mod tests {
         assert_eq!(window, Selection::Window { window_id: 42 });
         let screen: Selection = serde_json::from_value(serde_json::json!({ "target": "screen", "displayId": 7 })).unwrap();
         assert_eq!(screen, Selection::Screen { display_id: 7 });
+    }
+
+    #[test]
+    fn only_old_unreferenced_capture_dirs_without_a_capture_are_orphans() {
+        use DirContents::{Empty, Media, OnlyLeftovers};
+        let day = ORPHAN_AGE;
+        let hour = std::time::Duration::from_hours(1);
+        assert!(is_orphan("capture-abc", true, Some(day + hour), false, Empty));
+        assert!(is_orphan("capture-abc", true, Some(day), false, Empty));
+        assert!(!is_orphan("capture-abc", true, day.checked_sub(hour), false, Empty), "younger than a day");
+        assert!(!is_orphan("capture-abc", true, Some(day * 3), true, Empty), "a card still points at it");
+        assert!(!is_orphan("capture-abc", true, None, false, Empty), "unknown age stays");
+        assert!(!is_orphan("capture-abc", false, Some(day * 3), false, Empty), "not a directory");
+        assert!(!is_orphan("notes", true, Some(day * 3), false, Empty), "not one of ours");
+        // Leftovers wait a week; a capture is never removed.
+        assert!(!is_orphan("capture-abc", true, Some(day * 3), false, OnlyLeftovers));
+        assert!(is_orphan("capture-abc", true, Some(LEFTOVER_AGE), false, OnlyLeftovers));
+        assert!(!is_orphan("capture-abc", true, Some(day * 365), false, Media));
+    }
+
+    #[test]
+    fn a_saved_capture_counts_as_media_and_a_poster_does_not() {
+        let root = tempfile::TempDir::new().unwrap();
+        let dir = fresh_capture_dir(root.path()).unwrap();
+        assert_eq!(dir_contents(&dir), DirContents::Empty);
+        std::fs::write(dir.join("poster.png"), b"still").unwrap();
+        std::fs::write(dir.join("Recording.mp4"), b"").unwrap();
+        assert_eq!(dir_contents(&dir), DirContents::OnlyLeftovers, "a poster and an empty file are leftovers");
+        std::fs::write(dir.join("Recording.mp4"), b"moov").unwrap();
+        assert_eq!(dir_contents(&dir), DirContents::Media);
+        let shot = fresh_capture_dir(root.path()).unwrap();
+        std::fs::write(shot.join("Screenshot 2026-09-30 at 10.00.00.PNG"), b"png").unwrap();
+        assert_eq!(dir_contents(&shot), DirContents::Media);
+    }
+
+    #[test]
+    fn reclaim_removes_old_empty_dirs_and_never_a_capture() {
+        let root = tempfile::TempDir::new().unwrap();
+        let old = fresh_capture_dir(root.path()).unwrap();
+        let kept = fresh_capture_dir(root.path()).unwrap();
+        let recording = fresh_capture_dir(root.path()).unwrap();
+        std::fs::write(recording.join("Recording.mp4"), b"moov").unwrap();
+        let other = root.path().join("not-a-capture");
+        std::fs::create_dir(&other).unwrap();
+        // "Now" is two days on: all are old, one is still referenced.
+        let later = std::time::SystemTime::now() + ORPHAN_AGE * 2;
+        assert_eq!(reclaim_orphans(root.path(), later, std::slice::from_ref(&kept)), 1);
+        assert!(!old.exists() && kept.exists() && other.exists());
+        assert!(recording.exists(), "a recording left by a crash is never deleted");
+        // Today, nothing is old enough.
+        assert_eq!(reclaim_orphans(root.path(), std::time::SystemTime::now(), &[]), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_dirs_are_the_users_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::TempDir::new().unwrap();
+        let root = home.path().join("capture-tmp");
+        let dir = fresh_capture_dir(&root).unwrap();
+        for p in [&root, &dir] {
+            assert_eq!(std::fs::metadata(p).unwrap().permissions().mode() & 0o777, 0o700, "{}", p.display());
+        }
+    }
+
+    #[test]
+    fn recording_needs_two_gigabytes_free() {
+        assert!(space_refusal(Some(MIN_FREE_TO_RECORD - 1)).is_some());
+        assert!(space_refusal(Some(MIN_FREE_TO_RECORD)).is_none());
+        assert!(space_refusal(None).is_none(), "an unknown amount never refuses");
+        let Some(crate::error::AppError::Validation(message)) = space_refusal(Some(0)) else {
+            panic!("a Validation refusal");
+        };
+        assert!(message.contains("2 GB"), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn free_space_is_read_for_a_path_not_yet_created() {
+        let root = tempfile::TempDir::new().unwrap();
+        assert!(available_space(&root.path().join("capture-tmp").join("x")).is_some_and(|b| b > 0));
     }
 
     #[test]

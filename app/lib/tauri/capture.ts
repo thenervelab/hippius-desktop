@@ -10,7 +10,11 @@ import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 export type CaptureKind = "screenshot" | "recording";
 export type CaptureMode = "area" | "window" | "screen";
 
-/** Mirrors Rust's `CapturePhase`, as broadcast on `capture_state_changed`. */
+/**
+ * Mirrors Rust's `CapturePhase`. The session ends when the file exists (the
+ * preview card owns the upload), so a new capture can start while the last
+ * one uploads.
+ */
 export type CapturePhase =
   | { phase: "idle" }
   | { phase: "selecting"; kind: CaptureKind; mode: CaptureMode }
@@ -18,7 +22,15 @@ export type CapturePhase =
   | { phase: "recording"; elapsedSecs: number; microphone: boolean }
   | { phase: "paused"; elapsedSecs: number; microphone: boolean }
   | { phase: "finalizing" }
+  /** @deprecated Rust no longer sends it: the session is Idle once the file exists. */
   | { phase: "delivering"; kind: CaptureKind };
+
+/**
+ * `capture_state_changed` and `capture_state`: the phase plus `seq`, a number
+ * that only goes up. A surface seeded from `capture_state` drops any event
+ * whose `seq` is not newer than what it holds. Mirrors Rust's `PhaseEvent`.
+ */
+export type CapturePhaseEvent = CapturePhase & { seq: number };
 
 /** A selection rectangle in the overlay's own CSS pixels (logical points). */
 export interface LogicalRect {
@@ -57,8 +69,25 @@ export interface CaptureOptions {
   /** How big the camera bubble is. */
   cameraSize: CameraSize;
   showClicks: boolean;
+  /** Rust keeps these from `capture_start` / `capture_set_mode`; the bar's copy is ignored on save. */
   lastKind: CaptureKind;
   lastMode: CaptureMode;
+  // Always sent by Rust. Optional only until every caller that builds an
+  // options object by hand includes them; a missing one saves as its default.
+  /** Mint a public link after upload and copy it (default true). Off = filed only; the card can still make one. */
+  copyLink?: boolean;
+  /** Recording countdown: 0, 3 or 5 seconds (default 3; anything else reads as 3). */
+  recordCountdownSecs?: number;
+}
+
+/** `capture_set_options` (via `saveCaptureOptions`). Mirrors Rust's `SavedOptions`. */
+export interface CaptureSavedOptions {
+  /** What Rust stored (timers snapped, camera only turned back into screen where unsupported). */
+  options: CaptureOptions;
+  /** Seconds to count down for the capture being chosen now. */
+  countdownSecs: number;
+  /** Whether the camera, if on, is in the video for the mode chosen now. */
+  cameraFilmed: boolean;
 }
 
 export interface CaptureOverlayContext {
@@ -75,9 +104,19 @@ export interface CaptureOverlayContext {
   recordingAvailable: boolean;
   microphoneAvailable: boolean;
   showClicksAvailable: boolean;
+  /** Camera only (screen off) can be recorded here (macOS with recording). */
+  cameraOnlyAvailable: boolean;
+  /** Whether the camera, if on, is in the video: false for a bubble over a window recording. */
+  cameraFilmed: boolean;
   destination: CaptureDestination | null;
-  /** The area already drawn, on this display or another. */
+  /** The area already drawn, on this display or another; at start, the last area drawn on the bar's display. */
   pending: CaptureSelection | null;
+}
+
+/** `capture_pending_changed`. `rect` is the held area (null when cleared), so every overlay mirrors Rust. */
+export interface CapturePendingChanged {
+  displayId: number | null;
+  rect: LogicalRect | null;
 }
 
 /** How the camera shows. Mirrors Rust's `CameraShape`. */
@@ -96,6 +135,10 @@ export interface CaptureCameraState {
   /** The chosen camera's name: how the webview finds a system-listed camera. */
   deviceName: string | null;
   size: CameraSize;
+  /** A recording is starting or running: the page hides its size strip (it would be filmed). */
+  recording: boolean;
+  /** Whether the camera is in the video (false for a bubble over a window recording). */
+  cameraFilmed: boolean;
 }
 
 /** A camera or microphone the bar's pickers offer. Mirrors Rust's `recording::MediaDevice`. */
@@ -162,13 +205,42 @@ export interface CaptureDestinationChoice {
   remote: boolean;
 }
 
-/** Where a capture's upload is, on its preview card. Mirrors Rust's `PreviewStatus`. */
+/** Why an upload failed, for the card's next step. Mirrors Rust's `FailureReason`. */
+export type CaptureFailureReason = "offline" | "storageFull" | "other";
+
+/**
+ * Where a capture's upload is, on its preview card. Mirrors Rust's `PreviewStatus`.
+ * Rust moves `syncing` to `uploaded` / `failed` itself by following the sync
+ * engine's row by path; the card only draws the percent.
+ */
 export type CapturePreviewStatus =
   | { state: "uploading" }
   /** In the synced folder; the sync engine is uploading it. */
   | { state: "syncing"; linkCopied: boolean; linkError?: string }
   | { state: "uploaded"; linkCopied: boolean; linkError?: string }
-  | { state: "failed"; message: string };
+  /** `message` is Rust's sentence; `retryable` = Retry applies (false when the sync queue retries it). */
+  // `reason` and `retryable` are always sent by Rust; optional until every
+  // hand-built status in the tests includes them.
+  | { state: "failed"; message: string; reason?: CaptureFailureReason; retryable?: boolean };
+
+/** What the card says about the link. Mirrors Rust's `LinkState`. */
+export type CaptureLinkState =
+  | { state: "none" }
+  | { state: "public"; copied: boolean }
+  | { state: "failed"; message: string }
+  | { state: "revoked" };
+
+/** Which buttons the card offers now; Rust decides. Mirrors Rust's `CardActions`. */
+export interface CapturePreviewActions {
+  retry: boolean;
+  discard: boolean;
+  copyLink: boolean;
+  /** "Create link". */
+  mintLink: boolean;
+  revokeLink: boolean;
+  /** Reveal in Finder / Show in Explorer. */
+  reveal: boolean;
+}
 
 /** The preview card in the corner. Mirrors Rust's `PreviewCard`. */
 export interface CapturePreviewCard {
@@ -180,6 +252,14 @@ export interface CapturePreviewCard {
   remote: boolean;
   thumbnail?: string;
   status: CapturePreviewStatus;
+  // `relPath`, `link` and `actions` are always sent by Rust; optional until
+  // every hand-built card in the tests includes them.
+  /** `Captures/<fileName>`: the sync engine's row path, to join the percent on. */
+  relPath?: string;
+  link?: CaptureLinkState;
+  /** Rust's line about the link ("Public link copied"); absent = say nothing. */
+  linkText?: string;
+  actions?: CapturePreviewActions;
 }
 
 /** `capture_show_in_folder`: open this drive's Captures folder. */
@@ -216,20 +296,33 @@ export interface CaptureDelivered {
 export interface CaptureSupport {
   supported: boolean;
   recording: boolean;
+  /** Camera only (screen off) may be offered. */
+  cameraOnly: boolean;
   screenRecordingPermission: boolean;
+  /** System Settings' name for the pane on this Mac; null off macOS. */
+  permissionPane: string | null;
+}
+
+/** What the permission dialog's button did. Mirrors Rust's `PermissionRequest`. */
+export type CapturePermissionRequest = "granted" | "prompted" | "openedSettings";
+
+/** `capture_failed`. `cardShowing`: the card already shows it, so skip the toast. */
+export interface CaptureFailed {
+  message: string;
+  cardShowing: boolean;
 }
 
 // Events (listened for by name at each call site, so the IPC contract test
-// checks them against Rust): `capture_state_changed` → `CapturePhase`,
-// `capture_delivered` → `CaptureDelivered`, `capture_failed` → `{ message }`,
-// `capture_pending_changed` → `{ displayId: number | null }`,
+// checks them against Rust): `capture_state_changed` → `CapturePhaseEvent`,
+// `capture_delivered` → `CaptureDelivered`, `capture_failed` → `CaptureFailed`,
+// `capture_pending_changed` → `CapturePendingChanged`,
 // `capture_preview_changed` → `CapturePreviewCard | null`,
 // `capture_show_in_folder` → `CaptureShowInFolder`,
 // `capture_shortcut_pressed` → nothing,
 // `capture_camera_state` → `CaptureCameraState`,
 // `capture_cameras` → `CaptureDevice[]`,
 // `capture_options_changed` → `CaptureOptions`,
-// `capture_share_art` → `ShareArt`,
+// `capture_share_art` → `ShareArt` (the bar's overlay only),
 // `capture_camera_hover` → `boolean` (the camera window only).
 
 /**
@@ -258,7 +351,13 @@ export function getCaptureOptions(): Promise<CaptureOptions> {
   return invoke("capture_get_options");
 }
 
+/** Save the bar's options; resolves to what Rust stored. See `saveCaptureOptions` for the countdown too. */
 export function setCaptureOptions(options: CaptureOptions): Promise<CaptureOptions> {
+  return saveCaptureOptions(options).then((saved) => saved.options);
+}
+
+/** Save the bar's options; resolves to what Rust stored plus what the bar shows next. */
+export function saveCaptureOptions(options: CaptureOptions): Promise<CaptureSavedOptions> {
   return invoke("capture_set_options", { options });
 }
 
@@ -284,6 +383,26 @@ export function dismissCapturePreview(id: number): Promise<void> {
 
 export function retryCapturePreview(): Promise<void> {
   return invoke("capture_preview_retry");
+}
+
+/** "Create link": mint and copy a link for a capture in the drive without one. Rejects with Rust's sentence. */
+export function mintCapturePreviewLink(): Promise<void> {
+  return invoke("capture_preview_mint_link");
+}
+
+/** Revoke the public link this capture made. */
+export function revokeCapturePreviewLink(): Promise<void> {
+  return invoke("capture_preview_revoke_link");
+}
+
+/** Reveal the capture's file in Finder / Explorer (a drive synced here). */
+export function revealCapturePreview(): Promise<void> {
+  return invoke("capture_preview_reveal");
+}
+
+/** Throw away a capture that could not be uploaded (its file is deleted). */
+export function discardCapturePreview(): Promise<void> {
+  return invoke("capture_preview_discard");
 }
 
 /** Register the saved system-wide shortcut (called when the app mounts). */
@@ -350,6 +469,16 @@ export function selectCapture(selection: CaptureSelection): Promise<void> {
   return invoke("capture_select", { selection });
 }
 
+/** Window mode: the pickable windows on this display again (for live hover). */
+export function refreshCaptureWindows(displayId: number): Promise<CaptureWindowTarget[]> {
+  return invoke("capture_refresh_windows", { displayId });
+}
+
+/** Throw the recording away and start again on the same selection. */
+export function restartCapture(): Promise<void> {
+  return invoke("capture_restart");
+}
+
 export function pauseCapture(): Promise<void> {
   return invoke("capture_pause");
 }
@@ -366,7 +495,7 @@ export function cancelCapture(): Promise<void> {
   return invoke("capture_cancel");
 }
 
-export function getCaptureState(): Promise<CapturePhase> {
+export function getCaptureState(): Promise<CapturePhaseEvent> {
   return invoke("capture_state");
 }
 
@@ -376,6 +505,11 @@ export function getCaptureSupport(): Promise<CaptureSupport> {
 
 export function openScreenRecordingSettings(): Promise<void> {
   return invoke("capture_open_permission_settings");
+}
+
+/** The permission dialog's button: macOS's prompt the first time, System Settings after. */
+export function requestScreenRecordingPermission(): Promise<CapturePermissionRequest> {
+  return invoke("capture_request_permission");
 }
 
 export function getCaptureDestination(): Promise<CaptureDestination | null> {

@@ -33,10 +33,14 @@ fn fn_body(src: &str, sig: &str) -> String {
 #[test]
 fn the_overlay_keeps_itself_out_of_the_capture() {
     let src = read("src/capture/commands.rs");
-    let body = fn_body(&src, "fn open_overlay(");
+    let body = fn_body(&src, "fn build_overlay(");
     assert!(
         body.contains(".content_protected(true)"),
         "the overlay must be excluded from screen capture"
+    );
+    assert!(
+        fn_body(&src, "async fn open_overlay(").contains("build_overlay("),
+        "every overlay is built by build_overlay"
     );
 }
 
@@ -100,9 +104,16 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
         body.contains("upload_files_to_remote_folder_inner("),
         "the upload must be the remote file upload"
     );
-    assert!(body.contains("share_external_file("), "the link must come from the existing share path");
-    for forbidden in ["HcfsClient", "reqwest", "encrypt"] {
-        assert!(!body.contains(forbidden), "delivery must not talk to the server itself ({forbidden})");
+    let mint = fn_body(&src, "pub async fn mint(");
+    // A capture in a synced drive is shared by its place in the drive, so
+    // Drive shows it as shared and can revoke the link; any other file the
+    // way the Finder shares one.
+    assert!(mint.contains("share_synced_file("), "a synced capture's link must record its origin");
+    assert!(mint.contains("share_external_file("), "the link must come from the existing share path");
+    for body in [&body, &mint] {
+        for forbidden in ["HcfsClient", "reqwest", "encrypt"] {
+            assert!(!body.contains(forbidden), "delivery must not talk to the server itself ({forbidden})");
+        }
     }
 }
 
@@ -111,7 +122,7 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
 fn the_temp_copy_is_removed_only_after_the_upload_lands() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
-    let ok_arm = body.find("Ok(delivered) =>").expect("success arm");
+    let ok_arm = body.find("Ok((delivered, destination)) =>").expect("success arm");
     let err_arm = body.find("Err(e) =>").expect("failure arm");
     let removal = body.find("remove_dir_all").expect("the temp copy is removed somewhere");
     assert!(ok_arm < removal && removal < err_arm, "remove_dir_all must sit in the success arm only");
@@ -272,7 +283,183 @@ fn camera_only_records_the_stage_and_every_ending_removes_the_camera() {
     let src = read("src/capture/commands.rs");
     let confirm = fn_body(&src, "pub async fn capture_confirm(");
     assert!(confirm.contains("CameraShape::Stage") && confirm.contains("camera_window_id("));
-    for ending in ["pub async fn capture_stop(", "pub async fn capture_cancel(", "async fn begin_recording("] {
+    for ending in [
+        "pub(crate) async fn stop_inner(",
+        "pub(crate) async fn cancel_inner(",
+        "async fn begin_recording(",
+        "async fn fail_capture(",
+    ] {
         assert!(fn_body(&src, ending).contains("end_camera("), "{ending} must end the camera");
+    }
+}
+
+/// Once the choice is made, every failure ends the session in ONE place.
+/// A `?` that skipped it left the phase stuck with no UI, and every later
+/// capture was refused until a relaunch.
+#[test]
+fn every_failure_after_the_choice_goes_through_fail_capture() {
+    let src = read("src/capture/commands.rs");
+    let fail = fn_body(&src, "async fn fail_capture(");
+    for step in [
+        "CaptureEvent::Failed",
+        "FAILED_EVENT",
+        "restore_main_window(",
+        "end_camera(",
+        "close_controls(",
+        "close_overlays(",
+        "drop_unused_preview(",
+        "take_leftovers(",
+    ] {
+        assert!(fail.contains(step), "fail_capture must do {step}");
+    }
+    let select = fn_body(&src, "async fn select_inner(");
+    let moved = select.find("CaptureEvent::Selected").expect("select_inner moves the phase");
+    let routed = select.find("fail_capture(").expect("select_inner routes failures");
+    assert!(moved < routed, "failures after the phase moved go through fail_capture");
+    for sig in ["async fn finish_screenshot(", "async fn begin_recording("] {
+        let body = fn_body(&src, sig);
+        assert!(
+            !body.contains("CaptureEvent::Failed") && !body.contains("FAILED_EVENT"),
+            "{sig} must return its error to select_inner, not end the session itself"
+        );
+    }
+    for sig in ["pub(crate) async fn stop_inner(", "pub async fn capture_restart("] {
+        assert!(
+            fn_body(&src, sig).contains("fail_capture("),
+            "{sig} must end a failed session through fail_capture"
+        );
+    }
+}
+
+/// A recorder that finishes starting after a Cancel is cancelled, never
+/// left recording with no pill: it is adopted only under the phase check.
+#[test]
+fn a_recorder_is_adopted_only_while_the_session_waits_for_it() {
+    let src = read("src/capture/commands.rs");
+    let begin = fn_body(&src, "async fn begin_recording(");
+    assert!(begin.contains("adopt_recorder("), "the recorder must be adopted under the phase lock");
+    assert!(begin.contains("discard_recording(Some(orphan)"), "a refused recorder must be cancelled");
+    // The main window stays hidden while recording: it would be filmed.
+    assert!(
+        !begin.contains("restore_main_window("),
+        "the main window must not come back mid-recording"
+    );
+}
+
+/// Camera only records the camera window itself: closing it before the
+/// recorder stops ends the stream with the file still open.
+#[test]
+fn stop_closes_the_file_before_the_camera_goes() {
+    let src = read("src/capture/commands.rs");
+    let stop = fn_body(&src, "pub(crate) async fn stop_inner(");
+    let stopped = stop.find("recorder.stop()").expect("stop_inner stops the recorder");
+    let camera = stop.find("end_camera(").expect("stop_inner ends the camera");
+    assert!(stopped < camera, "the recorder must stop before the camera window closes");
+}
+
+/// A start that could not open its overlays takes down everything it put up.
+#[test]
+fn a_start_that_fails_takes_its_windows_down() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    let arm_start = start.find("if let Err(e) = open_capture_ui(").expect("the failure arm");
+    let arm = &start[arm_start..];
+    let arm = &arm[..arm.find("return Err(e);").expect("the arm returns")];
+    for step in [
+        "end_camera(",
+        "close_controls(",
+        "close_overlays(",
+        "drop_unused_preview(",
+        "CaptureEvent::Failed",
+    ] {
+        assert!(arm.contains(step), "capture_start's failure arm must do {step}");
+    }
+    // The permission dialog asks macOS itself; asking here too put two
+    // dialogs on screen at once.
+    assert!(!start.contains("request_screen_capture"), "capture_start must not prompt for permission");
+}
+
+/// The share picker's pictures show every window on screen; they go to the
+/// overlay that asked, not to every webview.
+#[test]
+fn share_pictures_go_to_the_picker_only() {
+    let src = read("src/capture/commands.rs");
+    let flush = fn_body(&src, "fn flush_share_art(");
+    assert!(flush.contains(".emit_to("), "share pictures must be sent to one window");
+    assert!(!flush.contains(".emit("), "share pictures must never be broadcast");
+}
+
+/// The pill is dragged by its body (`data-tauri-drag-region`), which needs
+/// the start-dragging permission; without it the drag does nothing, silently.
+#[test]
+fn the_pill_may_be_dragged() {
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-controls.json")).expect("capability parses");
+    let permissions: Vec<&str> = capability["permissions"]
+        .as_array()
+        .expect("permissions")
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+    assert!(permissions.contains(&"core:window:allow-start-dragging"), "{permissions:?}");
+    assert!(
+        permissions.iter().all(|p| p.starts_with("core:")),
+        "core permissions only: {permissions:?}"
+    );
+}
+
+/// Signing out cancels a live capture and unregisters the shortcut, before
+/// the session is cleared (the cancel needs nothing from it, the delivery
+/// of a capture left running would fail with no account).
+#[test]
+fn signing_out_ends_the_capture_and_the_shortcut() {
+    let src = read("src/auth/logout.rs");
+    let body = fn_body(&src, "pub async fn logout_full(");
+    let ended = body.find("capture::commands::end_for_logout(").expect("logout_full ends the capture");
+    let cleared = body.find("auth_logout_internal(").expect("logout_full clears the session");
+    assert!(ended < cleared, "the capture ends before the session is cleared");
+    let end = fn_body(&read("src/capture/commands.rs"), "pub async fn end_for_logout(");
+    assert!(end.contains("cancel_inner(") && end.contains("shortcut::apply(app, None)"));
+}
+
+/// The shortcut toggles, decided in Rust; it no longer only emits.
+#[test]
+fn the_shortcut_is_handled_in_rust() {
+    let src = read("src/capture/shortcut.rs");
+    let plugin = fn_body(&src, "pub fn plugin(");
+    assert!(plugin.contains("on_shortcut(app)"), "the handler must go through commands::on_shortcut");
+    let on = fn_body(&read("src/capture/commands.rs"), "pub fn on_shortcut(");
+    for action in ["stop_inner(", "cancel_inner(", "SHORTCUT_EVENT", "show_main_window("] {
+        assert!(on.contains(action), "on_shortcut must handle {action}");
+    }
+}
+
+/// Old capture temp folders are cleared at launch, off the start-up path.
+#[test]
+fn launch_reclaims_old_capture_folders() {
+    let main = read("src/main.rs");
+    let setup = fn_body(&main, "pub fn setup(");
+    assert!(setup.contains("capture::commands::reclaim_capture_tmp_at_launch()"));
+    let reclaim = fn_body(&read("src/capture/commands.rs"), "pub fn reclaim_capture_tmp_at_launch(");
+    assert!(reclaim.contains("std::thread::Builder"), "the sweep must not run on the start-up thread");
+}
+
+/// Each command the capture surfaces call is registered; a missing one only
+/// fails when its button is pressed.
+#[test]
+fn the_card_and_session_commands_are_registered() {
+    let main = read("src/main.rs");
+    for name in [
+        "capture_refresh_windows",
+        "capture_restart",
+        "capture_request_permission",
+        "capture_preview_mint_link",
+        "capture_preview_revoke_link",
+        "capture_preview_reveal",
+        "capture_preview_discard",
+    ] {
+        assert!(
+            main.contains(&format!("crate::capture::commands::{name},")),
+            "{name} must be registered in main.rs"
+        );
     }
 }

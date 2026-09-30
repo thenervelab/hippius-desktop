@@ -100,8 +100,22 @@ pub fn window_rect_on_display(frame: NativeFrame, display: &DisplayTarget) -> Op
 }
 
 /// Whether a listed window is one a user would mean to pick.
-pub fn is_pickable(app_name: &str, own_pid: bool, minimized: bool, rect: &LogicalRect) -> bool {
-    !own_pid && !minimized && !SYSTEM_OWNERS.contains(&app_name) && rect.width >= MIN_PICKABLE_POINTS && rect.height >= MIN_PICKABLE_POINTS
+///
+/// On Windows an untitled window is shell furniture, not an app window: xcap
+/// keeps the taskbar (`Shell_TrayWnd`, untitled and taller than the minimum),
+/// and it would highlight as pickable. macOS lists real app windows without
+/// titles (some panels and players), so the rule is Windows-only there.
+pub fn is_pickable(app_name: &str, title: &str, own_pid: bool, minimized: bool, rect: &LogicalRect) -> bool {
+    is_pickable_on(UNTITLED_IS_CHROME, app_name, title, own_pid, minimized, rect)
+}
+
+/// Where an untitled window is never a pickable one.
+const UNTITLED_IS_CHROME: bool = cfg!(windows);
+
+fn is_pickable_on(untitled_is_chrome: bool, app_name: &str, title: &str, own_pid: bool, minimized: bool, rect: &LogicalRect) -> bool {
+    let chrome = SYSTEM_OWNERS.contains(&app_name) || (untitled_is_chrome && title.trim().is_empty());
+    let sliver = rect.width < MIN_PICKABLE_POINTS || rect.height < MIN_PICKABLE_POINTS;
+    !(own_pid || minimized || chrome || sliver)
 }
 
 #[cfg(any(target_os = "macos", windows))]
@@ -148,15 +162,16 @@ mod os {
                 continue;
             };
             let app_name = w.app_name().unwrap_or_default();
+            let title = w.title().unwrap_or_default();
             let own_pid = w.pid().is_ok_and(|pid| pid == own);
             let minimized = w.is_minimized().unwrap_or(false);
-            if !is_pickable(&app_name, own_pid, minimized, &rect) {
+            if !is_pickable(&app_name, &title, own_pid, minimized, &rect) {
                 continue;
             }
             out.push(WindowTarget {
                 id,
                 app_name,
-                title: w.title().unwrap_or_default(),
+                title,
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
@@ -241,14 +256,30 @@ mod tests {
             width: 800.0,
             height: 600.0,
         };
-        assert!(is_pickable("Safari", false, false, &big));
+        assert!(is_pickable("Safari", "Start Page", false, false, &big));
         assert!(
-            !is_pickable("Hippius", true, false, &big),
+            !is_pickable("Hippius", "Hippius", true, false, &big),
             "the overlay must never offer to capture itself"
         );
-        assert!(!is_pickable("Safari", false, true, &big));
-        assert!(!is_pickable("Dock", false, false, &big));
-        assert!(!is_pickable("Window Server", false, false, &big));
+        assert!(!is_pickable("Safari", "Start Page", false, true, &big));
+        assert!(!is_pickable("Dock", "Dock", false, false, &big));
+        assert!(!is_pickable("Window Server", "Menubar", false, false, &big));
+    }
+
+    /// The Windows taskbar is an untitled window taller than the minimum;
+    /// macOS has real untitled app windows, which stay pickable.
+    #[test]
+    fn an_untitled_window_is_shell_chrome_on_windows_only() {
+        let taskbar = LogicalRect {
+            x: 0.0,
+            y: 1032.0,
+            width: 1920.0,
+            height: 48.0,
+        };
+        assert!(!is_pickable_on(true, "Windows Explorer", "", false, false, &taskbar));
+        assert!(!is_pickable_on(true, "Windows Explorer", "  ", false, false, &taskbar));
+        assert!(is_pickable_on(true, "Notepad", "notes.txt", false, false, &taskbar));
+        assert!(is_pickable_on(false, "QuickTime Player", "", false, false, &taskbar));
     }
 
     #[test]
@@ -259,6 +290,6 @@ mod tests {
             width: 800.0,
             height: 22.0,
         };
-        assert!(!is_pickable("Safari", false, false, &sliver));
+        assert!(!is_pickable("Safari", "Start Page", false, false, &sliver));
     }
 }

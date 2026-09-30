@@ -89,6 +89,25 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A capture that does not upload is never lost.** Its card comes back with
+  your next capture until you retry or discard it, and the message says what
+  went wrong in plain words: you are offline, or your storage is full.
+  Empty leftovers from a capture are cleared later; a saved capture never is.
+- **Recording checks there is room first.** With less than 2 GB free it says
+  so before recording, instead of failing at the end.
+- **Recording no longer pulls Hippius in front of what you are recording**,
+  and typing goes back to the app you were in once the capture bar closes.
+- **You can start a new capture while the last one uploads**, and a capture
+  sent to a paused drive uploads instead of waiting for sync to resume.
+- **Cancelling while a recording starts really stops it**, stopping a camera
+  only recording saves it properly, and a capture bar that could not open no
+  longer leaves the camera on screen.
+- **A capture copied to a drive on another disk never leaves a half-written
+  file**, and never replaces a file of the same name.
+- **The capture bar follows your displays.** Unplugging one closes its part of
+  the bar and forgets an area drawn on it; the camera stage no longer covers
+  the bar on a small screen.
+
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.
 
@@ -180,6 +199,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   shows the shortcut as clear, readable keys.
 - **Show in folder from the sync queue.** Each file in the sync widget has a
   folder button that opens the Drive folder it is in, however deep.
+- **Press the capture shortcut again to stop.** A second press stops the
+  recording, or closes the capture bar while you are still choosing. Signed
+  out, it brings Hippius forward so you can sign in.
+- **You decide what happens to the link.** Captures still copy a public link
+  by default, and the card now says so. Turn it off to only file the capture;
+  the card can make a link later, revoke one, or show the file in Finder or
+  Explorer when the drive is synced on this computer.
+- **More control while recording (Mac).** Choose a 0, 3 or 5 second countdown,
+  restart a recording without leaving the bar, and the camera bubble sits
+  inside the area you are recording so it is always in the video. The camera
+  tells you when a window recording will not include it.
 - **Shared with Me is always on the Drive page, with Share a drive.** When
   nothing is shared with you yet, it explains what shared drives are for and
   links to the guide. Share a drive lets you pick one of your drives and opens

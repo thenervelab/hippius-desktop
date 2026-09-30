@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use super::geometry::LogicalRect;
 use super::screenshot::Selection;
 use super::session::{CaptureKind, CaptureMode};
 use super::targets::DisplayTarget;
@@ -18,8 +19,13 @@ use crate::error::Result;
 /// value or a caller says is read as no timer, rather than an arbitrary wait.
 pub const TIMER_CHOICES: [u8; 3] = [0, 5, 10];
 
-/// A recording always counts down this long, so the first seconds of the video
-/// are not the user moving the pointer away from the Record button.
+/// Seconds a recording may count down before it starts. The default, 3, keeps
+/// the first seconds of the video from being the pointer leaving the Record
+/// button; 0 is for people who would rather trim than wait.
+pub const RECORD_COUNTDOWN_CHOICES: [u8; 3] = [0, 3, 5];
+
+/// A recording counts down this long unless the user chose otherwise, and a
+/// stored value the bar does not offer reads as this.
 pub const RECORDING_COUNTDOWN_SECS: u8 = 3;
 
 /// How the camera appears in a recording.
@@ -75,6 +81,12 @@ pub struct CaptureOptions {
     /// The bar opens on what was used last.
     pub last_kind: CaptureKind,
     pub last_mode: CaptureMode,
+    /// Mint a public link after the upload and put it on the clipboard. Off
+    /// = the capture is only filed in the drive; the card can still make a
+    /// link afterwards.
+    pub copy_link: bool,
+    /// Recording countdown: 0, 3 or 5 seconds.
+    pub record_countdown_secs: u8,
 }
 
 impl Default for CaptureOptions {
@@ -90,6 +102,8 @@ impl Default for CaptureOptions {
             show_clicks: false,
             last_kind: CaptureKind::Screenshot,
             last_mode: CaptureMode::Area,
+            copy_link: true,
+            record_countdown_secs: RECORDING_COUNTDOWN_SECS,
         }
     }
 }
@@ -102,9 +116,23 @@ impl CaptureOptions {
     pub fn normalized(self) -> Self {
         Self {
             timer_secs: if TIMER_CHOICES.contains(&self.timer_secs) { self.timer_secs } else { 0 },
+            record_countdown_secs: if RECORD_COUNTDOWN_CHOICES.contains(&self.record_countdown_secs) {
+                self.record_countdown_secs
+            } else {
+                RECORDING_COUNTDOWN_SECS
+            },
             camera: self.camera || !self.screen,
             ..self
         }
+    }
+
+    /// The same options limited to what this system can record. Camera only
+    /// records the camera window by its system window number, which only the
+    /// macOS recorder can take, so elsewhere the screen stays on.
+    #[must_use]
+    pub fn for_system(self, camera_only_supported: bool) -> Self {
+        let screen = self.screen || !camera_only_supported;
+        Self { screen, ..self }.normalized()
     }
 
     /// The camera window a capture of `kind` shows while choosing and while
@@ -125,7 +153,20 @@ impl CaptureOptions {
     pub fn countdown_secs(&self, kind: CaptureKind) -> u8 {
         match kind {
             CaptureKind::Screenshot => self.clone().normalized().timer_secs,
-            CaptureKind::Recording => RECORDING_COUNTDOWN_SECS,
+            CaptureKind::Recording => self.clone().normalized().record_countdown_secs,
+        }
+    }
+
+    /// Whether the camera, if on, ends up in the video: a window recording is
+    /// that one window only, so a bubble over the screen is not in it. The
+    /// stage is always filmed (it IS the recording), and an area recording
+    /// films the bubble because it is placed inside the area.
+    #[must_use]
+    pub fn camera_filmed(&self, kind: CaptureKind, mode: CaptureMode) -> bool {
+        match self.camera_shape(kind) {
+            Some(CameraShape::Stage) => true,
+            Some(CameraShape::Bubble) => mode != CaptureMode::Window,
+            None => false,
         }
     }
 }
@@ -147,6 +188,59 @@ pub async fn save_options(pool: &SqlitePool, options: CaptureOptions) -> Result<
     crate::utils::preferences::save_user_preference_internal(pool, OPTIONS_KEY, &json).await
 }
 
+const LAST_AREAS_KEY: &str = "capture_last_areas_v1";
+
+/// The last area drawn on each display, by display id, so the next area
+/// capture opens with it drawn. Kept in Rust with the other device-wide
+/// habits rather than in the overlay's storage.
+pub type RememberedAreas = std::collections::BTreeMap<u32, LogicalRect>;
+
+/// The remembered areas; an unreadable row reads as none.
+pub async fn load_areas(pool: &SqlitePool) -> Result<RememberedAreas> {
+    let raw = crate::utils::preferences::get_user_preference_internal(pool, LAST_AREAS_KEY).await?;
+    Ok(raw.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+}
+
+/// Remember `rect` as the last area drawn on `display_id`.
+pub async fn remember_area(pool: &SqlitePool, display_id: u32, rect: LogicalRect) -> Result<()> {
+    let mut areas = load_areas(pool).await?;
+    areas.insert(display_id, rect);
+    // Displays come and go; a handful is plenty (another display's goes
+    // first, lowest id first: ids carry no age).
+    while areas.len() > MAX_REMEMBERED_AREAS {
+        let Some(&oldest) = areas.keys().find(|&&id| id != display_id) else {
+            break;
+        };
+        areas.remove(&oldest);
+    }
+    let json = serde_json::to_string(&areas)?;
+    crate::utils::preferences::save_user_preference_internal(pool, LAST_AREAS_KEY, &json).await
+}
+
+const MAX_REMEMBERED_AREAS: usize = 8;
+
+/// A remembered area fitted to a display of `width` x `height` points: kept
+/// whole when it fits, moved back on screen when it hangs off an edge, shrunk
+/// when the display is now smaller. `None` when it is too small to be one.
+#[must_use]
+pub fn fit_area(rect: LogicalRect, width: f64, height: f64) -> Option<LogicalRect> {
+    const MIN_SIDE: f64 = 8.0;
+    if !(rect.width.is_finite() && rect.height.is_finite() && rect.x.is_finite() && rect.y.is_finite()) {
+        return None;
+    }
+    let w = rect.width.min(width);
+    let h = rect.height.min(height);
+    if w < MIN_SIDE || h < MIN_SIDE {
+        return None;
+    }
+    Some(LogicalRect {
+        x: rect.x.clamp(0.0, width - w),
+        y: rect.y.clamp(0.0, height - h),
+        width: w,
+        height: h,
+    })
+}
+
 /// The display the bar goes on: the one under the pointer, so the bar appears
 /// where the user is looking; else the primary display; else the first.
 ///
@@ -163,6 +257,43 @@ pub fn bar_display(displays: &[DisplayTarget], cursor: Option<(f64, f64)>) -> Op
         .or_else(|| displays.iter().find(|d| d.is_primary))
         .or_else(|| displays.first())
         .map(|d| d.id)
+}
+
+/// How the displays changed while a capture was open.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DisplayChange {
+    /// Unplugged (or turned off): their overlays close.
+    pub gone: Vec<u32>,
+    /// Plugged in: they get an overlay while choosing.
+    pub added: Vec<u32>,
+}
+
+/// What changed between two display lists, or `None` when nothing did. A
+/// display that moved or changed resolution counts as changed too (the card
+/// and pill are placed from the cached usable areas), with nothing gone or
+/// added.
+#[must_use]
+pub fn display_change(before: &[DisplayTarget], now: &[DisplayTarget]) -> Option<DisplayChange> {
+    if before == now {
+        return None;
+    }
+    let ids = |list: &[DisplayTarget]| list.iter().map(|d| d.id).collect::<Vec<_>>();
+    let (was, is) = (ids(before), ids(now));
+    Some(DisplayChange {
+        gone: was.iter().copied().filter(|id| !is.contains(id)).collect(),
+        added: is.iter().copied().filter(|id| !was.contains(id)).collect(),
+    })
+}
+
+/// The held area, if its display is still connected. An area on a display
+/// that is gone can never be captured, so it is dropped rather than refused
+/// at the Capture button.
+#[must_use]
+pub fn pending_after(pending: Option<Selection>, displays: &[DisplayTarget]) -> Option<Selection> {
+    match pending {
+        Some(Selection::Area { display_id, .. }) if !displays.iter().any(|d| d.id == display_id) => None,
+        other => other,
+    }
 }
 
 /// Why the Capture button cannot capture yet, in words the bar shows.
@@ -199,7 +330,6 @@ pub fn resolve_confirm(mode: CaptureMode, pending_area: Option<Selection>, press
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture::geometry::LogicalRect;
 
     fn display(id: u32, x: i32, y: i32, width: u32, height: u32, is_primary: bool) -> DisplayTarget {
         DisplayTarget {
@@ -237,6 +367,41 @@ mod tests {
     }
 
     #[test]
+    fn an_unplugged_display_is_gone_and_a_new_one_added() {
+        let a = display(1, 0, 0, 1440, 900, true);
+        let b = display(2, 1440, 0, 1920, 1080, false);
+        let c = display(3, -1920, 0, 1920, 1080, false);
+        assert_eq!(display_change(&[a.clone(), b.clone()], &[a.clone(), b.clone()]), None);
+        assert_eq!(
+            display_change(&[a.clone(), b.clone()], &[a.clone(), c.clone()]),
+            Some(DisplayChange {
+                gone: vec![2],
+                added: vec![3]
+            })
+        );
+        // A resolution change changes nothing's membership but still counts.
+        let mut bigger = a.clone();
+        bigger.width = 1728;
+        assert_eq!(display_change(std::slice::from_ref(&a), &[bigger]), Some(DisplayChange::default()));
+    }
+
+    #[test]
+    fn an_area_on_a_display_that_is_gone_is_dropped() {
+        let rect = LogicalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let on_two = Some(Selection::Area { display_id: 2, rect });
+        let only_one = [display(1, 0, 0, 1440, 900, true)];
+        assert_eq!(pending_after(on_two, &only_one), None);
+        let on_one = Some(Selection::Area { display_id: 1, rect });
+        assert_eq!(pending_after(on_one, &only_one), on_one);
+        assert_eq!(pending_after(None, &only_one), None);
+    }
+
+    #[test]
     fn capture_takes_the_drawn_area_or_the_screen_the_button_is_on() {
         let area = Selection::Area {
             display_id: 2,
@@ -265,6 +430,102 @@ mod tests {
         options.timer_secs = 10;
         assert_eq!(options.countdown_secs(CaptureKind::Screenshot), 10);
         assert_eq!(options.countdown_secs(CaptureKind::Recording), RECORDING_COUNTDOWN_SECS);
+    }
+
+    #[test]
+    fn the_recording_countdown_is_0_3_or_5_and_anything_else_reads_as_3() {
+        for (stored, read) in [(0, 0), (3, 3), (5, 5), (4, 3), (10, 3), (255, 3)] {
+            let o = CaptureOptions {
+                record_countdown_secs: stored,
+                ..CaptureOptions::default()
+            };
+            assert_eq!(o.countdown_secs(CaptureKind::Recording), read, "{stored}");
+            assert_eq!(o.normalized().record_countdown_secs, read, "{stored}");
+        }
+        // The screenshot timer is its own choice.
+        let o = CaptureOptions {
+            record_countdown_secs: 0,
+            timer_secs: 5,
+            ..CaptureOptions::default()
+        };
+        assert_eq!(o.countdown_secs(CaptureKind::Screenshot), 5);
+    }
+
+    /// Camera only records a window by its macOS window number; off macOS
+    /// the screen must stay on, whatever was saved.
+    #[test]
+    fn camera_only_is_turned_back_into_screen_where_it_cannot_record() {
+        let camera_only = CaptureOptions {
+            screen: false,
+            camera: true,
+            ..CaptureOptions::default()
+        };
+        assert!(!camera_only.clone().for_system(true).screen);
+        let fixed = camera_only.for_system(false);
+        assert!(fixed.screen && fixed.camera);
+        assert_eq!(fixed.camera_shape(CaptureKind::Recording), Some(CameraShape::Bubble));
+    }
+
+    #[test]
+    fn a_window_recording_does_not_film_the_bubble() {
+        let bubble = CaptureOptions {
+            camera: true,
+            ..CaptureOptions::default()
+        };
+        assert!(bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Screen));
+        assert!(bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Area));
+        assert!(!bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Window));
+        let stage = CaptureOptions {
+            screen: false,
+            ..bubble.clone()
+        };
+        assert!(stage.camera_filmed(CaptureKind::Recording, CaptureMode::Window));
+        assert!(!CaptureOptions::default().camera_filmed(CaptureKind::Recording, CaptureMode::Screen));
+        assert!(!bubble.camera_filmed(CaptureKind::Screenshot, CaptureMode::Screen));
+    }
+
+    #[test]
+    fn a_remembered_area_is_fitted_to_the_display_it_opens_on() {
+        let r = |x, y, width, height| LogicalRect { x, y, width, height };
+        assert_eq!(fit_area(r(10.0, 20.0, 300.0, 200.0), 1440.0, 900.0), Some(r(10.0, 20.0, 300.0, 200.0)));
+        // Hanging off the right and bottom: moved back on.
+        assert_eq!(
+            fit_area(r(1300.0, 800.0, 300.0, 200.0), 1440.0, 900.0),
+            Some(r(1140.0, 700.0, 300.0, 200.0))
+        );
+        // Bigger than a display that is now smaller: shrunk to it.
+        assert_eq!(fit_area(r(0.0, 0.0, 2000.0, 1200.0), 1440.0, 900.0), Some(r(0.0, 0.0, 1440.0, 900.0)));
+        assert_eq!(fit_area(r(0.0, 0.0, 2.0, 200.0), 1440.0, 900.0), None);
+        assert_eq!(fit_area(r(f64::NAN, 0.0, 200.0, 200.0), 1440.0, 900.0), None);
+    }
+
+    #[tokio::test]
+    async fn areas_are_remembered_per_display() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("pool");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+        let r = |x| LogicalRect {
+            x,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        assert!(load_areas(&pool).await.unwrap().is_empty());
+        remember_area(&pool, 1, r(1.0)).await.unwrap();
+        remember_area(&pool, 2, r(2.0)).await.unwrap();
+        remember_area(&pool, 1, r(3.0)).await.unwrap();
+        let areas = load_areas(&pool).await.unwrap();
+        assert_eq!(areas.get(&1), Some(&r(3.0)));
+        assert_eq!(areas.get(&2), Some(&r(2.0)));
+        for id in 10..30 {
+            remember_area(&pool, id, r(0.0)).await.unwrap();
+        }
+        let areas = load_areas(&pool).await.unwrap();
+        assert!(areas.len() <= MAX_REMEMBERED_AREAS);
+        assert!(areas.contains_key(&29), "the newest is kept");
     }
 
     #[test]
@@ -322,12 +583,16 @@ mod tests {
             serde_json::json!({
                 "timerSecs": 0, "microphone": true, "microphoneDevice": null,
                 "screen": true, "camera": false, "cameraDevice": null,
-                "cameraSize": "small", "showClicks": false, "lastKind": "screenshot", "lastMode": "area"
+                "cameraSize": "small", "showClicks": false, "lastKind": "screenshot", "lastMode": "area",
+                "copyLink": true, "recordCountdownSecs": 3
             })
         );
         let partial: CaptureOptions = serde_json::from_value(serde_json::json!({ "timerSecs": 5 })).unwrap();
         assert_eq!(partial.timer_secs, 5);
         assert_eq!(partial.last_mode, CaptureMode::Area);
+        // A row saved before these existed keeps copying links and counting 3.
+        assert!(partial.copy_link);
+        assert_eq!(partial.record_countdown_secs, RECORDING_COUNTDOWN_SECS);
     }
 
     #[tokio::test]
@@ -351,6 +616,8 @@ mod tests {
             show_clicks: true,
             last_kind: CaptureKind::Recording,
             last_mode: CaptureMode::Window,
+            copy_link: false,
+            record_countdown_secs: 5,
         };
         save_options(&pool, chosen.clone()).await.unwrap();
         assert_eq!(load_options(&pool).await.unwrap(), chosen);
