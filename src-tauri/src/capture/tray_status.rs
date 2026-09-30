@@ -288,4 +288,34 @@ mod tests {
         assert!(!tray_needs_write(Some(&t42), &t42));
         assert!(tray_needs_write(Some(&t42), &idle));
     }
+
+    /// Windows shows the tray's time in the tooltip, and a tooltip longer
+    /// than 127 UTF-16 units (`NOTIFYICONDATAW.szTip`) is cut off or refused
+    /// with no error. The longest one, a paused recording past 100 minutes,
+    /// fits.
+    #[test]
+    fn every_tooltip_fits_windows_tray_limit() {
+        for phase in [
+            CapturePhase::Recording {
+                elapsed_secs: 999 * 60 + 59,
+                microphone: true,
+            },
+            CapturePhase::Paused {
+                elapsed_secs: 999 * 60 + 59,
+                microphone: false,
+            },
+            CapturePhase::Idle,
+        ] {
+            let tip = tray_text_for(phase).tooltip;
+            assert!(tip.encode_utf16().count() <= 127, "{tip}");
+        }
+    }
+
+    /// The tooltip carries the running time, since Windows has no tray title.
+    #[test]
+    fn the_tooltip_carries_the_time_where_there_is_no_title() {
+        let text = tray_text_for(RECORDING);
+        assert!(text.tooltip.contains("00:42"), "{}", text.tooltip);
+        assert!(text.tooltip.contains("Click to show the recording controls"));
+    }
 }

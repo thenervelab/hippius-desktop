@@ -187,6 +187,11 @@ pub struct CaptureState {
     recording_camera: Mutex<Option<CameraShape>>,
     /// The bubble was hidden from the pill for part of a recording.
     camera_hidden: AtomicBool,
+    /// The capture UI may show up in this session's screenshot: Windows did
+    /// not keep an overlay out of captures (a build below 2004, or a driver
+    /// that refused `WDA_EXCLUDEFROMCAPTURE`). The overlays are then gone,
+    /// the card hidden and the compositor settled before the grab.
+    ui_in_grabs: AtomicBool,
     /// The camera window's system window number, read once when it opens
     /// (0 = not known yet). Camera only records that window.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -664,6 +669,12 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
 
     bring_back_failed_card(&app, &state.capture);
     hide_own_windows(&app, &state.capture).await;
+    // Below Windows 10 2004 nothing can be kept out of a capture; each
+    // overlay also checks for itself as it opens (`open_overlay`).
+    state.capture.ui_in_grabs.store(
+        !super::permissions::windows_excludes_from_capture(super::permissions::windows_build()),
+        Ordering::SeqCst,
+    );
     if let Err(e) = open_capture_ui(&app, &state.capture, &areas).await {
         // Everything this start put up comes down again, the camera included.
         close_overlays(&app);
@@ -787,6 +798,17 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool)
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         build_overlay(app, &label, display)?
     };
+    // Content protection is asked for, not promised: on Windows it is
+    // `SetWindowDisplayAffinity`, whose failure tao discards. Read it back;
+    // if it did not hold, this session's screenshot closes the overlays
+    // first rather than photographing the dimmed selection UI.
+    if !kept_out_of_captures(&window) {
+        tracing::warn!(
+            build = ?super::permissions::windows_build(),
+            "the capture overlay is not excluded from screen captures here; overlays will close before the grab"
+        );
+        app.state::<AppState>().capture.ui_in_grabs.store(true, Ordering::SeqCst);
+    }
 
     // Placed after building, in the display's own space: points on macOS,
     // physical pixels on Windows, where a logical position would be resolved
@@ -1064,13 +1086,43 @@ fn place(window: &tauri::WebviewWindow, f: camera::Frame, scale: f64) {
     } else {
         // Position first: a move onto a monitor of another scale resizes the
         // window, and the size set after it is the one that stays.
-        #[allow(clippy::cast_possible_truncation)]
-        let px = |v: f64| (v * scale).round() as i32;
-        let _ = window.set_position(tauri::PhysicalPosition::new(px(f.x), px(f.y)));
-        let _ = window.set_size(tauri::PhysicalSize::new(
-            px(f.width).max(1).unsigned_abs(),
-            px(f.height).max(1).unsigned_abs(),
-        ));
+        let p = physical_frame(f, scale);
+        let _ = window.set_position(tauri::PhysicalPosition::new(p.x, p.y));
+        let _ = window.set_size(tauri::PhysicalSize::new(p.width, p.height));
+    }
+}
+
+/// The card's frame: the bottom-right corner of the display's WORK area
+/// (clear of the Dock, or of the taskbar wherever it is docked), in that
+/// area's logical units.
+fn card_frame(area: LogicalArea) -> camera::Frame {
+    camera::Frame {
+        x: area.x + area.width - PREVIEW_WIDTH - PREVIEW_MARGIN,
+        y: area.y + area.height - PREVIEW_HEIGHT - PREVIEW_MARGIN,
+        width: PREVIEW_WIDTH,
+        height: PREVIEW_HEIGHT,
+    }
+}
+
+/// A frame in a monitor's logical units (its work area over its own scale)
+/// back in that monitor's physical pixels, rounded to whole pixels and never
+/// empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PhysicalFrame {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+fn physical_frame(f: camera::Frame, scale: f64) -> PhysicalFrame {
+    #[allow(clippy::cast_possible_truncation)]
+    let px = |v: f64| (v * scale).round() as i32;
+    PhysicalFrame {
+        x: px(f.x),
+        y: px(f.y),
+        width: px(f.width).max(1).unsigned_abs(),
+        height: px(f.height).max(1).unsigned_abs(),
     }
 }
 
@@ -1724,7 +1776,11 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     let state = app.state::<AppState>();
     // A pill prepared while this session was a recording is not needed.
     close_controls(app);
-    let taken = take_screenshot(selection).await;
+    let clear = state.capture.ui_in_grabs.load(Ordering::SeqCst);
+    if clear {
+        clear_screen_for_grab(app).await;
+    }
+    let taken = take_screenshot(selection, clear).await;
     restore_main_window(app, &state.capture);
     let (image, thumbnail, path) = taken?;
     let card_id = open_preview(app, CaptureKind::Screenshot, &path, thumbnail).await;
@@ -1877,12 +1933,75 @@ fn tick_once(app: &AppHandle) -> Tick {
     Tick::Continue
 }
 
+/// Where Windows could not keep the capture UI out of the picture: wait for
+/// the overlays to be gone (they were destroyed, which the event loop does
+/// a moment later) and hide the card, so nothing of Hippius is on screen
+/// when it is read. The compositor is settled in the grab itself.
+async fn clear_screen_for_grab(app: &AppHandle) {
+    if let Some(card) = app.get_webview_window(PREVIEW_LABEL)
+        && card.is_visible().unwrap_or(false)
+    {
+        let _ = card.hide();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while app.webview_windows().keys().any(|label| label.starts_with(OVERLAY_LABEL_PREFIX)) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Whether the system will keep `window` out of screen captures, read back
+/// from the window itself: `GetWindowDisplayAffinity` must say
+/// `WDA_EXCLUDEFROMCAPTURE` on Windows. macOS's `sharingType = none` holds
+/// wherever the app runs.
+#[cfg(windows)]
+fn kept_out_of_captures(window: &tauri::WebviewWindow) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+    let mut affinity = 0u32;
+    // SAFETY: a live top-level window of this process; the call only writes
+    // the affinity into `affinity`. Tauri's HWND comes from another version
+    // of the `windows` crate, so it crosses as the raw handle it wraps.
+    let read = unsafe { GetWindowDisplayAffinity(HWND(hwnd.0), &raw mut affinity) };
+    read.is_ok() && affinity == WDA_EXCLUDEFROMCAPTURE.0
+}
+
+#[cfg(not(windows))]
+fn kept_out_of_captures(_window: &tauri::WebviewWindow) -> bool {
+    true
+}
+
+/// Give the compositor two frames to take closed windows off the screen
+/// before it is read (`DwmFlush` waits for the next composition pass).
+#[cfg(windows)]
+fn settle_compositor() {
+    use windows::Win32::Graphics::Dwm::DwmFlush;
+    for _ in 0..2 {
+        // SAFETY: no arguments; blocks this (blocking-pool) thread until DWM
+        // has composed a frame.
+        if unsafe { DwmFlush() }.is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn settle_compositor() {}
+
 /// The screenshot in memory, its card picture, and where it will be written.
-async fn take_screenshot(selection: Selection) -> Result<(image::RgbaImage, Option<String>, PathBuf)> {
+/// `clear`: the capture UI could show in the picture, so the compositor is
+/// settled first (see [`clear_screen_for_grab`]).
+async fn take_screenshot(selection: Selection, clear: bool) -> Result<(image::RgbaImage, Option<String>, PathBuf)> {
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     let name = super::naming::capture_file_name(CaptureKind::Screenshot, chrono::Local::now().naive_local());
     let path = dir.join(name);
     let taken = tauri::async_runtime::spawn_blocking(move || {
+        if clear {
+            settle_compositor();
+        }
         let image = capture_blocking(selection)?;
         let thumbnail = super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(image.clone())).ok();
         Ok::<_, AppError>((image, thumbnail))
@@ -2552,16 +2671,7 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
         .map_err(|e| AppError::Other(format!("Could not open the capture preview: {e}")))?;
     if let Some(d) = display {
         let area = work_area(&app.state::<AppState>().capture, d);
-        place(
-            &window,
-            camera::Frame {
-                x: area.x + area.width - PREVIEW_WIDTH - PREVIEW_MARGIN,
-                y: area.y + area.height - PREVIEW_HEIGHT - PREVIEW_MARGIN,
-                width: PREVIEW_WIDTH,
-                height: PREVIEW_HEIGHT,
-            },
-            area.scale,
-        );
+        place(&window, card_frame(area), area.scale);
     }
     float_over_full_screen(&window);
     Ok(())
@@ -3403,6 +3513,71 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
+
+    /// Windows' work area in physical pixels, as `read_work_areas` turns it
+    /// into the area's own logical units.
+    fn windows_area(x: i32, y: i32, width: u32, height: u32, scale: f64) -> LogicalArea {
+        LogicalArea {
+            x: f64::from(x) / scale,
+            y: f64::from(y) / scale,
+            width: f64::from(width) / scale,
+            height: f64::from(height) / scale,
+            scale,
+        }
+    }
+
+    /// The card lands bottom-right of the work area in that monitor's own
+    /// pixels, on a 150 % laptop and on the 100 % monitor beside it, with
+    /// the taskbar at the bottom, the left or the top.
+    #[test]
+    fn the_card_sits_above_the_taskbar_in_each_monitors_own_pixels() {
+        let margin = 16;
+        // 150 % laptop, taskbar at the bottom (72 px tall at 150 %).
+        let laptop = windows_area(0, 0, 2880, 1728, 1.5);
+        let p = physical_frame(card_frame(laptop), laptop.scale);
+        assert_eq!(p.width, 474, "316 points at 150 %");
+        assert_eq!(p.height, 495, "330 points at 150 %");
+        assert_eq!(p.x + i32::try_from(p.width).unwrap(), 2880 - margin * 3 / 2);
+        assert_eq!(p.y + i32::try_from(p.height).unwrap(), 1728 - margin * 3 / 2);
+
+        // 100 % monitor to its right, taskbar on the LEFT (work area starts
+        // 48 px in): the card stays at the right edge.
+        let monitor = windows_area(2880 + 48, 0, 1920 - 48, 1080, 1.0);
+        let p = physical_frame(card_frame(monitor), monitor.scale);
+        assert_eq!(p.x + i32::try_from(p.width).unwrap(), 2880 + 1920 - margin);
+        assert_eq!(p.y + i32::try_from(p.height).unwrap(), 1080 - margin);
+
+        // Taskbar at the TOP: the work area starts lower, and the card's
+        // bottom is the display's bottom less the margin.
+        let top_bar = windows_area(0, 48, 1920, 1080 - 48, 1.0);
+        let p = physical_frame(card_frame(top_bar), top_bar.scale);
+        assert_eq!(p.y + i32::try_from(p.height).unwrap(), 1080 - margin);
+    }
+
+    /// A monitor left of or above the primary has negative pixels; the card
+    /// is still placed inside it, never on the primary.
+    #[test]
+    fn a_card_on_a_monitor_left_of_the_primary_stays_on_it() {
+        let left = windows_area(-2560, -200, 2560, 1400, 1.25);
+        let p = physical_frame(card_frame(left), left.scale);
+        assert!(p.x < 0 && p.x > -2560, "{p:?}");
+        assert_eq!(p.x + i32::try_from(p.width).unwrap(), -20, "16 points of margin at 125 %");
+        // 330 points is 412.5 pixels at 125 %: within a pixel of the margin.
+        assert!((p.y + i32::try_from(p.height).unwrap() - (1200 - 20)).abs() <= 1, "{p:?}");
+    }
+
+    /// A frame is never placed empty, whatever the scale.
+    #[test]
+    fn a_physical_frame_is_never_empty() {
+        let tiny = camera::Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 0.2,
+            height: 0.0,
+        };
+        let p = physical_frame(tiny, 1.0);
+        assert_eq!((p.width, p.height), (1, 1));
+    }
 
     #[derive(Default)]
     struct Calls {

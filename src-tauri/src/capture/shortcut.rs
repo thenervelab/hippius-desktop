@@ -2,7 +2,14 @@
 //!
 //! One shortcut, default Cmd+Shift+2 on macOS and Ctrl+Shift+2 on Windows:
 //! next to macOS's own Cmd+Shift+3/4/5/6 and unused by the system. The user
-//! can change it or turn it off in Settings.
+//! can change it or turn it off in Settings. Each system's own capture
+//! shortcuts are refused ([`reserved_by`]): macOS's Cmd+Shift+3 to 6, and
+//! Windows' Snipping Tool, Print Screen and Game Bar keys.
+//!
+//! Ctrl+Shift+2 is also Windows Terminal's "new tab with profile 2" and an
+//! Excel format shortcut, which a global registration takes away from them.
+//! Whether Windows moves to another default (`Alt+Shift+2` is proposed) is an
+//! open product decision; saved shortcuts are kept either way.
 //!
 //! It toggles, decided here ([`action_for`]): a second press stops a running
 //! recording, or closes the bar while choosing. Otherwise it emits
@@ -59,6 +66,49 @@ const OFF: &str = "off";
 /// either fail or take the system's shortcut away.
 #[cfg(any(target_os = "macos", windows))]
 const MACOS_RESERVED: [&str; 4] = ["Command+Shift+3", "Command+Shift+4", "Command+Shift+5", "Command+Shift+6"];
+
+/// Windows' own capture keys: Snipping Tool (Win+Shift+S), Print Screen with
+/// and without Win or Alt, and the Game Bar's record and screenshot keys.
+/// Taking one would break the system's capture for as long as Hippius runs.
+#[cfg(any(target_os = "macos", windows))]
+const WINDOWS_RESERVED: [&str; 6] = [
+    "Super+Shift+S",
+    "PrintScreen",
+    "Super+PrintScreen",
+    "Alt+PrintScreen",
+    "Super+Alt+R",
+    "Super+Alt+PrintScreen",
+];
+
+/// Which system's reserved shortcuts apply.
+#[cfg(any(target_os = "macos", windows))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShortcutSystem {
+    MacOs,
+    Windows,
+}
+
+#[cfg(any(target_os = "macos", windows))]
+const THIS_SYSTEM: ShortcutSystem = if cfg!(windows) { ShortcutSystem::Windows } else { ShortcutSystem::MacOs };
+
+/// The refusal for a shortcut `system` keeps for itself, or `None`.
+#[cfg(any(target_os = "macos", windows))]
+fn reserved_by(system: ShortcutSystem, shortcut: &tauri_plugin_global_shortcut::Shortcut) -> Option<&'static str> {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    let (list, refusal): (&[&str], &'static str) = match system {
+        ShortcutSystem::MacOs => (&MACOS_RESERVED, "macOS uses that shortcut for its own screenshots. Choose another."),
+        ShortcutSystem::Windows => (
+            &WINDOWS_RESERVED,
+            "Windows uses that shortcut for its own screenshots and recordings. Choose another.",
+        ),
+    };
+    list.iter()
+        .filter_map(|r| Shortcut::from_str(r).ok())
+        .any(|r| r.mods == shortcut.mods && r.key == shortcut.key)
+        .then_some(refusal)
+}
 
 /// What Settings shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -182,20 +232,15 @@ pub fn validate(accelerator: &str) -> Result<tauri_plugin_global_shortcut::Short
 
     let shortcut = Shortcut::from_str(accelerator.trim())
         .map_err(|_| AppError::Validation("That isn't a shortcut Hippius can use. Try a modifier with a letter or number.".into()))?;
+    // The system's own capture keys first: Print Screen alone is refused as
+    // Windows' key, not as "needs a modifier".
+    if let Some(refusal) = reserved_by(THIS_SYSTEM, &shortcut) {
+        return Err(AppError::Validation(refusal.into()));
+    }
     let needs = Modifiers::SUPER | Modifiers::CONTROL | Modifiers::ALT;
     if !shortcut.mods.intersects(needs) {
         return Err(AppError::Validation(
             "Use Command, Control or Option (Alt) in the shortcut, so it doesn't take over a key in every app.".into(),
-        ));
-    }
-    if cfg!(target_os = "macos")
-        && MACOS_RESERVED
-            .iter()
-            .filter_map(|r| Shortcut::from_str(r).ok())
-            .any(|r| r.mods == shortcut.mods && r.key == shortcut.key)
-    {
-        return Err(AppError::Validation(
-            "macOS uses that shortcut for its own screenshots. Choose another.".into(),
         ));
     }
     Ok(shortcut)
@@ -323,6 +368,71 @@ mod tests {
             assert!(matches!(validate(reserved), Err(AppError::Validation(_))), "{reserved}");
         }
         assert!(validate("Command+Shift+7").is_ok());
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    fn parsed(accelerator: &str) -> tauri_plugin_global_shortcut::Shortcut {
+        use std::str::FromStr;
+        tauri_plugin_global_shortcut::Shortcut::from_str(accelerator).unwrap()
+    }
+
+    /// Windows' Snipping Tool, Print Screen and Game Bar keys are refused
+    /// with a Windows sentence; macOS's own are not Windows' business.
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn windows_keeps_its_own_capture_shortcuts() {
+        for reserved in [
+            "Super+Shift+S",
+            "Shift+Super+S",
+            "PrintScreen",
+            "Super+PrintScreen",
+            "Alt+PrintScreen",
+            "Super+Alt+R",
+            "Alt+Super+R",
+            "Super+Alt+PrintScreen",
+        ] {
+            let refusal = reserved_by(ShortcutSystem::Windows, &parsed(reserved));
+            assert_eq!(
+                refusal,
+                Some("Windows uses that shortcut for its own screenshots and recordings. Choose another."),
+                "{reserved}"
+            );
+        }
+        for free in ["Control+Shift+2", "Alt+Shift+2", "Super+Shift+3", "Control+Alt+R", "Super+R"] {
+            assert_eq!(reserved_by(ShortcutSystem::Windows, &parsed(free)), None, "{free}");
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn macos_reserves_only_its_own_on_its_own_list() {
+        assert!(reserved_by(ShortcutSystem::MacOs, &parsed("Super+Shift+4")).is_some());
+        assert_eq!(reserved_by(ShortcutSystem::MacOs, &parsed("Super+Shift+S")), None);
+        assert_eq!(reserved_by(ShortcutSystem::MacOs, &parsed("PrintScreen")), None);
+    }
+
+    /// On Windows, Print Screen alone says it is Windows' key, not that it
+    /// lacks a modifier.
+    #[cfg(windows)]
+    #[test]
+    fn print_screen_is_refused_as_windows_own() {
+        let Err(AppError::Validation(msg)) = validate("PrintScreen") else {
+            panic!("refused");
+        };
+        assert!(msg.starts_with("Windows uses that shortcut"), "{msg}");
+        assert!(matches!(validate("Super+Shift+S"), Err(AppError::Validation(_))));
+        assert!(validate("Alt+Shift+2").is_ok());
+    }
+
+    /// The default is not changed here (an open product decision), and it
+    /// is not one the system keeps.
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn the_default_is_not_a_system_shortcut_anywhere() {
+        assert_eq!(DEFAULT_SHORTCUT, "CommandOrControl+Shift+2");
+        for system in [ShortcutSystem::MacOs, ShortcutSystem::Windows] {
+            assert_eq!(reserved_by(system, &parsed(DEFAULT_SHORTCUT)), None, "{system:?}");
+        }
     }
 
     #[tokio::test]

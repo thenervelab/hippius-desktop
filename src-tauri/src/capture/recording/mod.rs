@@ -276,7 +276,7 @@ pub fn recording_unavailable() -> Option<RecordingUnavailable> {
     }
     #[cfg(windows)]
     {
-        unavailable_reason(on_this_lane && windows::recording_supported(), true, true)
+        unavailable_reason(on_this_lane && windows::recording_supported(), windows::os_supports_recording(), true)
     }
     #[cfg(target_os = "linux")]
     {

@@ -628,6 +628,46 @@ fn the_app_starts_its_recorder_with_the_flag_main_looks_for() {
     }
 }
 
+/// On Windows, content protection is `SetWindowDisplayAffinity`, whose
+/// failure tao discards. Every overlay reads its affinity back, and a
+/// session where it did not hold clears the screen before the grab, or the
+/// screenshot is of the dimmed selection UI.
+#[test]
+fn windows_overlays_check_that_they_are_kept_out_of_the_shot() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "async fn open_overlay(");
+    assert!(open.contains("kept_out_of_captures(&window)"), "every overlay checks its affinity");
+    assert!(open.contains("ui_in_grabs.store(true"), "a failed check is remembered for the grab");
+    let check = fn_body(&src, "fn kept_out_of_captures(window: &tauri::WebviewWindow) -> bool {");
+    assert!(check.contains("GetWindowDisplayAffinity") && check.contains("WDA_EXCLUDEFROMCAPTURE"));
+    let start = fn_body(&src, "pub async fn capture_start(");
+    assert!(
+        start.contains("windows_excludes_from_capture("),
+        "below Windows 10 2004 every session clears the screen first"
+    );
+    let finish = fn_body(&src, "async fn finish_screenshot(");
+    let cleared = finish.find("clear_screen_for_grab(").expect("the screen is cleared when needed");
+    let grab = finish.find("take_screenshot(").expect("finish_screenshot grabs");
+    assert!(cleared < grab, "the screen is cleared before the grab");
+    let take = fn_body(&src, "async fn take_screenshot(");
+    let settle = take.find("settle_compositor()").expect("the compositor is settled");
+    assert!(settle < take.find("capture_blocking(").unwrap(), "settled before the pixels are read");
+    let clear = fn_body(&src, "async fn clear_screen_for_grab(");
+    assert!(clear.contains("PREVIEW_LABEL") && clear.contains(".hide()"), "the card is hidden too");
+    assert!(clear.contains("OVERLAY_LABEL_PREFIX"), "the overlays are waited out");
+}
+
+/// Windows window shots go through Windows.Graphics.Capture (xcap `wgc`):
+/// GDI returns only part of a DPI-unaware app's window on a scaled monitor.
+#[test]
+fn windows_screenshots_use_windows_graphics_capture() {
+    let manifest = read("Cargo.toml");
+    assert!(
+        manifest.contains(r#"xcap = { version = "0.9", features = ["wgc"] }"#),
+        "xcap must be built with its wgc feature"
+    );
+}
+
 /// Screenshots and recording follow the per-platform rollout, so a platform
 /// still on staging is simply unsupported on beta and production.
 #[test]

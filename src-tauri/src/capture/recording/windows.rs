@@ -18,6 +18,13 @@ pub fn recording_supported() -> bool {
     false
 }
 
+/// Windows.Graphics.Capture's controls and `WDA_EXCLUDEFROMCAPTURE` need
+/// Windows 10 version 2004 (build 19041); below it recording is `osTooOld`.
+pub fn os_supports_recording() -> bool {
+    use crate::capture::permissions::{windows_build, windows_excludes_from_capture};
+    windows_excludes_from_capture(windows_build())
+}
+
 /// The program that records: this executable in recorder mode.
 ///
 /// # Errors

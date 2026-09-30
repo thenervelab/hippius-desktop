@@ -163,6 +163,20 @@ pub fn available_space(_path: &Path) -> Option<u64> {
     None
 }
 
+/// Pixels per overlay point for an area on one display, read off the image
+/// itself rather than trusted from the OS: the overlay spans exactly this
+/// display, so image pixels over overlay points IS the conversion, whatever
+/// the display mode reports. Per display, so a 150 % laptop beside a 100 %
+/// monitor crops each at its own scale.
+#[must_use]
+pub fn area_scale(image_width: u32, logical_width: f64) -> f64 {
+    if logical_width > 0.0 {
+        f64::from(image_width) / logical_width
+    } else {
+        1.0
+    }
+}
+
 #[cfg(any(target_os = "macos", windows))]
 mod os {
     use super::Selection;
@@ -202,11 +216,7 @@ mod os {
             Selection::Area { display_id, rect } => {
                 let (monitor, target) = display_by_id(display_id)?;
                 let full = monitor.capture_image().map_err(|e| capture_err(&e))?;
-                // The scale is read off the image itself rather than trusted
-                // from the OS: the overlay spans exactly this display, so
-                // image pixels over overlay points IS the conversion, whatever
-                // the display mode reports.
-                let scale = f64::from(full.width()) / target.logical_width();
+                let scale = super::area_scale(full.width(), target.logical_width());
                 let crop = crop_rect(rect, scale, full.width(), full.height())
                     .ok_or_else(|| AppError::Validation("Drag to select an area to capture.".into()))?;
                 xcap::image::imageops::crop_imm(&full, crop.x, crop.y, crop.width, crop.height).to_image()
@@ -265,6 +275,34 @@ mod tests {
         assert_eq!(window, Selection::Window { window_id: 42 });
         let screen: Selection = serde_json::from_value(serde_json::json!({ "target": "screen", "displayId": 7 })).unwrap();
         assert_eq!(screen, Selection::Screen { display_id: 7 });
+    }
+
+    /// The crop scale is the display's own: Retina 2x, a Windows 150 % laptop
+    /// 1.5x, the 100 % monitor beside it 1x, a 125 % panel 1.25x.
+    #[test]
+    fn an_areas_scale_is_its_own_displays() {
+        assert!((area_scale(3024, 1512.0) - 2.0).abs() < f64::EPSILON);
+        assert!((area_scale(2880, 1920.0) - 1.5).abs() < f64::EPSILON);
+        assert!((area_scale(1920, 1920.0) - 1.0).abs() < f64::EPSILON);
+        assert!((area_scale(3000, 2400.0) - 1.25).abs() < f64::EPSILON);
+        assert!(
+            (area_scale(1920, 0.0) - 1.0).abs() < f64::EPSILON,
+            "a display with no size is not divided by"
+        );
+        // With the scale, a drag of the whole 150 % display crops every pixel.
+        let crop = crate::capture::geometry::crop_rect(
+            LogicalRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1200.0,
+            },
+            area_scale(2880, 1920.0),
+            2880,
+            1800,
+        )
+        .unwrap();
+        assert_eq!((crop.x, crop.y, crop.width, crop.height), (0, 0, 2880, 1800));
     }
 
     #[test]

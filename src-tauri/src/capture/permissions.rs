@@ -79,6 +79,54 @@ fn read_macos_version() -> Option<(u64, u64)> {
     None
 }
 
+/// Windows 10 version 2004: the first build where `WDA_EXCLUDEFROMCAPTURE`
+/// keeps a window out of every capture API and Windows.Graphics.Capture can
+/// hide its cursor. Below it, screenshots still work (the overlays are
+/// closed before the grab) and recording reports `osTooOld`.
+pub const WINDOWS_CAPTURE_FLOOR_BUILD: u32 = 19041;
+
+/// This Windows' build number (19045, 22631, 26100…), read once per launch.
+/// `None` off Windows or when it cannot be read.
+///
+/// `RtlGetVersion`, not `GetVersionEx`: the latter reports whatever the
+/// app's manifest claims compatibility with, not the system it runs on.
+#[must_use]
+pub fn windows_build() -> Option<u32> {
+    static BUILD: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *BUILD.get_or_init(read_windows_build)
+}
+
+#[cfg(windows)]
+fn read_windows_build() -> Option<u32> {
+    use windows::Wdk::System::SystemServices::RtlGetVersion;
+    use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+
+    let mut info = OSVERSIONINFOW {
+        dwOSVersionInfoSize: u32::try_from(std::mem::size_of::<OSVERSIONINFOW>()).ok()?,
+        ..Default::default()
+    };
+    // SAFETY: `info` is a properly sized OSVERSIONINFOW whose size field is
+    // set, as RtlGetVersion requires; it only writes into it.
+    let status = unsafe { RtlGetVersion(&raw mut info) };
+    status.is_ok().then_some(info.dwBuildNumber)
+}
+
+#[cfg(not(windows))]
+fn read_windows_build() -> Option<u32> {
+    None
+}
+
+/// Whether Windows can keep the capture UI out of a screenshot on this
+/// build. An unreadable build is trusted to be current (the runtime check in
+/// `commands::open_overlay` still catches a refusal).
+#[must_use]
+pub const fn windows_excludes_from_capture(build: Option<u32>) -> bool {
+    match build {
+        Some(build) => build >= WINDOWS_CAPTURE_FLOOR_BUILD,
+        None => true,
+    }
+}
+
 /// `"15.1.1\n"` to `(15, 1)`, `"26"` to `(26, 0)`; anything unreadable is
 /// `None`, which no feature gate passes.
 #[cfg(any(target_os = "macos", test))]
@@ -165,6 +213,27 @@ mod tests {
         assert!(first.is_some_and(|v| v >= (11, 0)), "the app floor is 11.0, got {first:?}");
         assert_eq!(macos_version(), first);
         assert_eq!(macos_major(), first.map(|(m, _)| m));
+    }
+
+    /// Windows 10 2004 (19041) is the floor; 1909 (18363) is below it.
+    #[test]
+    fn windows_2004_is_the_capture_floor() {
+        assert!(windows_excludes_from_capture(Some(19041)));
+        assert!(windows_excludes_from_capture(Some(26100)), "Windows 11 24H2");
+        assert!(!windows_excludes_from_capture(Some(18363)), "Windows 10 1909");
+        assert!(windows_excludes_from_capture(None));
+    }
+
+    /// Read once, and only on Windows.
+    #[test]
+    fn the_windows_build_is_read_on_windows_only() {
+        let build = windows_build();
+        if cfg!(windows) {
+            assert!(build.is_some_and(|b| b >= 10240), "a Windows 10+ build, got {build:?}");
+        } else {
+            assert_eq!(build, None);
+        }
+        assert_eq!(windows_build(), build);
     }
 
     /// macOS prompts once; asking again shows nothing, so the second press
