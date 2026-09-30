@@ -173,27 +173,6 @@ pub fn default_missing_grant_roles(body: &str) -> String {
     if changed { value.to_string() } else { body.to_string() }
 }
 
-/// The `member_count` of every `folder_grants[]` entry of a listing body, in
-/// listing order: how many people hold a grant on exactly that folder, the
-/// caller included. 0 where the server omitted it (it omits 0, and an older
-/// server never sends it) or sent something that is not a count.
-///
-/// Read from the body rather than the typed listing because the pinned
-/// hcfs-shared `FolderGrantEntry` predates the field. When an hcfs rev bump
-/// brings it, read the typed field and drop this.
-pub fn folder_grant_member_counts(body: &str) -> Vec<u64> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
-        return Vec::new();
-    };
-    let Some(grants) = value.get("folder_grants").and_then(|g| g.as_array()) else {
-        return Vec::new();
-    };
-    grants
-        .iter()
-        .map(|grant| grant.get("member_count").and_then(serde_json::Value::as_u64).unwrap_or(0))
-        .collect()
-}
-
 /// Map a refused FOLDER invite mint (assumption 2). The server words these
 /// as `400 bad_request` with a message, so the message is matched exactly
 /// here, once, and the frontend dispatches on the structured kind.
@@ -417,14 +396,5 @@ mod tests {
         let untouched = r#"{"memberships":[]}"#;
         assert_eq!(default_missing_grant_roles(untouched), untouched);
         assert_eq!(default_missing_grant_roles("not json"), "not json");
-    }
-
-    #[test]
-    fn grant_member_counts_follow_listing_order_and_read_absence_as_zero() {
-        let body = r#"{"memberships":[{"member_count":9}],"folder_grants":[{"path_prefix":"a","member_count":3},{"path_prefix":"b"},{"path_prefix":"c","member_count":"2"},{"path_prefix":"d","member_count":1}]}"#;
-        assert_eq!(folder_grant_member_counts(body), [3, 0, 0, 1]);
-
-        assert!(folder_grant_member_counts(r#"{"memberships":[]}"#).is_empty(), "no grants, no counts");
-        assert!(folder_grant_member_counts("not json").is_empty());
     }
 }

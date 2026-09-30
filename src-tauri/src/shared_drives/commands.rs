@@ -34,7 +34,7 @@ use crate::error::{AppError, NotReadyKind, Result};
 use crate::shared_drives::grant;
 use crate::sync::identity::MemberDriveIdentity;
 use base64::Engine;
-use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse};
+use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse, FolderGrantEntry};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
@@ -745,14 +745,6 @@ pub async fn http_revoke_invite(
 /// `GET /v1/drive-memberships` — the caller's memberships WITH sealed grant
 /// blobs. Internal to the backend: the blobs must not cross IPC.
 pub async fn http_list_memberships(http: &reqwest::Client, base_url: &str, bearer: &str) -> Result<DriveMembershipsResponse> {
-    let body = http_list_memberships_body(http, base_url, bearer).await?;
-    parse_memberships(&body)
-}
-
-/// [`http_list_memberships`] up to the parse: the body with missing grant
-/// roles already defaulted, for a caller that also reads fields the typed
-/// listing does not carry yet.
-async fn http_list_memberships_body(http: &reqwest::Client, base_url: &str, bearer: &str) -> Result<String> {
     let resp = http
         .get(format!("{}/v1/drive-memberships", base_url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {bearer}"))
@@ -766,11 +758,8 @@ async fn http_list_memberships_body(http: &reqwest::Client, base_url: &str, bear
     if !status.is_success() {
         return Err(classify_error_status(status, &body));
     }
-    Ok(super::folder_roles::default_missing_grant_roles(&body))
-}
-
-fn parse_memberships(body: &str) -> Result<DriveMembershipsResponse> {
-    serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("list-memberships response did not parse: {e}")))
+    let body = super::folder_roles::default_missing_grant_roles(&body);
+    serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("list-memberships response did not parse: {e}")))
 }
 
 // ─── Shared command plumbing ───────────────────────────────────────────────
@@ -1882,21 +1871,16 @@ pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolder
         return Ok(Vec::new());
     }
 
-    let body = http_list_memberships_body(&state.api_client.clone(), &ctx.base_url, &ctx.bearer).await?;
-    my_folder_grants(&body, caps.folder_grant_writes)
+    let resp = http_list_memberships(&state.api_client.clone(), &ctx.base_url, &ctx.bearer).await?;
+    Ok(my_folder_grants(resp.folder_grants, caps.folder_grant_writes))
 }
 
-/// Project a memberships listing body onto the FE's folder-grant rows, each
-/// with its folder's member count.
-fn my_folder_grants(body: &str, folder_grant_writes: bool) -> Result<Vec<MyFolderGrantInfo>> {
-    let resp = parse_memberships(body)?;
-    // Same body, same array: count i belongs to grant i.
-    let counts = super::folder_roles::folder_grant_member_counts(body);
-    Ok(resp
-        .folder_grants
+/// Project the listing's held folder grants onto the FE's rows, each with
+/// its own folder's member count.
+fn my_folder_grants(grants: Vec<FolderGrantEntry>, folder_grant_writes: bool) -> Vec<MyFolderGrantInfo> {
+    grants
         .into_iter()
-        .enumerate()
-        .map(|(i, g)| {
+        .map(|g| {
             let role = super::folder_roles::grant_role(Some(&g.role));
             MyFolderGrantInfo {
                 can_write: super::folder_roles::grant_can_write(&role, folder_grant_writes, g.frozen),
@@ -1907,12 +1891,12 @@ fn my_folder_grants(body: &str, folder_grant_writes: bool) -> Result<Vec<MyFolde
                 path_prefix: g.path_prefix,
                 role,
                 created_at: g.created_at,
-                member_count: present_member_count(counts.get(i).copied().unwrap_or(0)),
+                member_count: present_member_count(g.member_count),
                 frozen: g.frozen,
                 frozen_until: present_text(g.frozen_until),
             }
         })
-        .collect())
+        .collect()
 }
 
 /// Remove a member or a folder holder from a drive this account owns or
@@ -4413,19 +4397,25 @@ mod tests {
     /// or a server without the field) never reaches the FE as a number.
     #[test]
     fn held_folder_grants_carry_their_own_member_count() {
+        // A role-less grant sits between the counted ones: the role fill the
+        // listing goes through must leave each count on its own grant.
         let body = serde_json::json!({
-            "memberships": [],
+            "memberships": [{"owner_ss58":"5O","folder_hash":"h","display_label":"d","role":"writer","grant_blob":"B","created_at":"t","member_count":9}],
             "folder_grants": [
                 {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"a","role":"writer","grant_blob":"B","created_at":"t","member_count":4},
-                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"b","role":"reader","grant_blob":"B","created_at":"t"}
+                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"b","grant_blob":"B","created_at":"t"},
+                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"c","role":"reader","grant_blob":"B","created_at":"t","member_count":1}
             ]
         })
         .to_string();
+        let body = crate::shared_drives::folder_roles::default_missing_grant_roles(&body);
+        let resp: DriveMembershipsResponse = serde_json::from_str(&body).expect("listing parses");
 
-        let grants = my_folder_grants(&body, true).expect("listing parses");
+        let grants = my_folder_grants(resp.folder_grants, true);
         let counts: Vec<_> = grants.iter().map(|g| (g.path_prefix.as_str(), g.member_count)).collect();
-        assert_eq!(counts, [("a", Some(4)), ("b", None)]);
+        assert_eq!(counts, [("a", Some(4)), ("b", None), ("c", Some(1))], "never the drive's 9");
         assert!(grants[0].can_write, "the projection keeps the write decision");
+        assert_eq!(grants[1].role, "reader", "a role-less grant still reads as reader");
 
         let wire = serde_json::to_value(&grants[1]).expect("serialize");
         assert!(wire.get("memberCount").is_none(), "absent stays absent on the IPC");
