@@ -790,3 +790,74 @@ fn a_release_build_looks_for_the_recording_helper_only_inside_the_app() {
         "helper_path must not look outside the app bundle in release builds"
     );
 }
+
+/// Per-platform capture readiness lives in `capture::rollout`, one floor per
+/// (platform, feature). Production must enable exactly the rows marked
+/// production: a staging-only row that leaked into a production build shows
+/// a half-ready platform to every user, and nothing else would notice.
+#[test]
+fn production_enables_only_the_capture_rows_marked_production() {
+    use tauri_project_lib::capture::rollout::{Feature, Platform, enabled, floor};
+    use tauri_project_lib::release_channel::ReleaseChannel;
+
+    for platform in Platform::ALL {
+        for feature in Feature::ALL {
+            let marked_production = floor(platform, feature) == Some(ReleaseChannel::Production);
+            assert_eq!(
+                enabled(ReleaseChannel::Production, platform, feature),
+                marked_production,
+                "{platform:?} {feature:?}: production must follow the row's floor"
+            );
+            let marked_beta_or_later = matches!(floor(platform, feature), Some(ReleaseChannel::Beta | ReleaseChannel::Production));
+            assert_eq!(
+                enabled(ReleaseChannel::Beta, platform, feature),
+                marked_beta_or_later,
+                "{platform:?} {feature:?}: beta must follow the row's floor"
+            );
+        }
+    }
+}
+
+/// An unsigned Windows binary that records the screen and the microphone is
+/// what SmartScreen and Defender look at hardest. Windows recording may reach
+/// production only once the installer is signed (a certificate thumbprint or
+/// a sign command in `tauri.conf.json`).
+#[test]
+fn windows_recording_reaches_production_only_with_a_signed_installer() {
+    use tauri_project_lib::capture::rollout::{Feature, Platform, floor};
+    use tauri_project_lib::release_channel::ReleaseChannel;
+
+    let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
+    let windows = &config["bundle"]["windows"];
+    let signed = !windows["certificateThumbprint"].is_null() || windows.get("signCommand").is_some_and(|c| !c.is_null());
+    if floor(Platform::Windows, Feature::Recording) == Some(ReleaseChannel::Production) {
+        assert!(signed, "Windows recording is marked production but the Windows installer is not signed");
+    }
+}
+
+/// Screen capture carries most of the app's `cfg(windows)` code, and only the
+/// release workflow builds on Windows otherwise. The Windows lane must deny
+/// warnings over every target, run the capture tests, and run for any PR
+/// that touches capture, whatever its base.
+#[test]
+fn the_windows_lane_runs_clippy_and_the_capture_tests_for_capture_prs() {
+    let jobs = workflow_jobs("ci.yml");
+    let windows = jobs.get("rust-windows").expect("ci.yml has a rust-windows job");
+    assert!(
+        windows.script.contains("cargo clippy --all-targets -- -D warnings"),
+        "rust-windows must run clippy over every target with warnings denied"
+    );
+    assert!(
+        windows.script.contains("cargo test --lib \"capture::\""),
+        "rust-windows must run the capture unit tests"
+    );
+    let ci = repo_file("../.github/workflows/ci.yml");
+    assert!(
+        ci.contains("needs.changes.outputs.capture == 'true'"),
+        "rust-windows must run for PRs that touch src-tauri/src/capture/**"
+    );
+    assert!(
+        ci.contains("grep -qE '^src-tauri/src/capture/'"),
+        "the changes job must detect a capture change"
+    );
+}

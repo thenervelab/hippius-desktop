@@ -97,6 +97,14 @@ const MAIN_WINDOW_LABEL: &str = "main";
 /// there.
 pub const CAPTURE_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
 
+/// Whether screenshots are offered here: built for this platform, and the
+/// platform is on this build's lane (`rollout`). Every surface asks this, so
+/// a platform still on staging is simply unsupported on beta and production.
+#[must_use]
+pub fn capture_supported() -> bool {
+    CAPTURE_SUPPORTED && super::rollout::allows(super::rollout::Feature::Screenshots)
+}
+
 /// Whether camera only (the stage) can be recorded here: it records the
 /// camera window by its system window number, which only the macOS recorder
 /// takes. Elsewhere the bar must not offer it.
@@ -610,7 +618,7 @@ fn close_controls(app: &AppHandle) {
 /// A capture already in progress is brought forward, not refused.
 #[tauri::command]
 pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, kind: Option<CaptureKind>, mode: Option<CaptureMode>) -> Result<()> {
-    if !CAPTURE_SUPPORTED {
+    if !capture_supported() {
         return Err(AppError::Validation("Screen capture isn't available on this system yet.".into()));
     }
     let recording_ok = recording::recording_supported();
@@ -1267,6 +1275,10 @@ pub struct OverlayContext {
     /// Whether the camera, if on, is in the video. False for a bubble over a
     /// window recording, which films that one window only.
     pub camera_filmed: bool,
+    /// What this platform's bar may offer (modes, timer, the microphone's
+    /// line), the same as `capture_support` says.
+    #[serde(flatten)]
+    pub surfaces: super::support::Surfaces,
     pub destination: Option<CaptureDestination>,
     /// The area already drawn, on this display or another. At the start of a
     /// capture it is the area last drawn on the bar's display, fitted to it.
@@ -1307,6 +1319,7 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         show_clicks_available: recording::show_clicks_supported(),
         camera_only_available: camera_only_supported(),
         recording_availability: recording::RecordingAvailability::now(),
+        surfaces: super::support::surfaces(),
         destination,
         pending,
     })
@@ -1416,6 +1429,12 @@ pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
     };
     let options = bar::load_options(state.pool()?).await?.for_system(camera_only_supported());
     let selection = if options.camera_shape(kind) == Some(CameraShape::Stage) {
+        // A platform that cannot record says so in the recording's own words,
+        // before any window is looked for: "the camera isn't on screen yet"
+        // would be untrue and could never be fixed by waiting.
+        if let Some(why) = recording::recording_unavailable() {
+            return Err(AppError::Validation(why.message().into()));
+        }
         if !camera_only_supported() {
             return Err(AppError::Validation(
                 "Recording the camera on its own isn't available on this system yet.".into(),
@@ -2294,17 +2313,22 @@ pub struct CaptureSupport {
     /// `recordingUnavailable` (why `recording` is false) and Rust's line for it.
     #[serde(flatten)]
     pub recording_availability: recording::RecordingAvailability,
+    /// What this platform's surfaces may offer: selection, modes, timer,
+    /// system audio, the microphone's line and the shortcut.
+    #[serde(flatten)]
+    pub surfaces: super::support::Surfaces,
 }
 
 #[tauri::command]
 pub fn capture_support() -> CaptureSupport {
     CaptureSupport {
-        supported: CAPTURE_SUPPORTED,
+        supported: capture_supported(),
         recording: recording::recording_supported(),
         camera_only: camera_only_supported(),
         screen_recording_permission: super::permissions::screen_capture_granted(),
         permission_pane: super::permissions::permission_pane_name(cfg!(target_os = "macos"), super::permissions::macos_major()).map(str::to_string),
         recording_availability: recording::RecordingAvailability::now(),
+        surfaces: super::support::surfaces(),
     }
 }
 

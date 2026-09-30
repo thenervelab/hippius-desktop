@@ -34,6 +34,7 @@ import {
   TIMER_OPTIONS,
   toggleScreen,
   type BarMode,
+  type OfferedModes,
 } from "./barText";
 import { stepIndex } from "./keyNav";
 import MicMeter from "./MicMeter";
@@ -168,6 +169,7 @@ function OptionsMenu({
   options,
   destination,
   showClicksAvailable,
+  screenshotTimer,
   onOptions,
   onDestination,
 }: {
@@ -176,6 +178,8 @@ function OptionsMenu({
   options: CaptureOptions;
   destination: CaptureDestination | null;
   showClicksAvailable: boolean;
+  /** Whether this platform offers the screenshot timer (Rust's `screenshotTimer`). */
+  screenshotTimer: boolean;
   onOptions: (next: CaptureOptions) => void;
   onDestination: (next: CaptureDestination) => void;
 }) {
@@ -214,8 +218,9 @@ function OptionsMenu({
       )}
 
       {kind === "screenshot" ? (
-        <>
-          <MenuHeading>Timer</MenuHeading>
+        screenshotTimer && (
+          <>
+            <MenuHeading>Timer</MenuHeading>
           {TIMER_OPTIONS.map((t) => (
             <MenuRow
               key={t.secs}
@@ -226,7 +231,8 @@ function OptionsMenu({
               {t.label}
             </MenuRow>
           ))}
-        </>
+          </>
+        )
       ) : (
         <>
           <MenuHeading>Recording countdown</MenuHeading>
@@ -410,6 +416,7 @@ function SourceRow({
 function SourcesPanel({
   options,
   microphoneAvailable,
+  microphoneUnavailableMessage,
   cameraOnlyAvailable,
   cameraFilmed,
   menu,
@@ -421,6 +428,8 @@ function SourcesPanel({
 }: {
   options: CaptureOptions;
   microphoneAvailable: boolean;
+  /** Rust's line for why the microphone is off here; shown under the dimmed row. */
+  microphoneUnavailableMessage: string | null;
   /** The Screen switch (off = camera only) is offered only where Rust can record the camera alone. */
   cameraOnlyAvailable: boolean;
   /** Whether the camera would be in the video for the mode chosen now (Rust's answer). */
@@ -506,7 +515,7 @@ function SourcesPanel({
         label={sourceLabel(micOn, options.microphoneDevice, microphones, "microphone")}
         menuLabel="Microphone"
         on={options.microphone}
-        caption={microphoneAvailable ? null : "Recording the microphone needs macOS 15 or later"}
+        caption={microphoneAvailable ? null : microphoneUnavailableMessage}
         devices={microphones}
         chosen={options.microphoneDevice}
         open={menu === "microphone"}
@@ -533,7 +542,13 @@ interface Props {
   /** Why the Record modes are shown disabled (`disabledRecordingNote`); null shows them normally or not at all. */
   recordingNote?: string | null;
   microphoneAvailable: boolean;
+  /** Rust's line for why the microphone is off here (`microphoneUnavailableMessage`). */
+  microphoneUnavailableMessage?: string | null;
   showClicksAvailable: boolean;
+  /** The modes each kind may offer (Rust's `modes`); every mode when left out. */
+  modes?: OfferedModes;
+  /** Whether the screenshot timer is offered (Rust's `screenshotTimer`); offered when left out. */
+  screenshotTimer?: boolean;
   /** Camera only (the Screen switch) can be recorded here. */
   cameraOnlyAvailable: boolean;
   /** Whether the camera, if on, is in the video for this mode. */
@@ -643,7 +658,7 @@ export default function CaptureBar(props: Props) {
       .catch(() => undefined);
   };
 
-  const groups = barGroups(props.recordingAvailable, props.recordingNote ?? null);
+  const groups = barGroups(props.recordingAvailable, props.recordingNote ?? null, props.modes);
   const isActive = (entry: BarMode) =>
     entry.kind === kind && entry.mode === mode && !(props.cameraOnly && entry.kind === "recording");
   const pickMode = (entry: BarMode) => {
@@ -678,6 +693,7 @@ export default function CaptureBar(props: Props) {
         <SourcesPanel
           options={options}
           microphoneAvailable={props.microphoneAvailable}
+          microphoneUnavailableMessage={props.microphoneUnavailableMessage ?? null}
           cameraOnlyAvailable={props.cameraOnlyAvailable}
           cameraFilmed={props.cameraFilmed}
           menu={menu}
@@ -744,6 +760,7 @@ export default function CaptureBar(props: Props) {
               options={options}
               destination={destination}
               showClicksAvailable={props.showClicksAvailable}
+              screenshotTimer={props.screenshotTimer ?? true}
               onOptions={saveOptions}
               onDestination={saveDestination}
             />

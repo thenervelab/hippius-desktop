@@ -30,12 +30,13 @@ export const MENU_MODES: readonly CaptureMode[] = ["area", "window", "screen"];
 /**
  * The line to show beside disabled Record modes, or null to show them
  * normally (recording works) or not at all (no recorder on this platform).
- * Only a Mac that could record with another build or a newer macOS gets the
- * disabled modes: a missing helper must be visible, not a vanished feature.
- * The words are Rust's (`recordingUnavailableMessage`).
+ * Every reason but `unsupportedPlatform` gets the disabled modes (a missing
+ * helper, an old OS, a missing codec or portal): something the user or
+ * another build can fix must be visible, not a vanished feature. The words
+ * are Rust's (`recordingUnavailableMessage`).
  */
 export function disabledRecordingNote(availability: RecordingAvailability): string | null {
   const reason = availability.recordingUnavailable;
-  if (reason !== "helperMissing" && reason !== "osTooOld") return null;
+  if (reason === null || reason === "unsupportedPlatform") return null;
   return availability.recordingUnavailableMessage;
 }

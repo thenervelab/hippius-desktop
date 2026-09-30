@@ -82,6 +82,20 @@ pub fn start(mut program: Command, selection: Selection, dest: &Path, options: R
     Ok(Box::new(recorder))
 }
 
+/// This executable in recorder mode (`--capture-recorder`): the recorder on
+/// Windows and Linux, which need no second binary to build, sign or ship.
+///
+/// # Errors
+///
+/// The running executable's path could not be read.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn own_recorder_command() -> Result<Command> {
+    let exe = std::env::current_exe().map_err(|e| AppError::Other(format!("Could not find the app to record with: {e}")))?;
+    let mut program = Command::new(exe);
+    program.arg(crate::capture::recorder_child::RECORDER_FLAG);
+    Ok(program)
+}
+
 /// Run `program` once with `flag` (`--list-microphones`, `--list-cameras`)
 /// and read the device list it prints.
 pub fn list_devices(mut program: Command, flag: &str) -> Vec<MediaDevice> {
@@ -354,11 +368,7 @@ impl Recorder for HelperRecorder {
     }
 
     fn cancel(mut self: Box<Self>) -> Result<()> {
-        let _ = self.command(
-            "cancel",
-            |e| matches!(e, HelperEvent::Cancelled | HelperEvent::Stopped),
-            COMMAND_WITHIN,
-        );
+        let _ = self.command("cancel", |e| matches!(e, HelperEvent::Cancelled | HelperEvent::Stopped), COMMAND_WITHIN);
         self.shutdown();
         if self.output.exists() {
             let _ = std::fs::remove_file(&self.output);
@@ -545,6 +555,15 @@ mod tests {
         assert!(kept_after(&Death::Exited, MIN_PARTIAL_BYTES));
         assert!(!kept_after(&Death::Exited, 100), "a header with no picture is not a recording");
         assert!(!kept_after(&unsaved, 100));
+    }
+
+    /// Windows and Linux record with this very executable, in recorder mode.
+    #[test]
+    fn the_own_recorder_is_this_executable_with_the_flag() {
+        let program = own_recorder_command().unwrap();
+        assert_eq!(program.get_program(), std::env::current_exe().unwrap().as_os_str());
+        let args: Vec<_> = program.get_args().collect();
+        assert_eq!(args, ["--capture-recorder"]);
     }
 
     /// A recorder that never says `ready` fails the start rather than

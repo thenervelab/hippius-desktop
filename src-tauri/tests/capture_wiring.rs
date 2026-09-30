@@ -593,3 +593,61 @@ fn the_tray_is_written_only_when_its_text_changes() {
     let show = fn_body(&src, "fn show_phase_in_tray(");
     assert!(show.contains("tray_needs_write("), "the tray is written only when its text changes");
 }
+
+/// The recorder child is the app's own executable. If `main` reached the
+/// builder first, every recording would open a second window, tray and
+/// single-instance handler (which would hand the argv to the running app and
+/// exit), so the branch must come before all of it.
+#[test]
+fn the_recorder_child_branches_before_the_app_boots() {
+    let main = read("src/main.rs");
+    let body = fn_body(&main, "fn main()");
+    let branch = body.find("argv_requests_recorder(").expect("main branches into the recorder child");
+    for later in ["load_env()", "init_logging()", "Builder::default()"] {
+        let at = body.find(later).unwrap_or_else(|| panic!("main calls {later}"));
+        assert!(branch < at, "the recorder child must branch before {later}");
+    }
+    assert!(body[branch..].contains("recorder_child::run("), "the branch runs the recorder child");
+}
+
+/// Windows and Linux record with this executable in recorder mode, and the
+/// flag the app passes is the one `main` looks for.
+#[test]
+fn the_app_starts_its_recorder_with_the_flag_main_looks_for() {
+    let helper = read("src/capture/recording/helper.rs");
+    assert!(fn_body(&helper, "pub fn own_recorder_command(").contains("recorder_child::RECORDER_FLAG"));
+    let cli = read("src/cli.rs");
+    assert!(fn_body(&cli, "pub fn argv_requests_recorder<").contains("recorder_child::RECORDER_FLAG"));
+    let child = read("src/capture/recorder_child/mod.rs");
+    assert!(child.contains("pub const RECORDER_FLAG: &str = \"--capture-recorder\";"));
+    for platform in ["src/capture/recording/windows.rs", "src/capture/recording/linux.rs"] {
+        assert!(
+            fn_body(&read(platform), "pub fn helper_command(").contains("own_recorder_command()"),
+            "{platform} records with the app's own executable"
+        );
+    }
+}
+
+/// Screenshots and recording follow the per-platform rollout, so a platform
+/// still on staging is simply unsupported on beta and production.
+#[test]
+fn capture_follows_the_rollout_gate() {
+    let src = read("src/capture/commands.rs");
+    assert!(fn_body(&src, "pub fn capture_supported()").contains("rollout::allows(super::rollout::Feature::Screenshots)"));
+    assert!(fn_body(&src, "pub async fn capture_start(").contains("!capture_supported()"));
+    assert!(fn_body(&src, "pub fn capture_support()").contains("supported: capture_supported()"));
+    let recording = read("src/capture/recording/mod.rs");
+    assert!(fn_body(&recording, "pub fn recording_unavailable()").contains("rollout::allows(super::rollout::Feature::Recording)"));
+}
+
+/// Camera only on a platform that cannot record says so in the recording's
+/// own words before looking for the camera window (whose absence would read
+/// as "try again in a moment", which never helps).
+#[test]
+fn camera_only_refuses_with_the_recording_line_first() {
+    let src = read("src/capture/commands.rs");
+    let confirm = fn_body(&src, "pub async fn capture_confirm(");
+    let refusal = confirm.find("recording::recording_unavailable()").expect("checks recording first");
+    let lookup = confirm.find("camera_window_id(").expect("looks for the camera");
+    assert!(refusal < lookup);
+}

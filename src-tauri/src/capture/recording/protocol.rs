@@ -331,13 +331,7 @@ mod tests {
     /// What the app writes, the child reads back unchanged.
     #[test]
     fn a_start_line_round_trips_through_the_child() {
-        let cmd = StartCommand::from_selection(
-            2,
-            Selection::Window { window_id: 99 },
-            Path::new("/tmp/w.mp4"),
-            RecordOptions::default(),
-        )
-        .unwrap();
+        let cmd = StartCommand::from_selection(2, Selection::Window { window_id: 99 }, Path::new("/tmp/w.mp4"), RecordOptions::default()).unwrap();
         let line = serde_json::to_string(&cmd).unwrap();
         assert_eq!(parse_command(&line), Ok(Command::Start(cmd)));
     }

@@ -3,11 +3,14 @@
 //! Every platform records in another process driven by the same
 //! [`helper::HelperRecorder`] over one protocol ([`protocol`]): macOS runs the
 //! Swift helper (ScreenCaptureKit to H.264 MP4); Windows and Linux will run
-//! the app's own executable as `--capture-recorder`. Until their recorders land, recording is
+//! the app's own executable as `--capture-recorder`
+//! (`capture::recorder_child`). Until their recorders land, recording is
 //! unavailable there (`UnsupportedPlatform`) and Record stays hidden.
 //! Plan: `docs/plans/2026-10-01-capture-windows-linux.md`.
 
 pub mod helper;
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod protocol;
@@ -199,10 +202,22 @@ pub enum RecordingUnavailable {
     /// `tauri build` that skipped `macos/embed-capture-helper.sh`, or a
     /// staging build made without the finalize step.
     HelperMissing,
-    /// ScreenCaptureKit recording needs macOS 13.
+    /// The OS is below the recorder's floor: macOS 13 (ScreenCaptureKit),
+    /// Windows 10 version 2004 (Windows.Graphics.Capture's controls).
     OsTooOld,
-    /// No recorder on this platform yet (Windows, Linux).
+    /// No recorder on this platform (or in this lane) yet.
     UnsupportedPlatform,
+    /// Linux: no H.264 or AAC encoder among the distro's GStreamer plugins.
+    /// Produced once the Linux recorder lands (Phase 4 of the parity plan).
+    #[allow(dead_code)]
+    CodecsMissing,
+    /// Wayland: no xdg-desktop-portal ScreenCast backend to ask.
+    #[allow(dead_code)]
+    PortalMissing,
+    /// Windows N and KN editions without the Media Feature Pack have no
+    /// H.264 or AAC encoder.
+    #[allow(dead_code)]
+    MediaFeaturePackMissing,
 }
 
 impl RecordingUnavailable {
@@ -211,9 +226,27 @@ impl RecordingUnavailable {
     pub const fn message(self) -> &'static str {
         match self {
             Self::HelperMissing => "Screen recording isn't included in this build.",
-            Self::OsTooOld => "Screen recording needs macOS 13 or later.",
+            Self::OsTooOld => os_too_old_message(),
             Self::UnsupportedPlatform => "Screen recording isn't available on this system yet.",
+            Self::CodecsMissing => {
+                "Screen recording needs video codecs your system doesn't have. Install gstreamer1.0-plugins-ugly and gstreamer1.0-libav (Ubuntu, Debian) or gstreamer1-plugin-openh264 (Fedora), then restart Hippius."
+            }
+            Self::PortalMissing => {
+                "Screen recording needs your desktop's screen sharing service (xdg-desktop-portal). Install it for your desktop, then sign out and back in."
+            }
+            Self::MediaFeaturePackMissing => {
+                "Screen recording needs the Windows Media Feature Pack. Add it in Settings, Apps, Optional features, then restart Hippius."
+            }
         }
+    }
+}
+
+/// The OS floor, named for the system it is said on.
+const fn os_too_old_message() -> &'static str {
+    if cfg!(windows) {
+        "Screen recording needs Windows 10 version 2004 or later."
+    } else {
+        "Screen recording needs macOS 13 or later."
     }
 }
 
@@ -234,16 +267,24 @@ const fn unavailable_reason(platform_records: bool, os_supported: bool, helper_p
 
 /// Why recording is unavailable on this machine and build; `None` = it works.
 pub fn recording_unavailable() -> Option<RecordingUnavailable> {
+    // A platform still below this lane's floor (`rollout`) reports exactly
+    // what a platform without a recorder does.
+    let on_this_lane = super::rollout::allows(super::rollout::Feature::Recording);
     #[cfg(target_os = "macos")]
     {
-        unavailable_reason(true, macos::os_supports_recording(), macos::helper_present())
+        unavailable_reason(on_this_lane, macos::os_supports_recording(), macos::helper_present())
     }
     #[cfg(windows)]
     {
-        unavailable_reason(windows::recording_supported(), true, true)
+        unavailable_reason(on_this_lane && windows::recording_supported(), true, true)
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(target_os = "linux")]
     {
+        unavailable_reason(on_this_lane && linux::recording_supported(), true, true)
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    {
+        let _ = on_this_lane;
         unavailable_reason(false, true, true)
     }
 }
@@ -309,7 +350,11 @@ pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Resul
     {
         windows::start(selection, dest, options)
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::start(selection, dest, options)
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
         let _ = (selection, dest, options);
         Err(AppError::Validation("Screen recording isn't available on this system yet.".into()))
@@ -333,6 +378,18 @@ mod tests {
         assert_eq!(unavailable_reason(true, false, true), Some(RecordingUnavailable::OsTooOld));
     }
 
+    /// The floor is named for the system the user is on: a Windows user is
+    /// never told to update macOS.
+    #[test]
+    fn the_os_floor_names_this_system() {
+        let line = RecordingUnavailable::OsTooOld.message();
+        if cfg!(windows) {
+            assert_eq!(line, "Screen recording needs Windows 10 version 2004 or later.");
+        } else {
+            assert_eq!(line, "Screen recording needs macOS 13 or later.");
+        }
+    }
+
     #[test]
     fn a_platform_with_no_recorder_says_so_first() {
         assert_eq!(unavailable_reason(false, false, false), Some(RecordingUnavailable::UnsupportedPlatform));
@@ -352,9 +409,18 @@ mod tests {
         );
         let old = serde_json::to_value(RecordingAvailability::from_reason(Some(RecordingUnavailable::OsTooOld))).unwrap();
         assert_eq!(old["recordingUnavailable"], "osTooOld");
-        assert_eq!(old["recordingUnavailableMessage"], "Screen recording needs macOS 13 or later.");
+        assert_eq!(old["recordingUnavailableMessage"], os_too_old_message());
         let platform = serde_json::to_value(RecordingAvailability::from_reason(Some(RecordingUnavailable::UnsupportedPlatform))).unwrap();
         assert_eq!(platform["recordingUnavailable"], "unsupportedPlatform");
+        for (reason, wire) in [
+            (RecordingUnavailable::CodecsMissing, "codecsMissing"),
+            (RecordingUnavailable::PortalMissing, "portalMissing"),
+            (RecordingUnavailable::MediaFeaturePackMissing, "mediaFeaturePackMissing"),
+        ] {
+            let v = serde_json::to_value(RecordingAvailability::from_reason(Some(reason))).unwrap();
+            assert_eq!(v["recordingUnavailable"], wire);
+            assert!(v["recordingUnavailableMessage"].as_str().is_some_and(|m| !m.is_empty()));
+        }
         let works = serde_json::to_value(RecordingAvailability::from_reason(None)).unwrap();
         assert_eq!(
             works,

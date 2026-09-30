@@ -86,7 +86,31 @@ export interface CaptureSavedOptions {
   cameraFilmed: boolean;
 }
 
-export interface CaptureOverlayContext extends RecordingAvailability {
+/** How what to capture is chosen: Hippius's overlay, or the desktop's own picker (Wayland). Mirrors Rust's `SelectionUi`. */
+export type CaptureSelectionUi = "overlay" | "systemPicker";
+
+/** How the capture shortcut is registered on this platform. Mirrors Rust's `ShortcutVia`. */
+export type CaptureShortcutVia = "plugin" | "portal" | "desktopSettings";
+
+/**
+ * What this platform's capture surfaces may offer (Rust's `support::Surfaces`),
+ * flattened into `capture_support` and the overlay context. Rust decides; the
+ * frontend never checks the platform.
+ */
+export interface CaptureSurfaces {
+  selection: CaptureSelectionUi;
+  /** The modes each kind may offer; Record's are also subject to `recordingUnavailable`. */
+  modes: { screenshot: CaptureMode[]; recording: CaptureMode[] };
+  /** Whether the screenshot timer is offered. */
+  screenshotTimer: boolean;
+  /** Whether a recording carries the system's sound. */
+  systemAudio: boolean;
+  /** Rust's line for why the microphone cannot be recorded; null when it can. */
+  microphoneUnavailableMessage: string | null;
+  shortcut: { supported: boolean; via: CaptureShortcutVia };
+}
+
+export interface CaptureOverlayContext extends RecordingAvailability, CaptureSurfaces {
   mode: CaptureMode;
   displayId: number;
   kind: CaptureKind;
@@ -297,11 +321,18 @@ export interface CaptureDelivered {
 }
 
 /**
- * Why recording is unavailable (Rust's `RecordingUnavailable`). A Mac that
- * lacks the helper or macOS 13 shows the Record modes disabled with Rust's
- * line; a platform with no recorder hides them (`disabledRecordingNote`).
+ * Why recording is unavailable (Rust's `RecordingUnavailable`). Every reason
+ * but `unsupportedPlatform` shows the Record modes disabled with Rust's line
+ * (a missing helper, an old OS, a missing codec or portal); a platform with
+ * no recorder hides them (`disabledRecordingNote`).
  */
-export type RecordingUnavailable = "helperMissing" | "osTooOld" | "unsupportedPlatform";
+export type RecordingUnavailable =
+  | "helperMissing"
+  | "osTooOld"
+  | "unsupportedPlatform"
+  | "codecsMissing"
+  | "portalMissing"
+  | "mediaFeaturePackMissing";
 
 /** Flattened into `capture_support` and the overlay context. */
 export interface RecordingAvailability {
@@ -310,7 +341,7 @@ export interface RecordingAvailability {
   recordingUnavailableMessage: string | null;
 }
 
-export interface CaptureSupport extends RecordingAvailability {
+export interface CaptureSupport extends RecordingAvailability, CaptureSurfaces {
   supported: boolean;
   recording: boolean;
   /** Camera only (screen off) may be offered. */
