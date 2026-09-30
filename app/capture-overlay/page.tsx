@@ -28,13 +28,14 @@ import {
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { CAPTURE_ACCENT, GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
-import { disabledRecordingNote } from "@/app/lib/capture/modes";
+import { disabledRecordingNote, supportedModesOf } from "@/app/lib/capture/modes";
 import CaptureBar from "./CaptureBar";
 import SharePicker from "./SharePicker";
 import { barHint, LAST_AREA_KEY } from "./barText";
 import { isFromControl } from "./keyNav";
 import { selectionFor, type SharePick } from "./sharePickerState";
 import { pollWindows } from "./windowRefresh";
+import { captureCursor, isClickToCapture, spaceToggleMode } from "./clickCapture";
 import {
   dragRect,
   fitRect,
@@ -141,9 +142,14 @@ export default function CaptureOverlayPage() {
   // Where the pointer last was, so a refreshed window list re-picks the hover.
   const lastPoint = useRef<Point | null>(null);
   // What the key handler needs from the latest render, without re-binding.
-  const latest = useRef<{ rect: LogicalRect | null; nudge: ((next: LogicalRect) => void) | null }>({
+  const latest = useRef<{
+    rect: LogicalRect | null;
+    nudge: ((next: LogicalRect) => void) | null;
+    dragging: boolean;
+  }>({
     rect: null,
     nudge: null,
+    dragging: false,
   });
 
   const load = useCallback(async () => {
@@ -334,6 +340,18 @@ export default function CaptureOverlayPage() {
         return;
       }
       if (countdown !== null || inFlightRef.current) return;
+      // Space swaps window and area, as it does in macOS's ⌘⇧4. Not mid-drag,
+      // and not with the camera alone (nothing on screen is chosen then).
+      if (e.key === " " && context && !latest.current.dragging) {
+        const stage = context.kind === "recording" && cameraShape === "stage";
+        const next = stage ? null : spaceToggleMode(context.mode, context.kind, supportedModesOf(context));
+        if (next) {
+          e.preventDefault();
+          setNotice(null);
+          void setCaptureMode(context.kind, next).catch((error) => setNotice(errorMessage(error)));
+        }
+        return;
+      }
       const { rect: area, nudge } = latest.current;
       const next = area && nudge ? nudgeRect(area, e.key, e.shiftKey, bounds()) : null;
       if (next && nudge) {
@@ -343,7 +361,7 @@ export default function CaptureOverlayPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirm, countdown, picker, skipCountdown]);
+  }, [confirm, countdown, picker, skipCountdown, context, cameraShape]);
 
   if (!context || displayId === null) return null;
   const { kind } = context;
@@ -364,7 +382,7 @@ export default function CaptureOverlayPage() {
       void setCapturePending({ target: "area", displayId, rect: next }).catch(() => undefined);
     }
   };
-  latest.current = { rect: mode === "area" && !drag ? rect : null, nudge: commitArea };
+  latest.current = { rect: mode === "area" && !drag ? rect : null, nudge: commitArea, dragging: drag !== null };
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || counting) return;
@@ -419,6 +437,8 @@ export default function CaptureOverlayPage() {
   const highlight: LogicalRect | null = mode === "area" ? liveArea : mode === "window" ? hovered : null;
   const screenLit = mode === "screen" && pointerHere;
 
+  // Window and screen are click-to-capture: the camera cursor (a record-dot
+  // camera for recordings), as in macOS's ⌘⇧4 then Space.
   const cursor =
     counting || mode === "none"
       ? "default"
@@ -428,7 +448,9 @@ export default function CaptureOverlayPage() {
           : drag?.op === "move"
             ? "grabbing"
             : "crosshair"
-        : "pointer";
+        : isClickToCapture(mode)
+          ? captureCursor(kind)
+          : "pointer";
 
   const onMode = (nextKind: CaptureKind, nextMode: CaptureMode) => {
     setNotice(null);
@@ -436,7 +458,9 @@ export default function CaptureOverlayPage() {
   };
 
   const enterKey = enterKeyName();
-  const hint = notice ?? barHint(kind, context.mode, Boolean(rect) || areaElsewhere, cameraOnly, enterKey);
+  const spaceForArea = spaceToggleMode(context.mode, kind, supportedModesOf(context)) === "area";
+  const hint =
+    notice ?? barHint(kind, context.mode, Boolean(rect) || areaElsewhere, cameraOnly, enterKey, spaceForArea);
   // Said once with what it is counting to, then the bare numbers.
   const countdownSpeech =
     countdown === null || countdown <= 0
@@ -504,7 +528,12 @@ export default function CaptureOverlayPage() {
         })}
 
       {screenLit && (
-        <div className="pointer-events-none absolute inset-0" style={{ outline: `3px solid ${FRAME}`, outlineOffset: -3 }}>
+        <div
+          className="pointer-events-none absolute inset-0"
+          // A light tint as well as the frame: the display under the pointer
+          // is the one a click (or Return) takes.
+          style={{ outline: `3px solid ${FRAME}`, outlineOffset: -3, background: "rgba(49,103,221,0.08)" }}
+        >
           {!counting && (
             <span className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-[#000]/70 px-4 py-2 text-sm font-medium text-white shadow-lg">
               <KindIcon className="size-4" />
@@ -542,35 +571,40 @@ export default function CaptureOverlayPage() {
       )}
 
       {context.hostsBar && !counting && (
-        <CaptureBar
-          kind={kind}
-          mode={context.mode}
-          cameraOnly={cameraOnly}
-          options={context.options}
-          destination={context.destination}
-          recordingAvailable={context.recordingAvailable}
-          recordingNote={disabledRecordingNote(context)}
-          microphoneAvailable={context.microphoneAvailable}
-          showClicksAvailable={context.showClicksAvailable}
-          cameraOnlyAvailable={context.cameraOnlyAvailable}
-          cameraFilmed={context.cameraFilmed}
-          hint={hint}
-          enterKey={enterKey}
-          onMode={onMode}
-          onChoose={(tab) => {
-            setNotice(null);
-            setPicker(tab);
-          }}
-          onConfirm={confirm}
-          onCancel={() => void cancelCapture()}
-          onOptionsSaved={(saved) =>
-            // Rust says what the countdown and the camera are now; the bar does not work them out.
-            setContext((c) =>
-              c ? { ...c, options: saved.options, countdownSecs: saved.countdownSecs, cameraFilmed: saved.cameraFilmed } : c,
-            )
-          }
-          onDestinationSaved={(destination) => setContext((c) => (c ? { ...c, destination } : c))}
-        />
+        // The bar stays up but out of the way of click-to-capture: over it the
+        // pointer is a plain arrow and no window is lit, and its own handlers
+        // keep a click on it from choosing anything underneath.
+        <div data-testid="capture-bar-slot" style={{ cursor: "default" }} onPointerEnter={() => setHovered(null)}>
+          <CaptureBar
+            kind={kind}
+            mode={context.mode}
+            cameraOnly={cameraOnly}
+            options={context.options}
+            destination={context.destination}
+            recordingAvailable={context.recordingAvailable}
+            recordingNote={disabledRecordingNote(context)}
+            microphoneAvailable={context.microphoneAvailable}
+            showClicksAvailable={context.showClicksAvailable}
+            cameraOnlyAvailable={context.cameraOnlyAvailable}
+            cameraFilmed={context.cameraFilmed}
+            hint={hint}
+            enterKey={enterKey}
+            onMode={onMode}
+            onChoose={(tab) => {
+              setNotice(null);
+              setPicker(tab);
+            }}
+            onConfirm={confirm}
+            onCancel={() => void cancelCapture()}
+            onOptionsSaved={(saved) =>
+              // Rust says what the countdown and the camera are now; the bar does not work them out.
+              setContext((c) =>
+                c ? { ...c, options: saved.options, countdownSecs: saved.countdownSecs, cameraFilmed: saved.cameraFilmed } : c,
+              )
+            }
+            onDestinationSaved={(destination) => setContext((c) => (c ? { ...c, destination } : c))}
+          />
+        </div>
       )}
 
       {context.hostsBar && picker !== null && !counting && (

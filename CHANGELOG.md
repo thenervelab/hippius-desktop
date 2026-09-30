@@ -19,9 +19,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **Screenshot and Record are one click away in Drive.** The Capture menu is
   now two buttons, Screenshot and Record, on the Drive page and inside every
-  drive (including drives shared with you), with "…" beside them for the
-  capture shortcut and choosing which drive captures go to. On a narrow
-  window they shrink to icons.
+  drive (including drives shared with you). Each opens its own menu: capture
+  an area, a window or the entire screen, open the capture bar, or choose
+  which drive captures go to. On a narrow window they shrink to icons.
+
+- **Capturing a window or a whole screen is a single click, like on a Mac.**
+  The pointer turns into a camera, the window under it lights up with its
+  name, and clicking takes it; for the entire screen, click the display you
+  want. Press Space to switch between picking a window and dragging an area.
 
 - **Share by email or by link from one place.** The Share dialog now opens
   with two tabs at the top, By email and By link, instead of separate

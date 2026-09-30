@@ -248,14 +248,20 @@ pub fn fit_area(rect: LogicalRect, width: f64, height: f64) -> Option<LogicalRec
 /// Windows), which is how `targets::list_displays` reports them.
 #[must_use]
 pub fn bar_display(displays: &[DisplayTarget], cursor: Option<(f64, f64)>) -> Option<u32> {
-    let under_cursor = cursor.and_then(|(x, y)| {
-        displays.iter().find(|d| {
-            x >= f64::from(d.x) && x < f64::from(d.x) + f64::from(d.width) && y >= f64::from(d.y) && y < f64::from(d.y) + f64::from(d.height)
-        })
-    });
-    under_cursor
-        .or_else(|| displays.iter().find(|d| d.is_primary))
-        .or_else(|| displays.first())
+    display_under(displays, cursor)
+        .or_else(|| displays.iter().find(|d| d.is_primary).map(|d| d.id))
+        .or_else(|| displays.first().map(|d| d.id))
+}
+
+/// The display the pointer is on, or `None` when the pointer is unknown or
+/// on none of them. `cursor` is in the displays' own space, as for
+/// [`bar_display`].
+#[must_use]
+pub fn display_under(displays: &[DisplayTarget], cursor: Option<(f64, f64)>) -> Option<u32> {
+    let (x, y) = cursor?;
+    displays
+        .iter()
+        .find(|d| x >= f64::from(d.x) && x < f64::from(d.x) + f64::from(d.width) && y >= f64::from(d.y) && y < f64::from(d.y) + f64::from(d.height))
         .map(|d| d.id)
 }
 
@@ -305,23 +311,30 @@ pub enum ConfirmError {
     NeedsWindowClick,
 }
 
-/// What pressing Capture / Record takes.
+/// What pressing Capture / Record (or Return) takes.
 ///
 /// An area is whatever rectangle is drawn, on whichever display it is on; a
-/// screen is the display the button was pressed on; a window is chosen by
-/// clicking it, so the button alone cannot pick one.
+/// screen is the display under the pointer, as a click would take it (the
+/// keyboard is on the bar's overlay, which need not be the display the user
+/// is pointing at), else the one the button was pressed on; a window is
+/// chosen by clicking it, so the button alone cannot pick one.
 ///
 /// # Errors
 ///
 /// [`ConfirmError`] when there is nothing to take yet.
-pub fn resolve_confirm(mode: CaptureMode, pending_area: Option<Selection>, pressed_on_display: u32) -> std::result::Result<Selection, ConfirmError> {
+pub fn resolve_confirm(
+    mode: CaptureMode,
+    pending_area: Option<Selection>,
+    pressed_on_display: u32,
+    under_pointer: Option<u32>,
+) -> std::result::Result<Selection, ConfirmError> {
     match mode {
         CaptureMode::Area => match pending_area {
             Some(area @ Selection::Area { .. }) => Ok(area),
             _ => Err(ConfirmError::NoArea),
         },
         CaptureMode::Screen => Ok(Selection::Screen {
-            display_id: pressed_on_display,
+            display_id: under_pointer.unwrap_or(pressed_on_display),
         }),
         CaptureMode::Window => Err(ConfirmError::NeedsWindowClick),
     }
@@ -412,14 +425,43 @@ mod tests {
                 height: 200.0,
             },
         };
-        assert_eq!(resolve_confirm(CaptureMode::Area, Some(area), 1), Ok(area));
-        assert_eq!(resolve_confirm(CaptureMode::Area, None, 1), Err(ConfirmError::NoArea));
+        assert_eq!(resolve_confirm(CaptureMode::Area, Some(area), 1, None), Ok(area));
+        // The pointer never moves an area to another display.
+        assert_eq!(resolve_confirm(CaptureMode::Area, Some(area), 1, Some(1)), Ok(area));
+        assert_eq!(resolve_confirm(CaptureMode::Area, None, 1, None), Err(ConfirmError::NoArea));
         assert_eq!(
-            resolve_confirm(CaptureMode::Area, Some(Selection::Screen { display_id: 1 }), 1),
+            resolve_confirm(CaptureMode::Area, Some(Selection::Screen { display_id: 1 }), 1, None),
             Err(ConfirmError::NoArea)
         );
-        assert_eq!(resolve_confirm(CaptureMode::Screen, None, 3), Ok(Selection::Screen { display_id: 3 }));
-        assert_eq!(resolve_confirm(CaptureMode::Window, Some(area), 1), Err(ConfirmError::NeedsWindowClick));
+        assert_eq!(
+            resolve_confirm(CaptureMode::Screen, None, 3, None),
+            Ok(Selection::Screen { display_id: 3 })
+        );
+        assert_eq!(
+            resolve_confirm(CaptureMode::Window, Some(area), 1, Some(1)),
+            Err(ConfirmError::NeedsWindowClick)
+        );
+    }
+
+    /// Return in entire-screen mode takes the display the user points at,
+    /// as a click would, not the one whose overlay has the keyboard.
+    #[test]
+    fn return_takes_the_screen_under_the_pointer() {
+        let displays = [display(1, 0, 0, 1440, 900, true), display(2, 1440, 0, 1920, 1080, false)];
+        let under = display_under(&displays, Some((2000.0, 300.0)));
+        assert_eq!(under, Some(2));
+        assert_eq!(
+            resolve_confirm(CaptureMode::Screen, None, 1, under),
+            Ok(Selection::Screen { display_id: 2 })
+        );
+        // Pointer unknown or between displays: the display the key was pressed on.
+        assert_eq!(display_under(&displays, None), None);
+        assert_eq!(display_under(&displays, Some((5000.0, 5000.0))), None);
+        assert_eq!(bar_display(&displays, Some((5000.0, 5000.0))), Some(1));
+        assert_eq!(
+            resolve_confirm(CaptureMode::Screen, None, 1, None),
+            Ok(Selection::Screen { display_id: 1 })
+        );
     }
 
     #[test]

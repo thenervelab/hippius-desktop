@@ -443,3 +443,157 @@ describe("window mode's live window list", () => {
     expect(refreshes()).toBe(0);
   });
 });
+
+// jsdom has no PointerEvent, and without one a pointer event loses its
+// coordinates; a MouseEvent carries them.
+if (typeof window.PointerEvent === "undefined") {
+  class PointerEventWithCoords extends MouseEvent {
+    pointerId: number;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 1;
+    }
+  }
+  Object.defineProperty(window, "PointerEvent", { value: PointerEventWithCoords, configurable: true });
+}
+
+describe("click to capture", () => {
+  const FINDER = { id: 11, appName: "Finder", title: "Downloads", x: 0, y: 0, width: 300, height: 200 };
+  const SAFARI = { id: 22, appName: "Safari", title: "News", x: 400, y: 0, width: 300, height: 200 };
+  const surface = (container: HTMLElement) => container.firstElementChild as HTMLElement;
+  const move = (el: HTMLElement, x: number, y: number) => fireEvent.pointerMove(el, { clientX: x, clientY: y });
+  const click = (el: HTMLElement, x: number, y: number) => {
+    fireEvent.pointerDown(el, { clientX: x, clientY: y, button: 0 });
+    fireEvent.pointerUp(el, { clientX: x, clientY: y, button: 0 });
+  };
+
+  beforeEach(() => {
+    tauri.onInvoke("capture_select", () => new Promise(() => undefined));
+    tauri.onInvoke("capture_set_mode", () => null);
+  });
+
+  it("shows the camera cursor for a screenshot and the record-dot camera for a recording", async () => {
+    const shot = setup({ mode: "window", pending: null, windows: [FINDER] });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    const shotCursor = surface(shot.container).style.cursor;
+    expect(shotCursor).toContain("data:image/svg+xml");
+    expect(shotCursor).not.toContain("FF453A");
+    shot.unmount();
+
+    const rec = setup({ kind: "recording", mode: "window", pending: null, windows: [FINDER] });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(surface(rec.container).style.cursor).toContain("FF453A");
+  });
+
+  it("lights the window under the pointer, following it, and one click takes that window", async () => {
+    const { container } = setup({ mode: "window", pending: null, windows: [FINDER, SAFARI] });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    const el = surface(container);
+    move(el, 50, 50);
+    expect(await screen.findByText("Finder")).toBeInTheDocument();
+    move(el, 450, 50);
+    expect(await screen.findByText("Safari")).toBeInTheDocument();
+    expect(screen.queryByText("Finder")).toBeNull();
+    click(el, 450, 50);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_select", { selection: { target: "window", windowId: 22 } }),
+    );
+    // No need to press the bar's button as well.
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("takes nothing for a click where no window is", async () => {
+    const { container } = setup({ mode: "window", pending: null, windows: [FINDER] });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    click(surface(container), 900, 500);
+    expect(called("capture_select")).toBe(false);
+  });
+
+  it("still counts down the screenshot timer after the click", async () => {
+    const { container } = setup({ mode: "window", pending: null, windows: [FINDER], countdownSecs: 5 });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    click(surface(container), 50, 50);
+    expect(screen.getByText("Capturing in 5")).toBeInTheDocument();
+    expect(called("capture_select")).toBe(false);
+  });
+
+  it("cancels on Escape", async () => {
+    setup({ mode: "window", pending: null, windows: [FINDER] });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(called("capture_cancel")).toBe(true));
+  });
+
+  it("switches between window and area on Space, as macOS does", async () => {
+    setup({ mode: "window", pending: null, windows: [FINDER] });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(screen.getByRole("status")).toHaveTextContent("press Space to drag an area");
+    fireEvent.keyDown(window, { key: " " });
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_mode", { kind: "screenshot", mode: "area" }),
+    );
+  });
+
+  it("switches from area to window on Space", async () => {
+    setup({ mode: "area" });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    fireEvent.keyDown(window, { key: " " });
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_mode", { kind: "screenshot", mode: "window" }),
+    );
+  });
+
+  it("does not switch to a mode Rust does not offer on this platform", async () => {
+    setup({ mode: "window", pending: null, windows: [FINDER], modes: { screenshot: ["window", "screen"] } } as Partial<CaptureOverlayContext>);
+    await screen.findByRole("toolbar", { name: "Capture" });
+    fireEvent.keyDown(window, { key: " " });
+    expect(called("capture_set_mode")).toBe(false);
+    expect(screen.getByRole("status")).not.toHaveTextContent("Space");
+  });
+
+  it("leaves Space on a focused bar button to the button", async () => {
+    setup({ mode: "window", pending: null, windows: [FINDER] });
+    const options = await screen.findByRole("button", { name: /Options/ });
+    options.focus();
+    fireEvent.keyDown(options, { key: " " });
+    expect(called("capture_set_mode")).toBe(false);
+  });
+
+  it("lights nothing while the pointer is over the capture bar", async () => {
+    const { container } = setup({ mode: "window", pending: null, windows: [FINDER] });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    move(surface(container), 50, 50);
+    expect(await screen.findByText("Finder")).toBeInTheDocument();
+    fireEvent.pointerOver(screen.getByRole("toolbar", { name: "Capture" }));
+    await waitFor(() => expect(screen.queryByText("Finder")).toBeNull());
+    expect(screen.getByTestId("capture-bar-slot").style.cursor).toBe("default");
+  });
+
+  it("captures the display under the pointer with one click in entire-screen mode", async () => {
+    const { container } = setup({ mode: "screen", pending: null });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    const el = surface(container);
+    expect(el.style.cursor).toContain("data:image/svg+xml");
+    move(el, 300, 300);
+    expect(await screen.findByText("Click to capture this screen")).toBeInTheDocument();
+    click(el, 300, 300);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_select", { selection: { target: "screen", displayId: 1 } }),
+    );
+  });
+
+  // Return goes through Rust, which takes the display under the pointer.
+  it("asks Rust to take the screen on Return", async () => {
+    setup({ mode: "screen", pending: null });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    fireEvent.keyDown(window, { key: "Enter" });
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 1 }));
+  });
+
+  it("does not toggle on Space in entire-screen mode", async () => {
+    setup({ mode: "screen", pending: null });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    fireEvent.keyDown(window, { key: " " });
+    expect(called("capture_set_mode")).toBe(false);
+  });
+});

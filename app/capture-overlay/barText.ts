@@ -42,7 +42,7 @@ export function confirmLabel(kind: CaptureKind): string {
 /**
  * The line above the bar. `hasArea` is whether an area is drawn anywhere;
  * `enterKey` is the key's name on this platform ("Return" on a Mac, "Enter"
- * elsewhere).
+ * elsewhere); `spaceForArea` is whether Space switches window mode to area.
  */
 export function barHint(
   kind: CaptureKind,
@@ -50,10 +50,13 @@ export function barHint(
   hasArea: boolean,
   cameraOnly = false,
   enterKey = "Return",
+  spaceForArea = false,
 ): string {
   if (kind === "recording" && cameraOnly) return `Drag your camera where you like, then press ${enterKey} to record`;
   const verb = kind === "recording" ? "record" : "capture";
-  if (mode === "window") return `Click a window to ${verb} it`;
+  if (mode === "window") {
+    return spaceForArea ? `Click a window to ${verb} it, or press Space to drag an area` : `Click a window to ${verb} it`;
+  }
   if (mode === "screen") return `Click a screen to ${verb} it, or press ${enterKey}`;
   return hasArea
     ? `Drag or use the arrow keys to adjust, then double-click or press ${enterKey} to ${verb}`

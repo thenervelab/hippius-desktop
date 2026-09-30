@@ -1428,9 +1428,12 @@ pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
         Selection::Window { window_id }
     } else {
         let pending = *lock(&state.capture.pending);
+        // Entire screen: the display under the pointer, as a click takes it.
+        let displays = lock(&state.capture.displays).clone();
+        let under_pointer = bar::display_under(&displays, cursor_point(&app, &displays));
         // The window-mode refusal ("Click a window to choose it.") is Rust's
         // too: the bar shows this error as it is.
-        bar::resolve_confirm(mode, pending, display_id).map_err(|e| AppError::Validation(e.to_string()))?
+        bar::resolve_confirm(mode, pending, display_id, under_pointer).map_err(|e| AppError::Validation(e.to_string()))?
     };
     select_inner(&app, selection).await
 }

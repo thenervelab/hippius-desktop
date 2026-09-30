@@ -60,8 +60,23 @@ bar, and re-reads the cached work areas.
 `SetMode`, valid only while `Selecting`). An area drawn on any display is held
 in Rust (`capture_set_pending`, broadcast as `capture_pending_changed` so the
 other displays drop theirs) and taken by the bar's button (`capture_confirm` →
-`bar::resolve_confirm`: area = the held one, screen = the display the button is
-on, window = must be clicked). Window/screen clicks still call `capture_select`.
+`bar::resolve_confirm`: area = the held one, screen = the display under the
+pointer (`bar::display_under`, else the one the button is on: the keyboard is
+on the bar's overlay, so Return must not take that display when the user
+points at another), window = must be clicked).
+**Window and entire screen are click-to-capture** (macOS's ⌘⇧4 then Space;
+`app/capture-overlay/clickCapture.ts`): the pointer is a camera cursor (SVG
+data URL, hotspot on the lens; a red record-dot lens for recordings), the
+window under it is tinted and outlined with its app name (screen: the display
+under it, tinted, "Click to capture this screen"), and ONE click calls
+`capture_select` with that window or display; no bar button is needed. Space
+swaps window and area (`spaceToggleMode`, only to a mode `offeredModes` allows
+for the kind, never mid-drag, never with the camera alone, and never from a
+focused bar control). The bar stays up in a slot with a plain cursor that
+clears the hover on enter; its own pointer handlers stop a click reaching the
+surface. The overlay only draws and reports: the window list is Rust's, and it
+already drops every Hippius window by pid (`targets::is_pickable`), so the
+overlay, bar, pill, card and camera can never be picked.
 The countdown (`CaptureOptions::countdown_secs`: the screenshot timer 0/5/10,
 `record_countdown_secs` 0/3/5 for recordings, both normalised in Rust) runs in
 the overlay BEFORE it confirms. `capture_set_options` returns `SavedOptions
@@ -534,21 +549,26 @@ window recording must each finish with a playable file.
 ## Where Capture is offered
 
 The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
-**Screenshot** (`startCapture("screenshot")`) and **Record**
-(`startCapture("recording")`), each opening the bar on its kind's last mode,
-plus one "…" menu (Open capture bar with the shortcut's keycaps, Change
-capture drive…). A "…" rather than a chevron per button: the two items belong
-to neither kind, and one extra control costs less toolbar than two. Rendered in
+**Screenshot** and **Record**, each a normal toolbar button with a chevron
+that opens its own Radix menu (no separate "…" button): the kind's modes
+("Capture an area / a window / entire screen", `modeLabel` + `MODE_ICON`),
+each `startCapture(kind, mode)`, then a separator, "Open capture bar" with the
+shortcut's keycaps (`startCapture(kind)`: the bar on that kind's last mode)
+and "Change capture drive…". The modes come from `offeredModes(kind,
+captureModesAtom)`: Rust's `capture_support.modes` when it reports them
+(`supportedModesOf`, set by `CaptureHost`), else all three. Rendered in
 the folder list's toolbar (`DriveOnboarding`, `size="compact"`, 26px), the
 in-drive toolbar (`DriveHeader`, every drive, a Viewer's shared drive included:
 a capture is filed in the capture drive, not the open one) and Overview's Recent Files toolbar
 (`DriveHeader`'s recent layout, just before Folder and File; never in the
 shared home `PageHeader`, which Billing, Wallet, Referrals and Plans use too). Labels show at `@[52rem]` of the app's scroll
-`@container`; below it the buttons are icons named by `aria-label` + `title`.
+`@container`; below it the buttons are an icon and the chevron, named by
+`aria-label` + `title`.
 Record's state comes from ONE helper, `recordAvailability`
 (`app/lib/capture/recordAvailability.ts`): hidden off macOS without recording,
 shown `aria-disabled` with Rust's reason on a Mac without it (not `disabled`,
-which would swallow the tooltip). The reason is `capture_support.recordingUnavailable`
+which would swallow the tooltip), and then it is a plain button, not a menu
+trigger, so no menu opens. The reason is `capture_support.recordingUnavailable`
 (`helperMissing` / `osTooOld` / `unsupportedPlatform`) with Rust's line in
 `recordingUnavailableMessage`; `unsupportedPlatform` hides Record, the other two
 disable it. The capture bar's Record modes and Settings show the same line. The tray popover has its labelled Capture button
@@ -558,5 +578,5 @@ Settings › Sync & Storage has the Capture card (shortcut, drive). Pinned by
 `CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`,
 `drive/__tests__/recentFilesCapture.test.tsx`
 and `tests/capture_wiring.rs` (content protection, focus, capabilities, every
-command registered, retry path). The "…" menu styles its own
+command registered, retry path). Each menu styles its own
 `DropdownMenuContent` (theme has no `bg-popover`).
