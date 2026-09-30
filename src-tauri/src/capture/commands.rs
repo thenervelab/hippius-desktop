@@ -1743,6 +1743,8 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         microphone: saved.microphone && recording::microphone_supported(),
         microphone_device: saved.microphone_device.clone(),
         show_clicks: saved.show_clicks && recording::show_clicks_supported(),
+        system_audio: saved.system_audio,
+        camera_window: filmed_camera_window(&state.capture),
     };
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     *lock(&state.capture.recording_dir) = Some(dir.clone());
@@ -1790,6 +1792,16 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     }
     spawn_tick_loop(app.clone());
     Ok(())
+}
+
+/// The bubble's window number, for a window recording to film it too: set
+/// when this recording has a bubble (hidden from the pill or not, since it
+/// can be shown again) and the window's number is known.
+fn filmed_camera_window(state: &CaptureState) -> Option<u32> {
+    if *lock(&state.recording_camera) != Some(CameraShape::Bubble) {
+        return None;
+    }
+    u32::try_from(state.camera_window_number.load(Ordering::SeqCst)).ok().filter(|n| *n > 0)
 }
 
 /// The elapsed-time ticks while a recording runs. Each tick reads the
@@ -3009,25 +3021,39 @@ async fn sync_camera(app: &AppHandle) {
     let phase = state.capture.current();
     let wanted = camera::wanted_shape(phase, &options, recording, hidden);
     let previous = std::mem::replace(&mut *lock(&state.capture.camera_shape), wanted);
-    // In area mode the bubble goes inside the drawn area, or it is not filmed.
-    let anchored = wanted.and_then(|shape| area_bubble_frame(&state.capture, phase, shape, options.camera_size));
+    // In area mode the bubble goes inside the drawn area, or it is not filmed
+    // (gliding there while choosing); when Record is pressed it jumps inside
+    // whatever is recorded if it is not there already.
+    let anchored = match wanted.and_then(|shape| area_bubble_frame(&state.capture, phase, shape, options.camera_size)) {
+        Some((frame, scale)) => Some((frame, scale, true)),
+        None => recording_bubble_frame(app, phase, wanted, options.camera_size)
+            .await
+            .map(|(frame, scale)| (frame, scale, false)),
+    };
+    let mid_recording = matches!(phase, CapturePhase::Recording { .. } | CapturePhase::Paused { .. });
 
     match (wanted, app.get_webview_window(CAMERA_LABEL)) {
+        // Hidden from the pill mid-recording: ordered out, not closed, so it
+        // keeps its window number (a window recording films the camera by
+        // that number) and comes back where it was.
+        (None, Some(window)) if mid_recording => {
+            let _ = window.hide();
+        }
         (None, Some(window)) => {
             let _ = window.close();
             state.capture.camera_window_number.store(0, Ordering::SeqCst);
         }
         (None, None) => {}
         (Some(shape), Some(window)) => {
-            if let Some((frame, scale)) = anchored {
-                set_camera_frame(&window, frame, scale, true);
-            } else if previous != Some(shape) {
+            if let Some((frame, scale, animate)) = anchored {
+                set_camera_frame(&window, frame, scale, animate);
+            } else if previous != Some(shape) && !mid_recording {
                 place_camera(app, &window, shape, options.camera_size);
             }
             show_without_focus(&window);
         }
         (Some(shape), None) => {
-            if let Err(e) = open_camera_window(app, shape, options.camera_size, anchored) {
+            if let Err(e) = open_camera_window(app, shape, options.camera_size, anchored.map(|(f, scale, _)| (f, scale))) {
                 tracing::warn!(error = %e, "camera window could not open");
             }
         }
@@ -3064,6 +3090,80 @@ fn area_bubble_frame(state: &CaptureState, phase: CapturePhase, shape: CameraSha
         height: rect.height,
     };
     Some((camera::bubble_in_area(size, drawn), origin.scale))
+}
+
+/// Where the bubble jumps when Record is pressed: inside what is recorded
+/// (the area, the window, or the recorded display), unless it is wholly
+/// there already. Only at `Capturing` a recording with a bubble: while
+/// recording it stays wherever the user drags it.
+async fn recording_bubble_frame(app: &AppHandle, phase: CapturePhase, shape: Option<CameraShape>, size: CameraSize) -> Option<(camera::Frame, f64)> {
+    let recording_starts = matches!(
+        phase,
+        CapturePhase::Capturing {
+            kind: CaptureKind::Recording
+        }
+    );
+    if !recording_starts || shape != Some(CameraShape::Bubble) {
+        return None;
+    }
+    let state = app.state::<AppState>();
+    let selection = (*lock(&state.capture.selection))?;
+    let display_of = |id: u32| lock(&state.capture.displays).iter().find(|d| d.id == id).cloned();
+    let (filmed, scale) = match selection {
+        Selection::Area { display_id, rect } => {
+            let origin = display_area(&display_of(display_id)?);
+            let region = camera::Frame {
+                x: origin.x + rect.x,
+                y: origin.y + rect.y,
+                width: rect.width,
+                height: rect.height,
+            };
+            (camera::Filmed::Region(region), origin.scale)
+        }
+        Selection::Screen { display_id } => {
+            let display = display_of(display_id)?;
+            let area = display_area(&display);
+            let usable = work_area(&state.capture, &display);
+            (
+                camera::Filmed::Display {
+                    area: area.frame(),
+                    usable: usable.frame(),
+                },
+                area.scale,
+            )
+        }
+        Selection::Window { window_id } => {
+            if !bar::WINDOW_RECORDING_ADDS_CAMERA {
+                return None;
+            }
+            let frame = tauri::async_runtime::spawn_blocking(move || window_frame_blocking(window_id))
+                .await
+                .ok()
+                .flatten()?;
+            (camera::Filmed::Region(frame), 1.0)
+        }
+    };
+    let current = app.get_webview_window(CAMERA_LABEL).and_then(|w| current_camera_frame(&w));
+    camera::bubble_for_recording(current, size, filmed).map(|f| (f, scale))
+}
+
+/// A window's frame in global points, for placing the bubble inside it. The
+/// only platform that adds the camera to a window recording is macOS, where
+/// xcap's coordinates are already points.
+#[cfg(target_os = "macos")]
+fn window_frame_blocking(window_id: u32) -> Option<camera::Frame> {
+    let f = super::targets::window_frame(window_id)?;
+    Some(camera::Frame {
+        x: f64::from(f.x),
+        y: f64::from(f.y),
+        width: f64::from(f.width),
+        height: f64::from(f.height),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn window_frame_blocking(_window_id: u32) -> Option<camera::Frame> {
+    None
 }
 
 /// What the camera page and the pill are told: the shape, the chosen camera

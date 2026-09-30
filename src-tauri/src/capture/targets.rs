@@ -180,10 +180,23 @@ mod os {
         }
         Ok(out)
     }
+
+    /// Window `id`'s frame in xcap's native space (points, top-left origin
+    /// of the main display, on macOS), or `None` once it has closed.
+    pub fn window_frame(id: u32) -> Option<NativeFrame> {
+        let windows = xcap::Window::all().ok()?;
+        let w = windows.into_iter().find(|w| w.id().is_ok_and(|wid| wid == id))?;
+        Some(NativeFrame {
+            x: w.x().ok()?,
+            y: w.y().ok()?,
+            width: w.width().ok()?,
+            height: w.height().ok()?,
+        })
+    }
 }
 
 #[cfg(any(target_os = "macos", windows))]
-pub use os::{list_displays, windows_on_display};
+pub use os::{list_displays, window_frame, windows_on_display};
 
 #[cfg(test)]
 mod tests {

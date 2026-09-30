@@ -686,3 +686,54 @@ fn the_permission_relaunch_is_remembered_then_restarts() {
     let restart = body.find("request_restart()").expect("the app restarts through Tauri");
     assert!(mark < restart, "remember the relaunch before restarting");
 }
+
+/// A window recording films one window, so a bubble on screen was left out of
+/// the video without a word. The helper adds the camera window by number, and
+/// Record puts the bubble inside what is filmed first.
+#[test]
+fn the_bubble_is_filmed_with_a_window_recording() {
+    let src = read("src/capture/commands.rs");
+    let begin = fn_body(&src, "async fn begin_recording(");
+    assert!(
+        begin.contains("camera_window: filmed_camera_window("),
+        "the recording must be told the camera window's number"
+    );
+    let sync = fn_body(&src, "async fn sync_camera(");
+    assert!(
+        sync.contains("recording_bubble_frame("),
+        "Record must move the bubble inside what is filmed"
+    );
+    // Hidden from the pill mid-recording: ordered out, keeping its number,
+    // or showing it again would bring back a window the recording never saw.
+    let hide = sync.find("if mid_recording").expect("a mid-recording hide arm");
+    let close = sync.find("window.close()").expect("the close arm");
+    assert!(hide < close && sync[hide..close].contains("window.hide()"));
+
+    let macos = read("src/capture/recording/macos.rs");
+    assert!(macos.contains("camera_window_id: Option<u32>"));
+    let swift = read("../macos/HippiusCapture/Sources/main.swift");
+    assert!(swift.contains(r#"intU32(obj["cameraWindowId"])"#), "the helper reads the camera window");
+    assert!(
+        swift.contains("SCContentFilter(display: screen, including: [window, camera])"),
+        "a window recording with the camera films both windows"
+    );
+}
+
+/// Browsers, the share link's page included, play only a file's first audio
+/// track: a separate microphone track went unheard. One track, mixed.
+#[test]
+fn a_recording_has_one_audio_track() {
+    let swift = read("../macos/HippiusCapture/Sources/main.swift");
+    assert_eq!(
+        swift.matches("AVAssetWriterInput(mediaType: .audio").count(),
+        1,
+        "the helper must write exactly one audio track"
+    );
+    assert!(swift.contains("final class AudioMixer"));
+    assert!(
+        swift.contains("config.capturesAudio = options.systemAudio"),
+        "system audio only when asked for"
+    );
+    let src = read("src/capture/commands.rs");
+    assert!(fn_body(&src, "async fn begin_recording(").contains("system_audio: saved.system_audio"));
+}

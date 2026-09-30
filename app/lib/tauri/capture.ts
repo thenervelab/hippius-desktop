@@ -67,6 +67,8 @@ export interface CaptureOptions {
   /** How big the camera bubble is. */
   cameraSize: CameraSize;
   showClicks: boolean;
+  /** Record what the computer plays, mixed with the microphone (default off: speakers would echo the voice). */
+  systemAudio: boolean;
   /** Rust keeps these from `capture_start` / `capture_set_mode`; the bar's copy is ignored on save. */
   lastKind: CaptureKind;
   lastMode: CaptureMode;

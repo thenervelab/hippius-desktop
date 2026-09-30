@@ -23,6 +23,7 @@ const OPTIONS: CaptureOptions = {
   cameraDevice: null,
   cameraSize: "small",
   showClicks: false,
+  systemAudio: false,
   lastKind: "recording",
   lastMode: "screen",
   copyLink: true,

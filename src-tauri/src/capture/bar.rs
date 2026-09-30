@@ -78,6 +78,10 @@ pub struct CaptureOptions {
     pub camera_size: CameraSize,
     /// Draw a ring where the pointer clicks in a recording (macOS 15+).
     pub show_clicks: bool,
+    /// Record what the computer plays, mixed with the microphone into one
+    /// track. Off by default, as in Loom: with speakers it also records the
+    /// voice a second time, as an echo.
+    pub system_audio: bool,
     /// The bar opens on what was used last.
     pub last_kind: CaptureKind,
     pub last_mode: CaptureMode,
@@ -100,6 +104,7 @@ impl Default for CaptureOptions {
             camera_device: None,
             camera_size: CameraSize::Small,
             show_clicks: false,
+            system_audio: false,
             last_kind: CaptureKind::Screenshot,
             last_mode: CaptureMode::Area,
             copy_link: true,
@@ -157,19 +162,24 @@ impl CaptureOptions {
         }
     }
 
-    /// Whether the camera, if on, ends up in the video: a window recording is
-    /// that one window only, so a bubble over the screen is not in it. The
-    /// stage is always filmed (it IS the recording), and an area recording
-    /// films the bubble because it is placed inside the area.
+    /// Whether the camera, if on, ends up in the video. The stage is always
+    /// filmed (it IS the recording); the bubble is moved inside what is
+    /// recorded when Record is pressed. A window recording films that one
+    /// window, so the bubble is in it only where the recorder can add the
+    /// camera window to it ([`WINDOW_RECORDING_ADDS_CAMERA`]).
     #[must_use]
     pub fn camera_filmed(&self, kind: CaptureKind, mode: CaptureMode) -> bool {
         match self.camera_shape(kind) {
             Some(CameraShape::Stage) => true,
-            Some(CameraShape::Bubble) => mode != CaptureMode::Window,
+            Some(CameraShape::Bubble) => mode != CaptureMode::Window || WINDOW_RECORDING_ADDS_CAMERA,
             None => false,
         }
     }
 }
+
+/// The macOS helper films the camera window with a window recording
+/// (`cameraWindowId`); the other platforms' recorders cannot yet.
+pub const WINDOW_RECORDING_ADDS_CAMERA: bool = cfg!(target_os = "macos");
 
 const OPTIONS_KEY: &str = "capture_options_v1";
 
@@ -467,14 +477,19 @@ mod tests {
     }
 
     #[test]
-    fn a_window_recording_does_not_film_the_bubble() {
+    fn a_window_recording_films_the_bubble_where_the_recorder_adds_it() {
         let bubble = CaptureOptions {
             camera: true,
             ..CaptureOptions::default()
         };
         assert!(bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Screen));
         assert!(bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Area));
-        assert!(!bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Window));
+        assert_eq!(
+            bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Window),
+            WINDOW_RECORDING_ADDS_CAMERA
+        );
+        #[cfg(target_os = "macos")]
+        assert!(bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Window));
         let stage = CaptureOptions {
             screen: false,
             ..bubble.clone()
@@ -583,7 +598,8 @@ mod tests {
             serde_json::json!({
                 "timerSecs": 0, "microphone": true, "microphoneDevice": null,
                 "screen": true, "camera": false, "cameraDevice": null,
-                "cameraSize": "small", "showClicks": false, "lastKind": "screenshot", "lastMode": "area",
+                "cameraSize": "small", "showClicks": false, "systemAudio": false,
+                "lastKind": "screenshot", "lastMode": "area",
                 "copyLink": true, "recordCountdownSecs": 3
             })
         );
@@ -593,6 +609,8 @@ mod tests {
         // A row saved before these existed keeps copying links and counting 3.
         assert!(partial.copy_link);
         assert_eq!(partial.record_countdown_secs, RECORDING_COUNTDOWN_SECS);
+        // A row saved before the switch existed records no system audio.
+        assert!(!partial.system_audio);
     }
 
     #[tokio::test]
@@ -614,6 +632,7 @@ mod tests {
             camera_device: Some("abc123".into()),
             camera_size: CameraSize::Large,
             show_clicks: true,
+            system_audio: true,
             last_kind: CaptureKind::Recording,
             last_mode: CaptureMode::Window,
             copy_link: false,

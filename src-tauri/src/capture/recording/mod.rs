@@ -29,6 +29,13 @@ pub struct RecordOptions {
     pub microphone_device: Option<String>,
     /// Draw a ring where the pointer clicks, when the platform can.
     pub show_clicks: bool,
+    /// Record what the computer plays as well, mixed with the microphone
+    /// into the file's one audio track. Off unless asked for: with speakers
+    /// it records the voice a second time, as an echo.
+    pub system_audio: bool,
+    /// The camera bubble's window (its system window number), added to a
+    /// window recording, which otherwise films that one window only.
+    pub camera_window: Option<u32>,
 }
 
 /// A microphone or camera the bar's pickers offer.

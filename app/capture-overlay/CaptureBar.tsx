@@ -240,17 +240,23 @@ function OptionsMenu({
               {t.label}
             </MenuRow>
           ))}
+          <MenuHeading>Recording</MenuHeading>
+          {/* Off by default, as in Loom: with speakers it records the voice twice. */}
+          <MenuRow
+            role="menuitemcheckbox"
+            checked={options.systemAudio}
+            onSelect={() => onOptions({ ...options, systemAudio: !options.systemAudio })}
+          >
+            Record system audio
+          </MenuRow>
           {showClicksAvailable && (
-            <>
-              <MenuHeading>Recording</MenuHeading>
-              <MenuRow
-                role="menuitemcheckbox"
-                checked={options.showClicks}
-                onSelect={() => onOptions({ ...options, showClicks: !options.showClicks })}
-              >
-                Show mouse clicks
-              </MenuRow>
-            </>
+            <MenuRow
+              role="menuitemcheckbox"
+              checked={options.showClicks}
+              onSelect={() => onOptions({ ...options, showClicks: !options.showClicks })}
+            >
+              Show mouse clicks
+            </MenuRow>
           )}
         </>
       )}

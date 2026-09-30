@@ -431,6 +431,11 @@ struct StartCommand {
     /// Ring the pointer where it clicks (ScreenCaptureKit, macOS 15+; the
     /// helper ignores it on older systems).
     show_clicks: bool,
+    /// Mix what the Mac plays into the one audio track.
+    system_audio: bool,
+    /// A window recording also films this window (the camera bubble).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    camera_window_id: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -457,10 +462,15 @@ impl StartCommand {
             microphone: options.microphone,
             microphone_device_id: options.microphone_device.clone(),
             show_clicks: options.show_clicks,
+            system_audio: options.system_audio,
+            camera_window_id: None,
         };
         match selection {
             Selection::Screen { display_id } => cmd.display_id = Some(display_id),
-            Selection::Window { window_id } => cmd.window_id = Some(window_id),
+            Selection::Window { window_id } => {
+                cmd.window_id = Some(window_id);
+                cmd.camera_window_id = options.camera_window.filter(|id| *id != window_id);
+            }
             Selection::Area { display_id, rect } => {
                 cmd.display_id = Some(display_id);
                 cmd.crop = Some(CropRect {
@@ -632,6 +642,8 @@ mod tests {
                 microphone: true,
                 microphone_device: Some("BuiltInMicrophoneDevice".into()),
                 show_clicks: true,
+                system_audio: true,
+                camera_window: Some(99),
             },
         )
         .unwrap();
@@ -644,6 +656,28 @@ mod tests {
         // The Swift helper reads these exact keys.
         assert_eq!(v["showClicks"], true);
         assert_eq!(v["microphoneDeviceId"], "BuiltInMicrophoneDevice");
+        assert_eq!(v["systemAudio"], true);
+        // The screen and area filters film every window, the bubble included.
+        assert!(v.get("cameraWindowId").is_none());
+    }
+
+    /// A window recording films one window; the bubble is added by number,
+    /// or it is left out of the video while on screen.
+    #[test]
+    fn a_window_recording_carries_the_camera_window() {
+        let options = |camera_window| RecordOptions {
+            camera_window,
+            ..RecordOptions::default()
+        };
+        let window = Selection::Window { window_id: 42 };
+        let v = serde_json::to_value(StartCommand::from_selection(1, window, Path::new("/tmp/o.mp4"), options(Some(7))).unwrap()).unwrap();
+        assert_eq!((v["windowId"].as_u64(), v["cameraWindowId"].as_u64()), (Some(42), Some(7)));
+        assert_eq!(v["systemAudio"], false, "system audio is off unless asked for");
+        // Camera only records the camera window itself; nothing to add.
+        let v = serde_json::to_value(StartCommand::from_selection(1, window, Path::new("/tmp/o.mp4"), options(Some(42))).unwrap()).unwrap();
+        assert!(v.get("cameraWindowId").is_none());
+        let v = serde_json::to_value(StartCommand::from_selection(1, window, Path::new("/tmp/o.mp4"), options(None)).unwrap()).unwrap();
+        assert!(v.get("cameraWindowId").is_none());
     }
 
     #[test]
