@@ -1,12 +1,7 @@
 /*
- * The capture card is a small transparent always-on-top window. Clear the
- * shared root background at parse time (same reason as the overlay).
+ * The card's own motion. The window itself (transparent, system font) is
+ * set up by the shared floating-window.css.
  */
-html,
-body {
-  background: transparent !important;
-  overflow: hidden;
-}
 
 @keyframes capture-card-in {
   from {
