@@ -6,7 +6,7 @@ import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 
 import CaptureMenu from "../CaptureMenu";
-import { captureRecordingAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import { captureRecordingAtom, captureRecordingNoteAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
@@ -26,10 +26,11 @@ beforeEach(() => {
   );
 });
 
-function renderWith(supported: boolean, recording = false) {
+function renderWith(supported: boolean, recording = false, recordingNote: string | null = null) {
   const store = createStore();
   store.set(captureSupportedAtom, supported);
   store.set(captureRecordingAtom, recording);
+  store.set(captureRecordingNoteAtom, recordingNote);
   return render(
     <Provider store={store}>
       <CaptureMenu />
@@ -79,6 +80,19 @@ describe("CaptureMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Capture a window" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Capture entire screen" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Record an area" })).toBeNull();
+  });
+
+  it("keeps the Record section on a Mac whose build cannot record, disabled and saying why", async () => {
+    renderWith(true, false, "Screen recording isn't included in this build.");
+    const menu = await openMenu();
+    expect(menu).toHaveTextContent("Screen recording isn't included in this build.");
+    for (const name of ["Record an area", "Record a window", "Record entire screen"]) {
+      expect(screen.getByRole("menuitem", { name })).toHaveAttribute("aria-disabled", "true");
+    }
+    fireEvent.click(screen.getByRole("menuitem", { name: "Record an area" }));
+    expect(invoke).not.toHaveBeenCalledWith("capture_start", expect.anything());
+    // Screenshots are unaffected.
+    expect(screen.getByRole("menuitem", { name: "Capture an area" })).not.toHaveAttribute("aria-disabled");
   });
 
   it("opens the bar on the chosen mode", async () => {

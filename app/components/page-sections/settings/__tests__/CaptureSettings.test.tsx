@@ -16,12 +16,12 @@ vi.mock("@/app/lib/capture/shortcutLabel", async (importOriginal) => ({
 }));
 
 import CaptureSettings from "../CaptureSettings";
-import { captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import { captureRecordingNoteAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
 
 const DEFAULT = "CommandOrControl+Shift+2";
 let accelerator: string | null = DEFAULT;
 
-function setup() {
+function setup(recordingNote: string | null = null) {
   tauri.onInvoke("capture_get_shortcut", () => ({ accelerator, defaultAccelerator: DEFAULT }));
   tauri.onInvoke("capture_get_destination", () => ({ label: "Work", displayName: "Work" }));
   tauri.onInvoke("capture_set_shortcut", (args) => {
@@ -30,6 +30,7 @@ function setup() {
   });
   const store = createStore();
   store.set(captureSupportedAtom, true);
+  store.set(captureRecordingNoteAtom, recordingNote);
   return render(
     <Provider store={store}>
       <CaptureSettings />
@@ -103,5 +104,19 @@ describe("the capture shortcut recorder", () => {
       key("KeyK", { metaKey: true, shiftKey: true });
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("Another app is already using that shortcut.");
+  });
+});
+
+describe("the capture card's recording row", () => {
+  it("says in Rust's words when this build cannot record", async () => {
+    setup("Screen recording isn't included in this build.");
+    expect(await screen.findByText("Screen recording")).toBeInTheDocument();
+    expect(screen.getByText(/Screen recording isn't included in this build\./)).toBeInTheDocument();
+  });
+
+  it("is absent when recording works or is not offered here", async () => {
+    setup(null);
+    await screen.findByText("Capture drive");
+    expect(screen.queryByText("Screen recording")).toBeNull();
   });
 });

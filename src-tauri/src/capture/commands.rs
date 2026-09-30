@@ -602,8 +602,10 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         return Err(AppError::Validation("Screen capture isn't available on this system yet.".into()));
     }
     let recording_ok = recording::recording_supported();
-    if kind == Some(CaptureKind::Recording) && !recording_ok {
-        return Err(AppError::Validation("Screen recording isn't available on this system yet.".into()));
+    if kind == Some(CaptureKind::Recording)
+        && let Some(why) = recording::recording_unavailable()
+    {
+        return Err(AppError::Validation(why.message().into()));
     }
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
@@ -1246,6 +1248,10 @@ pub struct OverlayContext {
     pub show_clicks_available: bool,
     /// Camera only (screen off) can be recorded here.
     pub camera_only_available: bool,
+    /// Why not, when recording is unavailable: the bar shows the Record modes
+    /// disabled with this line on a Mac that lacks the helper or macOS 13.
+    #[serde(flatten)]
+    pub recording_availability: recording::RecordingAvailability,
     /// Whether the camera, if on, is in the video. False for a bubble over a
     /// window recording, which films that one window only.
     pub camera_filmed: bool,
@@ -1288,6 +1294,7 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         microphone_available: recording::microphone_supported(),
         show_clicks_available: recording::show_clicks_supported(),
         camera_only_available: camera_only_supported(),
+        recording_availability: recording::RecordingAvailability::now(),
         destination,
         pending,
     })
@@ -1313,8 +1320,10 @@ pub async fn capture_refresh_windows(state: tauri::State<'_, AppState>, display_
 /// context on the state event, and the choice is remembered for next time.
 #[tauri::command]
 pub async fn capture_set_mode(state: tauri::State<'_, AppState>, app: AppHandle, kind: CaptureKind, mode: CaptureMode) -> Result<()> {
-    if kind == CaptureKind::Recording && !recording::recording_supported() {
-        return Err(AppError::Validation("Screen recording isn't available on this system yet.".into()));
+    if kind == CaptureKind::Recording
+        && let Some(why) = recording::recording_unavailable()
+    {
+        return Err(AppError::Validation(why.message().into()));
     }
     advance(&app, &state.capture, CaptureEvent::SetMode { kind, mode })?;
     let pool = state.pool()?;
@@ -2218,6 +2227,9 @@ pub struct CaptureSupport {
     /// What System Settings calls the Screen Recording pane on this Mac
     /// ("Screen & System Audio Recording" from macOS 14); `None` off macOS.
     pub permission_pane: Option<String>,
+    /// `recordingUnavailable` (why `recording` is false) and Rust's line for it.
+    #[serde(flatten)]
+    pub recording_availability: recording::RecordingAvailability,
 }
 
 #[tauri::command]
@@ -2228,6 +2240,7 @@ pub fn capture_support() -> CaptureSupport {
         camera_only: camera_only_supported(),
         screen_recording_permission: super::permissions::screen_capture_granted(),
         permission_pane: super::permissions::permission_pane_name(cfg!(target_os = "macos"), super::permissions::macos_major()).map(str::to_string),
+        recording_availability: recording::RecordingAvailability::now(),
     }
 }
 

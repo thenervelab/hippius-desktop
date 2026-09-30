@@ -86,7 +86,7 @@ export interface CaptureSavedOptions {
   cameraFilmed: boolean;
 }
 
-export interface CaptureOverlayContext {
+export interface CaptureOverlayContext extends RecordingAvailability {
   mode: CaptureMode;
   displayId: number;
   kind: CaptureKind;
@@ -287,7 +287,21 @@ export interface CaptureDelivered {
   viaSync: boolean;
 }
 
-export interface CaptureSupport {
+/**
+ * Why recording is unavailable (Rust's `RecordingUnavailable`). A Mac that
+ * lacks the helper or macOS 13 shows the Record modes disabled with Rust's
+ * line; a platform with no recorder hides them (`disabledRecordingNote`).
+ */
+export type RecordingUnavailable = "helperMissing" | "osTooOld" | "unsupportedPlatform";
+
+/** Flattened into `capture_support` and the overlay context. */
+export interface RecordingAvailability {
+  recordingUnavailable: RecordingUnavailable | null;
+  /** Rust's line for the reason; null when recording works. */
+  recordingUnavailableMessage: string | null;
+}
+
+export interface CaptureSupport extends RecordingAvailability {
   supported: boolean;
   recording: boolean;
   /** Camera only (screen off) may be offered. */

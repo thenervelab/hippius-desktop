@@ -18,6 +18,7 @@ import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
 import {
   captureDialogAtom,
   captureRecordingAtom,
+  captureRecordingNoteAtom,
   captureSupportedAtom,
 } from "@/app/lib/capture/captureFlow";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
@@ -48,6 +49,11 @@ const LABEL_CLASSES = cn(
   "text-grey-50 dark:text-grey-dark-600",
 );
 const SEPARATOR_CLASSES = "my-1 h-px bg-grey-80 dark:bg-black-300";
+// Why the Record items below it are disabled; wraps on a narrow window.
+const NOTE_CLASSES = cn(
+  "max-w-[15rem] px-1.5 pb-1 font-geist text-[12px] leading-snug",
+  "text-grey-50 dark:text-grey-dark-600",
+);
 
 
 /**
@@ -59,12 +65,15 @@ const SEPARATOR_CLASSES = "my-1 h-px bg-grey-80 dark:bg-black-300";
  *
  * Renders nothing unless the feature is on for this lane AND Rust says this
  * platform can capture — a menu whose every item fails is worse than none.
- * Record items appear only when `capture_support.recording` is true (macOS
- * with the helper built).
+ * Record items work when `capture_support.recording` is true (macOS 13+ with
+ * the helper built). On a Mac without the helper or without macOS 13 they are
+ * listed disabled under Rust's reason, so a build that lacks recording says
+ * so; where the platform has no recorder they are left out.
  */
 export default function CaptureMenu({ className, iconClassName }: { className?: string; iconClassName?: string }) {
   const supported = useAtomValue(captureSupportedAtom);
   const recording = useAtomValue(captureRecordingAtom);
+  const recordingNote = useAtomValue(captureRecordingNoteAtom);
   const setDialog = useSetAtom(captureDialogAtom);
   const startCapture = useStartCapture();
   const [shortcut, setShortcut] = useState<string[]>([]);
@@ -112,7 +121,7 @@ export default function CaptureMenu({ className, iconClassName }: { className?: 
             </DropdownMenuItem>
           );
         })}
-        {recording && (
+        {(recording || recordingNote) && (
           <>
             <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
             <DropdownMenuLabel className={LABEL_CLASSES}>
@@ -121,12 +130,17 @@ export default function CaptureMenu({ className, iconClassName }: { className?: 
                 Record
               </span>
             </DropdownMenuLabel>
+            {!recording && recordingNote && (
+              <p className={NOTE_CLASSES}>{recordingNote}</p>
+            )}
             {MENU_MODES.map((mode) => {
               const Icon = MODE_ICON[mode];
               return (
                 <DropdownMenuItem
                   key={`rec-${mode}`}
                   className={ITEM_CLASSES}
+                  // A disabled item takes no pointer, so the line above says why.
+                  disabled={!recording}
                   onSelect={() => void startCapture("recording", mode)}
                 >
                   <Icon className="size-4" />

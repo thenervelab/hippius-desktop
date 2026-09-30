@@ -8,7 +8,13 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
-import { capturePermissionPaneAtom, captureRecordingAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import {
+  capturePermissionPaneAtom,
+  captureRecordingAtom,
+  captureRecordingNoteAtom,
+  captureSupportedAtom,
+} from "@/app/lib/capture/captureFlow";
+import { disabledRecordingNote } from "@/app/lib/capture/modes";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
 import {
   getCaptureSupport,
@@ -34,6 +40,7 @@ import CapturePermissionDialog from "./CapturePermissionDialog";
 export default function CaptureHost() {
   const setSupported = useSetAtom(captureSupportedAtom);
   const setRecording = useSetAtom(captureRecordingAtom);
+  const setRecordingNote = useSetAtom(captureRecordingNoteAtom);
   const setPermissionPane = useSetAtom(capturePermissionPaneAtom);
   const startCapture = useStartCapture();
   const queryClient = useQueryClient();
@@ -46,6 +53,7 @@ export default function CaptureHost() {
       .then((s) => {
         setSupported(s.supported);
         setRecording(s.recording);
+        setRecordingNote(s.recording ? null : disabledRecordingNote(s));
         setPermissionPane(s.permissionPane);
         // The saved shortcut is registered once the signed-in app is up.
         if (s.supported) void syncCaptureShortcut().catch(() => undefined);
@@ -53,8 +61,9 @@ export default function CaptureHost() {
       .catch(() => {
         setSupported(false);
         setRecording(false);
+        setRecordingNote(null);
       });
-  }, [setSupported, setRecording, setPermissionPane]);
+  }, [setSupported, setRecording, setRecordingNote, setPermissionPane]);
 
   useEffect(() => {
     if (!SCREEN_CAPTURE_ENABLED) return;

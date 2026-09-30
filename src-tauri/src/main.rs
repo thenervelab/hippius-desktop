@@ -989,6 +989,9 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // Screen capture: clear capture temp folders a crash or an abandoned
         // upload left a day or more ago. Its own thread; never delays start.
         crate::capture::commands::reclaim_capture_tmp_at_launch();
+        // Say in the log, once, when a release build has no recording helper
+        // (Record is shown disabled). Its own thread: it runs `sw_vers`.
+        std::thread::spawn(crate::capture::recording::warn_if_helper_missing);
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);

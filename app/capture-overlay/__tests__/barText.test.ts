@@ -40,6 +40,18 @@ describe("the capture bar", () => {
     expect(shots.map((m) => m.label)).toEqual(["Capture entire screen", "Capture a window", "Capture an area"]);
   });
 
+  // A local build without the helper used to drop the Record group, so the
+  // feature vanished with no word why.
+  it("shows the Record modes disabled, with the reason, on a Mac that cannot record in this build", () => {
+    const note = "Screen recording isn't included in this build.";
+    const [shots, recordings] = barGroups(false, note);
+    expect(shots.every((m) => m.unavailable === undefined)).toBe(true);
+    expect(recordings.map((m) => m.label)).toEqual(["Record entire screen", "Record a window", "Record an area"]);
+    expect(recordings.every((m) => m.unavailable === note)).toBe(true);
+    expect(barGroups(false, null)).toHaveLength(1);
+    expect(barGroups(true, note)[1].every((m) => m.unavailable === undefined)).toBe(true);
+  });
+
   it("names the Choose button for what it lists", () => {
     expect(chooseLabel("window")).toBe("Choose window…");
     expect(chooseLabel("screen")).toBe("Choose screen…");

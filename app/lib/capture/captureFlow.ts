@@ -34,6 +34,13 @@ export const captureSupportedAtom = atom<boolean>(false);
 /** Whether Record actions should be offered (macOS helper present). */
 export const captureRecordingAtom = atom<boolean>(false);
 
+/**
+ * Why Record is shown disabled (Rust's line), when this Mac could record with
+ * another build or a newer macOS; null when recording works or is not offered
+ * on this platform at all (`disabledRecordingNote`).
+ */
+export const captureRecordingNoteAtom = atom<string | null>(null);
+
 /** What System Settings calls the Screen Recording pane on this Mac (Rust's `permissionPane`); null until known. */
 export const capturePermissionPaneAtom = atom<string | null>(null);
 

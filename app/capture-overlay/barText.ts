@@ -12,6 +12,8 @@ export interface BarMode {
   mode: CaptureMode;
   /** Accessible name and tooltip, in the app's one mode vocabulary. */
   label: string;
+  /** Set when the mode is shown but cannot be picked: why, in Rust's words. */
+  unavailable?: string;
 }
 
 /** macOS's order on the bar: entire screen, window, area. */
@@ -20,9 +22,16 @@ const BAR_ORDER: readonly CaptureMode[] = ["screen", "window", "area"];
 const SHOTS: BarMode[] = BAR_ORDER.map((mode) => ({ kind: "screenshot", mode, label: modeLabel("screenshot", mode) }));
 const RECORDINGS: BarMode[] = BAR_ORDER.map((mode) => ({ kind: "recording", mode, label: modeLabel("recording", mode) }));
 
-/** The bar's two groups; the recording group only where recording works. */
-export function barGroups(recordingAvailable: boolean): BarMode[][] {
-  return recordingAvailable ? [SHOTS, RECORDINGS] : [SHOTS];
+/**
+ * The bar's two groups. The recording group works where recording works; on
+ * a Mac that could record with another build or a newer macOS it is shown
+ * disabled with `recordingNote` (`disabledRecordingNote`), so a missing
+ * helper is visible; elsewhere it is left out.
+ */
+export function barGroups(recordingAvailable: boolean, recordingNote: string | null = null): BarMode[][] {
+  if (recordingAvailable) return [SHOTS, RECORDINGS];
+  if (recordingNote) return [SHOTS, RECORDINGS.map((m) => ({ ...m, unavailable: recordingNote }))];
+  return [SHOTS];
 }
 
 /** "Capture" or "Record", on the bar's main button. */

@@ -36,6 +36,8 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
   },
   countdownSecs: 0,
   recordingAvailable: true,
+  recordingUnavailable: null,
+  recordingUnavailableMessage: null,
   microphoneAvailable: true,
   showClicksAvailable: true,
   cameraOnlyAvailable: true,
@@ -210,6 +212,33 @@ describe("the capture overlay's keyboard", () => {
 });
 
 describe("the capture bar's words", () => {
+  it("shows Record disabled with Rust's reason when this build has no helper, and does not switch to it", async () => {
+    tauri.onInvoke("capture_set_mode", () => null);
+    setup({
+      recordingAvailable: false,
+      cameraOnlyAvailable: false,
+      recordingUnavailable: "helperMissing",
+      recordingUnavailableMessage: "Screen recording isn't included in this build.",
+    });
+    const record = await screen.findByRole("radio", { name: "Record an area" });
+    expect(record).toHaveAttribute("aria-disabled", "true");
+    expect(record).toHaveAttribute("title", "Record an area: Screen recording isn't included in this build.");
+    fireEvent.click(record);
+    expect(screen.getByRole("status")).toHaveTextContent("Screen recording isn't included in this build.");
+    expect(called("capture_set_mode")).toBe(false);
+  });
+
+  it("leaves Record out where the platform has no recorder", async () => {
+    setup({
+      recordingAvailable: false,
+      cameraOnlyAvailable: false,
+      recordingUnavailable: "unsupportedPlatform",
+      recordingUnavailableMessage: "Screen recording isn't available on this system yet.",
+    });
+    await screen.findByRole("radio", { name: "Capture an area" });
+    expect(screen.queryByRole("radio", { name: "Record an area" })).toBeNull();
+  });
+
   it("names the Choose button for what it lists and says it opens a dialog", async () => {
     setup({ mode: "window", pending: null });
     const choose = await screen.findByRole("button", { name: "Choose window…" });

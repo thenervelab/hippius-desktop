@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Camera, Keyboard } from "lucide-react";
+import { Camera, Keyboard, VideoOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
-import { captureDialogAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import { captureDialogAtom, captureRecordingNoteAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
 import {
   acceleratorKeys,
   isMacPlatform,
@@ -31,10 +31,12 @@ const KBD =
  * Screen capture settings: the system-wide shortcut that opens the capture
  * bar, and the drive captures are saved to. Rust validates and registers the
  * shortcut (`capture::shortcut`); this only records the keys and shows what
- * Rust answered. Hidden where capture is not available.
+ * Rust answered. Hidden where capture is not available. On a Mac whose build
+ * or macOS cannot record, a third row says so in Rust's words.
  */
 export default function CaptureSettings() {
   const supported = useAtomValue(captureSupportedAtom);
+  const recordingNote = useAtomValue(captureRecordingNoteAtom);
   const setDialog = useSetAtom(captureDialogAtom);
   const [setting, setSetting] = useState<CaptureShortcutSetting | null>(null);
   const [recording, setRecording] = useState(false);
@@ -186,6 +188,20 @@ export default function CaptureSettings() {
           {driveName ? "Change" : "Choose"}
         </Button>
       </div>
+
+      {recordingNote && (
+        <div className={ROW}>
+          <div className="flex min-w-0 items-start gap-3">
+            <VideoOff className="mt-0.5 size-[18px] flex-shrink-0 text-grey-50 dark:text-grey-dark-600" strokeWidth={2} />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-grey-10 dark:text-white">Screen recording</p>
+              <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+                {recordingNote} Screenshots still work.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

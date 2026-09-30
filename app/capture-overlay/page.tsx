@@ -28,6 +28,7 @@ import {
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { CAPTURE_ACCENT, GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
+import { disabledRecordingNote } from "@/app/lib/capture/modes";
 import CaptureBar from "./CaptureBar";
 import SharePicker from "./SharePicker";
 import { barHint, LAST_AREA_KEY } from "./barText";
@@ -548,6 +549,7 @@ export default function CaptureOverlayPage() {
           options={context.options}
           destination={context.destination}
           recordingAvailable={context.recordingAvailable}
+          recordingNote={disabledRecordingNote(context)}
           microphoneAvailable={context.microphoneAvailable}
           showClicksAvailable={context.showClicksAvailable}
           cameraOnlyAvailable={context.cameraOnlyAvailable}
