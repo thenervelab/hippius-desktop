@@ -17,6 +17,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **A folder shared with you on its own is marked as one.** In Shared with me
+  and when you open it, it carries a "Folder in a drive" badge so it no longer
+  looks like a whole shared drive, and its row reads "Shared by" the owner
+  instead of leading with the drive's name.
+
 - **Share by email or by link from one place.** The Share dialog now opens
   with two tabs at the top, By email and By link, instead of separate
   sections above and below the people list. It remembers the tab you used
