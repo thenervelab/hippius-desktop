@@ -24,6 +24,26 @@ describe("deviceIdByName", () => {
     expect(deviceIdByName(devices, "videoinput", "Yeti Stereo Microphone")).toBe("v1");
   });
 
+  it("finds a Continuity iPhone whatever apostrophe or Unicode form each side used", () => {
+    const iphone = [
+      { kind: "videoinput" as const, deviceId: "v1", label: "FaceTime HD Camera" },
+      { kind: "videoinput" as const, deviceId: "v2", label: "Ahmad\u2019s iPhone Camera" },
+      { kind: "videoinput" as const, deviceId: "v3", label: "Ahmad\u2019s iPhone Desk View Camera" },
+      { kind: "audioinput" as const, deviceId: "a1", label: "Ahmad's iPhone Microphone" },
+      { kind: "audioinput" as const, deviceId: "a2", label: "Zo\u0065\u0301\u2019s  iPhone Microphone" },
+    ];
+    expect(deviceIdByName(iphone, "videoinput", "Ahmad's iPhone Camera")).toBe("v2");
+    expect(deviceIdByName(iphone, "videoinput", "Ahmad\u2019s iPhone Camera")).toBe("v2");
+    expect(deviceIdByName(iphone, "videoinput", "AHMAD\u2018S IPHONE DESK VIEW CAMERA")).toBe("v3");
+    expect(deviceIdByName(iphone, "audioinput", "Ahmad\u2019s iPhone Microphone")).toBe("a1");
+    // Decomposed "é" and a doubled space on the webview side; composed on the helper's.
+    expect(deviceIdByName(iphone, "audioinput", "Zo\u00e9\u2019s iPhone Microphone")).toBe("a2");
+  });
+
+  it("ignores a name that is only whitespace", () => {
+    expect(deviceIdByName(devices, "audioinput", "   ")).toBeNull();
+  });
+
   it("opens the default when nothing is chosen or nothing matches", () => {
     expect(deviceIdByName(devices, "audioinput", "AirPods")).toBeNull();
     expect(deviceIdByName(devices, "audioinput", null)).toBeNull();

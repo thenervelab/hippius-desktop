@@ -307,6 +307,56 @@ fn the_app_may_use_the_camera_and_says_why() {
     assert!(info.contains("<key>NSCameraUsageDescription</key>"));
 }
 
+/// Whether a plist sets `key` to `<true/>`: the value right after the key,
+/// whitespace aside.
+fn plist_key_is_true(plist: &str, key: &str) -> bool {
+    plist
+        .split(&format!("<key>{key}</key>"))
+        .nth(1)
+        .is_some_and(|rest| rest.trim_start().starts_with("<true/>"))
+}
+
+/// macOS offers an iPhone as a Continuity Camera only to a process whose
+/// Info.plist opts in. Two processes need it: the app (the camera window's
+/// getUserMedia) and the helper, whose `--list-cameras` fills the bar's
+/// camera menu. A command-line helper has no bundle, so its plist must be
+/// linked into the binary, and the helper must say it is signed with the
+/// identifier the plist names.
+#[test]
+fn the_app_and_the_helper_opt_in_to_continuity_camera() {
+    let key = "NSCameraUseContinuityCameraDeviceType";
+    assert!(plist_key_is_true(&read("Info.plist"), key), "src-tauri/Info.plist must set {key} to true");
+
+    let helper_plist = read("../macos/HippiusCapture/Info.plist");
+    assert!(plist_key_is_true(&helper_plist, key), "the helper's Info.plist must set {key} to true");
+    assert!(helper_plist.contains("<string>hippius.com.HippiusCapture</string>"));
+    for usage in ["NSCameraUsageDescription", "NSMicrophoneUsageDescription"] {
+        assert!(
+            helper_plist.contains(&format!("<key>{usage}</key>")),
+            "the helper's Info.plist must carry {usage}"
+        );
+    }
+
+    let package = read("../macos/HippiusCapture/Package.swift");
+    for flag in [
+        "\"-sectcreate\"",
+        "\"__TEXT\"",
+        "\"__info_plist\"",
+        "appendingPathComponent(\"Info.plist\")",
+    ] {
+        assert!(
+            package.contains(flag),
+            "Package.swift must link Info.plist into the helper ({flag} missing)"
+        );
+    }
+
+    let embed = read("../macos/embed-capture-helper.sh");
+    assert!(
+        embed.contains("--identifier \"hippius.com.HippiusCapture\"") && embed.contains("__TEXT,__info_plist"),
+        "embed-capture-helper.sh must sign with the plist's identifier and check the plist is embedded"
+    );
+}
+
 /// Camera only records the stage window itself, and every way a recording
 /// ends takes the camera away with it.
 #[test]

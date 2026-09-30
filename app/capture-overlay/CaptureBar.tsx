@@ -460,6 +460,20 @@ function SourcesPanel({
     readMicrophones();
   }, [readMicrophones]);
 
+  // A device that comes or goes while the bar is up (a USB mic plugged in, an
+  // iPhone waking nearby as a Continuity Camera) updates the menus without
+  // reopening them.
+  useEffect(() => {
+    const media = typeof navigator === "undefined" ? undefined : navigator.mediaDevices;
+    if (!media?.addEventListener) return;
+    const onChange = () => {
+      readCameras();
+      readMicrophones();
+    };
+    media.addEventListener("devicechange", onChange);
+    return () => media.removeEventListener("devicechange", onChange);
+  }, [readCameras, readMicrophones]);
+
   const toggleMenu = (which: "camera" | "microphone") => {
     onMenu(menu === which ? null : which);
     if (which === "camera") readCameras();

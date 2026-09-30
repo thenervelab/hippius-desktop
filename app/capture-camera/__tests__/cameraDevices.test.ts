@@ -53,6 +53,13 @@ describe("resolveCameraId", () => {
     expect(resolveCameraId(devices, "0x1234AVCaptureId", "FaceTime HD Camera")).toBe("w1");
   });
 
+  /** The helper and WebKit can disagree on the phone name's apostrophe. */
+  it("opens the iPhone the bar chose as a Continuity Camera, not the built-in camera", () => {
+    const withPhone = [...devices, dev("videoinput", "w3", "Ahmad\u2019s iPhone Camera")];
+    expect(resolveCameraId(withPhone, "A1B2-CONT", "Ahmad's iPhone Camera")).toBe("w3");
+    expect(resolveCameraId(withPhone, "A1B2-CONT", "Ahmad\u2019s iPhone Camera".normalize("NFD"))).toBe("w3");
+  });
+
   it("keeps a webview id chosen by an older build", () => {
     expect(resolveCameraId(devices, "w2", null)).toBe("w2");
   });

@@ -25,9 +25,20 @@ export default function MicMeter({ deviceName }: { deviceName: string | null }) 
     const start = async () => {
       const media = navigator.mediaDevices;
       if (!media?.getUserMedia || typeof AudioContext === "undefined") return;
-      const devices = await media.enumerateDevices();
-      const id = deviceIdByName(devices, "audioinput", deviceName);
-      const s = await media.getUserMedia({ audio: id ? { deviceId: { exact: id } } : true, video: false });
+      const open = (id: string | null) =>
+        media.getUserMedia({ audio: id ? { deviceId: { exact: id } } : true, video: false });
+      const id = deviceIdByName(await media.enumerateDevices(), "audioinput", deviceName);
+      let s = await open(id);
+      if (!id && deviceName) {
+        // Before the first grant the webview lists microphones without
+        // names, so the chosen one (an iPhone or USB mic) could not be found
+        // and the default opened. Now they are named: switch to it.
+        const named = deviceIdByName(await media.enumerateDevices(), "audioinput", deviceName);
+        if (named && named !== s.getAudioTracks()[0]?.getSettings().deviceId) {
+          s.getTracks().forEach((t) => t.stop());
+          s = await open(named);
+        }
+      }
       if (cancelled) {
         s.getTracks().forEach((t) => t.stop());
         return;

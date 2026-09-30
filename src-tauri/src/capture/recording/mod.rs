@@ -426,4 +426,42 @@ mod tests {
         ]);
         assert_eq!(tidy, vec![dev("a", "Mic A", true), dev("b", "Mic B", false)]);
     }
+
+    /// The helper's list with an iPhone in Continuity range, as
+    /// `JSONSerialization` writes it: the phone's name keeps its curly
+    /// apostrophe (raw UTF-8, or escaped), a "/" comes escaped, and the
+    /// iPhone microphone is listed by AVFoundation and again by Core Audio.
+    /// Every external device reaches the picker, named exactly as macOS names
+    /// it, since the camera window finds the camera by that name.
+    #[test]
+    fn continuity_and_external_devices_reach_the_picker_by_their_system_names() {
+        let cameras: Vec<MediaDevice> = serde_json::from_str(concat!(
+            r#"[{"id":"1F06D5FF","name":"FaceTime HD Camera","isDefault":true},"#,
+            r#"{"id":"A1B2-CONT","name":"Ahmad’s iPhone Camera","isDefault":false},"#,
+            r#"{"id":"A1B2-DESK","name":"Ahmad\u2019s iPhone Desk View Camera","isDefault":false},"#,
+            r#"{"id":"0x14100000046d0825","name":"Logi C270 HD WebCam \/ USB","isDefault":false}]"#
+        ))
+        .expect("the helper's camera list parses");
+        let names: Vec<String> = tidy_devices(cameras).into_iter().map(|d| d.name).collect();
+        assert_eq!(
+            names,
+            [
+                "FaceTime HD Camera",
+                "Ahmad\u{2019}s iPhone Camera",
+                "Ahmad\u{2019}s iPhone Desk View Camera",
+                "Logi C270 HD WebCam / USB",
+            ]
+        );
+
+        let mics: Vec<MediaDevice> = serde_json::from_str(concat!(
+            r#"[{"id":"BuiltInMicrophoneDevice","name":"MacBook Pro Microphone","isDefault":false},"#,
+            r#"{"id":"iPhoneMic-UID","name":"Ahmad’s iPhone Microphone","isDefault":true},"#,
+            r#"{"id":"BlackHole2ch_UID","name":"BlackHole 2ch","isDefault":false},"#,
+            r#"{"id":"iPhoneMic-UID","name":"Ahmad’s iPhone Microphone","isDefault":false}]"#
+        ))
+        .expect("the helper's microphone list parses");
+        let tidy = tidy_devices(mics);
+        assert_eq!(tidy.len(), 3, "the iPhone mic from both macOS APIs shows once");
+        assert_eq!(tidy[0], dev("iPhoneMic-UID", "Ahmad\u{2019}s iPhone Microphone", true));
+    }
 }
