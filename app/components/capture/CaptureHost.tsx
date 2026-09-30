@@ -9,12 +9,13 @@ import { toast } from "sonner";
 
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
 import {
+  captureModesAtom,
   capturePermissionPaneAtom,
   captureRecordingAtom,
   captureRecordingNoteAtom,
   captureSupportedAtom,
 } from "@/app/lib/capture/captureFlow";
-import { disabledRecordingNote } from "@/app/lib/capture/modes";
+import { disabledRecordingNote, supportedModesOf } from "@/app/lib/capture/modes";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
 import {
   getCaptureSupport,
@@ -42,6 +43,7 @@ export default function CaptureHost() {
   const setRecording = useSetAtom(captureRecordingAtom);
   const setRecordingNote = useSetAtom(captureRecordingNoteAtom);
   const setPermissionPane = useSetAtom(capturePermissionPaneAtom);
+  const setModes = useSetAtom(captureModesAtom);
   const startCapture = useStartCapture();
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -55,6 +57,7 @@ export default function CaptureHost() {
         setRecording(s.recording);
         setRecordingNote(s.recording ? null : disabledRecordingNote(s));
         setPermissionPane(s.permissionPane);
+        setModes(supportedModesOf(s));
         // The saved shortcut is registered once the signed-in app is up.
         if (s.supported) void syncCaptureShortcut().catch(() => undefined);
       })
@@ -63,7 +66,7 @@ export default function CaptureHost() {
         setRecording(false);
         setRecordingNote(null);
       });
-  }, [setSupported, setRecording, setRecordingNote, setPermissionPane]);
+  }, [setSupported, setRecording, setRecordingNote, setPermissionPane, setModes]);
 
   useEffect(() => {
     if (!SCREEN_CAPTURE_ENABLED) return;

@@ -6,9 +6,11 @@ import { Provider, createStore } from "jotai";
 import CaptureButtons, { screenshotTooltip } from "../CaptureButtons";
 import {
   captureDialogAtom,
+  captureModesAtom,
   captureRecordingAtom,
   captureSupportedAtom,
 } from "@/app/lib/capture/captureFlow";
+import { offeredModes, supportedModesOf, type SupportedModes } from "@/app/lib/capture/modes";
 import { recordAvailability, RECORDING_UNAVAILABLE_REASON } from "@/app/lib/capture/recordAvailability";
 
 const invoke = vi.fn();
@@ -38,12 +40,17 @@ beforeEach(() => {
 });
 
 function renderWith(
-  { supported = true, recording = true }: { supported?: boolean; recording?: boolean } = {},
+  {
+    supported = true,
+    recording = true,
+    modes = null,
+  }: { supported?: boolean; recording?: boolean; modes?: SupportedModes | null } = {},
   props: Parameters<typeof CaptureButtons>[0] = {},
 ) {
   const store = createStore();
   store.set(captureSupportedAtom, supported);
   store.set(captureRecordingAtom, recording);
+  store.set(captureModesAtom, modes);
   const view = render(
     <Provider store={store}>
       <CaptureButtons {...props} />
@@ -52,24 +59,101 @@ function renderWith(
   return { ...view, store };
 }
 
-async function openMore() {
-  const trigger = screen.getByRole("button", { name: "More capture options" });
+async function openMenu(name: "Screenshot" | "Record") {
+  const trigger = screen.getByRole("button", { name });
   // Radix opens its menu from the keyboard too; jsdom has no real pointer events.
   fireEvent.keyDown(trigger, { key: "Enter" });
-  return screen.findByRole("menu");
+  return screen.findByRole("menu", { name });
 }
 
+const itemNames = () => screen.getAllByRole("menuitem").map((el) => el.textContent?.replace("⇧⌘2", "").trim());
+
 describe("CaptureButtons", () => {
-  it("opens the capture bar on screenshots from Screenshot", async () => {
+  // The separate "…" button is gone: each button carries its own menu.
+  it("has no separate More button, only Screenshot and Record, each opening a menu", () => {
     renderWith();
-    fireEvent.click(screen.getByRole("button", { name: "Screenshot" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_start", { kind: "screenshot", mode: null }));
+    const buttons = screen.getAllByRole("button");
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Screenshot", "Record"]);
+    expect(screen.queryByRole("button", { name: /more/i })).toBeNull();
+    for (const b of buttons) expect(b).toHaveAttribute("aria-haspopup", "menu");
   });
 
-  it("opens the capture bar on recording from Record", async () => {
+  it("offers each screenshot mode, and each item starts that capture", async () => {
     renderWith();
-    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    for (const [item, mode] of [
+      ["Capture an area", "area"],
+      ["Capture a window", "window"],
+      ["Capture entire screen", "screen"],
+    ] as const) {
+      await openMenu("Screenshot");
+      fireEvent.click(screen.getByRole("menuitem", { name: item }));
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_start", { kind: "screenshot", mode }));
+    }
+  });
+
+  it("offers each recording mode, and each item starts that recording", async () => {
+    renderWith();
+    for (const [item, mode] of [
+      ["Record an area", "area"],
+      ["Record a window", "window"],
+      ["Record entire screen", "screen"],
+    ] as const) {
+      await openMenu("Record");
+      fireEvent.click(screen.getByRole("menuitem", { name: item }));
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_start", { kind: "recording", mode }));
+    }
+  });
+
+  it("lists the modes, a separator, then the capture bar with its shortcut and the drive", async () => {
+    renderWith();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_get_shortcut"));
+    const menu = await openMenu("Screenshot");
+    expect(itemNames()).toEqual([
+      "Capture an area",
+      "Capture a window",
+      "Capture entire screen",
+      "Open capture bar",
+      "Change capture drive…",
+    ]);
+    expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: /Open capture bar/ })).toHaveTextContent("⇧⌘2");
+
+    // Drawn on its own background in both themes: the shared menu's base is
+    // `bg-popover`, a token this theme does not define.
+    const classes = Array.from(menu.classList);
+    expect(classes.some((c) => /^bg-(?!popover)/.test(c))).toBe(true);
+    expect(classes.some((c) => c.startsWith("dark:bg-"))).toBe(true);
+  });
+
+  it("opens the capture bar on the menu's kind and last mode", async () => {
+    renderWith();
+    await openMenu("Record");
+    fireEvent.click(screen.getByRole("menuitem", { name: /Open capture bar/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_start", { kind: "recording", mode: null }));
+  });
+
+  it("changes the capture drive from either menu", async () => {
+    const { store } = renderWith();
+    await openMenu("Record");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Change capture drive…" }));
+    expect(store.get(captureDialogAtom)).toEqual({ kind: "destination", resume: null });
+  });
+
+  // Windows groundwork: Rust says which modes each kind has on this platform.
+  it("offers only the modes Rust says this platform supports", async () => {
+    renderWith({ modes: { screenshot: ["area", "window", "screen"], recording: ["screen"] } });
+    await openMenu("Record");
+    expect(screen.queryByRole("menuitem", { name: "Record an area" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Record a window" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Record entire screen" })).toBeInTheDocument();
+  });
+
+  it("closes on Escape and gives focus back to its button", async () => {
+    renderWith();
+    const menu = await openMenu("Screenshot");
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(screen.getByRole("button", { name: "Screenshot" })).toHaveFocus();
   });
 
   it("shows the shortcut in Screenshot's tooltip and names Record's", async () => {
@@ -93,7 +177,7 @@ describe("CaptureButtons", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  // Windows captures screenshots but has no recording at all.
+  // A platform with no recording at all.
   it("hides Record where the platform has no recording", () => {
     mac = false;
     renderWith({ recording: false });
@@ -102,48 +186,26 @@ describe("CaptureButtons", () => {
   });
 
   // A Mac whose build lacks the recording helper: the button stays, says why,
-  // and does nothing. aria-disabled rather than disabled, so the reason's
-  // tooltip still shows on hover and the button stays in the tab order.
-  it("shows Record disabled with the reason on a Mac without the helper", () => {
+  // and its menu never opens. aria-disabled rather than disabled, so the
+  // reason's tooltip still shows on hover and the button stays in the tab order.
+  it("shows Record disabled with the reason, and its menu does not open", () => {
     renderWith({ recording: false });
     const record = screen.getByRole("button", { name: "Record" });
     expect(record).toHaveAttribute("aria-disabled", "true");
     expect(record).toHaveAttribute("title", "Screen recording isn't available in this build.");
     expect(record).not.toBeDisabled();
+    expect(record).not.toHaveAttribute("aria-haspopup");
+    fireEvent.keyDown(record, { key: "Enter" });
     fireEvent.click(record);
+    expect(screen.queryByRole("menu")).toBeNull();
     expect(invoke).not.toHaveBeenCalledWith("capture_start", expect.anything());
-  });
-
-  it("offers the capture bar with its shortcut, and the capture drive, under More", async () => {
-    const { store } = renderWith();
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_get_shortcut"));
-    const menu = await openMore();
-    const bar = screen.getByRole("menuitem", { name: /Open capture bar/ });
-    expect(bar).toHaveTextContent("⇧⌘2");
-    expect(screen.getByRole("menuitem", { name: "Change capture drive…" })).toBeInTheDocument();
-
-    // Drawn on its own background in both themes: the shared menu's base is
-    // `bg-popover`, a token this theme does not define.
-    const classes = Array.from(menu.classList);
-    expect(classes.some((c) => /^bg-(?!popover)/.test(c))).toBe(true);
-    expect(classes.some((c) => c.startsWith("dark:bg-"))).toBe(true);
-
-    fireEvent.click(screen.getByRole("menuitem", { name: "Change capture drive…" }));
-    expect(store.get(captureDialogAtom)).toEqual({ kind: "destination", resume: null });
-  });
-
-  it("opens the capture bar on the last mode from More", async () => {
-    renderWith();
-    await openMore();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Open capture bar/ }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_start", { kind: null, mode: null }));
   });
 
   // Icon-only (narrow widths, or labels="never"): the names live on
   // aria-label, and nothing visible is left to read.
   it("names every button when drawn as icons only", () => {
     renderWith({}, { labels: "never" });
-    for (const name of ["Screenshot", "Record", "More capture options"]) {
+    for (const name of ["Screenshot", "Record"]) {
       const button = screen.getByRole("button", { name });
       expect(button).toHaveAttribute("aria-label", name);
       expect(button).toHaveTextContent("");
@@ -151,21 +213,38 @@ describe("CaptureButtons", () => {
   });
 
   // Labels collapse by container width, not by wrapping: a hidden label with
-  // a container-query reveal, and an icon-sized button until then.
+  // a container-query reveal, and an icon-and-chevron button until then.
   it("collapses labels to icons in narrow columns", () => {
     renderWith({}, { labels: "auto" });
     const shot = screen.getByRole("button", { name: "Screenshot" });
-    expect(shot.className).toContain("w-[30px]");
-    expect(shot.className).toContain("@[52rem]:w-auto");
+    expect(shot.className).toContain("px-2");
+    expect(shot.className).toContain("@[52rem]:px-3");
     const text = Array.from(shot.querySelectorAll("span")).find((s) => s.textContent === "Screenshot");
     expect(text?.className).toMatch(/\bhidden\b.*@\[52rem\]:inline/);
   });
 
   it("keeps the folder list's compact 26px size", () => {
     renderWith({}, { size: "compact" });
-    for (const name of ["Screenshot", "Record", "More capture options"]) {
+    for (const name of ["Screenshot", "Record"]) {
       expect(screen.getByRole("button", { name }).className).toContain("h-[26px]");
     }
+  });
+});
+
+describe("offeredModes", () => {
+  it("offers every mode when Rust does not say", () => {
+    expect(offeredModes("recording", null)).toEqual(["area", "window", "screen"]);
+    expect(offeredModes("screenshot", {})).toEqual(["area", "window", "screen"]);
+  });
+
+  it("keeps the menu's order and only Rust's modes", () => {
+    expect(offeredModes("recording", { recording: ["screen", "area"] })).toEqual(["area", "screen"]);
+  });
+
+  it("reads modes from a support answer only when it has them", () => {
+    expect(supportedModesOf({ supported: true })).toBeNull();
+    expect(supportedModesOf({ modes: { screenshot: ["area"] } })).toEqual({ screenshot: ["area"] });
+    expect(supportedModesOf(null)).toBeNull();
   });
 });
 

@@ -1,5 +1,6 @@
 import { atom } from "jotai";
 import type { CaptureKind, CaptureMode } from "@/app/lib/tauri/capture";
+import type { SupportedModes } from "./modes";
 import {
   isCaptureDestinationUnset,
   isScreenRecordingPermissionMissing,
@@ -40,6 +41,12 @@ export const captureRecordingAtom = atom<boolean>(false);
  * on this platform at all (`disabledRecordingNote`).
  */
 export const captureRecordingNoteAtom = atom<string | null>(null);
+
+/**
+ * The modes each kind may offer on this platform (`capture_support.modes`);
+ * null when Rust does not say, which offers every mode (`offeredModes`).
+ */
+export const captureModesAtom = atom<SupportedModes | null>(null);
 
 /** What System Settings calls the Screen Recording pane on this Mac (Rust's `permissionPane`); null until known. */
 export const capturePermissionPaneAtom = atom<string | null>(null);

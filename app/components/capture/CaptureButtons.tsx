@@ -1,9 +1,9 @@
 "use client";
 
 import { useAtomValue, useSetAtom } from "jotai";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { cva } from "class-variance-authority";
-import { Camera, Ellipsis, Settings2 } from "lucide-react";
+import { Camera, ChevronDown, PanelBottom, Settings2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -15,18 +15,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
-import { captureDialogAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import { captureDialogAtom, captureModesAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
 import { useRecordAvailability } from "@/app/lib/capture/recordAvailability";
+import { MODE_ICON, modeLabel, offeredModes } from "@/app/lib/capture/modes";
 import { acceleratorKeys, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
-import { getCaptureShortcut } from "@/app/lib/tauri/capture";
+import { getCaptureShortcut, type CaptureKind } from "@/app/lib/tauri/capture";
 import { SECONDARY_PILL_CLASSES } from "@/app/components/page-sections/drive/uploadActions";
 import ShortcutKeys from "./ShortcutKeys";
 
 export const SCREENSHOT_LABEL = "Screenshot";
 export const RECORD_LABEL = "Record";
 export const RECORD_TOOLTIP = "Record your screen";
-export const MORE_OPTIONS_LABEL = "More capture options";
+export const OPEN_BAR_LABEL = "Open capture bar";
+export const CHANGE_DRIVE_LABEL = "Change capture drive…";
 
 /** "Take a screenshot (⇧⌘2)", or without the brackets when no shortcut is set. */
 export function screenshotTooltip(keys: string[], mac: boolean): string {
@@ -35,16 +37,20 @@ export function screenshotTooltip(keys: string[], mac: boolean): string {
 }
 
 /**
- * The toolbar's two capture buttons, and one "…" for the rest.
+ * The toolbar's two capture buttons. Each opens its own menu, the way a
+ * split control in macOS or Loom does: the three modes for its kind, then
+ * the capture bar and the capture drive.
  *
  * Labels show only where the content column is wide enough (a container
  * query on the app's scroll area, which is an `@container`); below that the
- * buttons are icons with their names on `aria-label` and `title`, so a 900px
- * window with the sidebar open keeps its toolbar on one line.
+ * buttons are an icon and the chevron, with their names on `aria-label` and
+ * `title`, so a 900px window with the sidebar open keeps its toolbar on one
+ * line.
  *
  * The disabled Record uses `aria-disabled`, not `disabled`: a disabled button
  * takes no pointer events, so its tooltip, the one thing that says WHY, would
- * never show, and it would drop out of the tab order.
+ * never show, and it would drop out of the tab order. It is not a menu
+ * trigger at all, so it never opens.
  */
 const captureButton = cva(
   cn(
@@ -63,8 +69,6 @@ const captureButton = cva(
       labels: {
         auto: "",
         never: "",
-        /** The "…" trigger: always an icon. */
-        icon: "",
       },
       unavailable: {
         true: cn(
@@ -78,10 +82,11 @@ const captureButton = cva(
       },
     },
     compoundVariants: [
-      { size: "compact", labels: ["never", "icon"], class: "w-[26px] px-0" },
-      { size: "compact", labels: "auto", class: "w-[26px] px-0 @[52rem]:w-auto @[52rem]:px-2.5" },
-      { size: "regular", labels: ["never", "icon"], class: "w-[30px] px-0" },
-      { size: "regular", labels: "auto", class: "w-[30px] px-0 @[52rem]:w-auto @[52rem]:px-3" },
+      // Icon plus chevron: just wide enough for both, at the toolbar's height.
+      { size: "compact", labels: "never", class: "w-auto gap-0.5 px-1.5" },
+      { size: "compact", labels: "auto", class: "w-auto gap-0.5 px-1.5 @[52rem]:gap-1.5 @[52rem]:px-2.5" },
+      { size: "regular", labels: "never", class: "w-auto gap-0.5 px-2" },
+      { size: "regular", labels: "auto", class: "w-auto gap-0.5 px-2 @[52rem]:gap-1.5 @[52rem]:px-3" },
       // Hover leaves an unavailable button as it was.
       { size: "compact", unavailable: true, class: "hover:bg-grey-90 dark:hover:bg-[#2c2c2c]" },
       { size: "regular", unavailable: true, class: "hover:bg-white dark:hover:bg-black-primary-bg" },
@@ -93,7 +98,7 @@ const captureButton = cva(
 // Explicit colours: the shared DropdownMenuContent's base is `bg-popover`, a
 // token this theme does not define, so an unstyled menu has no background.
 const CONTENT_CLASSES = cn(
-  "min-w-[15rem] rounded-lg p-1.5",
+  "min-w-[15rem] max-w-[calc(100vw-2rem)] rounded-lg p-1.5",
   "bg-white border border-grey-80",
   "dark:bg-black-500 dark:border-black-300",
   "shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.3)]",
@@ -128,17 +133,17 @@ export interface CaptureButtonsProps {
 }
 
 /**
- * Screenshot and Record, side by side, then "…" for the capture bar's
- * shortcut and the capture drive. Each opens the capture bar on its kind
- * (the bar remembers the last mode). A capture is filed in the capture drive
- * the user chose, whatever drive is on screen, so no surface gates these on
- * the open drive's role.
+ * Screenshot and Record, side by side, each opening its menu of modes. A
+ * capture is filed in the capture drive the user chose, whatever drive is on
+ * screen, so no surface gates these on the open drive's role.
  *
  * Renders nothing unless the feature is on for this lane AND Rust says this
- * platform can capture. Record follows `useRecordAvailability`.
+ * platform can capture. Record follows `useRecordAvailability`; the modes
+ * each menu offers follow Rust's `capture_support.modes` (`offeredModes`).
  */
 export default function CaptureButtons({ size = "regular", labels = "auto", className }: CaptureButtonsProps) {
   const supported = useAtomValue(captureSupportedAtom);
+  const modes = useAtomValue(captureModesAtom);
   const record = useRecordAvailability();
   const setDialog = useSetAtom(captureDialogAtom);
   const startCapture = useStartCapture();
@@ -155,9 +160,53 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
   if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
 
   const icon = size === "compact" ? "size-3.5" : "size-4";
+  const chevron = cn(size === "compact" ? "size-3" : "size-3.5", "shrink-0 opacity-60");
   const label = (text: string) =>
     labels === "auto" ? <span className="hidden @[52rem]:inline">{text}</span> : null;
   const recordUnavailable = record.state === "disabled";
+
+  /** One kind's menu: its modes, then the two items that belong to both. */
+  const menu = (kind: CaptureKind, name: string) => (
+    <DropdownMenuContent align="start" aria-label={name} className={CONTENT_CLASSES}>
+      {offeredModes(kind, modes).map((mode) => {
+        const ModeIcon = MODE_ICON[mode];
+        return (
+          <DropdownMenuItem key={mode} className={ITEM_CLASSES} onSelect={() => void startCapture(kind, mode)}>
+            <ModeIcon aria-hidden className="size-4 shrink-0" />
+            {modeLabel(kind, mode)}
+          </DropdownMenuItem>
+        );
+      })}
+      <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
+      {/* The bar on this kind, on its last mode: from here the bar can switch to anything. */}
+      <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => void startCapture(kind)}>
+        <PanelBottom aria-hidden className="size-4 shrink-0" />
+        <span className="flex-1">{OPEN_BAR_LABEL}</span>
+        <ShortcutKeys keys={shortcut} className="ml-4" />
+      </DropdownMenuItem>
+      <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => setDialog({ kind: "destination", resume: null })}>
+        <Settings2 aria-hidden className="size-4 shrink-0" />
+        {CHANGE_DRIVE_LABEL}
+      </DropdownMenuItem>
+    </DropdownMenuContent>
+  );
+
+  const trigger = (name: string, title: string, glyph: ReactNode) => (
+    <DropdownMenuTrigger asChild>
+      <Button
+        type="button"
+        variant="defaultStable"
+        size="auto"
+        aria-label={name}
+        title={title}
+        className={captureButton({ size, labels })}
+      >
+        {glyph}
+        {label(name)}
+        <ChevronDown aria-hidden className={chevron} />
+      </Button>
+    </DropdownMenuTrigger>
+  );
 
   return (
     <div
@@ -165,67 +214,37 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
       aria-label="Screen capture"
       className={cn("flex shrink-0 items-center", size === "compact" ? "gap-1.5" : "gap-2", className)}
     >
-      <Button
-        type="button"
-        variant="defaultStable"
-        size="auto"
-        aria-label={SCREENSHOT_LABEL}
-        title={screenshotTooltip(shortcut, mac)}
-        className={captureButton({ size, labels })}
-        onClick={() => void startCapture("screenshot")}
-      >
-        <Camera aria-hidden className={cn(icon, "shrink-0")} />
-        {label(SCREENSHOT_LABEL)}
-      </Button>
+      <DropdownMenu>
+        {trigger(
+          SCREENSHOT_LABEL,
+          screenshotTooltip(shortcut, mac),
+          <Camera aria-hidden className={cn(icon, "shrink-0")} />,
+        )}
+        {menu("screenshot", SCREENSHOT_LABEL)}
+      </DropdownMenu>
 
-      {record.state !== "hidden" && (
+      {record.state === "available" && (
+        <DropdownMenu>
+          {trigger(RECORD_LABEL, RECORD_TOOLTIP, <RecordGlyph className={icon} />)}
+          {menu("recording", RECORD_LABEL)}
+        </DropdownMenu>
+      )}
+
+      {record.state === "disabled" && (
         <Button
           type="button"
           variant="defaultStable"
           size="auto"
           aria-label={RECORD_LABEL}
-          aria-disabled={recordUnavailable || undefined}
-          title={record.state === "disabled" ? record.reason : RECORD_TOOLTIP}
+          aria-disabled
+          title={record.reason}
           className={captureButton({ size, labels, unavailable: recordUnavailable })}
-          onClick={() => {
-            if (recordUnavailable) return;
-            void startCapture("recording");
-          }}
         >
           <RecordGlyph className={icon} />
           {label(RECORD_LABEL)}
+          <ChevronDown aria-hidden className={chevron} />
         </Button>
       )}
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="defaultStable"
-            size="auto"
-            aria-label={MORE_OPTIONS_LABEL}
-            title={MORE_OPTIONS_LABEL}
-            className={captureButton({ size, labels: "icon" })}
-          >
-            <Ellipsis aria-hidden className={cn(icon, "shrink-0")} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" aria-label={MORE_OPTIONS_LABEL} className={CONTENT_CLASSES}>
-          <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => void startCapture()}>
-            <Camera aria-hidden className="size-4" />
-            <span className="flex-1">Open capture bar</span>
-            <ShortcutKeys keys={shortcut} className="ml-4" />
-          </DropdownMenuItem>
-          <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
-          <DropdownMenuItem
-            className={ITEM_CLASSES}
-            onSelect={() => setDialog({ kind: "destination", resume: null })}
-          >
-            <Settings2 aria-hidden className="size-4" />
-            Change capture drive…
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
   );
 }

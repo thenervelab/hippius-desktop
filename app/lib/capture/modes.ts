@@ -28,6 +28,29 @@ export function modeLabel(kind: CaptureKind, mode: CaptureMode): string {
 export const MENU_MODES: readonly CaptureMode[] = ["area", "window", "screen"];
 
 /**
+ * The modes each kind may offer on this platform, as Rust reports them in
+ * `capture_support` / the overlay context (`modes`). Absent on a build whose
+ * Rust does not report them yet, which offers every mode.
+ */
+export type SupportedModes = Partial<Record<CaptureKind, readonly CaptureMode[]>>;
+
+/** `modes` from a `capture_support` or overlay-context answer, or null when Rust sent none. */
+export function supportedModesOf(answer: object | null | undefined): SupportedModes | null {
+  if (!answer || !("modes" in answer)) return null;
+  const modes = (answer as { modes?: unknown }).modes;
+  return modes && typeof modes === "object" ? (modes as SupportedModes) : null;
+}
+
+/**
+ * The modes a menu offers for `kind`, in {@link MENU_MODES} order: those Rust
+ * says this platform supports, or all three when it did not say.
+ */
+export function offeredModes(kind: CaptureKind, supported: SupportedModes | null): CaptureMode[] {
+  const allowed = supported?.[kind];
+  return allowed ? MENU_MODES.filter((m) => allowed.includes(m)) : [...MENU_MODES];
+}
+
+/**
  * The line to show beside disabled Record modes, or null to show them
  * normally (recording works) or not at all (no recorder on this platform).
  * Only a Mac that could record with another build or a newer macOS gets the
