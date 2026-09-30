@@ -78,7 +78,8 @@ function ModeGroup({
     if (next === null) return;
     e.preventDefault();
     refs.current[next]?.focus();
-    onPick(entries[next]);
+    // A disabled mode takes focus (so its reason is read) but is not picked.
+    if (!entries[next].unavailable) onPick(entries[next]);
   };
 
   return (
@@ -96,11 +97,19 @@ function ModeGroup({
             role="radio"
             aria-checked={checked}
             aria-label={entry.label}
-            title={entry.label}
+            // aria-disabled, not disabled: a disabled button gets no hover,
+            // so its tooltip would never say why. A click puts the reason on
+            // the hint line, which is a live region.
+            aria-disabled={entry.unavailable ? true : undefined}
+            title={entry.unavailable ? `${entry.label}: ${entry.unavailable}` : entry.label}
             tabIndex={i === tabStop ? 0 : -1}
             onClick={() => onPick(entry)}
             className={`relative grid h-9 w-10 place-items-center rounded-[8px] transition-colors ${GLASS_FOCUS} ${
-              checked ? "bg-white/20 text-white" : "text-white/80 hover:bg-white/10 hover:text-white"
+              entry.unavailable
+                ? "cursor-default text-white/40"
+                : checked
+                  ? "bg-white/20 text-white"
+                  : "text-white/80 hover:bg-white/10 hover:text-white"
             }`}
           >
             <Icon className="size-[18px]" strokeWidth={1.8} />
@@ -109,7 +118,9 @@ function ModeGroup({
               // so no dark rim shows around the dot over a light desktop.
               <span
                 aria-hidden
-                className="absolute bottom-[7px] right-[8px] size-[7px] rounded-full bg-[#FF453A] shadow-[0_0_0_2px_rgba(28,29,33,0.85)]"
+                className={`absolute bottom-[7px] right-[8px] size-[7px] rounded-full shadow-[0_0_0_2px_rgba(28,29,33,0.85)] ${
+                  entry.unavailable ? "bg-white/40" : "bg-[#FF453A]"
+                }`}
               />
             )}
           </button>
@@ -519,6 +530,8 @@ interface Props {
   options: CaptureOptions;
   destination: CaptureDestination | null;
   recordingAvailable: boolean;
+  /** Why the Record modes are shown disabled (`disabledRecordingNote`); null shows them normally or not at all. */
+  recordingNote?: string | null;
   microphoneAvailable: boolean;
   showClicksAvailable: boolean;
   /** Camera only (the Screen switch) can be recorded here. */
@@ -543,6 +556,8 @@ interface Props {
 export default function CaptureBar(props: Props) {
   const { kind, mode, options, destination, hint } = props;
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  // Why a disabled mode cannot be picked, shown in place of the hint once one is clicked.
+  const [modeNote, setModeNote] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const optionsTrigger = useRef<HTMLButtonElement | null>(null);
   const cameraTrigger = useRef<HTMLButtonElement | null>(null);
@@ -628,10 +643,17 @@ export default function CaptureBar(props: Props) {
       .catch(() => undefined);
   };
 
-  const groups = barGroups(props.recordingAvailable);
+  const groups = barGroups(props.recordingAvailable, props.recordingNote ?? null);
   const isActive = (entry: BarMode) =>
     entry.kind === kind && entry.mode === mode && !(props.cameraOnly && entry.kind === "recording");
   const pickMode = (entry: BarMode) => {
+    // A disabled Record mode puts its reason on the hint line, where it is
+    // read out, instead of switching.
+    if (entry.unavailable) {
+      setModeNote(entry.unavailable);
+      return;
+    }
+    setModeNote(null);
     // Picking what to record brings the screen back.
     if (props.cameraOnly && entry.kind === "recording") saveOptions({ ...options, screen: true });
     props.onMode(entry.kind, entry.mode);
@@ -650,7 +672,7 @@ export default function CaptureBar(props: Props) {
       {/* Polite: a refusal ("Drag to choose an area first") replaces the
           hint, and a screen reader should hear it. */}
       <p role="status" aria-live="polite" className="rounded-full bg-[#000]/70 px-3.5 py-1.5 text-[13px] text-white/90 shadow-lg">
-        {hint}
+        {modeNote ?? hint}
       </p>
       {kind === "recording" && (
         <SourcesPanel

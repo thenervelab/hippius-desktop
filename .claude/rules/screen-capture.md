@@ -367,7 +367,25 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   `macos/CaptureHelper.entitlements` (see macos-packaging.md). A release app
   looks ONLY there (`helper_candidates`); debug builds also try
   `macos/HippiusCapture/.build/{release,out/Products/Release,apple/...,debug}`.
-  No helper = no Record actions and no camera or microphone lists, silently.
+  No helper = no working Record actions and no camera or microphone lists.
+  It is NOT silent any more: `recording::recording_unavailable()` gives the
+  reason (`RecordingUnavailable`: `helperMissing` / `osTooOld` /
+  `unsupportedPlatform`, checked in that order of platform, then macOS 13,
+  then helper, so an old Mac is told to update), and `RecordingAvailability`
+  (the reason plus Rust's line) is flattened into `capture_support` and the
+  overlay context as `recordingUnavailable` / `recordingUnavailableMessage`.
+  `disabledRecordingNote` (`app/lib/capture/modes.ts`) turns the first two
+  into disabled Record modes with that line on the bar (`aria-disabled`, not
+  `disabled`, so the tooltip shows; a click puts the line on the hint), in
+  the Capture menu (a line above disabled items) and as a Settings row;
+  `unsupportedPlatform` still hides them. `capture_start` / `capture_set_mode`
+  refuse a recording with the same line. A release build logs a `warn` once
+  at launch when the helper is missing (`warn_if_helper_missing`, own thread:
+  `sw_vers`). Pinned by the `recording::tests` reason tests and the vitest
+  bar, menu, host and Settings tests.
+- **Local builds:** plain `pnpm tauri:build` has no helper (it only prints a
+  notice after, `scripts/capture-helper-notice.mjs`); `pnpm build:mac-local`
+  builds, embeds, re-signs and makes a DMG (see macos-packaging.md).
 - **Destination** per account (`capture_destination_v1:<account_key>`); own
   drives only for now.
 
@@ -431,13 +449,15 @@ a capture is filed in the capture drive, not the open one) and Overview
 `@container`; below it the buttons are icons named by `aria-label` + `title`.
 Record's state comes from ONE helper, `recordAvailability`
 (`app/lib/capture/recordAvailability.ts`): hidden off macOS without recording,
-shown `aria-disabled` with the reason on a Mac without it (not `disabled`, which
-would swallow the tooltip). The tray popover has its labelled Capture button
+shown `aria-disabled` with Rust's reason on a Mac without it (not `disabled`,
+which would swallow the tooltip). The reason is `capture_support.recordingUnavailable`
+(`helperMissing` / `osTooOld` / `unsupportedPlatform`) with Rust's line in
+`recordingUnavailableMessage`; `unsupportedPlatform` hides Record, the other two
+disable it. The capture bar's Record modes and Settings show the same line. The tray popover has its labelled Capture button
 (`TrayCaptureButton`, opens the bar on the last mode; its slot is held while
 support is asked). Mode names and icons come from `app/lib/capture/modes.ts`.
 Settings › Sync & Storage has the Capture card (shortcut, drive). Pinned by
 `CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`
 and `tests/capture_wiring.rs` (content protection, focus, capabilities, every
 command registered, retry path). The "…" menu styles its own
-`DropdownMenuContent` (theme has no `bg-popover`). `CaptureMenu.tsx` has no
-call site left and can be deleted.
+`DropdownMenuContent` (theme has no `bg-popover`).

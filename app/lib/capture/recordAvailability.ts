@@ -1,7 +1,7 @@
 "use client";
 
 import { useAtomValue } from "jotai";
-import { captureRecordingAtom } from "./captureFlow";
+import { captureRecordingAtom, captureRecordingNoteAtom } from "./captureFlow";
 import { isMacPlatform } from "./shortcutLabel";
 
 /**
@@ -25,8 +25,15 @@ export const RECORDING_UNAVAILABLE_REASON = "Screen recording isn't available in
  * `recording` flag today; a richer "why not" from Rust plugs in here and
  * every surface follows.
  */
-export function recordAvailability(support: { recording: boolean }, mac: boolean): RecordAvailability {
+export function recordAvailability(
+  support: { recording: boolean },
+  mac: boolean,
+  note: string | null = null,
+): RecordAvailability {
   if (support.recording) return { state: "available" };
+  // Rust's own line (`recordingUnavailableMessage`) when a Mac could record
+  // with another build or a newer macOS; the generic one only as a fallback.
+  if (note) return { state: "disabled", reason: note };
   if (!mac) return { state: "hidden" };
   return { state: "disabled", reason: RECORDING_UNAVAILABLE_REASON };
 }
@@ -34,5 +41,6 @@ export function recordAvailability(support: { recording: boolean }, mac: boolean
 /** `recordAvailability` for this machine, from the support CaptureHost asked for. */
 export function useRecordAvailability(): RecordAvailability {
   const recording = useAtomValue(captureRecordingAtom);
-  return recordAvailability({ recording }, isMacPlatform());
+  const note = useAtomValue(captureRecordingNoteAtom);
+  return recordAvailability({ recording }, isMacPlatform(), note);
 }

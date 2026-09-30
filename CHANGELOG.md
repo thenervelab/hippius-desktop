@@ -122,6 +122,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Show in folder points out the file.** From a capture's card or the sync
   queue, the folder opens on the page that holds the file, scrolls to it and
   highlights it for a few seconds, even in a folder of dozens of files.
+- **When recording is not available, Hippius says why.** On a Mac whose copy
+  of Hippius was built without screen recording, or that runs a macOS older
+  than 13, the Record options stay on the capture bar, the Capture menu and
+  in Settings, greyed out with the reason, instead of disappearing and
+  leaving only screenshots.
 
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.

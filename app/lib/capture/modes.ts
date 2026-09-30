@@ -1,5 +1,5 @@
 import { AppWindow, Monitor, SquareDashed } from "lucide-react";
-import type { CaptureKind, CaptureMode } from "@/app/lib/tauri/capture";
+import type { CaptureKind, CaptureMode, RecordingAvailability } from "@/app/lib/tauri/capture";
 
 /**
  * One vocabulary for the capture modes, on every surface that names them
@@ -26,3 +26,16 @@ export function modeLabel(kind: CaptureKind, mode: CaptureMode): string {
 
 /** The order the Capture menu lists modes in (the bar keeps macOS's order). */
 export const MENU_MODES: readonly CaptureMode[] = ["area", "window", "screen"];
+
+/**
+ * The line to show beside disabled Record modes, or null to show them
+ * normally (recording works) or not at all (no recorder on this platform).
+ * Only a Mac that could record with another build or a newer macOS gets the
+ * disabled modes: a missing helper must be visible, not a vanished feature.
+ * The words are Rust's (`recordingUnavailableMessage`).
+ */
+export function disabledRecordingNote(availability: RecordingAvailability): string | null {
+  const reason = availability.recordingUnavailable;
+  if (reason !== "helperMissing" && reason !== "osTooOld") return null;
+  return availability.recordingUnavailableMessage;
+}

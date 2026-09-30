@@ -29,7 +29,12 @@ vi.mock("../CapturePermissionDialog", () => ({ default: () => null }));
 
 import CaptureHost from "../CaptureHost";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
-import { captureDialogAtom, capturePermissionPaneAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import {
+  captureDialogAtom,
+  capturePermissionPaneAtom,
+  captureRecordingNoteAtom,
+  captureSupportedAtom,
+} from "@/app/lib/capture/captureFlow";
 
 beforeEach(() => {
   tauri.reset();
@@ -64,6 +69,25 @@ describe("CaptureHost", () => {
     await waitFor(() => expect(store.get(captureSupportedAtom)).toBe(true));
     expect(store.get(capturePermissionPaneAtom)).toBe("Screen & System Audio Recording");
     await waitFor(() => expect(tauri.core.invoke.mock.calls.some(([c]) => c === "capture_sync_shortcut")).toBe(true));
+  });
+
+  it.each([
+    ["helperMissing", "Screen recording isn't included in this build.", "Screen recording isn't included in this build."],
+    ["osTooOld", "Screen recording needs macOS 13 or later.", "Screen recording needs macOS 13 or later."],
+    ["unsupportedPlatform", "Screen recording isn't available on this system yet.", null],
+  ])("turns Rust's reason %s into the line beside disabled Record modes", async (reason, message, note) => {
+    tauri.onInvoke("capture_support", () => ({
+      supported: true,
+      recording: false,
+      cameraOnly: false,
+      screenRecordingPermission: true,
+      permissionPane: null,
+      recordingUnavailable: reason,
+      recordingUnavailableMessage: message,
+    }));
+    const store = mountHost();
+    await waitFor(() => expect(store.get(captureSupportedAtom)).toBe(true));
+    expect(store.get(captureRecordingNoteAtom)).toBe(note);
   });
 
   it("opens the drive's Captures folder on Show in folder", async () => {

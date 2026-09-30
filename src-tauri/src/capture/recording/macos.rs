@@ -35,9 +35,16 @@ const HELPER_NAME: &str = "HippiusCapture";
 /// above it, a header with no picture is well below.
 const MIN_PARTIAL_BYTES: u64 = 16 * 1024;
 
-/// ScreenCaptureKit system audio needs macOS 13+; hide recording below that.
-pub fn recording_supported() -> bool {
-    macos_at_least(13, 0) && helper_path().is_some()
+/// ScreenCaptureKit system audio needs macOS 13+; no recording below that.
+pub fn os_supports_recording() -> bool {
+    macos_at_least(13, 0)
+}
+
+/// Whether this build carries the recording helper where it looks for it
+/// (see [`helper_candidates`]). A local `tauri build` that skipped
+/// `macos/embed-capture-helper.sh` has none.
+pub fn helper_present() -> bool {
+    helper_path().is_some()
 }
 
 /// ScreenCaptureKit draws click rings from macOS 15.

@@ -182,4 +182,11 @@ describe("recordAvailability", () => {
       reason: RECORDING_UNAVAILABLE_REASON,
     });
   });
+
+  /** Rust names why (helper missing, macOS too old); that line wins. */
+  it("uses Rust's reason when there is one", () => {
+    const note = "Screen recording isn't included in this build.";
+    expect(recordAvailability({ recording: false }, true, note)).toEqual({ state: "disabled", reason: note });
+    expect(recordAvailability({ recording: true }, true, note)).toEqual({ state: "available" });
+  });
 });

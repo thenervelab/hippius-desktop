@@ -183,19 +183,112 @@ fn free_bytes(_dir: &Path) -> Option<u64> {
     None
 }
 
-/// Whether this build can start a recording right now (OS + helper present).
-pub fn recording_supported() -> bool {
+/// Why this build cannot record, when it cannot. The surfaces treat the
+/// reasons differently: a Mac that could record with another build or a
+/// newer macOS shows the Record modes disabled with [`Self::message`], so a
+/// missing helper is visible instead of Record silently vanishing; a
+/// platform with no recorder yet hides them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingUnavailable {
+    /// macOS 13+, but no `HippiusCapture` beside the app's binary: a local
+    /// `tauri build` that skipped `macos/embed-capture-helper.sh`, or a
+    /// staging build made without the finalize step.
+    HelperMissing,
+    /// ScreenCaptureKit recording needs macOS 13.
+    OsTooOld,
+    /// No recorder on this platform yet (Windows, Linux).
+    UnsupportedPlatform,
+}
+
+impl RecordingUnavailable {
+    /// What the surfaces say. Rust's copy, so every surface says the same.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::HelperMissing => "Screen recording isn't included in this build.",
+            Self::OsTooOld => "Screen recording needs macOS 13 or later.",
+            Self::UnsupportedPlatform => "Screen recording isn't available on this system yet.",
+        }
+    }
+}
+
+/// The decision, apart from the probes so it can be tested on any platform.
+/// The platform comes first, then the OS: a helper cannot help on macOS 12,
+/// so an old Mac is told to update rather than that the build is short.
+const fn unavailable_reason(platform_records: bool, os_supported: bool, helper_present: bool) -> Option<RecordingUnavailable> {
+    if !platform_records {
+        Some(RecordingUnavailable::UnsupportedPlatform)
+    } else if !os_supported {
+        Some(RecordingUnavailable::OsTooOld)
+    } else if !helper_present {
+        Some(RecordingUnavailable::HelperMissing)
+    } else {
+        None
+    }
+}
+
+/// Why recording is unavailable on this machine and build; `None` = it works.
+pub fn recording_unavailable() -> Option<RecordingUnavailable> {
     #[cfg(target_os = "macos")]
     {
-        macos::recording_supported()
+        unavailable_reason(true, macos::os_supports_recording(), macos::helper_present())
     }
     #[cfg(windows)]
     {
-        windows::recording_supported()
+        unavailable_reason(windows::recording_supported(), true, true)
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
-        false
+        unavailable_reason(false, true, true)
+    }
+}
+
+/// Whether this build can start a recording right now (OS + helper present).
+pub fn recording_supported() -> bool {
+    recording_unavailable().is_none()
+}
+
+/// `recordingUnavailable` and its line, as `capture_support` and the
+/// overlay's context both carry them (flattened into each).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingAvailability {
+    pub recording_unavailable: Option<RecordingUnavailable>,
+    pub recording_unavailable_message: Option<&'static str>,
+}
+
+impl RecordingAvailability {
+    #[must_use]
+    pub const fn from_reason(reason: Option<RecordingUnavailable>) -> Self {
+        Self {
+            recording_unavailable: reason,
+            recording_unavailable_message: match reason {
+                Some(r) => Some(r.message()),
+                None => None,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn now() -> Self {
+        Self::from_reason(recording_unavailable())
+    }
+}
+
+/// Log once at launch when a release build has no recording helper, so a
+/// support bundle says why Record is disabled. Debug builds skip it: a dev
+/// checkout without a built helper is normal. Reads `sw_vers`, so callers
+/// run it off the main thread.
+pub fn warn_if_helper_missing() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    if recording_unavailable() == Some(RecordingUnavailable::HelperMissing) {
+        tracing::warn!(
+            "screen recording helper (Contents/MacOS/HippiusCapture) is missing from this build; \
+             Record is shown disabled. Build with `pnpm build:mac-local` or run macos/embed-capture-helper.sh"
+        );
     }
 }
 
@@ -222,6 +315,55 @@ pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mac_with_no_helper_is_told_the_build_lacks_it() {
+        assert_eq!(unavailable_reason(true, true, false), Some(RecordingUnavailable::HelperMissing));
+        assert_eq!(unavailable_reason(true, true, true), None);
+    }
+
+    /// A helper does not help below macOS 13, so the OS wins over the helper.
+    #[test]
+    fn an_old_mac_is_told_to_update_whether_or_not_the_helper_is_there() {
+        assert_eq!(unavailable_reason(true, false, false), Some(RecordingUnavailable::OsTooOld));
+        assert_eq!(unavailable_reason(true, false, true), Some(RecordingUnavailable::OsTooOld));
+    }
+
+    #[test]
+    fn a_platform_with_no_recorder_says_so_first() {
+        assert_eq!(unavailable_reason(false, false, false), Some(RecordingUnavailable::UnsupportedPlatform));
+        assert_eq!(unavailable_reason(false, true, true), Some(RecordingUnavailable::UnsupportedPlatform));
+    }
+
+    /// The wire shape the frontend switches on, and Rust's copy with it.
+    #[test]
+    fn the_reason_and_its_line_serialize_for_the_frontend() {
+        let missing = serde_json::to_value(RecordingAvailability::from_reason(Some(RecordingUnavailable::HelperMissing))).unwrap();
+        assert_eq!(
+            missing,
+            serde_json::json!({
+                "recordingUnavailable": "helperMissing",
+                "recordingUnavailableMessage": "Screen recording isn't included in this build.",
+            })
+        );
+        let old = serde_json::to_value(RecordingAvailability::from_reason(Some(RecordingUnavailable::OsTooOld))).unwrap();
+        assert_eq!(old["recordingUnavailable"], "osTooOld");
+        assert_eq!(old["recordingUnavailableMessage"], "Screen recording needs macOS 13 or later.");
+        let platform = serde_json::to_value(RecordingAvailability::from_reason(Some(RecordingUnavailable::UnsupportedPlatform))).unwrap();
+        assert_eq!(platform["recordingUnavailable"], "unsupportedPlatform");
+        let works = serde_json::to_value(RecordingAvailability::from_reason(None)).unwrap();
+        assert_eq!(
+            works,
+            serde_json::json!({ "recordingUnavailable": null, "recordingUnavailableMessage": null })
+        );
+    }
+
+    #[test]
+    fn recording_is_supported_exactly_when_there_is_no_reason() {
+        assert_eq!(recording_supported(), recording_unavailable().is_none());
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(recording_unavailable(), Some(RecordingUnavailable::UnsupportedPlatform));
+    }
 
     fn dev(id: &str, name: &str, is_default: bool) -> MediaDevice {
         MediaDevice {
