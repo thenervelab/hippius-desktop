@@ -39,9 +39,14 @@ pub const MAX_REFRESHES: u32 = 100;
 const MIN_SHARE_WIDTH: f64 = 80.0;
 const MIN_SHARE_HEIGHT: f64 = 60.0;
 
-/// macOS and Windows surfaces that list themselves as windows but are not
-/// ones anyone shares: the menu bar and its extras, the Dock, the desktop
-/// picture, notification banners, Stage Manager, the login and lock screens.
+/// macOS surfaces that list themselves as windows but are not ones anyone
+/// shares: the menu bar and its extras, the Dock, the desktop picture,
+/// notification banners, Stage Manager, the login and lock screens.
+///
+/// These are macOS process names. On Windows the owner name is the exe's
+/// FileDescription ("Windows Explorer"), so a window TITLE such as "Program
+/// Manager" never matches here; xcap already drops the desktop (Progman) by
+/// class, and the untitled rule below drops the taskbar and shell helpers.
 const HIDDEN_OWNERS: &[&str] = &[
     "Window Server",
     "Dock",
@@ -59,8 +64,6 @@ const HIDDEN_OWNERS: &[&str] = &[
     "CursorUIViewService",
     "Screenshot",
     "universalcontrol",
-    "Program Manager",
-    "Windows Input Experience",
 ];
 
 /// The picker's two tabs.

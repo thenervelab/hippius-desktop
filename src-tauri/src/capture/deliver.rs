@@ -16,6 +16,7 @@ use serde::Serialize;
 
 use super::destination::CaptureDestination;
 use super::naming::CAPTURES_FOLDER;
+use super::preview::FailureReason;
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 
@@ -34,9 +35,25 @@ pub struct Delivered {
     /// The file went into a synced folder and the sync engine uploads it;
     /// false when it was uploaded directly.
     pub via_sync: bool,
+    /// The share's token, for Revoke on the card. Never sent anywhere.
+    #[serde(skip)]
+    pub share_token: Option<String>,
+    /// The file on this machine after delivery: in the synced folder, or the
+    /// temp copy a direct upload read from. Never sent anywhere.
+    #[serde(skip)]
+    pub placed: std::path::PathBuf,
 }
 
-/// Upload `file` into the destination's Captures folder and mint a link to it.
+/// Whether a direct upload's temp copy stays after the upload landed: only
+/// while it has no link, so the card's "Create link" has a file to make one
+/// from. A synced capture's copy is the drive's own file, never the temp one.
+#[must_use]
+pub fn keep_temp_after_upload(via_sync: bool, has_link: bool) -> bool {
+    !via_sync && !has_link
+}
+
+/// Upload `file` into the destination's Captures folder and, when
+/// `mint_link`, mint a public link to it.
 ///
 /// A failed upload is an `Err` and leaves `file` where it is: a long recording
 /// must not be lost because the network dropped at the end. A failed LINK is
@@ -47,7 +64,14 @@ pub struct Delivered {
 ///
 /// Whatever the upload refused with, including `NotReady(StorageLimitReached)`
 /// from the storage gate, which the UI answers with the plans dialog.
-pub async fn deliver(state: &AppState, app: tauri::AppHandle, account_id: &str, destination: &CaptureDestination, file: &Path) -> Result<Delivered> {
+pub async fn deliver(
+    state: &AppState,
+    app: tauri::AppHandle,
+    account_id: &str,
+    destination: &CaptureDestination,
+    file: &Path,
+    mint_link: bool,
+) -> Result<Delivered> {
     let local_root = if destination.owner_ss58.is_none() {
         super::destination::own_local_path(state.pool()?, account_id, &destination.label).await?
     } else {
@@ -94,21 +118,21 @@ pub async fn deliver(state: &AppState, app: tauri::AppHandle, account_id: &str, 
         .ok_or_else(|| AppError::Other("Capture file has no name".into()))?
         .to_string();
 
-    let (share_url, link_error) = match crate::shares::commands::share_external_file(
-        state,
-        account_id,
-        &placed,
-        hcfs_client::client::share::ShareTtl::Never,
-        crate::shares::commands::ShareChoice::Public,
-        None,
-    )
-    .await
-    {
-        Ok(link) => (Some(link.share_url), None),
-        Err(e) => {
-            tracing::warn!(error = %e, "capture saved, but its share link could not be minted");
-            (None, Some(e.to_string()))
+    let source = if via_sync {
+        LinkSource::Synced {
+            label: destination.label.clone(),
+            rel_path: super::preview::rel_path_for(&file_name),
         }
+    } else {
+        LinkSource::External(placed.clone())
+    };
+    let (share_url, share_token, link_error) = if mint_link {
+        match mint(state, account_id, &source).await {
+            Ok(link) => (Some(link.share_url), Some(link.share_token), None),
+            Err(message) => (None, None, Some(message)),
+        }
+    } else {
+        (None, None, None)
     };
 
     Ok(Delivered {
@@ -117,45 +141,247 @@ pub async fn deliver(state: &AppState, app: tauri::AppHandle, account_id: &str, 
         share_url,
         link_error,
         via_sync,
+        share_token,
+        placed,
     })
 }
 
+/// Where a capture's link is made from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkSource {
+    /// A file in a drive synced here, by its path in the drive: the share
+    /// records its origin, so Drive shows the file as shared and its share
+    /// dialog lists (and can revoke) the link.
+    Synced { label: String, rel_path: String },
+    /// A file on disk outside any synced folder (the temp copy of a direct
+    /// upload), shared the way the Finder's "Share with Hippius" does.
+    External(std::path::PathBuf),
+}
+
+/// Mint the capture's public, never-expiring link through the existing share
+/// paths. The error is Rust's sentence for the card.
+///
+/// # Errors
+///
+/// The sentence the card shows when no link could be made.
+pub async fn mint(state: &AppState, account_id: &str, source: &LinkSource) -> std::result::Result<crate::shares::commands::ShareLink, String> {
+    use crate::shares::commands::ShareChoice;
+    use hcfs_client::client::share::ShareTtl;
+    let minted = match source {
+        LinkSource::Synced { label, rel_path } => {
+            crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, None).await
+        }
+        LinkSource::External(path) => {
+            crate::shares::commands::share_external_file(state, account_id, path, ShareTtl::Never, ShareChoice::Public, None).await
+        }
+    };
+    minted.map_err(|e| {
+        tracing::warn!(error = %e, "capture saved, but its share link could not be minted");
+        link_failure_copy(&e)
+    })
+}
+
+/// The sentence for a link that could not be made. Never reqwest's own words.
+fn link_failure_copy(e: &AppError) -> String {
+    match failure_reason(e) {
+        FailureReason::Offline => "You're offline. Create the link when you're back online.".into(),
+        FailureReason::StorageFull => STORAGE_FULL.into(),
+        FailureReason::Other => "The link couldn't be created. Try again in a moment.".into(),
+    }
+}
+
+pub const OFFLINE: &str = "You're offline. Retry when you're back online.";
+pub const STORAGE_FULL: &str = "Storage is full. Upgrade your plan to upload this capture.";
+const UPLOAD_FAILED: &str = "The capture couldn't be uploaded. Retry in a moment.";
+
+/// What kind of failure `e` is, for the card's next step.
+#[must_use]
+pub fn failure_reason(e: &AppError) -> FailureReason {
+    match e {
+        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached) => FailureReason::StorageFull,
+        other if is_offline_shaped(&other.to_string()) => FailureReason::Offline,
+        _ => FailureReason::Other,
+    }
+}
+
+/// The card's and the notification's sentence for a failed upload. A
+/// transport error's own text ("Network unreachable (os error 51)") never
+/// reaches the user; a refusal Rust already worded (a `Validation`) does.
+#[must_use]
+pub fn failure_copy(e: &AppError) -> String {
+    match failure_reason(e) {
+        FailureReason::Offline => OFFLINE.into(),
+        FailureReason::StorageFull => STORAGE_FULL.into(),
+        FailureReason::Other => match e {
+            AppError::Validation(message) => message.clone(),
+            _ => UPLOAD_FAILED.into(),
+        },
+    }
+}
+
+/// The same classification for a sync-engine row's error text, which is all
+/// the engine gives for a file it could not upload.
+#[must_use]
+pub fn sync_failure_copy(error: Option<&str>) -> (String, FailureReason) {
+    let error = error.unwrap_or_default();
+    let lower = error.to_ascii_lowercase();
+    if ["returned 402", "status 402", "payment required", "storage limit", "quota"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        (STORAGE_FULL.into(), FailureReason::StorageFull)
+    } else if is_offline_shaped(error) {
+        (OFFLINE.into(), FailureReason::Offline)
+    } else {
+        ("Couldn't upload yet. The sync queue will try again.".into(), FailureReason::Other)
+    }
+}
+
+/// A transport failure: no route, no DNS, nothing answering. The same shapes
+/// the sync widget reads as a network failure, plus the OS's own "network is
+/// unreachable" / "no route" codes (51 and 65 on macOS, 101 and 113 on Linux,
+/// 10051 and 10065 on Windows).
+fn is_offline_shaped(message: &str) -> bool {
+    let lower = message.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    lower.starts_with("network error:")
+        || [
+            "error sending request for url",
+            "error trying to connect",
+            "connection refused",
+            "connection reset",
+            "dns error",
+            "failed to lookup address",
+            "network is unreachable",
+            "network unreachable",
+            "no route to host",
+            "internet connection appears to be offline",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+        || ["51", "65", "101", "113", "10051", "10065"]
+            .iter()
+            .any(|code| lower.contains(&format!("(os error {code})")))
+}
+
 /// Move `file` into `dir` (created if needed) under a name nothing there has.
+///
+/// Never overwrites: the name is claimed with a hard link, which fails when
+/// the name exists, so a same-named file that appears between the check and
+/// the move is kept (the next free name is taken instead). Across volumes
+/// (the temp folder on the boot disk, the drive on an external one) the file
+/// is copied first under a hidden name the sync engine skips, flushed, and
+/// only then given its real name: a copy that fails half-way never leaves a
+/// truncated capture under a real name for the engine to upload.
 fn place_in_folder(dir: &Path, file: &Path) -> Result<std::path::PathBuf> {
+    place_in_folder_with(dir, file, Path::exists, false, |from, to| std::fs::copy(from, to))
+}
+
+/// [`place_in_folder`] with the name check and the copy injected, and the
+/// same-volume move skipped when `force_copy`, so tests can fail each step.
+fn place_in_folder_with(
+    dir: &Path,
+    file: &Path,
+    exists: impl Fn(&Path) -> bool,
+    force_copy: bool,
+    copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<std::path::PathBuf> {
     std::fs::create_dir_all(dir)?;
     let name = file
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| AppError::Other("Capture file has no name".into()))?;
-    let target = free_name(dir, name, Path::exists);
-    // A rename is atomic on one volume; the capture temp dir and the synced
-    // folder can be on different ones, which is when it fails.
-    if std::fs::rename(file, &target).is_err() {
-        std::fs::copy(file, &target)?;
-        std::fs::remove_file(file)?;
+
+    if !force_copy {
+        match move_into(dir, name, file, &exists) {
+            Ok(target) => return Ok(target),
+            Err(e) if !crosses_devices(&e) => return Err(e.into()),
+            Err(_) => {}
+        }
     }
-    Ok(target)
+
+    // Another volume: a hidden staging copy the engine never lists or uploads.
+    let staging = dir.join(format!(".hippius-incoming-capture-{}.part", uuid::Uuid::new_v4().simple()));
+    let copied = copy(file, &staging).and_then(|_| std::fs::File::open(&staging)?.sync_all());
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&staging);
+        return Err(e.into());
+    }
+    match move_into(dir, name, &staging, &exists) {
+        Ok(target) => {
+            // The capture is safely in the drive; a temp copy that will not
+            // go away is only clutter, cleared with its folder later.
+            if let Err(e) = std::fs::remove_file(file) {
+                tracing::warn!(error = %e, "capture copied into the drive; its temp copy was not removed");
+            }
+            Ok(target)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&staging);
+            Err(e.into())
+        }
+    }
 }
 
-/// `dir/name`, or the first of `name (2)`, `name (3)`… that `exists` says is free.
-fn free_name(dir: &Path, name: &str, exists: impl Fn(&Path) -> bool) -> std::path::PathBuf {
+/// Give `from` the first free `name` in `dir`, never replacing a file there,
+/// and drop `from`'s old name. A cross-volume `from` is an error the caller
+/// answers by copying.
+fn move_into(dir: &Path, name: &str, from: &Path, exists: &impl Fn(&Path) -> bool) -> std::io::Result<std::path::PathBuf> {
+    use std::io::{Error, ErrorKind};
+    for _ in 0..MOVE_ATTEMPTS {
+        let target = free_name(dir, name, exists).ok_or_else(|| Error::new(ErrorKind::AlreadyExists, "no free name for the capture"))?;
+        match std::fs::hard_link(from, &target) {
+            Ok(()) => {
+                if let Err(e) = std::fs::remove_file(from) {
+                    tracing::warn!(error = %e, "capture placed; its old name was not removed");
+                }
+                return Ok(target);
+            }
+            // Taken since the check: try the next free name.
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+            Err(e) if crosses_devices(&e) => return Err(e),
+            // A volume without hard links (FAT, some network shares): a
+            // rename, straight after seeing the name free, is the best left.
+            Err(_) => {
+                if target.exists() {
+                    continue;
+                }
+                std::fs::rename(from, &target)?;
+                return Ok(target);
+            }
+        }
+    }
+    Err(Error::new(ErrorKind::AlreadyExists, "no free name for the capture"))
+}
+
+const MOVE_ATTEMPTS: usize = 8;
+
+/// A move that must be a copy: `from` and the target are on different volumes.
+fn crosses_devices(e: &std::io::Error) -> bool {
+    // EXDEV on Unix; ERROR_NOT_SAME_DEVICE (17) on Windows.
+    let code = if cfg!(windows) { 17 } else { 18 };
+    e.kind() == std::io::ErrorKind::CrossesDevices || e.raw_os_error() == Some(code)
+}
+
+/// `dir/name`, or the first of `name (2)`, `name (3)`… that `exists` says is
+/// free; `None` when every one is taken (never an existing name to overwrite).
+fn free_name(dir: &Path, name: &str, exists: impl Fn(&Path) -> bool) -> Option<std::path::PathBuf> {
     let first = dir.join(name);
     if !exists(&first) {
-        return first;
+        return Some(first);
     }
     let (stem, ext) = match name.rfind('.') {
         Some(i) if i > 0 => (&name[..i], &name[i..]),
         _ => (name, ""),
     };
-    (2..=9_999)
-        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
-        .find(|p| !exists(p))
-        .unwrap_or(first)
+    (2..=9_999).map(|n| dir.join(format!("{stem} ({n}){ext}"))).find(|p| !exists(p))
 }
 
 /// The notification a delivered capture posts: `(title, body)`.
 pub fn delivered_notice(delivered: &Delivered) -> (String, String) {
-    let saved = format!("{} is in {} → {CAPTURES_FOLDER}.", delivered.file_name, delivered.drive_name);
+    let saved = format!("{} is in {} › {CAPTURES_FOLDER}.", delivered.file_name, delivered.drive_name);
     if delivered.share_url.is_some() {
         ("Link copied".into(), saved)
     } else {
@@ -163,14 +389,17 @@ pub fn delivered_notice(delivered: &Delivered) -> (String, String) {
     }
 }
 
-/// The notification a capture that could not be uploaded posts, naming where
-/// the file still is so nothing is lost.
-pub fn failed_notice(error: &AppError, kept_at: &Path) -> (String, String) {
-    let reason = match error {
-        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached) => "Your plan's storage is full.".to_string(),
-        other => other.to_string(),
+/// The notification a capture that could not be uploaded posts. It says
+/// where to act, never a path: the kept file is in a hidden folder, and the
+/// card (or the next capture, which brings the card back) is where Retry is.
+pub fn failed_notice(error: &AppError, card_showing: bool) -> (String, String) {
+    let reason = failure_copy(error);
+    let next = if card_showing {
+        "Retry from the capture card."
+    } else {
+        "Hippius kept it and offers it again on your next capture."
     };
-    ("Capture not uploaded".into(), format!("{reason} It is saved at {}.", kept_at.display()))
+    ("Capture not uploaded".into(), format!("{reason} {next}"))
 }
 
 #[cfg(test)]
@@ -184,6 +413,8 @@ mod tests {
             share_url: share_url.map(str::to_string),
             link_error: share_url.is_none().then(|| "boom".into()),
             via_sync: false,
+            share_token: None,
+            placed: std::path::PathBuf::new(),
         }
     }
 
@@ -192,12 +423,63 @@ mod tests {
         let dir = Path::new("/drive/Captures");
         let taken = ["/drive/Captures/Shot.png", "/drive/Captures/Shot (2).png"];
         let exists = |p: &Path| taken.iter().any(|t| Path::new(t) == p);
-        assert_eq!(free_name(dir, "Shot.png", exists), Path::new("/drive/Captures/Shot (3).png"));
-        assert_eq!(free_name(dir, "Other.png", exists), Path::new("/drive/Captures/Other.png"));
+        assert_eq!(free_name(dir, "Shot.png", exists).unwrap(), Path::new("/drive/Captures/Shot (3).png"));
+        assert_eq!(free_name(dir, "Other.png", exists).unwrap(), Path::new("/drive/Captures/Other.png"));
         assert_eq!(
-            free_name(dir, "README", |p| p == Path::new("/drive/Captures/README")),
+            free_name(dir, "README", |p| p == Path::new("/drive/Captures/README")).unwrap(),
             Path::new("/drive/Captures/README (2)")
         );
+        // Every name taken: no name, rather than the first one overwritten.
+        assert_eq!(free_name(dir, "Shot.png", |_| true), None);
+    }
+
+    /// A same-named file that appears after the name was checked is kept.
+    #[test]
+    fn a_name_taken_after_the_check_is_not_overwritten() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("capture-x").join("Shot.png");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+        let captures = tmp.path().join("Captures");
+        std::fs::create_dir_all(&captures).unwrap();
+        std::fs::write(captures.join("Shot.png"), b"arrived meanwhile").unwrap();
+        // The check says every name is free, as if it ran before the other file landed.
+        let placed = place_in_folder_with(&captures, &src, |_| false, false, |a, b| std::fs::copy(a, b));
+        assert!(placed.is_err(), "no free name it could claim");
+        assert_eq!(std::fs::read(captures.join("Shot.png")).unwrap(), b"arrived meanwhile");
+        assert!(src.exists(), "the capture stays where it was, for Retry");
+    }
+
+    /// A copy across volumes that fails half-way leaves nothing under the
+    /// capture's name, and no staging file either.
+    #[test]
+    fn a_failed_cross_volume_copy_leaves_no_partial_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("capture-x").join("Recording.mp4");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, vec![7u8; 4096]).unwrap();
+        let captures = tmp.path().join("Captures");
+        let failing_copy = |_: &Path, to: &Path| {
+            std::fs::write(to, b"half")?;
+            Err(std::io::Error::other("volume unplugged"))
+        };
+        assert!(place_in_folder_with(&captures, &src, Path::exists, true, failing_copy).is_err());
+        assert_eq!(std::fs::read_dir(&captures).unwrap().count(), 0, "nothing left in the drive");
+        assert!(src.exists(), "the capture stays for Retry");
+    }
+
+    #[test]
+    fn a_cross_volume_copy_lands_under_the_real_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("capture-x").join("Recording.mp4");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"mp4").unwrap();
+        let captures = tmp.path().join("Captures");
+        let placed = place_in_folder_with(&captures, &src, Path::exists, true, |a, b| std::fs::copy(a, b)).unwrap();
+        assert_eq!(placed, captures.join("Recording.mp4"));
+        assert_eq!(std::fs::read(&placed).unwrap(), b"mp4");
+        assert_eq!(std::fs::read_dir(&captures).unwrap().count(), 1, "the staging copy is gone");
+        assert!(!src.exists());
     }
 
     #[test]
@@ -221,7 +503,7 @@ mod tests {
     fn a_delivered_capture_says_the_link_is_copied_and_where_the_file_went() {
         let (title, body) = delivered_notice(&delivered(Some("https://x/share/t#k=1")));
         assert_eq!(title, "Link copied");
-        assert_eq!(body, "Screenshot 2026-09-22 at 14.03.11.png is in Work → Captures.");
+        assert_eq!(body, "Screenshot 2026-09-22 at 14.03.11.png is in Work › Captures.");
     }
 
     /// The capture is safe; only the link is missing, and the notice must
@@ -230,22 +512,79 @@ mod tests {
     fn a_missing_link_is_reported_as_saved_not_failed() {
         let (title, body) = delivered_notice(&delivered(None));
         assert_eq!(title, "Capture saved");
-        assert!(body.contains("is in Work → Captures") && body.contains("could not be created"));
+        assert!(body.contains("is in Work › Captures") && body.contains("could not be created"));
     }
 
+    /// The kept file is in a hidden folder; naming it helps nobody. The
+    /// notice says where Retry is instead.
     #[test]
-    fn a_failed_upload_says_where_the_file_still_is() {
-        let (title, body) = failed_notice(&AppError::Other("Network unreachable".into()), Path::new("/tmp/x/Shot.png"));
+    fn a_failed_upload_notice_names_no_path_and_says_where_to_retry() {
+        let e = AppError::Io(std::io::Error::other(
+            "Network is unreachable (os error 51) at /Users/x/.hippius/capture-tmp",
+        ));
+        let (title, body) = failed_notice(&e, true);
         assert_eq!(title, "Capture not uploaded");
-        assert!(body.contains("Network unreachable") && body.contains("/tmp/x/Shot.png"));
+        assert_eq!(body, "You're offline. Retry when you're back online. Retry from the capture card.");
+        let (_, body) = failed_notice(&AppError::Other("boom".into()), false);
+        assert!(!body.contains('/'), "{body}");
+        assert!(body.contains("next capture"), "{body}");
     }
 
     #[test]
-    fn a_full_plan_is_named_as_such() {
-        let (_, body) = failed_notice(
-            &AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached),
-            Path::new("/tmp/x/Shot.png"),
+    fn offline_and_a_full_plan_are_said_plainly() {
+        for offline in [
+            "error sending request for url (https://api.hippius.com/upload)",
+            "Network error: timed out",
+            "dns error: failed to lookup address information",
+            "Connection refused (os error 61)",
+            "Network is unreachable (os error 51)",
+            "No route to host (os error 65)",
+            "An established connection failed (os error 10051)",
+        ] {
+            let e = AppError::Other(offline.into());
+            assert_eq!(failure_reason(&e), FailureReason::Offline, "{offline}");
+            assert_eq!(failure_copy(&e), "You're offline. Retry when you're back online.", "{offline}");
+        }
+        let full = AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached);
+        assert_eq!(failure_reason(&full), FailureReason::StorageFull);
+        assert_eq!(failure_copy(&full), "Storage is full. Upgrade your plan to upload this capture.");
+    }
+
+    /// A raw error never reaches the card; a sentence Rust wrote does.
+    #[test]
+    fn other_failures_use_rusts_words_not_the_transport_ones() {
+        let raw = AppError::Hcfs("upload: HTTP 500 Internal Server Error {\"detail\":\"x\"}".into());
+        assert_eq!(failure_reason(&raw), FailureReason::Other);
+        assert_eq!(failure_copy(&raw), "The capture couldn't be uploaded. Retry in a moment.");
+        let worded = AppError::Validation("That drive is no longer available.".into());
+        assert_eq!(failure_copy(&worded), "That drive is no longer available.");
+        // "os error 5" (access denied) is not an offline code.
+        assert_eq!(
+            failure_reason(&AppError::Other("Access is denied. (os error 5)".into())),
+            FailureReason::Other
         );
-        assert!(body.starts_with("Your plan's storage is full."), "{body}");
+    }
+
+    #[test]
+    fn a_sync_row_error_is_classified_the_same_way() {
+        assert_eq!(
+            sync_failure_copy(Some("error sending request for url (https://x)")).1,
+            FailureReason::Offline
+        );
+        assert_eq!(
+            sync_failure_copy(Some("Server returned 402: storage limit")).1,
+            FailureReason::StorageFull
+        );
+        let (copy, reason) = sync_failure_copy(None);
+        assert_eq!(reason, FailureReason::Other);
+        assert!(copy.contains("sync queue"), "{copy}");
+    }
+
+    #[test]
+    fn a_direct_upload_keeps_its_temp_copy_only_while_it_has_no_link() {
+        assert!(keep_temp_after_upload(false, false));
+        assert!(!keep_temp_after_upload(false, true));
+        assert!(!keep_temp_after_upload(true, false));
+        assert!(!keep_temp_after_upload(true, true));
     }
 }

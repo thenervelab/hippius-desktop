@@ -94,8 +94,9 @@ pub fn merge_choices(local: Vec<String>, remote: Vec<String>) -> Vec<Destination
     out
 }
 
-/// This account's own drives synced on this machine, paused ones included (a
-/// capture uploads straight to the server, so pausing sync does not stop it).
+/// This account's own drives synced on this machine, paused ones included:
+/// the picker offers every own drive. A paused one is delivered like a remote
+/// drive (see [`own_local_path`]), so pausing sync never strands a capture.
 /// Drives shared with this account and the migration pseudo-drive are not
 /// offered: captures go to a drive the user owns.
 pub async fn own_local_labels(pool: &SqlitePool, account_id: &str) -> Result<Vec<String>> {
@@ -130,9 +131,13 @@ pub async fn choices(pool: &SqlitePool, account_id: &str) -> Result<Vec<Destinat
 }
 
 /// Where `label` is synced on this machine, when it is one of this account's
-/// own drives. A capture for such a drive goes into this folder and the sync
-/// engine uploads it, rather than being uploaded directly and then synced
-/// back down as a second copy.
+/// own drives AND its sync is running. A capture for such a drive goes into
+/// this folder and the sync engine uploads it, rather than being uploaded
+/// directly and then synced back down as a second copy.
+///
+/// A paused drive answers `None`: its engine would not upload the file, and
+/// the card would wait on "waiting for sync" until the user resumed it for
+/// some other reason. Such a capture takes the direct upload instead.
 pub async fn own_local_path(pool: &SqlitePool, account_id: &str, label: &str) -> Result<Option<std::path::PathBuf>> {
     use sqlx::Row;
     let owner = crate::auth::account_key::account_key(account_id);
@@ -141,7 +146,8 @@ pub async fn own_local_path(pool: &SqlitePool, account_id: &str, label: &str) ->
          WHERE owner = ? AND label = ?
            AND label != 'migration'
            AND owner_ss58 IS NULL
-           AND wire_folder_hash IS NULL",
+           AND wire_folder_hash IS NULL
+           AND is_paused = 0",
     )
     .bind(&owner)
     .bind(label)
@@ -150,11 +156,11 @@ pub async fn own_local_path(pool: &SqlitePool, account_id: &str, label: &str) ->
     Ok(row.map(|r| std::path::PathBuf::from(r.get::<String, _>("path"))))
 }
 
-/// Whether `label` is one of this account's drives synced here.
+/// Whether a capture for `label` is delivered through this machine's synced
+/// folder: the same answer delivery acts on ([`own_local_path`]), so the card
+/// never names a drive "synced here" that the capture did not go through.
 pub async fn is_local(pool: &SqlitePool, account_id: &str, label: &str) -> bool {
-    own_local_labels(pool, account_id)
-        .await
-        .is_ok_and(|labels| labels.iter().any(|l| l == label))
+    own_local_path(pool, account_id, label).await.is_ok_and(|p| p.is_some())
 }
 
 #[cfg(test)]
@@ -263,6 +269,10 @@ mod tests {
         );
         assert_eq!(own_local_path(&pool, "5Alice", "Team").await.unwrap(), None);
         assert!(!is_local(&pool, "5Alice", "Team").await);
+        // Offered, but a paused drive's engine would never upload the file,
+        // so its captures take the direct upload.
+        assert_eq!(own_local_path(&pool, "5Alice", "Paused").await.unwrap(), None);
+        assert!(!is_local(&pool, "5Alice", "Paused").await);
         assert!(own_local_labels(&pool, "5Bob").await.unwrap().is_empty());
     }
 

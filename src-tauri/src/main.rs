@@ -685,6 +685,13 @@ fn main() {
             crate::capture::commands::capture_camera_dismiss,
             crate::capture::commands::capture_share_targets,
             crate::capture::commands::capture_share_done,
+            crate::capture::commands::capture_refresh_windows,
+            crate::capture::commands::capture_restart,
+            crate::capture::commands::capture_request_permission,
+            crate::capture::commands::capture_preview_mint_link,
+            crate::capture::commands::capture_preview_revoke_link,
+            crate::capture::commands::capture_preview_reveal,
+            crate::capture::commands::capture_preview_discard,
             get_platform_info,
             is_app_translocated,
             // Finder extension enablement. Registered on every platform (they
@@ -975,6 +982,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                  /Applications."
             );
         }
+
+        // Screen capture: clear capture temp folders a crash or an abandoned
+        // upload left a day or more ago. Its own thread; never delays start.
+        crate::capture::commands::reclaim_capture_tmp_at_launch();
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);

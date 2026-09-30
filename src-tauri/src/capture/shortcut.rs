@@ -2,15 +2,48 @@
 //!
 //! One shortcut, default Cmd+Shift+2 on macOS and Ctrl+Shift+2 on Windows:
 //! next to macOS's own Cmd+Shift+3/4/5/6 and unused by the system. The user
-//! can change it or turn it off in Settings. Pressing it emits
-//! [`SHORTCUT_EVENT`]; the main window's `CaptureHost` starts the capture the
-//! same way the Capture button does, so a missing drive or permission is
-//! answered by the same dialogs.
+//! can change it or turn it off in Settings.
+//!
+//! It toggles, decided here ([`action_for`]): a second press stops a running
+//! recording, or closes the bar while choosing. Otherwise it emits
+//! [`SHORTCUT_EVENT`] and the main window's `CaptureHost` starts the capture
+//! the same way the Capture button does, so a missing drive or permission is
+//! answered by the same dialogs. Signed out, there is no `CaptureHost`, so it
+//! brings Hippius forward to sign in instead of doing nothing.
 
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+use super::session::CapturePhase;
 use crate::error::{AppError, Result};
+
+/// What one press of the shortcut does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShortcutAction {
+    /// Open the bar (through the main window, for its refusal dialogs).
+    Start,
+    /// Stop the recording and save it.
+    Stop,
+    /// Close the bar.
+    Cancel,
+    /// Bring the main window forward: nobody is signed in to capture for.
+    ShowMainWindow,
+    /// Nothing to toggle: a capture is being taken or saved.
+    FocusCapture,
+}
+
+/// The shortcut toggles: stop what is recording, close what is choosing,
+/// otherwise start. Signed out, it shows the app so the user can sign in.
+#[must_use]
+pub fn action_for(phase: CapturePhase, signed_in: bool) -> ShortcutAction {
+    match phase {
+        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } => ShortcutAction::Stop,
+        CapturePhase::Selecting { .. } => ShortcutAction::Cancel,
+        CapturePhase::Capturing { .. } | CapturePhase::Finalizing if signed_in => ShortcutAction::FocusCapture,
+        _ if !signed_in => ShortcutAction::ShowMainWindow,
+        _ => ShortcutAction::Start,
+    }
+}
 
 pub const DEFAULT_SHORTCUT: &str = "CommandOrControl+Shift+2";
 pub const SHORTCUT_EVENT: &str = "capture_shortcut_pressed";
@@ -111,16 +144,16 @@ pub fn apply(_app: &tauri::AppHandle, _accelerator: Option<&str>) -> Result<()> 
     Ok(())
 }
 
-/// The plugin, with the one handler every capture shortcut shares.
+/// The plugin, with the one handler every capture shortcut shares; what a
+/// press does is [`action_for`], carried out by `commands::on_shortcut`.
 #[cfg(any(target_os = "macos", windows))]
 pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    use tauri::Emitter;
     use tauri_plugin_global_shortcut::ShortcutState;
 
     tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, _shortcut, event| {
             if event.state == ShortcutState::Pressed {
-                let _ = app.emit(SHORTCUT_EVENT, ());
+                super::commands::on_shortcut(app);
             }
         })
         .build()
@@ -129,6 +162,50 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::capture::session::{CaptureKind, CaptureMode};
+
+    #[test]
+    fn the_shortcut_toggles_what_is_running() {
+        let recording = CapturePhase::Recording {
+            elapsed_secs: 3,
+            microphone: true,
+        };
+        let paused = CapturePhase::Paused {
+            elapsed_secs: 3,
+            microphone: true,
+        };
+        let selecting = CapturePhase::Selecting {
+            kind: CaptureKind::Screenshot,
+            mode: CaptureMode::Area,
+        };
+        assert_eq!(action_for(recording, true), ShortcutAction::Stop);
+        assert_eq!(action_for(paused, true), ShortcutAction::Stop);
+        assert_eq!(action_for(selecting, true), ShortcutAction::Cancel);
+        assert_eq!(action_for(CapturePhase::Idle, true), ShortcutAction::Start);
+        for busy in [
+            CapturePhase::Capturing {
+                kind: CaptureKind::Recording,
+            },
+            CapturePhase::Finalizing,
+        ] {
+            assert_eq!(action_for(busy, true), ShortcutAction::FocusCapture, "{busy:?}");
+        }
+    }
+
+    /// Signed out there is nothing to capture for: the app comes forward to
+    /// sign in, rather than the press doing nothing at all. A recording that
+    /// somehow outlived the session still stops.
+    #[test]
+    fn signed_out_the_shortcut_brings_hippius_forward() {
+        assert_eq!(action_for(CapturePhase::Idle, false), ShortcutAction::ShowMainWindow);
+        assert_eq!(action_for(CapturePhase::Finalizing, false), ShortcutAction::ShowMainWindow);
+        let recording = CapturePhase::Recording {
+            elapsed_secs: 1,
+            microphone: false,
+        };
+        assert_eq!(action_for(recording, false), ShortcutAction::Stop);
+    }
 
     #[test]
     fn never_set_is_the_default_and_off_is_off() {

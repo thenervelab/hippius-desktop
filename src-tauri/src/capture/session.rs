@@ -6,6 +6,10 @@
 //! `capture_state_changed` event, rather than keeping their own flags — so a
 //! second trigger mid-capture is refused in one place, and no two surfaces can
 //! disagree about what is happening.
+//!
+//! The session ends when the file exists. Uploading it is the preview card's
+//! business (keyed by the card's id), not the session's, so a new capture can
+//! start while the last one is still uploading.
 
 use serde::{Deserialize, Serialize};
 
@@ -56,10 +60,6 @@ pub enum CapturePhase {
     },
     /// The recording is being closed to an MP4 on disk.
     Finalizing,
-    /// The file exists locally and is being uploaded and shared.
-    Delivering {
-        kind: CaptureKind,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,11 +88,13 @@ pub enum CaptureEvent {
     Resume,
     /// The user asked to stop; the encoder is finishing the file.
     Stop,
-    /// The capture file is written.
+    /// Throw the recording away and start again on the same selection. The
+    /// recorder is cancelled first; the session goes back to starting one.
+    Restart,
+    /// The capture file is written, and the session is over. The upload runs
+    /// on its own, owned by the preview card, so a new capture can start while
+    /// a long recording is still uploading.
     Captured,
-    /// Delivery finished, successfully or not. Either way the session is over:
-    /// a failed upload keeps its file and says where, it does not stay open.
-    Finished,
     /// The capture itself failed (no permission, no pixels, helper crashed).
     Failed,
     Cancel,
@@ -104,10 +106,11 @@ pub enum TransitionError {
     /// starting another; two overlays on one screen would each capture the other.
     #[error("A capture is already in progress.")]
     AlreadyActive,
-    /// Cancel after the file exists. The upload is already in flight, and
-    /// abandoning it half-way would leave a partial file in the drive.
-    #[error("The capture is already uploading.")]
-    TooLateToCancel,
+    /// Cancel while the recording is being closed to a file. The stop task
+    /// owns the recorder by then; cancelling underneath it would strand a
+    /// finished MP4 in the temp folder with nobody left to deliver or remove it.
+    #[error("The recording is already being saved.")]
+    AlreadySaving,
     #[error("That capture step does not apply now.")]
     NotApplicable,
 }
@@ -128,12 +131,14 @@ pub fn transition(phase: CapturePhase, event: CaptureEvent) -> Result<CapturePha
         (P::Idle, E::Start { kind, mode }) | (P::Selecting { .. }, E::SetMode { kind, mode }) => Ok(P::Selecting { kind, mode }),
         (_, E::Start { .. }) => Err(TransitionError::AlreadyActive),
 
-        // Screenshot: select → grab pixels → deliver.
+        // Screenshot: select → grab pixels → done (the card uploads it).
         (P::Selecting { kind: K::Screenshot, .. }, E::Selected) => Ok(P::Capturing { kind: K::Screenshot }),
-        (P::Capturing { kind: K::Screenshot }, E::Captured) => Ok(P::Delivering { kind: K::Screenshot }),
 
-        // Recording: select → start encoder → (pause/resume)* → finalize → deliver.
-        (P::Selecting { kind: K::Recording, .. }, E::Selected) => Ok(P::Capturing { kind: K::Recording }),
+        // Recording: select → start encoder → (pause/resume)* → finalize → done.
+        // Restart throws the recording away and starts the recorder again.
+        (P::Selecting { kind: K::Recording, .. }, E::Selected) | (P::Recording { .. } | P::Paused { .. }, E::Restart) => {
+            Ok(P::Capturing { kind: K::Recording })
+        }
         (P::Capturing { kind: K::Recording }, E::RecordingStarted { microphone }) => Ok(P::Recording { elapsed_secs: 0, microphone }),
         // Pausing, or a tick while paused, lands in Paused with the latest time.
         (P::Recording { elapsed_secs, microphone }, E::Pause) | (P::Paused { microphone, .. }, E::Tick { elapsed_secs }) => {
@@ -144,12 +149,12 @@ pub fn transition(phase: CapturePhase, event: CaptureEvent) -> Result<CapturePha
             Ok(P::Recording { elapsed_secs, microphone })
         }
         (P::Recording { .. } | P::Paused { .. }, E::Stop) => Ok(P::Finalizing),
-        (P::Finalizing, E::Captured) => Ok(P::Delivering { kind: K::Recording }),
 
-        // Every way a session ends before/after the file exists.
-        (P::Delivering { .. }, E::Finished)
-        | (P::Selecting { .. } | P::Capturing { .. } | P::Recording { .. } | P::Paused { .. } | P::Finalizing, E::Failed | E::Cancel) => Ok(P::Idle),
-        (P::Delivering { .. }, E::Cancel) => Err(TransitionError::TooLateToCancel),
+        // Every way a session ends: the file exists, or it never will.
+        (P::Capturing { kind: K::Screenshot } | P::Finalizing, E::Captured)
+        | (P::Selecting { .. } | P::Capturing { .. } | P::Recording { .. } | P::Paused { .. }, E::Failed | E::Cancel)
+        | (P::Finalizing, E::Failed) => Ok(P::Idle),
+        (P::Finalizing, E::Cancel) => Err(TransitionError::AlreadySaving),
 
         _ => Err(TransitionError::NotApplicable),
     }
@@ -175,7 +180,7 @@ mod tests {
     #[test]
     fn a_screenshot_runs_start_to_finish_and_returns_to_idle() {
         use CaptureEvent::*;
-        assert_eq!(run(&[SHOT, Selected, Captured, Finished]), Ok(CapturePhase::Idle));
+        assert_eq!(run(&[SHOT, Selected, Captured]), Ok(CapturePhase::Idle));
     }
 
     #[test]
@@ -194,12 +199,35 @@ mod tests {
                 kind: CaptureKind::Screenshot
             })
         );
-        assert_eq!(
-            run(&[SHOT, Selected, Captured]),
-            Ok(CapturePhase::Delivering {
-                kind: CaptureKind::Screenshot
-            })
-        );
+        assert_eq!(run(&[SHOT, Selected, Captured]), Ok(CapturePhase::Idle));
+    }
+
+    /// The upload runs on its own once the file exists: a long recording
+    /// still uploading must not make the next capture a silent no-op.
+    #[test]
+    fn a_new_capture_can_start_while_the_last_one_uploads() {
+        use CaptureEvent::*;
+        let after_shot = run(&[SHOT, Selected, Captured]).unwrap();
+        assert!(transition(after_shot, SHOT).is_ok());
+        let after_recording = run(&[REC, Selected, RecordingStarted { microphone: false }, Stop, Captured]).unwrap();
+        assert!(transition(after_recording, REC).is_ok());
+    }
+
+    /// Every phase but Idle has a way out, so no failure can strand a session.
+    #[test]
+    fn every_live_phase_can_end() {
+        use CaptureEvent::*;
+        for prefix in [
+            &[SHOT][..],
+            &[SHOT, Selected][..],
+            &[REC, Selected][..],
+            &[REC, Selected, RecordingStarted { microphone: false }][..],
+            &[REC, Selected, RecordingStarted { microphone: false }, Pause][..],
+            &[REC, Selected, RecordingStarted { microphone: false }, Stop][..],
+        ] {
+            let phase = run(prefix).unwrap();
+            assert_eq!(transition(phase, Failed), Ok(CapturePhase::Idle), "{phase:?}");
+        }
     }
 
     #[test]
@@ -215,7 +243,6 @@ mod tests {
                 Resume,
                 Stop,
                 Captured,
-                Finished,
             ]),
             Ok(CapturePhase::Idle)
         );
@@ -251,7 +278,6 @@ mod tests {
         for prefix in [
             &[SHOT][..],
             &[SHOT, Selected][..],
-            &[SHOT, Selected, Captured][..],
             &[REC, Selected, RecordingStarted { microphone: false }][..],
             &[REC, Selected, RecordingStarted { microphone: false }, Pause][..],
             &[REC, Selected, RecordingStarted { microphone: false }, Stop][..],
@@ -270,20 +296,54 @@ mod tests {
             run(&[REC, Selected, RecordingStarted { microphone: false }, Cancel]),
             Ok(CapturePhase::Idle)
         );
+    }
+
+    /// The stop task owns the recorder once the phase is Finalizing; a cancel
+    /// then would leave the finished file with nobody to deliver it.
+    #[test]
+    fn cancel_is_refused_while_the_recording_is_being_saved() {
+        use CaptureEvent::*;
         assert_eq!(
             run(&[REC, Selected, RecordingStarted { microphone: false }, Stop, Cancel]),
+            Err(TransitionError::AlreadySaving)
+        );
+        // A failed finalize still ends the session.
+        assert_eq!(
+            run(&[REC, Selected, RecordingStarted { microphone: false }, Stop, Failed]),
             Ok(CapturePhase::Idle)
         );
     }
 
     #[test]
-    fn cancel_is_refused_once_the_upload_has_started() {
+    fn restart_goes_back_to_starting_a_recording_from_recording_or_paused() {
         use CaptureEvent::*;
-        assert_eq!(run(&[SHOT, Selected, Captured, Cancel]), Err(TransitionError::TooLateToCancel));
+        let starting = Ok(CapturePhase::Capturing {
+            kind: CaptureKind::Recording,
+        });
+        assert_eq!(run(&[REC, Selected, RecordingStarted { microphone: true }, Restart]), starting);
+        assert_eq!(run(&[REC, Selected, RecordingStarted { microphone: true }, Pause, Restart]), starting);
+        // And the restarted recording carries on as a normal one.
         assert_eq!(
-            run(&[REC, Selected, RecordingStarted { microphone: false }, Stop, Captured, Cancel]),
-            Err(TransitionError::TooLateToCancel)
+            run(&[
+                REC,
+                Selected,
+                RecordingStarted { microphone: true },
+                Restart,
+                RecordingStarted { microphone: false }
+            ]),
+            Ok(CapturePhase::Recording {
+                elapsed_secs: 0,
+                microphone: false
+            })
         );
+        for prefix in [
+            &[SHOT][..],
+            &[SHOT, Selected][..],
+            &[REC, Selected, RecordingStarted { microphone: false }, Stop][..],
+        ] {
+            let phase = run(prefix).unwrap();
+            assert_eq!(transition(phase, Restart), Err(TransitionError::NotApplicable), "{phase:?}");
+        }
     }
 
     #[test]
@@ -324,7 +384,7 @@ mod tests {
     #[test]
     fn an_event_out_of_order_is_refused_and_changes_nothing() {
         use CaptureEvent::*;
-        for event in [Selected, Captured, Finished, Failed, Cancel, Pause, Resume, Stop] {
+        for event in [Selected, Captured, Failed, Cancel, Pause, Resume, Stop, Restart] {
             assert_eq!(transition(CapturePhase::Idle, event), Err(TransitionError::NotApplicable), "{event:?}");
         }
         assert_eq!(run(&[SHOT, Captured]), Err(TransitionError::NotApplicable));
