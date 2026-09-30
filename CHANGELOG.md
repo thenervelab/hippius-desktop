@@ -199,6 +199,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   "Capture a window", "Capture entire screen"), and the shortcut setting shows
   the keys as you hold them and says when a key cannot be used.
 - **Capture windows open with less to load**, so the bar appears sooner.
+- **The capture bar's hints, the camera's controls and the countdown sit on a
+  dark backing**, so they stay readable over a light screen.
 - **Shared with Me is always on the Drive page, with Share a drive.** When
   nothing is shared with you yet, it explains what shared drives are for and
   links to the guide. Share a drive lets you pick one of your drives and opens
