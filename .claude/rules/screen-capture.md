@@ -35,9 +35,8 @@ Windows) draws the ⌘⇧5-style **capture bar** (`app/capture-overlay/CaptureBa
 No kind/mode = the last used (`capture_options_v1`, device-wide). There is no
 "single display, capture at once" shortcut any more: Capture does that.
 `capture_start` never prompts for Screen Recording: it refuses with
-`NotReady(ScreenRecordingPermission)` and the dialog's button calls
-`capture_request_permission` (macOS's prompt the first time, the Settings pane
-after; `capture_support.permissionPane` names the pane for this macOS). Only
+`NotReady(ScreenRecordingPermission)` and the permission dialog takes over
+(see "Screen Recording permission" below). Only
 the bar's overlay takes focus. The frontmost app (pid) is remembered and
 re-activated when the overlays close; the main window comes back per
 `restore_plan` (hidden stays hidden, behind stays behind via `orderBack:`,
@@ -386,8 +385,8 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   the window labels and hold `core:` permissions only. The pill is dragged
   (`data-tauri-drag-region`), so its capability has
   `core:window:allow-start-dragging`.
-- **macOS Screen Recording** checked before capturing; grant needs relaunch.
-  The macOS version is read once per launch, in ONE cache
+- **macOS Screen Recording** checked before capturing; grant needs relaunch
+  (flow below). The macOS version is read once per launch, in ONE cache
   (`permissions::macos_version`, `(major, minor)`): the permission pane's
   name (`macos_major`) and the recording gates (`recording::macos_at_least`)
   both read it.
@@ -419,6 +418,48 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   builds, embeds, re-signs and makes a DMG (see macos-packaging.md).
 - **Destination** per account (`capture_destination_v1:<account_key>`); own
   drives only for now.
+
+## Screen Recording permission (macOS)
+
+`CGPreflightScreenCaptureAccess` turns true only in a process started after
+the grant, and TCC keys the grant to the app's designated requirement: stable
+for a certificate-signed app, the code hash for an ad hoc one, so every ad hoc
+rebuild is a new app whose Settings entry may show "on" for an older build.
+`permission_flow.rs` holds the decisions (unit-tested); `CapturePermissionDialog`
+only draws what `capture_permission_status` answers (vitest per state):
+
+- **`notAsked`** (nothing asked for THIS build, keyed by
+  `CodeSignature::key()`: the team when signed, the cdhash when ad hoc, read
+  once via `SecCodeCopySigningInformation`): "Allow" →
+  `capture_request_permission` → `CGRequestScreenCaptureAccess`, macOS's
+  prompt, which adds Hippius to the list switched off. A bare "asked once"
+  flag used to survive rebuilds and `tccutil reset`, so the button opened
+  Settings on a list without Hippius and the user had to press "+".
+- **`asked`**: "Open System Settings". It calls `CGRequestScreenCaptureAccess`
+  first (no UI while macOS has an answer on record; re-adds an entry removed
+  since), then opens the pane.
+- **"Relaunch Hippius"** is `capture_relaunch_for_permission`: records the
+  build in `capture_screen_permission_relaunched_v1` while still denied, then
+  `request_restart` (Tauri's restart, which frees the single-instance socket
+  before the new process starts). The dialog never calls plugin-process.
+- **`stale`**: that build was relaunched for the grant and is still denied.
+  The dialog says to remove Hippius with the minus button and press Allow
+  again; "Allow again" is `capture_reset_permission`: `tccutil reset
+  ScreenCapture <bundle id>` (Hippius's own entry only, no privileges needed),
+  then a fresh prompt. If `tccutil` fails the pane opens and the dialog gives
+  the manual steps. Seeing the grant clears the relaunch marker.
+- **`adHocSigned`** adds a line that this build loses the permission on
+  every rebuild; `pnpm build:mac-local` avoids it by signing with a real
+  identity (macos-packaging.md).
+- **The helper needs no grant of its own.** It is a plain child process
+  (`Command::spawn`, no launchd or XPC), so Hippius is its responsible process
+  and TCC attributes its ScreenCaptureKit and microphone use to Hippius;
+  `HippiusCapture` never appears in the list.
+
+Pinned by `permission_flow::tests`, `CapturePermissionDialog.test.tsx` and
+`tests/capture_wiring.rs` (the Settings path asks macOS before opening the
+pane; the relaunch is recorded before the restart; the reset runs `tccutil`
+before asking).
 
 ## The recording helper (`macos/HippiusCapture/Sources/main.swift`)
 

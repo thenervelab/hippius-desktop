@@ -2326,28 +2326,144 @@ fn open_permission_settings(_app: &AppHandle) -> Result<()> {
     Err(AppError::Validation("Screen recording permission is only managed on macOS.".into()))
 }
 
-const PERMISSION_ASKED_KEY: &str = "capture_screen_permission_asked_v1";
+/// Read a permission preference; an empty value is a cleared one.
+async fn permission_pref(pool: &sqlx::SqlitePool, key: &str) -> Result<Option<String>> {
+    Ok(super::permission_flow::stored(
+        crate::utils::preferences::get_user_preference_internal(pool, key).await?,
+    ))
+}
 
-/// The permission dialog's button. The first press asks macOS, which shows
-/// its own prompt (once, ever); later presses open the pane in System
-/// Settings instead, since asking again shows nothing. Never both at once.
+/// Ask macOS, off the async runtime. Shows the prompt only when macOS has no
+/// answer on record for this build (never asked, or its entry was removed);
+/// otherwise returns at once without UI. Either way it leaves Hippius in the
+/// Screen Recording list, which is what spares the user the "+" button.
+async fn ask_macos() {
+    let _ = tauri::async_runtime::spawn_blocking(super::permissions::request_screen_capture).await;
+}
+
+/// Where the permission stands for the dialog: granted, not yet asked for
+/// this build, asked, or stale (see [`super::permission_flow`]). Seeing the
+/// grant clears the relaunch marker, so a later revoke is not read as stale.
+#[tauri::command]
+pub async fn capture_permission_status(state: tauri::State<'_, AppState>) -> Result<super::permission_flow::PermissionStatus> {
+    use super::permission_flow::{PermissionState, PermissionStatus, RELAUNCHED_KEY, current_signature, permission_state};
+    let pool = state.pool()?;
+    let signature = current_signature();
+    let build = signature.key();
+    let granted = super::permissions::screen_capture_granted();
+    let relaunched = permission_pref(pool, RELAUNCHED_KEY).await?;
+    let asked = permission_pref(pool, super::permission_flow::ASKED_KEY).await?;
+    let status = permission_state(granted, asked.as_deref(), relaunched.as_deref(), &build);
+    if status == PermissionState::Granted && relaunched.is_some() {
+        crate::utils::preferences::save_user_preference_internal(pool, RELAUNCHED_KEY, "").await?;
+    }
+    Ok(PermissionStatus {
+        state: status,
+        ad_hoc_signed: cfg!(target_os = "macos") && signature.is_ad_hoc(),
+    })
+}
+
+/// The permission dialog's main button. The first press for this build asks
+/// macOS, which shows its own prompt and adds Hippius to the list; later
+/// presses open the pane in System Settings, since asking again shows
+/// nothing. "This build" is the signature TCC keys the grant by, so a
+/// rebuild of an ad hoc app, whose grant TCC has forgotten, is asked again.
+///
+/// The Settings path asks macOS first as well. It shows nothing while macOS
+/// has an answer on record, and puts Hippius back into the list when the
+/// entry was removed since (a `tccutil reset`, the minus button), which a
+/// stored flag cannot see.
 #[tauri::command]
 pub async fn capture_request_permission(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<super::permissions::PermissionRequest> {
+    use super::permission_flow::{ASKED_KEY, current_signature};
     use super::permissions::{PermissionRequest, next_request_step};
     let pool = state.pool()?;
-    let asked = crate::utils::preferences::get_user_preference_internal(pool, PERMISSION_ASKED_KEY)
-        .await?
-        .is_some();
+    let build = current_signature().key();
+    let asked = permission_pref(pool, ASKED_KEY).await?.as_deref() == Some(build.as_str());
     let step = next_request_step(super::permissions::screen_capture_granted(), asked);
     match step {
         PermissionRequest::Granted => {}
         PermissionRequest::Prompted => {
-            crate::utils::preferences::save_user_preference_internal(pool, PERMISSION_ASKED_KEY, "1").await?;
-            let _ = tauri::async_runtime::spawn_blocking(super::permissions::request_screen_capture).await;
+            crate::utils::preferences::save_user_preference_internal(pool, ASKED_KEY, &build).await?;
+            ask_macos().await;
         }
-        PermissionRequest::OpenedSettings => open_permission_settings(&app)?,
+        PermissionRequest::OpenedSettings => {
+            ask_macos().await;
+            open_permission_settings(&app)?;
+        }
     }
     Ok(step)
+}
+
+/// The stale-entry fix: clear Hippius's own Screen Recording entry with
+/// `tccutil reset ScreenCapture <bundle id>` (the user's own app needs no
+/// privileges, and no other app or service is touched), then ask macOS
+/// afresh so its prompt adds this build back. When the reset fails (a dev
+/// binary outside a bundle, a macOS that refuses it) System Settings is
+/// opened as well and the dialog tells the user to use the minus button.
+#[tauri::command]
+pub async fn capture_reset_permission(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<super::permissions::PermissionRequest> {
+    reset_permission(&state, &app).await
+}
+
+#[cfg(target_os = "macos")]
+async fn reset_permission(state: &AppState, app: &AppHandle) -> Result<super::permissions::PermissionRequest> {
+    use super::permission_flow::{ASKED_KEY, RELAUNCHED_KEY, current_signature, tccutil_reset_args};
+    use super::permissions::PermissionRequest;
+    let pool = state.pool()?;
+    let bundle_id = app.config().identifier.clone();
+    let reset = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new("/usr/bin/tccutil")
+            .args(tccutil_reset_args(&bundle_id))
+            .output()
+    })
+    .await;
+    let ok = match reset {
+        Ok(Ok(out)) if out.status.success() => true,
+        Ok(Ok(out)) => {
+            tracing::warn!("capture: tccutil reset failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+            false
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("capture: could not run tccutil: {e}");
+            false
+        }
+        Err(e) => {
+            tracing::warn!("capture: tccutil task failed: {e}");
+            false
+        }
+    };
+    // Either way the stale state has been dealt with: a later press is an
+    // ordinary "asked" press, which asks macOS before opening the pane and so
+    // re-adds an entry the user removed by hand.
+    crate::utils::preferences::save_user_preference_internal(pool, RELAUNCHED_KEY, "").await?;
+    crate::utils::preferences::save_user_preference_internal(pool, ASKED_KEY, &current_signature().key()).await?;
+    ask_macos().await;
+    if !ok {
+        open_permission_settings(app)?;
+        return Ok(PermissionRequest::OpenedSettings);
+    }
+    Ok(PermissionRequest::Prompted)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn reset_permission(_state: &AppState, _app: &AppHandle) -> Result<super::permissions::PermissionRequest> {
+    Err(AppError::Validation("Screen recording permission is only managed on macOS.".into()))
+}
+
+/// "Relaunch Hippius": macOS applies a new Screen Recording grant only to a
+/// fresh process. Remembers that this build was relaunched for the grant
+/// (so still denied afterwards reads as the stale entry, not as "asked"),
+/// then restarts through Tauri, which hands the single-instance socket over
+/// before the new process starts.
+#[tauri::command]
+pub async fn capture_relaunch_for_permission(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    if !super::permissions::screen_capture_granted() {
+        let build = super::permission_flow::current_signature().key();
+        crate::utils::preferences::save_user_preference_internal(state.pool()?, super::permission_flow::RELAUNCHED_KEY, &build).await?;
+    }
+    app.request_restart();
+    Ok(())
 }
 
 #[tauri::command]

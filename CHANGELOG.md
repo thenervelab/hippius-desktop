@@ -95,6 +95,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Screen recording permission no longer gets stuck (Mac).** Allow always
+  adds Hippius to macOS's Screen Recording list, so you never have to add it
+  by hand, and Relaunch Hippius picks the permission up. If macOS still says
+  no after the relaunch, the dialog explains why and Allow again clears the
+  old entry for you.
 - **A capture that does not upload is never lost.** Its card comes back with
   your next capture until you retry or discard it, and the message says what
   went wrong in plain words: you are offline, or your storage is full.

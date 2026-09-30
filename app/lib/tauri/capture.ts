@@ -323,6 +323,16 @@ export interface CaptureSupport extends RecordingAvailability {
 /** What the permission dialog's button did. Mirrors Rust's `PermissionRequest`. */
 export type CapturePermissionRequest = "granted" | "prompted" | "openedSettings";
 
+/** Where Screen Recording stands for this build. Mirrors Rust's `PermissionState`. */
+export type CapturePermissionState = "granted" | "notAsked" | "asked" | "stale";
+
+/** `capture_permission_status`. Mirrors Rust's `PermissionStatus`. */
+export interface CapturePermissionStatus {
+  state: CapturePermissionState;
+  /** Signed ad hoc: macOS treats every rebuild as a new app and forgets the grant. */
+  adHocSigned: boolean;
+}
+
 /** `capture_failed`. `cardShowing`: the card already shows it, so skip the toast. */
 export interface CaptureFailed {
   message: string;
@@ -533,6 +543,21 @@ export function openScreenRecordingSettings(): Promise<void> {
 /** The permission dialog's button: macOS's prompt the first time, System Settings after. */
 export function requestScreenRecordingPermission(): Promise<CapturePermissionRequest> {
   return invoke("capture_request_permission");
+}
+
+/** Where the permission stands for the dialog (Rust decides, including a stale entry). */
+export function getScreenRecordingPermissionStatus(): Promise<CapturePermissionStatus> {
+  return invoke("capture_permission_status");
+}
+
+/** Clear Hippius's own Screen Recording entry and ask macOS again (the stale-entry fix). */
+export function resetScreenRecordingPermission(): Promise<CapturePermissionRequest> {
+  return invoke("capture_reset_permission");
+}
+
+/** Relaunch so macOS applies the grant; Rust remembers it to spot a stale entry after. */
+export function relaunchForScreenRecording(): Promise<void> {
+  return invoke("capture_relaunch_for_permission");
 }
 
 export function getCaptureDestination(): Promise<CaptureDestination | null> {

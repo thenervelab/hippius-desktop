@@ -496,6 +496,9 @@ fn the_card_and_session_commands_are_registered() {
         "capture_refresh_windows",
         "capture_restart",
         "capture_request_permission",
+        "capture_permission_status",
+        "capture_reset_permission",
+        "capture_relaunch_for_permission",
         "capture_preview_mint_link",
         "capture_preview_revoke_link",
         "capture_preview_reveal",
@@ -592,4 +595,44 @@ fn the_tray_is_written_only_when_its_text_changes() {
     let src = read("src/capture/commands.rs");
     let show = fn_body(&src, "fn show_phase_in_tray(");
     assert!(show.contains("tray_needs_write("), "the tray is written only when its text changes");
+}
+
+/// The Screen Recording button must reach macOS's prompt again whenever TCC
+/// has no entry for this build: a bare "asked once" flag outlived rebuilds
+/// and `tccutil reset`, so the button opened System Settings on a list
+/// without Hippius in it and the only way in was the "+" button.
+#[test]
+fn the_permission_button_asks_macos_whenever_it_has_no_entry() {
+    let src = read("src/capture/commands.rs");
+    let request = fn_body(&src, "pub async fn capture_request_permission(");
+    assert!(
+        request.contains("current_signature().key()"),
+        "the asked flag must be keyed by the build TCC sees, not a bare flag"
+    );
+    let settings_arm = &request[request.find("PermissionRequest::OpenedSettings =>").expect("the Settings arm")..];
+    let ask = settings_arm.find("ask_macos()").expect("the Settings arm asks macOS too");
+    let open = settings_arm.find("open_permission_settings(").expect("the Settings arm opens the pane");
+    assert!(ask < open, "ask macOS (re-adding a removed entry) before opening the pane");
+    assert!(
+        fn_body(&src, "async fn ask_macos(").contains("request_screen_capture"),
+        "ask_macos must call CGRequestScreenCaptureAccess"
+    );
+
+    // The stale-entry fix resets only Hippius's own entry, then asks afresh.
+    let reset = fn_body(&src, "async fn reset_permission(state: &AppState");
+    let tcc = reset.find("tccutil_reset_args(").expect("the reset runs tccutil");
+    let asked = reset.rfind("ask_macos()").expect("the reset asks macOS again");
+    assert!(tcc < asked);
+}
+
+/// "Relaunch Hippius" records that this build was relaunched for the grant
+/// before restarting; without the marker a stale entry after the relaunch
+/// reads as plain "asked" and the dialog never offers the fix.
+#[test]
+fn the_permission_relaunch_is_remembered_then_restarts() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "pub async fn capture_relaunch_for_permission(");
+    let mark = body.find("RELAUNCHED_KEY").expect("the relaunch is remembered");
+    let restart = body.find("request_restart()").expect("the app restarts through Tauri");
+    assert!(mark < restart, "remember the relaunch before restarting");
 }
