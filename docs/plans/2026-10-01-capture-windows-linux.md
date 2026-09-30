@@ -627,6 +627,10 @@ Linux recording moves to beta.
   the pill says so (child emits a non-fatal `device_lost` event).
 - The mic meter only opens the device after a click on Linux and Windows too,
   where the first `getUserMedia` may show a system prompt (NT-16's rule).
+- External and phone devices, per "External and phone cameras and
+  microphones" below: USB and Bluetooth devices, Windows 11 Phone Link's
+  connected camera, and PipeWire/PulseAudio sources all listed; the lists
+  refresh on menu open and on `devicechange`.
 
 **Tests:** label matching fixtures; `capture_wiring.rs` pins for the Linux
 permission handler scoped to the camera and overlay labels and for media
@@ -634,7 +638,11 @@ stream being enabled only there.
 
 **Manual checklist:** built-in and USB cameras on each OS; bubble sizes and
 dragging; camera-only on Windows and X11; mic meter moves for each device;
-unplug the mic mid-recording.
+unplug the mic mid-recording; a Bluetooth headset mic; an Android phone as a
+Windows 11 connected camera (Phone Link) appears, opens in the bubble and
+disappears when the phone disconnects; a USB mic plugged in while the bar is
+up appears without reopening it; on Linux, a PipeWire virtual source and a
+phone camera through v4l2loopback (DroidCam) are listed.
 
 **Done when:** the sources panel behaves the same on all three OSes within the
 accepted Wayland limits.
@@ -810,3 +818,54 @@ Not part of this plan's phases, recorded so they are not lost:
   floor (proposed: Ubuntu 22.04+, Fedora 40+, GNOME or KDE); whether staging
   also ships an `.rpm`; the Windows default shortcut (proposed `Alt+Shift+2`,
   checked on hardware not to trip the Alt+Shift input-language switch).
+
+## External and phone cameras and microphones
+
+On macOS the bar lists what Google Meet lists (built-in, USB, Bluetooth,
+virtual and an iPhone as a Continuity Camera and microphone) because the
+helper enumerates through AVFoundation plus Core Audio, both processes opt in
+with `NSCameraUseContinuityCameraDeviceType`, names are compared through
+`deviceNameKey`, and the lists refresh on menu open and `devicechange`. The
+same shape carries over: the child lists devices with the OS's native API, the
+webview opens the camera found by name.
+
+**Windows**
+- Cameras: the child lists `MFEnumDeviceSources` with
+  `MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID`, which includes USB
+  (UVC) cameras and Windows 11's **connected camera** (an Android phone through
+  Phone Link / "Mobile devices", exposed as a normal camera once the user turns
+  it on). Frame-server virtual cameras (`MFCreateVirtualCamera`, OBS) appear
+  there too. The bubble opens the camera through WebView2's
+  `navigator.mediaDevices`, matched by name; WebView2 labels sometimes add a
+  " (xxxx:yyyy)" USB id, which the loose match already covers.
+- Microphones: WASAPI capture endpoints (`IMMDeviceEnumerator::EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)`),
+  named by `PKEY_Device_FriendlyName`, default from `GetDefaultAudioEndpoint(eCapture, eConsole)`.
+  That covers USB, Bluetooth hands-free and virtual cables. The endpoint id
+  is what the recorder opens, so no name matching on the recording side.
+- Refresh: `IMMNotificationClient` is not needed for a list-per-menu-open
+  design; the overlay's `devicechange` re-reads as on macOS. WebView2 needs
+  the camera and microphone permission granted for the capture windows
+  (`PermissionRequested` handler scoped to those labels) or labels stay empty.
+- Spike: confirm a Phone Link camera is visible to a Win32 (unpackaged) app
+  and to WebView2, and that it survives the phone locking.
+
+**Linux**
+- Cameras: V4L2 capture nodes (`/dev/video*` with `V4L2_CAP_VIDEO_CAPTURE`, via
+  `GstDeviceMonitor` "Video/Source"), which includes USB cameras and phone
+  cameras bridged through v4l2loopback (DroidCam, Iriun) or a PipeWire camera
+  portal node. There is no Continuity-style system feature for phones on
+  Linux; document the bridges rather than build one.
+- Microphones: PipeWire (or PulseAudio on older systems) sources from
+  `GstDeviceMonitor` "Audio/Source", excluding `.monitor` sources from the
+  microphone menu (they are system audio). Bluetooth headsets appear once
+  their HFP/HSP profile is active; say so in the empty-state text.
+- The webview: WebKitGTK needs `enable-media-stream` (and
+  `enable-mediastream-device-info` for labels) set on the capture windows,
+  plus the `permission-request` handler already planned in Phase 5, or
+  `enumerateDevices` returns nothing usable to match against.
+- Refresh: WebKitGTK's `devicechange` support varies by version; keep the
+  menu-open re-read as the guarantee and treat `devicechange` as a bonus.
+
+**Tests to add with Phase 5:** device-list parsing fixtures from each OS
+(WASAPI friendly names, a Phone Link camera name, a PipeWire source list with
+monitor sources to drop), `deviceNameKey` cases for each OS's label quirks.

@@ -170,6 +170,20 @@ name cameras yet; it reopens on `devicechange` or an ended track, keeping a
 still-correct stream. `capture_set_cameras` remains the fallback list where
 the system has none (`camera_list`, never a mix: the two id spaces would list
 a camera twice). The mic is chosen by `microphoneCaptureDeviceID` (macOS 15).
+**External and iPhone devices:** macOS offers an iPhone as a Continuity
+Camera only to a process whose Info.plist sets
+`NSCameraUseContinuityCameraDeviceType`, so both carry it: `src-tauri/Info.plist`
+(the camera window's `getUserMedia`) and the helper, which as a bare tool has
+its plist (`macos/HippiusCapture/Info.plist`) linked in as `__TEXT,__info_plist`
+by `Package.swift`'s `-sectcreate`; `embed-capture-helper.sh` refuses a helper
+without it, pinned in `tests/capture_wiring.rs`. SwiftPM does not relink when
+only that plist changes: touch a source file. The list modes run one
+discovery, wait up to 1.5 s for the list to go quiet (0.4 s without a new
+`wasConnectedNotification`) because remote devices can arrive a beat late,
+then print. Names match through `deviceNameKey` (NFC, straight quotes, single
+spaces), since a phone's name carries a curly apostrophe. The bar re-reads
+both lists on menu open and on the overlay's `devicechange`; `MicMeter`
+reopens by name once the first grant names the microphones.
 Hardened builds need the `com.apple.security.device.camera` entitlement or the
 camera fails silently. The pill can hide a bubble (`capture_camera_toggle`),
 never the stage.
