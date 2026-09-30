@@ -15,7 +15,10 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use super::session::CapturePhase;
-use crate::error::{AppError, Result};
+// AppError is only raised where a shortcut can be registered (macOS, Windows).
+#[cfg(any(target_os = "macos", windows))]
+use crate::error::AppError;
+use crate::error::Result;
 
 /// What one press of the shortcut does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

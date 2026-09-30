@@ -81,6 +81,7 @@ fn read_macos_version() -> Option<(u64, u64)> {
 
 /// `"15.1.1\n"` to `(15, 1)`, `"26"` to `(26, 0)`; anything unreadable is
 /// `None`, which no feature gate passes.
+#[cfg(any(target_os = "macos", test))]
 fn parse_version(text: &str) -> Option<(u64, u64)> {
     let mut parts = text.trim().split('.').map(|p| p.parse::<u64>().ok());
     match (parts.next().flatten(), parts.next()) {
