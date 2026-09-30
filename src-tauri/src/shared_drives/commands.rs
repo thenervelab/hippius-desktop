@@ -2115,7 +2115,7 @@ pub(crate) const EMAIL_INVITE_MAX_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// A validated emailed-invite request, ready for the wire.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct EmailInvitePolicy {
+pub struct EmailInvitePolicy {
     pub email: String,
     pub role: String,
     pub expires_in_secs: u64,
@@ -2124,30 +2124,39 @@ pub(crate) struct EmailInvitePolicy {
 /// Validate what the dialog asked for, before any network call.
 ///
 /// Rules are the server's, refused here by name so the dialog can say which
-/// one: one address; Viewer or Editor only (a Manager invite has to be a
-/// link, because the server caps those at a day and a mailed one would
-/// expire before anyone could approve it); a lifetime between one hour and
-/// thirty days, defaulting to the ordinary seven.
-pub(crate) fn resolve_email_invite(email: &str, role: Option<String>, expires_in_secs: Option<u64>) -> Result<EmailInvitePolicy> {
+/// one: one address; Viewer, Editor or Manager for a whole drive, Viewer or
+/// Editor for a folder (Manager is never a folder role, `folder_roles`); a
+/// lifetime between one hour and thirty days, defaulting to the ordinary
+/// seven.
+///
+/// A Manager invitation is then held to the manager link cap of one day
+/// (hcfs #521 answers anything longer with a 400): clamped, not refused, as
+/// [`apply_manager_invite_caps`] does for a link, so the omitted seven-day
+/// default still mints. The server makes it single use by itself and does
+/// not stretch it on the first key request, so the recipient has that one
+/// day to open it.
+pub fn resolve_email_invite(email: &str, role: Option<String>, expires_in_secs: Option<u64>, folder: bool) -> Result<EmailInvitePolicy> {
     let email = validate_invite_email(email)?;
+
     let role = role.unwrap_or_else(|| "writer".to_string());
-    match role.as_str() {
-        "reader" | "writer" => {}
-        "manager" => {
-            return Err(AppError::Validation(
-                "A Manager invite has to be a link. Invite them as an Editor by email and change their role after they join.".into(),
-            ));
-        }
-        other => {
-            return Err(AppError::Validation(format!("Unknown drive role: {other}. Expected reader or writer.")));
-        }
+    if folder {
+        super::folder_roles::resolve_folder_role(Some(role.clone()))?;
+    } else {
+        require_drive_role(&role)?;
     }
+
     let expires_in_secs = expires_in_secs.unwrap_or(DEFAULT_INVITE_EXPIRES_IN_SECS);
     if !(EMAIL_INVITE_MIN_SECS..=EMAIL_INVITE_MAX_SECS).contains(&expires_in_secs) {
         return Err(AppError::Validation(
             "An emailed invitation must expire between 1 hour and 30 days from now.".into(),
         ));
     }
+    let expires_in_secs = if role == "manager" {
+        expires_in_secs.min(MANAGER_INVITE_MAX_SECS)
+    } else {
+        expires_in_secs
+    };
+
     Ok(EmailInvitePolicy {
         email,
         role,
@@ -2212,13 +2221,20 @@ pub fn check_invite_email(email: String) -> InviteEmailCheck {
     invite_email_check(&email)
 }
 
+/// What a server from before hcfs #521 answers a mailed Manager invite with,
+/// matched exactly: a plain `bad_request` with no slug of its own, and no
+/// capability flag to ask first. Nothing was sent.
+const MANAGER_EMAIL_UNSUPPORTED: &str = "manager invites must be sent as a link";
+
 /// Map a failed `POST /v1/drive-invites/email`.
 ///
-/// Three outcomes need their own words, each matched on status or slug and
-/// never on the English message:
+/// These outcomes need their own words, each matched on status or slug, and
+/// on the exact English message only where the server offers nothing else:
 /// - 503 `email_invites_unavailable`: no mail service; the FE says email
 ///   invites are coming soon.
 /// - 400 on a folder: folder invites cannot be mailed yet (`folder_roles`).
+/// - 400 [`MANAGER_EMAIL_UNSUPPORTED`]: this server cannot mail a Manager
+///   invite yet; say to send a Manager link instead.
 /// - 429 `rate_limited`: too many invitations; say how long to wait.
 /// - 502 `mail_send_failed`: the server could not send it and has already
 ///   revoked the invite, so trying again is safe and is what we say.
@@ -2227,6 +2243,8 @@ fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: 
     struct Envelope {
         #[serde(default)]
         error: String,
+        #[serde(default)]
+        message: String,
         #[serde(default)]
         retry_after_secs: Option<u64>,
     }
@@ -2237,6 +2255,11 @@ fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: 
     }
     if let Some(err) = super::folder_roles::classify_folder_email_refusal(status, body) {
         return err;
+    }
+    if code == 400 && envelope.message == MANAGER_EMAIL_UNSUPPORTED {
+        return AppError::Validation(
+            "This server cannot email a Manager invite yet, so nothing was sent. Send a Manager link from By link instead.".into(),
+        );
     }
     if code == 429 || envelope.error == "rate_limited" {
         let wait = envelope.retry_after_secs.or(retry_after_header);
@@ -2420,7 +2443,7 @@ pub async fn email_drive_invite(
     folder_hash: Option<String>,
     path_prefix: Option<String>,
 ) -> Result<EmailInviteResult> {
-    let policy = resolve_email_invite(&email, role, expires_in_secs)?;
+    let policy = resolve_email_invite(&email, role, expires_in_secs, path_prefix.is_some())?;
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
     let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
@@ -4066,29 +4089,63 @@ mod tests {
 
     #[test]
     fn email_invite_policy_accepts_viewer_and_editor_within_the_window() {
-        let p = resolve_email_invite("  ada@example.com ", Some("reader".into()), Some(3600)).expect("ok");
+        let p = resolve_email_invite("  ada@example.com ", Some("reader".into()), Some(3600), false).expect("ok");
         assert_eq!(p.email, "ada@example.com");
         assert_eq!(p.role, "reader");
         assert_eq!(p.expires_in_secs, 3600);
 
-        let p = resolve_email_invite("ada@example.com", None, None).expect("defaults");
+        let p = resolve_email_invite("ada@example.com", None, None, false).expect("defaults");
         assert_eq!(p.role, "writer", "the dialog's default role");
         assert_eq!(p.expires_in_secs, DEFAULT_INVITE_EXPIRES_IN_SECS);
-        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS)).is_ok());
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS), false).is_ok());
     }
 
     #[test]
-    fn email_invite_policy_refuses_manager_by_name() {
-        let err = resolve_email_invite("ada@example.com", Some("manager".into()), None).expect_err("manager");
-        assert!(format!("{err}").contains("has to be a link"), "{err}");
+    fn email_invite_policy_takes_manager_within_the_manager_day() {
+        let manager = || Some("manager".to_string());
+
+        // Omitted: the seven-day default would be a 400, so it becomes a day.
+        let p = resolve_email_invite("ada@example.com", manager(), None, false).expect("manager");
+        assert_eq!(p.role, "manager");
+        assert_eq!(p.expires_in_secs, MANAGER_INVITE_MAX_SECS);
+
+        // Wider but still a legal email lifetime: clamped, as a link is.
+        let p = resolve_email_invite("ada@example.com", manager(), Some(EMAIL_INVITE_MAX_SECS), false).expect("clamped");
+        assert_eq!(p.expires_in_secs, MANAGER_INVITE_MAX_SECS);
+
+        // Shorter is kept as asked.
+        let p = resolve_email_invite("ada@example.com", manager(), Some(2 * 3600), false).expect("short");
+        assert_eq!(p.expires_in_secs, 2 * 3600);
+
+        // The email window still applies first: no clamp rescues "Never expires".
+        assert!(resolve_email_invite("ada@example.com", manager(), Some(100 * 365 * 24 * 3600), false).is_err());
+        assert!(resolve_email_invite("ada@example.com", manager(), Some(EMAIL_INVITE_MIN_SECS - 1), false).is_err());
+
+        // The cap is the manager's alone.
+        let p = resolve_email_invite("ada@example.com", Some("writer".into()), Some(EMAIL_INVITE_MAX_SECS), false).expect("writer");
+        assert_eq!(p.expires_in_secs, EMAIL_INVITE_MAX_SECS);
+    }
+
+    #[test]
+    fn email_invite_policy_refuses_manager_on_a_folder() {
+        let err = resolve_email_invite("ada@example.com", Some("manager".into()), None, true).expect_err("folder manager");
+        assert!(matches!(err, AppError::Validation(_)), "{err}");
+        assert!(resolve_email_invite("ada@example.com", Some("reader".into()), None, true).is_ok());
+        assert!(resolve_email_invite("ada@example.com", Some("writer".into()), None, true).is_ok());
+    }
+
+    #[test]
+    fn email_invite_policy_refuses_an_unknown_role_by_name() {
+        let err = resolve_email_invite("ada@example.com", Some("owner".into()), None, false).expect_err("unknown");
+        assert!(format!("{err}").contains("Unknown drive role: owner"), "{err}");
     }
 
     #[test]
     fn email_invite_policy_refuses_out_of_window_lifetimes() {
-        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MIN_SECS - 1)).is_err());
-        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS + 1)).is_err());
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MIN_SECS - 1), false).is_err());
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS + 1), false).is_err());
         // The link dialog's "Never expires" preset must not slip through.
-        assert!(resolve_email_invite("ada@example.com", None, Some(100 * 365 * 24 * 3600)).is_err());
+        assert!(resolve_email_invite("ada@example.com", None, Some(100 * 365 * 24 * 3600), false).is_err());
     }
 
     #[test]
@@ -4104,14 +4161,14 @@ mod tests {
             "ada@.com",
             "a@b.c,d@e.f g",
         ] {
-            assert!(resolve_email_invite(bad, None, None).is_err(), "{bad:?} must be refused");
+            assert!(resolve_email_invite(bad, None, None, false).is_err(), "{bad:?} must be refused");
         }
     }
 
     #[test]
     fn email_invite_policy_refuses_two_addresses_in_one_field() {
         for bad in ["ada@example.com,bob@example.com", "ada@b@example.com"] {
-            assert!(resolve_email_invite(bad, None, None).is_err(), "{bad:?} must be refused");
+            assert!(resolve_email_invite(bad, None, None, false).is_err(), "{bad:?} must be refused");
         }
     }
 
@@ -4460,6 +4517,21 @@ mod tests {
         assert!(matches!(
             classify_email_invite_error(StatusCode::BAD_GATEWAY, None, r#"{"error":"mail_send_failed","message":"x"}"#),
             AppError::Validation(_)
+        ));
+        // A server from before mailed Manager invites: nothing was sent, and
+        // the words say what to do instead of echoing the raw refusal.
+        match classify_email_invite_error(
+            StatusCode::BAD_REQUEST,
+            None,
+            r#"{"error":"bad_request","message":"manager invites must be sent as a link"}"#,
+        ) {
+            AppError::Validation(msg) => assert!(msg.contains("Send a Manager link"), "{msg}"),
+            other => panic!("old-server manager refusal must be worded, got {other:?}"),
+        }
+        // Any other 400 keeps the shared-drive mapping.
+        assert!(matches!(
+            classify_email_invite_error(StatusCode::BAD_REQUEST, None, r#"{"error":"bad_request","message":"something else"}"#),
+            AppError::Hcfs(_)
         ));
         // Everything else keeps the shared-drive mapping.
         assert!(matches!(

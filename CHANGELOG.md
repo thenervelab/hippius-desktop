@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Invite a Manager by email.** The By email tab now offers Manager for a
+  whole drive. The invite works once and expires after 24 hours, so the
+  person needs to join within a day.
+
 - **Share by email or by link from one place.** The Share dialog now opens
   with two tabs at the top, By email and By link, instead of separate
   sections above and below the people list. It remembers the tab you used

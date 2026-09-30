@@ -13,6 +13,7 @@ import {
   EMAIL_INVITE_TTL_OPTIONS,
   clampEmailInviteTtl,
   clampFolderInviteTtl,
+  emailInviteRolesFor,
   FOLDER_INVITE_ROLES,
   FOLDER_INVITE_TTL_OPTIONS,
 } from "../shareDriveModalState";
@@ -74,8 +75,13 @@ describe("emailed invitation choices", () => {
     }
   });
 
-  it("offers Viewer and Editor only", () => {
-    expect([...EMAIL_INVITE_ROLES]).toEqual(["reader", "writer"]);
+  it("offers Viewer, Editor and Manager for a whole drive", () => {
+    expect([...EMAIL_INVITE_ROLES]).toEqual(["reader", "writer", "manager"]);
+    expect([...emailInviteRolesFor(false)]).toEqual(["reader", "writer", "manager"]);
+  });
+
+  it("never offers Manager for a folder", () => {
+    expect([...emailInviteRolesFor(true)]).toEqual(["reader", "writer"]);
   });
 
   it("snaps a link-only lifetime back to the default", () => {
