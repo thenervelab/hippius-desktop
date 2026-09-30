@@ -8,6 +8,7 @@ paths:
   - "src-tauri/tauri.conf.json"
   - "app/components/FinderExtensionGuard.tsx"
   - "scripts/build-mac-local.sh"
+  - "scripts/lib/mac-signing.sh"
   - "scripts/capture-helper-notice.mjs"
 ---
 
@@ -50,11 +51,16 @@ The extension's sandbox exceptions (`macos/FinderSync.entitlements`) are restric
 
 1. builds the helper (`macos/build-capture-helper.sh`, first, so a Swift error fails in seconds);
 2. `tauri build --bundles app` with `HIPPIUS_RELEASE_CHANNEL` from `--channel` (default `staging`, so staging-gated features such as Capture show) and `createUpdaterArtifacts` off (updater artifacts need the release key; a local build has no use for them). The stale bundle is deleted first so a failed build cannot pass for this one;
-3. `embed-capture-helper.sh` (ad hoc unless `APPLE_SIGNING_IDENTITY` names a real identity);
-4. re-signs the app with `src-tauri/entitlements.plist`, **not `--deep`** (that would re-sign the helper with the app's entitlements and drop its `audio-input`), verifies, and checks the helper carries every architecture the app has;
+3. `embed-capture-helper.sh` with the chosen identity (below);
+4. re-signs the app with the same identity (`sign_app_bundle`: hardened runtime, `src-tauri/entitlements.plist`), **not `--deep`** (that would re-sign the helper with the app's entitlements and drop its `audio-input`), verifies, and checks the helper carries every architecture the app has;
 5. `~/Desktop/Hippius-<version>-local.dmg` (app + an `/Applications` link), unless `--no-dmg`.
 
-It refuses to start while port 3000 is listening or `tauri dev` runs (`next build` overwrites what the dev server serves) and below 18 GB free on the cargo target dir's volume. The default is this Mac's own architecture, which is what makes it work on Intel Macs and without a full Xcode; `--universal` builds arm64 + x86_64 (needs both rustup targets and Xcode for SwiftPM's multi-arch build). `--dry-run` runs the checks and prints every step. The finishing text is the install guide: right-click Open the first time (not notarized), and `tccutil reset ScreenCapture hippius.com` when Screen Recording reads as not granted although it is on, since a rebuilt ad hoc app has a new signature.
+It refuses to start while port 3000 is listening or `tauri dev` runs (`next build` overwrites what the dev server serves) and below 18 GB free on the cargo target dir's volume. The default is this Mac's own architecture, which is what makes it work on Intel Macs and without a full Xcode; `--universal` builds arm64 + x86_64 (needs both rustup targets and Xcode for SwiftPM's multi-arch build). `--dry-run` runs the checks and prints every step, the chosen identity included. The finishing text is the install guide, with the Screen Recording recovery steps for the way this build was signed.
+
+**Local builds sign with a real identity whenever the keychain has one, because an ad hoc app loses Screen Recording on every rebuild.** TCC keys a grant to the app's designated requirement. With a certificate that is the bundle id plus the certificate, shared by every rebuild; ad hoc it is the build's own code hash, so each rebuild is a new app to TCC: the switch shown "on" in System Settings belongs to an older build and this one reads as denied, and "relaunch" never helps. The identity (`scripts/lib/mac-signing.sh`, pure functions pinned by `scripts/__tests__/macSigning.test.mjs`) is `--identity <sha1|name|->`, else `APPLE_SIGNING_IDENTITY`, else the first **Developer ID Application**, else the first **Apple Development** identity in `security find-identity -v -p codesigning` order, else ad hoc with a loud warning and the recovery steps. A named identity that matches nothing fails the build rather than falling back to ad hoc. Xcode (Settings > Accounts > Manage Certificates) creates a free Apple Development identity. An Apple Development signed, hardened-runtime app with these entitlements launches locally (no restricted entitlement needs a provisioning profile); `spctl` rejects it, which is expected for anything not notarized and does not apply to a build made on the same Mac.
+
+- **No secure timestamp unless Developer ID.** A timestamp is a network round trip only notarization needs, so the app is signed `--timestamp=none` and the helper gets `HIPPIUS_CODESIGN_TIMESTAMP=none`, which `embed-capture-helper.sh` honours for local builds only. No release lane may set it (pinned in `the_recording_helper_is_embedded_and_signed_before_the_app_is_sealed`).
+- **Recovering a Mac that ran ad hoc builds**, once: quit Hippius, remove every Hippius entry from Privacy & Security > Screen & System Audio Recording with the minus button, run `tccutil reset ScreenCapture hippius.com`, install the signed build, then Allow from the capture dialog, switch Hippius on and relaunch. The in-app dialog detects the stale entry itself (see screen-capture.md).
 
 **Why `pnpm tauri:build` does not embed the helper itself:** by the time a post-build step runs, Tauri has already made the DMG (and, with the key set, the updater tarball), so embedding then fixes the `.app` and leaves the artifact people install without recording; an ad hoc re-sign would also replace a Developer ID signature. So it only prints a notice when the bundled app lacks the helper (`scripts/capture-helper-notice.mjs`: macOS only, silent elsewhere, never fails the build). CI is unaffected either way: tauri-action runs `tauri build`, not this npm script.
 

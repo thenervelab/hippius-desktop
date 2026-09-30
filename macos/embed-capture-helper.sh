@@ -11,7 +11,8 @@
 # re-signed afterwards, inside-out: finalize-macos-release.sh runs this
 # before embed-finder-extension.sh, which signs the app last. With
 # APPLE_SIGNING_IDENTITY unset or "-" the helper is signed ad hoc (local
-# testing only; such an app cannot be notarized).
+# testing only; such an app cannot be notarized). HIPPIUS_CODESIGN_TIMESTAMP=none
+# skips the secure timestamp, for local builds only; CI never sets it.
 set -euo pipefail
 
 APP_PATH="${1:?usage: embed-capture-helper.sh <Hippius.app> [helper-binary]}"
@@ -33,7 +34,7 @@ chmod +x "${dest}"
 echo "embedded ${dest}" >&2
 
 identity="${APPLE_SIGNING_IDENTITY:-}"
-if [[ -n "${identity}" && "${identity}" != "-" ]]; then
+if [[ -n "${identity}" && "${identity}" != "-" && "${HIPPIUS_CODESIGN_TIMESTAMP:-}" != "none" ]]; then
   # Notarization rejects an executable without a secure timestamp or without
   # the hardened runtime.
   codesign --force --options runtime --timestamp \
@@ -42,6 +43,16 @@ if [[ -n "${identity}" && "${identity}" != "-" ]]; then
     --sign "${identity}" \
     "${dest}"
   echo "signed HippiusCapture with ${identity}" >&2
+elif [[ -n "${identity}" && "${identity}" != "-" ]]; then
+  # HIPPIUS_CODESIGN_TIMESTAMP=none: a local build with a development
+  # identity (scripts/build-mac-local.sh). The timestamp is a network round
+  # trip only notarization needs, and such a build is never notarized.
+  codesign --force --options runtime --timestamp=none \
+    --entitlements "${entitlements}" \
+    --identifier "hippius.com.HippiusCapture" \
+    --sign "${identity}" \
+    "${dest}"
+  echo "signed HippiusCapture with ${identity} (no secure timestamp)" >&2
 else
   codesign --force --options runtime \
     --entitlements "${entitlements}" \

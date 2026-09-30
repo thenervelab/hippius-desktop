@@ -4,7 +4,7 @@
 # (Contents/MacOS/HippiusCapture), a fresh signature, and a DMG on the Desktop.
 #
 #   pnpm build:mac-local [--channel staging|beta|production] [--universal]
-#                        [--no-dmg] [--dry-run]
+#                        [--identity <sha1|name|->] [--no-dmg] [--dry-run]
 #
 # Why not plain `pnpm tauri:build`: Tauri knows nothing about the helper (it is
 # deliberately not an externalBin, see .claude/rules/macos-packaging.md), and a
@@ -18,20 +18,27 @@
 #                     Xcode); by default the app and helper are built for this
 #                     Mac's own architecture, which works on Intel and Apple
 #                     silicon alike
+#   --identity <id>   sign with this identity: a SHA-1 or (part of) a name
+#                     from `security find-identity -v -p codesigning`, or
+#                     "-" for ad hoc. Overrides APPLE_SIGNING_IDENTITY.
 #   --no-dmg          stop after the signed .app
 #   --dry-run         run the checks and print the steps without building
 #
-# Signing: with APPLE_SIGNING_IDENTITY set to a real identity the helper and
-# app are signed with it; otherwise ad hoc. Either way the result is NOT
-# notarized, so it is for local testing only.
+# Signing: --identity, else APPLE_SIGNING_IDENTITY, else the first
+# "Developer ID Application" identity in the keychain, else the first
+# "Apple Development" one, else ad hoc. A real identity keeps the Screen
+# Recording grant across rebuilds; ad hoc loses it on every build (see
+# scripts/lib/mac-signing.sh). The result is NOT notarized either way, so it
+# is for local testing only.
 set -euo pipefail
 
 channel="staging"
 make_dmg=1
 universal=0
 dry_run=0
+requested_identity="${APPLE_SIGNING_IDENTITY:-}"
 
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while (($#)); do
   case "$1" in
@@ -41,6 +48,12 @@ while (($#)); do
       shift 2
       ;;
     --channel=*) channel="${1#--channel=}"; shift ;;
+    --identity)
+      [[ $# -ge 2 ]] || { echo "ERROR: --identity needs a value" >&2; exit 2; }
+      requested_identity="$2"
+      shift 2
+      ;;
+    --identity=*) requested_identity="${1#--identity=}"; shift ;;
     --no-dmg) make_dmg=0; shift ;;
     --universal) universal=1; shift ;;
     --dry-run) dry_run=1; shift ;;
@@ -61,6 +74,8 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
+# shellcheck source=scripts/lib/mac-signing.sh
+source "${repo_root}/scripts/lib/mac-signing.sh"
 
 # Print a step in a dry run, run it otherwise.
 run() {
@@ -120,15 +135,49 @@ fi
 app="${bundle_dir}/Hippius.app"
 dmg="${HOME}/Desktop/Hippius-${version}-local.dmg"
 
-identity="${APPLE_SIGNING_IDENTITY:-}"
-if [[ -n "${identity}" && "${identity}" != "-" ]]; then
-  sign_label="${identity}"
+# Picked before anything is built, so a mistyped --identity fails at once.
+identities="$(security find-identity -v -p codesigning 2>/dev/null | parse_signing_identities || true)"
+if ! selected="$(printf '%s\n' "${identities}" | select_signing_identity "${requested_identity}")"; then
+  echo "ERROR: no valid code-signing identity matches '${requested_identity}'. These are available:" >&2
+  if [[ -n "${identities}" ]]; then
+    printf '%s\n' "${identities}" | sed 's/^/         /' >&2
+  else
+    echo "         (none)" >&2
+  fi
+  exit 2
+fi
+identity="${selected%%$'\t'*}"
+sign_label="${selected#*$'\t'}"
+if [[ "${identity}" == "-" ]]; then
+  identity_kind="adhoc"
 else
-  identity="-"
-  sign_label="ad hoc"
+  identity_kind="$(signing_identity_kind "${sign_label}")"
+  sign_label="${sign_label} (${identity})"
 fi
 
-echo "==> Hippius ${version}, channel ${channel}, ${arch_label}, signed ${sign_label}"
+echo "==> Hippius ${version}, channel ${channel}, ${arch_label}"
+echo "==> Signing identity: ${sign_label}"
+if [[ "${identity}" == "-" ]]; then
+  if [[ -z "${requested_identity}" ]]; then
+    echo "WARN: no Developer ID Application or Apple Development identity in the keychain," >&2
+  else
+    echo "WARN: ad hoc signing was asked for (--identity - or APPLE_SIGNING_IDENTITY=-)," >&2
+  fi
+  cat >&2 <<'EOF'
+      so this build is signed ad hoc. macOS ties an ad hoc app's Screen
+      Recording permission to that one build, so you must grant it again after
+      EVERY rebuild:
+        1. Quit Hippius.
+        2. System Settings > Privacy & Security > Screen & System Audio
+           Recording (Screen Recording before macOS 14): select Hippius and
+           remove it with the minus button.
+        3. Run: tccutil reset ScreenCapture hippius.com
+        4. Open Hippius, start a capture, press Allow, switch Hippius on,
+           then relaunch Hippius.
+      Xcode (Settings > Accounts > Manage Certificates) creates a free Apple
+      Development identity, which this script then picks up automatically.
+EOF
+fi
 if git rev-parse --git-dir >/dev/null 2>&1; then
   echo "    $(git branch --show-current 2>/dev/null) @ $(git log --oneline -1)"
 fi
@@ -164,19 +213,23 @@ fi
 # ---- 3. Embed the helper ---------------------------------------------------
 
 echo "==> 3/5 Putting the helper inside the app"
-# Signs it with its own entitlements (audio-input) and checks them.
-run env APPLE_SIGNING_IDENTITY="${identity}" macos/embed-capture-helper.sh "${app}" "${helper}"
+# Signs it with its own entitlements (audio-input) and checks them. No
+# secure timestamp unless the identity could be notarized: it needs the
+# network and nothing local checks it.
+if [[ "${identity_kind}" == "developer-id" ]]; then
+  helper_timestamp=""
+else
+  helper_timestamp="none"
+fi
+run env APPLE_SIGNING_IDENTITY="${identity}" HIPPIUS_CODESIGN_TIMESTAMP="${helper_timestamp}" \
+  macos/embed-capture-helper.sh "${app}" "${helper}"
 
 # ---- 4. Re-sign the app ----------------------------------------------------
 
 echo "==> 4/5 Re-signing the app"
 # Adding a file to Contents/MacOS broke the app's seal. Not --deep: that would
 # re-sign the helper with the app's entitlements and drop its own.
-if [[ "${identity}" == "-" ]]; then
-  run codesign --force --sign - --entitlements src-tauri/entitlements.plist "${app}"
-else
-  run codesign --force --options runtime --sign "${identity}" --entitlements src-tauri/entitlements.plist "${app}"
-fi
+run sign_app_bundle "${app}" "${identity}" "${identity_kind}" src-tauri/entitlements.plist
 run codesign --verify --deep --strict "${app}"
 
 if ((!dry_run)); then
@@ -220,6 +273,22 @@ fi
 
 ((dry_run)) && { echo "Dry run: nothing was built."; exit 0; }
 
+if [[ "${identity}" == "-" ]]; then
+  grant_note="     Ad hoc: Screen Recording must be granted again after every rebuild. If
+     Capture says it is not allowed although it is switched on, remove Hippius
+     from Privacy & Security > Screen & System Audio Recording with the minus
+     button, run
+       tccutil reset ScreenCapture hippius.com
+     then press Allow in Hippius again, switch it on and relaunch."
+else
+  grant_note="     Screen Recording granted to an earlier build signed this way carries
+     over. The first time after an ad hoc build, remove the old Hippius
+     entries from Privacy & Security > Screen & System Audio Recording with
+     the minus button and run
+       tccutil reset ScreenCapture hippius.com
+     then press Allow in Hippius, switch it on and relaunch."
+fi
+
 cat <<EOF
 
 Done: ${installer}
@@ -227,10 +296,8 @@ Done: ${installer}
 Install and first launch
   1. Quit any running Hippius (menu bar icon, then Quit).
   2. $( ((make_dmg)) && echo "Open the DMG and drag Hippius onto Applications (Replace)." || echo "Copy Hippius.app into /Applications (Replace).")
-  3. The first time, right-click Hippius in Applications and choose Open. It is
-     signed on this Mac, not notarized by Apple, so a double-click is refused.
-  4. If Capture says Screen Recording is not allowed although it is switched on
-     in System Settings (a rebuilt app has a new signature), run
-       tccutil reset ScreenCapture hippius.com
-     then allow it again when asked, and relaunch Hippius.
+  3. If macOS refuses to open it the first time, right-click Hippius in
+     Applications and choose Open. It is signed on this Mac, not notarized.
+  4. Signed with: ${sign_label}
+${grant_note}
 EOF

@@ -735,6 +735,19 @@ fn the_recording_helper_is_embedded_and_signed_before_the_app_is_sealed() {
     for flag in ["--options runtime", "--timestamp", "--entitlements \"${entitlements}\""] {
         assert!(signing.contains(flag), "the release signing of the helper lacks {flag}");
     }
+    // The local build's opt-out of the secure timestamp must never reach a
+    // release: a helper without one fails notarization.
+    for path in [
+        "../macos/finalize-macos-release.sh",
+        "../.github/workflows/tauri-build.yml",
+        "../.github/workflows/tauri-beta.yml",
+        "../.github/workflows/tauri-staging.yml",
+    ] {
+        assert!(
+            !repo_file(path).contains("HIPPIUS_CODESIGN_TIMESTAMP"),
+            "{path} must not skip the helper's secure timestamp"
+        );
+    }
 
     let entitlements = repo_file("../macos/CaptureHelper.entitlements");
     let squashed: String = entitlements.split_whitespace().collect();
