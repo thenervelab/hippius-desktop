@@ -100,6 +100,19 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Your voice is heard when a recording is played from its share link
+  (Mac).** A recording now has one sound track with your microphone in it
+  (and the computer's sound when you ask for it), a little louder than
+  before, so browsers and video players no longer play a silent track
+  instead of your voice.
+- **The camera bubble is in every recording that shows it (Mac).** Recording
+  a single window now includes the bubble, and pressing Record moves the
+  bubble inside the window or area you chose if it was outside it.
+- **The camera bubble is easier to resize.** At full size its button now
+  says "Exit full size" and takes it back to the size it had (Escape does the
+  same), each size button names itself when you point at it, and the bubble
+  no longer shows a backwards play symbol before the camera starts.
+
 - **Screen recording permission no longer gets stuck (Mac).** Allow always
   adds Hippius to macOS's Screen Recording list, so you never have to add it
   by hand, and Relaunch Hippius picks the permission up. If macOS still says
@@ -203,6 +216,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   remain the last line of defence.
 
 ### Added
+
+- **Choose whether a recording includes your computer's sound (Mac).** The
+  capture bar's Options menu has "Record system audio", off by default so
+  your voice is not recorded twice through the speakers; turn it on to
+  record a video or a call together with your narration.
 
 - **Take a screenshot or record your screen straight into Hippius.** Press
   ⇧⌘2 (Ctrl+Shift+2 on Windows) from any app, or use Capture on the Drive page

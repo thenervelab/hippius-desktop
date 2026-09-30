@@ -1,6 +1,5 @@
 import { deviceIdByName } from "@/app/lib/capture/devices";
-import type { CaptureCameraState } from "@/app/lib/tauri/capture";
-import type { CaptureDevice } from "@/app/lib/tauri/capture";
+import type { CameraSize, CaptureCameraState, CaptureDevice } from "@/app/lib/tauri/capture";
 
 /**
  * The cameras `enumerateDevices` found, as the bar's picker lists them.
@@ -64,4 +63,43 @@ export function stripShown(camera: CaptureCameraState | null): boolean {
  */
 export function cameraCloseLabel(camera: CaptureCameraState | null): string {
   return camera?.recording ? "Hide camera" : "Turn camera off";
+}
+
+/** A round bubble's size: what "Exit full size" goes back to. */
+export type RoundSize = Exclude<CameraSize, "full">;
+
+/** Which picture a size button draws: each points the way it acts. */
+export type SizeIcon = "small" | "large" | "enterFull" | "exitFull";
+
+export interface SizeControl {
+  /** Stable key for the button. */
+  key: CameraSize;
+  /** The size a click asks Rust for. */
+  target: CameraSize;
+  label: string;
+  icon: SizeIcon;
+  /** `aria-pressed`: the size shown now. Undefined on the full-size toggle while full, which is an action ("Exit full size"), not a state. */
+  pressed: boolean | undefined;
+}
+
+/**
+ * The strip's size buttons, Loom style: small, large, and a full-size toggle.
+ * At full size the third button leaves it ("Exit full size", back to the
+ * round size the bubble had before) instead of asking for full again, which
+ * did nothing and left no obvious way back.
+ */
+export function sizeControls(size: CameraSize, lastRound: RoundSize): SizeControl[] {
+  const full = size === "full";
+  return [
+    { key: "small", target: "small", label: "Small camera", icon: "small", pressed: size === "small" },
+    { key: "large", target: "large", label: "Large camera", icon: "large", pressed: size === "large" },
+    full
+      ? { key: "full", target: lastRound, label: "Exit full size", icon: "exitFull", pressed: undefined }
+      : { key: "full", target: "full", label: "Full size camera", icon: "enterFull", pressed: false },
+  ];
+}
+
+/** The round size to remember: the current one, or the last one while full. */
+export function nextRoundSize(size: CameraSize, lastRound: RoundSize): RoundSize {
+  return size === "full" ? lastRound : size;
 }

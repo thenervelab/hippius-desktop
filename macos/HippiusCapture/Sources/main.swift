@@ -399,12 +399,20 @@ struct StartOptions {
     let inset: CGFloat?
     let microphone: Bool
     let microphoneDeviceId: String?
+    /// Record what the Mac plays (ScreenCaptureKit's audio). Off by default:
+    /// with speakers it also picks up the voice a second time, as an echo.
+    let systemAudio: Bool
     let showClicks: Bool
+    /// The camera bubble's window, filmed with a window recording: that
+    /// records one window only, so the bubble is added to it by number.
+    let cameraWindowId: UInt32?
 
     init?(_ obj: [String: Any]) {
         guard let output = obj["output"] as? String, !output.isEmpty else { return nil }
         outputURL = URL(fileURLWithPath: output)
         microphone = (obj["microphone"] as? Bool) ?? false
+        systemAudio = (obj["systemAudio"] as? Bool) ?? false
+        cameraWindowId = intU32(obj["cameraWindowId"])
         showClicks = (obj["showClicks"] as? Bool) ?? false
         microphoneDeviceId = obj["microphoneDeviceId"] as? String
         displayId = intU32(obj["displayId"])
@@ -557,13 +565,239 @@ private func isCompleteFrame(_ buffer: CMSampleBuffer) -> Bool {
     return status == .complete
 }
 
+/// Mixes the system audio and the microphone into the file's one audio track:
+/// stereo float at 48 kHz, on the recording's timeline.
+///
+/// Each source's buffers are converted to 48 kHz float (a mono microphone is
+/// put in both channels) and added into a running mix at the frame where they
+/// belong. A source continues where its last buffer ended unless its
+/// timestamp says otherwise by more than `resyncSlack` (a gap is silence; an
+/// overlap, which a buffer straddling a pause leaves, is dropped). The mix is
+/// handed out once every source has reached a frame, or when one lags the
+/// other by more than `maxLag` (a source that stopped delivering must not
+/// hold the other back). Not thread safe: `RecordSession` calls it on its
+/// writer queue only.
+final class AudioMixer {
+    enum Source: Hashable {
+        case system
+        case microphone
+    }
+
+    static let sampleRate: Double = 48_000
+    /// The microphone is lifted 6 dB: a built-in mic at speaking distance
+    /// records speech around -33 dBFS, quiet next to anything else people
+    /// play. `limit` keeps the peaks this adds from clipping.
+    static let microphoneGain: Float = 2.0
+    static let systemGain: Float = 1.0
+    /// 50 ms: timestamp jitter a source is allowed before it is re-placed.
+    static let resyncSlack: Int64 = 2_400
+    /// 300 ms: how far one source may run ahead of a silent one.
+    static let maxLag: Int64 = 14_400
+    /// The most handed out at once, one second.
+    static let maxChunk: Int64 = 48_000
+
+    struct Chunk {
+        /// First frame, counted from the start of the recording.
+        let start: Int64
+        /// Interleaved left/right samples.
+        let samples: [Float]
+        var frames: Int { samples.count / 2 }
+    }
+
+    private struct Track {
+        /// Where this source's next frame goes.
+        var next: Int64?
+        var converter: AVAudioConverter?
+        var converterInput: AVAudioFormat?
+    }
+
+    private let sources: Set<Source>
+    private var tracks: [Source: Track] = [:]
+    /// The mix from `flushed` on, one array per channel.
+    private var left: [Float] = []
+    private var right: [Float] = []
+    private var flushed: Int64 = 0
+    private var outputFormat: CMAudioFormatDescription?
+
+    init(sources: Set<Source>) {
+        self.sources = sources
+        for source in sources { tracks[source] = Track() }
+    }
+
+    /// The frame `offset` from the start of the recording falls on.
+    static func frame(at offset: CMTime) -> Int64 {
+        Int64((offset.seconds * sampleRate).rounded())
+    }
+
+    /// Mix `buffer` from `source` in at `frame`.
+    func add(_ buffer: CMSampleBuffer, from source: Source, at frame: Int64) {
+        guard var track = tracks[source], let pcm = Self.floatStereo48k(buffer, track: &track) else { return }
+        var start = frame
+        if let next = track.next, abs(frame - next) <= Self.resyncSlack {
+            // Continuous: a converter's output does not line up with its
+            // input timestamps to the frame, so trust the running count.
+            start = next
+        }
+        let frames = Int64(pcm.frameLength)
+        // Never write behind what this source already wrote (a buffer that
+        // overlaps the one before it once a pause is cut) or behind what was
+        // already handed out.
+        let floor = max(track.next ?? 0, flushed)
+        let skip = max(0, floor - start)
+        track.next = max(track.next ?? 0, start + frames)
+        tracks[source] = track
+        guard skip < frames, let channels = pcm.floatChannelData else { return }
+        let gain = source == .microphone ? Self.microphoneGain : Self.systemGain
+        let from = Int(start + skip - flushed)
+        let count = Int(frames - skip)
+        if left.count < from + count {
+            left.append(contentsOf: repeatElement(0, count: from + count - left.count))
+            right.append(contentsOf: repeatElement(0, count: from + count - right.count))
+        }
+        let l = channels[0]
+        let r = pcm.format.channelCount > 1 ? channels[1] : channels[0]
+        let offset = Int(skip)
+        for i in 0..<count {
+            left[from + i] += l[offset + i] * gain
+            right[from + i] += r[offset + i] * gain
+        }
+    }
+
+    /// The mix every source has reached (or that the lagging one has fallen
+    /// too far behind to hold up), or nil when nothing is ready.
+    func take() -> Chunk? {
+        let written = sources.map { tracks[$0]?.next ?? flushed }
+        guard let lowest = written.min(), let highest = written.max() else { return nil }
+        let ready = max(lowest, highest - Self.maxLag)
+        return hand(upTo: ready)
+    }
+
+    /// Everything mixed so far, at the end of the recording.
+    func drain() -> Chunk? {
+        hand(upTo: flushed + Int64(left.count))
+    }
+
+    private func hand(upTo ready: Int64) -> Chunk? {
+        let count = Int(min(ready - flushed, Self.maxChunk, Int64(left.count)))
+        guard count > 0 else { return nil }
+        var samples = [Float](repeating: 0, count: count * 2)
+        for i in 0..<count {
+            samples[2 * i] = Self.limit(left[i])
+            samples[2 * i + 1] = Self.limit(right[i])
+        }
+        left.removeFirst(count)
+        right.removeFirst(count)
+        let chunk = Chunk(start: flushed, samples: samples)
+        flushed += Int64(count)
+        return chunk
+    }
+
+    /// A soft limiter: untouched below 0.8, then eased towards 1 so a loud
+    /// voice over loud system audio rounds off instead of clipping.
+    static func limit(_ x: Float) -> Float {
+        let knee: Float = 0.8
+        let a = abs(x)
+        guard a > knee else { return x }
+        let over = (a - knee) / (1 - knee)
+        let eased = knee + (1 - knee) * tanhf(over)
+        return x < 0 ? -eased : eased
+    }
+
+    /// `chunk` as a sample buffer the AAC input takes, stamped `pts`.
+    func sampleBuffer(_ chunk: Chunk, at pts: CMTime) -> CMSampleBuffer? {
+        if outputFormat == nil {
+            var asbd = AudioStreamBasicDescription(
+                mSampleRate: Self.sampleRate,
+                mFormatID: kAudioFormatLinearPCM,
+                mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+                mBytesPerPacket: 8,
+                mFramesPerPacket: 1,
+                mBytesPerFrame: 8,
+                mChannelsPerFrame: 2,
+                mBitsPerChannel: 32,
+                mReserved: 0
+            )
+            CMAudioFormatDescriptionCreate(
+                allocator: kCFAllocatorDefault, asbd: &asbd, layoutSize: 0, layout: nil,
+                magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &outputFormat
+            )
+        }
+        guard let format = outputFormat else { return nil }
+        let bytes = chunk.samples.count * MemoryLayout<Float>.size
+        var block: CMBlockBuffer?
+        guard CMBlockBufferCreateWithMemoryBlock(
+            allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: bytes, blockAllocator: kCFAllocatorDefault,
+            customBlockSource: nil, offsetToData: 0, dataLength: bytes, flags: kCMBlockBufferAssureMemoryNowFlag,
+            blockBufferOut: &block
+        ) == noErr, let block else { return nil }
+        let copied = chunk.samples.withUnsafeBytes { raw in
+            CMBlockBufferReplaceDataBytes(with: raw.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: bytes)
+        }
+        guard copied == noErr else { return nil }
+        var out: CMSampleBuffer?
+        guard CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+            allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: format,
+            sampleCount: chunk.frames, presentationTimeStamp: pts, packetDescriptions: nil, sampleBufferOut: &out
+        ) == noErr else { return nil }
+        return out
+    }
+
+    /// `buffer` as non-interleaved float at 48 kHz with one or two channels,
+    /// converted when it is anything else (a USB or Bluetooth microphone runs
+    /// at its own rate). The converter is kept per source: it carries state
+    /// from one buffer to the next.
+    private static func floatStereo48k(_ buffer: CMSampleBuffer, track: inout Track) -> AVAudioPCMBuffer? {
+        guard let description = CMSampleBufferGetFormatDescription(buffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
+        else { return nil }
+        var streamDescription = asbd
+        guard let inFormat = AVAudioFormat(streamDescription: &streamDescription) else { return nil }
+        let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(buffer))
+        guard frames > 0, let input = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: frames) else { return nil }
+        input.frameLength = frames
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(buffer, at: 0, frameCount: Int32(frames), into: input.mutableAudioBufferList) == noErr else {
+            return nil
+        }
+        let channels = min(inFormat.channelCount, 2)
+        if inFormat.commonFormat == .pcmFormatFloat32, !inFormat.isInterleaved, inFormat.sampleRate == sampleRate, inFormat.channelCount <= 2 {
+            return input
+        }
+        guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channels, interleaved: false) else {
+            return nil
+        }
+        if track.converter == nil || track.converterInput != inFormat {
+            track.converter = AVAudioConverter(from: inFormat, to: target)
+            track.converterInput = inFormat
+        }
+        guard let converter = track.converter else { return nil }
+        let capacity = AVAudioFrameCount((Double(frames) * sampleRate / inFormat.sampleRate).rounded(.up)) + 64
+        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+        var given = false
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, outStatus in
+            if given {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            given = true
+            outStatus.pointee = .haveData
+            return input
+        }
+        guard status != .error, output.frameLength > 0 else { return nil }
+        return output
+    }
+}
+
 final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     typealias DeathHandler = (RecordSession, String) -> Void
 
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput
+    /// The one audio track, or nil when neither the microphone nor the
+    /// system audio is recorded.
     private let audioInput: AVAssetWriterInput?
-    private let micInput: AVAssetWriterInput?
+    /// Mixes what goes into `audioInput`; used on `writerQueue` only.
+    private let mixer: AudioMixer?
     private let outputURL: URL
     private let onDeath: DeathHandler
     let width: Int
@@ -583,8 +817,9 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private var gaps: [(start: CMTime, end: CMTime)] = []
     private var lastVideo: CMSampleBuffer?
     private var lastVideoTime = CMTime.invalid
-    private var lastAudioEnd = CMTime.invalid
-    private var lastMicEnd = CMTime.invalid
+    /// Where the file's timeline starts (the first frame, retimed); audio is
+    /// placed by its distance from here.
+    private var sessionStart = CMTime.invalid
 
     private let finishLock = NSLock()
     private var finishing: Task<Void, Error>?
@@ -601,17 +836,32 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             guard let window = content.windows.first(where: { $0.windowID == windowId }) else {
                 throw CaptureError.noWindow
             }
-            filter = SCContentFilter(desktopIndependentWindow: window)
             let centre = CGPoint(x: window.frame.midX, y: window.frame.midY)
             let screen = content.displays.first(where: { $0.frame.contains(centre) })
-            scale = pixelScale(filter, displayID: screen?.displayID)
-            bounds = CGRect(origin: .zero, size: window.frame.size)
-            region = bounds
-            let ownWindow = window.owningApplication.map { $0.processID == getppid() } ?? false
-            let inset = options.inset ?? (ownWindow ? stageInset : 0)
-            if inset > 0, bounds.width > inset * 4, bounds.height > inset * 4 {
-                region = bounds.insetBy(dx: inset, dy: inset)
+            if let cameraId = options.cameraWindowId, cameraId != windowId,
+               let camera = content.windows.first(where: { $0.windowID == cameraId }),
+               let screen {
+                // The window plus the camera bubble: only those two windows
+                // are drawn (nothing else on screen, as with the window on its
+                // own), cut to where the window is when recording starts. A
+                // window-only filter would leave the bubble out.
+                filter = SCContentFilter(display: screen, including: [window, camera])
+                scale = pixelScale(filter, displayID: screen.displayID)
+                bounds = CGRect(x: 0, y: 0, width: screen.width, height: screen.height)
+                region = window.frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY).intersection(bounds)
+                if region.isNull || region.isEmpty { region = bounds }
                 sourceRectWanted = true
+            } else {
+                filter = SCContentFilter(desktopIndependentWindow: window)
+                scale = pixelScale(filter, displayID: screen?.displayID)
+                bounds = CGRect(origin: .zero, size: window.frame.size)
+                region = bounds
+                let ownWindow = window.owningApplication.map { $0.processID == getppid() } ?? false
+                let inset = options.inset ?? (ownWindow ? stageInset : 0)
+                if inset > 0, bounds.width > inset * 4, bounds.height > inset * 4 {
+                    region = bounds.insetBy(dx: inset, dy: inset)
+                    sourceRectWanted = true
+                }
             }
         } else {
             let display: SCDisplay
@@ -651,9 +901,12 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             config.captureResolution = .best
         }
         config.colorSpaceName = CGColorSpace.sRGB
-        config.capturesAudio = true
-        config.sampleRate = 48_000
+        // System audio only when asked for: it records what the speakers
+        // play, the voice included when there are no headphones (an echo).
+        config.capturesAudio = options.systemAudio
+        config.sampleRate = Int(AudioMixer.sampleRate)
         config.channelCount = 2
+        config.excludesCurrentProcessAudio = true
         config.showsCursor = true
         config.queueDepth = 8
         config.pixelFormat = kCVPixelFormatType_32BGRA
@@ -708,34 +961,28 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         }
         writer.add(videoInput)
 
-        let audioSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 48_000,
-            AVNumberOfChannelsKey: 2,
-            AVEncoderBitRateKey: 128_000
-        ]
-        var audioInput: AVAssetWriterInput? = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
-        audioInput?.expectsMediaDataInRealTime = true
-        if let input = audioInput, writer.canAdd(input) {
-            writer.add(input)
-        } else {
-            audioInput = nil
-        }
-
-        var micInput: AVAssetWriterInput?
-        if #available(macOS 15.0, *), options.microphone {
-            let micSettings: [String: Any] = [
+        // ONE audio track, whatever is recorded: browsers (the share link's
+        // page included) and most players play only a file's first audio
+        // track, so a second track for the microphone went unheard. The
+        // microphone and the system audio are mixed into it (`AudioMixer`).
+        var sources: Set<AudioMixer.Source> = []
+        if options.systemAudio { sources.insert(.system) }
+        if #available(macOS 15.0, *), options.microphone { sources.insert(.microphone) }
+        var audioInput: AVAssetWriterInput?
+        if !sources.isEmpty {
+            let audioSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 48_000,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 64_000
+                AVSampleRateKey: AudioMixer.sampleRate,
+                AVNumberOfChannelsKey: 2,
+                AVEncoderBitRateKey: 160_000
             ]
-            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: micSettings)
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
             input.expectsMediaDataInRealTime = true
-            if writer.canAdd(input) {
-                writer.add(input)
-                micInput = input
+            guard writer.canAdd(input) else {
+                throw CaptureError.writerFailed("Could not add the audio track.")
             }
+            writer.add(input)
+            audioInput = input
         }
 
         guard writer.startWriting() else {
@@ -746,7 +993,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             writer: writer,
             videoInput: videoInput,
             audioInput: audioInput,
-            micInput: micInput,
+            mixer: sources.isEmpty ? nil : AudioMixer(sources: sources),
             outputURL: options.outputURL,
             width: width,
             height: height,
@@ -758,9 +1005,11 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         session.stream = stream
         do {
             try stream.addStreamOutput(session, type: .screen, sampleHandlerQueue: session.writerQueue)
-            try stream.addStreamOutput(session, type: .audio, sampleHandlerQueue: session.writerQueue)
-            if #available(macOS 15.0, *), options.microphone {
-                try? stream.addStreamOutput(session, type: .microphone, sampleHandlerQueue: session.writerQueue)
+            if sources.contains(.system) {
+                try stream.addStreamOutput(session, type: .audio, sampleHandlerQueue: session.writerQueue)
+            }
+            if #available(macOS 15.0, *), sources.contains(.microphone) {
+                try stream.addStreamOutput(session, type: .microphone, sampleHandlerQueue: session.writerQueue)
             }
             try await stream.startCapture()
         } catch {
@@ -775,7 +1024,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         writer: AVAssetWriter,
         videoInput: AVAssetWriterInput,
         audioInput: AVAssetWriterInput?,
-        micInput: AVAssetWriterInput?,
+        mixer: AudioMixer?,
         outputURL: URL,
         width: Int,
         height: Int,
@@ -784,7 +1033,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         self.writer = writer
         self.videoInput = videoInput
         self.audioInput = audioInput
-        self.micInput = micInput
+        self.mixer = mixer
         self.outputURL = outputURL
         self.width = width
         self.height = height
@@ -840,10 +1089,11 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
                 }
                 let end = self.endTime()
                 self.appendTailFrame(at: end)
+                // What the mixer still holds (it waits for the slower source).
+                self.writeMixedAudio(final: true)
                 self.writer.endSession(atSourceTime: end)
                 self.videoInput.markAsFinished()
                 self.audioInput?.markAsFinished()
-                self.micInput?.markAsFinished()
                 self.writer.finishWriting {
                     if self.writer.status == .completed {
                         cont.resume(returning: .success(()))
@@ -931,6 +1181,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             guard isCompleteFrame(sampleBuffer) else { return }
             if !sessionStarted {
                 writer.startSession(atSourceTime: placed.time)
+                sessionStart = placed.time
                 sessionStarted = true
             }
             if lastVideoTime.isValid, CMTimeCompare(placed.time, lastVideoTime) <= 0 { return }
@@ -943,33 +1194,37 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
                 writerFailed()
             }
         case .audio:
-            appendAudio(sampleBuffer, to: audioInput, placed: placed, lastEnd: &lastAudioEnd)
+            mixAudio(sampleBuffer, from: .system, at: placed.time)
         case .microphone:
-            appendAudio(sampleBuffer, to: micInput, placed: placed, lastEnd: &lastMicEnd)
+            mixAudio(sampleBuffer, from: .microphone, at: placed.time)
         @unknown default:
             break
         }
     }
 
-    private func appendAudio(
-        _ sampleBuffer: CMSampleBuffer,
-        to input: AVAssetWriterInput?,
-        placed: (time: CMTime, offset: CMTime),
-        lastEnd: inout CMTime
-    ) {
+    /// Hand a system audio or microphone buffer to the mixer, placed on the
+    /// file's timeline (already moved earlier by every pause before it), then
+    /// write whatever the mixer has ready.
+    private func mixAudio(_ sampleBuffer: CMSampleBuffer, from source: AudioMixer.Source, at time: CMTime) {
         // Sound starts with the first picture.
-        guard sessionStarted, let input else { return }
-        // A buffer that straddled a pause's start overlaps the first one after
-        // it once the pause is cut out; drop the overlap rather than write
-        // audio that runs backwards.
-        let slack = CMTime(value: 1, timescale: 1000)
-        if lastEnd.isValid, CMTimeCompare(placed.time, lastEnd - slack) < 0 { return }
-        guard input.isReadyForMoreMediaData, let buffer = shifted(sampleBuffer, by: placed.offset) else { return }
-        if input.append(buffer) {
-            let duration = CMSampleBufferGetDuration(sampleBuffer)
-            lastEnd = duration.isValid ? placed.time + duration : placed.time
-        } else {
-            writerFailed()
+        guard sessionStarted, let mixer else { return }
+        let frame = AudioMixer.frame(at: time - sessionStart)
+        mixer.add(sampleBuffer, from: source, at: frame)
+        writeMixedAudio(final: false)
+    }
+
+    /// Append the mixer's finished audio. Real time: a chunk the encoder
+    /// cannot take now is dropped, like a video frame.
+    private func writeMixedAudio(final: Bool) {
+        guard let mixer, let input = audioInput, !deathReported else { return }
+        while let chunk = final ? mixer.drain() : mixer.take() {
+            let pts = sessionStart + CMTime(value: chunk.start, timescale: CMTimeScale(AudioMixer.sampleRate))
+            guard let buffer = mixer.sampleBuffer(chunk, at: pts) else { continue }
+            guard input.isReadyForMoreMediaData else { continue }
+            if !input.append(buffer) {
+                writerFailed()
+                return
+            }
         }
     }
 

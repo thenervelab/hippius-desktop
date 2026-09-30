@@ -188,6 +188,41 @@ pub fn bubble_in_area(size: CameraSize, area: Frame) -> Frame {
     }
 }
 
+/// What a recording films, in the same global points as the camera window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Filmed {
+    /// A whole display (`area`); a bubble placed there goes in the corner
+    /// of its usable part (`usable`), as it does while choosing.
+    Display { area: Frame, usable: Frame },
+    /// A drawn area, or a window's frame.
+    Region(Frame),
+}
+
+/// Where the bubble has to go when Record is pressed so it is in the video,
+/// or `None` when it already is (wholly inside what is filmed, where the user
+/// may have dragged it). A bubble outside, or half outside, is not filmed
+/// (or is cut), so it moves to the bottom-left corner of what is filmed.
+#[must_use]
+pub fn bubble_for_recording(current: Option<Frame>, size: CameraSize, filmed: Filmed) -> Option<Frame> {
+    let (inside, corner) = match filmed {
+        Filmed::Display { area, usable } => (area, frame(CameraShape::Bubble, size, usable)),
+        Filmed::Region(region) => (region, bubble_in_area(size, region)),
+    };
+    match current {
+        Some(now) if within(now, inside) => None,
+        _ => Some(corner),
+    }
+}
+
+/// `inner` lies wholly inside `outer`, give or take a point of rounding.
+fn within(inner: Frame, outer: Frame) -> bool {
+    const SLACK: f64 = 1.0;
+    inner.x >= outer.x - SLACK
+        && inner.y >= outer.y - SLACK
+        && inner.x + inner.width <= outer.x + outer.width + SLACK
+        && inner.y + inner.height <= outer.y + outer.height + SLACK
+}
+
 /// The bubble resized to `side`, anchored where it is now.
 ///
 /// A bubble against a corner (or one side) of the usable area stays against
@@ -461,6 +496,63 @@ mod tests {
         assert!(small.contains(f.x, f.y) && small.contains(f.x + f.width, f.y + f.height));
         // Full is not a bubble shape for an area; it is placed as a small one.
         assert!((bubble_in_area(CameraSize::Full, drawn).width - BUBBLE_SIZE).abs() < f64::EPSILON);
+    }
+
+    /// The camera was not in a window recording while the bubble sat in
+    /// the display's corner, outside the window. Record moves it in.
+    #[test]
+    fn record_moves_a_bubble_outside_what_is_filmed_into_its_corner() {
+        let window = Frame {
+            x: 311.0,
+            y: 527.0,
+            width: 920.0,
+            height: 436.0,
+        };
+        let in_display_corner = frame(CameraShape::Bubble, CameraSize::Small, AREA);
+        let moved = bubble_for_recording(Some(in_display_corner), CameraSize::Small, Filmed::Region(window)).expect("moved");
+        assert_eq!(moved, bubble_in_area(CameraSize::Small, window));
+        assert!(within(moved, window));
+        // Already inside (placed there, or dragged there): it stays.
+        assert_eq!(bubble_for_recording(Some(moved), CameraSize::Small, Filmed::Region(window)), None);
+        // Half outside is cut by the crop: moved in as well.
+        let straddling = Frame { x: window.x - 50.0, ..moved };
+        assert!(bubble_for_recording(Some(straddling), CameraSize::Small, Filmed::Region(window)).is_some());
+        // No known frame yet: placed.
+        assert_eq!(
+            bubble_for_recording(None, CameraSize::Large, Filmed::Region(window)),
+            Some(bubble_in_area(CameraSize::Large, window))
+        );
+    }
+
+    /// A screen recording of another display films nothing on this one.
+    #[test]
+    fn record_moves_a_bubble_onto_the_recorded_display() {
+        let other = Frame {
+            x: 1512.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let usable = Frame {
+            y: 25.0,
+            height: 1055.0,
+            ..other
+        };
+        let here = frame(CameraShape::Bubble, CameraSize::Small, AREA);
+        let moved = bubble_for_recording(Some(here), CameraSize::Small, Filmed::Display { area: other, usable });
+        assert_eq!(moved, Some(frame(CameraShape::Bubble, CameraSize::Small, usable)));
+        // On the recorded display already: it stays where the user put it.
+        let dragged = Frame { x: 900.0, y: 300.0, ..here };
+        let display = Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 1512.0,
+            height: 982.0,
+        };
+        assert_eq!(
+            bubble_for_recording(Some(dragged), CameraSize::Small, Filmed::Display { area: display, usable: AREA }),
+            None
+        );
     }
 
     #[test]

@@ -29,6 +29,7 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
     cameraDevice: null,
     cameraSize: "small",
     showClicks: false,
+    systemAudio: false,
     lastKind: "screenshot",
     lastMode: "area",
     copyLink: true,
@@ -365,6 +366,27 @@ describe("the Options menu", () => {
     vi.useFakeTimers();
     fireEvent.keyDown(window, { key: "Enter" });
     expect(screen.getByText("Recording in 5")).toBeInTheDocument();
+  });
+
+  it("offers system audio for a recording, off until asked for", async () => {
+    tauri.onInvoke("capture_set_options", (args) => saved((args as { options: CaptureOverlayContext["options"] }).options, 3));
+    setup({ kind: "recording", countdownSecs: 3 });
+    fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
+    const system = await screen.findByRole("menuitemcheckbox", { name: "Record system audio" });
+    expect(system).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(system);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: expect.objectContaining({ systemAudio: true }),
+      }),
+    );
+  });
+
+  it("offers no system audio for a screenshot", async () => {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
+    await screen.findByRole("menu", { name: "Capture options" });
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Record system audio" })).toBeNull();
   });
 
   it("turns copying a share link after capture on and off", async () => {

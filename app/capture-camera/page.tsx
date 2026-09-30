@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Circle, Maximize2, VideoOff, X } from "lucide-react";
+import { Circle, Maximize2, Minimize2, VideoOff, X } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
   cancelCapture,
@@ -11,12 +11,22 @@ import {
   getCaptureState,
   setCaptureCameras,
   setCaptureCameraSize,
-  type CameraSize,
   type CaptureCameraState,
 } from "@/app/lib/tauri/capture";
 import { GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { stepIndex } from "@/app/capture-overlay/keyNav";
-import { camerasAreNamed, camerasFrom, cameraCloseLabel, resolveCameraId, stripShown, videoConstraints } from "./cameraDevices";
+import {
+  camerasAreNamed,
+  camerasFrom,
+  cameraCloseLabel,
+  nextRoundSize,
+  resolveCameraId,
+  sizeControls,
+  stripShown,
+  videoConstraints,
+  type RoundSize,
+  type SizeIcon,
+} from "./cameraDevices";
 
 /**
  * The camera, Loom style: a round bubble over the screen (small or large), a
@@ -35,18 +45,30 @@ import { camerasAreNamed, camerasFrom, cameraCloseLabel, resolveCameraId, stripS
  * (`recording`), so the page follows no phase of its own. The pill hides
  * the bubble while recording. While choosing the strip is always
  * in the page (faded out until the pointer or keyboard focus is on it), so
- * Tab reaches it; the arrow keys move along it.
+ * Tab reaches it; the arrow keys move along it. At full size its third button
+ * leaves full size (as Escape does), back to the round size from before.
+ *
+ * The <video> is mirrored, so WebKit's own start-playback button (drawn over
+ * a video that is paused or not playing yet) came out as a backwards
+ * triangle on the bubble. CSS cannot remove WebKit's modern media controls,
+ * so the video stays invisible until it is actually playing (the bubble's
+ * dark fill shows instead), and the page starts playback itself.
  */
 
-const SIZES: { size: CameraSize; label: string }[] = [
-  { size: "small", label: "Small camera" },
-  { size: "large", label: "Large camera" },
-  { size: "full", label: "Full size camera" },
-];
+function SizeGlyph({ icon }: { icon: SizeIcon }) {
+  if (icon === "enterFull") return <Maximize2 className="size-3.5" aria-hidden />;
+  if (icon === "exitFull") return <Minimize2 className="size-3.5" aria-hidden />;
+  return <Circle className={icon === "small" ? "size-2.5" : "size-3.5"} strokeWidth={2.4} aria-hidden />;
+}
 
-function SizeIcon({ size }: { size: CameraSize }) {
-  if (size === "full") return <Maximize2 className="size-3.5" />;
-  return <Circle className={size === "small" ? "size-2.5" : "size-3.5"} strokeWidth={2.4} />;
+/** Start the camera picture; WebKit may leave a new stream paused. */
+function playVideo(video: HTMLVideoElement | null) {
+  if (!video || !video.paused) return;
+  try {
+    void video.play()?.catch(() => undefined);
+  } catch {
+    // Not implemented (tests) or refused: the next stream or event tries again.
+  }
 }
 
 export default function CaptureCameraPage() {
@@ -65,6 +87,23 @@ export default function CaptureCameraPage() {
   /** Which camera the open stream is for ("default" or a webview deviceId). */
   const openFor = useRef<string | null>(null);
   const run = useRef(0);
+  /** The round size before full size, for "Exit full size" and Escape. */
+  const [lastRound, setLastRound] = useState<RoundSize>("small");
+  /** The same two for the key listener, which is added once. */
+  const lastRoundRef = useRef<RoundSize>("small");
+  const cameraRef = useRef<CaptureCameraState | null>(null);
+  /** The strip button under the pointer or focus, named in the tooltip. */
+  const [tip, setTip] = useState<string | null>(null);
+  /** Frames are flowing; until then the video (and WebKit's play button) is hidden. */
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    cameraRef.current = camera;
+    if (!camera) return;
+    const round = nextRoundSize(camera.size, lastRoundRef.current);
+    lastRoundRef.current = round;
+    setLastRound(round);
+  }, [camera]);
 
   useEffect(() => {
     // The first read can answer late (the context may start the helper to
@@ -131,7 +170,10 @@ export default function CaptureCameraPage() {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = s;
       openFor.current = key;
-      if (videoRef.current) videoRef.current.srcObject = s;
+      if (videoRef.current) {
+        videoRef.current.srcObject = s;
+        playVideo(videoRef.current);
+      }
       // An unplugged camera ends its track; look again.
       s.getVideoTracks()[0]?.addEventListener("ended", () => setDevicesSeen((n) => n + 1));
       setFailed(false);
@@ -183,14 +225,22 @@ export default function CaptureCameraPage() {
   useEffect(() => {
     if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
+      playVideo(videoRef.current);
     }
   });
 
   // While choosing, a click on the camera takes focus from the overlay, so
-  // Escape has to work here too. Never mid-recording: that would discard it.
+  // Escape has to work here too: it leaves full size first, and otherwise
+  // cancels. Never mid-recording: that would discard it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      const now = cameraRef.current;
+      if (now?.size === "full" && stripShown(now)) {
+        e.preventDefault();
+        void setCaptureCameraSize(lastRoundRef.current).catch(() => undefined);
+        return;
+      }
       void getCaptureState()
         .then((p) => (p.phase === "selecting" ? cancelCapture() : undefined))
         .catch(() => undefined);
@@ -207,6 +257,12 @@ export default function CaptureCameraPage() {
   const hasStrip = bubble && stripShown(camera);
   const hovered = hoverRust || hoverDom;
   const closeLabel = cameraCloseLabel(camera);
+  const controls = sizeControls(camera.size, lastRound);
+  // The Tab stop: the size shown now, or the full-size toggle while full.
+  const focusIndex = Math.max(
+    0,
+    controls.findIndex((c) => c.pressed || c.icon === "exitFull"),
+  );
 
   const onStripKey = (e: React.KeyboardEvent) => {
     const buttons = Array.from(stripRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
@@ -225,7 +281,7 @@ export default function CaptureCameraPage() {
     >
       <div
         data-tauri-drag-region
-        className={`relative h-full w-full cursor-grab overflow-hidden bg-[#1c1d21] shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-2 ring-white/85 active:cursor-grabbing ${
+        className={`relative h-full w-full cursor-grab overflow-hidden bg-[#1c1d21] shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-2 ring-white/85 transition-[border-radius] duration-200 active:cursor-grabbing motion-reduce:transition-none ${
           round ? "rounded-full" : "rounded-[18px]"
         }`}
       >
@@ -246,47 +302,84 @@ export default function CaptureCameraPage() {
             autoPlay
             muted
             playsInline
+            disablePictureInPicture
+            onPlaying={() => setPlaying(true)}
+            // WebKit pauses a video it cannot see; hide it (its play button
+            // would show, mirrored) and start it again.
+            onPause={(e) => {
+              setPlaying(false);
+              playVideo(e.currentTarget);
+            }}
+            onEmptied={() => setPlaying(false)}
+            data-playing={playing}
             // Mirrored, as every camera preview is: moving left moves left.
-            className="h-full w-full -scale-x-100 object-cover"
+            className={`h-full w-full -scale-x-100 object-cover transition-opacity duration-150 motion-reduce:transition-none ${
+              playing ? "opacity-100" : "opacity-0"
+            }`}
           />
         )}
 
         {hasStrip && (
           <div
-            ref={stripRef}
-            role="toolbar"
-            aria-label="Camera size"
-            onKeyDown={onStripKey}
-            className={`absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-[#000]/70 p-1 text-white shadow-lg backdrop-blur transition-opacity duration-150 motion-reduce:transition-none ${
-              round ? "bottom-[14%]" : "bottom-3"
-            } ${hovered ? "opacity-100" : "pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100"}`}
+            className={`absolute left-1/2 z-10 flex -translate-x-1/2 flex-col items-center gap-1 ${round ? "bottom-[14%]" : "bottom-3"}`}
           >
-            {SIZES.map(({ size, label }, i) => (
-              <button
-                key={size}
-                type="button"
-                aria-label={label}
-                aria-pressed={camera.size === size}
-                // One Tab stop into the strip; the arrows move along it.
-                tabIndex={camera.size === size || (i === 0 && !SIZES.some((x) => x.size === camera.size)) ? 0 : -1}
-                onClick={() => void setCaptureCameraSize(size).catch(() => undefined)}
-                className={`grid size-7 place-items-center rounded-full transition-colors ${GLASS_FOCUS} ${
-                  camera.size === size ? "bg-white/25" : "hover:bg-white/15"
-                }`}
-              >
-                <SizeIcon size={size} />
-              </button>
-            ))}
-            <span aria-hidden className="mx-0.5 h-4 w-px bg-white/25" />
-            <button
-              type="button"
-              aria-label={closeLabel}
-              tabIndex={-1}
-              onClick={() => void dismissCaptureCamera().catch(() => undefined)}
-              className={`grid size-7 place-items-center rounded-full hover:bg-white/15 ${GLASS_FOCUS}`}
+            {/* The name of the button under the pointer or focus. A native
+                title would open a system tooltip window over the bubble. */}
+            <span
+              role="tooltip"
+              id="camera-strip-tip"
+              aria-hidden={!tip}
+              className={`pointer-events-none whitespace-nowrap rounded-md bg-[#000]/80 px-2 py-0.5 text-[11px] font-medium text-white transition-opacity duration-100 motion-reduce:transition-none ${
+                tip ? "opacity-100" : "opacity-0"
+              }`}
             >
-              <X className="size-3.5" />
-            </button>
+              {tip ?? ""}
+            </span>
+            <div
+              ref={stripRef}
+              role="toolbar"
+              aria-label="Camera size"
+              onKeyDown={onStripKey}
+              className={`flex items-center gap-0.5 rounded-full bg-[#000]/70 p-1 text-white shadow-lg backdrop-blur transition-opacity duration-150 motion-reduce:transition-none ${
+                hovered ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100"
+              }`}
+            >
+              {controls.map((c, i) => (
+                <button
+                  key={c.key}
+                  type="button"
+                  aria-label={c.label}
+                  aria-pressed={c.pressed}
+                  aria-describedby={tip === c.label ? "camera-strip-tip" : undefined}
+                  // One Tab stop into the strip; the arrows move along it.
+                  tabIndex={i === focusIndex ? 0 : -1}
+                  onClick={() => void setCaptureCameraSize(c.target).catch(() => undefined)}
+                  onMouseEnter={() => setTip(c.label)}
+                  onMouseLeave={() => setTip(null)}
+                  onFocus={() => setTip(c.label)}
+                  onBlur={() => setTip(null)}
+                  className={`grid size-7 place-items-center rounded-full transition-colors ${GLASS_FOCUS} ${
+                    c.pressed ? "bg-white/25" : "hover:bg-white/15"
+                  }`}
+                >
+                  <SizeGlyph icon={c.icon} />
+                </button>
+              ))}
+              <span aria-hidden className="mx-0.5 h-4 w-px bg-white/25" />
+              <button
+                type="button"
+                aria-label={closeLabel}
+                tabIndex={-1}
+                onClick={() => void dismissCaptureCamera().catch(() => undefined)}
+                onMouseEnter={() => setTip(closeLabel)}
+                onMouseLeave={() => setTip(null)}
+                onFocus={() => setTip(closeLabel)}
+                onBlur={() => setTip(null)}
+                className={`grid size-7 place-items-center rounded-full hover:bg-white/15 ${GLASS_FOCUS}`}
+              >
+                <X className="size-3.5" aria-hidden />
+              </button>
+            </div>
           </div>
         )}
       </div>

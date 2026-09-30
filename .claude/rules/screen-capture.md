@@ -91,13 +91,16 @@ request at a time) only while `mode === "window"`, the page is visible and no
 countdown or capture is running. The bar saves through `saveCaptureOptions`
 and takes `countdownSecs` and `cameraFilmed` from Rust's answer; it never
 works them out. The Options menu holds the drive, the screenshot timer or the
-recording countdown (None / 3 / 5 seconds), Show mouse clicks, and "Copy a
-share link after capture" (`copyLink`). Clicking the countdown numeral or
+recording countdown (None / 3 / 5 seconds), "Record system audio"
+(`systemAudio`, off by default like Loom: with speakers it records the voice
+twice), Show mouse clicks, and "Copy a share link after capture" (`copyLink`). Clicking the countdown numeral or
 pressing Return while counting runs the waiting action at once. Camera only
 is macOS-only (`camera_only_supported`, `for_system` turns the screen back on
 elsewhere); the sources panel shows the Screen switch only when
 `cameraOnlyAvailable`, and the camera row says "Camera is only recorded with
-the entire screen or an area." whenever `cameraFilmed` is false.
+the entire screen or an area." whenever `cameraFilmed` is false (a window
+recording where the recorder cannot add the camera window:
+`bar::WINDOW_RECORDING_ADDS_CAMERA`, macOS only).
 
 **Screenshot:** selection → pixels in memory (`screenshot::capture_image`) and
 the card's JPEG from them (`thumbnail::from_image`) → preview card shown →
@@ -147,10 +150,18 @@ options live (so the bubble can be placed before recording); from Record on it
 follows `recording_camera`, frozen in `select_inner` BEFORE the phase moves, so
 a mid-recording option change never pulls the camera out of the video.
 `sync_camera` applies it after every change; every ending calls `end_camera`.
-Bubble = bottom-left, filmed with the screen (not filmed by a window
-recording, which is one window only: `cameraFilmed` in `CameraState` and
-`OverlayContext` says so); while choosing an AREA recording it sits inside the
-drawn area's bottom-left (`camera::bubble_in_area`) so it is filmed. Sized by
+Bubble = bottom-left, filmed with whatever is recorded; while choosing an
+AREA recording it sits inside the drawn area's bottom-left
+(`camera::bubble_in_area`). **At Record (`Capturing`) `sync_camera` moves a
+bubble that is not wholly inside what is filmed** (`recording_bubble_frame` →
+`camera::bubble_for_recording`: the area, the window's frame from xcap, or
+the recorded display's usable corner), without the glide; one already inside
+stays where the user put it. A **window recording** films one window, so the
+bubble was left out while on screen: `begin_recording` passes its window
+number (`RecordOptions.camera_window` → `cameraWindowId`) and the helper
+records both windows. Hidden from the pill mid-recording the window is
+`hide()`n (ordered out), never closed, so it keeps that number and its place;
+a re-created window would not be in the recording's filter. Sized by
 `CameraSize`: small 200 pt, large 340 pt (round), full = the stage's 16:9
 frame, which stays above the bar block (`BAR_BLOCK_HEIGHT`, it sits at a
 higher level than the overlay). `sync_camera` holds `camera_lock` for its whole run. The hover strip on the
@@ -163,9 +174,19 @@ stale copy back. The strip exists only on a bubble that is not recording
 (`stripShown`, from `CameraState.recording`, which Rust sets from Capturing a
 recording on; the camera page follows no phase of its own): the camera window
 is filmed, so a strip shown mid-recording was in the video; the pill hides
-the bubble instead. The × is "Turn camera off" while choosing and "Hide
+the bubble instead (no resizing mid-recording: the strip lives in the filmed
+window). The × is "Turn camera off" while choosing and "Hide
 camera" while recording (`cameraCloseLabel`). While choosing it is always mounted, faded until
-hovered or focused, so Tab reaches it. No native `title` on this window.
+hovered or focused, so Tab reaches it. Its third button is a toggle
+(`sizeControls`): at full size it is "Exit full size" (Minimize2) back to the
+round size from before (`nextRoundSize`), and Escape on the camera window
+does the same before it would cancel; asking for full again did nothing, so
+there was no way back. No native `title` on this window: the strip names the
+hovered or focused button in its own `role="tooltip"` label. The `<video>` is
+mirrored, so WebKit's start-playback button (shown on a paused or not yet
+playing video) was a backwards triangle on the bubble; CSS cannot remove
+WebKit's modern controls, so the video is `opacity-0` until `playing` (and
+again on `pause`), and the page calls `play()` itself.
 Hover comes from Rust (`capture_camera_hover`, polling the
 pointer against the frame) because a non-key window does not reliably get
 webview hover on macOS. Screen off = **stage**: a
@@ -535,6 +556,22 @@ stderr lines are diagnostics and are logged at `warn`.
 - `movieFragmentInterval` is 2 s, so a killed helper leaves a playable file;
   stdin closing (the app died) FINISHES the file and keeps it. Only `cancel`
   deletes.
+- **One audio track.** Browsers (the share link's page included) and most
+  players play only a file's first audio track, so the microphone as a
+  second track went unheard. `AudioMixer` mixes the microphone and, only when
+  `systemAudio` is on, the system audio (`capturesAudio`) into one stereo
+  48 kHz AAC track at 160 kbps: each source converted to float 48 kHz (a mono
+  mic in both channels), placed by its retimed timestamp against the first
+  frame, continuing from its last buffer unless that is off by more than
+  50 ms, overlaps dropped, and handed out once every source reached a frame or
+  one lags by 300 ms. The mic gets +6 dB (a built-in mic records speech near
+  -33 dBFS) and a soft limiter above 0.8 stops clipping. No source = no audio
+  track. Pinned by `a_recording_has_one_audio_track`.
+- **A window recording with the camera** (`cameraWindowId`, not the window
+  itself) is `SCContentFilter(display:including: [window, camera])` cut to the
+  window's frame at start: only those two windows are drawn, but the video does
+  not follow the window if it is moved. Without the camera it is
+  `desktopIndependentWindow` as before.
 - The camera stage is a window owned by the app (`owningApplication.processID
   == getppid()`), trimmed by `stageInset` (12 pt: the page's `p-1.5` margin
   plus the corner of `rounded-[18px]`) so its transparent corners and ring are
