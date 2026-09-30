@@ -1,9 +1,0 @@
-/*
- * The recording control bar is a small transparent always-on-top window.
- * Clear the shared root background at parse time (same reason as the overlay).
- */
-html,
-body {
-  background: transparent !important;
-  overflow: hidden;
-}

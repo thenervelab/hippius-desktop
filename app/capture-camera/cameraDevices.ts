@@ -1,3 +1,5 @@
+import { deviceIdByName } from "@/app/lib/capture/devices";
+import type { CapturePhase } from "@/app/lib/tauri/capture";
 import type { CaptureDevice } from "@/app/lib/tauri/capture";
 
 /**
@@ -34,17 +36,31 @@ export function resolveCameraId(
   deviceId: string | null,
   deviceName: string | null,
 ): string | null {
-  const cameras = devices.filter((d) => d.kind === "videoinput" && d.deviceId && d.deviceId !== "default");
-  if (deviceId && cameras.some((d) => d.deviceId === deviceId)) return deviceId;
-  if (!deviceName) return null;
-  const wanted = deviceName.trim().toLowerCase();
-  const exact = cameras.find((d) => d.label.trim().toLowerCase() === wanted);
-  // Some webviews add a USB vendor and product id to the label.
-  const loose = exact ?? cameras.find((d) => d.label.toLowerCase().includes(wanted));
-  return loose?.deviceId ?? null;
+  if (deviceId && devices.some((d) => d.kind === "videoinput" && d.deviceId === deviceId && deviceId !== "default")) {
+    return deviceId;
+  }
+  return deviceIdByName(devices, "videoinput", deviceName);
 }
 
 /** Whether the list names its cameras yet (it does once one has been opened). */
 export function camerasAreNamed(devices: Pick<MediaDeviceInfo, "kind" | "label">[]): boolean {
   return devices.some((d) => d.kind === "videoinput" && d.label.trim() !== "");
+}
+
+/**
+ * Whether the bubble's size strip is drawn. Only while choosing: the camera
+ * window is filmed with the screen, so a strip shown mid-recording ended up
+ * in the video. Unknown (the first read not back yet) counts as no.
+ */
+export function stripShown(phase: CapturePhase | null): boolean {
+  return phase?.phase === "selecting";
+}
+
+/**
+ * What the bubble's × does, named for the phase: while choosing it turns the
+ * camera off (saved in the options); while recording it only hides the
+ * bubble, and the pill brings it back.
+ */
+export function cameraCloseLabel(phase: CapturePhase | null): string {
+  return phase?.phase === "recording" || phase?.phase === "paused" ? "Hide camera" : "Turn camera off";
 }

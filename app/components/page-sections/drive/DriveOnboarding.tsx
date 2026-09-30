@@ -728,7 +728,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                "Sync a Folder" is easy to pick wrong — a mistake only
                discovered later, when the copy silently fails to track
                changes. */
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {/* Capture first: it files into the capture drive, not a
                   drive picked here, so it is not gated on canUpload. */}
               <CaptureMenu

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canRetry, cardView, destinationText } from "@/app/capture-preview/previewCard";
+import { canRetry, cardView, destinationText, wantsProgress, watchSyncRow } from "@/app/capture-preview/previewCard";
 import type { CapturePreviewCard } from "@/app/lib/tauri/capture";
 import type { RemoteUploadProgress } from "@/app/lib/remote-upload/remoteUploadFeed";
 import type { FileProgress } from "@/app/lib/types/syncSnapshot";
@@ -79,6 +79,55 @@ describe("a capture in a synced drive", () => {
   it("is done when the sync engine says so, not before", () => {
     expect(cardView(syncing, null, [engine({ status: "completed" })])).toMatchObject({ done: true, percent: 100 });
     expect(cardView(syncing, null, [engine({ status: "error" })])).toMatchObject({ failed: true, done: false });
+  });
+});
+
+describe("remembering what the sync engine did (the engine drops finished rows)", () => {
+  const syncing = card({ state: "syncing", linkCopied: true });
+  const snap = (files: FileProgress[], effectiveInProgress = true) => ({ files, effectiveInProgress });
+
+  // Replay: in flight, then the row finishes, then the next snapshot no
+  // longer lists it. The card must stay done, not fall back to "waiting".
+  it("stays done once the row finished, after the row has left the snapshots", () => {
+    let watch = watchSyncRow(null, syncing, snap([engine()]));
+    watch = watchSyncRow(watch, syncing, snap([engine({ status: "completed" })]));
+    watch = watchSyncRow(watch, syncing, snap([], false));
+    expect(cardView(syncing, null, [], watch)).toMatchObject({ done: true, text: "Uploaded · link copied" });
+  });
+
+  // The completed frame itself was never seen: in flight, then gone, with
+  // the engine quiet. That is finished too.
+  it("counts a row that was in flight and left a quiet engine as done", () => {
+    let watch = watchSyncRow(null, syncing, snap([engine()]));
+    watch = watchSyncRow(watch, syncing, snap([], true));
+    expect(watch.done).toBe(false);
+    watch = watchSyncRow(watch, syncing, snap([], false));
+    expect(cardView(syncing, null, [], watch).done).toBe(true);
+  });
+
+  // The engine can finish a small file while Rust is still minting the link,
+  // before the card says syncing; the card watches from the start.
+  it("remembers a finish seen while the card still said uploading", () => {
+    const uploading = card({ state: "uploading" });
+    const watch = watchSyncRow(null, uploading, snap([engine({ status: "completed" })]));
+    expect(cardView(syncing, null, [], watch).done).toBe(true);
+  });
+
+  it("never says done for a row it never saw, or for another card", () => {
+    const unseen = watchSyncRow(null, syncing, snap([], false));
+    expect(cardView(syncing, null, [], unseen).done).toBe(false);
+    const done = watchSyncRow(null, syncing, snap([engine({ status: "completed" })]));
+    expect(cardView({ ...syncing, id: 2 }, null, [], done).done).toBe(false);
+  });
+});
+
+describe("wantsProgress", () => {
+  it("listens only while there is an upload to follow", () => {
+    expect(wantsProgress(null)).toBe(false);
+    expect(wantsProgress(card({ state: "uploading" }))).toBe(true);
+    expect(wantsProgress(card({ state: "syncing", linkCopied: false }))).toBe(true);
+    expect(wantsProgress(card({ state: "uploaded", linkCopied: true }))).toBe(false);
+    expect(wantsProgress(card({ state: "failed", message: "x" }))).toBe(false);
   });
 });
 

@@ -7,6 +7,8 @@ paths:
   - "app/capture-preview/**"
   - "app/components/capture/**"
   - "app/lib/capture/**"
+  - "app/lib/tray/trayCaptureState.ts"
+  - "app/tray-panel/TrayCaptureButton.tsx"
   - "macos/HippiusCapture/**"
 ---
 
@@ -99,7 +101,8 @@ for the card.
 rows, each a switch plus a device menu) saves
 `CaptureOptions.{screen, camera, camera_device, camera_size, microphone_device}`
 at once. The mic row's level meter (`MicMeter`) opens the mic in the overlay
-webview, found by name (`inputIdByName`); it unmounts with the bar before
+webview, found by name (`deviceIdByName` in `app/lib/capture/devices.ts`,
+shared with the camera page); it unmounts with the bar before
 the countdown so it never holds the device while recording.
 `camera::wanted_shape` decides the window: while selecting it follows the
 options live (so the bubble can be placed before recording); from Record on it
@@ -119,7 +122,12 @@ then the window glides via `camera::resize_bubble`, which keeps a bubble in
 its corner or grows it from its centre, always on screen) and
 `capture_camera_dismiss` (camera off while choosing, bubble hidden
 mid-recording). Both emit `capture_options_changed` so the bar never saves a
-stale copy back. Hover comes from Rust (`capture_camera_hover`, polling the
+stale copy back. The strip exists only while the phase is `selecting`
+(`stripShown`, from `capture_state` + `capture_state_changed`): the camera
+window is filmed, so a strip shown mid-recording was in the video; the pill
+hides the bubble instead. While choosing it is always mounted, faded until
+hovered or focused, so Tab reaches it. No native `title` on this window.
+Hover comes from Rust (`capture_camera_hover`, polling the
 pointer against the frame) because a non-key window does not reliably get
 webview hover on macOS. Screen off = **stage**: a
 centred 16:9 window that `capture_confirm` records as `Selection::Window` by
@@ -142,8 +150,9 @@ camera fails silently. The pill can hide a bubble (`capture_camera_toggle`),
 never the stage.
 
 **Share picker** ("Choose what to share", `share.rs`,
-`app/capture-overlay/SharePicker`): the bar's Choose… button opens Window /
-Entire Screen tabs of live pictures. `capture_share_targets(first)` answers
+`app/capture-overlay/SharePicker`): the bar's "Choose window…" / "Choose
+screen…" button opens Window / Entire screen tabs of live pictures, with the
+frontmost window (or the bar's display) picked. `capture_share_targets(first)` answers
 the list plus whatever pictures are ready within `INLINE_BUDGET` (300 ms);
 the rest stream as `capture_share_art` batches tagged with a token, refreshed
 every `REFRESH_EVERY` until `capture_share_done(token)` or the choosing ends.
@@ -152,8 +161,10 @@ overlay only (`emit_to`): they are pictures of every window. The list drops Hipp
 own windows, untitled ones, system chrome (`HIDDEN_OWNERS`), off-screen ones
 and anything under 80x60 pt. Choosing calls the same `capture_select` as an
 overlay click. While it is open the picker owns Return / Escape / arrows (the
-overlay page skips its own key handler) and stops pointer events from
-reaching the selection surface, or a click would pick the window under it.
+overlay page skips its own key handler), traps Tab, returns focus to its
+opener on close, and stops pointer events from reaching the selection
+surface, or a click would pick the window under it. The grid is one Tab stop
+(roving `tabIndex`); `gridStep` moves the pick in two dimensions.
 Keep the logic module named `sharePickerState.ts`: a `sharePicker.ts` beside
 `SharePicker.tsx` resolves as the component's import on a case-insensitive
 disk.
@@ -163,7 +174,15 @@ prewarmed hidden at `capture_start`, shown when the file exists, bottom-right
 of the bar display's WORK area (`work_area`: NSScreen `visibleFrame`, not the
 full display, or it sits under the Dock), `focused(false)` + content-protected +
 `accept_first_mouse(true)` (never key, so without it every button needed two
-clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered.
+clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer bar
+stays mounted and pauses, or the card changes height under the pointer).
+It must fit 316 x 330 in every state: it sits at the window's bottom, so an
+overflow clips the TOP (the close button first). Hence the 16:9 picture and
+the one-line failure reason with the full text in `title`. It listens to
+upload progress only while `uploading` / `syncing` (`wantsProgress`): it is
+prewarmed hidden at every capture start. For a synced drive `watchSyncRow`
+remembers the engine finishing the file, because a finished row leaves later
+snapshots (until Rust owns that outcome).
 Rust owns its status (`uploading` → `syncing` / `uploaded` / `failed`),
 keyed by a per-capture `id` so a late outcome never lands on a newer card; progress comes from `remote_upload_progress`. A `syncing` card is moved
 on by Rust (`spawn_sync_follow`), following the engine's row by label +
@@ -182,12 +201,27 @@ folder emits `capture_show_in_folder` → `driveFolderRoute(label, remote,
 "Captures")` → the Drive page steps into the folder with the row's own
 `generateFolderUrl`. Retry re-runs `deliver_and_announce` on the kept file, to the card's own
 `destination` (not whatever the capture drive is now).
+`generateFolderUrl`. Retry re-runs `deliver_and_announce` on the kept file.
+`DriveContainer` handles each open request once (`shouldOpenFromUrl`, keyed on
+the params, not the mount: the page stays mounted across clicks) and waits
+one listing refresh for a subfolder that is not listed yet
+(`resolvePendingFolder`: a first capture creates Captures). Folder names
+compare in NFC and are never trimmed.
+
+**Recording pill:** Escape does nothing there (the pill turns key when
+clicked, so a stray Escape discarded recordings). The trash discards under
+`DISCARD_CONFIRM_SECS` (5 s) at once and asks first from then on. It drags by
+`data-tauri-drag-region` (`-webkit-app-region` is Electron-only), which needs
+`core:window:allow-start-dragging` in `capture-controls.json`.
 
 **Menu bar:** while recording, the tray title shows the time and a tray click
 calls `capture_stop` (`app/lib/tray/trayCaptureState.ts`). Title writes go
-through one serial queue seeded from `capture_state` and drop stale ones:
-async `setTitle` calls finish out of order, and a late "❚❚ 00:10" once stayed
-in the menu bar after the recording was saved.
+through one serial queue (`createTrayTitleQueue`) and drop stale ones: async
+`setTitle` calls finish out of order, and a late "❚❚ 00:10" once stayed in
+the menu bar after the recording was saved. `followCapturePhase` listens
+BEFORE it reads `capture_state` and drops that read if an event came first.
+The same "an event beats a late first read" rule holds in the pill, camera
+and card pages.
 
 **Sync queue Show in folder:** each row's folder button fires
 `requestOpenDriveFolder(driveFolderRoute(label, remote, parentOf(path)))`
@@ -244,7 +278,23 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   plain `show` activates it). Overlays are `destroy`ed, not closed, so a quick
   restart can reuse the label.
 - **Overlay / controls routes** have the tray panel's dev/export split and boot
-  provider-free in `AppShell`.
+  provider-free in `AppShell`. `AppShell`, `app/layout.tsx` and
+  `app/not-found.tsx` are in every window's first chunk list, so none of
+  them may import the app tree or a UI/hook/utils barrel statically
+  (`FullAppShell` and `NotFoundContent` load through `next/dynamic`). One
+  static import put 1.4 MB of polkadot, react-query and framer-motion into
+  each overlay; pinned by `app/components/__tests__/appShellSplit.test.ts`.
+- **Keyboard on the overlay.** An open bar menu owns the keyboard from a
+  capture-phase window listener (Escape closes only the menu and refocuses
+  its trigger; arrows / Home / End move; Return never reaches the page). The
+  page ignores Return and arrows that start on a control (`isFromControl`),
+  so Return on a focused bar button is the button's. Escape stops a running
+  countdown; once the capture is in flight it cancels. The countdown's live
+  region is always mounted.
+- **Floating-window styling** comes from `app/lib/capture/glass.ts` (one
+  glass, one accent, `GLASS_FOCUS`) and `floating-window.css` (transparent
+  window, system font). Text on the glass is never below white/60; every
+  `animate-*` carries `motion-reduce:animate-none`.
 - **Capabilities** (`capture-overlay.json`, `capture-controls.json`) must match
   the window labels and hold `core:` permissions only. The pill is dragged
   (`data-tauri-drag-region`), so its capability has
@@ -309,8 +359,11 @@ window recording must each finish with a playable file.
 ## Where Capture is offered
 
 The shortcut; Drive toolbar menu ("Open capture bar" + preselecting items),
-Files list (showPlanCard branch), Overview (`showCapture`), tray popover button
-(opens the bar on the last mode). Record modes only when
+Files list (showPlanCard branch), Overview (`showCapture`), tray popover's
+labelled Capture button (`TrayCaptureButton`, opens the bar on the last mode;
+its slot is held while support is asked). Mode names and icons come from
+`app/lib/capture/modes.ts` on every surface: "Capture an area / a window /
+entire screen". Record modes only when
 `capture_support.recording`. Settings › Sync & Storage has the Capture card
 (shortcut, drive). Pinned by `tests/capture_wiring.rs` (content protection,
 focus, capabilities, every command registered, retry path).

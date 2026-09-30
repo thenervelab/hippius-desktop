@@ -3,6 +3,7 @@
 import { useAtomValue } from "jotai";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { remoteUploadsAtom } from "@/app/lib/remote-upload/remoteUploadFeed";
+import { snapshotAtom } from "@/app/lib/hooks/useSyncSnapshot";
 import { rowPercent, uploadsInFolder } from "./uploadingHere";
 
 /** At most this many rows; the sync widget has the full list. */
@@ -10,10 +11,13 @@ const MAX_ROWS = 3;
 
 /**
  * "Uploading here": files on their way into this folder that are not in its
- * listing yet, with their progress. Renders nothing when there are none.
+ * listing yet, with their progress, whether they go up directly or through
+ * the sync engine (a capture saved into a drive synced here). Renders nothing
+ * when there are none.
  */
 export default function UploadingHereStrip({ label, subPath }: { label: string | null; subPath: string | null }) {
-  const rows = uploadsInFolder(useAtomValue(remoteUploadsAtom), label, subPath);
+  const snapshot = useAtomValue(snapshotAtom);
+  const rows = uploadsInFolder(useAtomValue(remoteUploadsAtom), label, subPath, snapshot.files);
   if (rows.length === 0) return null;
 
   return (
@@ -30,7 +34,7 @@ export default function UploadingHereStrip({ label, subPath }: { label: string |
             {failed ? (
               <AlertCircle className="size-4 shrink-0 text-error-50" />
             ) : (
-              <Loader2 className="size-4 shrink-0 animate-spin text-primary-50" />
+              <Loader2 className="size-4 shrink-0 animate-spin text-primary-50 motion-reduce:animate-none" />
             )}
             <span className="min-w-0 flex-1 truncate text-grey-10 dark:text-grey-light-100" title={row.fileName}>
               {failed ? `Couldn't upload ${row.fileName}` : `Uploading ${row.fileName}`}
@@ -39,7 +43,7 @@ export default function UploadingHereStrip({ label, subPath }: { label: string |
               <span className="flex w-28 shrink-0 items-center gap-2 max-sm:w-16">
                 <span className="h-1 flex-1 overflow-hidden rounded-full bg-grey-80 dark:bg-black-300">
                   <span
-                    className={`block h-full rounded-full bg-primary-50 transition-[width] duration-300 ${percent === null ? "w-1/4 animate-pulse" : ""}`}
+                    className={`block h-full rounded-full bg-primary-50 transition-[width] duration-300 ${percent === null ? "w-1/4 animate-pulse motion-reduce:animate-none" : ""}`}
                     style={percent === null ? undefined : { width: `${Math.max(4, percent)}%` }}
                   />
                 </span>

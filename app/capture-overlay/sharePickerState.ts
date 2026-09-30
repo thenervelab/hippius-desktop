@@ -60,12 +60,16 @@ export function displayCaption(d: Pick<ShareDisplay, "name" | "isPrimary">, inde
 }
 
 /**
- * What is picked when the picker opens: on the Entire Screen tab the display
- * the bar is on (else the main one), so Return shares it at once; on the
- * Window tab nothing, as a window has to be chosen.
+ * What is picked when the picker opens, so Return shares it at once: on the
+ * Entire screen tab the display the bar is on (else the main one); on the
+ * Window tab the frontmost window (Rust lists windows front first), as Loom
+ * does.
  */
 export function initialPick(tab: ShareTab, targets: ShareTargets, barDisplayId: number): SharePick | null {
-  if (tab === "window") return null;
+  if (tab === "window") {
+    const front = targets.windows[0];
+    return front ? { tab: "window", id: front.id } : null;
+  }
   const d =
     targets.displays.find((x) => x.id === barDisplayId) ??
     targets.displays.find((x) => x.isPrimary) ??
@@ -93,4 +97,35 @@ export function selectionFor(pick: SharePick): CaptureSelection {
 export function tileAspect(width: number, height: number): number {
   if (!(width > 0) || !(height > 0)) return 16 / 10;
   return Math.min(Math.max(width / height, 0.75), 2.4);
+}
+
+/**
+ * Where an arrow key moves the pick in a grid of `count` tiles laid out
+ * `columns` across: Left / Right step through the order (wrapping), Up / Down
+ * move a row and stay put at the top or bottom edge, Home / End jump to the
+ * ends. Null for any other key. `at` of -1 (nothing picked) starts at the
+ * first tile, or the last for Left / Up / End.
+ */
+export function gridStep(key: string, at: number, count: number, columns: number): number | null {
+  if (count <= 0) return null;
+  const cols = Math.max(1, Math.floor(columns));
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  if (at < 0) {
+    if (key === "ArrowRight" || key === "ArrowDown") return 0;
+    if (key === "ArrowLeft" || key === "ArrowUp") return count - 1;
+    return null;
+  }
+  switch (key) {
+    case "ArrowRight":
+      return (at + 1) % count;
+    case "ArrowLeft":
+      return (at - 1 + count) % count;
+    case "ArrowDown":
+      return at + cols < count ? at + cols : at;
+    case "ArrowUp":
+      return at - cols >= 0 ? at - cols : at;
+    default:
+      return null;
+  }
 }

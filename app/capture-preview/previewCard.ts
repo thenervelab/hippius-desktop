@@ -1,6 +1,7 @@
 import type { CapturePreviewCard } from "@/app/lib/tauri/capture";
 import type { RemoteUploadProgress } from "@/app/lib/remote-upload/remoteUploadFeed";
 import type { FileProgress } from "@/app/lib/types/syncSnapshot";
+import { cappedPercent } from "@/app/lib/upload-feed/percent";
 
 /**
  * What the capture card says, decided without React so it can be tested.
@@ -28,9 +29,37 @@ export interface CardView {
   linkCopied: boolean;
 }
 
-function percentOf(sent: number, total: number): number | null {
-  if (total <= 0) return null;
-  return Math.min(99, Math.round((sent / total) * 100));
+/**
+ * What this card has seen of its file in the sync engine's snapshots. The
+ * engine drops a finished row from later snapshots, and on a busy drive it
+ * can finish the file before the card is even told it is syncing (the share
+ * link is minted first), so "done" is remembered rather than read off the
+ * latest snapshot. Keyed by card id: a new capture starts over.
+ *
+ * Rust will own this outcome (it knows the file's relative path); until then
+ * this keeps the card from sitting on "waiting for sync" for an uploaded file.
+ */
+export interface SyncWatch {
+  cardId: number;
+  /** The row has been in a snapshot, in flight. */
+  seen: boolean;
+  /** The row finished, or left the snapshots once the engine went quiet. */
+  done: boolean;
+}
+
+export function watchSyncRow(
+  prev: SyncWatch | null,
+  card: CapturePreviewCard,
+  snapshot: { files: readonly FileProgress[]; effectiveInProgress: boolean },
+): SyncWatch {
+  const start = prev && prev.cardId === card.id ? prev : { cardId: card.id, seen: false, done: false };
+  if (start.done) return start;
+  const row = snapshot.files.find((f) => sameFile(card, f));
+  if (row?.status === "completed") return { ...start, seen: true, done: true };
+  if (row) return start.seen ? start : { ...start, seen: true };
+  // Seen in flight, now gone, and the engine has nothing left running: it finished.
+  if (start.seen && !snapshot.effectiveInProgress) return { ...start, done: true };
+  return start;
 }
 
 /** The upload row that belongs to this card, if the event is about it. */
@@ -42,11 +71,12 @@ export function cardView(
   card: CapturePreviewCard,
   remoteRow: RemoteUploadProgress | null,
   syncFiles: readonly FileProgress[],
+  syncWatch: SyncWatch | null = null,
 ): CardView {
   const status = card.status;
   switch (status.state) {
     case "uploading": {
-      const percent = sameFile(card, remoteRow) && remoteRow ? percentOf(remoteRow.bytesTransferred, remoteRow.totalBytes) : null;
+      const percent = sameFile(card, remoteRow) && remoteRow ? cappedPercent(remoteRow.bytesTransferred, remoteRow.totalBytes) : null;
       return {
         percent,
         text: percent === null ? "Preparing upload…" : `Uploading · ${percent}%`,
@@ -57,13 +87,14 @@ export function cardView(
     }
     case "syncing": {
       const row = syncFiles.find((f) => sameFile(card, f));
-      if (row?.status === "completed") {
+      const watchedDone = syncWatch?.cardId === card.id && syncWatch.done;
+      if (row?.status === "completed" || (watchedDone && row?.status !== "error")) {
         return { percent: 100, text: uploadedText(status.linkCopied), done: true, failed: false, linkCopied: status.linkCopied };
       }
       if (row?.status === "error") {
         return { percent: null, text: "Couldn't upload · the sync queue will retry", done: false, failed: true, linkCopied: status.linkCopied };
       }
-      const percent = row ? percentOf(row.bytesTransferred, row.totalBytes) : null;
+      const percent = row ? cappedPercent(row.bytesTransferred, row.totalBytes) : null;
       return {
         percent,
         text: percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`,
@@ -83,7 +114,7 @@ function uploadedText(linkCopied: boolean): string {
   return linkCopied ? "Uploaded · link copied" : "Uploaded · no link";
 }
 
-/** Where the file is going, as the card's first line reads it. */
+/** Where the file is going, on the card's own line under the status. */
 export function destinationText(card: CapturePreviewCard): string {
   return `${card.driveName} › Captures`;
 }
@@ -91,4 +122,9 @@ export function destinationText(card: CapturePreviewCard): string {
 /** Retry applies only to a direct upload that failed; the sync queue retries its own. */
 export function canRetry(card: CapturePreviewCard): boolean {
   return card.status.state === "failed";
+}
+
+/** Whether the card listens to upload progress: only while there is some to show. */
+export function wantsProgress(card: CapturePreviewCard | null): boolean {
+  return card?.status.state === "uploading" || card?.status.state === "syncing";
 }

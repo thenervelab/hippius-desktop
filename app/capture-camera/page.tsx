@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Circle, Maximize2, VideoOff, X } from "lucide-react";
-import "./capture-camera.css";
+import "@/app/lib/capture/floating-window.css";
 import {
   cancelCapture,
   dismissCaptureCamera,
@@ -13,8 +13,11 @@ import {
   setCaptureCameraSize,
   type CameraSize,
   type CaptureCameraState,
+  type CapturePhase,
 } from "@/app/lib/tauri/capture";
-import { camerasAreNamed, camerasFrom, resolveCameraId, videoConstraints } from "./cameraDevices";
+import { GLASS_FOCUS } from "@/app/lib/capture/glass";
+import { stepIndex } from "@/app/capture-overlay/keyNav";
+import { camerasAreNamed, camerasFrom, cameraCloseLabel, resolveCameraId, stripShown, videoConstraints } from "./cameraDevices";
 
 /**
  * The camera, Loom style: a round bubble over the screen (small or large), a
@@ -26,6 +29,12 @@ import { camerasAreNamed, camerasFrom, resolveCameraId, videoConstraints } from 
  * Not content-protected: the bubble is filmed with the screen on purpose.
  * Drag it anywhere; while choosing it sits above the dimmed overlay so it can
  * be placed before recording starts.
+ *
+ * The size strip exists only while choosing: this window is filmed, so a
+ * strip that appeared under the pointer mid-recording was in the video. The
+ * pill hides the bubble while recording. While choosing the strip is always
+ * in the page (faded out until the pointer or keyboard focus is on it), so
+ * Tab reaches it; the arrow keys move along it.
  */
 
 const SIZES: { size: CameraSize; label: string }[] = [
@@ -41,7 +50,10 @@ function SizeIcon({ size }: { size: CameraSize }) {
 
 export default function CaptureCameraPage() {
   const [camera, setCamera] = useState<CaptureCameraState | null>(null);
+  // The session's phase; null until known, and the strip waits for it.
+  const [phase, setPhase] = useState<CapturePhase | null>(null);
   const [failed, setFailed] = useState(false);
+  const stripRef = useRef<HTMLDivElement | null>(null);
   // Rust reports the pointer over the window (a window that is not key does
   // not always get the webview's own hover on macOS); the webview's own
   // events cover everywhere else.
@@ -56,9 +68,25 @@ export default function CaptureCameraPage() {
   const run = useRef(0);
 
   useEffect(() => {
-    void getCaptureCameraContext().then(setCamera).catch(() => undefined);
+    // The first reads can answer late (the context may start the helper to
+    // name the camera); an event that landed first is newer, so they give way.
+    let heardCamera = false;
+    let heardPhase = false;
+    void getCaptureCameraContext()
+      .then((c) => !heardCamera && setCamera(c))
+      .catch(() => undefined);
+    void getCaptureState()
+      .then((p) => !heardPhase && setPhase(p))
+      .catch(() => undefined);
     const unlisteners = [
-      listen<CaptureCameraState>("capture_camera_state", (e) => setCamera(e.payload)),
+      listen<CaptureCameraState>("capture_camera_state", (e) => {
+        heardCamera = true;
+        setCamera(e.payload);
+      }),
+      listen<CapturePhase>("capture_state_changed", (e) => {
+        heardPhase = true;
+        setPhase(e.payload);
+      }),
       listen<boolean>("capture_camera_hover", (e) => setHoverRust(e.payload)),
     ];
     return () => {
@@ -183,8 +211,19 @@ export default function CaptureCameraPage() {
   if (!camera?.shape || camera.hidden) return null;
   const bubble = camera.shape === "bubble";
   const round = bubble && camera.size !== "full";
-  // The strip is for the bubble only: the camera-only stage is the recording.
-  const showStrip = bubble && (hoverRust || hoverDom);
+  // The strip is for the bubble only (the camera-only stage is the
+  // recording), and only while choosing.
+  const hasStrip = bubble && stripShown(phase);
+  const hovered = hoverRust || hoverDom;
+  const closeLabel = cameraCloseLabel(phase);
+
+  const onStripKey = (e: React.KeyboardEvent) => {
+    const buttons = Array.from(stripRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+    const next = stepIndex(e.key, buttons.indexOf(document.activeElement as HTMLButtonElement), buttons.length, "horizontal");
+    if (next === null) return;
+    e.preventDefault();
+    buttons[next]?.focus();
+  };
 
   return (
     <div
@@ -195,7 +234,6 @@ export default function CaptureCameraPage() {
     >
       <div
         data-tauri-drag-region
-        title="Drag to move"
         className={`relative h-full w-full cursor-grab overflow-hidden bg-[#1c1d21] shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-2 ring-white/85 active:cursor-grabbing ${
           round ? "rounded-full" : "rounded-[18px]"
         }`}
@@ -222,23 +260,26 @@ export default function CaptureCameraPage() {
           />
         )}
 
-        {showStrip && (
+        {hasStrip && (
           <div
+            ref={stripRef}
             role="toolbar"
             aria-label="Camera size"
-            className={`absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-black/70 p-1 text-white shadow-lg backdrop-blur ${
+            onKeyDown={onStripKey}
+            className={`absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-[#000]/70 p-1 text-white shadow-lg backdrop-blur transition-opacity duration-150 motion-reduce:transition-none ${
               round ? "bottom-[14%]" : "bottom-3"
-            }`}
+            } ${hovered ? "opacity-100" : "pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100"}`}
           >
-            {SIZES.map(({ size, label }) => (
+            {SIZES.map(({ size, label }, i) => (
               <button
                 key={size}
                 type="button"
                 aria-label={label}
                 aria-pressed={camera.size === size}
-                title={label}
+                // One Tab stop into the strip; the arrows move along it.
+                tabIndex={camera.size === size || (i === 0 && !SIZES.some((x) => x.size === camera.size)) ? 0 : -1}
                 onClick={() => void setCaptureCameraSize(size).catch(() => undefined)}
-                className={`grid size-7 place-items-center rounded-full transition-colors ${
+                className={`grid size-7 place-items-center rounded-full transition-colors ${GLASS_FOCUS} ${
                   camera.size === size ? "bg-white/25" : "hover:bg-white/15"
                 }`}
               >
@@ -248,10 +289,10 @@ export default function CaptureCameraPage() {
             <span aria-hidden className="mx-0.5 h-4 w-px bg-white/25" />
             <button
               type="button"
-              aria-label="Hide camera"
-              title="Hide camera"
+              aria-label={closeLabel}
+              tabIndex={-1}
               onClick={() => void dismissCaptureCamera().catch(() => undefined)}
-              className="grid size-7 place-items-center rounded-full hover:bg-white/15"
+              className={`grid size-7 place-items-center rounded-full hover:bg-white/15 ${GLASS_FOCUS}`}
             >
               <X className="size-3.5" />
             </button>
