@@ -445,12 +445,12 @@ export default function CaptureOverlayPage() {
           }}
         >
           {mode === "area" && isRealDrag(highlight) && !counting && (
-            <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md bg-black/60 px-2 py-0.5 text-xs font-medium tabular-nums text-white">
+            <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md bg-[#000]/60 px-2 py-0.5 text-xs font-medium tabular-nums text-white">
               {sizeLabel(highlight)}
             </span>
           )}
           {mode === "window" && hovered && !counting && (
-            <span className="absolute left-1/2 top-1/2 flex max-w-[80%] -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/75 px-3.5 py-2 text-sm font-medium text-white shadow-lg">
+            <span className="absolute left-1/2 top-1/2 flex max-w-[80%] -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-[#000]/75 px-3.5 py-2 text-sm font-medium text-white shadow-lg">
               <KindIcon className="size-4 shrink-0" />
               <span className="truncate">{hovered.appName || hovered.title || "Window"}</span>
             </span>
@@ -473,7 +473,7 @@ export default function CaptureOverlayPage() {
       {screenLit && (
         <div className="pointer-events-none absolute inset-0" style={{ outline: `3px solid ${FRAME}`, outlineOffset: -3 }}>
           {!counting && (
-            <span className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-lg">
+            <span className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-[#000]/70 px-4 py-2 text-sm font-medium text-white shadow-lg">
               <KindIcon className="size-4" />
               {kind === "recording" ? "Click to record this screen" : "Click to capture this screen"}
             </span>
@@ -490,7 +490,7 @@ export default function CaptureOverlayPage() {
       {countdown !== null && countdown > 0 && (
         <div
           aria-hidden
-          className="pointer-events-none absolute grid size-24 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-5xl font-semibold tabular-nums text-white"
+          className="pointer-events-none absolute grid size-24 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-[#000]/60 text-5xl font-semibold tabular-nums text-white"
           style={{
             left: highlight ? highlight.x + highlight.width / 2 : "50%",
             // Camera only: the stage fills the middle and sits above this

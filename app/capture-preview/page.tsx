@@ -190,13 +190,13 @@ export default function CapturePreviewPage() {
             </div>
           )}
           {card.kind === "recording" && (
-            <span className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-medium">
+            <span className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-full bg-[#000]/60 px-2 py-0.5 text-[11px] font-medium">
               <Video className="size-3" /> Recording
             </span>
           )}
           {!canRetry(card) && (
-            <span className="pointer-events-none absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition duration-150 group-hover:bg-black/35 group-hover:opacity-100 motion-reduce:transition-none">
-              <span className="flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-[12px] font-medium">
+            <span className="pointer-events-none absolute inset-0 grid place-items-center bg-[#000]/0 opacity-0 transition duration-150 group-hover:bg-[#000]/35 group-hover:opacity-100 motion-reduce:transition-none">
+              <span className="flex items-center gap-1.5 rounded-full bg-[#000]/70 px-3 py-1 text-[12px] font-medium">
                 <FolderOpen className="size-3.5" /> Show in folder
               </span>
             </span>

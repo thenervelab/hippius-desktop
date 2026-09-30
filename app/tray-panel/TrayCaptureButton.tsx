@@ -18,7 +18,9 @@ import { getCaptureSupport } from "@/app/lib/tauri/capture";
  * the capture hides it again at once, and the flash would be all the user saw.
  *
  * Its slot is held while `capture_support` is being asked, so the header's
- * other buttons do not jump sideways when it arrives.
+ * other buttons do not jump sideways when it arrives. Text is `text-grey-10`,
+ * not `text-black`: the theme's `black` is a scale with no default, so
+ * `text-black` generates no colour at all.
  */
 export default function TrayCaptureButton() {
   const [supported, setSupported] = useState<boolean | null>(SCREEN_CAPTURE_ENABLED ? null : false);
@@ -38,7 +40,7 @@ export default function TrayCaptureButton() {
       aria-hidden={pending || undefined}
       tabIndex={pending ? -1 : undefined}
       title="Take a screenshot or start a recording (opens the capture bar)"
-      className={`relative flex h-9 items-center gap-1.5 rounded-lg px-2.5 font-geist text-[13px] font-medium text-black transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/10 ${
+      className={`relative flex h-9 items-center gap-1.5 rounded-lg px-2.5 font-geist text-[13px] font-medium text-grey-10 transition-colors hover:bg-[rgba(0,0,0,0.05)] dark:text-white dark:hover:bg-white/10 ${
         pending ? "invisible" : ""
       }`}
     >

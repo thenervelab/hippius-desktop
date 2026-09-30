@@ -266,7 +266,7 @@ export default function CaptureCameraPage() {
             role="toolbar"
             aria-label="Camera size"
             onKeyDown={onStripKey}
-            className={`absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-black/70 p-1 text-white shadow-lg backdrop-blur transition-opacity duration-150 motion-reduce:transition-none ${
+            className={`absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-[#000]/70 p-1 text-white shadow-lg backdrop-blur transition-opacity duration-150 motion-reduce:transition-none ${
               round ? "bottom-[14%]" : "bottom-3"
             } ${hovered ? "opacity-100" : "pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100"}`}
           >

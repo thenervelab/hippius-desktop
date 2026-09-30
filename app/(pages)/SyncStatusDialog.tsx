@@ -354,7 +354,7 @@ const SyncFileItem = memo<SyncFileItemProps>(
                   event.stopPropagation();
                   onShowInFolder(file);
                 }}
-                className="-my-1 grid size-6 shrink-0 place-items-center rounded-[4px] text-grey-10/50 hover:bg-black/5 hover:text-grey-10 dark:text-white/50 dark:hover:bg-white/10 dark:hover:text-white"
+                className="-my-1 grid size-6 shrink-0 place-items-center rounded-[4px] text-grey-10/50 hover:bg-[#000]/5 hover:text-grey-10 dark:text-white/50 dark:hover:bg-white/10 dark:hover:text-white"
               >
                 <FolderOpen className="size-3.5" />
               </button>

@@ -44,3 +44,13 @@ describe("the tray's Capture button", () => {
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 });
+
+// The theme's `black` is a scale with no DEFAULT, so `text-black` compiles to
+// nothing and the label would take whatever colour it inherits.
+it("draws its label in a colour the theme defines, in both themes", async () => {
+  tauri.onInvoke("capture_support", () => ({ supported: true, recording: true }));
+  render(<TrayCaptureButton />);
+  const button = await screen.findByRole("button", { name: "Capture" });
+  expect(button).toHaveClass("text-grey-10", "dark:text-white");
+  expect(button).not.toHaveClass("text-black");
+});

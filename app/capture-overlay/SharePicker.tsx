@@ -92,7 +92,7 @@ function Tile({
         picked ? "bg-[#3167DD]/25 ring-2 ring-[#3167DD]" : "hover:bg-white/[0.07]"
       }`}
     >
-      <span className="grid h-[132px] w-full place-items-center overflow-hidden rounded-[8px] bg-black/40">
+      <span className="grid h-[132px] w-full place-items-center overflow-hidden rounded-[8px] bg-[#000]/40">
         {thumbnail ? (
           <img src={thumbnail} alt="" className="max-h-full max-w-full object-contain" draggable={false} />
         ) : (
@@ -252,7 +252,7 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
 
   return (
     <div
-      className="absolute inset-0 z-20 grid place-items-center bg-black/35 px-4"
+      className="absolute inset-0 z-20 grid place-items-center bg-[#000]/35 px-4"
       // The picker is a dialog over the selection surface, which must not
       // see its clicks (a click would pick the window underneath).
       onPointerDown={(e) => {
@@ -278,7 +278,7 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
           <p className={`mt-0.5 text-[12.5px] ${GLASS_MUTED}`}>
             Hippius will {verb} the {tab === "window" ? "window" : "screen"} you choose.
           </p>
-          <div role="tablist" aria-label="What to share" className="mt-3 inline-flex rounded-[9px] bg-black/35 p-0.5">
+          <div role="tablist" aria-label="What to share" className="mt-3 inline-flex rounded-[9px] bg-[#000]/35 p-0.5">
             {TABS.map(({ tab: t, label, Icon }) => (
               <button
                 key={t}

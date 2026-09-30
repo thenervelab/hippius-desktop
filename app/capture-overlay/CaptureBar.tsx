@@ -610,7 +610,7 @@ export default function CaptureBar(props: Props) {
     >
       {/* Polite: a refusal ("Drag to choose an area first") replaces the
           hint, and a screen reader should hear it. */}
-      <p role="status" aria-live="polite" className="rounded-full bg-black/70 px-3.5 py-1.5 text-[13px] text-white/90 shadow-lg">
+      <p role="status" aria-live="polite" className="rounded-full bg-[#000]/70 px-3.5 py-1.5 text-[13px] text-white/90 shadow-lg">
         {hint}
       </p>
       {kind === "recording" && (
