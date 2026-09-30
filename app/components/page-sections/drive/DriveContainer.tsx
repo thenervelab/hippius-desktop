@@ -110,6 +110,9 @@ import { toast } from "sonner";
 import { cn } from "@/app/lib/utils";
 import UploadingHereStrip from "./UploadingHereStrip";
 import { resolvePendingFolder, shouldOpenFromUrl, type PendingFolder } from "./openFolderPath";
+import { invoke } from "@tauri-apps/api/core";
+import { HIGHLIGHT_OPEN_LIMIT_MS, type HighlightRequest } from "./highlightEntry";
+import { useDriveHighlight } from "./useDriveHighlight";
 
 /**
  * Rows per page in the browsed file list.
@@ -378,6 +381,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const urlOpenRemote = getParam("openRemote") === "1";
   // …and one level into it (a capture's "Show in folder" → Captures).
   const urlOpenSubfolder = getParam("openSubfolder");
+  // …and the file in it to point out ("Show in folder" on a capture's card
+  // or a sync queue row).
+  const urlOpenFile = getParam("openFile");
+  // The subfolder to step into once the drive's rows have loaded. A ref, not
+  // the param: the param is cleared as soon as the drive opens.
+  const pendingSubfolderRef = useRef<PendingFolder | null>(null);
+  // The file to point out once its folder is listed (`useDriveHighlight`).
+  const [highlightRequest, setHighlightRequest] = useState<HighlightRequest | null>(null);
   const urlMainReqHash = getParam("mainReqHash");
   const isNested =
     !isRecentFiles &&
@@ -998,6 +1009,77 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   } = nestedListing;
   const remoteHasMore = isRemoteView && remoteListingHasMore;
   const effectiveHasMore = hasMore || remoteHasMore;
+
+  // "Show in folder" → point the file out once its folder is listed.
+  //
+  // Which page holds it depends on the order the level is SHOWN in. A local
+  // level in list view is sorted by the table (its comparators live there),
+  // so the table reports that order while a request is pending; the card
+  // view shows the level unsorted; a server-paged level is the page in hand
+  // and Rust walks the server's pages to find the one that lists it.
+  const [tableOrder, setTableOrder] = useState<{
+    source: readonly FormattedUserFile[];
+    rows: readonly FormattedUserFile[];
+  } | null>(null);
+  const handleSortedLevel = useCallback(
+    (source: readonly FormattedUserFile[], rows: readonly FormattedUserFile[]) =>
+      setTableOrder({ source, rows }),
+    [],
+  );
+  const needsTableOrder = viewMode === "list" && !browsePagedOnServer;
+  const tableOrderReady = !needsTableOrder || tableOrder?.source === statusFilteredData;
+  const highlightOrdered =
+    needsTableOrder && tableOrder?.source === statusFilteredData
+      ? tableOrder.rows
+      : statusFilteredData;
+  const clearHighlightRequest = useCallback(() => {
+    setHighlightRequest(null);
+    setTableOrder(null);
+  }, []);
+  const refreshHighlightListing = useCallback(() => {
+    if (isNested || isRemoteRoot) refreshNestedListing();
+    else void refetchUserFiles();
+  }, [isNested, isRemoteRoot, refreshNestedListing, refetchUserFiles]);
+  const highlightSubfolder = isNested ? (urlSubFolderPath ?? "") : "";
+  const locateHighlight = useCallback(
+    (name: string) =>
+      invoke<number | null>("locate_remote_folder_entry", {
+        accountId: polkadotAddress,
+        label: remoteUploadLabel ?? "",
+        subfolder: highlightSubfolder,
+        name,
+        pageSize: browsePageSize,
+        sortBy: browseSort.sortBy ?? null,
+        sortOrder: browseSort.sortDir ?? null,
+        ownerSs58: browsedSharedDrive?.ownerSs58 ?? null,
+        folderHash: browsedSharedDrive?.folderHash ?? null,
+      }),
+    [
+      polkadotAddress,
+      remoteUploadLabel,
+      highlightSubfolder,
+      browsePageSize,
+      browseSort.sortBy,
+      browseSort.sortDir,
+      browsedSharedDrive?.ownerSs58,
+      browsedSharedDrive?.folderHash,
+    ],
+  );
+  useDriveHighlight({
+    request: highlightRequest,
+    onDone: clearHighlightRequest,
+    level: { label: filterDriveLabel, folder: isRecentFiles || isOnLocalView ? null : highlightSubfolder },
+    ready: !isLoading && tableOrderReady && pendingSubfolderRef.current === null,
+    ordered: highlightOrdered,
+    rendered: browsePageRows ?? visibleData,
+    serverPaged: browsePagedOnServer,
+    paged: browsePagingActive,
+    page: browsePage,
+    pageSize: browsePageSize,
+    setPage: setBrowsePage,
+    refresh: refreshHighlightListing,
+    locate: locateHighlight,
+  });
   const effectiveLoadMore = useCallback(() => {
     if (hasMore) {
       loadMore();
@@ -1574,18 +1656,29 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // of it. Keyed on the request, not the mount (`shouldOpenFromUrl`): this
   // page stays mounted across "Show in folder" clicks.
   const openedFromUrlRef = useRef<string | null>(null);
-  // The subfolder to step into once the drive's rows have loaded. A ref, not
-  // the param: the param is cleared as soon as the drive opens.
-  const pendingSubfolderRef = useRef<PendingFolder | null>(null);
   useEffect(() => {
     const decision = shouldOpenFromUrl(openedFromUrlRef.current, {
       label: urlOpenLabel,
       remote: Boolean(urlOpenRemote),
       subfolder: urlOpenSubfolder || null,
+      file: urlOpenFile || null,
     });
     openedFromUrlRef.current = decision.key;
     if (!decision.open || !urlOpenLabel) return;
     pendingSubfolderRef.current = urlOpenSubfolder ? { path: urlOpenSubfolder, missedOn: null } : null;
+    // Pointed out once its folder is listed (`useDriveHighlight`). A folder
+    // that never opens drops it after HIGHLIGHT_OPEN_LIMIT_MS, so it cannot
+    // fire later when the user browses there on their own.
+    setHighlightRequest(
+      urlOpenFile
+        ? {
+            label: urlOpenLabel,
+            folder: urlOpenSubfolder || "",
+            name: urlOpenFile,
+            until: Date.now() + HIGHLIGHT_OPEN_LIMIT_MS,
+          }
+        : null,
+    );
     if (urlOpenRemote) {
       handleSelectRemoteFolderFromCards(urlOpenLabel);
     } else {
@@ -1596,6 +1689,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     urlOpenLabel,
     urlOpenRemote,
     urlOpenSubfolder,
+    urlOpenFile,
     handleSelectFolderFromCards,
     handleSelectRemoteFolderFromCards,
     router,
@@ -2193,6 +2287,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 // itself and gets a globally correct order for free.
                 serverSorted={browsePagedOnServer}
                 windowStart={browseWindowStart}
+                // Only while a "Show in folder" is pending: reporting the
+                // sorted level costs a pass over it on every sort.
+                onSortedLevel={highlightRequest ? handleSortedLevel : undefined}
                 newFolderTarget={newFolderTarget}
                 onSyncPathConfigured={
                   isRecentFiles ? handleNavigateToSettings : handleStartSyncing

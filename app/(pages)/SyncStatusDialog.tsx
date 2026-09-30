@@ -4,7 +4,7 @@ import { ChevronDown, ChevronUp, FolderOpen } from "lucide-react";
 import { driveFolderRoute } from "@/app/lib/routes";
 import { requestOpenDriveFolder } from "@/app/lib/drive/openDriveFolder";
 import { driveStatusesAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { parentOf } from "@/app/components/page-sections/drive/uploadingHere";
+import { baseNameOf, parentOf } from "@/app/components/page-sections/drive/uploadingHere";
 import React, {
   memo,
   useCallback,
@@ -425,7 +425,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     (file: FileProgress) => {
       if (!file.label) return;
       const remote = !driveStatuses.has(file.label);
-      requestOpenDriveFolder(driveFolderRoute(file.label, remote, parentOf(file.path) || undefined));
+      // The file's own name too, so the folder opens with its row pointed out.
+      requestOpenDriveFolder(
+        driveFolderRoute(file.label, remote, parentOf(file.path) || undefined, baseNameOf(file.path) || undefined),
+      );
     },
     [driveStatuses],
   );

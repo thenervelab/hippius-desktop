@@ -109,6 +109,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   the bar on a small screen.
 - **A failed capture upload is reported once**, on its card, instead of on the
   card and in a pop-up in Hippius as well.
+- **The recording time leaves the menu bar as soon as you stop.** It could
+  stay there, frozen, after the recording was saved, and the Hippius icon
+  stopped opening its menu. Clicking the icon while recording now brings the
+  recording controls back instead of stopping at once.
+- **Show in folder points out the file.** From a capture's card or the sync
+  queue, the folder opens on the page that holds the file, scrolls to it and
+  highlights it for a few seconds, even in a folder of dozens of files.
 
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.
@@ -176,7 +183,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   recording: 3 seconds unless you pick none or 5 in Options, and clicking the
   number or pressing Return starts at once. A small pill shows the time, the
   microphone, pause, restart, stop and discard, and the menu bar shows the time
-  too: click the Hippius icon to stop. Needs macOS 13+, with the microphone and click rings on macOS 15+.
+  too: click the Hippius icon to bring the controls back. Needs macOS 13+, with the microphone and click rings on macOS 15+.
   Screenshots work on Mac and Windows; Windows recording follows later.
   Available in internal builds first.
 - **Sharp recordings that keep what you recorded (Mac).** Recordings are

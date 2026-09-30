@@ -90,6 +90,14 @@ describe("shouldOpenFromUrl", () => {
     expect(shouldOpenFromUrl(first.key, { ...request, label: "Photos" }).open).toBe(true);
   });
 
+  // Two captures in the same folder, one after the other: the second one's
+  // file must be pointed out too.
+  it("treats another file in the same folder as a new request", () => {
+    const first = shouldOpenFromUrl(null, { ...request, file: "a.png" });
+    expect(shouldOpenFromUrl(first.key, { ...request, file: "b.png" }).open).toBe(true);
+    expect(shouldOpenFromUrl(first.key, { ...request, file: "a.png" }).open).toBe(false);
+  });
+
   it("does not open the same request twice while its params are still there", () => {
     const first = shouldOpenFromUrl(null, request);
     expect(shouldOpenFromUrl(first.key, request)).toEqual({ open: false, key: first.key });

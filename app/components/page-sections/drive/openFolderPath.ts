@@ -67,7 +67,8 @@ export function resolvePendingFolder(
 
 /**
  * Whether the Drive page should open the folder its URL asks for
- * (`openLabel`, `openRemote`, `openSubfolder`), keyed on the request rather
+ * (`openLabel`, `openRemote`, `openSubfolder`, and `openFile`, the file to
+ * point out in it), keyed on the request rather
  * than the mount: the page stays mounted across "Show in folder" clicks, so a
  * mount-once guard left every click after the first dead. The page clears the
  * params once it has opened the folder, which is what lets the same folder be
@@ -76,9 +77,9 @@ export function resolvePendingFolder(
  */
 export function shouldOpenFromUrl(
   lastHandled: string | null,
-  request: { label: string | null; remote: boolean; subfolder: string | null },
+  request: { label: string | null; remote: boolean; subfolder: string | null; file?: string | null },
 ): { open: boolean; key: string | null } {
   if (!request.label) return { open: false, key: null };
-  const key = JSON.stringify([request.label, request.remote, request.subfolder ?? ""]);
+  const key = JSON.stringify([request.label, request.remote, request.subfolder ?? "", request.file ?? ""]);
   return { open: key !== lastHandled, key };
 }

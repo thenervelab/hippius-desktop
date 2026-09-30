@@ -25,6 +25,7 @@ import { useFileSelection } from '@/app/contexts/FileSelectionContext';
 import { useRouter } from "next/navigation";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
+import { entryKey } from "../highlightEntry";
 /** Card thumbnail resolution — shared by the resolve and the evict-on-error. */
 const CARD_THUMB_MAX_DIM = 256;
 
@@ -240,6 +241,8 @@ const FileCard: React.FC<FileCardProps> = ({
   return (
     <div
       ref={cardRef}
+      // "Show in folder" finds the card by this (`highlightEntry.ts`).
+      data-drive-entry={entryKey(file)}
       className={cn(
         "w-full relative border rounded-[5px] overflow-hidden h-[220px] flex flex-col transition-all duration-200",
         // Folder containers use a subtle grey/dark background; files stay white/black-500.

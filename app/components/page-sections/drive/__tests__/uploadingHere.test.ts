@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parentOf, rowPercent, uploadsInFolder } from "../uploadingHere";
+import { baseNameOf, parentOf, rowPercent, uploadsInFolder } from "../uploadingHere";
 import type { RemoteUploadProgress } from "@/app/lib/remote-upload/remoteUploadFeed";
 import type { FileProgress } from "@/app/lib/types/syncSnapshot";
 
@@ -73,6 +73,12 @@ describe("helpers", () => {
     expect(parentOf("Captures/a.mp4")).toBe("Captures");
     expect(parentOf("/a/b/c.png")).toBe("a/b");
     expect(parentOf("a.png")).toBe("");
+  });
+
+  it("finds a path's own name", () => {
+    expect(baseNameOf("Captures/2026/Recording.mp4")).toBe("Recording.mp4");
+    expect(baseNameOf("/a.png")).toBe("a.png");
+    expect(baseNameOf("Notes /a b.txt")).toBe("a b.txt");
   });
 
   it("has no percentage until bytes move", () => {

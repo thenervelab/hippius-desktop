@@ -124,6 +124,7 @@ use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files
 use crate::sync::rekey_probe::probe_rekey_recovery;
 use crate::sync::remote::{
     cache_remote_file, download_remote_file, folder_grant_stats, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped,
+    locate_remote_folder_entry,
 };
 use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, rename_remote_folder};
 use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
@@ -450,6 +451,7 @@ fn main() {
             rename_remote_folder,
             create_remote_folder,
             list_remote_folder_grouped,
+            locate_remote_folder_entry,
             folder_grant_stats,
             download_remote_file,
             cache_remote_file,

@@ -70,7 +70,9 @@ export default function CaptureHost() {
       // The system-wide shortcut opens the bar on whatever was used last.
       listen("capture_shortcut_pressed", () => void startCapture()),
       listen<CaptureShowInFolder>("capture_show_in_folder", (e) => {
-        router.push(driveFolderRoute(e.payload.label, e.payload.remote, e.payload.subfolder));
+        router.push(
+          driveFolderRoute(e.payload.label, e.payload.remote, e.payload.subfolder, e.payload.fileName || undefined),
+        );
       }),
       // The card's Upgrade (the plan is full): the plans, where every upgrade prompt goes.
       listen("capture_open_plans", () => router.push(BILLING_ROUTE)),

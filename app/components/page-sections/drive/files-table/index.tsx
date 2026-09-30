@@ -111,6 +111,7 @@ import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { Refresh } from "@/components/ui/icons";
+import { entryKey } from "../highlightEntry";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -387,6 +388,8 @@ const DriveFileRow = memo(function DriveFileRow({
   return (
     <>
       <TableModule.Tr
+        // "Show in folder" finds the row by this (`highlightEntry.ts`).
+        data-drive-entry={entryKey(rowData)}
         rowHover={!isDeleting}
         transparent
         className={cn(
@@ -510,6 +513,12 @@ interface FilesTableProps {
    * page one's rows on every page.
    */
   windowStart?: number;
+  /**
+   * Receives `allFiles` and the level in the order this table sorts it, so
+   * "Show in folder" can page to a file: the comparators live here, and a
+   * page is a window of THIS order. Passed only while such a request waits.
+   */
+  onSortedLevel?: (source: readonly FormattedUserFile[], rows: readonly FormattedUserFile[]) => void;
   isRecentFiles?: boolean;
   sharedState?: FileViewSharedState;
   handleFileDownload: (
@@ -562,6 +571,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     files,
     allFiles,
     windowStart = 0,
+    onSortedLevel,
     isRecentFiles = false,
     sharedState,
     handleFileDownload,
@@ -1898,6 +1908,14 @@ const FilesTable: FC<FilesTableProps> = memo(
     // is on screen. The start matters as much as the length once the window
     // is a page: sorting the level and then always rendering its first page
     // is what made sorting look broken from page two onwards.
+    useEffect(() => {
+      if (!onSortedLevel) return;
+      onSortedLevel(
+        allFiles,
+        table.getRowModel().rows.map((row) => row.original),
+      );
+    }, [onSortedLevel, allFiles, table, enrichedAllFiles, sorting]);
+
     const visibleRows = useMemo(() => {
       return table
         .getRowModel()

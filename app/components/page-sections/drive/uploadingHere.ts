@@ -18,6 +18,12 @@ export function parentOf(path: string): string {
   return i === -1 ? "" : trimmed.slice(0, i);
 }
 
+/** The last segment of a drive-relative path: the file's own name. */
+export function baseNameOf(path: string): string {
+  const trimmed = path.replace(/^\/+|\/+$/g, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1);
+}
+
 /** One row of the strip, whichever feed it came from. */
 export interface UploadingRow {
   path: string;

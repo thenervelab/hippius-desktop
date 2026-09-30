@@ -11,6 +11,14 @@ describe("driveFolderRoute", () => {
     expect(driveFolderRoute("Work", false)).not.toContain("openSubfolder");
   });
 
+  // "Show in folder" points the file out once the folder is open.
+  it("carries the file to point out, encoded", () => {
+    const url = new URL(driveFolderRoute("Work", false, "Captures", "Screen Recording 2026 #1.mp4"), "http://x");
+    expect(url.searchParams.get("openSubfolder")).toBe("Captures");
+    expect(url.searchParams.get("openFile")).toBe("Screen Recording 2026 #1.mp4");
+    expect(driveFolderRoute("Work", false, "Captures")).not.toContain("openFile");
+  });
+
   it("names the folder to open", () => {
     expect(driveFolderRoute("chains", false)).toBe("/files?openLabel=chains");
   });

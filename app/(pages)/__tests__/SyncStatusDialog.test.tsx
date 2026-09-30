@@ -108,6 +108,8 @@ describe("SyncStatusDialog", () => {
     expect(params.get("openLabel")).toBe("Work");
     // The whole path to the file's folder, not just the first level.
     expect(params.get("openSubfolder")).toBe("Captures/2026");
+    // And the file itself, so the folder opens with its row pointed out.
+    expect(params.get("openFile")).toBe("Recording.mp4");
     // No drive status here means the drive is not synced on this machine.
     expect(params.get("openRemote")).toBe("1");
   });

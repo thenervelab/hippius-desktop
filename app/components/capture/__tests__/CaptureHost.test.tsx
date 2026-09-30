@@ -71,7 +71,8 @@ describe("CaptureHost", () => {
     await act(() =>
       tauri.emitEvent("capture_show_in_folder", { label: "Work", remote: false, subfolder: "Captures", fileName: "a.png" }),
     );
-    expect(h.push).toHaveBeenCalledWith("/files?openLabel=Work&openSubfolder=Captures");
+    // The capture's own name rides along, so its row is pointed out.
+    expect(h.push).toHaveBeenCalledWith("/files?openLabel=Work&openSubfolder=Captures&openFile=a.png");
   });
 
   it("refreshes the file lists when a capture lands, and says when one failed", async () => {

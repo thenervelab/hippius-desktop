@@ -7,7 +7,9 @@ paths:
   - "app/capture-preview/**"
   - "app/components/capture/**"
   - "app/lib/capture/**"
-  - "app/lib/tray/trayCaptureState.ts"
+  - "src-tauri/src/tray/**"
+  - "app/components/page-sections/drive/highlightEntry.ts"
+  - "app/components/page-sections/drive/useDriveHighlight.ts"
   - "app/tray-panel/TrayCaptureButton.tsx"
   - "macos/HippiusCapture/**"
 ---
@@ -218,8 +220,9 @@ path. A failed card closed by the user is PARKED and comes back on the
 next `capture_start`, until retried or discarded. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in
 folder emits `capture_show_in_folder` → `driveFolderRoute(label, remote,
-"Captures")` → the Drive page steps into the folder with the row's own
-`generateFolderUrl`. Retry re-runs `deliver_and_announce` on the kept file, to
+"Captures", fileName)` → the Drive page steps into the folder with the row's
+own `generateFolderUrl`, then points the file out (see "Show in folder points
+the file out" below). Retry re-runs `deliver_and_announce` on the kept file, to
 the card's own `destination` (not whatever the capture drive is now).
 `DriveContainer` handles each open request once (`shouldOpenFromUrl`, keyed on
 the params, not the mount: the page stays mounted across clicks) and waits
@@ -237,19 +240,49 @@ when its `seq` is newer than the one it shows. It drags by
 `data-tauri-drag-region` (`-webkit-app-region` is Electron-only), which needs
 `core:window:allow-start-dragging` in `capture-controls.json`.
 
-**Menu bar:** while recording, the tray title shows the time and a tray click
-calls `capture_stop` (`app/lib/tray/trayCaptureState.ts`). Title writes go
-through one serial queue (`createTrayTitleQueue`) and drop stale ones: async
-`setTitle` calls finish out of order, and a late "❚❚ 00:10" once stayed in
-the menu bar after the recording was saved. `followCapturePhase` listens
-BEFORE it reads `capture_state` and drops that read if an event came first.
-The same "an event beats a late first read" rule holds in the camera and card
-pages; the pill compares `seq` instead.
+**Menu bar (Rust owns it; the webview never writes the title):** every
+phase broadcast goes through `emit_phase`, which also calls
+`show_phase_in_tray`: the title is the time for Recording ("◼ 00:15") and
+Paused ("❚❚ 00:15") and EMPTY for every other phase (`tray_status::tray_title_for`).
+Empty, never `None`: `tray-icon` ignores a `None` title on macOS, which is
+what left a saved recording's time frozen in the menu bar. Windows has no
+title, so the tooltip carries the time (`tray_text_for`). The write is POSTED
+to the main thread (`run_on_main_thread`), never awaited: it runs under the
+phase lock and `set_title` blocks on the main thread, where a sync command may
+be waiting for that lock. A late write is dropped by `seq`
+(`newest_for_tray`). The icon is found by `tray_status::TRAY_ID`
+(= `TRAY_ID` in `useTraySync.ts`). A tray click reaches `toggle_tray_panel`,
+which first asks `commands::on_tray_click`: Recording/Paused shows the pill
+without focus and returns (no popover, never a stop; the pill has Stop), any
+other phase opens the popover. Pinned by `tray_status` unit tests, the
+`commands.rs` session tests and `tests/capture_wiring.rs`. The camera and card
+pages keep the "an event beats a late first read" rule; the pill compares
+`seq`.
 
 **Sync queue Show in folder:** each row's folder button fires
-`requestOpenDriveFolder(driveFolderRoute(label, remote, parentOf(path)))`
-(a window event, so the widget needs no router); `TrayNavigationListener`
-navigates and `folderUrlForPath` opens a multi-level path.
+`requestOpenDriveFolder(driveFolderRoute(label, remote, parentOf(path),
+baseNameOf(path)))` (a window event, so the widget needs no router);
+`TrayNavigationListener` navigates and `folderUrlForPath` opens a multi-level
+path.
+
+**Show in folder points the file out** (`openFile` param →
+`DriveContainer` `highlightRequest` → `useDriveHighlight`, pure steps in
+`drive/highlightEntry.ts`). Once the requested level is listed it finds the
+file (exact name, NFC, never a folder) in the order the level is SHOWN: the
+table's sort for a local level in list view (the comparators live in
+`FilesTable`, which reports the sorted level via `onSortedLevel` only while a
+request waits), the level as-is in card view, and for a server-paged remote
+level Rust's `locate_remote_folder_entry`, which walks the server's pages
+with the page size and sort on screen. Then it sets the page, scrolls the row
+or card (`data-drive-entry`) to the centre, sets `data-drive-highlight` for
+`HIGHLIGHT_MS` (brand tint plus outline in `globals.css`, its own `.dark`
+colours, duration pinned to the constant) and focuses the row's first
+control. It does NOT enter the table's bulk-selection mode. A file not listed
+yet (just written) is looked for again on each listing refresh, nudged every
+`HIGHLIGHT_RETRY_EVERY_MS`, for `HIGHLIGHT_WAIT_MS` after the level is ready,
+then dropped quietly; a folder that never opens drops the request after
+`HIGHLIGHT_OPEN_LIMIT_MS`. `shouldOpenFromUrl` keys on the file too, so a
+second capture in the same folder is pointed out as well.
 
 **Shortcut** (`shortcut.rs`, `tauri-plugin-global-shortcut`, macOS/Windows):
 default `CommandOrControl+Shift+2`, stored `capture_shortcut_v1` (`off` =
