@@ -567,6 +567,45 @@ fn drive_memberships_profile_and_freeze_fields_parse() {
     assert_eq!(entry.frozen_until.as_deref(), Some("2026-10-01T00:00:00Z"));
 }
 
+/// A held folder grant's `member_count` (hcfs #516) is the folder's own, read
+/// per entry, and an absent key (an older server) reads as 0, which the
+/// desktop forwards as "unknown", never as "0 members".
+#[test]
+fn folder_grant_member_count_parses_per_entry() {
+    let resp: DriveMembershipsResponse = serde_json::from_str(
+        r#"{
+            "memberships": [],
+            "folder_grants": [
+                {
+                    "owner_ss58": "5Owner",
+                    "folder_hash": "0123456789abcdef",
+                    "display_label": "team-docs",
+                    "path_prefix": "Clients/ACME",
+                    "role": "reader",
+                    "grant_blob": "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=",
+                    "created_at": "2026-09-29T00:00:00Z",
+                    "member_count": 2
+                },
+                {
+                    "owner_ss58": "5Owner",
+                    "folder_hash": "0123456789abcdef",
+                    "display_label": "team-docs",
+                    "path_prefix": "Clients/Other",
+                    "role": "reader",
+                    "grant_blob": "eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=",
+                    "created_at": "2026-09-29T00:00:00Z"
+                }
+            ]
+        }"#,
+    )
+    .expect("deserialize");
+    let counts: Vec<(&str, u64)> = resp.folder_grants.iter().map(|g| (g.path_prefix.as_str(), g.member_count)).collect();
+    assert_eq!(counts, [("Clients/ACME", 2), ("Clients/Other", 0)]);
+
+    let json = serde_json::to_value(&resp.folder_grants[1]).expect("serialize");
+    assert!(json.get("member_count").is_none(), "a zero count is omitted on the wire");
+}
+
 /// The owner-side members listing (`GET /v1/drives/{fh}/members`), consumed
 /// by Task 6's members surface. Deliberately blob-free: grants are sealed to
 /// each member and useless to the owner.

@@ -853,6 +853,11 @@ export interface MyFolderGrantInfo {
    * an Editor grant, writer grants on at the server, and not frozen.
    */
   canWrite: boolean;
+  /**
+   * People holding a grant on exactly this folder, this account included.
+   * Omit / undefined means unknown — never draw "0 members" from absence.
+   */
+  memberCount?: number;
   frozen?: boolean;
   frozenUntil?: string;
 }

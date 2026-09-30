@@ -10,8 +10,9 @@
 //
 // Its size and file count are the FOLDER's own, from browsing the folder
 // (`folder_grant_stats`), never the drive's totals, which would overstate
-// it: a skeleton while they load, a dash if they cannot be read. No member
-// count: the server does not tell a holder how many people reach a folder.
+// it: a skeleton while they load, a dash if they cannot be read. The member
+// count is the people holding a grant on exactly this folder, the viewer
+// included; it is omitted when the server does not send one.
 
 import React from "react";
 
@@ -126,6 +127,13 @@ export default function SharedFolderGrantRow({
           </span>
           <span className="shrink-0">· Shared by</span>
           <AccountLabel ss58={grant.ownerSs58} name={grant.ownerName} />
+          {/* Zero and absent both draw nothing — never fake "0 members"
+              off a missing count, as on a whole-drive row. */}
+          {grant.memberCount ? (
+            <span className="shrink-0 whitespace-nowrap">
+              · {grant.memberCount} {grant.memberCount === 1 ? "member" : "members"}
+            </span>
+          ) : null}
         </div>
       </div>
 

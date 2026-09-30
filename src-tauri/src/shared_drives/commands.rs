@@ -34,7 +34,7 @@ use crate::error::{AppError, NotReadyKind, Result};
 use crate::shared_drives::grant;
 use crate::sync::identity::MemberDriveIdentity;
 use base64::Engine;
-use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse};
+use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse, FolderGrantEntry};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
@@ -1848,6 +1848,11 @@ pub struct MyFolderGrantInfo {
     /// writer grants on at the server, and the owner not frozen. Decided here
     /// so the frontend never combines role and capability itself.
     pub can_write: bool,
+    /// How many people hold a grant on exactly this folder, this account
+    /// included. `None` when the server omitted it (0, or an older server) —
+    /// the FE must never draw "0 members" from absence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_count: Option<u32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub frozen: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1867,13 +1872,18 @@ pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolder
     }
 
     let resp = http_list_memberships(&state.api_client.clone(), &ctx.base_url, &ctx.bearer).await?;
-    Ok(resp
-        .folder_grants
+    Ok(my_folder_grants(resp.folder_grants, caps.folder_grant_writes))
+}
+
+/// Project the listing's held folder grants onto the FE's rows, each with
+/// its own folder's member count.
+fn my_folder_grants(grants: Vec<FolderGrantEntry>, folder_grant_writes: bool) -> Vec<MyFolderGrantInfo> {
+    grants
         .into_iter()
         .map(|g| {
             let role = super::folder_roles::grant_role(Some(&g.role));
             MyFolderGrantInfo {
-                can_write: super::folder_roles::grant_can_write(&role, caps.folder_grant_writes, g.frozen),
+                can_write: super::folder_roles::grant_can_write(&role, folder_grant_writes, g.frozen),
                 owner_ss58: g.owner_ss58,
                 owner_name: present_text(g.owner_name),
                 folder_hash: g.folder_hash,
@@ -1881,11 +1891,12 @@ pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolder
                 path_prefix: g.path_prefix,
                 role,
                 created_at: g.created_at,
+                member_count: present_member_count(g.member_count),
                 frozen: g.frozen,
                 frozen_until: present_text(g.frozen_until),
             }
         })
-        .collect())
+        .collect()
 }
 
 /// Remove a member or a folder holder from a drive this account owns or
@@ -4363,6 +4374,7 @@ mod tests {
             role: "writer".into(),
             created_at: "t".into(),
             can_write: true,
+            member_count: Some(3),
             frozen: false,
             frozen_until: None,
         };
@@ -4376,8 +4388,37 @@ mod tests {
                 "role": "writer",
                 "createdAt": "t",
                 "canWrite": true,
+                "memberCount": 3,
             })
         );
+    }
+
+    /// Each held grant carries its own folder's count; an omitted count (0,
+    /// or a server without the field) never reaches the FE as a number.
+    #[test]
+    fn held_folder_grants_carry_their_own_member_count() {
+        // A role-less grant sits between the counted ones: the role fill the
+        // listing goes through must leave each count on its own grant.
+        let body = serde_json::json!({
+            "memberships": [{"owner_ss58":"5O","folder_hash":"h","display_label":"d","role":"writer","grant_blob":"B","created_at":"t","member_count":9}],
+            "folder_grants": [
+                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"a","role":"writer","grant_blob":"B","created_at":"t","member_count":4},
+                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"b","grant_blob":"B","created_at":"t"},
+                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"c","role":"reader","grant_blob":"B","created_at":"t","member_count":1}
+            ]
+        })
+        .to_string();
+        let body = crate::shared_drives::folder_roles::default_missing_grant_roles(&body);
+        let resp: DriveMembershipsResponse = serde_json::from_str(&body).expect("listing parses");
+
+        let grants = my_folder_grants(resp.folder_grants, true);
+        let counts: Vec<_> = grants.iter().map(|g| (g.path_prefix.as_str(), g.member_count)).collect();
+        assert_eq!(counts, [("a", Some(4)), ("b", None), ("c", Some(1))], "never the drive's 9");
+        assert!(grants[0].can_write, "the projection keeps the write decision");
+        assert_eq!(grants[1].role, "reader", "a role-less grant still reads as reader");
+
+        let wire = serde_json::to_value(&grants[1]).expect("serialize");
+        assert!(wire.get("memberCount").is_none(), "absent stays absent on the IPC");
     }
 
     #[test]
