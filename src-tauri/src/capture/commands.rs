@@ -1062,13 +1062,27 @@ fn spawn_tick_loop(app: AppHandle) {
                 _ = &mut rx => break,
                 _ = interval.tick() => {
                     let state = app.state::<AppState>();
-                    let elapsed = {
+                    let (elapsed, died) = {
                         let Ok(guard) = state.capture.recorder.lock() else { continue };
                         match guard.as_ref() {
-                            Some(r) => r.elapsed_secs(),
+                            Some(r) => (r.elapsed_secs(), r.take_death()),
                             None => break,
                         }
                     };
+                    // The recording ended on its own (display gone, helper
+                    // crashed): end the session as Stop would, delivering
+                    // what was saved, instead of counting on.
+                    if let Some(e) = died {
+                        tracing::warn!(error = %e, "recording ended on its own; saving what was recorded");
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let state = app.state::<AppState>();
+                            if let Err(e) = capture_stop(state, app.clone()).await {
+                                tracing::warn!(error = %e, "could not save the recording that ended on its own");
+                            }
+                        });
+                        break;
+                    }
                     let phase = state.capture.current();
                     if !matches!(phase, CapturePhase::Recording { .. } | CapturePhase::Paused { .. }) {
                         break;
