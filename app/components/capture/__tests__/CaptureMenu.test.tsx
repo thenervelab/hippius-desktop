@@ -90,13 +90,15 @@ describe("CaptureMenu", () => {
 });
 
 describe("where Capture is offered", () => {
-  // The home header is also Billing's, Wallet's, Referrals' and Plans'. Only
-  // Overview asks for Capture (PageHeader's own opt-in is rendered in
-  // PageHeaderCapture.test.tsx); this pins who asks.
-  it("is asked for by Overview and by none of the other pages sharing the header", () => {
+  // Overview offers it in the Recent Files toolbar beside Folder and File, as
+  // a drive's toolbar does (recentFilesCapture.test.tsx renders both). The
+  // home header is shared with Billing, Wallet, Referrals and Plans, so it
+  // never carries Capture itself.
+  it("is in the drive header's two toolbars and in no page header", () => {
     const src = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8");
-    expect(src("app/components/page-sections/home/index.tsx")).toMatch(/<PageHeader[^>]*showCapture/);
-    for (const page of ["billing", "wallet", "referrals", "drive-plans"]) {
+    expect(src("app/components/page-sections/drive/DriveHeader.tsx").match(/<CaptureMenu \/>/g)).toHaveLength(2);
+    expect(src("app/components/page-sections/home/PageHeader.tsx")).not.toContain("CaptureMenu");
+    for (const page of ["home", "billing", "wallet", "referrals", "drive-plans"]) {
       expect(src(`app/components/page-sections/${page}/index.tsx`)).not.toContain("showCapture");
     }
   });

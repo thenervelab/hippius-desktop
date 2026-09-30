@@ -476,6 +476,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               View All Files
               <Icons.ArrowRight className="size-[0.875rem]" />
             </Button>
+            {/* Beside Folder and File, as in a drive's own toolbar. The
+                capture goes to the capture drive, not a drive on screen. */}
+            <CaptureMenu />
             {actionButtons}
           </div>
         </div>
