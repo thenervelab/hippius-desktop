@@ -69,5 +69,11 @@ if [[ "${signed}" != *"com.apple.security.device.audio-input"* ]]; then
   echo "ERROR: the signed helper lacks com.apple.security.device.audio-input" >&2
   exit 1
 fi
+# Without its linked-in Info.plist (Package.swift) the helper never lists an
+# iPhone as a Continuity Camera, and nothing else would say so.
+if ! launchctl plist __TEXT,__info_plist "${dest}" 2>/dev/null | grep -q '"NSCameraUseContinuityCameraDeviceType" = true'; then
+  echo "ERROR: the helper has no embedded Info.plist opting in to Continuity Camera" >&2
+  exit 1
+fi
 codesign --verify --strict --verbose=2 "${dest}"
 echo "helper embed + sign OK" >&2

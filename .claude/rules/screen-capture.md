@@ -26,6 +26,17 @@ phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
 unsupported until its desktop-portal path lands. Windows recording is stubbed
 behind the `Recorder` trait (`capture_support.recording == false`).
 
+**Windows and Linux parity plan:** `docs/plans/2026-10-01-capture-windows-linux.md`.
+Read it before touching a non-macOS capture path. Its load-bearing decisions:
+Windows and Linux record in a child process of the app
+(`Hippius --capture-recorder`) speaking the Swift helper's JSON protocol
+through one shared `HelperRecorder`; Windows = WGC + Media Foundation
+fragmented MP4 + WASAPI, no ffmpeg; Linux = portals (`ashpd`, on the zbus 5
+already in the graph) on Wayland, x11rb and `ximagesrc` on X11, GStreamer from
+the distro for the file; Wayland has no overlay (the system picker chooses);
+per-platform rollout lives in Rust (`capture::rollout`), not in new frontend
+flags. Note: xcap 0.9.8's `wgc` feature has no GDI fallback.
+
 ## Flow
 
 **Start:** `capture_start(kind?, mode?)` opens an overlay per display; the one
@@ -158,6 +169,20 @@ name cameras yet; it reopens on `devicechange` or an ended track, keeping a
 still-correct stream. `capture_set_cameras` remains the fallback list where
 the system has none (`camera_list`, never a mix: the two id spaces would list
 a camera twice). The mic is chosen by `microphoneCaptureDeviceID` (macOS 15).
+**External and iPhone devices:** macOS offers an iPhone as a Continuity
+Camera only to a process whose Info.plist sets
+`NSCameraUseContinuityCameraDeviceType`, so both carry it: `src-tauri/Info.plist`
+(the camera window's `getUserMedia`) and the helper, which as a bare tool has
+its plist (`macos/HippiusCapture/Info.plist`) linked in as `__TEXT,__info_plist`
+by `Package.swift`'s `-sectcreate`; `embed-capture-helper.sh` refuses a helper
+without it, pinned in `tests/capture_wiring.rs`. SwiftPM does not relink when
+only that plist changes: touch a source file. The list modes run one
+discovery, wait up to 1.5 s for the list to go quiet (0.4 s without a new
+`wasConnectedNotification`) because remote devices can arrive a beat late,
+then print. Names match through `deviceNameKey` (NFC, straight quotes, single
+spaces), since a phone's name carries a curly apostrophe. The bar re-reads
+both lists on menu open and on the overlay's `devicechange`; `MicMeter`
+reopens by name once the first grant names the microphones.
 Hardened builds need the `com.apple.security.device.camera` entitlement or the
 camera fails silently. The pill can hide a bubble (`capture_camera_toggle`),
 never the stage.

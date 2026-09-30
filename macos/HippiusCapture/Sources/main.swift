@@ -28,18 +28,46 @@ struct HippiusCaptureMain {
         // `--list-microphones`: print the microphones as JSON and exit. Rust
         // offers them in the capture bar and passes the chosen id to "start".
         if CommandLine.arguments.contains("--list-microphones") {
+            _ = listMicrophones()
+            settleDevices()
             printDevices(listMicrophones())
             return
         }
         // `--list-cameras`: the same for cameras, so the bar can offer them
         // before the camera window has opened one.
         if CommandLine.arguments.contains("--list-cameras") {
+            _ = listCameras()
+            settleDevices()
             printDevices(listCameras())
             return
         }
         let runner = Runner()
         emit(["ok": true, "event": "ready"])
         runner.run()
+    }
+}
+
+private final class LastConnect: @unchecked Sendable {
+    var at = Date()
+}
+
+/// Give devices a moment to reach this process before listing them.
+///
+/// The helper lists and exits in one go, but a remote device (a Continuity
+/// Camera iPhone, whose camera and microphone are published to each process
+/// by the system's Continuity service) can arrive a beat after the first
+/// discovery. A long-lived app sees it through `wasConnectedNotification`;
+/// this waits for the list to go quiet, bounded, so a menu opening never
+/// waits long. The caller runs one discovery first to start the connection.
+func settleDevices(quiet: TimeInterval = 0.4, cap: TimeInterval = 1.5) {
+    let last = LastConnect()
+    let token = NotificationCenter.default.addObserver(
+        forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: .main
+    ) { _ in last.at = Date() }
+    defer { NotificationCenter.default.removeObserver(token) }
+    let deadline = Date(timeIntervalSinceNow: cap)
+    while Date() < deadline, Date().timeIntervalSince(last.at) < quiet {
+        RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
     }
 }
 
@@ -89,7 +117,10 @@ func listMicrophones() -> [ListedDevice] {
 
 /// Every camera: built-in, USB, display cameras, Continuity Camera and Desk
 /// View. Names are `localizedName`, which is also the label the webview gives
-/// the same camera, so the camera window can find it by name.
+/// the same camera, so the camera window can find it by name. An iPhone is
+/// typed `.continuityCamera` only because the embedded Info.plist opts in
+/// (`NSCameraUseContinuityCameraDeviceType`); without that macOS 14+ files it
+/// under `.builtInWideAngleCamera`, which is asked for too.
 func listCameras() -> [ListedDevice] {
     var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
     if #available(macOS 14.0, *) {

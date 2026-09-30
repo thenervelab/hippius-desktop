@@ -254,6 +254,28 @@ describe("the capture bar's words", () => {
     expect(screen.getByText("Recording the camera only")).toBeInTheDocument();
   });
 
+  it("reads the cameras and microphones again when a device comes or goes, such as an iPhone waking nearby", async () => {
+    const media = new EventTarget();
+    Object.defineProperty(navigator, "mediaDevices", { value: media, configurable: true });
+    try {
+      setup({ kind: "recording" });
+      await screen.findByRole("switch", { name: "Screen" });
+      const count = (cmd: string) => tauri.core.invoke.mock.calls.filter(([c]) => c === cmd).length;
+      await waitFor(() => expect(count("capture_microphones")).toBeGreaterThan(0));
+      const cameras = count("capture_cameras");
+      const microphones = count("capture_microphones");
+      act(() => {
+        media.dispatchEvent(new Event("devicechange"));
+      });
+      await waitFor(() => {
+        expect(count("capture_cameras")).toBe(cameras + 1);
+        expect(count("capture_microphones")).toBe(microphones + 1);
+      });
+    } finally {
+      Reflect.deleteProperty(navigator, "mediaDevices");
+    }
+  });
+
   it("says why the microphone is off below macOS 15, on screen", async () => {
     setup({ kind: "recording", microphoneAvailable: false });
     expect(await screen.findByText("Recording the microphone needs macOS 15 or later")).toBeInTheDocument();

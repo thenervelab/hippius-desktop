@@ -100,6 +100,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   by hand, and Relaunch Hippius picks the permission up. If macOS still says
   no after the relaunch, the dialog explains why and Allow again clears the
   old entry for you.
+- **Your iPhone and other external cameras and microphones show up when you
+  record.** The Camera and Microphone menus in the capture bar now list an
+  iPhone nearby (as a Continuity Camera and microphone), USB webcams and
+  headsets, and update when one is connected or wakes up.
 - **A capture that does not upload is never lost.** Its card comes back with
   your next capture until you retry or discard it, and the message says what
   went wrong in plain words: you are offline, or your storage is full.
