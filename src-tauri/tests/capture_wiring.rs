@@ -99,7 +99,7 @@ fn the_overlay_capability_grants_nothing_it_does_not_use() {
 #[test]
 fn delivery_reuses_the_existing_upload_and_share_paths() {
     let src = read("src/capture/deliver.rs");
-    let body = fn_body(&src, "pub async fn deliver(");
+    let body = fn_body(&src, "pub async fn place(");
     assert!(
         body.contains("upload_files_to_remote_folder_inner("),
         "the upload must be the remote file upload"
@@ -122,11 +122,42 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
 fn the_temp_copy_is_removed_only_after_the_upload_lands() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
-    let ok_arm = body.find("Ok((delivered, destination)) =>").expect("success arm");
+    let ok_arm = body.find("Ok((account_id, destination, mint_link, placed)) =>").expect("success arm");
     let err_arm = body.find("Err(e) =>").expect("failure arm");
     let removal = body.find("remove_dir_all").expect("the temp copy is removed somewhere");
     assert!(ok_arm < removal && removal < err_arm, "remove_dir_all must sit in the success arm only");
     assert_eq!(body.matches("remove_dir_all").count(), 1, "exactly one removal, on success");
+}
+
+/// The card hears that the file is in the drive before the link is made,
+/// and a synced capture is followed from that moment. Waiting for both held
+/// the card on "Preparing upload" through the whole upload and the mint.
+#[test]
+fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "async fn deliver_and_announce(");
+    let placed = body.find("announce_placed(").expect("the placement is announced");
+    let link = body.find("link_for(").expect("the link is made");
+    assert!(placed < link, "the card must hear of the placement before the mint");
+    let announce = fn_body(&src, "fn announce_placed(");
+    assert!(announce.contains("spawn_sync_follow("), "a synced capture is followed at once");
+    assert!(announce.contains("LinkState::Creating"), "the card says the link is being made");
+    // The follower asks every source the engine answers from.
+    let facts = fn_body(&src, "fn sync_facts(");
+    for source in ["current_session", "recent_files", "is_synced("] {
+        assert!(facts.contains(source), "sync_facts must read {source}");
+    }
+    assert!(facts.contains("same_drive_path("), "the row is matched by its path in the drive");
+    let follow = fn_body(&src, "fn spawn_sync_follow(");
+    assert!(follow.contains("link_fallback_applies("), "the bounded fallback must be applied");
+    // The cycle is started, never waited for, by the placement.
+    let place = fn_body(&read("src/capture/deliver.rs"), "pub async fn place(");
+    let spawn = place.find("async_runtime::spawn(").expect("the sync is started in the background");
+    let trigger = place.find("trigger_sync_now(").expect("the sync is nudged");
+    assert!(
+        spawn < trigger,
+        "trigger_sync_now must run inside the spawned task, not be awaited inline"
+    );
 }
 
 /// The preview card floats over whatever the user captures next, and it is
@@ -511,10 +542,14 @@ fn every_phase_change_updates_the_tray() {
 #[test]
 fn the_tray_click_asks_the_capture_first() {
     let panel = read("src/tray/panel.rs");
-    let toggle = fn_body(&panel, "pub fn toggle_tray_panel(");
-    let ask = toggle.find("on_tray_click(&app)").expect("toggle_tray_panel asks the capture");
-    let open = toggle.find("build_panel(").expect("toggle_tray_panel builds the panel");
+    let click = fn_body(&panel, "fn on_left_click(");
+    let ask = click.find("on_tray_click(app, signed_in)").expect("the click asks the capture");
+    let open = click.find("toggle_panel(").expect("the click can open the popover");
     assert!(ask < open, "the capture is asked before the popover opens");
+    assert!(
+        fn_body(&panel, "pub fn toggle_tray_panel(").contains("on_left_click("),
+        "the IPC form routes the same way"
+    );
     let on_click = fn_body(&read("src/capture/commands.rs"), "pub fn on_tray_click(");
     assert!(on_click.contains("show_without_focus("), "the pill comes back without focus");
     assert!(!on_click.contains("stop_inner("), "a tray click never stops the recording");
@@ -522,4 +557,39 @@ fn the_tray_click_asks_the_capture_first() {
     for gone in ["capture_stop", "setTitle(", "capture_state_changed"] {
         assert!(!hook.contains(gone), "useTraySync must not own the recording's tray ({gone})");
     }
+}
+
+/// The popover stopped opening: the click went to a callback the main
+/// window's page registered, which a reload of that page left dead. Rust
+/// listens for the click itself, and the webview only reports sign-in.
+#[test]
+fn the_tray_click_reaches_rust_whatever_the_webview_does() {
+    let main = read("src/main.rs");
+    assert!(
+        main.contains(".on_tray_icon_event(|app, event| crate::tray::panel::on_tray_icon_event(app, &event))"),
+        "the app must listen for tray clicks in Rust"
+    );
+    assert!(main.contains("tray_set_signed_in,"), "the sign-in mirror must be registered");
+    let panel = read("src/tray/panel.rs");
+    let handler = fn_body(&panel, "pub fn on_tray_icon_event(");
+    for needle in ["MouseButton::Left", "MouseButtonState::Up", "TRAY_ID", "on_left_click("] {
+        assert!(handler.contains(needle), "on_tray_icon_event must check {needle}");
+    }
+    let hook = std::fs::read_to_string(format!("{}/../app/lib/hooks/useTraySync.ts", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    assert!(
+        !hook.contains("handleTrayClick") && !hook.contains("TrayIconEvent"),
+        "the icon must not route its click through a webview callback"
+    );
+    assert!(!hook.contains("\"toggle_tray_panel\""), "the webview must not open the popover itself");
+    assert!(hook.contains("\"tray_set_signed_in\""), "the webview reports sign-in to Rust");
+    // A tray that survives a reload gets a live context menu again.
+    assert!(hook.contains("existingTray.setMenu("), "a reload must re-attach the context menu");
+}
+
+/// Every phase used to rewrite the status item; now only a change does.
+#[test]
+fn the_tray_is_written_only_when_its_text_changes() {
+    let src = read("src/capture/commands.rs");
+    let show = fn_body(&src, "fn show_phase_in_tray(");
+    assert!(show.contains("tray_needs_write("), "the tray is written only when its text changes");
 }

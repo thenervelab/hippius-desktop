@@ -38,7 +38,7 @@ fn fn_body<'a>(src: &'a str, signature: &str) -> &'a str {
 #[test]
 fn toggle_tray_panel_emits_shown_event_on_show() {
     let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tray/panel.rs")).expect("read panel.rs");
-    let body = fn_body(&src, "pub fn toggle_tray_panel(");
+    let body = fn_body(&src, "fn toggle_panel(");
 
     // The literal event string appears in the body ONLY at the real emit call
     // (the surrounding doc comment deliberately doesn't repeat it).

@@ -113,3 +113,26 @@ describe("wantsProgress", () => {
 it("names where the file went", () => {
   expect(destinationText(card({ state: "uploading" }))).toBe("Work › Captures");
 });
+
+describe("following a synced capture", () => {
+  // A name macOS wrote decomposed ("e" plus a combining accent) is the same
+  // file as the composed name Rust gave the card.
+  it("joins the engine's row in either Unicode form", () => {
+    const composed = "Capture d\u2019\u00e9cran 2026-09-30 \u00e0 13.53.34.png";
+    const decomposed = composed.normalize("NFD");
+    expect(decomposed).not.toBe(composed);
+    const c = card({ state: "syncing", linkCopied: true }, { fileName: composed, relPath: `Captures/${composed}` });
+    const row = engine({ path: `Captures/${decomposed}`, fileName: decomposed });
+    expect(cardView(c, null, [row]).text).toBe("Uploading · 40%");
+  });
+
+  it("is finished only when Rust says it settled", () => {
+    const creating = card({ state: "uploaded", linkCopied: false }, { link: { state: "creating" }, settled: false });
+    expect(cardView(creating, null, [])).toMatchObject({ done: true, settled: false });
+    const settled = card({ state: "uploaded", linkCopied: true }, { settled: true });
+    expect(cardView(settled, null, [])).toMatchObject({ done: true, settled: true });
+    // A card from before Rust sent `settled` is finished once uploaded.
+    expect(cardView(card({ state: "uploaded", linkCopied: true }), null, []).settled).toBe(true);
+    expect(cardView(card({ state: "syncing", linkCopied: true }), null, []).settled).toBe(false);
+  });
+});

@@ -67,6 +67,9 @@ pub enum LinkState {
     Failed { message: String },
     /// The link was revoked from the card.
     Revoked,
+    /// The link is being made. The card is not finished until it settles,
+    /// so it never slides away before it can say the link was copied.
+    Creating,
 }
 
 impl LinkState {
@@ -79,6 +82,7 @@ impl LinkState {
             Self::Public { copied: false } => Some("Public link ready"),
             Self::Failed { .. } => Some("No link yet"),
             Self::Revoked => Some("Link revoked"),
+            Self::Creating => Some("Creating link…"),
         }
     }
 }
@@ -132,6 +136,9 @@ pub struct PreviewCard {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_text: Option<String>,
     pub actions: CardActions,
+    /// The capture is in the drive and its link has settled: the card may
+    /// slide away on its own. Worked out in [`PreviewCard::refreshed`].
+    pub settled: bool,
     /// The link Copy link puts on the clipboard. Never sent to the card.
     #[serde(skip)]
     pub share_url: Option<String>,
@@ -161,6 +168,71 @@ pub enum SyncRow {
     Completed,
     /// The engine's own error text, which is never shown as it is.
     Failed(Option<String>),
+}
+
+/// Whether the engine's `engine_path` is the capture at `rel_path`
+/// (`Captures/<name>`). The engine names a file by its path in the drive,
+/// but a path can arrive with Windows separators, a leading slash, as an
+/// absolute path ending in the drive path, or in another Unicode form (a
+/// name typed on macOS can be decomposed: "é" as "e" plus an accent), so
+/// both sides are compared in NFC, never trimmed of spaces.
+#[must_use]
+pub fn same_drive_path(engine_path: &str, rel_path: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let norm = |p: &str| -> String { p.replace('\\', "/").trim_start_matches('/').nfc().collect() };
+    let engine = norm(engine_path);
+    let ours = norm(rel_path);
+    !ours.is_empty() && (engine == ours || engine.ends_with(&format!("/{ours}")))
+}
+
+/// What the engine says about the capture, from every place it says it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncFacts {
+    /// The capture's row in the live session, if it has one.
+    pub live: Option<SyncRow>,
+    /// A finished upload of it since the capture was placed (completed rows
+    /// leave the session for the engine's recent list).
+    pub finished: bool,
+    /// The engine's set of files it knows are on the server holds it: the
+    /// upload was confirmed, whatever became of its row.
+    pub on_server: bool,
+}
+
+impl SyncFacts {
+    /// One answer from the three sources. The server's confirmation wins:
+    /// a row can linger as "uploading" after the engine finished with it,
+    /// and a row can be gone altogether once the session closes.
+    #[must_use]
+    pub fn row(&self) -> SyncRow {
+        if self.on_server {
+            return SyncRow::Completed;
+        }
+        match &self.live {
+            Some(row) if *row != SyncRow::Absent => row.clone(),
+            _ if self.finished => SyncRow::Completed,
+            _ => SyncRow::Absent,
+        }
+    }
+}
+
+/// How long a synced capture with a public link waits, with the engine idle
+/// and no row for the file anywhere, before its card says Uploaded anyway.
+/// The link is the capture's own encrypted copy on the server, so the file
+/// reached Hippius; the card must not say "uploading" for ever because the
+/// engine's bookkeeping missed it.
+pub const LINK_FALLBACK_AFTER: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Whether the bounded fallback applies (see [`LINK_FALLBACK_AFTER`]): the
+/// card is still syncing, has a public link, the engine has nothing for the
+/// file (no row, no failure) and is not syncing anything, and it has waited
+/// long enough.
+#[must_use]
+pub fn link_fallback_applies(card: &PreviewCard, row: &SyncRow, waited: std::time::Duration, engine_busy: bool) -> bool {
+    matches!(card.status, PreviewStatus::Syncing { .. })
+        && matches!(card.link, LinkState::Public { .. })
+        && *row == SyncRow::Absent
+        && !engine_busy
+        && waited >= LINK_FALLBACK_AFTER
 }
 
 /// What a syncing card becomes given the engine's row, or `None` when it
@@ -206,7 +278,13 @@ impl PreviewCard {
     pub fn refreshed(self) -> Self {
         let link_text = self.link.text().map(str::to_string);
         let actions = self.decide_actions();
-        Self { link_text, actions, ..self }
+        let settled = matches!(self.status, PreviewStatus::Uploaded { .. }) && self.link != LinkState::Creating;
+        Self {
+            link_text,
+            actions,
+            settled,
+            ..self
+        }
     }
 
     fn decide_actions(&self) -> CardActions {
@@ -219,7 +297,7 @@ impl PreviewCard {
             copy_link: has_link,
             // The link is made from a file on this machine: the synced copy,
             // or the temp copy kept for exactly this.
-            mint_link: in_drive && !has_link && self.placed_path.is_some(),
+            mint_link: in_drive && !has_link && self.placed_path.is_some() && self.link != LinkState::Creating,
             revoke_link: has_link && self.share_token.is_some(),
             reveal: !self.remote && in_drive && self.placed_path.is_some(),
             upgrade: matches!(
@@ -238,7 +316,7 @@ impl PreviewCard {
         match &self.link {
             LinkState::Public { copied } => (*copied, None),
             LinkState::Failed { message } => (false, Some(message.clone())),
-            LinkState::None | LinkState::Revoked => (false, None),
+            LinkState::None | LinkState::Revoked | LinkState::Creating => (false, None),
         }
     }
 
@@ -287,6 +365,7 @@ mod tests {
             link: LinkState::None,
             link_text: None,
             actions: CardActions::default(),
+            settled: false,
             share_url: None,
             share_token: None,
             file_path: PathBuf::from("/tmp/capture/Recording.mp4"),
@@ -490,7 +569,8 @@ mod tests {
                 "actions": {
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
                     "revokeLink": true, "reveal": true, "upgrade": false
-                }
+                },
+                "settled": true
             })
         );
         assert_eq!(
@@ -509,5 +589,152 @@ mod tests {
             .unwrap(),
             serde_json::json!({ "state": "syncing", "linkCopied": true })
         );
+    }
+
+    // ── Following a synced capture (the card that stayed on "Preparing upload") ──
+
+    const SHOT: &str = "Screenshot 2026-09-30 at 09.19.47.png";
+
+    #[test]
+    fn the_engines_path_is_matched_by_the_path_in_the_drive() {
+        let rel = rel_path_for(SHOT);
+        assert!(same_drive_path("Captures/Screenshot 2026-09-30 at 09.19.47.png", &rel), "spaces kept");
+        assert!(
+            same_drive_path("/Captures/Screenshot 2026-09-30 at 09.19.47.png", &rel),
+            "a leading slash"
+        );
+        assert!(
+            same_drive_path("Captures\\Screenshot 2026-09-30 at 09.19.47.png", &rel),
+            "Windows separators"
+        );
+        assert!(
+            same_drive_path("/Users/me/Archive/Captures/Screenshot 2026-09-30 at 09.19.47.png", &rel),
+            "an absolute path ending in it"
+        );
+        assert!(
+            !same_drive_path("Screenshot 2026-09-30 at 09.19.47.png", &rel),
+            "the same name at the drive root is another file"
+        );
+        assert!(!same_drive_path("Old/Captures/Screenshot 2026-09-30 at 09.19.4.png", &rel));
+        assert!(!same_drive_path("Captures/Screenshot 2026-09-30 at 09.19.47.png ", &rel), "never trimmed");
+        assert!(!same_drive_path("anything", ""), "an empty path matches nothing");
+    }
+
+    /// A macOS name with an apostrophe and an accent, as Finder writes it
+    /// (decomposed) and as Rust spells it (composed).
+    #[test]
+    fn a_unicode_name_matches_in_either_normal_form() {
+        let composed = "Capture d\u{2019}\u{e9}cran 2026-09-30 \u{e0} 13.53.34.png";
+        let decomposed = "Capture d\u{2019}e\u{301}cran 2026-09-30 a\u{300} 13.53.34.png";
+        assert_ne!(composed, decomposed);
+        assert!(same_drive_path(&format!("Captures/{decomposed}"), &rel_path_for(composed)));
+        assert!(same_drive_path(&format!("Captures/{composed}"), &rel_path_for(decomposed)));
+        assert!(
+            !same_drive_path("Captures/Capture d'\u{e9}cran 2026-09-30 \u{e0} 13.53.34.png", &rel_path_for(composed)),
+            "a straight quote is another name"
+        );
+    }
+
+    #[test]
+    fn the_engine_is_asked_in_every_place_it_answers() {
+        // A completed row in the live session.
+        let live = SyncFacts {
+            live: Some(SyncRow::Completed),
+            ..SyncFacts::default()
+        };
+        assert_eq!(live.row(), SyncRow::Completed);
+        // The row already left the session: the finished list has it.
+        let gone = SyncFacts {
+            finished: true,
+            ..SyncFacts::default()
+        };
+        assert_eq!(gone.row(), SyncRow::Completed);
+        // No row anywhere, but the engine knows the server has it.
+        let known = SyncFacts {
+            on_server: true,
+            ..SyncFacts::default()
+        };
+        assert_eq!(known.row(), SyncRow::Completed);
+        // A row still saying "uploading" once the server confirmed it.
+        let stale = SyncFacts {
+            live: Some(SyncRow::Working),
+            on_server: true,
+            ..SyncFacts::default()
+        };
+        assert_eq!(stale.row(), SyncRow::Completed);
+        // Still going, and not there yet.
+        let working = SyncFacts {
+            live: Some(SyncRow::Working),
+            ..SyncFacts::default()
+        };
+        assert_eq!(working.row(), SyncRow::Working);
+        assert_eq!(SyncFacts::default().row(), SyncRow::Absent);
+        let failed = SyncFacts {
+            live: Some(SyncRow::Failed(None)),
+            ..SyncFacts::default()
+        };
+        assert_eq!(failed.row(), SyncRow::Failed(None));
+    }
+
+    #[test]
+    fn a_row_that_finished_before_the_card_followed_it_still_finishes_the_card() {
+        let c = syncing(true);
+        let gone = SyncFacts {
+            finished: true,
+            ..SyncFacts::default()
+        };
+        assert_eq!(
+            status_after_sync_row(&c, &gone.row()),
+            Some(PreviewStatus::Uploaded {
+                link_copied: true,
+                link_error: None
+            })
+        );
+        let done = c
+            .with_outcome(9, status_after_sync_row(&c, &gone.row()).unwrap(), Some("https://l".into()))
+            .unwrap();
+        assert!(done.settled, "an uploaded card with its link may slide away");
+        assert_eq!(done.link_text.as_deref(), Some("Public link copied"));
+    }
+
+    #[test]
+    fn the_card_waits_for_its_link_before_it_is_finished() {
+        let mut c = syncing(false);
+        c.link = LinkState::Creating;
+        c.status = PreviewStatus::Uploaded {
+            link_copied: false,
+            link_error: None,
+        };
+        let c = c.refreshed();
+        assert!(!c.settled, "it must not slide away before it can say the link was copied");
+        assert_eq!(c.link_text.as_deref(), Some("Creating link…"));
+        assert!(!c.actions.mint_link, "no second link while one is being made");
+        let mut copied = c.clone();
+        copied.link = LinkState::Public { copied: true };
+        assert!(copied.refreshed().settled);
+    }
+
+    #[test]
+    fn a_link_and_an_idle_engine_finish_a_card_the_engine_lost_track_of() {
+        let long = LINK_FALLBACK_AFTER;
+        let c = syncing(true);
+        assert!(link_fallback_applies(&c, &SyncRow::Absent, long, false));
+        // Not before the wait, not while the engine works, not over a row.
+        assert!(!link_fallback_applies(
+            &c,
+            &SyncRow::Absent,
+            long.saturating_sub(std::time::Duration::from_secs(1)),
+            false
+        ));
+        assert!(!link_fallback_applies(&c, &SyncRow::Absent, long, true));
+        assert!(!link_fallback_applies(&c, &SyncRow::Working, long, false));
+        assert!(!link_fallback_applies(&c, &SyncRow::Failed(None), long, false));
+        // No link means no evidence the bytes reached the server.
+        let mut no_link = syncing(false);
+        no_link.link = LinkState::None;
+        assert!(!link_fallback_applies(&no_link, &SyncRow::Absent, long, false));
+        let mut creating = syncing(false);
+        creating.link = LinkState::Creating;
+        assert!(!link_fallback_applies(&creating, &SyncRow::Absent, long, false));
     }
 }

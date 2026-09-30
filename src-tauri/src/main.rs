@@ -129,7 +129,7 @@ use crate::sync::remote::{
 use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, rename_remote_folder};
 use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
-use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
+use crate::tray::panel::{hide_tray_panel, toggle_tray_panel, tray_set_signed_in};
 use crate::updates::{
     check_for_update, current_release_channel, install_update, note_update_prompted, release_channel_status, spawn_background_update_checks,
     switch_release_channel,
@@ -333,6 +333,9 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
+        // The tray icon's clicks reach Rust here, whatever state the webview
+        // that made the icon is in (see `tray::panel::on_tray_icon_event`).
+        .on_tray_icon_event(|app, event| crate::tray::panel::on_tray_icon_event(app, &event))
         .invoke_handler(tauri::generate_handler![
             // Team chat (Rust half: gate, OIDC bridge, keyring session, 4S key, native surfaces)
             chat::config::chat_get_config,
@@ -644,6 +647,7 @@ fn main() {
             get_tray_menu_data,
             // Tray popover panel (replaces the native tray menu)
             toggle_tray_panel,
+            tray_set_signed_in,
             check_for_update,
             note_update_prompted,
             install_update,
