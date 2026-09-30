@@ -1,12 +1,16 @@
 //! Screen recording backends behind a single `Recorder` trait.
 //!
-//! macOS drives a small Swift helper (ScreenCaptureKit → H.264 MP4). Windows
-//! will use `windows-capture` behind the same trait; until that ships, starting
-//! a recording there returns a clear "not yet" error. Linux recording stays a
-//! follow-up (screenshots are already deferred on Linux).
+//! Every platform records in another process driven by the same
+//! [`helper::HelperRecorder`] over one protocol ([`protocol`]): macOS runs the
+//! Swift helper (ScreenCaptureKit to H.264 MP4); Windows and Linux will run
+//! the app's own executable as `--capture-recorder`. Until their recorders land, recording is
+//! unavailable there (`UnsupportedPlatform`) and Record stays hidden.
+//! Plan: `docs/plans/2026-10-01-capture-windows-linux.md`.
 
+pub mod helper;
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod protocol;
 #[cfg(windows)]
 pub mod windows;
 
