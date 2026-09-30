@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import React from "react";
 import type { ShareArt, ShareTargets } from "@/app/lib/tauri/capture";
 
 const invoke = vi.fn();
@@ -21,6 +22,8 @@ const TARGETS: ShareTargets = {
   pending: true,
   windows: [
     { id: 11, appName: "Safari", title: "Hippius", displayId: 1, width: 1200, height: 800, thumbnail: null, icon: null },
+    { id: 12, appName: "Mail", title: "Inbox", displayId: 1, width: 1200, height: 800, thumbnail: null, icon: null },
+    { id: 13, appName: "Notes", title: "Notes", displayId: 1, width: 1200, height: 800, thumbnail: null, icon: null },
   ],
   displays: [{ id: 1, name: "Built-in Display", isPrimary: true, width: 1512, height: 982, thumbnail: null }],
 };
@@ -43,7 +46,7 @@ describe("SharePicker", () => {
     expect(getByRole("option", { name: /Hippius/ }).querySelector("img")).toHaveAttribute("src", "data:x");
   });
 
-  it("records the picked window, and only once one is picked", async () => {
+  it("records the picked window, and only once the list is there", async () => {
     const onChoose = vi.fn();
     const { findByRole, getByRole } = render(
       <SharePicker kind="recording" firstTab="window" barDisplayId={1} onChoose={onChoose} onClose={vi.fn()} />,
@@ -52,6 +55,17 @@ describe("SharePicker", () => {
     expect(record).toBeDisabled();
     fireEvent.click(await findByRole("option", { name: /Hippius/ }));
     fireEvent.click(record);
+    expect(onChoose).toHaveBeenCalledWith({ tab: "window", id: 11 });
+  });
+
+  // Loom pre-picks the frontmost window, so Return shares it at once.
+  it("opens with the frontmost window picked", async () => {
+    const onChoose = vi.fn();
+    const { findByRole } = render(
+      <SharePicker kind="recording" firstTab="window" barDisplayId={1} onChoose={onChoose} onClose={vi.fn()} />,
+    );
+    expect(await findByRole("option", { name: /Hippius/ })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(window, { key: "Enter" });
     expect(onChoose).toHaveBeenCalledWith({ tab: "window", id: 11 });
   });
 
@@ -89,5 +103,73 @@ describe("SharePicker", () => {
     fireEvent.pointerDown(tile);
     fireEvent.pointerUp(tile);
     expect(underneath).not.toHaveBeenCalled();
+  });
+
+  it("is one Tab stop, and focus follows the pick along the arrows", async () => {
+    const { findByRole, getByRole } = render(
+      <SharePicker kind="screenshot" firstTab="window" barDisplayId={1} onChoose={vi.fn()} onClose={vi.fn()} />,
+    );
+    const first = await findByRole("option", { name: /Hippius/ });
+    expect(first).toHaveAttribute("tabindex", "0");
+    expect(getByRole("option", { name: /Inbox/ })).toHaveAttribute("tabindex", "-1");
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(getByRole("option", { name: /Inbox/ })).toHaveFocus();
+    fireEvent.keyDown(window, { key: "End" });
+    expect(getByRole("option", { name: /Notes/ })).toHaveFocus();
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(getByRole("option", { name: /Notes/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("switches tabs with the arrow keys on the tab strip", async () => {
+    const { findByRole, getByRole } = render(
+      <SharePicker kind="screenshot" firstTab="window" barDisplayId={1} onChoose={vi.fn()} onClose={vi.fn()} />,
+    );
+    await findByRole("option", { name: /Hippius/ });
+    const windowTab = getByRole("tab", { name: "Window" });
+    windowTab.focus();
+    fireEvent.keyDown(windowTab, { key: "ArrowRight" });
+    const screenTab = getByRole("tab", { name: "Entire screen" });
+    expect(screenTab).toHaveFocus();
+    expect(screenTab).toHaveAttribute("aria-selected", "true");
+    expect(getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "share-tab-screen");
+  });
+
+  it("keeps Tab inside itself", async () => {
+    const { findByRole, getByRole } = render(
+      <>
+        <button type="button">Behind</button>
+        <SharePicker kind="screenshot" firstTab="window" barDisplayId={1} onChoose={vi.fn()} onClose={vi.fn()} />
+      </>,
+    );
+    await findByRole("option", { name: /Hippius/ });
+    const capture = getByRole("button", { name: "Capture" });
+    capture.focus();
+    fireEvent.keyDown(capture, { key: "Tab" });
+    expect(getByRole("dialog")).toContainElement(document.activeElement as HTMLElement);
+    expect(getByRole("button", { name: "Behind" })).not.toHaveFocus();
+  });
+
+  it("gives focus back to what opened it", async () => {
+    function Host() {
+      const [open, setOpen] = React.useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Choose window…
+          </button>
+          {open && (
+            <SharePicker kind="screenshot" firstTab="window" barDisplayId={1} onChoose={vi.fn()} onClose={() => setOpen(false)} />
+          )}
+        </>
+      );
+    }
+    const { getByRole, findByRole } = render(<Host />);
+    const opener = getByRole("button", { name: "Choose window…" });
+    opener.focus();
+    fireEvent.click(opener);
+    await findByRole("option", { name: /Hippius/ });
+    expect(opener).not.toHaveFocus();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(opener).toHaveFocus());
   });
 });

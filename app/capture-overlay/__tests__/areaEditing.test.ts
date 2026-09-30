@@ -3,8 +3,9 @@ import {
   fitRect,
   handlePoint,
   hitTest,
-  MIN_AREA,
+  applyPending,
   moveRect,
+  nudgeRect,
   resizeRect,
 } from "@/app/capture-overlay/overlaySelection";
 
@@ -49,7 +50,8 @@ describe("resizeRect", () => {
 
   it("never folds inside out, however far the handle is dragged", () => {
     const shrunk = resizeRect(AREA, "w", { x: 900, y: 0 }, DISPLAY);
-    expect(shrunk.width).toBe(MIN_AREA);
+    // The smallest an area resizes to is 16 pt.
+    expect(shrunk.width).toBe(16);
     expect(shrunk.x + shrunk.width).toBe(500);
   });
 
@@ -66,5 +68,52 @@ describe("fitRect", () => {
 
   it("gives nothing back when nothing usable is left", () => {
     expect(fitRect({ x: 0, y: 0, width: 4, height: 4 }, DISPLAY)).toBeNull();
+  });
+});
+
+describe("nudgeRect", () => {
+  it("moves the area a point per arrow press, ten with Shift", () => {
+    expect(nudgeRect(AREA, "ArrowLeft", false, DISPLAY)).toEqual({ ...AREA, x: 99 });
+    expect(nudgeRect(AREA, "ArrowDown", true, DISPLAY)).toEqual({ ...AREA, y: 110 });
+  });
+
+  it("stops at the display's edge", () => {
+    expect(nudgeRect({ ...AREA, x: 0 }, "ArrowLeft", true, DISPLAY)).toEqual({ ...AREA, x: 0 });
+  });
+
+  it("ignores every other key", () => {
+    expect(nudgeRect(AREA, "Enter", false, DISPLAY)).toBeNull();
+  });
+});
+
+describe("applyPending", () => {
+  const MINE = { x: 10, y: 10, width: 200, height: 100 };
+
+  it("drops this display's area when another display takes the pending one", () => {
+    expect(applyPending(1, { displayId: 2 }, MINE)).toEqual({ rect: null, elsewhere: true });
+  });
+
+  // The race: display 2 restored its last area while the user was drawing on
+  // display 1. Display 2's event cleared display 1's drawing; display 1's own
+  // event came last, so Rust holds display 1's area and it must be drawn.
+  it("draws the area it handed over again when its own event comes last", () => {
+    let drawn: typeof MINE | null = MINE;
+    const apply = (change: { displayId: number | null }) => {
+      const next = applyPending(1, change, MINE);
+      if (next.rect !== undefined) drawn = next.rect;
+    };
+    apply({ displayId: 2 });
+    expect(drawn).toBeNull();
+    apply({ displayId: 1 });
+    expect(drawn).toEqual(MINE);
+  });
+
+  it("takes Rust's own rect when the event carries one", () => {
+    const fromRust = { x: 1, y: 2, width: 30, height: 40 };
+    expect(applyPending(1, { displayId: 1, rect: fromRust }, MINE).rect).toEqual(fromRust);
+  });
+
+  it("leaves the drawing alone when nobody holds an area", () => {
+    expect(applyPending(1, { displayId: null }, MINE)).toEqual({ rect: undefined, elsewhere: false });
   });
 });

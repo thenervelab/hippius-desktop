@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   barGroups,
   barHint,
+  chooseLabel,
   confirmLabel,
   isDeviceInUse,
   pickCamera,
@@ -32,7 +33,15 @@ describe("the capture bar", () => {
     const [shots, recordings] = barGroups(true);
     expect(shots.map((m) => m.mode)).toEqual(["screen", "window", "area"]);
     expect(recordings.every((m) => m.kind === "recording")).toBe(true);
-    expect(recordings.map((m) => m.label)).toContain("Record selected portion");
+    // One vocabulary with the Drive Capture menu: area, window, entire screen.
+    expect(recordings.map((m) => m.label)).toEqual(["Record entire screen", "Record a window", "Record an area"]);
+    expect(shots.map((m) => m.label)).toEqual(["Capture entire screen", "Capture a window", "Capture an area"]);
+  });
+
+  it("names the Choose button for what it lists", () => {
+    expect(chooseLabel("window")).toBe("Choose window…");
+    expect(chooseLabel("screen")).toBe("Choose screen…");
+    expect(chooseLabel("area")).toBe("Choose screen…");
   });
 
   it("says Capture or Record on its button", () => {
@@ -42,9 +51,16 @@ describe("the capture bar", () => {
 
   it("tells the user the next step for each mode", () => {
     expect(barHint("screenshot", "area", false)).toBe("Drag to choose what to capture");
-    expect(barHint("recording", "area", true)).toBe("Drag to adjust, then press Return to record");
+    expect(barHint("recording", "area", true)).toBe(
+      "Drag or use the arrow keys to adjust, then double-click or press Return to record",
+    );
     expect(barHint("recording", "window", false)).toBe("Click a window to record it");
     expect(barHint("screenshot", "screen", false)).toContain("press Return");
+  });
+
+  it("names the confirm key as the platform does", () => {
+    expect(barHint("screenshot", "screen", false, false, "Enter")).toBe("Click a screen to capture it, or press Enter");
+    expect(barHint("recording", "area", false, true, "Enter")).toContain("press Enter to record");
   });
 
   /** Rust snaps anything else to no timer (`bar::TIMER_CHOICES`). */

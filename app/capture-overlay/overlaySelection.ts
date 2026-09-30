@@ -13,7 +13,7 @@ export interface Point {
 }
 
 /** Below this, in points, a drag is a click that slipped, not a selection. */
-export const MIN_DRAG_POINTS = 4;
+const MIN_DRAG_POINTS = 4;
 
 /** The rectangle between the press and the current pointer, in any direction. */
 export function dragRect(start: Point, current: Point): LogicalRect {
@@ -59,10 +59,10 @@ export type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 export const HANDLES: readonly Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
 /** How far from a handle's centre, in points, a press still grabs it. */
-export const HANDLE_GRAB = 9;
+const HANDLE_GRAB = 9;
 
 /** The smallest an area can be resized to, so it never folds inside out. */
-export const MIN_AREA = 16;
+const MIN_AREA = 16;
 
 /** Where handle `h` sits on `rect`. */
 export function handlePoint(rect: LogicalRect, h: Handle): Point {
@@ -147,4 +147,59 @@ export function fitRect(rect: LogicalRect, bounds: { width: number; height: numb
   const height = Math.min(rect.height, bounds.height);
   if (width < MIN_AREA || height < MIN_AREA) return null;
   return moveRect({ x: rect.x, y: rect.y, width, height }, 0, 0, bounds);
+}
+
+/** How far one arrow press moves a drawn area, in points; Shift moves further. */
+const NUDGE = 1;
+const NUDGE_SHIFT = 10;
+
+/**
+ * `rect` moved by an arrow key, kept on the display, as macOS nudges a
+ * selection: 1 pt a press, 10 pt with Shift. Null for any other key.
+ */
+export function nudgeRect(
+  rect: LogicalRect,
+  key: string,
+  shift: boolean,
+  bounds: { width: number; height: number },
+): LogicalRect | null {
+  const step = shift ? NUDGE_SHIFT : NUDGE;
+  const delta: Record<string, [number, number]> = {
+    ArrowLeft: [-step, 0],
+    ArrowRight: [step, 0],
+    ArrowUp: [0, -step],
+    ArrowDown: [0, step],
+  };
+  const d = delta[key];
+  return d ? moveRect(rect, d[0], d[1], bounds) : null;
+}
+
+/** `capture_pending_changed`: which display holds the area, and (when Rust sends it) the area. */
+export interface PendingChange {
+  displayId: number | null;
+  rect?: LogicalRect | null;
+}
+
+/**
+ * What one overlay draws after `capture_pending_changed`, mirroring Rust's
+ * pending area. Events arrive in the order Rust applied them, so the last
+ * one names the area the Capture button will take:
+ *
+ * - another display holds it: draw none here, and say an area exists;
+ * - this display holds it: draw it, from the event's rect when Rust sends
+ *   one, else the area this overlay last handed over. Keeping the current
+ *   one instead left an overlay blank after a race with another display's
+ *   restore, while Rust still held its area and would capture it unseen;
+ * - nobody holds one: leave this overlay's drawing alone.
+ *
+ * `rect: undefined` means keep what is drawn.
+ */
+export function applyPending(
+  own: number,
+  change: PendingChange,
+  lastHandedOver: LogicalRect | null,
+): { rect: LogicalRect | null | undefined; elsewhere: boolean } {
+  if (change.displayId === null) return { rect: undefined, elsewhere: false };
+  if (change.displayId !== own) return { rect: null, elsewhere: true };
+  return { rect: change.rect ?? lastHandedOver ?? undefined, elsewhere: false };
 }

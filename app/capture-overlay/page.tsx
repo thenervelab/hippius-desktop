@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Camera, Video } from "lucide-react";
-import "./capture-overlay.css";
+import "@/app/lib/capture/floating-window.css";
 import {
   cancelCapture,
   confirmCapture,
@@ -25,9 +25,12 @@ import {
   type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { CAPTURE_ACCENT } from "@/app/lib/capture/glass";
+import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
 import CaptureBar from "./CaptureBar";
 import SharePicker from "./SharePicker";
 import { barHint, LAST_AREA_KEY } from "./barText";
+import { isFromControl } from "./keyNav";
 import { selectionFor, type SharePick } from "./sharePickerState";
 import {
   dragRect,
@@ -35,12 +38,15 @@ import {
   HANDLES,
   handlePoint,
   hitTest,
+  applyPending,
   isRealDrag,
   moveRect,
+  nudgeRect,
   resizeRect,
   sizeLabel,
   windowAt,
   type Handle,
+  type PendingChange,
   type Point,
 } from "./overlaySelection";
 
@@ -60,7 +66,7 @@ import {
  */
 
 const DIM = "rgba(0, 0, 0, 0.38)";
-const FRAME = "#3167DD";
+const FRAME = CAPTURE_ACCENT;
 
 type Drag =
   | { op: "create"; start: Point; current: Point }
@@ -119,9 +125,21 @@ export default function CaptureOverlayPage() {
   const [cameraShape, setCameraShape] = useState<CameraShape | null>(null);
   // "Choose what to share" is open on this tab; it owns the keyboard then.
   const [picker, setPicker] = useState<ShareTab | null>(null);
+  // The capture itself is running (the countdown ended, or there was none):
+  // Rust closes this window when it is done, or answers a refusal.
+  const [inFlight, setInFlight] = useState(false);
   const pendingAction = useRef<(() => Promise<void>) | null>(null);
   const submitted = useRef(false);
+  const inFlightRef = useRef(false);
   const restored = useRef(false);
+  // The area this overlay last handed to Rust, drawn again when Rust says
+  // this display holds the pending area (see `applyPending`).
+  const handedOver = useRef<LogicalRect | null>(null);
+  // What the key handler needs from the latest render, without re-binding.
+  const latest = useRef<{ rect: LogicalRect | null; nudge: ((next: LogicalRect) => void) | null }>({
+    rect: null,
+    nudge: null,
+  });
 
   const load = useCallback(async () => {
     if (displayId === null) return;
@@ -131,14 +149,17 @@ export default function CaptureOverlayPage() {
     restored.current = true;
     const pending = ctx.pending;
     if (pending?.target === "area") {
-      if (pending.displayId === displayId) setRect(pending.rect);
-      else setAreaElsewhere(true);
+      if (pending.displayId === displayId) {
+        handedOver.current = pending.rect;
+        setRect(pending.rect);
+      } else setAreaElsewhere(true);
       return;
     }
     // macOS brings back the last area; so does this, on the display it was on.
     const last = readLastArea();
     const fitted = last && last.displayId === displayId ? fitRect(last.rect, bounds()) : null;
     if (fitted) {
+      handedOver.current = fitted;
       setRect(fitted);
       void setCapturePending({ target: "area", displayId, rect: fitted }).catch(() => undefined);
     }
@@ -173,10 +194,11 @@ export default function CaptureOverlayPage() {
       listen<CaptureOptions>("capture_options_changed", (e) =>
         setContext((c) => (c ? { ...c, options: e.payload } : c)),
       ),
-      listen<{ displayId: number | null }>("capture_pending_changed", (e) => {
-        const other = e.payload.displayId !== null && e.payload.displayId !== displayId;
-        setAreaElsewhere(other);
-        if (other) setRect(null);
+      listen<PendingChange>("capture_pending_changed", (e) => {
+        if (displayId === null) return;
+        const next = applyPending(displayId, e.payload, handedOver.current);
+        setAreaElsewhere(next.elsewhere);
+        if (next.rect !== undefined) setRect(next.rect);
       }),
     ];
     return () => {
@@ -190,14 +212,24 @@ export default function CaptureOverlayPage() {
       if (submitted.current || !context) return;
       submitted.current = true;
       setNotice(null);
-      const run = () =>
-        action().catch((error) => {
-          // Rust has already reported a capture failure; a refusal (nothing
-          // drawn yet) is shown here and the user can carry on.
-          setNotice(errorMessage(error));
-          setCountdown(null);
-          submitted.current = false;
-        });
+      // `submitted` stays set until the action settles: a second Return
+      // while Rust is taking the capture must not start another countdown.
+      const run = () => {
+        inFlightRef.current = true;
+        setInFlight(true);
+        setCountdown(null);
+        return action()
+          .catch((error) => {
+            // Rust has already reported a capture failure; a refusal (nothing
+            // drawn yet) is shown here and the user can carry on.
+            setNotice(errorMessage(error));
+            submitted.current = false;
+          })
+          .finally(() => {
+            inFlightRef.current = false;
+            setInFlight(false);
+          });
+      };
       if (context.countdownSecs > 0) {
         pendingAction.current = run;
         setCountdown(context.countdownSecs);
@@ -246,19 +278,35 @@ export default function CaptureOverlayPage() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The picker answers Return (share the pick) and Escape (close it,
-      // leaving the capture bar up) itself.
-      if (picker !== null) return;
+      // leaving the capture bar up) itself; an open bar menu takes the key
+      // first and marks it handled.
+      if (picker !== null || e.defaultPrevented) return;
       if (e.key === "Escape") {
-        if (countdown !== null) {
+        if (countdown !== null && !inFlightRef.current) {
           // Esc during the countdown stops it, not the whole capture.
           pendingAction.current = null;
           setCountdown(null);
           submitted.current = false;
           return;
         }
+        // Nothing to stop short of the capture itself, including one Rust
+        // is already taking: cancel it.
         void cancelCapture();
-      } else if (e.key === "Enter" && countdown === null) {
-        confirm();
+        return;
+      }
+      // Return on a focused bar button is that button's (Options opens its
+      // menu); only a Return aimed at the screen takes the capture.
+      if (isFromControl(e.target)) return;
+      if (e.key === "Enter") {
+        if (countdown === null) confirm();
+        return;
+      }
+      if (countdown !== null || inFlightRef.current) return;
+      const { rect: area, nudge } = latest.current;
+      const next = area && nudge ? nudgeRect(area, e.key, e.shiftKey, bounds()) : null;
+      if (next && nudge) {
+        e.preventDefault();
+        nudge(next);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -271,17 +319,20 @@ export default function CaptureOverlayPage() {
   // Camera only: the stage is what is recorded, so no area, window or screen
   // is chosen here. "none" switches every selection path below off.
   const mode: CaptureMode | "none" = cameraOnly ? "none" : context.mode;
-  const counting = countdown !== null;
+  // The bar and the handles stay down from the count until Rust closes the window.
+  const counting = countdown !== null || inFlight;
 
   const pointFrom = (e: React.PointerEvent): Point => ({ x: e.clientX, y: e.clientY });
 
   const commitArea = (next: LogicalRect | null) => {
     setRect(next);
     if (next && isRealDrag(next)) {
+      handedOver.current = next;
       saveLastArea(displayId, next);
       void setCapturePending({ target: "area", displayId, rect: next }).catch(() => undefined);
     }
   };
+  latest.current = { rect: mode === "area" && !drag ? rect : null, nudge: commitArea };
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || counting) return;
@@ -351,7 +402,15 @@ export default function CaptureOverlayPage() {
     void setCaptureMode(nextKind, nextMode).catch((error) => setNotice(errorMessage(error)));
   };
 
-  const hint = notice ?? barHint(kind, context.mode, Boolean(rect) || areaElsewhere, cameraOnly);
+  const enterKey = enterKeyName();
+  const hint = notice ?? barHint(kind, context.mode, Boolean(rect) || areaElsewhere, cameraOnly, enterKey);
+  // Said once with what it is counting to, then the bare numbers.
+  const countdownSpeech =
+    countdown === null || countdown <= 0
+      ? ""
+      : countdown === context.countdownSecs
+        ? `${kind === "recording" ? "Recording" : "Capturing"} in ${countdown}`
+        : String(countdown);
   const KindIcon = kind === "recording" ? Video : Camera;
 
   return (
@@ -422,8 +481,15 @@ export default function CaptureOverlayPage() {
         </div>
       )}
 
-      {counting && (
+      {/* Always mounted: a live region that appears with its first number
+          is often not announced at all. */}
+      <p className="sr-only" aria-live="assertive" aria-atomic="true">
+        {countdownSpeech}
+      </p>
+
+      {countdown !== null && countdown > 0 && (
         <div
+          aria-hidden
           className="pointer-events-none absolute grid size-24 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-5xl font-semibold tabular-nums text-white"
           style={{
             left: highlight ? highlight.x + highlight.width / 2 : "50%",
@@ -431,7 +497,6 @@ export default function CaptureOverlayPage() {
             // window, so the count goes above it.
             top: highlight ? highlight.y + highlight.height / 2 : cameraOnly ? "11%" : "50%",
           }}
-          aria-live="assertive"
         >
           {countdown}
         </div>
@@ -448,6 +513,7 @@ export default function CaptureOverlayPage() {
           microphoneAvailable={context.microphoneAvailable}
           showClicksAvailable={context.showClicksAvailable}
           hint={hint}
+          enterKey={enterKey}
           onMode={onMode}
           onChoose={(tab) => {
             setNotice(null);

@@ -1,4 +1,5 @@
 import type { CaptureDevice, CaptureKind, CaptureMode, CaptureOptions, ShareTab } from "@/app/lib/tauri/capture";
+import { modeLabel } from "@/app/lib/capture/modes";
 
 /**
  * What the capture bar shows, decided without React so it can be tested:
@@ -9,21 +10,15 @@ import type { CaptureDevice, CaptureKind, CaptureMode, CaptureOptions, ShareTab 
 export interface BarMode {
   kind: CaptureKind;
   mode: CaptureMode;
-  /** Accessible name and tooltip, macOS's own wording. */
+  /** Accessible name and tooltip, in the app's one mode vocabulary. */
   label: string;
 }
 
-const SHOTS: BarMode[] = [
-  { kind: "screenshot", mode: "screen", label: "Capture entire screen" },
-  { kind: "screenshot", mode: "window", label: "Capture selected window" },
-  { kind: "screenshot", mode: "area", label: "Capture selected portion" },
-];
+/** macOS's order on the bar: entire screen, window, area. */
+const BAR_ORDER: readonly CaptureMode[] = ["screen", "window", "area"];
 
-const RECORDINGS: BarMode[] = [
-  { kind: "recording", mode: "screen", label: "Record entire screen" },
-  { kind: "recording", mode: "window", label: "Record selected window" },
-  { kind: "recording", mode: "area", label: "Record selected portion" },
-];
+const SHOTS: BarMode[] = BAR_ORDER.map((mode) => ({ kind: "screenshot", mode, label: modeLabel("screenshot", mode) }));
+const RECORDINGS: BarMode[] = BAR_ORDER.map((mode) => ({ kind: "recording", mode, label: modeLabel("recording", mode) }));
 
 /** The bar's two groups; the recording group only where recording works. */
 export function barGroups(recordingAvailable: boolean): BarMode[][] {
@@ -36,16 +31,29 @@ export function confirmLabel(kind: CaptureKind): string {
 }
 
 /**
- * The line above the bar. `hasArea` is whether an area is drawn anywhere, and
- * `onThisDisplay` whether the pointer is on this display (a screen hint only
- * makes sense for the screen being pointed at).
+ * The line above the bar. `hasArea` is whether an area is drawn anywhere;
+ * `enterKey` is the key's name on this platform ("Return" on a Mac, "Enter"
+ * elsewhere).
  */
-export function barHint(kind: CaptureKind, mode: CaptureMode, hasArea: boolean, cameraOnly = false): string {
-  if (kind === "recording" && cameraOnly) return "Drag your camera where you like, then press Return to record";
+export function barHint(
+  kind: CaptureKind,
+  mode: CaptureMode,
+  hasArea: boolean,
+  cameraOnly = false,
+  enterKey = "Return",
+): string {
+  if (kind === "recording" && cameraOnly) return `Drag your camera where you like, then press ${enterKey} to record`;
   const verb = kind === "recording" ? "record" : "capture";
   if (mode === "window") return `Click a window to ${verb} it`;
-  if (mode === "screen") return `Click a screen to ${verb} it, or press Return`;
-  return hasArea ? `Drag to adjust, then press Return to ${verb}` : `Drag to choose what to ${verb}`;
+  if (mode === "screen") return `Click a screen to ${verb} it, or press ${enterKey}`;
+  return hasArea
+    ? `Drag or use the arrow keys to adjust, then double-click or press ${enterKey} to ${verb}`
+    : `Drag to choose what to ${verb}`;
+}
+
+/** The bar's "Choose…" button, named for what it lists. */
+export function chooseLabel(mode: CaptureMode): string {
+  return shareTabFor(mode) === "window" ? "Choose window…" : "Choose screen…";
 }
 
 /** The timer choices the Options menu offers, as Rust accepts them. */

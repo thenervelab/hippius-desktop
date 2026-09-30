@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   displayCaption,
+  gridStep,
   initialPick,
   livePick,
   mergeShareArt,
@@ -70,8 +71,11 @@ describe("what the share picker shows and hands back", () => {
   it("opens the screen tab on the bar's own screen, so Return shares it", () => {
     expect(initialPick("screen", TARGETS, 2)).toEqual({ tab: "screen", id: 2 });
     expect(initialPick("screen", TARGETS, 42)).toEqual({ tab: "screen", id: 1 });
-    // A window always has to be chosen.
-    expect(initialPick("window", TARGETS, 2)).toBeNull();
+  });
+
+  it("opens the window tab on the frontmost window (Rust lists them front first)", () => {
+    expect(initialPick("window", TARGETS, 2)).toEqual({ tab: "window", id: TARGETS.windows[0].id });
+    expect(initialPick("window", { ...TARGETS, windows: [] }, 2)).toBeNull();
   });
 
   it("forgets a pick whose window has closed", () => {
@@ -90,5 +94,33 @@ describe("what the share picker shows and hands back", () => {
     expect(tileAspect(5000, 100)).toBe(2.4);
     expect(tileAspect(100, 5000)).toBe(0.75);
     expect(tileAspect(0, 0)).toBeCloseTo(1.6);
+  });
+});
+
+describe("gridStep", () => {
+  // Seven tiles, three across:  0 1 2 / 3 4 5 / 6
+  it("moves a row with Up and Down and stays put at the edges", () => {
+    expect(gridStep("ArrowDown", 1, 7, 3)).toBe(4);
+    expect(gridStep("ArrowDown", 4, 7, 3)).toBe(4);
+    expect(gridStep("ArrowDown", 3, 7, 3)).toBe(6);
+    expect(gridStep("ArrowUp", 4, 7, 3)).toBe(1);
+    expect(gridStep("ArrowUp", 1, 7, 3)).toBe(1);
+  });
+
+  it("walks the order with Left and Right, wrapping", () => {
+    expect(gridStep("ArrowRight", 6, 7, 3)).toBe(0);
+    expect(gridStep("ArrowLeft", 0, 7, 3)).toBe(6);
+  });
+
+  it("jumps to the ends with Home and End", () => {
+    expect(gridStep("Home", 5, 7, 3)).toBe(0);
+    expect(gridStep("End", 0, 7, 3)).toBe(6);
+  });
+
+  it("starts from an end when nothing is picked, and ignores other keys", () => {
+    expect(gridStep("ArrowDown", -1, 7, 3)).toBe(0);
+    expect(gridStep("ArrowUp", -1, 7, 3)).toBe(6);
+    expect(gridStep("a", 2, 7, 3)).toBeNull();
+    expect(gridStep("ArrowDown", 0, 0, 3)).toBeNull();
   });
 });
