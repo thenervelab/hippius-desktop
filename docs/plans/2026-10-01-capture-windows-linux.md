@@ -1,7 +1,8 @@
 # Screen capture on Windows and Linux: the plan to macOS parity
 
-**Status:** plan, not started. Written against `feat/screen-capture` at
-8a4e21f2.
+**Status:** Phase 0 done. Phase 1 done in code; its hardware checklist is
+still to run, so Windows screenshots stay on staging in `capture::rollout`.
+Phases 2 to 6 not started. Written against `feat/screen-capture` at 8a4e21f2.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
 bar, recording, microphone and system audio, the camera, the pill and the
 tray timer, the shortcut, the preview card, permissions), brought to Windows
@@ -326,6 +327,16 @@ The order is the one asked for, with two changes the evidence argued for:
 
 ### Phase 0: groundwork (S, 3 to 4 days)
 
+**Status: done.** Deviations: the protocol types live in
+`recording/protocol.rs` (both `helper.rs` and the child use them), not in
+the child's folder. The child's `--probe` is left to Phase 2's `probe.rs`
+(it has nothing to report yet); `--list-microphones` / `--list-cameras`
+answer `[]`. `capture_support.shortcut` exists, but Settings does not read
+`via` until Phase 6. `selection` is typed in the frontend and always
+`overlay`, so nothing branches on it yet. Verified on macOS only: the
+Windows lane runs on CI with this change; `--capture-recorder` was driven by
+hand on macOS and through the in-process pipe tests on every OS.
+
 **Scope**
 - Split `recording/macos.rs` into `recording/helper.rs` (`HelperRecorder`,
   `StartCommand`, `read_events`, `wait_for`, `Death`, `Shared`, all platform
@@ -365,6 +376,15 @@ lane runs clippy and the capture tests green; `Hippius --capture-recorder`
 answers `ready` and the synthetic `start`/`stop` on all three OSes.
 
 ### Phase 1: Windows screenshots to release quality (S to M, 1 week)
+
+**Status: code done, hardware checklist pending.** Deviations: the default
+shortcut is NOT changed (an open decision, below); the refused list adds
+Alt+Print Screen and Win+Alt+Print Screen (Windows' own active-window and
+Game Bar screenshot keys) to the four named. `wgc` is on without spike W1's
+numbers, since the checklist runs on the same hardware: if W1 shows slower
+monitor shots or a border on Windows 10, window shots move to our own
+one-frame WGC grab as planned. Windows screenshots move to beta in
+`capture::rollout` only once the checklist passes.
 
 **Scope**
 - xcap `features = ["wgc"]` (XP-1), gated by spike W1's numbers.

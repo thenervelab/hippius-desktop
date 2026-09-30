@@ -37,6 +37,34 @@ the distro for the file; Wayland has no overlay (the system picker chooses);
 per-platform rollout lives in Rust (`capture::rollout`), not in new frontend
 flags. Note: xcap 0.9.8's `wgc` feature has no GDI fallback.
 
+**Phase 0 and 1 of that plan are in.** `recording/protocol.rs` holds the wire
+types both ends use; `recording/helper.rs` is the platform-free
+`HelperRecorder` (handshake, ids, deaths, salvage) that `macos.rs` drives the
+Swift helper with and `windows.rs` / `linux.rs` will drive
+`Hippius --capture-recorder` with (`helper::own_recorder_command`). The child
+(`capture/recorder_child/`) is branched into at the very top of `main`
+(`cli::argv_requests_recorder`), before `load_env` and the builder, or a
+second window, tray and single-instance handler would start; pinned by
+`capture_wiring.rs`. It serves the protocol with `timeline.rs` (the Swift
+`place` rule: drop samples inside a pause, move later ones back by every
+finished pause, by start time for audio), `sizing.rs` (`alignToPixels`,
+`capped`, `videoBitRate`, pinned against `main.swift`'s literals) and a
+`synthetic` test pattern through a text stand-in writer; a real `start` is
+refused with `UnsupportedPlatform`'s line until a platform recorder lands.
+Drive it by hand: `{"cmd":"start","id":1,"output":"/tmp/x.txt","synthetic":true}`.
+**Rollout:** `rollout::floor(platform, feature)` is the lowest lane per row
+(debug builds count as staging); `commands::capture_supported()` and
+`recording::recording_unavailable()` both ask it, so a platform below its
+lane reads exactly as unsupported. `SCREEN_CAPTURE_ENABLED` stays the one
+frontend switch. Moving a row on is a one-line change once its manual
+checklist passes; `release_lane_pins.rs` pins that production enables only
+production rows and that Windows recording needs a signed installer to get
+there. **Surfaces:** `support::Surfaces` (selection, modes, screenshotTimer,
+systemAudio, microphoneUnavailableMessage, shortcut) is flattened into
+`capture_support` and `OverlayContext`; the bar draws only Rust's `modes`,
+hides the timer when `screenshotTimer` is false and captions the mic row with
+Rust's line (it used to hard-code "macOS 15").
+
 ## Flow
 
 **Start:** `capture_start(kind?, mode?)` opens an overlay per display; the one
@@ -330,7 +358,13 @@ start's refusals reach the same dialogs (`useStartCapture`). `logout_full`
 calls `end_for_logout` first: cancels a live capture, forgets the cards,
 unregisters the shortcut. A new
 shortcut is registered before it is saved, so one another app holds is refused
-and the old one stays; no modifier and macOS's ⌘⇧3–6 are refused. A refusal
+and the old one stays; no modifier, macOS's ⌘⇧3–6 and Windows' own capture
+keys (Win+Shift+S, Print Screen with or without Win or Alt, Win+Alt+R,
+Win+Alt+Print Screen) are refused, each system's list only on that system
+(`shortcut::reserved_by`, checked before the modifier rule so Print Screen
+alone is named as Windows' key). The Windows default stays Ctrl+Shift+2 for
+now (it collides with Windows Terminal and Excel); changing it is an open
+product decision. A refusal
 names another copy of Hippius when one is running (`shortcut::held_message`,
 from NSWorkspace's running apps by bundle id or name; Windows says the plain
 sentence). A saved shortcut that did not register at start-up is kept in
@@ -403,6 +437,31 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   name (`macos_major`) and the recording gates (`recording::macos_at_least`)
   both read it.
 - **Refusals** matched on `subkind` in `classifyCaptureRefusal`.
+- **Windows exclusion is read back, not assumed.** `content_protected` is
+  `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, whose failure tao
+  discards. `open_overlay` reads `GetWindowDisplayAffinity` back
+  (`kept_out_of_captures`); below build 19041
+  (`permissions::windows_build`, `RtlGetVersion`, read once) or on a failed
+  read the session sets `ui_in_grabs`, and `finish_screenshot` then waits for
+  the destroyed overlays to go, hides the card (`clear_screen_for_grab`) and
+  runs `DwmFlush` twice before the pixels are read. Pinned by
+  `capture_wiring.rs`.
+- **Windows shots use Windows.Graphics.Capture** (xcap `wgc`, no GDI
+  fallback in 0.9.8): GDI rendered a DPI-unaware app's window as its
+  top-left fraction on a scaled monitor. Windows 10 may flash WGC's yellow
+  border; spike W1 in the plan measures it on hardware.
+- **Windows DPI:** every value is physical pixels divided by the display's
+  OWN scale (`targets::to_logical_on`, `screenshot::area_scale`), and floating
+  windows go back to physical pixels with the work area's own scale
+  (`physical_frame`, `card_frame`). Mixed-DPI pairs, a monitor above or left
+  of the primary and a window straddling a seam are pinned as unit tests on
+  every OS.
+- **Windows dev builds:** toast notifications need the AppUserModelID the
+  installers register, so `pnpm tauri dev` on Windows silently drops the
+  "Capture not uploaded" notice; the card's Failed state still shows.
+- **Windows virtual desktops:** `visible_on_all_workspaces` is a no-op there,
+  so the pill and card stay on the desktop they opened on when the user
+  switches mid-capture. Accepted for now (plan XP-16).
 - **Helper:** build with `macos/build-capture-helper.sh` (`--universal` for
   release). It is NOT a Tauri `externalBin`: `finalize-macos-release.sh`
   embeds it as `Contents/MacOS/HippiusCapture` and signs it with
@@ -413,11 +472,13 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   It is NOT silent any more: `recording::recording_unavailable()` gives the
   reason (`RecordingUnavailable`: `helperMissing` / `osTooOld` /
   `unsupportedPlatform`, checked in that order of platform, then macOS 13,
-  then helper, so an old Mac is told to update), and `RecordingAvailability`
+  then helper, so an old Mac is told to update; plus `codecsMissing`,
+  `portalMissing`, `mediaFeaturePackMissing` for the Linux and Windows
+  recorders, and `osTooOld` names Windows 10 2004 on Windows), and `RecordingAvailability`
   (the reason plus Rust's line) is flattened into `capture_support` and the
   overlay context as `recordingUnavailable` / `recordingUnavailableMessage`.
-  `disabledRecordingNote` (`app/lib/capture/modes.ts`) turns the first two
-  into disabled Record modes with that line on the bar (`aria-disabled`, not
+  `disabledRecordingNote` (`app/lib/capture/modes.ts`) turns every reason
+  but `unsupportedPlatform` into disabled Record modes with that line on the bar (`aria-disabled`, not
   `disabled`, so the tooltip shows; a click puts the line on the hint), in
   the Capture menu (a line above disabled items) and as a Settings row;
   `unsupportedPlatform` still hides them. `capture_start` / `capture_set_mode`
