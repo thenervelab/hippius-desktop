@@ -42,6 +42,12 @@ struct HippiusCaptureMain {
             printDevices(listCameras())
             return
         }
+        // `--poster <video> <seconds>...`: stills from a finished recording
+        // for the capture card (Poster.swift).
+        if arguments.contains("--poster") {
+            runPoster(arguments: arguments)
+            return
+        }
         // `--meter [deviceId]`: the capture bar's microphone level until stdin
         // closes (Meter.swift says why it is not measured in the webview).
         if let at = CommandLine.arguments.firstIndex(of: "--meter") {
