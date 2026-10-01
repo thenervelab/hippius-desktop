@@ -123,18 +123,16 @@ pub fn move_into(src: &Path, dest: &Path) -> std::io::Result<()> {
     if dest.exists() {
         return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "the destination exists"));
     }
-    match std::fs::rename(src, dest) {
-        Ok(()) => Ok(()),
-        // EXDEV and friends: another filesystem (a /tmp on tmpfs).
-        Err(_) => {
-            std::fs::copy(src, dest)?;
-            if let Err(e) = std::fs::remove_file(src) {
-                // The copy is kept; a leftover original is only untidy.
-                tracing::warn!(error = %e, "capture: the desktop's copy of the screenshot was not removed");
-            }
-            Ok(())
-        }
+    if std::fs::rename(src, dest).is_ok() {
+        return Ok(());
     }
+    // EXDEV and friends: another filesystem (a /tmp on tmpfs).
+    std::fs::copy(src, dest)?;
+    if let Err(e) = std::fs::remove_file(src) {
+        // The copy is kept; a leftover original is only untidy.
+        tracing::warn!(error = %e, "capture: the desktop's copy of the screenshot was not removed");
+    }
+    Ok(())
 }
 
 /// Turn the portal's answer into a screenshot at `dest` (a `.png` in a

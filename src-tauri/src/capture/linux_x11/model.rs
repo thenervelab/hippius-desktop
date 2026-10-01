@@ -482,12 +482,10 @@ mod tests {
         assert_eq!(d.len(), 2);
         assert_eq!((d[0].id, d[0].x, d[0].width, d[0].is_primary), (300, 0, 3840, false));
         assert_eq!((d[1].id, d[1].x, d[1].is_primary), (301, 3840, true));
-        assert!(
-            (d[0].logical_width() - 1920.0).abs() < f64::EPSILON,
-            "a 4K panel at 200 % is 1920 CSS pixels"
-        );
-        // X11 has one scale: the 1080p monitor beside it is ALSO halved.
-        assert!((d[1].logical_width() - 960.0).abs() < f64::EPSILON);
+        // X11 has one scale: the 1080p monitor beside the 4K panel is ALSO at
+        // 200 %, which is what the webview draws it at. (`targets` divides
+        // physical pixels by it on Linux; that maths is pinned there.)
+        assert!(d.iter().all(|d| (d.scale_factor - 2.0).abs() < f64::EPSILON));
     }
 
     #[test]
