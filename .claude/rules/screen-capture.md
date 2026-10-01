@@ -22,9 +22,10 @@ filed in `<drive>/Captures`, with a public share link copied unless
 phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
 `SCREEN_CAPTURE_ENABLED = enabledFrom("staging")`, and behind Rust's
 `capture_support` for the platform: **screenshots on macOS and Windows**;
-**recording on macOS 13+** when `HippiusCapture` is built. Linux reports
-unsupported until its desktop-portal path lands. Windows recording is stubbed
-behind the `Recorder` trait (`capture_support.recording == false`).
+**recording on macOS 13+** when `HippiusCapture` is built, and on Windows
+10 2004+ in debug and staging builds only (`capture::rollout`, until its
+hardware checklist passes). Linux reports unsupported until its
+desktop-portal path lands.
 
 **Windows and Linux parity plan:** `docs/plans/2026-10-01-capture-windows-linux.md`.
 Read it before touching a non-macOS capture path. Its load-bearing decisions:
@@ -50,7 +51,8 @@ second window, tray and single-instance handler would start; pinned by
 finished pause, by start time for audio), `sizing.rs` (`alignToPixels`,
 `capped`, `videoBitRate`, pinned against `main.swift`'s literals) and a
 `synthetic` test pattern through a text stand-in writer; a real `start` is
-refused with `UnsupportedPlatform`'s line until a platform recorder lands.
+refused with `UnsupportedPlatform`'s line where no platform recorder has
+landed (Linux; Windows has one, below).
 Drive it by hand: `{"cmd":"start","id":1,"output":"/tmp/x.txt","synthetic":true}`.
 **Rollout:** `rollout::floor(platform, feature)` is the lowest lane per row
 (debug builds count as staging); `commands::capture_supported()` and
@@ -66,8 +68,31 @@ hides the timer when `screenshotTimer` is false, hides "Record system audio"
 when `systemAudio` is false and captions the mic row with Rust's line (it
 used to hard-code "macOS 15"). The shared `StartCommand` carries the
 recording's `systemAudio` and a window recording's `cameraWindowId` (the
-bubble), so every recorder gets them; the child ignores both until it records
-audio and windows.
+bubble), so every recorder gets them.
+
+**Phase 2 (Windows recording) is in code, not yet run on hardware.** The
+child's platform-free pieces (`mixer`, `pcm`, `frame`, `pacing`, `plan`,
+`pipeline`) are tested everywhere; `recorder_child/windows/` is WGC
+(`windows-capture`) + WASAPI + a Media Foundation FMPEG4 sink writer. Rules:
+every device has ONE owner thread (WGC's thread, one per WASAPI client, the
+writer thread for the file; the camera belongs to the bubble's webview and
+is filmed as a window, never opened by the recorder), because macOS's
+shared capture session made the camera and the mic fight. All times are QPC
+microseconds (WGC `SystemRelativeTime`, WASAPI QPC positions, pause), so one
+`Timeline` places both. `started` waits for the first picture to build the
+writer, so a missing encoder fails Start with its reason. App ids are xcap's
+low 32 bits of the HMONITOR/HWND, sign-extended back in the child. The app
+side probes Media Foundation once per launch on its own thread
+(`mediaFeaturePackMissing`), lists mics through `--list-microphones`, reads
+the ConsentStore for a blocked mic (`MIC_BLOCKED_WINDOWS`), and
+`webview_media.rs` answers WebView2's `PermissionRequested` (camera, mic) for
+`capture-camera` and `capture-overlay-*` and the app's own origin only,
+pinned in `capture_wiring.rs`. Not done: process loopback (Hippius's own
+sounds are in system audio), the bubble in a window recording, a GPU colour
+converter, the tray glyph (XP-15). Cross-check from a Mac with the MSVC
+headers from `xwin` (`CFLAGS_x86_64_pc_windows_msvc` with clang's own
+include dir FIRST, or the MSVC intrinsics headers break aws-lc), and pass
+`--target` before `--`, or clippy builds the build script for Windows.
 
 ## Flow
 
@@ -128,8 +153,8 @@ recording countdown (None / 3 / 5 seconds), "Record system audio"
 twice; offered only where Rust's `systemAudio` surface says this platform
 can record it, and `begin_recording` asks for it only there), Show mouse clicks, and "Copy a share link after capture" (`copyLink`). Clicking the countdown numeral or
 pressing Return while counting runs the waiting action at once. Camera only
-is macOS-only (`camera_only_supported`, `for_system` turns the screen back on
-elsewhere); the sources panel shows the Screen switch only when
+is macOS and Windows (`camera_only_supported`, `for_system` turns the screen
+back on elsewhere; Windows records the camera window's HWND); the sources panel shows the Screen switch only when
 `cameraOnlyAvailable`, and the camera row says "Camera is only recorded with
 the entire screen or an area." whenever `cameraFilmed` is false (a window
 recording where the recorder cannot add the camera window:

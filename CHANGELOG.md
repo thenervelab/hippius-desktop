@@ -226,6 +226,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Record your screen on Windows (test builds first).** Record a whole
+  screen, one window or an area, with your microphone, your computer's sound
+  or both in one soundtrack, pause and resume, and the camera bubble or the
+  camera on its own. It reaches beta once it has been checked on real
+  Windows PCs.
+
 - **Choose whether a recording includes your computer's sound (Mac).** The
   capture bar's Options menu has "Record system audio", off by default so
   your voice is not recorded twice through the speakers; turn it on to

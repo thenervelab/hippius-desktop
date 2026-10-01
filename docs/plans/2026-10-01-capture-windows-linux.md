@@ -1,8 +1,8 @@
 # Screen capture on Windows and Linux: the plan to macOS parity
 
-**Status:** Phase 0 done. Phase 1 done in code; its hardware checklist is
-still to run, so Windows screenshots stay on staging in `capture::rollout`.
-Phases 2 to 6 not started. Written against `feat/screen-capture` at 8a4e21f2;
+**Status:** Phase 0 done. Phases 1 and 2 done in code; their hardware
+checklists are still to run, so Windows screenshots and Windows recording
+stay on staging in `capture::rollout`. Phases 3 to 6 not started here. Written against `feat/screen-capture` at 8a4e21f2;
 Phases 0 and 1 merged with the permission, external-device, button-menu and
 camera/audio work at 2fd6e468.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
@@ -432,7 +432,153 @@ screenshots move to beta in `capture::rollout`.
 
 ### Phase 2: Windows recording (L, 3 to 4 weeks)
 
-**Scope**
+**Status: code done, hardware checklist pending.** Verified only by cross
+checks from a Mac (`cargo check` and `cargo clippy --all-targets -D warnings`
+for `x86_64-pc-windows-msvc`, with the MSVC headers from `xwin`) and by the
+platform-free tests on macOS. Nothing in it has run on Windows yet. The
+rollout row is unchanged: Windows recording shows in debug and staging
+builds only, never on beta or production.
+
+**What landed**
+- `recorder_child/` platform-free pieces, tested on every OS: `mixer.rs`
+  (the Swift `AudioMixer` ported, numbers pinned against `main.swift`),
+  `pcm.rs` (any WASAPI mix format to stereo 48 kHz float, linear
+  resampling carried across packets), `frame.rs` (BGRA to BT.709 limited
+  NV12, letterboxed into the fixed output size), `pacing.rs` (30 fps gate,
+  the held last frame with its true duration, a still picture rewritten
+  once a second, repeated at Stop), `plan.rs` (area pixels via
+  `alignToPixels`, even and capped output, the stage inset) and
+  `pipeline.rs` (origin on the first picture, the mixer, exact 100 ns audio
+  times from frame counts, behind an `Encoder` trait with a fake in tests).
+  The child's session is a `Live` trait; `serve` is unchanged otherwise.
+- `recorder_child/windows/`: `wgc.rs` (windows-capture 2.0.1 on the HMONITOR
+  or HWND from the app's ids, sign-extended back from xcap's 32 bits; cursor
+  on; border off from build 22000 with a retry on the default if refused;
+  `MinimumUpdateInterval` from 26100; area cropped on the GPU with
+  `CopySubresourceRegion` via `buffer_crop`; Hippius's own window (the stage)
+  trimmed by the 12 px inset at its DPI; at most 4 pictures queued for the
+  writer, the rest dropped), `writer.rs` (FMPEG4 sink writer, NV12 in, H.264
+  High, `MF_MT_MAX_KEYFRAME_SPACING` 60, `video_bit_rate`, BT.709 tags, AAC
+  160 kbps from 16-bit PCM; hardware transforms first, software on a setup
+  failure), `audio.rs` (one WASAPI shared client per device on its own
+  thread, 48 kHz stereo float with `AUTOCONVERTPCM`, the mix format and
+  `pcm.rs` otherwise, QPC-stamped packets), `devices.rs`
+  (`--list-microphones`), `probe.rs` (`--probe`: build, H.264 and AAC
+  encoders, hardware H.264), `self_test.rs` (`--self-test` and a Windows-only
+  unit test: synthetic 3 s, 1 s pause, 2 s through the real writer, read back
+  with `IMFSourceReader`), `com.rs` (COM, MF startup, `SetThreadExecutionState`
+  keep-awake, the QPC clock).
+- Session (`windows/mod.rs`): every device has one owner. WGC's own thread
+  owns the capture, one thread per audio device owns its WASAPI client, the
+  writer thread owns the sink writer and the pipeline, and the camera is
+  never opened by the recorder (the bubble's webview owns it and is filmed
+  as a window), so screen, system audio, microphone and camera run side by
+  side; a device that cannot open is left out with a stderr line instead of
+  failing the recording. `started` is answered once the first picture has
+  made the writer (so a missing encoder fails Start with its reason). A
+  closed window or unplugged display (`on_closed`), or a writer error,
+  finishes the file and says `stream_stopped` with `saved`; a lost
+  microphone ends only its thread. Stop is time-boxed at 30 s; Cancel drops
+  the writer unfinished and deletes the file; stdin EOF is still "finish and
+  keep" through `serve`.
+- App side: `recording::windows` starts the child with `CREATE_NO_WINDOW`;
+  `recording_unavailable` = lane, then build 19041 (`osTooOld`), then the
+  encoders from an in-process probe cached per launch
+  (`mediaFeaturePackMissing`); `microphone_supported` and `list_microphones`
+  go through the child; `systemAudio` is offered on Windows;
+  `camera_only_supported` is true on Windows and `camera_window_id` returns
+  the camera window's HWND; `webview_media.rs` answers WebView2's
+  `PermissionRequested` with Allow for CAMERA and MICROPHONE on
+  `capture-camera` and `capture-overlay-*` only, for the app's own origin
+  only; a microphone blocked by the ConsentStore (`Deny` in the device or
+  the `NonPackaged` switch, HKCU or HKLM) dims the mic row with a Windows
+  sentence.
+
+**Deviations from the scope above**
+- No `gpu.rs`: BGRA to NV12 and any scaling run on the CPU (`frame.rs`) after
+  a GPU crop. Fine at 1080p30 by arithmetic; spike W3 decides whether 4K30
+  needs the D3D11 video processor.
+- No process loopback: system audio is plain endpoint loopback, so
+  Hippius's own sounds are recorded too (rare: notifications). Windows 11's
+  `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` needs
+  `ActivateAudioInterfaceAsync` with a COM completion handler; left as a
+  seam in `audio::Device`.
+- The camera bubble is not added to a window recording
+  (`WINDOW_RECORDING_ADDS_CAMERA` stays macOS-only, so the bar already says
+  "Camera is only recorded with the entire screen or an area."): WGC takes
+  one item, so it needs two captures composited.
+- No button to `ms-settings:privacy-*` yet: Rust has the URIs
+  (`PrivacyDevice::settings_uri`) and the mic line says where to go; a
+  blocked camera has no surface yet (the bubble stays black). Both belong
+  with Phase 5's device work.
+- XP-15 (a recording glyph on the tray icon) is not done: the icon is
+  created and swapped by the main window (`useTraySync.ts`), and a second
+  writer from Rust would fight it. Phase 6.
+- The CI self-test runs as a unit test (`cargo test --lib capture::` already
+  runs on the Windows lane) instead of a separate `--self-test` step; it
+  skips itself where the runner has no Media Foundation encoders.
+- `--list-cameras` still prints `[]` on Windows: the bubble names cameras
+  from WebView2 once the permission handler lets it (Phase 5 lists them
+  from `MFEnumDeviceSources`).
+
+**Needs a Windows PC to know** (none of this could be exercised from a Mac)
+- that WGC starts from the child for a monitor, a window and the stage, and
+  the border/interval fallbacks behave (W2);
+- the sink writer accepts NV12 at odd-but-even sizes on hardware encoders
+  (W3) and the software fallback triggers when it does not;
+- a killed child leaves a playable fragmented MP4 (W4);
+- AUTOCONVERTPCM is honoured by real drivers, loopback goes quiet without
+  stalling the mic, and A/V stay in sync over an hour (W5);
+- the WebView2 handler fires (bubble shows the camera, meter moves) and the
+  ConsentStore reading matches the Settings switches;
+- the stage inset and the HWND sign-extension are right on a real machine.
+
+**Windows hardware test checklist** (Windows 11 x64 at 150 % with an
+external 100 % monitor, then Windows 10 22H2, then the ARM VM for smoke; a
+debug or staging build, since beta and production do not offer Record)
+1. `Hippius.exe --capture-recorder --probe` prints the build and
+   `h264Encoder`/`aacEncoder` true; `--list-microphones` lists every input
+   with the default marked; `--self-test` prints `"ok":true`.
+2. Record button shows (not hidden, not disabled) on a debug build; on a
+   Windows N VM without the Media Feature Pack it is disabled with the
+   Media Feature Pack line.
+3. Entire screen, 10 s, each monitor: plays in the card, Edge, Chrome,
+   Firefox and the Drive preview; the pill, overlay and card are not in the
+   video; the camera bubble is.
+4. Area on the 150 % monitor and on the 100 % one: the video is exactly the
+   drawn area (compare a screenshot of the same area).
+5. A window recording: resize the window mid-recording (letterboxed, never
+   stretched); close the window (the card delivers what was recorded, the
+   pill ends); a DPI-unaware app's window comes out whole.
+6. Unplug the recorded monitor mid-recording: the file is kept and delivered.
+7. Pause and resume three times in a 2 minute take; the duration equals the
+   recorded time and a clap stays in sync after each resume.
+8. Microphone only, system audio only (a YouTube video), both: one audio
+   track (check with `ffprobe` or MediaInfo), the mic louder than before;
+   a 44.1 kHz and a 16 kHz (Bluetooth hands-free) headset; unplug the USB
+   mic mid-recording (recording goes on, stderr says so in the log).
+9. Silence on the speakers for 30 s with the mic on: the narration does not
+   lag or drop (loopback sends nothing while silent).
+10. Camera bubble small, large and full with Entire screen and Area; camera
+    only (Screen off): the stage is recorded without its transparent margin
+    or black corners.
+11. Turn off "Let desktop apps access your microphone" in Settings: the bar's
+    mic row is dimmed with the Windows line; turn it back on, reopen the bar.
+12. Kill `Hippius.exe --capture-recorder` in Task Manager after 20 s: the
+    file in `%USERPROFILE%\.hippius\capture-tmp` plays at least 18 s.
+    Quit the app mid-recording the same way: the child finishes the file.
+13. Sleep the laptop mid-recording, wake it: the recording ends or goes on,
+    and either way the file plays.
+14. 5 min and 60 min recordings at 1080p30 and 4K30: CPU in Task Manager,
+    file size near 14 Mbps (1080p) / 28 Mbps (4K), A/V offset at the end.
+    Repeat on an NVIDIA or AMD machine (hardware encoder) and in the ARM VM
+    (software encoder).
+15. Windows 10: the yellow border shows around the recorded item and is not
+    in the video; no console window flashes when recording starts.
+16. Run each case in light and dark mode; check the pill and card at 1280x720
+    and at 200 %.
+
+**Original scope**
 - `recorder_child/windows/`: `wgc.rs` (sessions for monitor, window, area;
   cursor on; border off on Windows 11; 30 fps cap by dropping frames closer
   than 33 ms, or `MinimumUpdateInterval` on 24H2), `gpu.rs` (video processor:
