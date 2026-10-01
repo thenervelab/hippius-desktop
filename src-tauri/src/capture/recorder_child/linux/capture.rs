@@ -1,10 +1,16 @@
 //! The capture pipelines: one for the picture, one per sound device, each
 //! pulled by the one thread that owns it. Samples leave stamped on the
 //! capture clock and placed on the pause timeline; the writer does the rest.
+//!
+//! The picture is the screen (`ximagesrc`, the portal's `pipewiresrc`), a
+//! window with the bubble drawn in, a Wayland area cut out of its monitor
+//! ([`Held`]), or (camera only on Wayland) the camera itself
+//! ([`Video::start_camera`]).
 
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -15,15 +21,23 @@ use gstreamer_app as gst_app;
 use super::super::linux_plan::{self, VideoEnd, VideoSource};
 use super::super::mixer::Source;
 use super::super::pacing::Gate;
-use super::super::plan;
+use super::super::plan::{self, PixelRect};
 use super::super::writer_loop::{Msg, Shared};
-use super::say;
+use super::{installed, say};
+use crate::capture::recording::protocol::CameraPick;
 
 /// How long one pull waits before the thread looks at its stop flag and its
 /// pipeline's bus again.
 const PULL: gst::ClockTime = gst::ClockTime::from_mseconds(100);
 /// How long a source may take to open (a device, the X server, PipeWire).
 const OPEN_WITHIN: gst::ClockTime = gst::ClockTime::from_seconds(5);
+/// How long a camera may stay busy while the stage page lets go of it, and
+/// how long its first picture may take once open.
+const CAMERA_FREE_WITHIN: Duration = Duration::from_secs(3);
+const CAMERA_FIRST_PICTURE: Duration = Duration::from_secs(5);
+/// How long a held stream's first picture may take (a portal stream can
+/// take a moment to negotiate).
+const FIRST_PICTURE_WITHIN: Duration = Duration::from_secs(15);
 
 /// A pipeline from its gst-launch text, on the system clock every capture
 /// pipeline shares.
@@ -132,7 +146,10 @@ impl Video {
             .spawn({
                 let pipeline = pipeline.clone();
                 let stop = Arc::clone(&stop);
-                move || pull_video(&pipeline, &sink, &filter, &source, &shared, &stop)
+                move || {
+                    let ended = |end: &VideoEnd| linux_plan::ended_reason(&source, end);
+                    pull_video(&pipeline, &sink, &filter, source.known_size(), &ended, &shared, &stop);
+                }
             })
             .map_err(|e| format!("could not start the capture thread: {e}"))?;
         Ok(Self(Running {
@@ -193,8 +210,260 @@ impl Video {
         }))
     }
 
+    /// Camera only where no window can be filmed (Wayland): the camera the
+    /// bubble showed, opened from GStreamer's own device (the element
+    /// WebKitGTK would make for it), mirrored and sized like any picture.
+    /// The stage page is letting go of it as this runs, so a busy camera is
+    /// tried again for [`CAMERA_FREE_WITHIN`]; a camera that offers nothing
+    /// at a bounded size and rate is opened at whatever it offers.
+    pub fn start_camera(pick: &CameraPick, shared: Arc<Shared>) -> Result<Self, String> {
+        const NOT_OPENED: &str = "The camera could not be opened. Check it is connected and not in use by another app.";
+        let monitor = gst::DeviceMonitor::new();
+        let _ = monitor.add_filter(Some("Video/Source"), None);
+        if monitor.start().is_err() {
+            say("the camera list could not be read");
+            return Err(NOT_OPENED.into());
+        }
+        let devices: Vec<gst::Device> = monitor.devices().into_iter().filter(|d| d.has_classes("Video/Source")).collect();
+        monitor.stop();
+        let found: Vec<linux_plan::RawCamera> = devices.iter().map(super::devices::raw_camera).collect();
+        let (index, chosen) = linux_plan::pick_camera(&found, pick).ok_or("No camera is connected.")?;
+        if !chosen {
+            say("the chosen camera is not connected; recording the default camera");
+        }
+        let device = &devices[index];
+        let jpeg = installed(linux_plan::JPEG_DECODER);
+        let deadline = Instant::now() + CAMERA_FREE_WITHIN;
+        let mut constrained = true;
+        let (pipeline, sink, filter) = loop {
+            match open_camera(device, constrained, jpeg) {
+                Ok(opened) => break opened,
+                Err(detail) if constrained => {
+                    say(&format!("the camera did not start at a bounded size, trying any: {detail}"));
+                    constrained = false;
+                }
+                Err(detail) if Instant::now() < deadline => {
+                    say(&format!("the camera is not free yet: {detail}"));
+                    std::thread::sleep(Duration::from_millis(250));
+                    constrained = true;
+                }
+                Err(detail) => {
+                    say(&format!("the camera could not be opened: {detail}"));
+                    return Err(NOT_OPENED.into());
+                }
+            }
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = std::thread::Builder::new()
+            .name("capture-camera".into())
+            .spawn({
+                let pipeline = pipeline.clone();
+                let stop = Arc::clone(&stop);
+                move || {
+                    let ended = |_: &VideoEnd| linux_plan::CAMERA_ENDED.to_string();
+                    pull_video(&pipeline, &sink, &filter, None, &ended, &shared, &stop);
+                }
+            })
+            .map_err(|e| format!("could not start the capture thread: {e}"))?;
+        Ok(Self(Running {
+            pipeline,
+            stop,
+            thread: Some(thread),
+        }))
+    }
+
     pub fn stop(self) {
         self.0.stop();
+    }
+}
+
+/// `device`'s element linked into the camera pipeline
+/// (`linux_plan::camera_capture_tail`), playing, with a first picture seen:
+/// a camera whose caps do not negotiate fails here, not mid-recording.
+fn open_camera(device: &gst::Device, constrained: bool, jpeg: bool) -> Result<(gst::Pipeline, gst_app::AppSink, gst::Element), String> {
+    let pipeline = launch(&linux_plan::camera_capture_tail(constrained, jpeg))?;
+    let source = device.create_element(None).map_err(|e| format!("no element for the camera: {e}"))?;
+    let input = pipeline.by_name(linux_plan::CAMERA_IN).ok_or("the camera pipeline has no input")?;
+    pipeline.add(&source).map_err(|e| format!("the camera could not be added: {e}"))?;
+    source.link(&input).map_err(|e| format!("the camera could not be linked: {e}"))?;
+    let sink = appsink(&pipeline, linux_plan::VIDEO_SINK)?;
+    let filter = pipeline.by_name(linux_plan::SIZE_FILTER).ok_or("the pipeline has no size filter")?;
+    play(&pipeline)?;
+    let deadline = Instant::now() + CAMERA_FIRST_PICTURE;
+    loop {
+        if let Some(detail) = bus_error(&pipeline) {
+            let _ = pipeline.set_state(gst::State::Null);
+            return Err(detail);
+        }
+        if sink.try_pull_sample(PULL).is_some() {
+            return Ok((pipeline, sink, filter));
+        }
+        if Instant::now() >= deadline {
+            let _ = pipeline.set_state(gst::State::Null);
+            return Err("no picture from the camera".into());
+        }
+    }
+}
+
+/// The first picture of a held stream, BGRx, rows `width * 4` bytes apart.
+pub struct FirstPicture {
+    pub bgrx: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Where a held stream's pictures go once the area is known.
+struct CropTarget {
+    shared: Arc<Shared>,
+    area: PixelRect,
+    out: (u32, u32),
+}
+
+/// A Wayland area's monitor, open and read whole, while the area is drawn
+/// on its first picture: later pictures are dropped until
+/// [`Held::release`] names the area, then each is cut to it (the stream's
+/// own pixels, `frame::to_nv12` reading the area's rows in place) and sent
+/// to the writer at the area's size. Nothing renegotiates mid-stream.
+pub struct Held {
+    running: Running,
+    target: Arc<Mutex<Option<CropTarget>>>,
+    /// Why the stream ended while the area was being drawn.
+    ended: Arc<Mutex<Option<String>>>,
+}
+
+impl Held {
+    /// Open `source` and wait for its first picture.
+    pub fn start(source: VideoSource) -> Result<(Self, FirstPicture), String> {
+        let pipeline = launch(&linux_plan::video_capture_bgrx(&source))?;
+        let sink = appsink(&pipeline, linux_plan::VIDEO_SINK)?;
+        play(&pipeline).map_err(|detail| {
+            say(&format!("the screen could not be read: {detail}"));
+            "The screen could not be read.".to_string()
+        })?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let target: Arc<Mutex<Option<CropTarget>>> = Arc::new(Mutex::new(None));
+        let ended = Arc::new(Mutex::new(None));
+        let (first_tx, first_rx) = mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("capture-video".into())
+            .spawn({
+                let pipeline = pipeline.clone();
+                let stop = Arc::clone(&stop);
+                let target = Arc::clone(&target);
+                let ended = Arc::clone(&ended);
+                move || pull_held(&pipeline, &sink, &source, &target, &ended, first_tx, &stop)
+            })
+            .map_err(|e| format!("could not start the capture thread: {e}"))?;
+        let running = Running {
+            pipeline,
+            stop,
+            thread: Some(thread),
+        };
+        if let Ok(first) = first_rx.recv_timeout(FIRST_PICTURE_WITHIN) {
+            Ok((Self { running, target, ended }, first))
+        } else {
+            running.stop();
+            Err("The screen sent no picture to record.".into())
+        }
+    }
+
+    /// Record `area` from now on, through `shared`.
+    pub fn release(self, area: PixelRect, shared: Arc<Shared>) -> Result<Video, String> {
+        if let Some(reason) = self.ended.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+            self.running.stop();
+            return Err(reason);
+        }
+        *self.target.lock().unwrap_or_else(PoisonError::into_inner) = Some(CropTarget {
+            shared,
+            area,
+            out: plan::output_size(area.width(), area.height()),
+        });
+        Ok(Video(self.running))
+    }
+
+    pub fn stop(self) {
+        self.running.stop();
+    }
+}
+
+/// The held stream's thread: the first picture out, then nothing until the
+/// area is known, then pull, stamp, place, pace, cut, send.
+fn pull_held(
+    pipeline: &gst::Pipeline,
+    sink: &gst_app::AppSink,
+    source: &VideoSource,
+    target: &Mutex<Option<CropTarget>>,
+    ended_early: &Mutex<Option<String>>,
+    first: mpsc::Sender<FirstPicture>,
+    stop: &AtomicBool,
+) {
+    let mut first = Some(first);
+    let mut gate = Gate::new();
+    let mut quiet = Quiet { last: None };
+    let finish = |end: &VideoEnd| {
+        let reason = linux_plan::ended_reason(source, end);
+        match target.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            Some(t) => {
+                t.shared.send(Msg::Ended(reason));
+            }
+            None => *ended_early.lock().unwrap_or_else(PoisonError::into_inner) = Some(reason),
+        }
+    };
+    while !stop.load(Ordering::SeqCst) {
+        if let Some(end) = ended(pipeline) {
+            if let VideoEnd::Error(detail) = &end {
+                say(&format!("the picture's pipeline failed: {detail}"));
+            }
+            finish(&end);
+            return;
+        }
+        let Some(sample) = sink.try_pull_sample(PULL) else {
+            if sink.is_eos() {
+                finish(&VideoEnd::Eos);
+                return;
+            }
+            continue;
+        };
+        let Some((w, h)) = sample_size(&sample) else { continue };
+        let Some(buffer) = sample.buffer() else { continue };
+        let Ok(map) = buffer.map_readable() else { continue };
+        let stride = w as usize * 4;
+        let bytes = map.as_slice();
+        if bytes.len() < stride * h as usize {
+            continue;
+        }
+        if let Some(tx) = first.take() {
+            let _ = tx.send(FirstPicture {
+                bgrx: bytes[..stride * h as usize].to_vec(),
+                width: w,
+                height: h,
+            });
+        }
+        let guard = target.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(t) = guard.as_ref() else { continue };
+        // A monitor whose resolution changed keeps what is left of the area.
+        let Some(area) = t.area.within(w, h) else { continue };
+        let Some(time) = micros_of(pipeline, buffer.pts()) else { continue };
+        let Some(placed) = t.shared.place(time) else { continue };
+        if !gate.accept(placed) {
+            continue;
+        }
+        let at = area.y0 as usize * stride + area.x0 as usize * 4;
+        let mut nv12 = Vec::new();
+        super::super::frame::to_nv12(
+            super::super::frame::Bgra {
+                data: &bytes[at..],
+                width: area.width(),
+                height: area.height(),
+                stride,
+            },
+            t.out.0,
+            t.out.1,
+            &mut nv12,
+        );
+        if !t.shared.send_frame(placed, nv12, t.out) {
+            quiet.say("the writer is behind; pictures are being dropped");
+        }
     }
 }
 
@@ -322,9 +591,19 @@ fn pull_composed(
     }
 }
 
-/// The picture thread: pull, size, stamp, place, pace, send.
-fn pull_video(pipeline: &gst::Pipeline, sink: &gst_app::AppSink, filter: &gst::Element, source: &VideoSource, shared: &Shared, stop: &AtomicBool) {
-    let mut size = source.known_size().map(|(w, h)| plan::output_size(w, h));
+/// The picture thread: pull, size, stamp, place, pace, send. `known` is
+/// the picture's size when the source says it up front; `ended_reason`
+/// words a stream that stopped on its own.
+fn pull_video(
+    pipeline: &gst::Pipeline,
+    sink: &gst_app::AppSink,
+    filter: &gst::Element,
+    known: Option<(u32, u32)>,
+    ended_reason: &dyn Fn(&VideoEnd) -> String,
+    shared: &Shared,
+    stop: &AtomicBool,
+) {
+    let mut size = known.map(|(w, h)| plan::output_size(w, h));
     let mut gate = Gate::new();
     let mut quiet = Quiet { last: None };
     let bus = pipeline.bus();
@@ -340,12 +619,12 @@ fn pull_video(pipeline: &gst::Pipeline, sink: &gst_app::AppSink, filter: &gst::E
             if let VideoEnd::Error(detail) = &end {
                 say(&format!("the picture's pipeline failed: {detail}"));
             }
-            shared.send(Msg::Ended(linux_plan::ended_reason(source, &end)));
+            shared.send(Msg::Ended(ended_reason(&end)));
             return;
         }
         let Some(sample) = sink.try_pull_sample(PULL) else {
             if sink.is_eos() {
-                shared.send(Msg::Ended(linux_plan::ended_reason(source, &VideoEnd::Eos)));
+                shared.send(Msg::Ended(ended_reason(&VideoEnd::Eos)));
                 return;
             }
             continue;

@@ -63,16 +63,22 @@ pub fn cameras_of(found: impl IntoIterator<Item = gst::Device>) -> Vec<MediaDevi
     let found: Vec<RawCamera> = found
         .into_iter()
         .filter(|d| d.has_classes("Video/Source"))
-        .map(|d| {
-            let props = d.properties();
-            let text = |key: &str| props.as_ref().and_then(|p| p.get::<String>(key).ok());
-            RawCamera {
-                id: text("node.name").or_else(|| text("api.v4l2.path")).or_else(|| text("device.path")),
-                display_name: d.display_name().to_string(),
-            }
-        })
+        .map(|d| raw_camera(&d))
         .collect();
     cameras(found)
+}
+
+/// A camera as the list names it: PipeWire's `node.name`, else the V4L2
+/// path. Camera only on Wayland finds the camera to open by this same id
+/// (`linux_plan::pick_camera`), so the list and the recorder never differ.
+#[must_use]
+pub fn raw_camera(device: &gst::Device) -> RawCamera {
+    let props = device.properties();
+    let text = |key: &str| props.as_ref().and_then(|p| p.get::<String>(key).ok());
+    RawCamera {
+        id: text("node.name").or_else(|| text("api.v4l2.path")).or_else(|| text("device.path")),
+        display_name: device.display_name().to_string(),
+    }
 }
 
 /// A device as the list needs it. PipeWire's provider names the node in

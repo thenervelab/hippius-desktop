@@ -19,7 +19,7 @@ use super::super::linux_plan::{PortalAsk, VideoSource};
 use super::say;
 use crate::capture::linux_portal::{PortalAnswer, classify};
 use crate::capture::recording::RecordingUnavailable;
-use crate::capture::recording::protocol::PICKER_CANCELLED;
+use crate::capture::recording::protocol::{PICKER_CANCELLED, StreamPlacement};
 
 /// How long the portal may take to answer a question that shows no dialog
 /// (whether it exists, the inhibit).
@@ -33,6 +33,10 @@ struct Cast {
     /// stays open until the session closes.
     fd: OwnedFd,
     restore_token: Option<String>,
+    /// Where the compositor shows the stream, when it says (a monitor's
+    /// place in its logical layout): which monitor a Wayland area's
+    /// selection window should cover.
+    placement: Option<StreamPlacement>,
 }
 
 /// The portal objects of one recording and the runtime that drives them.
@@ -83,6 +87,13 @@ impl Desktop {
         };
         self.cast = Some(cast);
         Ok(source)
+    }
+
+    /// Where the chosen stream sits in the desktop's layout, when the
+    /// portal said.
+    #[must_use]
+    pub fn stream_placement(&self) -> Option<StreamPlacement> {
+        self.cast.as_ref().and_then(|c| c.placement)
     }
 
     /// The token for restoring this choice next time, when the portal gave
@@ -167,6 +178,10 @@ async fn start_cast(ask: &PortalAsk) -> ashpd::Result<(Cast, u32)> {
         return Err(ashpd::Error::NoResponse);
     };
     let node = stream.pipe_wire_node_id();
+    let placement = match (stream.position(), stream.size()) {
+        (Some((x, y)), Some((width, height))) => Some(StreamPlacement { x, y, width, height }),
+        _ => None,
+    };
     let restore_token = streams.restore_token().map(str::to_string);
     let fd = proxy.open_pipe_wire_remote(&session, OpenPipeWireRemoteOptions::default()).await?;
     Ok((
@@ -175,6 +190,7 @@ async fn start_cast(ask: &PortalAsk) -> ashpd::Result<(Cast, u32)> {
             session,
             fd,
             restore_token,
+            placement,
         },
         node,
     ))

@@ -11,12 +11,14 @@
 //! Commands (app to recorder), each with an `id` the reply echoes:
 //! `{"cmd":"start","id":1,"output":"…","displayId":…,"windowId":…,"crop":…,
 //! "systemAudio":…,"cameraWindowId":…}`,
-//! `pause`, `resume`, `stop`, `cancel`. Closing stdin means "finish the file
-//! and keep it".
+//! `pause`, `resume`, `stop`, `cancel`, and (the Rust child only, a Wayland
+//! area) `crop`. Closing stdin means "finish the file and keep it".
 //!
 //! Events (recorder to app): `{"ok":true,"event":"ready"}` once, then
 //! `{"ok":true,"event":"started"|"paused"|"resumed"|"stopped"|"cancelled","id":n}`
-//! or `{"ok":false,"error":"…","id":n}`, and the unprompted
+//! or `{"ok":false,"error":"…","id":n}`; a `start` with `pickArea` is
+//! answered `area_still` (the stream's first picture) and the `crop` that
+//! follows is answered `started`. And the unprompted
 //! `{"ok":false,"event":"stream_stopped","error":"…","saved":bool}` when the
 //! recording ended on its own and the file was finished with what it had.
 
@@ -78,6 +80,17 @@ pub struct StartCommand {
     /// dialog. Only the Rust child reads it; left off the wire when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restore_token: Option<String>,
+    /// Wayland area: ask the portal for a monitor, answer this `start` with
+    /// `area_still` (the stream's first picture, in its own pixels) and
+    /// record nothing until a `crop` names the area on that picture. Only
+    /// the Rust child reads it; left off the wire when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pick_area: bool,
+    /// Camera only where the recorder opens the camera itself (Wayland,
+    /// which gives no window to film): which camera. Only the Rust child
+    /// reads it; left off the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<CameraPick>,
     /// Record the child's test pattern instead of the screen. Only the Rust
     /// child knows it; never sent by the app's own sessions, and left off the
     /// wire when false so the Swift helper never sees it.
@@ -93,6 +106,70 @@ pub struct CropRect {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+/// The camera a camera-only recording opens in the recorder (Wayland): the
+/// id the bar listed (`--list-cameras`: PipeWire's `node.name` or the V4L2
+/// path) and its name, which is GStreamer's and WebKitGTK's alike, for a
+/// choice made by name in the webview's own list.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraPick {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// An area of a ScreenCast stream's picture, in that picture's own pixels
+/// (`crop`): the stream's pixels, never the desktop's logical units, so a
+/// scaled or fractionally scaled monitor needs no conversion in the child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamCrop {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// `crop`: record this area of the stream the `area_still` showed.
+#[derive(Debug, Serialize)]
+pub struct CropCommand {
+    pub cmd: &'static str,
+    pub id: u64,
+    #[serde(flatten)]
+    pub area: StreamCrop,
+}
+
+impl CropCommand {
+    #[must_use]
+    pub const fn new(id: u64, area: StreamCrop) -> Self {
+        Self { cmd: "crop", id, area }
+    }
+}
+
+/// Where the compositor shows a stream, in its logical layout, when the
+/// portal says (`position` and `size` of the stream): which monitor the
+/// selection window should cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamPlacement {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// `area_still`: the first picture of the monitor the user chose in the
+/// desktop's dialog, for drawing the area on. `width` x `height` are the
+/// stream's pixels (what `crop` is measured in); the JPEG may be smaller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamStill {
+    pub width: u32,
+    pub height: u32,
+    /// Base64 JPEG.
+    pub jpeg: String,
+    pub placement: Option<StreamPlacement>,
 }
 
 impl StartCommand {
@@ -119,6 +196,8 @@ impl StartCommand {
             system_audio: options.system_audio,
             camera_window_id: None,
             restore_token: options.restore_token.clone(),
+            pick_area: false,
+            camera: options.camera.clone(),
             synthetic: false,
         };
         match selection {
@@ -136,6 +215,11 @@ impl StartCommand {
                     height: rect.height,
                 });
             }
+        }
+        if options.pick_area {
+            // The area is drawn later, on the stream's own picture.
+            cmd.crop = None;
+            cmd.pick_area = true;
         }
         Ok(cmd)
     }
@@ -164,6 +248,9 @@ pub enum HelperEvent {
     DeviceLost {
         device: String,
     },
+    /// The answer to a `start` with `pickArea`: the chosen monitor's first
+    /// picture. Nothing is recorded until `crop`.
+    AreaStill(StreamStill),
 }
 
 /// One line from the recorder: the event, and the id of the command it
@@ -193,6 +280,14 @@ struct WireEvent {
     restore_token: Option<String>,
     #[serde(default)]
     device: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+    #[serde(default)]
+    jpeg: Option<String>,
+    #[serde(default)]
+    placement: Option<StreamPlacement>,
 }
 
 /// Read one event line.
@@ -213,6 +308,16 @@ pub fn parse_event(line: &str) -> std::result::Result<Incoming, String> {
         }
     } else if v.ok == Some(false) || v.error.is_some() {
         HelperEvent::Error(v.error.unwrap_or_else(|| "helper error".into()))
+    } else if v.event.as_deref() == Some("area_still") {
+        match (v.width, v.height, v.jpeg) {
+            (Some(width), Some(height), Some(jpeg)) if width > 0 && height > 0 => HelperEvent::AreaStill(StreamStill {
+                width,
+                height,
+                jpeg,
+                placement: v.placement,
+            }),
+            _ => return Err("area_still without a picture".into()),
+        }
     } else {
         match v.event.as_deref() {
             Some("ready") => HelperEvent::Ready,
@@ -241,6 +346,7 @@ pub enum Command {
     Resume { id: Option<u64> },
     Stop { id: Option<u64> },
     Cancel { id: Option<u64> },
+    Crop { id: Option<u64>, area: StreamCrop },
 }
 
 /// Why a command line could not be read, with the id to answer it on when
@@ -283,6 +389,14 @@ pub fn parse_command(line: &str) -> std::result::Result<Command, BadCommand> {
         "resume" => Ok(Command::Resume { id }),
         "stop" => Ok(Command::Stop { id }),
         "cancel" => Ok(Command::Cancel { id }),
+        "crop" => serde_json::from_value::<StreamCrop>(value.clone())
+            .ok()
+            .filter(|a| a.width > 0 && a.height > 0)
+            .map(|area| Command::Crop { id, area })
+            .ok_or_else(|| BadCommand {
+                id,
+                error: "missing crop area".into(),
+            }),
         other => Err(BadCommand {
             id,
             error: format!("unknown cmd: {other}"),
@@ -324,6 +438,25 @@ pub fn started_line(id: Option<u64>, size: (u32, u32), restore_token: Option<&st
         }
         None => line,
     }
+}
+
+/// `area_still`: the answer to a `start` with `pickArea`.
+#[must_use]
+pub fn area_still_line(id: Option<u64>, still: &StreamStill) -> String {
+    let mut body = serde_json::json!({
+        "ok": true,
+        "event": "area_still",
+        "width": still.width,
+        "height": still.height,
+        "jpeg": still.jpeg,
+    });
+    if let Some(id) = id {
+        body["id"] = id.into();
+    }
+    if let Some(placement) = still.placement {
+        body["placement"] = serde_json::to_value(placement).unwrap_or_default();
+    }
+    body.to_string()
 }
 
 /// The recorder's refusal when the user closed the desktop's screen-sharing
@@ -382,6 +515,8 @@ mod tests {
                 system_audio: true,
                 camera_window: Some(99),
                 restore_token: None,
+                pick_area: false,
+                camera: None,
             },
         )
         .unwrap();

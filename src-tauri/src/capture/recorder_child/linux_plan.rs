@@ -26,6 +26,14 @@
 //!   again ([`PortalAsk`]).
 //! - **Why a recording ended on its own** ([`ended_reason`]), in the words
 //!   the app logs and delivers with the file.
+//! - **Camera only on Wayland** ([`pick_camera`], [`camera_capture_tail`]):
+//!   no window to film there, so the recorder opens the camera the bubble
+//!   showed, found among GStreamer's devices by the id the bar listed or by
+//!   its name (WebKitGTK lists cameras through GStreamer too, so the names
+//!   are the same), mirrored as the stage shows it.
+//! - **A Wayland area** ([`video_capture_bgrx`] on the portal's stream): the
+//!   monitor is read whole and cropped in Rust to the area drawn on its
+//!   first picture, in the stream's own pixels.
 //!
 //! See `docs/plans/2026-10-01-capture-windows-linux.md`, decision 3 and
 //! Phase 4.
@@ -166,6 +174,15 @@ pub const NEEDED_ALWAYS: [&str; 11] = [
     "videocrop",
 ];
 
+/// What camera only on Wayland needs besides a recording's elements:
+/// `decodebin` (a camera that sends JPEG) and `videoflip` (the mirror the
+/// stage shows), plus one of [`CAMERA_SOURCES`].
+pub const NEEDED_FOR_CAMERA: [&str; 2] = ["decodebin", "videoflip"];
+/// The camera sources GStreamer's device monitor hands out elements of.
+pub const CAMERA_SOURCES: [&str; 2] = ["v4l2src", "pipewiresrc"];
+/// Decodes a camera's JPEG; without it only raw formats are asked for.
+pub const JPEG_DECODER: &str = "jpegdec";
+
 /// The picture's source on each session: `ximagesrc` (good plugins) on X11,
 /// `pipewiresrc` (PipeWire's own plugin) on Wayland.
 #[must_use]
@@ -195,6 +212,11 @@ pub struct Probe {
     /// Wayland only: whether a ScreenCast portal answered (`None` on X11).
     #[serde(default)]
     pub screencast_portal: Option<bool>,
+    /// Whether the recorder can open a camera itself (camera only on
+    /// Wayland): a camera source and [`NEEDED_FOR_CAMERA`] are installed.
+    /// `None` from an older probe.
+    #[serde(default)]
+    pub camera: Option<bool>,
 }
 
 impl Probe {
@@ -221,7 +243,16 @@ impl Probe {
             missing,
             session: Some(if wayland { "wayland" } else { "x11" }.to_string()),
             screencast_portal: None,
+            camera: Some(NEEDED_FOR_CAMERA.iter().all(|e| installed(e)) && CAMERA_SOURCES.iter().any(|e| installed(e))),
         }
+    }
+
+    /// Whether camera only can be recorded without a window to film: the
+    /// machine records at all, and the probe found a camera source and
+    /// what camera pictures need.
+    #[must_use]
+    pub fn records_camera(&self, wayland: bool) -> bool {
+        self.camera == Some(true) && self.unavailable(wayland).is_none()
     }
 
     /// Why this machine cannot record, from what the probe found. A Wayland
@@ -449,20 +480,106 @@ pub fn video_capture(source: &VideoSource) -> String {
     )
 }
 
-/// The capture pipeline for a window that gets the camera bubble drawn in
-/// (X11): the window's own pictures at their own size, as BGRx, for the
-/// recorder to draw the bubble into and fit into the recording's size
-/// itself (`frame::to_nv12`), the way Windows does. No crop: the stage is
-/// never recorded with a bubble (camera only has no screen to film).
+/// The capture pipeline whose pictures Rust finishes itself: the source's
+/// own pictures at their own size, as BGRx, fitted into the recording's
+/// size by the recorder (`frame::to_nv12`), the way Windows does. Two
+/// users: an X11 window that gets the camera bubble drawn in (no crop: the
+/// stage is never recorded with a bubble), and a Wayland area, cut out of
+/// the monitor's stream in Rust (the area is known only after the first
+/// picture, so the pipeline never has to renegotiate). X11 is asked for
+/// 30 frames a second; a portal stream sends one when the screen changes.
 #[must_use]
 pub fn video_capture_bgrx(source: &VideoSource) -> String {
+    let rate = match source {
+        VideoSource::X11Area { .. } | VideoSource::X11Window { .. } => format!("video/x-raw,framerate={FPS}/1 ! "),
+        VideoSource::Portal { .. } => String::new(),
+    };
     format!(
-        "{src} name=vsrc ! video/x-raw,framerate={FPS}/1 ! queue max-size-buffers=3 leaky=downstream ! videoconvert ! \
+        "{src} name=vsrc ! {rate}queue max-size-buffers=3 leaky=downstream ! videoconvert ! \
          capsfilter caps={caps} ! appsink name={VIDEO_SINK} max-buffers=4 drop=true sync=false",
         src = source.element(),
         caps = quoted("video/x-raw,format=BGRx"),
     )
 }
+
+/// The named element a camera's source is linked into
+/// ([`camera_capture_tail`]): the source is an element GStreamer's device
+/// monitor makes, so it is added by the recorder, not written as text.
+pub const CAMERA_IN: &str = "camin";
+
+/// What follows a camera's source: a bounded caps choice first
+/// (`constrained`: at most 1080p, 15 to 60 frames a second, as raw video
+/// or, with a JPEG decoder, `image/jpeg`; a camera's first offer is often
+/// its largest picture at a few frames a second), decoded, mirrored as the
+/// stage shows it, then the open `size` filter the recording's size is set
+/// on from the first picture, as for every other source. Unconstrained is
+/// the fallback for a camera that offers nothing in that range.
+#[must_use]
+pub fn camera_capture_tail(constrained: bool, jpeg: bool) -> String {
+    let choice = if constrained {
+        let raw = "video/x-raw,width=[1,1920],height=[1,1080],framerate=[15/1,60/1]";
+        let caps = if jpeg {
+            format!("{raw};image/jpeg,width=[1,1920],height=[1,1080],framerate=[15/1,60/1]")
+        } else {
+            raw.to_string()
+        };
+        format!("capsfilter caps={} ! ", quoted(&caps))
+    } else {
+        String::new()
+    };
+    format!(
+        "queue name={CAMERA_IN} max-size-buffers=3 leaky=downstream ! {choice}decodebin ! videoconvert ! \
+         videoflip method=horizontal-flip ! videoscale add-borders=true ! capsfilter name={SIZE_FILTER} caps={caps} ! \
+         appsink name={VIDEO_SINK} max-buffers=4 drop=true sync=false",
+        caps = quoted("video/x-raw,format=NV12"),
+    )
+}
+
+/// How a camera's name is compared: the bar may hold the name WebKitGTK
+/// gave (the same GStreamer name, but a phone's may carry a curly
+/// apostrophe one way and a straight one the other), so NFC, straight
+/// quotes, single spaces and no case.
+#[must_use]
+pub fn camera_name_key(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    let straight: String = name
+        .nfc()
+        .map(|c| match c {
+            '\u{2018}' | '\u{2019}' | '\u{201B}' | '\u{2032}' => '\'',
+            '\u{201C}' | '\u{201D}' | '\u{2033}' => '"',
+            c => c,
+        })
+        .collect();
+    straight.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Which of the cameras GStreamer found to open for `pick`: the one with
+/// the bar's id (PipeWire's `node.name` or the V4L2 path), else the one
+/// with its name, else the first (the default, as the bubble opens it when
+/// nothing is chosen). The flag says whether what was asked for is what
+/// is opened; `None` when there is no camera at all.
+#[must_use]
+pub fn pick_camera(found: &[RawCamera], pick: &crate::capture::recording::protocol::CameraPick) -> Option<(usize, bool)> {
+    if found.is_empty() {
+        return None;
+    }
+    let wanted_id = pick.id.as_deref().map(str::trim).filter(|id| !id.is_empty() && *id != "default");
+    if let Some(id) = wanted_id
+        && let Some(i) = found.iter().position(|c| c.id.as_deref() == Some(id))
+    {
+        return Some((i, true));
+    }
+    let wanted_name = pick.name.as_deref().map(camera_name_key).filter(|n| !n.is_empty());
+    if let Some(name) = &wanted_name
+        && let Some(i) = found.iter().position(|c| camera_name_key(&c.display_name) == *name)
+    {
+        return Some((i, true));
+    }
+    Some((0, wanted_id.is_none() && wanted_name.is_none()))
+}
+
+/// What the app is told when the camera stopped mid-recording.
+pub const CAMERA_ENDED: &str = "The camera stopped sending pictures.";
 
 /// What "Record system audio" records: the default output's monitor. Both
 /// PulseAudio and `pipewire-pulse` resolve the name, so it follows the
@@ -1243,5 +1360,104 @@ mod tests {
                 ("Logitech C270", "Logitech C270"),
             ]
         );
+    }
+
+    /// A Wayland area reads the monitor whole as BGRx, at the stream's own
+    /// pace (a portal stream sends a picture when the screen changes), for
+    /// the recorder to cut the area out in Rust.
+    #[test]
+    fn a_wayland_area_reads_the_whole_stream_raw() {
+        let text = video_capture_bgrx(&VideoSource::Portal { fd: 9, node: 70 });
+        assert!(text.starts_with("pipewiresrc fd=9 path=70"), "{text}");
+        assert!(!text.contains("framerate"), "{text}");
+        assert!(!text.contains("videocrop") && !text.contains("name=size"), "the crop is Rust's");
+        assert!(text.contains("caps=\"video/x-raw,format=BGRx\""), "{text}");
+    }
+
+    /// Camera only on Wayland: the camera is asked for at most 1080p at a
+    /// real frame rate (JPEG only where it can be decoded), mirrored as the
+    /// stage shows it, and sized from its first picture like any source.
+    #[test]
+    fn a_camera_is_bounded_mirrored_and_sized_from_its_first_picture() {
+        let text = camera_capture_tail(true, true);
+        assert!(text.starts_with("queue name=camin "), "{text}");
+        assert!(
+            text.contains("video/x-raw,width=[1,1920],height=[1,1080],framerate=[15/1,60/1];image/jpeg"),
+            "{text}"
+        );
+        assert!(text.contains("decodebin ! videoconvert ! videoflip method=horizontal-flip"), "{text}");
+        assert!(text.contains("capsfilter name=size caps=\"video/x-raw,format=NV12\""), "{text}");
+        assert!(text.ends_with("appsink name=video max-buffers=4 drop=true sync=false"));
+        assert!(!camera_capture_tail(true, false).contains("image/jpeg"), "no decoder, no JPEG");
+        let open = camera_capture_tail(false, true);
+        assert!(!open.contains("framerate") && open.contains("videoflip"), "{open}");
+    }
+
+    fn camera(id: Option<&str>, name: &str) -> RawCamera {
+        RawCamera {
+            id: id.map(str::to_string),
+            display_name: name.into(),
+        }
+    }
+
+    /// The recorder opens the camera the bubble showed: by the bar's id,
+    /// else by the name WebKitGTK and GStreamer share (a phone's curly
+    /// apostrophe matches a straight one), else the default with the flag
+    /// saying so; nothing at all without a camera.
+    #[test]
+    fn the_recorder_opens_the_camera_the_bubble_showed() {
+        use crate::capture::recording::protocol::CameraPick;
+        let found = [
+            camera(Some("/dev/video0"), "Integrated Camera: Integrated C"),
+            camera(Some("v4l2_input.pci-0000_00_14.0-usb-0_1_1.0"), "Ana\u{2019}s Pixel"),
+            camera(None, "OBS Virtual Camera"),
+        ];
+        let by = |id: Option<&str>, name: Option<&str>| CameraPick {
+            id: id.map(str::to_string),
+            name: name.map(str::to_string),
+        };
+        assert_eq!(pick_camera(&found, &by(Some("/dev/video0"), None)), Some((0, true)));
+        assert_eq!(
+            pick_camera(&found, &by(Some("v4l2_input.pci-0000_00_14.0-usb-0_1_1.0"), Some("whatever"))),
+            Some((1, true)),
+            "the id wins over the name"
+        );
+        // A webview deviceId (no match among GStreamer's ids) falls to the name.
+        assert_eq!(pick_camera(&found, &by(Some("8d1c0f..."), Some("ana's  pixel"))), Some((1, true)));
+        assert_eq!(pick_camera(&found, &by(None, Some("OBS Virtual Camera"))), Some((2, true)));
+        assert_eq!(pick_camera(&found, &by(None, None)), Some((0, true)), "nothing chosen: the default");
+        assert_eq!(pick_camera(&found, &by(Some("default"), None)), Some((0, true)));
+        assert_eq!(
+            pick_camera(&found, &by(Some("/dev/video9"), Some("Unplugged"))),
+            Some((0, false)),
+            "a camera that is gone records the default, and says so"
+        );
+        assert_eq!(pick_camera(&[], &by(None, None)), None);
+        assert_eq!(camera_name_key("  Ana\u{2019}s   PIXEL "), "ana's pixel");
+    }
+
+    /// The probe says whether camera only can be recorded without a window:
+    /// a camera source and the decoder and mirror, on a machine that records.
+    #[test]
+    fn the_probe_says_whether_the_recorder_can_open_a_camera() {
+        let full: Vec<&str> = H264Encoder::PREFERENCE
+            .iter()
+            .map(|e| e.factory())
+            .chain(AacEncoder::PREFERENCE.iter().map(|e| e.factory()))
+            .chain(NEEDED_ALWAYS)
+            .chain(["pipewiresrc", "ximagesrc"])
+            .collect();
+        let with_camera: Vec<&str> = full.iter().copied().chain(NEEDED_FOR_CAMERA).chain(["v4l2src"]).collect();
+        let mut probe = Probe::from_registry(true, with(&with_camera));
+        probe.screencast_portal = Some(true);
+        assert_eq!(probe.camera, Some(true));
+        assert!(probe.records_camera(true));
+        let mut no_flip = Probe::from_registry(true, with(&full.iter().copied().chain(["decodebin", "v4l2src"]).collect::<Vec<_>>()));
+        no_flip.screencast_portal = Some(true);
+        assert!(!no_flip.records_camera(true), "no videoflip");
+        let mut no_portal = probe.clone();
+        no_portal.screencast_portal = Some(false);
+        assert!(!no_portal.records_camera(true), "a machine that cannot record cannot record the camera");
+        assert!(!Probe::default().records_camera(true), "an older probe that never said");
     }
 }
