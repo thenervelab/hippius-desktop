@@ -4,7 +4,8 @@
 still to run, so Windows screenshots stay on staging in `capture::rollout`.
 Phase 3 (Linux screenshots) done in code and type-checked for Linux from
 macOS; its checklist needs real Linux sessions, so Linux stays on staging.
-Phases 2, 4, 5 and 6 not started. Written against `feat/screen-capture` at 8a4e21f2;
+Phase 4 has its pure groundwork (`recorder_child/linux_plan.rs`) and nothing
+else. Phases 2, 5 and 6 not started here. Written against `feat/screen-capture` at 8a4e21f2;
 Phases 0 and 1 merged with the permission, external-device, button-menu and
 camera/audio work at 2fd6e468.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
@@ -574,13 +575,19 @@ What landed, and where it differs from the scope below:
   displays listed, a screen grab at the display's pixel size, a root grab,
   the pointer.
 
-**Verified so far:** `cargo check --target x86_64-unknown-linux-gnu` from
-macOS (fake `.pc` files and a no-op C compiler stand in for the Linux
-system libraries; this type-checks every Rust line, links nothing). Unit
-tests of the pure halves on macOS. vitest for the menu and Settings.
-**Not verified anywhere yet:** any real X server or portal. Linux clippy
-did not run from macOS (clippy compiles `build.rs` for the target there);
-CI's `rust-linux` runs it.
+**Verified so far:** `cargo check --lib --target x86_64-unknown-linux-gnu`
+from macOS (fake `.pc` files and a no-op C compiler stand in for the Linux
+system libraries; this type-checks every Rust line, links nothing). On
+macOS: `cargo clippy --all-targets -- -D warnings`, `cargo test --lib
+capture::` (the pure X11, portal, surfaces and Phase 4 plan tests included),
+`capture_wiring` and `release_lane_pins`; vitest, eslint and `tsc` for the
+menu and Settings. Clippy with the crate's lints on the Linux-only files
+(`linux_x11/os.rs`, the Linux share picker, the portal call) for the Linux
+target through a stand-alone crate that includes them.
+**Not verified anywhere yet:** any real X server or portal, and clippy of
+the whole crate for Linux (from macOS clippy builds `build.rs` for the
+target and fails on `tauri_build`; CI's `rust-linux` runs it natively), nor
+the Linux test run itself (CI's `rust-linux` and its new Xvfb step).
 
 **Linux checklist** (every row in light and dark mode; the card and the
 Settings card at the smallest window and at 200 %):
@@ -698,6 +705,19 @@ Dolphin and Thunar on the right folder; the card's behaviour per L4.
 **Done when:** the checklist passes and Linux screenshots move to beta.
 
 ### Phase 4: Linux recording (L, 3 to 4 weeks)
+
+**Status: groundwork only.** `recorder_child/linux_plan.rs` holds the pure
+decisions, tested on every OS and linked into nothing yet: the encoder
+choice in this plan's order (`vah264enc`, `vaapih264enc`, `x264enc`,
+`openh264enc`; `avenc_aac`, `fdkaacenc`, `voaacenc`; `None` =
+`codecsMissing`), each encoder's bit rate in its own units, the source
+element (`ximagesrc` with INCLUSIVE `endx`/`endy`, or by `xid`;
+`pipewiresrc fd=… path=…`), the gst-launch description (size from
+`sizing::capped`, evened; `sizing::video_bit_rate`; one `audiomixer` into one
+AAC track at 160 kbps; `mp4mux fragment-duration=2000`; paths quoted) and
+the microphone list without monitor sources, default first. The `ashpd`
+`screencast` feature, the GStreamer crates, the panel, the pill and the CI
+self-test are all still to do.
 
 **Scope**
 - `recorder_child/linux/`: `portal.rs` (ScreenCast session in the child:
