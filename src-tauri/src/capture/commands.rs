@@ -374,9 +374,14 @@ fn show_phase_in_tray(app: &AppHandle, event: PhaseEvent) {
             let mut last = lock(&state.capture.tray_last);
             if tray_status::tray_needs_write(last.as_ref(), &text) {
                 let was = last.as_ref().map_or(tray_status::TrayGlyph::None, tray_status::tray_glyph_of);
+                let now = tray_status::tray_glyph_of(&text);
                 write_tray_text(&handle, &text);
+                // Linux: the recording's own menu first, so the main window,
+                // told on release, puts back its menu and its icon together.
+                #[cfg(target_os = "linux")]
+                write_tray_menu(&handle, super::tray_recording_menu::menu_write(was, now));
                 if tray_status::TRAY_ICON_MARKS_RECORDING {
-                    write_tray_glyph(&handle, tray_status::icon_write(was, tray_status::tray_glyph_of(&text)));
+                    write_tray_glyph(&handle, tray_status::icon_write(was, now));
                 }
                 *last = Some(text);
             }
@@ -446,8 +451,9 @@ fn marked_tray_icon(glyph: tray_status::TrayGlyph) -> Option<tauri::image::Image
 }
 
 /// Mark the tray icon while a recording runs, or put the app's icon back
-/// (plan XP-15). Windows only ([`tray_status::TRAY_ICON_MARKS_RECORDING`]):
-/// its tray shows no title. The main window owns the icon otherwise; on
+/// (plan XP-15). Windows and Linux ([`tray_status::TRAY_ICON_MARKS_RECORDING`]):
+/// Windows' tray shows no title, and many Linux panels no label. The main
+/// window owns the icon otherwise; on
 /// release it is told to re-apply its own, since only it knows whether a
 /// sync is running.
 fn write_tray_glyph(app: &AppHandle, write: tray_status::IconWrite) {
@@ -473,6 +479,85 @@ fn write_tray_glyph(app: &AppHandle, write: tray_status::IconWrite) {
             let _ = app.emit(TRAY_ICON_RELEASED_EVENT, ());
         }
     }
+}
+
+/// Linux: while a recording runs, the tray's menu is the recording's own
+/// (`tray_recording_menu`): AppIndicator sends no click, so the menu is the
+/// only way to reach Stop from the tray. Written only when what it offers
+/// changes; on release the main window puts back its own menu, on the same
+/// `capture_tray_icon_released` that `write_tray_glyph` sends.
+#[cfg(target_os = "linux")]
+fn write_tray_menu(app: &AppHandle, write: super::tray_recording_menu::MenuWrite) {
+    use super::tray_recording_menu::{MenuWrite, items_for};
+    use tauri::menu::{Menu, MenuItem};
+
+    let MenuWrite::Set(glyph) = write else {
+        // Release: `write_tray_glyph` tells the main window, which rebuilds
+        // its menu with its icon. Keep: nothing changed.
+        return;
+    };
+    let Some(tray) = app.tray_by_id(tray_status::TRAY_ID) else {
+        return;
+    };
+    listen_to_recording_menu(app);
+    let items: Vec<MenuItem<tauri::Wry>> = items_for(glyph)
+        .into_iter()
+        .filter_map(|item| MenuItem::with_id(app, item.id, item.text, true, None::<&str>).ok())
+        .collect();
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
+    match Menu::with_items(app, &refs) {
+        Ok(menu) => {
+            if let Err(e) = tray.set_menu(Some(menu)) {
+                tracing::debug!(error = %e, "could not put the recording's menu on the tray");
+            }
+        }
+        Err(e) => tracing::debug!(error = %e, "could not build the recording's tray menu"),
+    }
+}
+
+/// The app-wide menu listener for the recording's tray items, added once
+/// (Tauri keeps every listener added, so adding one per write would run
+/// each click many times). Other menus' items are ignored by id.
+#[cfg(target_os = "linux")]
+fn listen_to_recording_menu(app: &AppHandle) {
+    use super::tray_recording_menu::{Action, action_for};
+    static LISTENING: std::sync::Once = std::sync::Once::new();
+    LISTENING.call_once(|| {
+        app.on_menu_event(|app, event| {
+            let Some(action) = action_for(event.id().0.as_str()) else {
+                return;
+            };
+            let app = app.clone();
+            match action {
+                Action::ShowControls => {
+                    if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
+                        show_without_focus(&w);
+                    }
+                }
+                Action::Stop => {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = stop_inner(&app).await {
+                            tracing::warn!(error = %e, "tray menu: stop refused");
+                        }
+                    });
+                }
+                Action::Pause => {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = capture_pause(app).await {
+                            tracing::warn!(error = %e, "tray menu: pause refused");
+                        }
+                    });
+                }
+                Action::Resume => {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = capture_resume(app).await {
+                            tracing::warn!(error = %e, "tray menu: resume refused");
+                        }
+                    });
+                }
+            }
+        });
+    });
 }
 
 /// A left click on the tray icon, received by `tray::panel` before it opens

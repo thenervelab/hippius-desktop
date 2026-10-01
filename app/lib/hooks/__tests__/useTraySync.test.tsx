@@ -301,6 +301,22 @@ describe("useTrayInit: after a recording's mark", () => {
     mocks.getReleasedListener()!({ payload: null });
     await waitFor(() => expect(mocks.setIconCalls.length).toBe(before + 1));
     expect(mocks.setIconCalls[mocks.setIconCalls.length - 1]).toContain("Syncing");
+    // macOS and Windows keep their menu through a recording.
+    expect(mocks.setMenuCalls.length).toBe(0);
+  });
+
+  // Linux: Rust put the recording's own menu (Stop, Pause, Show) on the icon,
+  // since AppIndicator sends no click; at the end this page's menu comes back.
+  it("puts its own menu back on Linux when Rust releases the icon", async () => {
+    setUserAgent("Mozilla/5.0 (X11; Linux x86_64) webkit2gtk");
+    await mountTray();
+    await waitFor(() => expect(mocks.getReleasedListener()).toBeTruthy());
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
+    mocks.getReleasedListener()!({ payload: null });
+    await waitFor(() => expect(mocks.setMenuCalls.length).toBe(1));
+    const texts = (mocks.setMenuCalls[0].items ?? []).map((i) => i.text);
+    expect(texts[0]).toBe("Open Hippius");
+    expect(texts).toContain("Quit Hippius");
   });
 });
 

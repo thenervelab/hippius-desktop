@@ -132,9 +132,10 @@ pub enum TrayGlyph {
     Paused,
 }
 
-/// Whether this system marks the tray icon itself (Windows only: the
-/// others carry the time as the title).
-pub const TRAY_ICON_MARKS_RECORDING: bool = cfg!(windows);
+/// Whether this system marks the tray icon itself: Windows (no title at
+/// all) and Linux (many panels show no indicator label, and the label is
+/// the only text there). macOS carries the time as the title.
+pub const TRAY_ICON_MARKS_RECORDING: bool = cfg!(any(windows, target_os = "linux"));
 
 #[must_use]
 pub fn tray_glyph_for(phase: CapturePhase) -> TrayGlyph {

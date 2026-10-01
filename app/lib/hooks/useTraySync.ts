@@ -350,9 +350,23 @@ export function useTrayInit(isAuthenticated: boolean) {
       void listen(TRAY_ICON_RELEASED_EVENT, () => {
         trayIconState = "unknown";
         void setTrayIconSyncing(lastIconRequest.isSyncing, lastIconRequest.isCompleted);
+        // Linux: Rust put the recording's own menu (Stop, Pause, Show) on the
+        // icon, since AppIndicator sends no click. Its items' actions are
+        // Rust's; this page's are not, so the page puts its menu back.
+        if (isLinuxPlatform) void reattachTrayMenu();
       });
     })();
   }, []);
+}
+
+/** Put this page's context menu back on the live icon. */
+async function reattachTrayMenu() {
+  try {
+    const tray = await TrayIcon.getById(TRAY_ID);
+    await tray?.setMenu(await buildTrayContextMenu());
+  } catch (e) {
+    logTrayAction("Failed to re-attach the tray menu", e);
+  }
 }
 
 // Add these explicit debug logs
