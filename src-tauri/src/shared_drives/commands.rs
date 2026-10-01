@@ -2950,7 +2950,7 @@ fn folder_key(path: &str) -> Option<String> {
 }
 
 /// One folder of an own drive that is shared on its own: people hold a grant
-/// on exactly this folder, or a folder invite for it is listed.
+/// on exactly this folder, or a folder invite for it is still open.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderSharingSummary {
@@ -2959,21 +2959,26 @@ pub struct FolderSharingSummary {
     /// People holding a grant on exactly this folder. A grant on a folder
     /// around it is that folder's, not this one's, so nobody is counted twice.
     pub holder_count: u32,
-    /// A folder invite for exactly this folder is listed, live or spent: the
-    /// same "any invite" rule the drive mark keys on, since an owner whose
-    /// folder link lapsed still shared the folder.
+    /// A folder invite for exactly this folder can still bring someone in:
+    /// an emailed invitation still waiting, or an active link (see
+    /// `access_panel::invite_is_open`). A spent one does not count. Counting
+    /// every listed invite kept a folder marked "Shared" after its last person
+    /// was removed, because the email invitation they had accepted is still
+    /// listed, and the mark then opened a Manage access with nobody in it.
     pub has_invite: bool,
 }
 
 /// Fold one own drive's folder grants and folder invites into the folders
 /// that are shared on their own, sorted by path. Whole-drive members and
 /// whole-drive invites are the drive's, never a folder's, so they are left
-/// out. `None` for either listing means it failed; the other still answers.
+/// out, and so are invites that can no longer bring anyone in. `None` for
+/// either listing means it failed; the other still answers.
 ///
-/// Pure, so the rule is testable without a server.
+/// Pure (the clock is passed in), so the rule is testable without a server.
 fn fold_folder_sharing(
     grants: Option<&[hcfs_shared::network::DriveGrantHolderEntry]>,
     invites: Option<&[DriveInviteInfo]>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<FolderSharingSummary> {
     use std::collections::{BTreeMap, BTreeSet};
     let mut by_path: BTreeMap<String, (BTreeSet<&str>, bool)> = BTreeMap::new();
@@ -2983,6 +2988,9 @@ fn fold_folder_sharing(
         }
     }
     for invite in invites.into_iter().flatten() {
+        if !super::access_panel::invite_is_open(invite, now) {
+            continue;
+        }
         if let Some(path) = invite_folder(invite) {
             by_path.entry(path).or_default().1 = true;
         }
@@ -3027,7 +3035,11 @@ pub async fn list_owned_folder_sharing(app: tauri::AppHandle, label: String) -> 
         ),
     };
 
-    let folders = fold_folder_sharing(listing.as_ref().map(|l| l.folder_grants.as_slice()), invites.as_deref());
+    let folders = fold_folder_sharing(
+        listing.as_ref().map(|l| l.folder_grants.as_slice()),
+        invites.as_deref(),
+        chrono::Utc::now(),
+    );
     info!(label = %label, shared_folders = folders.len(), "Listed owned folder sharing");
     Ok(folders)
 }
@@ -3827,8 +3839,8 @@ mod tests {
             grant("5Bo", "Clients/ACME"),
             grant("5Di", "Work"),
         ];
-        let invites = [folder_invite("Clients/ACME", false), folder_invite("Photos", false), invite(true, false)];
-        let folders = fold_folder_sharing(Some(&grants), Some(&invites));
+        let invites = [folder_invite("Clients/ACME", true), folder_invite("Photos", true), invite(true, false)];
+        let folders = fold_folder_sharing(Some(&grants), Some(&invites), chrono::Utc::now());
         assert_eq!(
             folders,
             vec![
@@ -3855,15 +3867,94 @@ mod tests {
     #[test]
     fn folder_fold_answers_from_either_listing_and_normalises_paths() {
         let grants = [grant("5Bo", "Cafe\u{0301}")];
-        let folders = fold_folder_sharing(Some(&grants), None);
+        let folders = fold_folder_sharing(Some(&grants), None, chrono::Utc::now());
         assert_eq!(folders.len(), 1);
         assert_eq!(folders[0].path, "Caf\u{00E9}", "keyed NFC, as the server stores a grant");
 
-        let folders = fold_folder_sharing(None, Some(&[folder_invite("Work", true)]));
+        let folders = fold_folder_sharing(None, Some(&[folder_invite("Work", true)]), chrono::Utc::now());
         assert_eq!((folders[0].holder_count, folders[0].has_invite), (0, true));
 
-        assert!(fold_folder_sharing(None, None).is_empty());
-        assert!(fold_folder_sharing(Some(&[]), Some(&[invite(true, false)])).is_empty());
+        assert!(fold_folder_sharing(None, None, chrono::Utc::now()).is_empty());
+        assert!(fold_folder_sharing(Some(&[]), Some(&[invite(true, false)]), chrono::Utc::now()).is_empty());
+    }
+
+    /// The emailed invitation a person accepted, as the server still lists
+    /// it after they joined: one use, used.
+    fn accepted_email_invite(path: &str) -> DriveInviteInfo {
+        DriveInviteInfo {
+            email_status: Some("sealed".into()),
+            recipient_email: Some("bob@example.com".into()),
+            use_count: 1,
+            ..folder_invite(path, false)
+        }
+    }
+
+    // The reported bug: a folder shared by email, the person removed. Their
+    // grant is gone but the invitation they accepted is still listed, and it
+    // kept the folder's "Shared" and "Manage access" pills up over a Manage
+    // access with nobody in it.
+    #[test]
+    fn folder_is_not_shared_once_its_last_person_is_removed() {
+        let folders = fold_folder_sharing(Some(&[]), Some(&[accepted_email_invite("Clients")]), chrono::Utc::now());
+        assert!(folders.is_empty(), "an accepted invitation shares nothing: {folders:?}");
+
+        // While they still hold it, the folder is shared by them alone.
+        let grants = [grant("5Bo", "Clients")];
+        let folders = fold_folder_sharing(Some(&grants), Some(&[accepted_email_invite("Clients")]), chrono::Utc::now());
+        assert_eq!(
+            folders,
+            vec![FolderSharingSummary {
+                path: "Clients".into(),
+                holder_count: 1,
+                has_invite: false,
+            }]
+        );
+    }
+
+    // What still shares a folder nobody holds: something that can bring a
+    // person in. Each spent kind of invite is history and shares nothing.
+    #[test]
+    fn folder_stays_shared_only_while_an_invite_can_still_bring_someone_in() {
+        let now = chrono::Utc::now();
+        let shared = |invite: DriveInviteInfo| !fold_folder_sharing(Some(&[]), Some(&[invite]), now).is_empty();
+
+        let pending_email = || DriveInviteInfo {
+            email_status: Some("sent".into()),
+            recipient_email: Some("bob@example.com".into()),
+            ..folder_invite("Clients", true)
+        };
+        assert!(shared(pending_email()), "an invitation not yet accepted");
+        assert!(shared(folder_invite("Clients", true)), "an active share link");
+
+        assert!(
+            !shared(DriveInviteInfo {
+                revoked: true,
+                ..pending_email()
+            }),
+            "a cancelled invitation"
+        );
+        assert!(
+            !shared(DriveInviteInfo {
+                revoked: true,
+                ..folder_invite("Clients", true)
+            }),
+            "a revoked link"
+        );
+        assert!(
+            !shared(DriveInviteInfo {
+                use_count: 1,
+                ..folder_invite("Clients", true)
+            }),
+            "a single-use link already used"
+        );
+        assert!(
+            !shared(DriveInviteInfo {
+                expires_at: (now - chrono::Duration::hours(1)).to_rfc3339(),
+                ..folder_invite("Clients", true)
+            }),
+            "an expired link the server still calls valid"
+        );
+        assert!(!shared(folder_invite("Clients", false)), "a link the server calls invalid");
     }
 
     #[test]
