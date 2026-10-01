@@ -1,7 +1,7 @@
 {
     "$schema": "../gen/schemas/desktop-schema.json",
     "identifier": "capture-overlay",
-    "description": "Least-privilege capability for the screen-capture selection overlays, one borderless window per display (labels capture-overlay-<display id>). An overlay only draws a selection and reports it: it listens for capture_state_changed so it can close itself, and calls the app-defined capture_overlay_context / capture_select / capture_cancel commands, which are not capability-gated. On Wayland the same page is the recording panel (capture-overlay-0, an ordinary small window), which the user can drag by its empty part, hence start-dragging. It deliberately EXCLUDES opener, fs, dialog, process, deep-link, updater and the asset protocol — none of which the overlay uses, and it sits over every app on screen.",
+    "description": "Least-privilege capability for the screen-capture selection overlays, one borderless window per display (labels capture-overlay-<display id>). An overlay only draws a selection and reports it: it listens for capture_state_changed so it can close itself, and calls the app-defined capture_overlay_context / capture_select / capture_cancel commands, which are not capability-gated. On Wayland the same page is the recording panel (capture-overlay-0, an ordinary small window), which the user can drag by its empty part, hence start-dragging. It deliberately EXCLUDES opener, fs, dialog, process, deep-link, updater and the asset protocol: none of which the overlay uses, and it sits over every app on screen.",
     "windows": ["capture-overlay-*"],
     "permissions": [
         "core:default",

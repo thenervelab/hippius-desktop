@@ -139,14 +139,23 @@ pub fn list_microphones() -> Vec<Microphone> {
 }
 
 /// The cameras the system has, named as the system names them. Listed by the
-/// helper on macOS so the bar can offer them before the camera window has
-/// ever opened; empty elsewhere (the camera window names them there).
+/// helper on macOS and the recorder child on Linux (GStreamer, whose names
+/// WebKitGTK shows too) so the bar can offer them before the camera window
+/// has ever opened; empty elsewhere (the camera window names them there).
 pub fn list_cameras() -> Vec<MediaDevice> {
     #[cfg(target_os = "macos")]
     {
         tidy_devices(macos::list_cameras())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        if recording_supported() {
+            tidy_devices(linux::list_cameras())
+        } else {
+            Vec::new()
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         Vec::new()
     }

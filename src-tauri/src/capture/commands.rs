@@ -110,11 +110,11 @@ pub fn capture_supported() -> bool {
 
 /// Whether camera only (the stage) can be recorded here: it records the
 /// camera window by its system window id (macOS's window number, Windows'
-/// HWND), which the macOS and Windows recorders take. Elsewhere the bar must
-/// not offer it.
+/// HWND, the XID on X11), which those recorders take. Wayland has no window
+/// id to give (`support::camera_only`); there the bar must not offer it.
 #[must_use]
 pub fn camera_only_supported() -> bool {
-    cfg!(any(target_os = "macos", windows)) && recording::recording_supported()
+    super::support::camera_only(super::rollout::current_platform()) && recording::recording_supported()
 }
 
 /// A lock that survives a panic elsewhere: a poisoned recorder lock must not
@@ -3813,8 +3813,37 @@ async fn camera_window_id(app: &AppHandle) -> Option<u32> {
     (id != 0).then_some(id)
 }
 
+/// The camera window's XID on X11, which is its id in the window list too
+/// (`_NET_CLIENT_LIST`), so camera only records it with `ximagesrc xid=`
+/// and the recorder trims the stage's margin. Read on the main thread,
+/// where GTK lives. None on Wayland, which has no window ids.
+#[cfg(target_os = "linux")]
+async fn camera_window_id(app: &AppHandle) -> Option<u32> {
+    use gtk::glib::Cast;
+    use gtk::prelude::WidgetExt;
+    if super::rollout::current_platform() != super::rollout::Platform::LinuxX11 {
+        return None;
+    }
+    let window = app.get_webview_window(CAMERA_LABEL)?;
+    let target = window.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .run_on_main_thread(move || {
+            let xid = target
+                .gtk_window()
+                .ok()
+                .and_then(|gtk| gtk.window())
+                .and_then(|gdk| gdk.downcast::<gdkx11::X11Window>().ok())
+                .map(|x11| x11.xid());
+            let _ = tx.send(xid);
+        })
+        .ok()?;
+    let xid = tokio::time::timeout(std::time::Duration::from_millis(500), rx).await.ok()?.ok()??;
+    u32::try_from(xid).ok().filter(|id| *id > 0)
+}
+
 // Async to match the macOS version, which waits on the main thread.
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 #[allow(clippy::unused_async)]
 async fn camera_window_id(_app: &AppHandle) -> Option<u32> {
     None

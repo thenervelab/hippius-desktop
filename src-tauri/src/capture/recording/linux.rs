@@ -79,6 +79,12 @@ pub fn list_microphones() -> Vec<MediaDevice> {
     helper_command().map_or_else(|_| Vec::new(), |program| helper::list_devices(program, "--list-microphones"))
 }
 
+/// The cameras, from the child (`--list-cameras`: V4L2 and PipeWire
+/// cameras by the names WebKitGTK also shows).
+pub fn list_cameras() -> Vec<MediaDevice> {
+    helper_command().map_or_else(|_| Vec::new(), |program| helper::list_devices(program, "--list-cameras"))
+}
+
 /// The microphone meter: the child in `--meter` mode on `device` (a
 /// PulseAudio source name; none = the default input).
 pub fn meter_command(device: Option<&str>) -> Option<Command> {

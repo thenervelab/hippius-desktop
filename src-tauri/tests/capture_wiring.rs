@@ -1066,3 +1066,22 @@ fn the_wayland_panel_hands_the_choice_to_the_desktop() {
     let begin = fn_body(&src, "async fn begin_recording(");
     assert!(begin.contains("screencast_token::for_start(") && begin.contains("screencast_token::remember("));
 }
+
+/// WebKitGTK never offers `getUserMedia` unless media stream is on, and
+/// denies what nobody answers: on Linux the camera bubble needs both. Both
+/// are given to the capture windows only (the same gate as WebView2's), for
+/// the app's own pages only, and only for the camera and microphone (and
+/// their names); any other request keeps WebKitGTK's default.
+#[test]
+fn linux_webviews_open_devices_only_in_the_capture_windows() {
+    let media = read("src/capture/webview_media.rs");
+    let allow = fn_body(&media, "pub fn allow_capture_devices(");
+    let linux = allow.split("#[cfg(target_os = \"linux\")]").nth(1).expect("a Linux arm");
+    assert!(linux.trim_start().starts_with("if allows_capture_devices(window.label()) {"));
+    assert!(linux.contains("webview_media_gtk::attach(&webview)"));
+    let gtk = read("src/capture/webview_media_gtk.rs");
+    assert!(gtk.contains("set_enable_media_stream(true)"));
+    assert!(gtk.contains("is::<UserMediaPermissionRequest>()") && gtk.contains("is::<DeviceInfoPermissionRequest>()"));
+    assert!(gtk.contains("is_app_origin(&uri)") && gtk.contains("request.deny()"));
+    assert!(gtk.contains("return false;"), "other requests keep WebKitGTK's default");
+}

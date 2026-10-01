@@ -406,6 +406,9 @@ where
         if has("--list-microphones") {
             return print_line(&serde_json::to_string(&linux::devices::list_microphones()).unwrap_or_else(|_| "[]".into()));
         }
+        if has("--list-cameras") {
+            return print_line(&serde_json::to_string(&linux::devices::list_cameras()).unwrap_or_else(|_| "[]".into()));
+        }
         if has("--probe") {
             return print_line(&serde_json::to_string(&linux::probe::probe()).unwrap_or_else(|_| "{}".into()));
         }

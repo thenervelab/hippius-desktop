@@ -106,7 +106,17 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         desktop.open_screencast(&ask)?
     } else {
         let displays = crate::capture::linux_x11::list_displays().map_err(|e| e.to_string())?;
-        linux_plan::x11_source(cmd, &displays)?
+        // Camera only records the app's own stage window, trimmed of its
+        // margin; the window list names each window's process.
+        let inset = cmd.window_id.map_or(0, |xid| {
+            let pid = crate::capture::linux_x11::list_windows()
+                .ok()
+                .and_then(|windows| windows.into_iter().find(|w| w.id == xid))
+                .and_then(|w| w.pid);
+            let scale = displays.first().map_or(1.0, |d| d.scale_factor);
+            linux_plan::stage_inset(pid, std::os::unix::process::parent_id(), scale)
+        });
+        linux_plan::x11_source(cmd, &displays, inset)?
     };
     desktop.keep_awake();
 

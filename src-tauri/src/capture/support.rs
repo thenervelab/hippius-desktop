@@ -180,6 +180,14 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
     }
 }
 
+/// Whether `platform` can record the camera alone (the stage window, by its
+/// window id). Wayland gives an app no window ids, and the portal's dialog
+/// would make the user pick Hippius's own window, so not there in v1.
+#[must_use]
+pub const fn camera_only(platform: Platform) -> bool {
+    !matches!(platform, Platform::LinuxWayland)
+}
+
 /// How a capture starts: Hippius's overlay, or (a screenshot on Wayland)
 /// straight to the desktop's screenshot tool with no Hippius window at all,
 /// or (a recording on Wayland) the capture bar alone in a small window
@@ -386,6 +394,16 @@ mod tests {
         let x11 = surfaces_for(Platform::LinuxX11, true, true);
         assert!(x11.record_countdown);
         assert_eq!(countdown_secs(&x11, 3, Recording), 3);
+    }
+
+    /// Camera only records the stage window by its id: every platform but
+    /// Wayland has one.
+    #[test]
+    fn camera_only_needs_a_window_id() {
+        assert!(camera_only(Platform::MacOs));
+        assert!(camera_only(Platform::Windows));
+        assert!(camera_only(Platform::LinuxX11));
+        assert!(!camera_only(Platform::LinuxWayland));
     }
 
     /// Linux has no capture shortcut yet; Settings shows what to use

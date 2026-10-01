@@ -7,7 +7,7 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
 
-use super::super::linux_plan::{RawAudioSource, microphones};
+use super::super::linux_plan::{RawAudioSource, RawCamera, cameras, microphones};
 use crate::capture::recording::MediaDevice;
 
 /// The microphones, default first; empty when GStreamer cannot list them.
@@ -24,6 +24,35 @@ pub fn list_microphones() -> Vec<MediaDevice> {
     let raw: Vec<RawAudioSource> = monitor.devices().into_iter().filter_map(|d| raw_source(&d)).collect();
     monitor.stop();
     microphones(raw)
+}
+
+/// `--list-cameras` on Linux: the V4L2 and PipeWire cameras, so the bar can
+/// offer them before the bubble ever opened. Empty when GStreamer cannot
+/// list them.
+#[must_use]
+pub fn list_cameras() -> Vec<MediaDevice> {
+    if super::init().is_err() {
+        return Vec::new();
+    }
+    let monitor = gst::DeviceMonitor::new();
+    let _ = monitor.add_filter(Some("Video/Source"), None);
+    if monitor.start().is_err() {
+        return Vec::new();
+    }
+    let found: Vec<RawCamera> = monitor
+        .devices()
+        .into_iter()
+        .map(|d| {
+            let props = d.properties();
+            let text = |key: &str| props.as_ref().and_then(|p| p.get::<String>(key).ok());
+            RawCamera {
+                id: text("node.name").or_else(|| text("api.v4l2.path")).or_else(|| text("device.path")),
+                display_name: d.display_name().to_string(),
+            }
+        })
+        .collect();
+    monitor.stop();
+    cameras(found)
 }
 
 /// A device as the list needs it. PipeWire's provider names the node in

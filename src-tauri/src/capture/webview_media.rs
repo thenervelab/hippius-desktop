@@ -12,8 +12,9 @@
 //! (`permissions::windows_privacy_blocks`): when they block desktop apps,
 //! no answer here can open the device.
 //!
-//! macOS asks through WKWebView and its TCC prompt; Linux's WebKitGTK
-//! handler is Phase 5 of `docs/plans/2026-10-01-capture-windows-linux.md`.
+//! macOS asks through WKWebView and its TCC prompt; Linux's WebKitGTK has
+//! the same answer in `webview_media_gtk` (media stream on, user-media and
+//! device-info requests allowed, same windows, same origins).
 
 use super::commands::{CAMERA_LABEL, OVERLAY_LABEL_PREFIX};
 
@@ -42,7 +43,7 @@ pub fn is_app_origin(uri: &str) -> bool {
 }
 
 /// Let the pages of `window` open the camera and the microphone, if it is
-/// one of the capture windows. A no-op off Windows.
+/// one of the capture windows. A no-op on macOS.
 pub fn allow_capture_devices(window: &tauri::WebviewWindow) {
     #[cfg(windows)]
     if allows_capture_devices(window.label()) {
@@ -56,7 +57,14 @@ pub fn allow_capture_devices(window: &tauri::WebviewWindow) {
             tracing::warn!(error = %e, "could not reach the capture window's webview");
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    if allows_capture_devices(window.label()) {
+        let attached = window.with_webview(|webview| super::webview_media_gtk::attach(&webview));
+        if let Err(e) = attached {
+            tracing::warn!(error = %e, "could not reach the capture window's webview");
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = window;
 }
 

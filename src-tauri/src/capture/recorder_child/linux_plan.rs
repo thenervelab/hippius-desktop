@@ -152,7 +152,7 @@ pub fn candidates(installed: impl Fn(&str) -> bool) -> Vec<Encoders> {
 /// Elements every recording needs besides the encoders: GStreamer's base
 /// plugins (conversion, `appsrc` / `appsink`), the good plugins (`mp4mux`,
 /// `aacparse`, `pulsesrc`) and the bad plugins (`h264parse`).
-pub const NEEDED_ALWAYS: [&str; 10] = [
+pub const NEEDED_ALWAYS: [&str; 11] = [
     "appsrc",
     "appsink",
     "videoconvert",
@@ -163,6 +163,7 @@ pub const NEEDED_ALWAYS: [&str; 10] = [
     "h264parse",
     "aacparse",
     "pulsesrc",
+    "videocrop",
 ];
 
 /// The picture's source on each session: `ximagesrc` (good plugins) on X11,
@@ -248,7 +249,9 @@ pub enum VideoSource {
     /// area), with the pointer drawn in.
     X11Area { x: u32, y: u32, width: u32, height: u32 },
     /// X11: one window by XID; it follows the window and its size.
-    X11Window { xid: u32 },
+    /// `inset` pixels are cut from every edge: Hippius's own camera stage,
+    /// whose transparent margin and rounded corners would film as black.
+    X11Window { xid: u32, inset: u32 },
     /// Wayland: the ScreenCast portal's PipeWire remote (`fd`) and the
     /// stream's node id.
     Portal { fd: i32, node: u32 },
@@ -266,7 +269,7 @@ impl VideoSource {
                 x + width.max(1) - 1,
                 y + height.max(1) - 1
             ),
-            Self::X11Window { xid } => format!("ximagesrc use-damage=false show-pointer=true xid={xid:#x}"),
+            Self::X11Window { xid, .. } => format!("ximagesrc use-damage=false show-pointer=true xid={xid:#x}"),
             Self::Portal { fd, node } => format!("pipewiresrc fd={fd} path={node} do-timestamp=true always-copy=true"),
         }
     }
@@ -330,6 +333,13 @@ pub fn video_capture(source: &VideoSource) -> String {
         VideoSource::X11Area { .. } | VideoSource::X11Window { .. } => format!("video/x-raw,framerate={FPS}/1 ! "),
         VideoSource::Portal { .. } => String::new(),
     };
+    // The camera stage, trimmed of its margin before anything is sized.
+    let crop = match *source {
+        VideoSource::X11Window { inset, .. } if inset > 0 => {
+            format!("videocrop top={inset} bottom={inset} left={inset} right={inset} ! ")
+        }
+        _ => String::new(),
+    };
     let caps = match source.known_size() {
         Some((w, h)) => {
             let (w, h) = plan::output_size(w, h);
@@ -338,7 +348,7 @@ pub fn video_capture(source: &VideoSource) -> String {
         None => "video/x-raw,format=NV12".to_string(),
     };
     format!(
-        "{src} name=vsrc ! {rate}queue max-size-buffers=3 leaky=downstream ! videoconvert ! \
+        "{src} name=vsrc ! {rate}queue max-size-buffers=3 leaky=downstream ! {crop}videoconvert ! \
          videoscale add-borders=true ! capsfilter name={SIZE_FILTER} caps={caps} ! \
          appsink name={VIDEO_SINK} max-buffers=4 drop=true sync=false",
         src = source.element(),
@@ -432,12 +442,13 @@ pub fn encode(plan: &EncodePlan) -> String {
 
 /// What an X11 recording reads, from the start command and the displays
 /// RandR lists (physical root pixels, one scale for the screen).
+/// `stage_inset` is what to cut from a window's edges ([`stage_inset`]).
 ///
 /// # Errors
 /// The display has gone, or the area has no size.
-pub fn x11_source(cmd: &StartCommand, displays: &[DisplayTarget]) -> Result<VideoSource, String> {
+pub fn x11_source(cmd: &StartCommand, displays: &[DisplayTarget], stage_inset: u32) -> Result<VideoSource, String> {
     if let Some(xid) = cmd.window_id {
-        return Ok(VideoSource::X11Window { xid });
+        return Ok(VideoSource::X11Window { xid, inset: stage_inset });
     }
     let id = cmd.display_id.ok_or("missing display or window")?;
     let d = displays.iter().find(|d| d.id == id).ok_or("That display is no longer connected.")?;
@@ -460,6 +471,20 @@ pub fn x11_source(cmd: &StartCommand, displays: &[DisplayTarget]) -> Result<Vide
         width: rect.width(),
         height: rect.height(),
     })
+}
+
+/// Pixels to cut from each edge of a recorded window: the camera stage's
+/// margin (`plan::STAGE_INSET` at the screen's one scale) when the window
+/// belongs to the app that started this recorder (`window_pid` is the
+/// parent's), nothing for any other window.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn stage_inset(window_pid: Option<u32>, parent_pid: u32, scale: f64) -> u32 {
+    if window_pid != Some(parent_pid) {
+        return 0;
+    }
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    (plan::STAGE_INSET * scale).round() as u32
 }
 
 /// What the ScreenCast portal is asked for.
@@ -554,6 +579,33 @@ pub fn microphones(sources: Vec<RawAudioSource>) -> Vec<MediaDevice> {
     )
 }
 
+/// A camera as `GstDeviceMonitor` reports it (`Video/Source`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawCamera {
+    /// PipeWire's `node.name`, else the V4L2 device path.
+    pub id: Option<String>,
+    pub display_name: String,
+}
+
+/// The camera menu before the bubble ever opened: each camera once, named as
+/// GStreamer names it, which is what WebKitGTK's own device list (also
+/// GStreamer's) calls it, so the bubble finds the camera by that name. A
+/// camera with no id of its own is listed by its name.
+#[must_use]
+pub fn cameras(found: Vec<RawCamera>) -> Vec<MediaDevice> {
+    tidy_devices(
+        found
+            .into_iter()
+            .map(|c| MediaDevice {
+                id: c.id.filter(|id| !id.trim().is_empty()).unwrap_or_else(|| c.display_name.clone()),
+                name: c.display_name,
+                is_default: false,
+                continuity: false,
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,6 +676,7 @@ mod tests {
         "h264parse",
         "aacparse",
         "pulsesrc",
+        "videocrop",
         "ximagesrc",
         "pipewiresrc",
         "x264enc",
@@ -710,7 +763,7 @@ mod tests {
             height: 1080,
         };
         assert!(right.element().ends_with("startx=1920 starty=0 endx=3839 endy=1079"));
-        assert!(VideoSource::X11Window { xid: 0x0340_0007 }.element().ends_with("xid=0x3400007"));
+        assert!(VideoSource::X11Window { xid: 0x0340_0007, inset: 0 }.element().ends_with("xid=0x3400007"));
         assert!(
             VideoSource::Portal { fd: 42, node: 57 }
                 .element()
@@ -758,7 +811,8 @@ mod tests {
         let portal = video_capture(&VideoSource::Portal { fd: 9, node: 70 });
         assert!(portal.contains("caps=\"video/x-raw,format=NV12\""), "{portal}");
         assert!(!portal.contains("framerate"), "{portal}");
-        let window = video_capture(&VideoSource::X11Window { xid: 7 });
+        let window = video_capture(&VideoSource::X11Window { xid: 7, inset: 0 });
+        assert!(!window.contains("videocrop"), "another app's window is filmed whole");
         assert!(window.contains("caps=\"video/x-raw,format=NV12\""), "{window}");
         assert!(window.contains("framerate=30/1"));
         assert_eq!(
@@ -848,7 +902,7 @@ mod tests {
     #[test]
     fn x11_screens_and_areas_are_root_rectangles() {
         let displays = [display(1, 0, 2560, 1600, 2.0), display(2, 2560, 1920, 1080, 2.0)];
-        let screen = x11_source(&start(r#"{"id":1,"output":"/x.mp4","displayId":2}"#), &displays).unwrap();
+        let screen = x11_source(&start(r#"{"id":1,"output":"/x.mp4","displayId":2}"#), &displays, 0).unwrap();
         assert_eq!(
             screen,
             VideoSource::X11Area {
@@ -865,7 +919,7 @@ mod tests {
             width: 300.5,
             height: 200.0,
         });
-        let VideoSource::X11Area { x, y, width, height } = x11_source(&cmd, &displays).unwrap() else {
+        let VideoSource::X11Area { x, y, width, height } = x11_source(&cmd, &displays, 0).unwrap() else {
             panic!("an area");
         };
         assert_eq!((x, y), (2580, 40));
@@ -876,10 +930,24 @@ mod tests {
     #[test]
     fn an_x11_window_is_recorded_by_its_xid_and_a_gone_display_is_refused() {
         let displays = [display(1, 0, 1920, 1080, 1.0)];
-        let window = x11_source(&start(r#"{"id":1,"output":"/x.mp4","windowId":62914567}"#), &displays).unwrap();
-        assert_eq!(window, VideoSource::X11Window { xid: 62_914_567 });
-        assert!(x11_source(&start(r#"{"id":1,"output":"/x.mp4","displayId":9}"#), &displays).is_err());
-        assert!(x11_source(&start(r#"{"id":1,"output":"/x.mp4"}"#), &displays).is_err());
+        let window = x11_source(&start(r#"{"id":1,"output":"/x.mp4","windowId":62914567}"#), &displays, 0).unwrap();
+        assert_eq!(window, VideoSource::X11Window { xid: 62_914_567, inset: 0 });
+        assert!(x11_source(&start(r#"{"id":1,"output":"/x.mp4","displayId":9}"#), &displays, 0).is_err());
+        assert!(x11_source(&start(r#"{"id":1,"output":"/x.mp4"}"#), &displays, 0).is_err());
+    }
+
+    /// Camera only records Hippius's stage window: its transparent margin
+    /// is cut at the screen's scale before it is sized; any other window is
+    /// filmed whole.
+    #[test]
+    fn the_camera_stage_is_trimmed_of_its_margin() {
+        assert_eq!(stage_inset(Some(400), 400, 1.0), 12);
+        assert_eq!(stage_inset(Some(400), 400, 2.0), 24);
+        assert_eq!(stage_inset(Some(400), 400, f64::NAN), 12);
+        assert_eq!(stage_inset(Some(401), 400, 2.0), 0, "another app's window");
+        assert_eq!(stage_inset(None, 400, 2.0), 0, "a window that names no pid");
+        let stage = video_capture(&VideoSource::X11Window { xid: 9, inset: 24 });
+        assert!(stage.contains("! videocrop top=24 bottom=24 left=24 right=24 ! videoconvert"), "{stage}");
     }
 
     /// A monitor may be restored without the portal's dialog; a window is
@@ -915,7 +983,7 @@ mod tests {
         let portal = VideoSource::Portal { fd: 3, node: 4 };
         assert_eq!(ended_reason(&portal, &VideoEnd::Eos), "Screen sharing was stopped from your desktop.");
         assert_eq!(
-            ended_reason(&VideoSource::X11Window { xid: 5 }, &VideoEnd::Error("BadWindow".into())),
+            ended_reason(&VideoSource::X11Window { xid: 5, inset: 0 }, &VideoEnd::Error("BadWindow".into())),
             "The window being recorded was closed."
         );
         let area = VideoSource::X11Area {
@@ -965,5 +1033,37 @@ mod tests {
         );
         assert!(mics[0].is_default);
         assert_eq!(monitor_of("alsa_output.x"), "alsa_output.x.monitor");
+    }
+
+    /// USB, built-in and v4l2loopback (a phone through DroidCam) cameras,
+    /// each once, by the name WebKitGTK also shows.
+    #[test]
+    fn cameras_are_listed_once_by_their_names() {
+        let list = cameras(vec![
+            RawCamera {
+                id: Some("v4l2_input.pci-0000_00_14.0-usb-0_6_1.0".into()),
+                display_name: "Integrated Camera: Integrated C".into(),
+            },
+            RawCamera {
+                id: Some("/dev/video4".into()),
+                display_name: "DroidCam Source".into(),
+            },
+            RawCamera {
+                id: None,
+                display_name: "Logitech C270".into(),
+            },
+            RawCamera {
+                id: Some("v4l2_input.pci-0000_00_14.0-usb-0_6_1.0".into()),
+                display_name: "Integrated Camera: Integrated C".into(),
+            },
+        ]);
+        assert_eq!(
+            list.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect::<Vec<_>>(),
+            [
+                ("v4l2_input.pci-0000_00_14.0-usb-0_6_1.0", "Integrated Camera: Integrated C"),
+                ("/dev/video4", "DroidCam Source"),
+                ("Logitech C270", "Logitech C270"),
+            ]
+        );
     }
 }

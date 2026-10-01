@@ -340,6 +340,14 @@ x11rb = { version = "0.13", features = ["randr"] }
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot", "screencast", "inhibit"] }
 gstreamer = "0.25"
 gstreamer-app = "0.25"
+# The camera bubble's getUserMedia (Phase 5): WebKitGTK's media-stream
+# setting and permission-request signal on the capture windows. The same
+# webkit2gtk wry already links (pinned to its exact version), no new
+# library; gtk and gdkx11 (also tao's and wry's) name the camera window's
+# XID for camera only on X11.
+webkit2gtk = "=2.0.2"
+gtk = "0.18"
+gdkx11 = "0.18"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
