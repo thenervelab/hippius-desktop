@@ -8,17 +8,26 @@
 //! builder, so no window, tray, single-instance or deep-link handler starts
 //! in it.
 //!
-//! This is the skeleton the platform recorders fill in: the command loop,
-//! the pause timeline ([`timeline`]), the sizing rules shared with the Swift
-//! helper ([`sizing`]) and a test pattern ([`synthetic`]) written through a
-//! stand-in writer. A `start` for a real screen is refused with the same
-//! line `recording_unavailable` gives, until the platform's recorder lands.
+//! Shared by every platform: the command loop, the pause timeline
+//! ([`timeline`]), the sizing rules shared with the Swift helper ([`sizing`],
+//! [`plan`]), the frame pacing ([`pacing`]), the one-track audio mixer
+//! ([`mixer`], [`pcm`]), the BGRA to NV12 conversion ([`frame`]), the writer
+//! thread's logic ([`pipeline`]) and a test pattern ([`synthetic`]) written
+//! through a stand-in writer. A platform recorder is a [`Live`] recording.
+//! Where none has landed yet, a `start` for a real screen is
+//! refused with the same line `recording_unavailable` gives.
 //!
 //! Rules kept from the Swift helper: every reply echoes its command's `id`;
 //! closing stdin FINISHES the file and keeps it (the app died); only `cancel`
 //! deletes; a recording that ends on its own says `stream_stopped` with
 //! `saved` after finishing the file.
 
+pub mod frame;
+pub mod mixer;
+pub mod pacing;
+pub mod pcm;
+pub mod pipeline;
+pub mod plan;
 pub mod sizing;
 pub mod synthetic;
 pub mod timeline;
@@ -109,10 +118,12 @@ impl SampleWriter for TextWriter {
     }
 }
 
-type Output = Arc<Mutex<Box<dyn Write + Send>>>;
+/// Where the child's protocol lines go (stdout, or a pipe in tests). Shared
+/// with the capture threads, which say `stream_stopped` themselves.
+pub type Output = Arc<Mutex<Box<dyn Write + Send>>>;
 
 /// Write one protocol line and flush it: the app reads line by line.
-fn emit(out: &Output, line: &str) {
+pub fn emit(out: &Output, line: &str) {
     let mut out = out.lock().unwrap_or_else(PoisonError::into_inner);
     let _ = writeln!(out, "{line}").and_then(|()| out.flush());
 }
@@ -124,7 +135,37 @@ struct Captured {
     last_video: Option<u64>,
 }
 
-/// One recording in progress.
+/// A recording in progress, whatever records it.
+pub trait Live: Send {
+    /// Start a pause now: later samples move back by it, those inside it
+    /// are dropped.
+    fn pause(&self);
+    fn resume(&self);
+    /// Stop capturing and finish the file.
+    ///
+    /// # Errors
+    /// Nothing was captured, or the file could not be finished.
+    fn finish(self: Box<Self>) -> std::result::Result<(), String>;
+    /// Stop capturing and throw the file away.
+    fn cancel(self: Box<Self>);
+}
+
+/// What `start` hands back: the recording and its picture's pixel size.
+pub type Started = (Box<dyn Live>, (u32, u32));
+
+/// Start what `cmd` asks for: the test pattern, or this platform's recorder.
+fn start_live(cmd: &StartCommand, out: &Output) -> std::result::Result<Started, String> {
+    if cmd.synthetic {
+        let (session, size) = Session::start(cmd, out)?;
+        return Ok((Box::new(session), size));
+    }
+    // No screen recorder on this platform yet: the app never gets here
+    // (Record is hidden), and a hand-driven start is told why.
+    let _ = out;
+    Err(crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message().into())
+}
+
+/// The test pattern's recording.
 struct Session {
     output: PathBuf,
     clock: Clock,
@@ -135,11 +176,6 @@ struct Session {
 
 impl Session {
     fn start(cmd: &StartCommand, out: &Output) -> std::result::Result<(Self, (u32, u32)), String> {
-        if !cmd.synthetic {
-            // No screen recorder on this platform yet: the app never gets
-            // here (Record is hidden), and a hand-driven start is told why.
-            return Err(crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message().into());
-        }
         let output = PathBuf::from(&cmd.output);
         let writer: Box<dyn SampleWriter> = Box::new(TextWriter::create(&output)?);
         let clock = Clock::start();
@@ -164,6 +200,17 @@ impl Session {
         ))
     }
 
+    fn halt(&mut self) -> std::result::Result<Captured, String> {
+        self.stop.store(true, Ordering::SeqCst);
+        match self.thread.take().map(JoinHandle::join) {
+            Some(Ok(captured)) => captured,
+            Some(Err(_)) => Err("The recorder stopped unexpectedly.".into()),
+            None => Err("not recording".into()),
+        }
+    }
+}
+
+impl Live for Session {
     fn pause(&self) {
         let now = self.clock.now();
         self.timeline.lock().unwrap_or_else(PoisonError::into_inner).pause(now);
@@ -174,8 +221,7 @@ impl Session {
         self.timeline.lock().unwrap_or_else(PoisonError::into_inner).resume(now);
     }
 
-    /// Stop capturing and finish the file.
-    fn finish(mut self) -> std::result::Result<(), String> {
+    fn finish(mut self: Box<Self>) -> std::result::Result<(), String> {
         let now = self.clock.now();
         let captured = self.halt()?;
         let timeline = self.timeline.lock().unwrap_or_else(PoisonError::into_inner).clone();
@@ -187,19 +233,9 @@ impl Session {
         captured.writer.finish(end)
     }
 
-    /// Stop capturing and throw the file away.
-    fn cancel(mut self) {
+    fn cancel(mut self: Box<Self>) {
         let _ = self.halt();
         let _ = std::fs::remove_file(&self.output);
-    }
-
-    fn halt(&mut self) -> std::result::Result<Captured, String> {
-        self.stop.store(true, Ordering::SeqCst);
-        match self.thread.take().map(JoinHandle::join) {
-            Some(Ok(captured)) => captured,
-            Some(Err(_)) => Err("The recorder stopped unexpectedly.".into()),
-            None => Err("not recording".into()),
-        }
     }
 }
 
@@ -247,7 +283,7 @@ fn capture_loop(
 pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
     let out: Output = Arc::new(Mutex::new(Box::new(output)));
     emit(&out, &protocol::ready_line());
-    let mut session: Option<Session> = None;
+    let mut session: Option<Box<dyn Live>> = None;
     for line in input.lines().map_while(std::result::Result::ok) {
         let line = line.trim();
         if line.is_empty() {
@@ -260,7 +296,7 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
                     emit(&out, &protocol::error_line("already recording", Some(cmd.id)));
                     continue;
                 }
-                match Session::start(&cmd, &out) {
+                match start_live(&cmd, &out) {
                     Ok((live, size)) => {
                         session = Some(live);
                         emit(&out, &protocol::ok_line("started", Some(cmd.id), Some(size)));
@@ -307,9 +343,10 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
     }
 }
 
-/// `Hippius --capture-recorder [--list-microphones | --list-cameras]`: the
-/// one-shot listings print a JSON array and return; otherwise serve the
-/// protocol on stdin and stdout. Returns the process exit code.
+/// `Hippius --capture-recorder [--list-microphones | --list-cameras |
+/// --probe | --self-test]`: the one-shot modes print one JSON value and
+/// return; otherwise serve the protocol on stdin and stdout. Returns the
+/// process exit code.
 #[must_use]
 pub fn run<I, S>(args: I) -> i32
 where
@@ -317,13 +354,23 @@ where
     S: AsRef<str>,
 {
     let args: Vec<String> = args.into_iter().map(|a| a.as_ref().to_string()).collect();
-    if args.iter().any(|a| a == "--list-microphones" || a == "--list-cameras") {
-        // No devices until the platform's recorder lists them.
-        let mut stdout = std::io::stdout();
-        return i32::from(writeln!(stdout, "[]").and_then(|()| stdout.flush()).is_err());
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    if has("--list-microphones") || has("--list-cameras") {
+        // No devices where the platform's recorder does not list them (the
+        // camera window names cameras from the webview on Windows).
+        return print_line("[]");
+    }
+    if has("--probe") || has("--self-test") {
+        return print_line(r#"{"ok":false,"error":"not available on this platform"}"#);
     }
     serve(std::io::stdin().lock(), std::io::stdout());
     0
+}
+
+/// Print one line on stdout; the exit code says whether it got there.
+fn print_line(line: &str) -> i32 {
+    let mut stdout = std::io::stdout();
+    i32::from(writeln!(stdout, "{line}").and_then(|()| stdout.flush()).is_err())
 }
 
 #[cfg(test)]
@@ -423,18 +470,22 @@ mod tests {
         assert!(end_of(&lines(&dest)) > 0);
     }
 
-    /// A real screen is not recorded here yet: the start is refused with the
-    /// line the app shows, and no file is made.
+    /// A real screen is not recorded where no recorder has landed: the start
+    /// is refused with the line the app shows. On Windows the recorder is
+    /// real, and display 1 is no monitor: refused all the same. Either way
+    /// no file is left behind.
     #[test]
-    fn a_real_start_is_refused_with_the_apps_own_line() {
+    fn a_real_start_that_cannot_record_is_refused_and_leaves_no_file() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("rec.mp4");
         let (recorder, child) = wire(&dest, false);
         let err = recorder.err().expect("refused");
-        assert_eq!(
-            err.to_string(),
-            crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message()
-        );
+        if !cfg!(windows) {
+            assert_eq!(
+                err.to_string(),
+                crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message()
+            );
+        }
         child.join().unwrap();
         assert!(!dest.exists());
     }
