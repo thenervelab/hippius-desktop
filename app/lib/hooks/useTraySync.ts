@@ -265,6 +265,22 @@ async function handleTrayClick(event: TrayIconEvent) {
   }
 }
 
+/**
+ * Tell Rust a context menu was just attached to the icon (`TrayIcon.new`
+ * with a `menu`). On newer macOS a status item that owns a menu opens it on
+ * every click, so the left click never reached `handleTrayClick` and the
+ * popover never opened; Rust takes the menu off the status item, keeps it
+ * and opens it itself on a right click (`tray::status_menu`). A no-op
+ * elsewhere.
+ */
+async function reportMenuAttached() {
+  try {
+    await invoke("tray_menu_attached");
+  } catch (e) {
+    logTrayAction("Failed to report the tray menu", e);
+  }
+}
+
 /* ─ Public: create tray once ──────────────────────────────────── */
 
 export function useTrayInit(isAuthenticated: boolean) {
@@ -331,7 +347,8 @@ export function useTrayInit(isAuthenticated: boolean) {
         // show on left-click (`showMenuOnLeftClick: isLinuxPlatform`) and it
         // includes an "Open Hippius" entry (added by `buildTrayContextMenu`) as
         // the only way to reach the popover there. `action` stays attached
-        // (harmless no-op on Linux).
+        // (harmless no-op on Linux). On macOS `showMenuOnLeftClick: false` is
+        // not enough: see `reportMenuAttached`.
         const contextMenu = await buildTrayContextMenu();
         await TrayIcon.new({
           id: TRAY_ID,
@@ -342,6 +359,7 @@ export function useTrayInit(isAuthenticated: boolean) {
           showMenuOnLeftClick: isLinuxPlatform,
           action: handleTrayClick,
         });
+        await reportMenuAttached();
         trayIconState = "default";
       }
 
@@ -474,6 +492,7 @@ async function setTrayIconSyncing(
         showMenuOnLeftClick: isLinuxPlatform,
         action: handleTrayClick,
       });
+      await reportMenuAttached();
 
       trayIconState = newState;
       logTrayAction("Tray recreated successfully");
