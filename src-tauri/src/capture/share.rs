@@ -47,6 +47,8 @@ const MIN_SHARE_HEIGHT: f64 = 60.0;
 /// FileDescription ("Windows Explorer"), so a window TITLE such as "Program
 /// Manager" never matches here; xcap already drops the desktop (Progman) by
 /// class, and the untitled rule below drops the taskbar and shell helpers.
+/// On X11 the panels and the desktop are dropped by their EWMH window type
+/// before they get here (`linux_x11::model::window_type`).
 const HIDDEN_OWNERS: &[&str] = &[
     "Window Server",
     "Dock",
@@ -379,6 +381,105 @@ mod os {
 
 #[cfg(any(target_os = "macos", windows))]
 pub use os::run;
+
+/// X11: the same picker, every picture cropped from ONE grab of the root
+/// window per pass (a window's picture is what is on screen where it is, as
+/// in an X11 window shot). Wayland never opens the picker: the desktop's
+/// own picker replaces it.
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{
+        IconSource, MAX_REFRESHES, REFRESH_EVERY, ShareArtItem, ShareMessage, ShareTab, THUMB_HEIGHT, THUMB_WIDTH, WindowCandidate, art_order,
+        share_displays, share_windows,
+    };
+    use crate::capture::linux_x11::{self, model};
+
+    pub fn run(first: ShareTab, own_pid: u32, icons: &IconSource, keep_going: &dyn Fn() -> bool, send: &dyn Fn(ShareMessage) -> bool) {
+        let listed = (|| -> crate::error::Result<_> {
+            let displays = linux_x11::list_displays()?;
+            let candidates = linux_x11::list_windows()?
+                .into_iter()
+                .map(|w| WindowCandidate {
+                    id: w.id,
+                    pid: w.pid.unwrap_or_default(),
+                    app_name: w.app_name,
+                    title: w.title,
+                    frame: w.frame,
+                })
+                .collect();
+            Ok((share_windows(candidates, own_pid, &displays), share_displays(&displays)))
+        })();
+        let (windows, displays) = match listed {
+            Ok(v) => v,
+            Err(e) => {
+                send(ShareMessage::List(Err(e)));
+                return;
+            }
+        };
+        let order = art_order(first, &windows, &displays);
+        let pids: Vec<u32> = windows.iter().map(|w| w.pid).collect();
+        let pid_of: std::collections::HashMap<u32, u32> = windows.iter().map(|w| (w.id, w.pid)).collect();
+        if !send(ShareMessage::List(Ok((windows, displays)))) {
+            return;
+        }
+        let icon_by_pid = icons(&pids);
+        for pass in 0..=MAX_REFRESHES {
+            if !keep_going() {
+                return;
+            }
+            // One grab, then every picture is a crop of it. Frames are read
+            // with it, so a window moved since the list is cropped where it is.
+            let Ok((root, now_displays, now_windows)) = linux_x11::grab_root() else {
+                return;
+            };
+            for &(tab, id) in &order {
+                if !keep_going() {
+                    return;
+                }
+                let rect = match tab {
+                    ShareTab::Window => now_windows
+                        .iter()
+                        .find(|w| w.id == id)
+                        .and_then(|w| model::clip_to_root(w.frame, root.width(), root.height())),
+                    ShareTab::Screen => now_displays.iter().find(|d| d.id == id).and_then(|d| {
+                        let frame = crate::capture::targets::NativeFrame {
+                            x: d.x,
+                            y: d.y,
+                            width: d.width,
+                            height: d.height,
+                        };
+                        model::clip_to_root(frame, root.width(), root.height())
+                    }),
+                };
+                let thumbnail = rect.and_then(|r| {
+                    let part = image::imageops::crop_imm(&root, r.x, r.y, r.width, r.height).to_image();
+                    crate::capture::thumbnail::fit_data_url(&part, THUMB_WIDTH, THUMB_HEIGHT).ok()
+                });
+                let icon = if pass == 0 && tab == ShareTab::Window {
+                    pid_of.get(&id).and_then(|pid| icon_by_pid.get(pid).cloned())
+                } else {
+                    None
+                };
+                if (thumbnail.is_some() || icon.is_some()) && !send(ShareMessage::Art(ShareArtItem { tab, id, thumbnail, icon })) {
+                    return;
+                }
+            }
+            if pass == 0 && !send(ShareMessage::FirstPassDone) {
+                return;
+            }
+            let rest = std::time::Instant::now() + REFRESH_EVERY;
+            while std::time::Instant::now() < rest {
+                if !keep_going() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use linux::run;
 
 /// The icon of each running app in `pids`, as PNG `data:` URLs. AppKit, so
 /// call it on the main thread.

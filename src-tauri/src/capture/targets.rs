@@ -1,8 +1,10 @@
 //! The displays and windows a capture can target, and where they sit.
 //!
 //! xcap reports geometry in the platform's own space: **points on macOS**
-//! (`CGDisplayBounds`), **physical pixels on Windows**. The overlay is a
-//! webview and thinks in CSS pixels, which are points on both. So every
+//! (`CGDisplayBounds`), **physical pixels on Windows**. On Linux X11 the
+//! displays and windows come from x11rb (`capture::linux_x11`), also in
+//! physical pixels, with one scale for the whole screen. The overlay is a
+//! webview and thinks in CSS pixels, which are points everywhere. So every
 //! value this module hands the overlay is converted to display-local points
 //! here, and nothing downstream has to know which platform it is on.
 
@@ -208,6 +210,11 @@ mod os {
 
 #[cfg(any(target_os = "macos", windows))]
 pub use os::{list_displays, window_frame, windows_on_display};
+
+/// Linux: X11 only. Wayland never lists displays or windows (the desktop's
+/// own picker chooses there), and these refuse if asked.
+#[cfg(target_os = "linux")]
+pub use super::linux_x11::{list_displays, window_frame, windows_on_display};
 
 #[cfg(test)]
 mod tests {
