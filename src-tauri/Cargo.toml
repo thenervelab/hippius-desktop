@@ -325,11 +325,21 @@ webview2-com = "0.38"
 # new build or runtime package) with RandR for the monitors. Wayland: the
 # xdg-desktop-portal Screenshot interface through ashpd, on the zbus 5 the
 # Linux build already carries (notify-rust, opener, single-instance), so no
-# second D-Bus stack. Only the portals capture uses are switched on; Phase 4
-# adds `screencast`, Phase 6 `global_shortcuts`.
+# second D-Bus stack. Only the portals capture uses are switched on: Phase 4
+# adds `screencast` (Wayland recording) and `inhibit` (no screen blanking
+# while recording); Phase 6 adds `global_shortcuts`.
+#
+# Linux recording (Phase 4): GStreamer from the distro through gstreamer-rs
+# (MIT/Apache). It links only libgstreamer-1.0 and libgstapp-1.0, which
+# WebKitGTK's own GStreamer dependency already brings onto every desktop;
+# the encoders are the distro's plugins, found at run time (the deb only
+# recommends them). Building needs libgstreamer1.0-dev and
+# libgstreamer-plugins-base1.0-dev.
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["randr"] }
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot", "screencast", "inhibit"] }
+gstreamer = "0.25"
+gstreamer-app = "0.25"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
