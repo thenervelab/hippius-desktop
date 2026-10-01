@@ -266,6 +266,22 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   one soundtrack, with pause and resume, the camera bubble filmed with the
   screen (or the camera on its own on X11), and a live microphone level. If
   your system lacks the video codecs, Record says which packages to install.
+- **The capture shortcut and the tray on Linux (internal builds first).**
+  On X11, Ctrl+Shift+2 (or the keys you choose in Settings) opens the
+  capture bar from any app. On Wayland, KDE Plasma and GNOME 48 or later add
+  the shortcut through your desktop, which may ask you to confirm it; on
+  other desktops Settings gives you the command to bind in your keyboard
+  settings, and on GNOME adds it for you. While recording, the tray icon
+  shows a red dot (amber when paused) and its menu has Stop, Pause and the
+  recording controls.
+- **Recording on Linux feels more like a Mac (internal builds first).** On
+  Wayland the countdown runs after you pick what to share, in the recording
+  controls, with Start now to skip it. The controls stay a small dot and
+  timer until you point at them, since Linux films them in screen
+  recordings, and they move out of the way of an area you record. On X11 a
+  recording of one window now includes the camera bubble, and a system
+  missing video codecs is told exactly which packages to install. Fedora
+  testers get an .rpm package.
 - **Record your screen on Windows (test builds first).** Record a whole
   screen, one window or an area, with your microphone, your computer's sound
   or both in one soundtrack, pause and resume, and the camera bubble or the

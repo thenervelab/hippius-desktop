@@ -10,8 +10,13 @@ Linux sessions, so Linux recording stays on staging too. Phases 5 and 6 are
 done in code for Windows (cross-checked from a Mac, not yet run on a Windows
 PC; their checklist rows are below), and Phase 5's Linux part (the camera in
 WebKitGTK, the camera list, camera only on X11, `device_lost`) is done in code
-the same way as Phase 4; Phase 6 is not started for Linux. Windows and Linux
-recording stay on staging. Written against `feat/screen-capture` at 8a4e21f2;
+the same way as Phase 4. Phase 6 is done in code for Linux too (the shortcut
+on X11 and Wayland, the tray while recording, the countdown after the
+Wayland dialog), with most of Phase 4's leftovers (the pill's compact form,
+the pill outside an X11 area, the bubble in an X11 window recording, the
+exact `codecsMissing` packages, the staging `.rpm`); type-checked and linted
+for Linux from macOS only. Windows and Linux recording stay on staging, and
+so does Wayland's shortcut portal. Written against `feat/screen-capture` at 8a4e21f2;
 Phases 0 and 1 merged with the permission, external-device, button-menu and
 camera/audio work at 2fd6e468.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
@@ -931,21 +936,19 @@ staging builds only, never on beta or production.
   whole screen on a machine with one display: a restored session skips the
   dialog, so with two displays (or a window) it would record the old choice
   unasked with no way to pick another.
-- **No countdown on Wayland** (`recordCountdown: false`): the desktop's
-  dialog comes between Record and the recording, so a count before it would
-  end at a dialog. The plan's "countdown in the pill after the picker" is
-  left for Phase 6.
+- **No countdown before the Wayland dialog**: the desktop's dialog comes
+  between Record and the recording, so a count before it would end at a
+  dialog. The plan's "countdown in the pill after the picker" landed with
+  Phase 6 (`countdownAfterPicker`).
 - **No poster on Wayland:** Hippius cannot read the screen there, so the
   card of a Wayland recording has no picture.
-- **Not done:** the pill's compact form and one-time "visible in screen
-  recordings" note, placing the pill outside an X11 area recording, the
-  bubble in a window recording (`WINDOW_RECORDING_ADDS_CAMERA` stays macOS
-  only), camera only on Wayland (no window ids there), Wayland area
-  recording (spike L6), the staging `rpm` bundle, and the `codecsMissing`
-  line names every package rather than the missing one (the probe logs
-  exactly which elements are missing). The camera on Linux (the WebKitGTK
-  permission, `--list-cameras`, camera only on X11) landed with Phase 5's
-  Linux part, below.
+- **Not done:** camera only on Wayland (no window ids there) and Wayland
+  area recording (spike L6), both documented limits. The camera on Linux
+  (the WebKitGTK permission, `--list-cameras`, camera only on X11) landed
+  with Phase 5's Linux part, below; the pill's compact form and one-time
+  note, the pill outside an X11 area recording, the bubble in an X11 window
+  recording, the `codecsMissing` line naming only the missing packages and
+  the staging `rpm` bundle landed with Phase 6's Linux part.
 
 **Needs real Linux sessions to know** (none of this ran from a Mac)
 - that `gst::parse::launch` accepts every pipeline text with the distro's
@@ -1289,9 +1292,12 @@ accepted Wayland limits.
 
 ### Phase 6: shortcuts, tray and polish (M, 1 to 1.5 weeks)
 
-**Status (Windows): code done, hardware checklist pending. Linux: not
-started** (the Wayland and X11 shortcut and the Linux tray menu are Phase
-4 and 6 Linux work).
+**Status (Windows): code done, hardware checklist pending. Linux: code
+done, Linux checklist pending** (Linux below the Windows notes). Verified
+for Linux the same way as Phase 4: `cargo clippy --lib --tests` for
+`x86_64-unknown-linux-gnu` (pedantic, no warnings) with the fake `.pc`
+files and a no-op C compiler, the platform-free tests on macOS, and the
+Windows MSVC cross-check for the shared code.
 
 **What landed (Windows)**
 - **XP-15, the tray's recording mark, from Rust.** `show_phase_in_tray`
@@ -1320,8 +1326,9 @@ started** (the Wayland and X11 shortcut and the Linux tray menu are Phase
 **Deviations**
 - The Windows default shortcut is still Ctrl+Shift+2; changing it remains
   an open product decision (below), not a code task.
-- Settings does not read `shortcut.via` yet: Windows is always `plugin`,
-  and the Linux values arrive with Linux Phase 6.
+- *Closed with Linux Phase 6:* Settings reads `shortcut.via` now (the key
+  recorder for `plugin`, the desktop's trigger and dialog for `portal`, the
+  command for `desktopSettings`).
 
 **Needs a Windows PC to know**
 - that `TrayIcon::set_icon` with a 64 px RGBA image looks right on a 100 %
@@ -1339,6 +1346,139 @@ started** (the Wayland and X11 shortcut and the Linux tray menu are Phase
    no code in it, and the log has the HRESULT.
 10. A full-screen game on the second monitor, start a recording there from
     the shortcut: the pill appears on that monitor and is not in the video.
+
+**What landed (Linux)**
+- **The shortcut on X11** is the plugin's, as on macOS and Windows:
+  `tauri-plugin-global-shortcut` is a Linux dependency now (global-hotkey's
+  X11 backend is x11rb, nothing new to build or install) and `main.rs`
+  registers it only where `shortcut::plugin_grabs_keys` (not Wayland, whose
+  XWayland grab would only see keys typed into XWayland windows). The
+  plugin path refuses GNOME's and KDE's Print Screen keys and GNOME's
+  Ctrl+Alt+Shift+R (`LINUX_RESERVED`), and the modifier refusal names
+  Ctrl, Alt or Super.
+- **The shortcut on Wayland** (`shortcut_portal.rs`): where the
+  GlobalShortcuts portal answers (`warm` asks at launch; the lane's
+  `ShortcutPortal` row, still staging) one task owns a D-Bus connection
+  registered under the app id (host registry, best effort), a session and
+  the one shortcut `capture`, bound with the saved accelerator as the
+  preferred trigger in the XDG names (`portal_trigger`); `Activated` for
+  that session and id goes to `commands::on_shortcut`. Settings shows the
+  desktop's own description of the trigger, Change opens the desktop's
+  dialog (`ConfigureShortcuts`, portal version 2 only), Turn off closes the
+  session. A declined dialog or a failed bind is Rust's line in Settings.
+- **Where Wayland has no portal** (`desktop_shortcut.rs`; Ubuntu 24.04's
+  GNOME 46): `shortcut.via = desktopSettings` with Rust's line and
+  `shortcut.command` (`<this executable> --capture`); a second launch with
+  `--capture` reaches the running app through the single-instance handler,
+  which calls `on_shortcut` and does NOT bring the main window forward (it
+  would be filmed). On GNOME Settings offers "Add for me", which writes
+  Hippius's own custom keybinding (`.../custom-keybindings/hippius-capture/`)
+  and adds it to GNOME's list once.
+- **The tray while recording.** `TRAY_ICON_MARKS_RECORDING` is true on
+  Linux too: the red (amber) dot from Windows, since KDE and most GNOME
+  extensions show no indicator label (the label still carries the time
+  where shown). AppIndicator sends no click, so `tray_recording_menu.rs`
+  puts the recording's own menu on the icon (Stop recording, Pause or
+  Resume recording, Show recording controls), rewritten only when the
+  recording changes state, never on the time tick; one app-wide menu
+  listener (added once) acts on those ids only. At the end Rust emits
+  `capture_tray_icon_released` as on Windows and `useTraySync.ts` puts back
+  its icon and, on Linux, its own menu. No click routing changed.
+- **The countdown after the Wayland dialog.** `recordCountdown` is offered
+  on Wayland now and `countdownAfterPicker` says where it runs: the overlay
+  counts nothing (`support::countdown_secs` is 0), and once the desktop's
+  dialog is answered `begin_recording` holds the recorder paused
+  (`count_down_in_pill`), sends `capture_pill_countdown` to the pill once a
+  second ("Recording in 3", Start now = `capture_skip_countdown`, Cancel
+  ends the start like any cancel while starting), then resumes it.
+- **The pill where it is filmed** (`support::pill_filmed`, Linux): it stays
+  the dot and the time until pointed at or focused (Tab reaches the group),
+  and the first time ever says so (`capture_controls_context`, the
+  `capture_pill_note_seen_v1` preference). On X11 an area recording on the
+  bar's display gets the pill outside the area (`camera::pill_outside`:
+  below, above, right, left, else its usual place).
+- **The bubble in an X11 window recording.** `bar::window_recording_adds_camera`
+  is per platform now (everything but Wayland). The app remembers the
+  camera window's XID when it opens; the child reads the recorded window
+  raw (`linux_plan::video_capture_bgrx`) and, through one kept X connection
+  (`linux_x11::WindowReader`), the bubble's own pixels and both windows'
+  places on every picture, draws only the bubble's shape with the same
+  `overlay.rs` Windows uses (not while the pill has unmapped it), and fits
+  the picture into the recording's size with `frame::to_nv12`.
+- **`codecsMissing` names only what is missing**: the probe's missing
+  elements and absent encoders map to their packages in the family's
+  names (`/etc/os-release`: Debian's `gstreamer1.0-*`, Fedora's
+  `gstreamer1-*`); an unknown family or a probe that could not start
+  GStreamer keeps the full line (`RecordingUnavailable::line`).
+- **Staging builds an `.rpm`** (`--bundles deb,rpm`) recommending
+  Fedora's plugins and the portal; beta and production stay deb only.
+  Pinned in `release_lane_pins.rs`.
+- **Windows fix found on the way:** the app never stored the bubble's HWND
+  (`remember_camera_window_number` was macOS only), so a Windows window
+  recording was never handed the bubble; it is stored when the camera
+  window opens now.
+
+**Deviations (Linux)**
+- No GNOME 46 "Add for me" through the portal (there is none); it writes
+  the custom keybinding with `gsettings` instead, as the plan allowed.
+- `hippius --capture` acts only on a running Hippius; started cold it just
+  starts the app.
+- The recording's tray menu replaces the main window's menu while it runs
+  (Rust cannot rebuild the page's items); if the main window recreates the
+  icon mid-recording (a failed icon swap), the recording's menu comes back
+  at the next pause or resume only.
+- The countdown after the dialog records the moment between `started` and
+  the pause (a fraction of a second) before the count.
+- The bubble is composited on the CPU and read from the X server per
+  picture (about 160 KB at the small size); spike W3's arithmetic applies.
+
+**Needs real Linux sessions to know**
+- that global-hotkey's X11 grab works on GNOME Xorg, KDE X11 and XFCE, and
+  a grab another app holds is refused (Settings says so);
+- that KDE Plasma 6 and GNOME 48 bind through the portal for a host
+  (non-Flatpak) app, show their dialog once, keep the binding across
+  launches, honour the preferred trigger, and that `ConfigureShortcuts`
+  opens (spike L8); whether the host registry takes `hippius.com` without a
+  matching `.desktop` file;
+- that GNOME 46 picks up the `gsettings` keybinding at once and that
+  `--capture` reaches the running app on X11 and Wayland;
+- that AppIndicator (Ubuntu's extension) and KDE's tray show the marked
+  icon, the label, and the swapped menu, and that the menu's items act;
+- that `ximagesrc xid=` gives BGRx and `GetImage` reads the bubble's ARGB
+  window (compositing on), and the bubble lines up at 100 % and
+  `GDK_SCALE=2`;
+- the rpm installing on Fedora 42 with its recommends.
+
+**Linux checklist additions** (debug or staging build)
+1. X11 (Ubuntu on Xorg, KDE X11): Ctrl+Shift+2 opens the bar from another
+   app; again cancels; while recording it stops. Change it in Settings;
+   Print Screen is refused with the desktop line; a key another app grabbed
+   is refused.
+2. KDE Plasma 6 Wayland: Settings shows the desktop's trigger after KDE's
+   dialog; the shortcut opens the bar; Change opens KDE's dialog; Turn off,
+   then on, asks again. Fedora 42 GNOME 48: the same with GNOME's dialog.
+3. Ubuntu 24.04 GNOME Wayland: Settings shows the command; Add for me adds
+   "Hippius capture" in Settings, Keyboard, Custom Shortcuts; the keys open
+   the bar without bringing the main window up, and stop a recording.
+4. Every desktop: while recording, the tray icon has the red dot (amber
+   paused); its menu has Stop recording, Pause/Resume recording and Show
+   recording controls, each works; after Stop the normal menu and icon are
+   back (the syncing icon if a sync runs).
+5. Wayland with a 3 s countdown: pick a screen in the dialog; the pill
+   counts 3, 2, 1; the video starts at the count's end; Start now and
+   Cancel work.
+6. The pill: a dot and the time in a full-screen recording (check the
+   video), expands on hover and on Tab; the one-time note shows on the
+   first recording only. X11 area recording: the pill sits outside the
+   area and is not in the video.
+7. X11 window recording with the bubble small, large and full: the bubble
+   is in the video where it was, round with no black corners; hidden from
+   the pill it leaves the video.
+8. Remove `gstreamer1.0-libav` only: Record says to install
+   `gstreamer1.0-libav` and nothing else; on Fedora the `gstreamer1-*`
+   names.
+9. Install the staging `.rpm` on Fedora 42; the plugins it recommends come
+   with it.
 
 **Original scope**
 - Wayland shortcut: the GlobalShortcuts portal (KDE Plasma 5.27+, GNOME 48+,

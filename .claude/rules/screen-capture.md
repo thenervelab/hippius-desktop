@@ -131,7 +131,7 @@ folder under the Hippius name, never follows a symlink, and says
 `PORTAL_MISSING` / `PORTAL_FAILED` in Rust's words. The frontend branches
 only on Rust's `selection` (one "Take a screenshot…" item, no capture bar)
 and `shortcut.supported` / `unavailableMessage` (no keycaps, Settings shows
-the line). Linux has no shortcut until Phase 6. The `rust-linux` CI job runs
+the line). The `rust-linux` CI job runs
 the X server test under Xvfb. Pinned by `capture_wiring.rs`.
 
 **Phase 4 (Linux recording) is in code, not yet run on Linux.** The child
@@ -164,7 +164,8 @@ per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
 `codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
 Wayland (the desktop's dialog). **Wayland records from the panel**
 (`StartPlan::Panel`): one `capture-overlay-0` window with the bar alone,
-no display watch, no countdown (`recordCountdown`), Record resolved by
+no display watch, no countdown on the overlay (`countdownAfterPicker`: the
+pill counts once the dialog is answered), Record resolved by
 `support::system_picker_selection`; a cancel in the desktop's dialog is the
 child's exact `PICKER_CANCELLED` refusal, which `fail_capture` ends quietly.
 The restore token (`screencast_token.rs`, device-wide) is sent only for a
@@ -174,6 +175,32 @@ CI's `rust-linux` runs the ignored real-writer tests
 the fake `.pc` files: `cargo check` and `cargo clippy --lib --tests` for
 `x86_64-unknown-linux-gnu` work; `-- -D warnings` rebuilds the build script
 for the target and fails, so read the warnings instead.
+
+**Phase 6 (Linux) is in code, not yet run on Linux.** The shortcut on X11
+is the plugin's (`main.rs` registers it only where
+`shortcut::plugin_grabs_keys`: never on Wayland, where an XWayland grab sees
+only XWayland windows, and where the plugin's state is missing, so
+`shortcut::apply` must not reach `global_shortcut()` there). On Wayland
+`shortcut_portal.rs` binds through the GlobalShortcuts portal (one task owns
+the connection and session; `Activated` for its own session path and id
+goes to `on_shortcut`; Settings shows the desktop's trigger text, never
+keycaps, since the desktop has the last word), gated by the lane's
+`ShortcutPortal` row; without a portal `support::shortcut_for` says
+`desktopSettings` with `shortcut.command` (`<exe> --capture`), which the
+single-instance handler turns into `on_shortcut` WITHOUT showing the main
+window, and `desktop_shortcut.rs` writes GNOME's custom keybinding at
+Hippius's own path. Linux marks the tray icon like Windows and, since
+AppIndicator sends no click, puts the recording's menu on it
+(`tray_recording_menu.rs`, rewritten only on a state change; one listener
+added once); the main window puts its menu back on
+`capture_tray_icon_released`. The pill is filmed on Linux
+(`support::pill_filmed`): compact until pointed at or focused, a one-time
+note (`capture_controls_context`), and outside an X11 area recording
+(`camera::pill_outside`). An X11 window recording composites the bubble
+like Windows (`Video::start_with_camera`, `linux_x11::WindowReader`,
+`overlay.rs`), from the XID the app stores when the camera opens.
+`RecordingUnavailable::line` names only the missing packages on Linux; use
+it, not `message`, for anything the user reads.
 
 ## Flow
 
@@ -240,7 +267,7 @@ window's HWND, X11 its XID with the stage's margin cut by `videocrop`); the sour
 `cameraOnlyAvailable`, and the camera row says "Camera is only recorded with
 the entire screen or an area." whenever `cameraFilmed` is false (a window
 recording where the recorder cannot add the camera window:
-`bar::WINDOW_RECORDING_ADDS_CAMERA`, macOS and Windows).
+`bar::window_recording_adds_camera`, everywhere but Wayland).
 
 **Screenshot:** selection → pixels in memory (`screenshot::capture_image`) and
 the card's JPEG from them (`thumbnail::from_image`) → preview card shown →
@@ -517,11 +544,14 @@ It is written only when the text changes (`tray_needs_write` against
 `tray_last`), so a screenshot never touches the status item.
 Empty, never `None`: `tray-icon` ignores a `None` title on macOS, which is
 what left a saved recording's time frozen in the menu bar. Windows has no
-title, so the tooltip carries the time (`tray_text_for`) and Rust marks the
-icon with a red (paused: amber) dot (`write_tray_glyph`, XP-15), redrawn on
-every write so a sync icon swapped in by `useTraySync.ts` is covered within
-a second; at the end it puts the plain icon back and emits
-`capture_tray_icon_released`, on which the main window re-applies its own. The write is POSTED
+title, so the tooltip carries the time (`tray_text_for`), and Windows and
+Linux (many panels show no label) get a red (paused: amber) dot on the
+icon (`write_tray_glyph`, XP-15), redrawn on every write so a sync icon
+swapped in by `useTraySync.ts` is covered within a second; at the end it
+puts the plain icon back and emits `capture_tray_icon_released`, on which
+the main window re-applies its own. Linux also swaps in the recording's
+menu (`write_tray_menu`, only on a state change), which the main window
+replaces with its own on that same event. The write is POSTED
 to the main thread (`run_on_main_thread`), never awaited: it runs under the
 phase lock and `set_title` blocks on the main thread, where a sync command may
 be waiting for that lock. A late write is dropped by `seq`
@@ -563,7 +593,8 @@ then dropped quietly; a folder that never opens drops the request after
 `HIGHLIGHT_OPEN_LIMIT_MS`. `shouldOpenFromUrl` keys on the file too, so a
 second capture in the same folder is pointed out as well.
 
-**Shortcut** (`shortcut.rs`, `tauri-plugin-global-shortcut`, macOS/Windows):
+**Shortcut** (`shortcut.rs`, `tauri-plugin-global-shortcut`, macOS, Windows
+and X11; Wayland in Phase 6 above):
 default `CommandOrControl+Shift+2`, stored `capture_shortcut_v1` (`off` =
 disabled). Registered from `CaptureHost` via `capture_sync_shortcut`. It
 toggles, decided by `shortcut::action_for` in `commands::on_shortcut`:
