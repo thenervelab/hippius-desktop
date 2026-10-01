@@ -227,6 +227,25 @@ pub fn system_picker_selection(mode: CaptureMode) -> super::screenshot::Selectio
     }
 }
 
+/// `mode` if these surfaces offer it for `kind`, else what they do offer
+/// (the whole screen first): a mode remembered from another session (an
+/// area drawn on X11) must not open a Wayland panel on a mode it lacks.
+#[must_use]
+pub fn offered_mode(surfaces: &Surfaces, kind: super::session::CaptureKind, mode: CaptureMode) -> CaptureMode {
+    let offered = match kind {
+        super::session::CaptureKind::Screenshot => &surfaces.modes.screenshot,
+        super::session::CaptureKind::Recording => &surfaces.modes.recording,
+    };
+    if offered.is_empty() || offered.contains(&mode) {
+        return mode;
+    }
+    if offered.contains(&CaptureMode::Screen) {
+        CaptureMode::Screen
+    } else {
+        offered[0]
+    }
+}
+
 /// The countdown for a capture of `kind`: the saved one, except where
 /// these surfaces offer none.
 #[must_use]
@@ -394,6 +413,20 @@ mod tests {
         let x11 = surfaces_for(Platform::LinuxX11, true, true);
         assert!(x11.record_countdown);
         assert_eq!(countdown_secs(&x11, 3, Recording), 3);
+    }
+
+    /// A remembered area opens a Wayland recording on the whole screen; an
+    /// offered mode is kept, and a kind with no modes of its own (Wayland's
+    /// screenshot, the desktop's tool) is left as it was.
+    #[test]
+    fn a_mode_this_platform_lacks_falls_back_to_one_it_offers() {
+        use crate::capture::session::CaptureKind::{Recording, Screenshot};
+        let wayland = surfaces_for(Platform::LinuxWayland, true, true);
+        assert_eq!(offered_mode(&wayland, Recording, CaptureMode::Area), CaptureMode::Screen);
+        assert_eq!(offered_mode(&wayland, Recording, CaptureMode::Window), CaptureMode::Window);
+        assert_eq!(offered_mode(&wayland, Screenshot, CaptureMode::Area), CaptureMode::Area);
+        let x11 = surfaces_for(Platform::LinuxX11, true, true);
+        assert_eq!(offered_mode(&x11, Recording, CaptureMode::Area), CaptureMode::Area);
     }
 
     /// Camera only records the stage window by its id: every platform but

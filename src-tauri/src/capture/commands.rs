@@ -667,8 +667,9 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         None if options.last_kind == CaptureKind::Recording && !recording_ok => CaptureKind::Screenshot,
         None => options.last_kind,
     };
-    let mode = mode.unwrap_or(options.last_mode);
-    let plan = super::support::start_plan(&super::support::surfaces(), kind);
+    let surfaces = super::support::surfaces();
+    let mode = super::support::offered_mode(&surfaces, kind, mode.unwrap_or(options.last_mode));
+    let plan = super::support::start_plan(&surfaces, kind);
 
     match advance(&app, &state.capture, CaptureEvent::Start { kind, mode }) {
         Ok(_) => {}
