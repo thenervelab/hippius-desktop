@@ -17,6 +17,7 @@ pub mod naming;
 pub mod permission_flow;
 pub mod permissions;
 pub mod preview;
+pub mod privacy;
 pub mod recorder_child;
 pub mod recording;
 pub mod rollout;

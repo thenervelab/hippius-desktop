@@ -119,7 +119,18 @@ export interface CaptureSurfaces {
   linuxSession: "x11" | "wayland" | null;
 }
 
-export interface CaptureOverlayContext extends RecordingAvailability, CaptureSurfaces {
+/** Which devices Windows' privacy settings keep from Hippius (Rust's `privacy::DevicePrivacy`). */
+export interface CaptureDevicePrivacy {
+  /** A blocked device's row offers "Open Settings" (`openCapturePrivacySettings`). */
+  privacyBlocked: { microphone: boolean; camera: boolean };
+  /** Rust's line for why the camera cannot be used; null when it can. */
+  cameraUnavailableMessage: string | null;
+}
+
+/** A device whose privacy switch the bar can open in the system's Settings. */
+export type CapturePrivacyDevice = "camera" | "microphone";
+
+export interface CaptureOverlayContext extends RecordingAvailability, CaptureSurfaces, Partial<CaptureDevicePrivacy> {
   mode: CaptureMode;
   displayId: number;
   kind: CaptureKind;
@@ -531,6 +542,21 @@ export function stopCaptureMicMeter(generation: number): Promise<void> {
 
 /** The microphone meter's level, 0 (silence) to 1. */
 export const MIC_LEVEL_EVENT = "capture_mic_level";
+
+/** Open the system's Settings page that holds `device`'s privacy switch (Windows). */
+export function openCapturePrivacySettings(device: CapturePrivacyDevice): Promise<void> {
+  return invoke("capture_open_privacy_settings", { device });
+}
+
+/** A sound source went away mid-recording and the recording goes on without it. */
+export const DEVICE_LOST_EVENT = "capture_device_lost";
+
+/** What `DEVICE_LOST_EVENT` carries: the source, and Rust's line for the pill. */
+export interface CaptureDeviceLost {
+  /** `microphone` or `systemAudio`. */
+  device: string;
+  message: string;
+}
 
 /** Hide or show the camera bubble mid-recording; resolves to whether it shows now. */
 export function toggleCaptureCamera(): Promise<boolean> {

@@ -677,6 +677,7 @@ fn main() {
             crate::capture::commands::capture_state,
             crate::capture::commands::capture_support,
             crate::capture::commands::capture_open_permission_settings,
+            crate::capture::commands::capture_open_privacy_settings,
             crate::capture::commands::capture_get_destination,
             crate::capture::commands::capture_set_destination,
             crate::capture::commands::capture_set_mode,

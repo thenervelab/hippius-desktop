@@ -1389,6 +1389,10 @@ pub struct OverlayContext {
     /// line), the same as `capture_support` says.
     #[serde(flatten)]
     pub surfaces: super::support::Surfaces,
+    /// Which devices Windows' privacy settings block, and the camera's line
+    /// (the bar offers "Open Settings" under a blocked row).
+    #[serde(flatten)]
+    pub privacy: super::privacy::DevicePrivacy,
     pub destination: Option<CaptureDestination>,
     /// The area already drawn, on this display or another. At the start of a
     /// capture it is the area last drawn on the bar's display, fitted to it.
@@ -1430,6 +1434,7 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         camera_only_available: camera_only_supported(),
         recording_availability: recording::RecordingAvailability::now(),
         surfaces: super::support::surfaces(),
+        privacy: super::privacy::device_privacy(),
         destination,
         pending,
     })
@@ -2629,6 +2634,21 @@ fn open_permission_settings(app: &AppHandle) -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn open_permission_settings(_app: &AppHandle) -> Result<()> {
     Err(AppError::Validation("Screen recording permission is only managed on macOS.".into()))
+}
+
+/// The bar's "Open Settings" under a camera or microphone row that Windows'
+/// privacy settings block (`privacy::device_privacy`): the Settings page
+/// holding that device's switches. `device` is `camera` or `microphone`;
+/// anything else, or any other system, is refused, so the webview can never
+/// open an arbitrary URI through it.
+#[tauri::command]
+pub fn capture_open_privacy_settings(app: AppHandle, device: String) -> Result<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let uri = super::privacy::settings_uri_for(super::rollout::current_platform(), &device)
+        .ok_or_else(|| AppError::Validation("There is no privacy setting to open here.".into()))?;
+    app.opener()
+        .open_url(uri, None::<&str>)
+        .map_err(|e| AppError::Other(format!("Could not open Settings: {e}")))
 }
 
 /// Read a permission preference; an empty value is a cleared one.
