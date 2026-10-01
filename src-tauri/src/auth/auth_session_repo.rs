@@ -295,6 +295,32 @@ pub async fn get_provider(pool: &SqlitePool, account_id: &str) -> Result<Option<
     Ok(row.and_then(|(provider,)| provider))
 }
 
+/// How an account signs in, as stored on its session row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub provider: Option<String>,
+    pub username: Option<String>,
+    pub email: Option<String>,
+}
+
+/// The sign-in identity stored for an account.
+///
+/// Like [`get_provider`], reads only display metadata and never the OS
+/// keychain, so a surface that polls it (the tray popover refreshes every few
+/// seconds while open) cannot trigger a keychain prompt. Skips cleared husk
+/// rows for the same reason [`get_provider`] does.
+pub async fn get_identity(pool: &SqlitePool, account_id: &str) -> Result<Option<SessionIdentity>> {
+    let owner = account_key(account_id);
+
+    let row: Option<(Option<String>, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT provider, username, email FROM auth_session WHERE owner = ? AND substrate_address IS NOT NULL")
+            .bind(&owner)
+            .fetch_optional(pool)
+            .await?;
+
+    Ok(row.map(|(provider, username, email)| SessionIdentity { provider, username, email }))
+}
+
 /// Fetch the full row for a specific account, if any.
 pub async fn get_by_account(pool: &SqlitePool, account_id: &str) -> Result<Option<AuthSessionRow>> {
     let owner = account_key(account_id);
@@ -999,5 +1025,42 @@ mod tests {
             get_by_account(&pool, BOB).await.unwrap().unwrap().auth_token.as_deref(),
             Some("bob-token")
         );
+    }
+
+    /// The tray popover names an OAuth account by its sign-in email, read
+    /// through `get_identity` on every poll. It must carry the stored
+    /// identity, and must stop naming the account once it is signed out:
+    /// `clear` keeps a husk row, which must not still read as signed in.
+    #[tokio::test]
+    async fn get_identity_reads_the_sign_in_identity_until_logout() {
+        let pool = setup_db().await;
+        upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ALICE,
+                token: "t",
+                token_expiry_ms: chrono::Utc::now().timestamp_millis() + 86_400_000,
+                user_id: Some(1),
+                username: "ahmad_rao",
+                provider: "google",
+                email: Some("a@b.com"),
+                logout_time_minutes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            get_identity(&pool, ALICE).await.unwrap(),
+            Some(SessionIdentity {
+                provider: Some("google".into()),
+                username: Some("ahmad_rao".into()),
+                email: Some("a@b.com".into()),
+            })
+        );
+        assert_eq!(get_identity(&pool, BOB).await.unwrap(), None);
+
+        clear(&pool, ALICE).await.unwrap();
+        assert_eq!(get_identity(&pool, ALICE).await.unwrap(), None);
     }
 }

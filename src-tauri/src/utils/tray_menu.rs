@@ -19,6 +19,17 @@ pub struct TrayMenuData {
     pub substrate_address: Option<String>,
     /// Raw credit balance. None if not logged in or fetch failed.
     pub credits: Option<f64>,
+    /// The same balance as the billing API's exact decimal string (one
+    /// credit is one dollar). The popover formats it as dollars with
+    /// `formatBalanceUsd`, the formatter the Billing page uses, so the two
+    /// cannot quote one account a cent apart; `credits` is an `f64` and
+    /// would round before the cents are taken.
+    pub balance: Option<String>,
+    /// Who the account signs in as, for an OAuth account: `@handle` for
+    /// GitHub, the email for Google / Apple, else the username. `None` for
+    /// an access-key (mnemonic) account, which has no identity beyond its
+    /// address, so the popover keeps the address + block layout.
+    pub account_label: Option<String>,
     /// Whether the *in-memory* session is hydrated for `substrate_address`.
     ///
     /// `logged_in` reflects the persisted `auth_session` row, which is valid
@@ -82,18 +93,47 @@ async fn valid_persisted_address(pool: &sqlx::SqlitePool, now_ms: i64) -> Result
     Ok(if valid { row.substrate_address } else { None })
 }
 
-/// Fetch the raw credit balance for `account` from the billing API.
+/// Fetch the credit balance for `account` from the billing API, as the
+/// API's own decimal string.
 ///
 /// Returns `None` on any HTTP or parse failure: an unreachable or malformed
 /// balance is "unknown", not "zero credits".
-async fn fetch_credit_balance(api_client: &reqwest::Client, pool: &sqlx::SqlitePool, account: &crate::app_state::SessionAccount) -> Option<f64> {
+async fn fetch_credit_balance(api_client: &reqwest::Client, pool: &sqlx::SqlitePool, account: &crate::app_state::SessionAccount) -> Option<String> {
     match crate::api::client::ApiClient::new(api_client.clone(), pool.clone())
         .get::<serde_json::Value>("/api/billing/credits/balance/", account)
         .await
     {
-        Ok(data) => data.get("balance").and_then(|v| v.as_str()).unwrap_or("0").parse::<f64>().ok(),
+        Ok(data) => parse_balance(&data),
         Err(_) => None,
     }
+}
+
+/// The `balance` field of a billing-API balance response, kept only when it
+/// is a number. A missing field reads as zero (the API omits it for an
+/// account that has never been funded); anything unparseable is unknown.
+fn parse_balance(data: &serde_json::Value) -> Option<String> {
+    let raw = data.get("balance").and_then(|v| v.as_str()).unwrap_or("0").trim();
+    raw.parse::<f64>().ok().map(|_| raw.to_string())
+}
+
+/// The label an OAuth account is known by, mirroring the main window's
+/// `resolveAccountIdentity` (`app/components/dashboard-title-wrapper/
+/// accountIdentity.ts`) so the popover and the sidebar card name one account
+/// the same way: GitHub signs in as a handle, Google and Apple with an email,
+/// and the username is the fallback. A placeholder email
+/// (`@hippius.local`) counts as none.
+///
+/// `None` for an access-key account (`provider` absent or `"mnemonic"`): it
+/// has no sign-in identity, and its address is what identifies it.
+fn sign_in_label(provider: Option<&str>, username: Option<&str>, email: Option<&str>) -> Option<String> {
+    let provider = provider.map(str::trim).filter(|p| !p.is_empty() && *p != "mnemonic")?;
+    let username = username.map(str::trim).filter(|u| !u.is_empty());
+    let handle = if provider == "github" {
+        username.map(|u| format!("@{u}"))
+    } else {
+        crate::utils::display_email::display_email(email)
+    };
+    handle.or_else(|| username.map(str::to_string))
 }
 
 /// Return pre-computed data for the system tray popover.
@@ -127,14 +167,26 @@ pub async fn get_tray_menu_data(state: tauri::State<'_, crate::app_state::AppSta
             // billing client requires. A logout landing between the two auth
             // reads degrades to `None` credits this tick; the next poll
             // corrects it.
-            let credits = match state.current_session_account() {
+            let balance = match state.current_session_account() {
                 Ok(account) => fetch_credit_balance(&state.api_client, pool, &account).await,
                 Err(_) => None,
+            };
+            // A failed identity read degrades to the address layout this
+            // tick rather than failing the whole popover refresh.
+            let account_label = match auth_session_repo::get_identity(pool, &address).await {
+                Ok(Some(id)) => sign_in_label(id.provider.as_deref(), id.username.as_deref(), id.email.as_deref()),
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::debug!(error = %e, "tray: could not read the sign-in identity");
+                    None
+                }
             };
             Ok(TrayMenuData {
                 logged_in: true,
                 substrate_address: Some(address),
-                credits,
+                credits: balance.as_deref().and_then(|b| b.parse::<f64>().ok()),
+                balance,
+                account_label,
                 session_ready: true,
             })
         }
@@ -142,6 +194,8 @@ pub async fn get_tray_menu_data(state: tauri::State<'_, crate::app_state::AppSta
             logged_in: address.is_some(),
             substrate_address: address,
             credits: None,
+            balance: None,
+            account_label: None,
             session_ready: false,
         }),
     }
@@ -162,6 +216,8 @@ mod tests {
             logged_in: true,
             substrate_address: Some("5Frholdaddr".into()),
             credits: Some(12.5),
+            balance: Some("12.5".into()),
+            account_label: Some("a@b.com".into()),
             session_ready: false,
         };
         let json = serde_json::to_value(&data).expect("serialize");
@@ -169,6 +225,45 @@ mod tests {
         assert_eq!(json["substrateAddress"], "5Frholdaddr");
         assert_eq!(json["credits"], 12.5);
         assert_eq!(json["sessionReady"], false);
+        assert_eq!(json["balance"], "12.5");
+        assert_eq!(json["accountLabel"], "a@b.com");
+    }
+
+    /// The popover shows "Balance $x.yy" from this string, so it must be the
+    /// API's exact decimal, not a float re-rendered (which would turn
+    /// "737553.122357" into a value already rounded off by `f64`).
+    #[test]
+    fn balance_keeps_the_api_decimal_string() {
+        let data = serde_json::json!({ "balance": "737553.122357" });
+        assert_eq!(parse_balance(&data).as_deref(), Some("737553.122357"));
+        assert_eq!(parse_balance(&serde_json::json!({})).as_deref(), Some("0"));
+        assert_eq!(parse_balance(&serde_json::json!({ "balance": "n/a" })), None);
+    }
+
+    /// An access-key account keeps the address layout: it has no sign-in
+    /// identity, and its stored username is not one the user chose.
+    #[test]
+    fn access_key_accounts_have_no_sign_in_label() {
+        assert_eq!(sign_in_label(Some("mnemonic"), Some("user_5abc"), None), None);
+        assert_eq!(sign_in_label(None, Some("user_5abc"), Some("a@b.com")), None);
+    }
+
+    /// Same resolution as the sidebar card's `resolveAccountIdentity`.
+    #[test]
+    fn oauth_accounts_are_named_by_how_they_sign_in() {
+        assert_eq!(
+            sign_in_label(Some("google"), Some("ahmad"), Some(" a@b.com ")).as_deref(),
+            Some("a@b.com")
+        );
+        assert_eq!(sign_in_label(Some("apple"), Some("ahmad"), Some("a@b.com")).as_deref(), Some("a@b.com"));
+        assert_eq!(sign_in_label(Some("github"), Some("octo"), Some("a@b.com")).as_deref(), Some("@octo"));
+        // A placeholder email is not an address anyone can write to.
+        assert_eq!(
+            sign_in_label(Some("google"), Some("ahmad"), Some("user_5x@hippius.local")).as_deref(),
+            Some("ahmad")
+        );
+        assert_eq!(sign_in_label(Some("oauth"), None, Some("a@b.com")).as_deref(), Some("a@b.com"));
+        assert_eq!(sign_in_label(Some("google"), None, None), None);
     }
 
     /// The multi-account regression: a background token refresh on the *other*
