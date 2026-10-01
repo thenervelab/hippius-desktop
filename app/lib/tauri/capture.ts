@@ -382,6 +382,7 @@ export interface CaptureFailed {
 // `capture_shortcut_pressed` → nothing,
 // `capture_camera_state` → `CaptureCameraState`,
 // `capture_cameras` → `CaptureDevice[]`,
+// `capture_mic_level` → `number` (the bar's microphone meter, 0 to 1),
 // `capture_options_changed` → `CaptureOptions`,
 // `capture_share_art` → `ShareArt` (the bar's overlay only),
 // `capture_camera_hover` → `boolean` (the camera window only).
@@ -501,6 +502,26 @@ export function getCaptureCameras(): Promise<CaptureDevice[]> {
 export function getCaptureMicrophones(): Promise<CaptureDevice[]> {
   return invoke("capture_microphones");
 }
+
+/**
+ * Start the capture bar's microphone meter on `device` (the id the bar
+ * lists; null = the system default). Levels arrive as `capture_mic_level`
+ * (0 to 1). Resolves to the meter's generation for `stopCaptureMicMeter`, or
+ * null where there is no meter. Rust measures it in the recording helper:
+ * a webview microphone would black out the camera bubble (WebKit lets one
+ * page capture at a time).
+ */
+export function startCaptureMicMeter(device: string | null): Promise<number | null> {
+  return invoke("capture_mic_meter_start", { device });
+}
+
+/** Stop the meter `startCaptureMicMeter` answered `generation` for. */
+export function stopCaptureMicMeter(generation: number): Promise<void> {
+  return invoke("capture_mic_meter_stop", { generation });
+}
+
+/** The microphone meter's level, 0 (silence) to 1. */
+export const MIC_LEVEL_EVENT = "capture_mic_level";
 
 /** Hide or show the camera bubble mid-recording; resolves to whether it shows now. */
 export function toggleCaptureCamera(): Promise<boolean> {

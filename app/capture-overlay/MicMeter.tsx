@@ -1,76 +1,43 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { deviceIdByName } from "@/app/lib/capture/devices";
-import { levelFrom, litBars } from "./micLevel";
+import { listen } from "@tauri-apps/api/event";
+import { MIC_LEVEL_EVENT, startCaptureMicMeter, stopCaptureMicMeter } from "@/app/lib/tauri/capture";
+import { litBars } from "./micLevel";
 
 const BARS = 5;
 
 /**
  * A small live level meter beside the microphone row, so a user can see the
- * chosen microphone hears them before they record, as Loom shows. It opens
- * the microphone in this webview only while shown; the capture bar unmounts
- * it before the countdown, so it never holds the device while recording.
- * Anything that fails (no permission, no device) just leaves it dark.
+ * chosen microphone hears them before they record, as Loom shows.
+ *
+ * Rust measures it in the recording helper and sends the level; this page
+ * never opens the microphone. WebKit lets one page capture at a time, so a
+ * `getUserMedia` here muted the camera bubble (black) and the bubble opening
+ * again muted this, back and forth on every toggle. Rust also stops the meter
+ * before the recorder takes the microphone. Anything that fails (no
+ * permission, no device, no helper) just leaves it dark.
  */
-export default function MicMeter({ deviceName }: { deviceName: string | null }) {
+export default function MicMeter({ deviceId }: { deviceId: string | null }) {
   const [lit, setLit] = useState(0);
 
   useEffect(() => {
-    let stream: MediaStream | null = null;
-    let context: AudioContext | null = null;
-    let frame = 0;
     let cancelled = false;
-
-    const start = async () => {
-      const media = navigator.mediaDevices;
-      if (!media?.getUserMedia || typeof AudioContext === "undefined") return;
-      const open = (id: string | null) =>
-        media.getUserMedia({ audio: id ? { deviceId: { exact: id } } : true, video: false });
-      const id = deviceIdByName(await media.enumerateDevices(), "audioinput", deviceName);
-      let s = await open(id);
-      if (!id && deviceName) {
-        // Before the first grant the webview lists microphones without
-        // names, so the chosen one (an iPhone or USB mic) could not be found
-        // and the default opened. Now they are named: switch to it.
-        const named = deviceIdByName(await media.enumerateDevices(), "audioinput", deviceName);
-        if (named && named !== s.getAudioTracks()[0]?.getSettings().deviceId) {
-          s.getTracks().forEach((t) => t.stop());
-          s = await open(named);
-        }
-      }
-      if (cancelled) {
-        s.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      stream = s;
-      context = new AudioContext();
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 1024;
-      context.createMediaStreamSource(s).connect(analyser);
-      const samples = new Float32Array(analyser.fftSize);
-      let last = -1;
-      const tick = () => {
-        analyser.getFloatTimeDomainData(samples);
-        const next = litBars(levelFrom(samples), BARS);
-        if (next !== last) {
-          last = next;
-          setLit(next);
-        }
-        frame = requestAnimationFrame(tick);
-      };
-      tick();
-    };
-
-    start().catch(() => setLit(0));
+    const unlisten = listen<number>(MIC_LEVEL_EVENT, (e) => {
+      if (!cancelled) setLit(litBars(e.payload, BARS));
+    });
+    // Stop exactly the meter this mount started: a newer one (another
+    // microphone picked) may already be running when this cleanup lands.
+    const started = startCaptureMicMeter(deviceId).catch(() => null);
     return () => {
       cancelled = true;
-      cancelAnimationFrame(frame);
-      stream?.getTracks().forEach((t) => t.stop());
-      void context?.close().catch(() => undefined);
+      void unlisten.then((fn) => fn());
+      void started.then((generation) => {
+        if (generation !== null) void stopCaptureMicMeter(generation).catch(() => undefined);
+      });
       setLit(0);
     };
-  }, [deviceName]);
+  }, [deviceId]);
 
   return (
     <span aria-hidden className="flex h-3.5 items-end gap-[2px]">

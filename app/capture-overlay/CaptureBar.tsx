@@ -506,8 +506,6 @@ function SourcesPanel({
   };
 
   const micOn = options.microphone && microphoneAvailable;
-  const micName =
-    microphones.find((d) => d.id === options.microphoneDevice)?.name ?? microphones.find((d) => d.isDefault)?.name ?? null;
 
   return (
     <div role="group" aria-label="Recording sources" className={`w-[300px] max-w-[calc(100vw-32px)] rounded-[14px] p-1 ${GLASS_BAR}`}>
@@ -547,7 +545,7 @@ function SourcesPanel({
         disabled={!microphoneAvailable}
         triggerRef={microphoneTrigger}
         menuRef={menuRef}
-        extra={micOn ? <MicMeter deviceName={micName} /> : null}
+        extra={micOn ? <MicMeter deviceId={options.microphoneDevice} /> : null}
         onOpen={() => toggleMenu("microphone")}
         onPick={(id) => pick(pickMicrophone(options, id))}
         onToggle={() =>
