@@ -164,3 +164,36 @@ describe("the pill offers no microphone mute", () => {
     expect(screen.queryByRole("button", { name: /mute/i })).toBeNull();
   });
 });
+
+describe("a sound source lost mid-recording", () => {
+  const MIC_LOST = "The microphone was disconnected. The recording goes on without it.";
+
+  // Rust sends the line (`recording::device_lost_message`); the pill never words it.
+  it("swaps the microphone for Rust's line and announces it", async () => {
+    setup({ phase: "recording", elapsedSecs: 3, microphone: true, seq: 1 });
+    await screen.findByRole("button", { name: "Stop recording" });
+    await act(() => tauri.emitEvent("capture_device_lost", { device: "microphone", message: MIC_LOST }));
+    expect(screen.getByRole("img", { name: MIC_LOST })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Recording the microphone" })).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent(MIC_LOST);
+    // The recording goes on: Stop is still there.
+    expect(screen.getByRole("button", { name: "Stop recording" })).toBeInTheDocument();
+  });
+
+  it("names lost system audio too", async () => {
+    const line = "System audio stopped. The recording goes on without it.";
+    setup(recording(3));
+    await screen.findByRole("button", { name: "Stop recording" });
+    await act(() => tauri.emitEvent("capture_device_lost", { device: "systemAudio", message: line }));
+    expect(screen.getByRole("img", { name: line })).toBeInTheDocument();
+  });
+
+  it("forgets the line once the recording is over", async () => {
+    setup({ phase: "recording", elapsedSecs: 3, microphone: true, seq: 1 });
+    await screen.findByRole("button", { name: "Stop recording" });
+    await act(() => tauri.emitEvent("capture_device_lost", { device: "microphone", message: MIC_LOST }));
+    await act(() => tauri.emitEvent("capture_state_changed", { phase: "idle", seq: 2 }));
+    await act(() => tauri.emitEvent("capture_state_changed", { phase: "recording", elapsedSecs: 0, microphone: true, seq: 3 }));
+    expect(screen.getByRole("img", { name: "Recording the microphone" })).toBeInTheDocument();
+  });
+});

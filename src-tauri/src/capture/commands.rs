@@ -68,6 +68,26 @@ pub const SHARE_ART_EVENT: &str = "capture_share_art";
 /// window that is not the key window does not always get the webview's own
 /// hover events on macOS.
 pub const CAMERA_HOVER_EVENT: &str = "capture_camera_hover";
+/// A sound source went away mid-recording and the recording goes on without
+/// it (`DeviceLost`): the pill says so in Rust's words.
+pub const DEVICE_LOST_EVENT: &str = "capture_device_lost";
+
+/// What [`DEVICE_LOST_EVENT`] carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceLost {
+    /// `microphone` or `systemAudio`.
+    pub device: String,
+    pub message: &'static str,
+}
+
+impl DeviceLost {
+    #[must_use]
+    pub fn new(device: String) -> Self {
+        let message = recording::device_lost_message(&device);
+        Self { device, message }
+    }
+}
 
 /// Overlay windows are labelled `capture-overlay-<display id>`, which is also
 /// the glob the overlay's capability file grants.
@@ -2055,17 +2075,23 @@ fn tick_once(app: &AppHandle) -> Tick {
     // `try_lock`: a pause or resume holds the recorder while the helper
     // answers (up to seconds). The tick skips a beat rather than blocking an
     // async worker for that long.
-    let (elapsed, died) = match state.capture.recorder.try_lock() {
+    let (elapsed, died, lost) = match state.capture.recorder.try_lock() {
         Ok(guard) => match guard.as_ref() {
-            Some(r) => (r.elapsed_secs(), r.take_death()),
+            Some(r) => (r.elapsed_secs(), r.take_death(), r.take_lost_device()),
             None => return Tick::Done,
         },
         Err(std::sync::TryLockError::Poisoned(p)) => match p.into_inner().as_ref() {
-            Some(r) => (r.elapsed_secs(), r.take_death()),
+            Some(r) => (r.elapsed_secs(), r.take_death(), r.take_lost_device()),
             None => return Tick::Done,
         },
         Err(std::sync::TryLockError::WouldBlock) => return Tick::Continue,
     };
+    // A microphone unplugged mid-recording: the recording goes on, and the
+    // pill says so (one a tick; another waits for the next).
+    if let Some(device) = lost {
+        tracing::warn!(%device, "a sound source went away; recording goes on without it");
+        let _ = app.emit(DEVICE_LOST_EVENT, DeviceLost::new(device));
+    }
     // The recording ended on its own (display gone, helper crashed): end the
     // session as Stop would, delivering what was saved, instead of counting
     // on. Spawned, because `stop_inner` stops this very loop.
