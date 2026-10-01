@@ -162,7 +162,13 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         match audio::open(audio::Device::Microphone(cmd.microphone_device_id.clone())) {
             Ok(opened) => {
                 sources.push(Source::Microphone);
-                audio_threads.push(audio::spawn(opened, Source::Microphone, Arc::clone(&shared), Arc::clone(&stop_audio)));
+                audio_threads.push(audio::spawn(
+                    opened,
+                    Source::Microphone,
+                    Arc::clone(&shared),
+                    Arc::clone(&stop_audio),
+                    tell_lost(out, Source::Microphone),
+                ));
             }
             Err(e) => {
                 let _ = writeln_stderr(&format!("the microphone could not be opened, recording without it: {e}"));
@@ -170,10 +176,16 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         }
     }
     if cmd.system_audio {
-        match audio::open(audio::Device::SystemLoopback) {
+        match audio::open(audio::Device::system()) {
             Ok(opened) => {
                 sources.push(Source::System);
-                audio_threads.push(audio::spawn(opened, Source::System, Arc::clone(&shared), Arc::clone(&stop_audio)));
+                audio_threads.push(audio::spawn(
+                    opened,
+                    Source::System,
+                    Arc::clone(&shared),
+                    Arc::clone(&stop_audio),
+                    tell_lost(out, Source::System),
+                ));
             }
             Err(e) => {
                 let _ = writeln_stderr(&format!("system audio could not be opened, recording without it: {e}"));
@@ -209,6 +221,14 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
             Err(e)
         }
     }
+}
+
+/// What an audio thread calls when its device goes away mid-recording: the
+/// app is told (`device_lost`), so the pill can say the recording goes on
+/// without it.
+fn tell_lost(out: &Output, source: Source) -> impl FnOnce(&str) + Send + 'static {
+    let out = Arc::clone(out);
+    move |error| emit(&out, &protocol::device_lost_line(source.device_name(), error))
 }
 
 /// Diagnostics go to stderr, which the app logs at `warn`.

@@ -25,12 +25,14 @@
 
 pub mod frame;
 pub mod linux_plan;
+pub mod meter;
 pub mod mixer;
 pub mod pacing;
 pub mod pcm;
 pub mod pipeline;
 pub mod plan;
 pub mod sizing;
+pub mod sources;
 pub mod synthetic;
 pub mod timeline;
 #[cfg(windows)]
@@ -354,9 +356,10 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
 }
 
 /// `Hippius --capture-recorder [--list-microphones | --list-cameras |
-/// --probe | --self-test]`: the one-shot modes print one JSON value and
-/// return; otherwise serve the protocol on stdin and stdout. Returns the
-/// process exit code.
+/// --probe | --self-test | --meter [deviceId]]`: the one-shot modes print one
+/// JSON value and return; `--meter` prints the microphone's level until stdin
+/// closes ([`meter`]); otherwise serve the protocol on stdin and stdout.
+/// Returns the process exit code.
 #[must_use]
 pub fn run<I, S>(args: I) -> i32
 where
@@ -367,6 +370,12 @@ where
     let has = |flag: &str| args.iter().any(|a| a == flag);
     #[cfg(windows)]
     {
+        if has("--meter") {
+            return windows::audio::run_meter(meter::device_arg(&args));
+        }
+        if has("--list-cameras") {
+            return print_line(&serde_json::to_string(&windows::devices::list_cameras()).unwrap_or_else(|_| "[]".into()));
+        }
         if has("--list-microphones") {
             return print_line(&serde_json::to_string(&windows::devices::list_microphones()).unwrap_or_else(|_| "[]".into()));
         }
@@ -387,6 +396,11 @@ where
     }
     if has("--probe") || has("--self-test") {
         return print_line(r#"{"ok":false,"error":"not available on this platform"}"#);
+    }
+    if has("--meter") {
+        // No microphone the child can open here: the app's meter stays dark.
+        let _ = print_line(&meter::failed_line("The microphone meter is not available on this system."));
+        return 1;
     }
     serve(std::io::stdin().lock(), std::io::stdout());
     0
