@@ -1244,3 +1244,28 @@ fn a_windows_window_recording_films_the_bubble() {
     let commands = read("src/capture/commands.rs");
     assert!(fn_body(&commands, "async fn recording_bubble_frame(").contains("camera::window_region("));
 }
+
+/// The recording pill's window never carries a native shadow. On a
+/// transparent window AppKit and DWM draw it from the window's rectangle,
+/// not the rounded pill, which framed the pill in a border; and the page's
+/// own shadow must fit inside the window, or its clipped edge does the same.
+#[test]
+fn the_recording_pill_has_no_rectangular_shadow() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "fn open_controls(");
+    assert!(open.contains(".shadow(false)"), "the pill's window must not draw a native shadow");
+    let page = read("../app/capture-controls/page.tsx");
+    assert!(
+        page.contains("${GLASS_PILL}") && !page.contains("${GLASS_BAR}"),
+        "the pill uses the glass whose shadow fits its window"
+    );
+    let glass = read("../app/lib/capture/glass.ts");
+    let pill = glass
+        .split("export const GLASS_PILL")
+        .nth(1)
+        .expect("GLASS_PILL")
+        .split(';')
+        .next()
+        .unwrap();
+    assert!(pill.contains("shadow-[0_2px_6px"), "a shadow reaching at most 8px: {pill}");
+}

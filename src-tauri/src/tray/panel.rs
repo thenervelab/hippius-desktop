@@ -18,7 +18,7 @@ use serde::Deserialize;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
@@ -145,20 +145,24 @@ fn now_ms() -> u64 {
 /// Linux gets no left-click event from `tray-icon` (the menu opens instead),
 /// and never shows the popover.
 pub fn on_tray_icon_event(app: &AppHandle, event: &TrayIconEvent) {
-    if cfg!(target_os = "linux") {
+    if cfg!(target_os = "linux") || event.id().as_ref() != crate::capture::tray_status::TRAY_ID {
         return;
     }
+    // macOS: keep the context menu off the status item, or the status item
+    // opens it on every click and the left click never arrives (see
+    // `tray::status_menu`). Also opens it on a right click.
+    super::status_menu::on_tray_event(app, event);
     let TrayIconEvent::Click {
-        id,
         rect,
-        button: MouseButton::Left,
+        button,
         button_state: MouseButtonState::Up,
         ..
     } = event
     else {
         return;
     };
-    if id.as_ref() != crate::capture::tray_status::TRAY_ID {
+    info!("tray: {button:?} click");
+    if *button != MouseButton::Left {
         return;
     }
     if let Err(e) = on_left_click(app, Some(TrayIconRect::from_tray(*rect))) {
@@ -175,6 +179,7 @@ pub fn on_tray_icon_event(app: &AppHandle, event: &TrayIconEvent) {
 /// login screen.
 #[tauri::command]
 pub fn tray_set_signed_in(state: tauri::State<'_, AppState>, signed_in: bool) {
+    info!("tray: signed in = {signed_in}");
     state.tray_signed_in.store(signed_in, Ordering::Relaxed);
 }
 
@@ -183,7 +188,9 @@ pub fn tray_set_signed_in(state: tauri::State<'_, AppState>, signed_in: bool) {
 fn on_left_click(app: &AppHandle, rect: Option<TrayIconRect>) -> Result<()> {
     use crate::capture::tray_status::TrayClickRoute;
     let signed_in = app.state::<AppState>().tray_signed_in.load(Ordering::Relaxed);
-    match crate::capture::commands::on_tray_click(app, signed_in) {
+    let route = crate::capture::commands::on_tray_click(app, signed_in);
+    info!("tray click: signed in = {signed_in}, route = {route:?}, rect = {rect:?}");
+    match route {
         TrayClickRoute::ShowRecordingControls => Ok(()),
         TrayClickRoute::OpenMainWindow => {
             show_main_window(app);
@@ -239,6 +246,7 @@ fn toggle_panel(app: &AppHandle, rect: Option<TrayIconRect>, recording: bool) ->
     };
 
     if win.is_visible().unwrap_or(false) {
+        info!("tray panel: visible, click hides it");
         hide_window(&win)?;
         return Ok(());
     }
@@ -249,6 +257,7 @@ fn toggle_panel(app: &AppHandle, rect: Option<TrayIconRect>, recording: bool) ->
     // immediately re-opening.
     let hidden_at = app.state::<AppState>().tray_panel_hidden_at.load(Ordering::Relaxed);
     if hidden_at != 0 && now_ms().saturating_sub(hidden_at) < REOPEN_COOLDOWN_MS {
+        info!("tray panel: hidden by this click's blur, stays hidden");
         return Ok(());
     }
 
@@ -271,6 +280,7 @@ fn toggle_panel(app: &AppHandle, rect: Option<TrayIconRect>, recording: bool) ->
 
     let (x, y) = geometry::compute_panel_position(icon, panel_w, panel_h, work_area, gap, margin);
 
+    info!("tray panel: show at ({x}, {y}) on work area {work_area:?} x{scale}, recording = {recording}");
     win.set_position(PhysicalPosition::new(x, y))
         .map_err(|e| AppError::Other(format!("failed to position tray panel: {e}")))?;
     if let Err(e) = win.set_content_protected(recording) {
@@ -338,9 +348,11 @@ pub fn on_panel_blur(app: &AppHandle) {
         let shown_at = app.state::<AppState>().tray_panel_shown_at.load(Ordering::Relaxed);
         if !blur_dismisses(now_ms(), shown_at) {
             // The activation settling, not a click outside: keep the keyboard.
+            info!("tray panel: blur right after the show, keeps focus");
             let _ = win.set_focus();
             return;
         }
+        info!("tray panel: blur, hidden");
         if let Err(e) = win.hide() {
             warn!("failed to hide tray panel on blur: {e}");
             return;

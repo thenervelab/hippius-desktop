@@ -254,6 +254,22 @@ async function reportSignedIn(signedIn: boolean) {
   }
 }
 
+/**
+ * Tell Rust a context menu was just attached to the icon (`TrayIcon.new`
+ * with a `menu`, or `setMenu`). On macOS a status item that owns a menu
+ * opens it on every click, so the left click never reached the app and the
+ * popover never opened; Rust takes the menu off the status item, keeps it
+ * and opens it itself on a right click (`tray::status_menu`). A no-op
+ * elsewhere.
+ */
+async function reportMenuAttached() {
+  try {
+    await invoke("tray_menu_attached");
+  } catch (e) {
+    logTrayAction("Failed to report the tray menu", e);
+  }
+}
+
 /* ─ Public: create tray once ──────────────────────────────────── */
 
 export function useTrayInit(isAuthenticated: boolean) {
@@ -331,6 +347,7 @@ export function useTrayInit(isAuthenticated: boolean) {
           menu: contextMenu,
           showMenuOnLeftClick: isLinuxPlatform,
         });
+        await reportMenuAttached();
         trayIconState = "default";
       } else {
         // The page reloaded under a live icon. Its context menu's items call
@@ -338,6 +355,7 @@ export function useTrayInit(isAuthenticated: boolean) {
         // menu so right-click works again.
         try {
           await existingTray.setMenu(await buildTrayContextMenu());
+          await reportMenuAttached();
         } catch (e) {
           logTrayAction("Failed to re-attach the tray menu", e);
         }
@@ -476,6 +494,7 @@ async function setTrayIconSyncing(
         menu: contextMenu,
         showMenuOnLeftClick: isLinuxPlatform,
       });
+      await reportMenuAttached();
 
       trayIconState = newState;
       logTrayAction("Tray recreated successfully");
