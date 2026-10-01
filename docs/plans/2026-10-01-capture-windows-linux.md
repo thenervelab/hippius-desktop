@@ -2,7 +2,9 @@
 
 **Status:** Phase 0 done. Phase 1 done in code; its hardware checklist is
 still to run, so Windows screenshots stay on staging in `capture::rollout`.
-Phases 2 to 6 not started. Written against `feat/screen-capture` at 8a4e21f2;
+Phase 3 (Linux screenshots) done in code and type-checked for Linux from
+macOS; its checklist needs real Linux sessions, so Linux stays on staging.
+Phases 2, 4, 5 and 6 not started. Written against `feat/screen-capture` at 8a4e21f2;
 Phases 0 and 1 merged with the permission, external-device, button-menu and
 camera/audio work at 2fd6e468.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
@@ -507,6 +509,143 @@ vendors, the ARM VM plays its own recordings (software encoder path), and
 Windows recording moves to beta.
 
 ### Phase 3: Linux screenshots (M, 1.5 to 2 weeks)
+
+**Status: code done, Linux checklist pending.** Linux X11 and Wayland
+screenshots are in; `capture::rollout` keeps both on staging (debug builds
+count as staging), so beta and production still report Linux unsupported.
+
+What landed, and where it differs from the scope below:
+- `capture/linux_x11/` (not `capture/targets/linux_x11.rs`): `model.rs` is
+  the pure half (RandR monitors to displays, the XSETTINGS
+  `Gdk/WindowScalingFactor` parser and `GDK_SCALE` rule, EWMH window
+  filtering front first with frame extents, `_NET_WM_STATE_HIDDEN`,
+  `_NET_WM_DESKTOP` and furniture window types, `ZPixmap` to RGBA for 32,
+  24 and 16 bpp in either byte order, clipping to the root), tested on
+  every OS; `os.rs` is the x11rb connection (Linux only). `targets`,
+  `screenshot` and `share` re-export it on Linux, so `commands.rs` runs the
+  same overlay flow it runs on Windows.
+- **HiDPI on X11:** one scale for the whole screen, GDK's (`GDK_SCALE`,
+  else the XSETTINGS window scale, else 1; whole numbers only, as GDK 3 on
+  X11). Every display gets that scale, so a mixed 100/200 % pair reads as
+  both at the screen's scale, which is what the webview draws at.
+- **Overlays on X11 are made full screen** (`cover_whole_display`) after
+  they are shown: GNOME and KDE keep ordinary windows clear of their panels,
+  which would shift the overlay and every area read back by the panel's
+  height. There is no content protection, so `ui_in_grabs` is set for every
+  Linux session and `settle_compositor` waits `COMPOSITOR_SETTLE` (120 ms,
+  pending spike L1) after the overlays are gone and the card is hidden.
+- **Window shots read the screen where the window is**, so a covered window
+  comes out as what is on top (XComposite is a later nicety, as planned).
+  The frame includes the window manager's decorations (`_NET_FRAME_EXTENTS`).
+- **Share picker on X11:** one root grab per refresh, every picture cropped
+  from it. No app icons on Linux yet (the tile shows the app name).
+- `capture/linux_portal.rs`: the Wayland flow. `support::start_plan` sends
+  a Wayland screenshot past the overlay: `capture_start` hides Hippius's own
+  windows, prepares the card hidden, and spawns `system_picker_screenshot`,
+  which holds the session in `Capturing` while the desktop's tool is open.
+  `settle` turns the portal's answer into the capture: `file://` URIs are
+  percent-decoded byte for byte (`localhost` accepted, other hosts and
+  schemes refused, a symlink never followed), PNGs are MOVED (rename, else
+  copy then remove) under the Hippius name, other formats re-encoded to PNG
+  and the original removed. Cancelled = a quiet cancel; no portal =
+  `PORTAL_MISSING` (names `xdg-desktop-portal` and the backends); anything
+  else = `PORTAL_FAILED` with the D-Bus detail logged only. ashpd is on with
+  `screenshot` only; Phase 4 adds `screencast`.
+- **Surfaces:** Wayland reports `selection: systemPicker`, no screenshot
+  modes, no timer, recording modes `window` and `screen` (for Phase 4), a
+  `systemPickerNote` and `linuxSession`. Linux X11 and Wayland report
+  `shortcut.supported: false` with `shortcut.unavailableMessage` (Phase 6
+  brings the shortcut).
+- **Frontend:** on `systemPicker` the Screenshot menu is one item ("Take a
+  screenshot…") with Rust's note and the drive item, no "Open capture bar".
+  Where the shortcut is unsupported no keycaps show and Settings shows
+  Rust's line instead of the shortcut controls; on Wayland Settings also
+  says the desktop's tool takes the screenshot.
+- **Card on Wayland (spike L4):** not decided on hardware. The card is kept
+  as is; the compositor places it (usually centred) and GNOME may show
+  "Hippius is ready" instead of raising it. If the checklist shows that,
+  switch to a notification with the link copied and a "Show in folder"
+  action.
+- **Packaging:** deb `recommends` `xdg-desktop-portal` and
+  `xdg-desktop-portal-gnome | xdg-desktop-portal-kde |
+  xdg-desktop-portal-wlr` (never `depends`: X11 needs no portal).
+- **CI:** `rust-linux` installs `xvfb` and runs the `#[ignore]`d X server
+  test (`xvfb-run -a cargo test --lib capture::linux_x11 -- --ignored`):
+  displays listed, a screen grab at the display's pixel size, a root grab,
+  the pointer.
+
+**Verified so far:** `cargo check --target x86_64-unknown-linux-gnu` from
+macOS (fake `.pc` files and a no-op C compiler stand in for the Linux
+system libraries; this type-checks every Rust line, links nothing). Unit
+tests of the pure halves on macOS. vitest for the menu and Settings.
+**Not verified anywhere yet:** any real X server or portal. Linux clippy
+did not run from macOS (clippy compiles `build.rs` for the target there);
+CI's `rust-linux` runs it.
+
+**Linux checklist** (every row in light and dark mode; the card and the
+Settings card at the smallest window and at 200 %):
+
+*Ubuntu 24.04, GNOME, Wayland session (the default):*
+1. `capture_support` answers `linuxSession: "wayland"`, `selection:
+   "systemPicker"`; the Screenshot menu has one item, the note, no capture
+   bar; Record is hidden.
+2. "Take a screenshot…": GNOME's screenshot UI opens. Take an area, then a
+   window, then a screen: each lands in `<drive>/Captures` with a link
+   copied, and `~/Pictures/Screenshots` has no new file.
+3. Press Escape in GNOME's UI: no toast, no card, the main window comes
+   back as it was, and Screenshot works again at once.
+4. Note where the card appears and whether it is raised (spike L4).
+5. Remove `xdg-desktop-portal-gnome` (or stop the portal): the toast says
+   to install the portal, and the session ends.
+6. A 200 % display, and a 100 % plus 200 % pair: the file is at each
+   output's full pixels.
+7. Settings > Sync & Storage > Capture: the Screenshots line and the
+   shortcut line show; there is no Change button for a shortcut.
+
+*Ubuntu 24.04, "Ubuntu on Xorg" session:*
+1. `linuxSession: "x11"`, `selection: "overlay"`; the menu has the three
+   modes and "Open capture bar" with no keycaps.
+2. The overlay covers the whole display, top bar and dock included; the
+   bar opens on the display under the pointer.
+3. Area: drag a rectangle over known content; the file is exactly that
+   region (check edges against a grid image), with no dim band, bar or card
+   in it.
+4. Window: hover highlights the frontmost window under the pointer
+   (title bar included); a minimised window, a window on another
+   workspace, the top bar and the dock are never offered; Hippius's own
+   windows are never offered.
+5. Screen: click-to-capture each display of a two-display setup, one left
+   of the other and then one above; each file is that display only.
+6. Share picker: both tabs fill with live pictures and refresh; picking a
+   window or screen captures it.
+7. `GDK_SCALE=2` (or Settings > Displays at 200 %): the overlay is not
+   half size or offset, and an area crop matches what was framed.
+8. Disable the compositor if the desktop allows it (or use a non-compositing
+   window manager): note what the overlay looks like (spike L1, the
+   transparent window needs a compositor).
+9. Time from click to card; if the shot ever shows the overlay fading out,
+   raise `COMPOSITOR_SETTLE` (spike L1).
+
+*Fedora 42 KDE Plasma 6, Wayland (the default):*
+1. KDE's screenshot dialog opens; area, window and screen each deliver;
+   the temp file KDE wrote is gone afterwards.
+2. Cancel in KDE's dialog: a quiet cancel.
+3. The card's placement and raising (spike L4).
+
+*KDE Plasma X11 and XFCE (X11), if a VM is at hand:*
+1. The overlay covers the panel; the window list skips the panel and the
+   desktop; `_NET_FRAME_EXTENTS` frames are right (KDE draws server-side
+   decorations).
+2. XFCE with its compositor off: transparency fails; record what the user
+   sees.
+
+*Everywhere:* Show in folder opens Nautilus, Dolphin or Thunar on the right
+folder; a failed upload's card offers Retry; signed out, Screenshot is not
+offered.
+
+**Done when** (unchanged): the checklist passes and Linux screenshots move
+to beta in `capture::rollout` (both `LinuxX11` and `LinuxWayland`
+`Screenshots` rows; they can move separately).
 
 **Scope**
 - `CAPTURE_SUPPORTED` true on Linux; xcap stays macOS and Windows only.

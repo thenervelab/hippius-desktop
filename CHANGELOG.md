@@ -226,6 +226,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Screenshots on Linux (internal builds first).** On an X11 desktop the
+  capture bar works as it does on a Mac or Windows: drag an area, click a
+  window or a screen, or pick one from the live previews. On Wayland
+  (Ubuntu, Fedora and KDE's default) Screenshot opens your desktop's own
+  screenshot tool, where you choose an area, a window or a screen; the
+  picture then lands in your drive with a link copied, and nothing is left
+  behind in your Pictures folder. Recording on Linux follows later.
+
 - **Choose whether a recording includes your computer's sound (Mac).** The
   capture bar's Options menu has "Record system audio", off by default so
   your voice is not recorded twice through the speakers; turn it on to

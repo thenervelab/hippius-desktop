@@ -21,10 +21,10 @@ filed in `<drive>/Captures`, with a public share link copied unless
 `CaptureOptions.copyLink` is off. Design and
 phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
 `SCREEN_CAPTURE_ENABLED = enabledFrom("staging")`, and behind Rust's
-`capture_support` for the platform: **screenshots on macOS and Windows**;
-**recording on macOS 13+** when `HippiusCapture` is built. Linux reports
-unsupported until its desktop-portal path lands. Windows recording is stubbed
-behind the `Recorder` trait (`capture_support.recording == false`).
+`capture_support` for the platform: **screenshots on macOS, Windows and
+Linux** (Linux on staging only); **recording on macOS 13+** when
+`HippiusCapture` is built. Windows and Linux recording are stubbed behind the
+`Recorder` trait (`capture_support.recording == false`).
 
 **Windows and Linux parity plan:** `docs/plans/2026-10-01-capture-windows-linux.md`.
 Read it before touching a non-macOS capture path. Its load-bearing decisions:
@@ -68,6 +68,29 @@ used to hard-code "macOS 15"). The shared `StartCommand` carries the
 recording's `systemAudio` and a window recording's `cameraWindowId` (the
 bubble), so every recorder gets them; the child ignores both until it records
 audio and windows.
+
+**Phase 3 (Linux screenshots) is in.** X11 = `capture/linux_x11/` (x11rb:
+RandR monitors, EWMH windows front first, `GetImage` of the root; `model.rs`
+is the pure half, tested everywhere; `os.rs` Linux only), re-exported by
+`targets`, `screenshot` and `share`, so the overlay flow is Windows'. Rules
+that fail silently there: **one scale per X screen** (GDK's: `GDK_SCALE`,
+else the XSETTINGS `Gdk/WindowScalingFactor`, whole numbers only), every
+value in physical root pixels (`COORDS_ARE_LOGICAL` false); **overlays are
+made full screen** (`cover_whole_display`) or GNOME and KDE push them below
+their panels and every area read back is shifted; **no content protection**,
+so every Linux session sets `ui_in_grabs` and `settle_compositor` sleeps
+`COMPOSITOR_SETTLE` before the grab; a window shot is the screen where the
+window is (a covered window shows what covers it). Wayland =
+`capture/linux_portal.rs`: `support::start_plan` sends a Wayland screenshot
+past the overlay to `system_picker_screenshot` (session `Capturing` while
+the desktop's tool is open; a cancel there is a quiet cancel, everything
+else `fail_capture`); `settle` MOVES the portal's PNG into the capture
+folder under the Hippius name, never follows a symlink, and says
+`PORTAL_MISSING` / `PORTAL_FAILED` in Rust's words. The frontend branches
+only on Rust's `selection` (one "Take a screenshot…" item, no capture bar)
+and `shortcut.supported` / `unavailableMessage` (no keycaps, Settings shows
+the line). Linux has no shortcut until Phase 6. The `rust-linux` CI job runs
+the X server test under Xvfb. Pinned by `capture_wiring.rs`.
 
 ## Flow
 
