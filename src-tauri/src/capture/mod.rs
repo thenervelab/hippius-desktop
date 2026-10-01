@@ -16,6 +16,7 @@ pub mod mic_meter;
 pub mod naming;
 pub mod permission_flow;
 pub mod permissions;
+pub mod poster;
 pub mod preview;
 pub mod privacy;
 pub mod recorder_child;

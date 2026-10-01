@@ -107,6 +107,28 @@ pub fn list_devices(mut program: Command, flag: &str) -> Vec<MediaDevice> {
     parse_devices(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// Run `program` to the end with a closed stdin and return what it printed,
+/// or `None` when it could not start or did not finish within `limit` (it is
+/// then killed, so a stuck helper never holds the caller up for longer).
+pub fn output_within(mut program: Command, limit: Duration) -> Option<String> {
+    let mut child = program.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut text = String::new();
+        let read = stdout.read_to_string(&mut text).map(|_| text);
+        let _ = tx.send(read);
+    });
+    if let Ok(Ok(text)) = rx.recv_timeout(limit) {
+        let _ = child.wait();
+        Some(text)
+    } else {
+        let _ = child.kill();
+        let _ = child.wait();
+        None
+    }
+}
+
 /// The recorder prints one JSON array; anything else (an old helper that
 /// does not know the flag and starts a session instead, a crash) reads as
 /// none.
@@ -458,6 +480,22 @@ fn wait_for(rx: &Receiver<Incoming>, id: Option<u64>, pred: impl Fn(&HelperEvent
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_one_shot_run_returns_what_it_printed_and_a_stuck_one_is_killed() {
+        let mut quick = Command::new("sh");
+        quick.args(["-c", "echo poster"]);
+        assert_eq!(output_within(quick, Duration::from_secs(5)).as_deref(), Some("poster\n"));
+
+        let mut stuck = Command::new("sh");
+        stuck.args(["-c", "sleep 30"]);
+        let started = Instant::now();
+        assert_eq!(output_within(stuck, Duration::from_millis(200)), None);
+        assert!(started.elapsed() < Duration::from_secs(5), "the caller waited for the stuck run");
+
+        assert_eq!(output_within(Command::new("/no/such/helper"), Duration::from_secs(1)), None);
+    }
 
     #[test]
     fn reads_the_helpers_microphone_list_and_survives_garbage() {
