@@ -168,9 +168,10 @@ mod tests {
     fn the_stage_trim_matches_the_stage_page() {
         let swift = include_str!("../../../../macos/HippiusCapture/Sources/main.swift");
         let page = include_str!("../../../../app/capture-camera/page.tsx");
+        let shape = include_str!("../../../../app/capture-camera/cameraDevices.ts");
         assert!(swift.contains("let stageInset: CGFloat = 12"), "main.swift lost its stage inset");
         assert!(
-            page.contains("h-full w-full p-1.5") && page.contains("rounded-[18px]"),
+            page.contains("fixed inset-0 p-1.5") && shape.contains("\"h-full w-full rounded-[18px]\""),
             "the camera stage's margin (p-1.5) or corner radius (rounded-[18px]) changed; \
              recompute stageInset in macos/HippiusCapture/Sources/main.swift"
         );

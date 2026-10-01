@@ -200,6 +200,22 @@ pub fn microphone_supported() -> bool {
     }
 }
 
+/// The program that reads stills out of a finished recording for the
+/// capture card (`--poster <video> <seconds>...`, see `capture::poster`):
+/// the Swift helper on macOS. `None` elsewhere, where the card keeps the
+/// screenshot taken as the recording started.
+#[must_use]
+pub fn poster_command() -> Option<std::process::Command> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::helper_command()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 /// The helper in microphone-meter mode (`--meter [deviceId]`), for the
 /// capture bar's level meter: the Swift helper on macOS, the recorder child
 /// on Linux. `None` where the microphone cannot be recorded or there is no

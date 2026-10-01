@@ -197,7 +197,8 @@ pub struct CaptureState {
     display_watch: AtomicU64,
     /// The area drawn so far, on whichever display, for the Capture button.
     pending: Mutex<Option<Selection>>,
-    /// A still of a recording's first frame, for its preview card.
+    /// A still of the selection taken as a recording starts: its card's
+    /// picture only when the saved file gives none (`poster::pick`).
     poster: Mutex<Option<String>>,
     /// The card in the corner, if one is showing.
     preview: Mutex<Option<PreviewCard>>,
@@ -2135,12 +2136,14 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         tracing::warn!(error = %e, "recording controls could not open");
     }
 
-    // A still of the first frame, for the preview card once it is saved. Best
-    // effort: a recording without a picture on its card is still a recording.
-    // Taken in memory and alongside the recorder's start, so it adds nothing
-    // to the wait before recording begins.
+    // A still of the selection, the preview card's fallback picture when the
+    // saved file gives none (`poster::pick`; the card prefers a frame of the
+    // file, which has the camera bubble in it). Best effort: a recording
+    // without a picture on its card is still a recording. Taken in memory and
+    // alongside the recorder's start, so it adds nothing to the wait before
+    // recording begins.
     // With the system picker Hippius cannot read the screen itself, and the
-    // selection is not chosen yet: no still, the card shows none.
+    // selection is not chosen yet: no still.
     let poster_task = tauri::async_runtime::spawn_blocking(move || {
         if system_picker {
             return None;
@@ -2674,6 +2677,9 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
         fail_capture(app, &e).await;
         return Err(e);
     };
+    // Pauses left out; a whole number of seconds, so the middle of the
+    // second it is in is the better guess for where the stills are asked.
+    let recorded_secs = f64::from(u32::try_from(recorder.elapsed_secs()).unwrap_or(u32::MAX)) + 0.5;
     let stopped = tauri::async_runtime::spawn_blocking(move || recorder.stop())
         .await
         .map_err(|e| AppError::Other(format!("stop task failed: {e}")))
@@ -2696,7 +2702,16 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
     lock(&state.capture.selection).take();
     restore_main_window(app, &state.capture);
 
-    let poster = lock(&state.capture.poster).take();
+    // The card's picture comes from the saved file, so it shows what the
+    // video shows: the camera bubble, or the camera-only stage, which has no
+    // screen to screenshot. The still taken at start is only the fallback.
+    let at_start = lock(&state.capture.poster).take();
+    let recorded = path.clone();
+    let from_file = tauri::async_runtime::spawn_blocking(move || super::poster::from_recording(&recorded, recorded_secs))
+        .await
+        .ok()
+        .flatten();
+    let poster = super::poster::pick(from_file, at_start);
     let card_id = open_preview(app, CaptureKind::Recording, &path, poster).await;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -4239,6 +4254,24 @@ mod tests {
         };
         let p = physical_frame(tiny, 1.0);
         assert_eq!((p.width, p.height), (1, 1));
+    }
+
+    /// A round bubble placed in physical pixels (Windows) stays square at
+    /// every common scale, wherever it sits, so the page draws a circle.
+    #[test]
+    fn a_round_bubble_is_square_in_pixels_at_every_scale() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 3.0] {
+            for side in [camera::BUBBLE_SIZE, camera::LARGE_BUBBLE_SIZE, 187.0] {
+                let f = camera::Frame {
+                    x: 33.5,
+                    y: 517.25,
+                    width: side,
+                    height: side,
+                };
+                let p = physical_frame(f, scale);
+                assert_eq!(p.width, p.height, "{side} pt at {scale}x");
+            }
+        }
     }
 
     #[derive(Default)]

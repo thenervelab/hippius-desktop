@@ -274,8 +274,16 @@ recorder, and every capture lock recovers from poison (`lock`). Restart =
 by the fake-`Recorder` harness in `commands.rs` and `tests/capture_wiring.rs`. Mic and
 click rings come from the saved options, each gated on macOS 15
 (`recording::microphone_supported` / `show_clicks_supported`; the helper reads
-`showClicks`). A still of the first frame is taken before the recorder starts,
-for the card.
+`showClicks`). **The card's picture is a frame of the saved file**
+(`poster.rs`): at Stop the helper's `--poster <video> <seconds>...`
+(`Poster.swift`, AVAssetImageGenerator, about 0.25 s) reads stills at
+`poster::candidate_times` (1 s in, or the middle of a shorter one, then the
+middle, then three quarters), Rust keeps the first that is not black
+(`is_blank`) and `pick` falls back to the still of the selection taken as the
+recorder starts. That start still missed the camera bubble (it moves into
+what is filmed at that same moment) and gave a camera-only recording no
+picture at all. Windows and Linux have no `poster_command` yet, so they keep
+the start still.
 
 **Camera and microphone** (`camera.rs`, `app/capture-camera`, label
 `capture-camera`): the bar's Loom-style sources panel (Screen / Camera / Mic
@@ -315,7 +323,8 @@ number (`RecordOptions.camera_window` → `cameraWindowId`) and the helper
 records both windows. Hidden from the pill mid-recording the window is
 `hide()`n (ordered out), never closed, so it keeps that number and its place;
 a re-created window would not be in the recording's filter. Sized by
-`CameraSize`: small 200 pt, large 340 pt (round), full = the stage's 16:9
+`CameraSize`: small 200 pt, large 340 pt (round, whole-point squares from
+every placement and resize), full = the stage's 16:9
 frame, which stays above the bar block (`BAR_BLOCK_HEIGHT`, it sits at a
 higher level than the overlay). `sync_camera` holds `camera_lock` for its whole run. The hover strip on the
 bubble (small / large / full / ×) calls `capture_camera_set_size` (saved,
@@ -340,6 +349,12 @@ mirrored, so WebKit's start-playback button (shown on a paused or not yet
 playing video) was a backwards triangle on the bubble; CSS cannot remove
 WebKit's modern controls, so the video is `opacity-0` until `playing` (and
 again on `pause`), and the page calls `play()` itself.
+**The camera page is sized by its window, never by the video**: its root
+is `fixed inset-0` and the frame's shape is `cameraFrameShape` (round:
+`aspect-square`, capped at the window's height; full and stage: fill with
+18 px corners). This page's `<html>`/`<body>` have no height, so an `h-full`
+root took the camera's 16:9 picture as its height and the round bubble was a
+pill, on screen and in every video; pinned by `cameraPage.test.tsx`.
 Hover comes from Rust (`capture_camera_hover`, polling the
 pointer against the frame) because a non-key window does not reliably get
 webview hover on macOS. Screen off = **stage**: a
@@ -787,7 +802,11 @@ stderr lines are diagnostics and are logged at `warn`.
 - The camera stage is a window owned by the app (`owningApplication.processID
   == getppid()`), trimmed by `stageInset` (12 pt: the page's `p-1.5` margin
   plus the corner of `rounded-[18px]`) so its transparent corners and ring are
-  not filmed as black. Pinned against `app/capture-camera/page.tsx`.
+  not filmed as black. Pinned against `app/capture-camera/page.tsx` and
+  `cameraDevices.ts` (`cameraFrameShape`).
+- `--poster <video> <seconds>...` prints one line, `{"duration", "frames":
+  [{"time", "jpeg": base64}]}`, each time clamped into the video, and exits;
+  `poster::tests` pins the flag and the line against the Swift source.
 - `recording::start` refuses below `MIN_FREE_BYTES` (2 GB) free with a message
   saying so.
 

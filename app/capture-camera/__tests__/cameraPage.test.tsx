@@ -103,6 +103,48 @@ describe("the camera window's first read", () => {
   });
 });
 
+// The bubble's window has no height on <html>/<body>: a root sized
+// `h-full` took the camera's 16:9 picture as its height and drew the round
+// bubble as a pill. jsdom does no layout, so the classes that make the
+// shape are what is pinned; the layout itself was checked in a browser.
+describe("the camera frame's shape", () => {
+  const frameClasses = () => screen.getByTestId("camera-frame").className.split(/\s+/);
+
+  it("is sized by the window, not by the video", async () => {
+    setup();
+    const root = await screen.findByTestId("camera-window");
+    expect(root.className).toContain("fixed inset-0");
+    expect(root.className).not.toMatch(/(^|\s)h-full(\s|$)/);
+  });
+
+  it.each(["small", "large"] as const)("is a square circle at %s size", async (size) => {
+    setup({ ...BUBBLE, size });
+    await screen.findByTestId("camera-frame");
+    expect(frameClasses()).toEqual(expect.arrayContaining(["aspect-square", "rounded-full", "overflow-hidden"]));
+    // Never stretched to the window's height on its own: that is the oval.
+    expect(frameClasses()).not.toContain("h-full");
+  });
+
+  it("fills its 16:9 window with rounded corners at full size and as the stage", async () => {
+    const { unmount } = setup({ ...BUBBLE, size: "full" });
+    await screen.findByTestId("camera-frame");
+    expect(frameClasses()).toEqual(expect.arrayContaining(["h-full", "w-full", "rounded-[18px]"]));
+    expect(frameClasses()).not.toContain("aspect-square");
+    unmount();
+
+    setup({ ...BUBBLE, shape: "stage", size: "small" });
+    await screen.findByTestId("camera-frame");
+    expect(frameClasses()).toEqual(expect.arrayContaining(["h-full", "w-full", "rounded-[18px]"]));
+  });
+
+  it("turns round again when it leaves full size", async () => {
+    setup({ ...BUBBLE, size: "full" });
+    await screen.findByTestId("camera-frame");
+    await act(() => tauri.emitEvent("capture_camera_state", { ...BUBBLE, size: "large" }));
+    expect(frameClasses()).toEqual(expect.arrayContaining(["aspect-square", "rounded-full"]));
+  });
+});
+
 const sizeCalls = () =>
   tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_camera_set_size").map(([, a]) => (a as { size: string }).size);
 
@@ -212,6 +254,8 @@ describe("the camera picture", () => {
     const video = container.querySelector("video")!;
     expect(video.className).toContain("opacity-0");
     expect(video.className).toContain("-scale-x-100");
+    // Cropped to fill the round frame, centred, never letterboxed or stretched.
+    expect(video.className).toContain("object-cover");
     fireEvent(video, new Event("playing"));
     expect(video.className).toContain("opacity-100");
     fireEvent(video, new Event("pause"));

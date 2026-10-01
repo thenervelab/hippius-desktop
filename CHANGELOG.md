@@ -131,6 +131,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   says "Exit full size" and takes it back to the size it had (Escape does the
   same), each size button names itself when you point at it, and the bubble
   no longer shows a backwards play symbol before the camera starts.
+- **The camera bubble is a true circle.** At the small and large sizes it was
+  drawn as a stretched oval, on screen and in the video; it is now round,
+  with your picture filling it.
+- **Recordings get the right picture on their card (Mac).** The preview card
+  now shows a frame from the recording itself, so a camera-only recording has
+  a picture and a screen recording shows the camera bubble, as the video does.
 
 - **Screen recording permission no longer gets stuck (Mac).** Allow always
   adds Hippius to macOS's Screen Recording list, so you never have to add it

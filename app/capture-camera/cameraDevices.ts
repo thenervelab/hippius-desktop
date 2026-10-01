@@ -12,6 +12,28 @@ export function camerasFrom(devices: Pick<MediaDeviceInfo, "kind" | "deviceId" |
 }
 
 /**
+ * The camera window's layout: the frame centred in the window, inside the
+ * page's 6 px margin (`p-1.5`, where the ring and the shadow sit). The
+ * window, not the video, sets the size: `h-full` against this page's
+ * auto-height <body> took the camera's 16:9 picture as the height, so the
+ * round bubble came out as a pill.
+ */
+export const CAMERA_FRAME_LAYOUT = "flex items-center justify-center";
+
+/**
+ * The frame's size and shape. Small and large are a true circle: a square as
+ * wide as the window allows and never taller than it (`aspect-square`,
+ * capped at the window's height less the margin), so even a window a pixel
+ * off square (a fractional size rounded at another scale, a glide between
+ * sizes) draws a circle, not an oval. Full size and the camera-only stage
+ * fill their 16:9 window with 18 px corners (the helper's `stageInset` and
+ * the Windows recorder's bubble shape assume both).
+ */
+export function cameraFrameShape(round: boolean): string {
+  return round ? "aspect-square w-full max-w-[calc(100vh-0.75rem)] rounded-full" : "h-full w-full rounded-[18px]";
+}
+
+/**
  * What to ask `getUserMedia` for. A chosen camera that has gone (unplugged)
  * falls back to the default rather than failing: `ideal`, not `exact`.
  */
