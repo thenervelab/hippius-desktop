@@ -52,7 +52,8 @@ pub fn meter_may_run(phase: CapturePhase) -> bool {
 /// How loud an RMS (of float samples, -1 to 1) reads on the meter, on a
 /// decibel scale so a quiet voice still moves it.
 pub fn level_from_rms(rms: f64) -> f64 {
-    if !(rms > 0.0) {
+    // NaN, zero and negative all read as silence.
+    if rms.is_nan() || rms <= 0.0 {
         return 0.0;
     }
     let db = 20.0 * rms.log10();
@@ -253,11 +254,12 @@ mod tests {
     /// Same scale as the old webview meter (-60 dBFS silent, -10 dBFS full).
     #[test]
     fn levels_are_on_a_decibel_scale() {
-        assert_eq!(level_from_rms(0.0), 0.0);
-        assert_eq!(level_from_rms(f64::NAN), 0.0);
-        assert_eq!(level_from_rms(0.001), 0.0);
-        assert!((level_from_rms(0.01) - 0.4).abs() < 1e-9);
-        assert_eq!(level_from_rms(0.5), 1.0);
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(near(level_from_rms(0.0), 0.0));
+        assert!(near(level_from_rms(f64::NAN), 0.0));
+        assert!(near(level_from_rms(0.001), 0.0));
+        assert!(near(level_from_rms(0.01), 0.4));
+        assert!(near(level_from_rms(0.5), 1.0));
     }
 
     #[test]
