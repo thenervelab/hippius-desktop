@@ -16,7 +16,12 @@ Wayland dialog), with most of Phase 4's leftovers (the pill's compact form,
 the pill outside an X11 area, the bubble in an X11 window recording, the
 exact `codecsMissing` packages, the staging `.rpm`); type-checked and linted
 for Linux from macOS only. Windows and Linux recording stay on staging, and
-so does Wayland's shortcut portal. Written against `feat/screen-capture` at 8a4e21f2;
+so does Wayland's shortcut portal. The two Wayland limits left after the
+parity gaps are closed in code too: an area recording (spike L6, drawn on
+the chosen monitor's first picture and cropped in the stream's own pixels)
+and camera only (the recorder opens the camera itself), cross-checked from
+a Mac like the rest; see "Wayland area recording and camera only" below.
+The Linux rows in `capture::rollout` are unchanged. Written against `feat/screen-capture` at 8a4e21f2;
 Phases 0 and 1 merged with the permission, external-device, button-menu and
 camera/audio work at 2fd6e468.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
@@ -73,7 +78,7 @@ manager with a compositor.
 | **Share picker thumbnails** | Already works (xcap). **none** | Same picker, thumbnails from x11rb. **S** | Not offered: the portal's picker replaces it. **none** |
 | **Countdown** | Same. **none** | Same. **none** | Recording: counted in the pill after the portal picker returns. Screenshot timer hidden. **S** |
 | **Own windows out of the capture** | `WDA_EXCLUDEFROMCAPTURE` (content protection), honoured by WGC; runtime check that it held (XP-2). **S** | Not possible. Pill and card are filmed in a full-screen recording; placed outside an area recording. **accept** | Not possible. Window recordings never include them; screen recordings do. **accept** |
-| **Recording: area, window, screen** | WGC per monitor or HWND; area cropped on the GPU. **L** | `ximagesrc` (screen, area by coordinates, window by XID). **M** (on top of the Linux recorder) | ScreenCast portal (monitor or window, chosen in the system picker). Area: not in v1 (spike L6). **L** |
+| **Recording: area, window, screen** | WGC per monitor or HWND; area cropped on the GPU. **L** | `ximagesrc` (screen, area by coordinates, window by XID). **M** (on top of the Linux recorder) | ScreenCast portal (monitor or window, chosen in the system picker). Area: the monitor chosen there, cropped to an area drawn on its first picture (spike L6, done in code). **L** |
 | **Pause with retimed timeline** | Samples dropped and retimed in the child from the QPC clock (the same rule as macOS `place`). **in L above** | Same retiming in a GStreamer pad probe. **in L above** | Same. |
 | **Crash-safe output** | Media Foundation fragmented MP4 (`MFTranscodeContainerType_FMPEG4`); stdin EOF finishes the file. **in L above** | `mp4mux` fragmented (2 s), or Matroska then remux (spike L3). | Same. |
 | **Pixel resolution, bitrate** | Native pixels, long edge capped at 3840, macOS's `videoBitRate` and even-pixel alignment ported to Rust and shared. **in L above** | Same. | Same. |
@@ -81,7 +86,7 @@ manager with a compositor.
 | **Microphone + device list + meter** | WASAPI capture in the child; list via the child's `--list-microphones`; meter in WebView2 once permission is handled (XP-7). **M** | PulseAudio/PipeWire source through GStreamer; list via `GstDeviceMonitor`; meter in WebKitGTK once media stream is enabled. **M** | Same as X11. |
 | **System audio** | WASAPI loopback of the default output; Windows 11 excludes Hippius's own sounds (process loopback). **S** | The default sink's `.monitor` source. **S** | Same. |
 | **Camera bubble** | `getUserMedia` in WebView2 with a `PermissionRequested` handler for the camera window; bubble filmed (not protected). **S** | WebKitGTK: `enable-media-stream` plus a `permission-request` handler. Always-on-top and placement work. **M** | Same webview work; the bubble is a normal window the compositor places and does not keep on top. **accept** |
-| **Camera only (stage)** | Record the stage window by HWND (XP-10). **S** | Record the stage window by XID. **S** | Not in v1 (the user would have to pick the Hippius window in the portal). |
+| **Camera only (stage)** | Record the stage window by HWND (XP-10). **S** | Record the stage window by XID. **S** | The recorder opens the camera itself (the device the bubble showed, through GStreamer); the stage shows a placeholder while it does. **S** (done in code) |
 | **Recording pill** | Works (focus fix already in). Content-protected, so never filmed. **S** | Works; filmed in full-screen recordings. **S** | Normal window, compositor-placed; filmed in screen recordings; the desktop's own "screen is being shared" indicator also stops it. **S** |
 | **Tray timer and click** | No tray title: tooltip carries the time (done) plus a recording icon (XP-15). Left click reaches the pill (works). **S** | AppIndicator label shows the time; no click event, so the menu grows Stop / Pause / Show controls while recording. **S** | Same; stock Fedora GNOME has no tray at all. |
 | **Global shortcut** | Works (plugin). Change the default: Ctrl+Shift+2 belongs to Windows Terminal and Excel (XP-6). **S** | Works (plugin, X11 grab). **S** | GlobalShortcuts portal where it exists (KDE, GNOME 48+); elsewhere a desktop keyboard shortcut running `hippius --capture`. **M** |
@@ -264,8 +269,9 @@ as raw pointers.
   bubble, the panel and the card go where the compositor puts them. KDE lets
   the user pin a window above others from its menu; GNOME from the window
   menu (Alt+Space, "Always on Top").
-- **Wayland area recording** is not in v1 (spike L6 looks at cropping a monitor
-  stream to a drawn area).
+- **Wayland area recording** draws the area after the desktop's dialog, on a
+  still picture of the chosen monitor, not live over the screen (spike L6;
+  see "Wayland area recording and camera only").
 - **Show clicks** stays macOS-only (`show_clicks_supported` false elsewhere).
 
 ### 6. One mixed audio track on Windows and Linux
@@ -943,8 +949,9 @@ staging builds only, never on beta or production.
 - *Closed.* **No poster on Wayland:** Hippius cannot read the screen
   there, so the card of a Wayland recording had no picture; the child's
   `--poster` now reads one from the saved file.
-- **Not done:** camera only on Wayland (no window ids there) and Wayland
-  area recording (spike L6), both documented limits. The camera on Linux
+- *Closed* (see "Wayland area recording and camera only"). **Not done:**
+  camera only on Wayland (no window ids there) and Wayland area recording
+  (spike L6), both documented limits. The camera on Linux
   (the WebKitGTK permission, `--list-cameras`, camera only on X11) landed
   with Phase 5's Linux part, below; the pill's compact form and one-time
   note, the pill outside an X11 area recording, the bubble in an X11 window
@@ -1106,7 +1113,8 @@ pure tests on macOS).
   WebKitGTK shows (it lists through GStreamer too), id = PipeWire's
   `node.name` or the V4L2 path (`linux_plan::cameras`); `recording::list_cameras`
   asks the child, so the bar lists cameras before the bubble opens.
-- Camera only on X11 (`support::camera_only`, false on Wayland):
+- Camera only on X11 (`support::camera_only`; on Wayland the recorder
+  opens the camera instead, see "Wayland area recording and camera only"):
   `camera_window_id` reads the camera window's XID on the GTK thread
   (`gdkx11`), the child records it with `ximagesrc xid=` and, when the
   window's `_NET_WM_PID` is the app's (the stage), cuts `STAGE_INSET` at the
@@ -1126,7 +1134,7 @@ pure tests on macOS).
    listed and open.
 4. X11: Screen off (camera only) records the stage without its margin or
    black corners, small and full sizes, at 100 % and `GDK_SCALE=2`.
-5. Wayland: the Screen switch is not offered.
+5. Wayland: rows 7 to 9 of "Wayland area recording and camera only".
 
 
 **Status (Windows): code done, hardware checklist pending** (Linux: above).
@@ -1651,6 +1659,177 @@ still needs the hardware.
    first. Close the bar: no `--watch-devices` child left (`pgrep -af
    watch-devices`).
 
+## Wayland area recording and camera only
+
+**Status: code done, cross-checked from a Mac, not yet run on Linux.**
+Verified with `cargo clippy --lib --tests` for `x86_64-unknown-linux-gnu`
+(fake `.pc` files, no warnings), the Windows MSVC cross-check for the
+shared code, and the pure tests on macOS. The Linux rows in
+`capture::rollout` are unchanged: both stay on staging with the rest of
+Linux recording.
+
+### Wayland area recording (spike L6)
+
+**Design: draw on the stream's first picture, crop in the stream's
+pixels.** Record in the panel with Area chosen asks the recorder for a
+monitor (`pickArea`); the desktop's dialog picks which one. The child
+opens that stream and answers `start` with `area_still`: the first picture
+as a JPEG (at most 2560 px on its long side), the stream's size in its own
+pixels, and where the compositor shows the stream when the portal says
+(`position` and `size`). Every later picture is held back, and no sound
+and no file exist yet. The app shows the picture in one full-screen window
+(`capture-area`), on the GTK monitor at the stream's place when there is
+one; the user drags the area, Escape or Cancel ends the recording at any
+step. The page sends the rectangle in its CSS pixels together with the
+picture's own box, and Rust maps it onto the stream's pixels
+(`area_pick::stream_area`: the drawn box minus the picture's corner,
+clipped to the picture, times the stream's width over the shown width,
+grown outward to even pixels by `plan::area_pixels`). The window comes
+down, Rust waits for the compositor to drop it from the stream, and sends
+`crop`; the child then opens the sound and the writer exactly as a plain
+`start` does and cuts the area out of each picture in Rust
+(`frame::to_nv12` reads the area's rows in place). `started` answers the
+crop, so the countdown (`countdownAfterPicker`, in the pill) runs after
+the area is drawn.
+
+**Why not the transparent window the spike proposed.** A transparent
+window over the live screen only gives coordinates that mean something if
+it sits exactly on the streamed monitor at exactly its logical size, and
+Wayland guarantees neither: `set_fullscreen` on a chosen output is a
+request, the stream's `position` is optional in the portal, and the
+monitor's scale (fractional on many laptops) sits between the window's
+pixels and the stream's. On the stream's own picture the mapping is a
+single ratio of two sizes Hippius measures itself, whatever monitor the
+compositor puts the window on and whatever its scale. The cost is that the
+user draws on a still picture of the screen rather than the live one; the
+picture is only a second old and the recording itself is live. **Why the
+crop is Rust's, not `videocrop`:** the area is known only after the first
+picture, and changing `videocrop` and the size filter on a playing
+`pipewiresrc` pipeline is a renegotiation nobody can verify from a Mac; the
+BGRx path is the one the X11 bubble composite already uses, and cropping
+first makes the conversion cheaper than recording the whole monitor.
+
+**What landed**
+- `capture/area_pick.rs` (pure, tested everywhere): `stream_area`
+  (HiDPI, fractional scaling, a letterboxed picture, clipping, a click),
+  `monitor_for` (which GTK monitor the stream covers), the
+  `AreaStep` / `AreaEvent` flow (one area, only while drawing; a cancel or
+  failure at any step ends it) and `DRAW_WITHIN` (5 minutes, like the
+  dialog).
+- Protocol: `start` carries `pickArea`; `area_still` answers it (`width`,
+  `height`, `jpeg`, optional `placement`); `crop {x, y, width, height}` in
+  stream pixels is answered `started`. `HelperRecorder` hands the still out
+  once (`Recorder::take_area_still`) and `Recorder::crop` waits for
+  `started`; the child's `serve` keeps a `Picking` state between the two,
+  refuses a crop with nothing waiting, and cancels it on `cancel` or when
+  stdin closes (nothing was recorded, so nothing is kept). The synthetic
+  test pattern supports the flow, so the whole loop runs in the unit tests.
+- `recorder_child/still.rs` (pure): BGRx to the JPEG the app draws on.
+- Linux child: `capture::Held` (the BGRx stream, first picture out, later
+  ones dropped until `release`), `AreaPicking`, and `record()` shared by
+  every start. The portal's stream placement is kept (`Desktop::stream_placement`).
+- App: `support` offers Area on Wayland wherever it records;
+  `system_picker_selection(Area)` and `picks_area_after_dialog`;
+  `begin_recording` → `draw_area` before the restore token is kept and
+  before the countdown; `capture_area_context` / `capture_area_choose`;
+  the `capture-area` window (its own core-only capability, a provider-free
+  route in `AppShell`, closed by `close_overlays`, so every ending takes it
+  down); an area shares the screen's restore token on one display.
+- Frontend: `app/capture-area/page.tsx` (skeleton until the picture is in,
+  drag, move and resize with the overlay's handles, arrow-key nudges, the
+  bar with Cancel and Record at 320 px and up, Rust's refusal shown in
+  place); the panel's line says the area is drawn after the dialog.
+
+**Deviations**
+- Restart draws the area again (it reopens the desktop's dialog, or with
+  one display restores the monitor without it); keeping the last area
+  across a Restart is a later nicety.
+- The pill cannot be placed on Wayland, so it may sit inside the area and
+  be filmed; it stays compact there as everywhere on Linux.
+- A monitor whose resolution changes mid-recording keeps what is left of
+  the area, letterboxed into the recording's size.
+
+### Camera only on Wayland
+
+**Design: the recorder opens the camera.** Wayland gives an app no window
+ids, and having the user pick Hippius's own stage in the dialog would be
+both confusing and fragile, so on Wayland camera only does not film the
+stage at all. When the screen is off, Record names the camera
+(`CameraPick`: the bar's id and its name) and asks no dialog. From that
+moment Rust tells the stage page that the recorder has the camera
+(`CameraState.recorderOwnsCamera`), the page closes its stream and shows
+"Recording your camera" (one owner per device: a V4L2 camera opens once),
+and the child opens the camera through GStreamer and records it with the
+same writer, microphone and system audio mixing, pause and resume.
+
+**Device identity.** `--list-cameras` already names cameras as WebKitGTK
+does (both list through GStreamer) with PipeWire's `node.name` or the V4L2
+path as id. The child runs one `GstDeviceMonitor` read and picks the
+camera by that id, else by name (`camera_name_key`: NFC, straight quotes,
+single spaces, no case, so a choice made by name in the webview's list
+still matches), else the default with a stderr line
+(`linux_plan::pick_camera`). It records with the device's own element
+(`GstDevice::create_element`, what WebKitGTK makes for it), never a source
+written by hand, so the same code opens a V4L2 camera, a PipeWire camera
+node and a v4l2loopback phone. It retries a busy device for 3 s while the
+stage lets go, asks for at most 1080p at 15 to 60 frames a second (raw, or
+JPEG where `jpegdec` exists) and falls back to whatever the camera offers,
+and mirrors the picture as the stage shows it (`videoflip`).
+
+**Availability.** `support::camera_only(platform, recorder_camera)` is
+true on Wayland only where the launch's probe found a camera source
+(`v4l2src` or `pipewiresrc`), `decodebin` and `videoflip` on a machine that
+records (`Probe::records_camera`); the panel's Screen switch follows Rust's
+`cameraOnlyAvailable` as before.
+
+**Deviations**
+- The stage shows a placeholder, not a preview, while recording (a preview
+  would need the recorder's pictures in the webview). It is not filmed on
+  Wayland, so it may say in words what is happening.
+- The Camera portal (`org.freedesktop.portal.Camera`) is not used: Hippius
+  is not sandboxed (deb, rpm), and the host's PipeWire and V4L2 devices are
+  what WebKitGTK opens too. A Flatpak would need it.
+
+### Needs real Wayland sessions to know
+- GNOME 46/48 and KDE Plasma 6: that `area_still` arrives within 15 s for
+  monitor streams (including DMA-BUF-only ones through `videoconvert`),
+  that the picture matches the monitor, that `fullscreen_on_monitor` lands
+  the window on the streamed monitor with two displays, whether GNOME and
+  KDE send a position for a monitor stream at all (without one the window
+  goes where the compositor puts it), and that two `COMPOSITOR_SETTLE`s keep the selection
+  window out of the first recorded picture.
+- That the drawn area lands on the same pixels in the video at 100 %, 200 %
+  and GNOME's 125 % / 150 % fractional scaling.
+- Camera only: that the stage releasing the camera frees a V4L2 device in
+  time for the recorder (the 3 s retry), that PipeWire camera nodes from
+  `pipewiredeviceprovider` open with `create_element` on PipeWire 0.3.48
+  (Ubuntu 22.04) and 1.x, that the bounded caps pick a sane mode on common
+  UVC webcams, and that the mirrored picture matches what the stage showed.
+
+### Linux checklist additions (Wayland, debug or staging build)
+1. Ubuntu 24.04 GNOME Wayland, one display at 100 %: the panel offers Area;
+   Record, pick the screen; the screen's picture fills the display; drag an
+   area, Record: the video is exactly that area, with sound and pause.
+2. The same at 200 % and at 125 % fractional scaling: the video covers the
+   drawn pixels, no more and no less (compare against a screenshot).
+3. Two displays side by side with different scales: pick the second one in
+   the dialog; the picture opens on that display; the area records from it.
+4. Escape and Cancel on the picture, Cancel in the pill while it is up, and
+   leaving it 5 minutes: each ends quietly, the sharing indicator goes, no
+   card, no toast. Stop sharing from the top bar while drawing: the same.
+5. A 3 s countdown: it runs in the pill after the area is drawn, and the
+   picture window is not in the first second of the video.
+6. KDE Plasma 6 Wayland: rows 1, 3 and 4.
+7. Camera only on GNOME and KDE: turn the screen off in the panel; Record
+   asks no dialog; the stage says "Recording your camera" and the camera's
+   light stays on; the video is the camera, mirrored, with the microphone;
+   pause and resume; Stop delivers it with a picture on the card.
+8. Camera only with a USB camera chosen in the menu, then with a phone
+   through v4l2loopback: the recorded camera is the chosen one; unplug the
+   chosen camera before Record: the default camera is recorded.
+9. A machine without `gstreamer1.0-plugins-good`'s `videoflip` (or without
+   any camera source): the Screen switch is not offered on Wayland.
+
 ## What each installer gains
 
 | Installer | Bundles | Declares | Size |
@@ -1741,7 +1920,7 @@ supported display (1280 x 720) and at 200 % scale.
 | L3 | `pipewiresrc` and `mp4mux` fragments: a killed pipeline leaves an unplayable file; pause through pad probes misbehaves with live sources | SIGKILL test and pause test on the real portal stream; fallback is Matroska with a remux at Stop (and `.mkv` counted as media in `dir_contents`). 2 days |
 | L4 | On Wayland the card lands mid-screen or is not raised (GNOME shows "Hippius is ready" instead) | Show the card after a capture on GNOME and KDE Wayland; choose card or notification. 0.5 day |
 | L5 | WebKitGTK builds without media stream, or `getUserMedia` cannot open a camera in use by nothing else | `enable-media-stream` on Ubuntu 22.04/24.04 and Fedora WebKitGTK; open the camera and a mic. 1 day |
-| L6 | Wayland area recording | Monitor stream plus a fullscreen transparent window on that output to draw on, then `videocrop`; judge on GNOME and KDE. 2 days, may land after v1 |
+| L6 | Wayland area recording | Done in code with a change of approach: the area is drawn on the monitor stream's first picture in a full-screen window, not on a transparent window over the live screen, and cropped in Rust in the stream's pixels, not with `videocrop` (see "Wayland area recording and camera only"). Still to judge on GNOME and KDE |
 | L7 | Restore tokens not honoured (GNOME older than 44) so the picker shows every time | Record twice on 22.04 and 24.04. 0.5 day |
 | L8 | GlobalShortcuts portal differences between KDE and GNOME 48 | Bind, rebind and trigger on both. 1 day |
 | X1 | Parity drift between the Swift and Rust recorders (bitrate, alignment, pause rule) | `sizing.rs` tests pinned to the Swift constants; a shared protocol fixture file read by both test suites. part of Phase 0 |
