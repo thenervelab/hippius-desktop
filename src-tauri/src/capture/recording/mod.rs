@@ -202,15 +202,25 @@ pub fn microphone_supported() -> bool {
 
 /// The program that reads stills out of a finished recording for the
 /// capture card (`--poster <video> <seconds>...`, see `capture::poster`):
-/// the Swift helper on macOS. `None` elsewhere, where the card keeps the
-/// screenshot taken as the recording started.
+/// the Swift helper on macOS, the recorder child on Windows (Media
+/// Foundation) and Linux (GStreamer), all printing the same line. `None`
+/// elsewhere, where the card keeps the screenshot taken as the recording
+/// started.
 #[must_use]
 pub fn poster_command() -> Option<std::process::Command> {
     #[cfg(target_os = "macos")]
     {
         macos::helper_command()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        windows::helper_command().ok()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::helper_command().ok()
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
         None
     }

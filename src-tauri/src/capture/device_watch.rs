@@ -8,7 +8,10 @@
 //! more after the camera. So on macOS the helper runs in `--watch-devices`
 //! mode for as long as the bar is up and prints both lists again on every
 //! change; this module keeps that process and hands each new pair of lists
-//! to the caller, which stores them and tells the bar.
+//! to the caller, which stores them and tells the bar. Windows and Linux run
+//! the recorder child in the same mode (`recorder_child::watch`:
+//! `IMMNotificationClient` and camera-interface arrival on Windows,
+//! GStreamer's device monitor on Linux), printing the same line.
 //!
 //! The watcher is started by the bar's first device read and stopped when
 //! the overlays close. Closing its stdin is what ends the helper; it also
@@ -44,10 +47,10 @@ pub fn parse_lists(line: &str) -> Option<DeviceLists> {
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod imp {
     use std::io::{BufRead, BufReader};
-    use std::process::{Child, Stdio};
+    use std::process::{Child, Command, Stdio};
     use std::sync::{Mutex, MutexGuard};
 
     use super::{DeviceLists, parse_lists};
@@ -70,10 +73,7 @@ mod imp {
             }
             slot.take();
         }
-        if !recording::macos::macos_at_least(13, 0) {
-            return false;
-        }
-        let Some(mut program) = recording::macos::helper_command() else {
+        let Some(mut program) = watcher_command() else {
             return false;
         };
         let spawned = program
@@ -107,6 +107,26 @@ mod imp {
         true
     }
 
+    /// The program that watches: the Swift helper on macOS 13 and later, the
+    /// recorder child (with no console window) on Windows and Linux.
+    fn watcher_command() -> Option<Command> {
+        #[cfg(target_os = "macos")]
+        {
+            if !recording::macos::macos_at_least(13, 0) {
+                return None;
+            }
+            recording::macos::helper_command()
+        }
+        #[cfg(windows)]
+        {
+            recording::windows::helper_command().ok()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            recording::linux::helper_command().ok()
+        }
+    }
+
     /// Stop the watcher: its stdin closes and it exits; killed as well so a
     /// wedged one cannot linger.
     pub fn stop() {
@@ -118,7 +138,7 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 mod imp {
     use super::DeviceLists;
 
