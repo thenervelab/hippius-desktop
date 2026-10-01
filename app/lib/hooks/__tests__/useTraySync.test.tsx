@@ -284,7 +284,7 @@ describe("useTrayInit — tray creation", () => {
   });
 });
 
-describe("useTrayInit — after a recording's mark", () => {
+describe("useTrayInit: after a recording's mark", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
