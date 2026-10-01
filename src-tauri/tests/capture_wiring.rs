@@ -999,3 +999,121 @@ fn windows_records_in_its_own_child_and_stays_on_staging() {
         "Windows recording leaves staging only once its hardware checklist passes"
     );
 }
+
+/// Windows' meter is the recorder child's WASAPI client, the same program
+/// and endpoint id the recording uses; the child serves `--meter` before
+/// anything else and lets go of the device when stdin closes. The one-owner
+/// rule above (`emit_phase` stops the meter) covers it unchanged.
+#[test]
+fn windows_meters_the_microphone_in_its_recorder_child() {
+    let recording = read("src/capture/recording/mod.rs");
+    let meter = fn_body(&recording, "pub fn meter_command(");
+    assert!(meter.contains("windows::meter_command(device)"), "Windows must have a meter");
+    let windows = read("src/capture/recording/windows.rs");
+    let command = fn_body(&windows, "pub fn meter_command(");
+    assert!(command.contains("helper_command()") && command.contains("\"--meter\""));
+    let child = read("src/capture/recorder_child/mod.rs");
+    let run = fn_body(&child, "pub fn run<");
+    assert!(
+        run.find("\"--meter\"").unwrap() < run.find("serve(std::io::stdin()").unwrap(),
+        "the meter mode returns before a recording session would start"
+    );
+    let audio = read("src/capture/recorder_child/windows/audio.rs");
+    assert!(fn_body(&audio, "pub fn run_meter(").contains("meter::serve("));
+    let serve = fn_body(&read("src/capture/recorder_child/meter.rs"), "pub fn serve<");
+    assert!(serve.contains("stop.store(true"), "stdin closing stops the meter");
+}
+
+/// System audio leaves Hippius's own sounds out on Windows 11: the child is
+/// told the app's pid, and asks for process loopback excluding that tree
+/// before falling back to the whole output.
+#[test]
+fn windows_system_audio_leaves_the_apps_own_tree_out() {
+    let windows = read("src/capture/recording/windows.rs");
+    assert!(fn_body(&windows, "pub fn helper_command(").contains("program.env(APP_PID_ENV, std::process::id()"));
+    let audio = read("src/capture/recorder_child/windows/audio.rs");
+    assert!(fn_body(&audio, "pub fn system(").contains("sources::system_audio_route("));
+    let activate = fn_body(&audio, "fn activate_process_loopback(");
+    assert!(activate.contains("PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE") && activate.contains("VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK"));
+    let open = fn_body(&audio, "pub fn open(");
+    assert!(
+        open.contains("SystemAudioRoute::WholeOutput"),
+        "a refused process loopback falls back to the whole output"
+    );
+    let child = read("src/capture/recorder_child/windows/mod.rs");
+    assert!(
+        child.contains("audio::Device::system()"),
+        "the recording asks for the route, not plain loopback"
+    );
+}
+
+/// A microphone unplugged mid-recording is not a death: the child says
+/// `device_lost`, the helper keeps it apart from replies and deaths, and the
+/// tick tells the pill in Rust's words while the recording goes on.
+#[test]
+fn a_lost_microphone_reaches_the_pill_without_ending_the_recording() {
+    let child = read("src/capture/recorder_child/windows/mod.rs");
+    assert!(fn_body(&child, "fn tell_lost(").contains("protocol::device_lost_line("));
+    assert!(
+        child.matches("tell_lost(out, Source::").count() == 2,
+        "the microphone and system audio both tell"
+    );
+    let helper = read("src/capture/recording/helper.rs");
+    let reader = fn_body(&helper, "fn read_events(");
+    assert!(reader.contains("HelperEvent::DeviceLost") && reader.contains("shared.lost"));
+    let commands = read("src/capture/commands.rs");
+    let tick = fn_body(&commands, "fn tick_once(");
+    assert!(tick.contains("take_lost_device()") && tick.contains("DEVICE_LOST_EVENT"));
+    let lost = tick.find("DEVICE_LOST_EVENT").unwrap();
+    let died = tick.find("if let Some(e) = died").unwrap();
+    assert!(lost < died, "a lost device is told even on the tick that ends the recording");
+    let pill = read("../app/capture-controls/page.tsx");
+    assert!(
+        pill.contains("DEVICE_LOST_EVENT") && pill.contains("lost.message"),
+        "the pill says Rust's line"
+    );
+}
+
+/// "Open Settings" under a row Windows' privacy settings block opens only
+/// the camera or microphone page, decided in Rust.
+#[test]
+fn the_privacy_settings_button_opens_only_rusts_pages() {
+    let commands = read("src/capture/commands.rs");
+    let open = fn_body(&commands, "pub fn capture_open_privacy_settings(");
+    assert!(open.contains("privacy::settings_uri_for(") && open.contains("open_url(uri"));
+    assert!(fn_body(&commands, "pub async fn capture_overlay_context(").contains("privacy::device_privacy()"));
+    let bar = read("../app/capture-overlay/CaptureBar.tsx");
+    assert!(bar.contains("openCapturePrivacySettings(device)"));
+    assert!(!bar.contains("ms-settings:"), "the bar never names a Settings URI itself");
+}
+
+/// Windows' tray shows no title, so a recording marks the icon itself
+/// (XP-15), redrawn on every write while it runs, and hands the icon back to
+/// the main window when it ends.
+#[test]
+fn windows_marks_the_tray_icon_while_recording_and_hands_it_back() {
+    let commands = read("src/capture/commands.rs");
+    let show = fn_body(&commands, "fn show_phase_in_tray(");
+    assert!(show.contains("TRAY_ICON_MARKS_RECORDING") && show.contains("write_tray_glyph("));
+    let glyph = fn_body(&commands, "fn write_tray_glyph(");
+    assert!(glyph.contains("set_icon(") && glyph.contains("TRAY_ICON_RELEASED_EVENT"));
+    let hook = std::fs::read_to_string(format!("{}/../app/lib/hooks/useTraySync.ts", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    assert!(hook.contains("\"capture_tray_icon_released\""), "the main window re-applies its icon");
+    assert!(commands.contains("pub const TRAY_ICON_RELEASED_EVENT: &str = \"capture_tray_icon_released\";"));
+}
+
+/// A Windows window recording films the camera bubble: the child is given
+/// the bubble's window and composites it, and the bubble is moved inside
+/// the recorded window at Record.
+#[test]
+fn a_windows_window_recording_films_the_bubble() {
+    let child = read("src/capture/recorder_child/windows/mod.rs");
+    assert!(child.contains("cmd.camera_window_id.map(handle_from_id)"));
+    assert!(child.contains("wgc::start(target, Arc::clone(&shared), camera)"));
+    let wgc = read("src/capture/recorder_child/windows/wgc.rs");
+    assert!(fn_body(&wgc, "fn render(").contains("overlay::composite("));
+    let bar = read("src/capture/bar.rs");
+    assert!(bar.contains("pub const WINDOW_RECORDING_ADDS_CAMERA: bool = cfg!(any(target_os = \"macos\", windows));"));
+    let commands = read("src/capture/commands.rs");
+    assert!(fn_body(&commands, "async fn recording_bubble_frame(").contains("camera::window_region("));
+}
