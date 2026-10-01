@@ -100,6 +100,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Camera and microphone now record together.** With both turned on, the
+  camera bubble no longer goes black and the microphone no longer drops out,
+  however many times you switch either one off and on before recording. The
+  bubble also shows a soft placeholder while the camera starts, instead of a
+  black circle.
+
 - **Your voice is heard when a recording is played from its share link
   (Mac).** A recording now has one sound track with your microphone in it
   (and the computer's sound when you ask for it), a little louder than

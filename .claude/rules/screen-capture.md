@@ -174,10 +174,22 @@ for the card.
 `capture-camera`): the bar's Loom-style sources panel (Screen / Camera / Mic
 rows, each a switch plus a device menu) saves
 `CaptureOptions.{screen, camera, camera_device, camera_size, microphone_device}`
-at once. The mic row's level meter (`MicMeter`) opens the mic in the overlay
-webview, found by name (`deviceIdByName` in `app/lib/capture/devices.ts`,
-shared with the camera page); it unmounts with the bar before
-the countdown so it never holds the device while recording.
+at once. **Only the camera window may call `getUserMedia`.** WebKit lets one
+page per process capture: a page starting capture mutes every other page's
+camera and mic (`WebProcessProxy::muteCaptureInPagesExcept`, Cocoa), and a
+muted camera stays black until that page asks again, even after the other
+let go; WebKit's mic also runs voice processing that alters what the
+recorder hears from the same mic for a few seconds after it closes. So the
+mic row's level meter (`MicMeter`) is the helper's (`HippiusCapture --meter
+[deviceId]`, plain AVFoundation, by the helper's own id, no name matching),
+run by `capture::mic_meter` (one process, a generation per start so a late
+stop never ends its replacement) and sent as `capture_mic_level` (0..1,
+`level_from_rms`). `meter_may_run` allows it only while choosing a
+recording; `emit_phase` stops it on every other phase, before the recorder
+opens the mic. The camera page covers a muted or not-yet-playing camera with
+a placeholder (`showsPlaceholder`) and reopens one muted for
+`MUTE_RECOVERY_MS`, at most `MUTE_RECOVERY_TRIES` in a row. Pinned by
+`onlyCameraCaptures.test.ts`, `mic_meter::tests` and `capture_wiring.rs`.
 `camera::wanted_shape` decides the window: while selecting it follows the
 options live (so the bubble can be placed before recording); from Record on it
 follows `recording_camera`, frozen in `select_inner` BEFORE the phase moves, so
@@ -250,8 +262,7 @@ discovery, wait up to 1.5 s for the list to go quiet (0.4 s without a new
 `wasConnectedNotification`) because remote devices can arrive a beat late,
 then print. Names match through `deviceNameKey` (NFC, straight quotes, single
 spaces), since a phone's name carries a curly apostrophe. The bar re-reads
-both lists on menu open and on the overlay's `devicechange`; `MicMeter`
-reopens by name once the first grant names the microphones.
+both lists on menu open and on the overlay's `devicechange`.
 Hardened builds need the `com.apple.security.device.camera` entitlement or the
 camera fails silently. The pill can hide a bubble (`capture_camera_toggle`),
 never the stage.
