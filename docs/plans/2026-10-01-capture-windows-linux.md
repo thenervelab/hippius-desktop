@@ -850,7 +850,9 @@ On macOS the bar lists what Google Meet lists (built-in, USB, Bluetooth,
 virtual and an iPhone as a Continuity Camera and microphone) because the
 helper enumerates through AVFoundation plus Core Audio, both processes opt in
 with `NSCameraUseContinuityCameraDeviceType`, names are compared through
-`deviceNameKey`, and the lists refresh on menu open and `devicechange`. The
+`deviceNameKey`, and the lists stay live while the bar is up (the helper's
+`--watch-devices`, `device_watch.rs`) as well as refreshing on menu open; a
+menu with no Continuity device shows Rust's `continuityHint`. The
 same shape carries over: the child lists devices with the OS's native API, the
 webview opens the camera found by name.
 

@@ -329,6 +329,8 @@ function SourceRow({
   caption,
   menuLabel,
   devices,
+  loading,
+  hint,
   chosen,
   open,
   disabled,
@@ -347,7 +349,12 @@ function SourceRow({
   caption?: string | null;
   /** The device menu's name; no menu for a row without devices (Screen). */
   menuLabel?: string;
-  devices?: CaptureDevice[];
+  /** Null until the first list arrives (the menu shows placeholders). */
+  devices?: CaptureDevice[] | null;
+  /** A list is being read: a placeholder row says more may arrive. */
+  loading?: boolean;
+  /** Rust's line on bringing an iPhone in, shown when no listed device is one. */
+  hint?: string | null;
   chosen?: string | null;
   open?: boolean;
   disabled?: boolean;
@@ -388,14 +395,20 @@ function SourceRow({
         <Switch on={lit} label={switchLabel ?? menuLabel ?? label} disabled={disabled} onToggle={onToggle} />
       </div>
       {caption && <p className={`pb-0.5 pl-[26px] text-[11.5px] leading-snug ${GLASS_MUTED}`}>{caption}</p>}
-      {open && devices && onPick && (
+      {open && devices !== undefined && onPick && (
         <div
           ref={menuRef}
           role="menu"
           aria-label={`Choose a ${noun}`}
+          aria-busy={loading || devices === null}
           className={`absolute bottom-[calc(100%+6px)] left-2 right-2 z-10 max-h-[50vh] overflow-y-auto rounded-[12px] p-1.5 ${GLASS_PANEL}`}
         >
-          {devices.length === 0 ? (
+          {devices === null ? (
+            <>
+              <DeviceSkeleton />
+              <DeviceSkeleton short />
+            </>
+          ) : devices.length === 0 && !loading ? (
             <p className={`px-2.5 py-1.5 text-[13px] ${GLASS_MUTED}`}>Only the default {noun} was found</p>
           ) : (
             devices.map((d) => (
@@ -410,10 +423,57 @@ function SourceRow({
               </MenuRow>
             ))
           )}
+          {devices !== null && loading && <DeviceSkeleton short />}
+          <span role="status" className="sr-only">
+            {loading || devices === null ? `Looking for ${noun}s` : ""}
+          </span>
+          {hint && devices !== null && !devices.some((d) => d.continuity) && (
+            <p className={`mt-1 border-t border-white/10 px-2.5 pb-1 pt-2 text-[11.5px] leading-snug ${GLASS_MUTED}`}>
+              {hint}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
+}
+
+/** A device row still being looked for: a placeholder bar, never a spinner. */
+function DeviceSkeleton({ short = false }: { short?: boolean }) {
+  return (
+    <div aria-hidden data-device-skeleton className="flex min-h-8 items-center px-2.5">
+      <span
+        className={`h-2.5 rounded-full bg-white/15 animate-pulse motion-reduce:animate-none ${short ? "w-2/5" : "w-3/5"}`}
+      />
+    </div>
+  );
+}
+
+/**
+ * One of the bar's device lists: null until the first read answers, read
+ * again on demand (`refresh`), and replaced whenever Rust sends a new one on
+ * `event` (its device watcher, while the bar is up). `loading` while any read
+ * is in flight, so the menu can say more devices may still arrive.
+ */
+function useDeviceList(read: () => Promise<CaptureDevice[]>, event: string, enabled: boolean) {
+  const [devices, setDevices] = useState<CaptureDevice[] | null>(null);
+  const [reading, setReading] = useState(0);
+  const refresh = useCallback(() => {
+    if (!enabled) return;
+    setReading((n) => n + 1);
+    void read()
+      .then(setDevices)
+      .catch(() => setDevices((prev) => prev ?? []))
+      .finally(() => setReading((n) => n - 1));
+  }, [read, enabled]);
+  useEffect(() => {
+    if (!enabled) return;
+    const unlisten = listen<CaptureDevice[]>(event, (e) => setDevices(e.payload));
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [event, enabled]);
+  return { devices, loading: reading > 0, refresh };
 }
 
 /**
@@ -428,6 +488,7 @@ function SourcesPanel({
   options,
   microphoneAvailable,
   microphoneUnavailableMessage,
+  continuityHint,
   cameraOnlyAvailable,
   cameraFilmed,
   menu,
@@ -441,6 +502,8 @@ function SourcesPanel({
   microphoneAvailable: boolean;
   /** Rust's line for why the microphone is off here; shown under the dimmed row. */
   microphoneUnavailableMessage: string | null;
+  /** Rust's iPhone checklist, under a device menu that lists no iPhone; null where it does not apply. */
+  continuityHint: string | null;
   /** The Screen switch (off = camera only) is offered only where Rust can record the camera alone. */
   cameraOnlyAvailable: boolean;
   /** Whether the camera would be in the video for the mode chosen now (Rust's answer). */
@@ -452,37 +515,27 @@ function SourcesPanel({
   onMenu: (next: OpenMenu | null) => void;
   onOptions: (next: CaptureOptions) => void;
 }) {
-  const [cameras, setCameras] = useState<CaptureDevice[]>([]);
-  const [microphones, setMicrophones] = useState<CaptureDevice[]>([]);
-
-  const readCameras = useCallback(() => {
-    void getCaptureCameras()
-      .then(setCameras)
-      .catch(() => undefined);
-  }, []);
-  const readMicrophones = useCallback(() => {
-    if (!microphoneAvailable) return;
-    void getCaptureMicrophones()
-      .then(setMicrophones)
-      .catch(() => undefined);
-  }, [microphoneAvailable]);
+  // Rust sends a new list whenever a device comes or goes while the bar is
+  // up (a USB mic plugged in, an iPhone's camera and then its microphone
+  // arriving), and the camera window reports what it finds where the system
+  // has no list.
+  const camerasList = useDeviceList(getCaptureCameras, "capture_cameras", true);
+  const microphonesList = useDeviceList(getCaptureMicrophones, "capture_microphones", microphoneAvailable);
+  const readCameras = camerasList.refresh;
+  const readMicrophones = microphonesList.refresh;
+  const cameras = camerasList.devices ?? [];
+  const microphones = microphonesList.devices ?? [];
 
   useEffect(() => {
     readCameras();
-    // The camera window reports what it finds where the system has no list.
-    const unlisten = listen<CaptureDevice[]>("capture_cameras", (e) => setCameras(e.payload));
-    return () => {
-      void unlisten.then((fn) => fn());
-    };
   }, [readCameras]);
 
   useEffect(() => {
     readMicrophones();
   }, [readMicrophones]);
 
-  // A device that comes or goes while the bar is up (a USB mic plugged in, an
-  // iPhone waking nearby as a Continuity Camera) updates the menus without
-  // reopening them.
+  // The webview's own signal, where it sends one (WebKit does so only once
+  // the page holds a capture grant): read both lists again.
   useEffect(() => {
     const media = typeof navigator === "undefined" ? undefined : navigator.mediaDevices;
     if (!media?.addEventListener) return;
@@ -526,7 +579,9 @@ function SourcesPanel({
         menuLabel="Camera"
         on={options.camera}
         caption={cameraFilmed ? null : CAMERA_NOT_FILMED}
-        devices={cameras}
+        devices={camerasList.devices}
+        loading={camerasList.loading}
+        hint={continuityHint}
         chosen={options.cameraDevice}
         open={menu === "camera"}
         triggerRef={cameraTrigger}
@@ -541,7 +596,9 @@ function SourcesPanel({
         menuLabel="Microphone"
         on={options.microphone}
         caption={microphoneAvailable ? null : microphoneUnavailableMessage}
-        devices={microphones}
+        devices={microphonesList.devices}
+        loading={microphonesList.loading}
+        hint={continuityHint}
         chosen={options.microphoneDevice}
         open={menu === "microphone"}
         disabled={!microphoneAvailable}
@@ -569,6 +626,8 @@ interface Props {
   microphoneAvailable: boolean;
   /** Rust's line for why the microphone is off here (`microphoneUnavailableMessage`). */
   microphoneUnavailableMessage?: string | null;
+  /** Rust's iPhone checklist for the device menus (`continuityHint`); none when left out. */
+  continuityHint?: string | null;
   showClicksAvailable: boolean;
   /** The modes each kind may offer (Rust's `modes`); every mode when left out. */
   modes?: OfferedModes;
@@ -721,6 +780,7 @@ export default function CaptureBar(props: Props) {
           options={options}
           microphoneAvailable={props.microphoneAvailable}
           microphoneUnavailableMessage={props.microphoneUnavailableMessage ?? null}
+          continuityHint={props.continuityHint ?? null}
           cameraOnlyAvailable={props.cameraOnlyAvailable}
           cameraFilmed={props.cameraFilmed}
           menu={menu}

@@ -109,6 +109,8 @@ export interface CaptureSurfaces {
   systemAudio: boolean;
   /** Rust's line for why the microphone cannot be recorded; null when it can. */
   microphoneUnavailableMessage: string | null;
+  /** What to check when an iPhone is not in the camera or microphone menu (macOS); null elsewhere. */
+  continuityHint: string | null;
   shortcut: { supported: boolean; via: CaptureShortcutVia };
 }
 
@@ -169,6 +171,8 @@ export interface CaptureDevice {
   name: string;
   /** The system's default device of its kind (listed first). */
   isDefault?: boolean;
+  /** An iPhone's camera or microphone, reached through Continuity. */
+  continuity?: boolean;
 }
 
 /** The share picker's tabs. Mirrors Rust's `share::ShareTab`. */

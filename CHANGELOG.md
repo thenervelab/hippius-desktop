@@ -100,6 +100,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Your iPhone microphone now shows up when you record.** The camera and
+  microphone lists in the capture bar update by themselves as devices come and
+  go, so an iPhone nearby, a USB microphone or a headset appears without
+  reopening the menu. If your iPhone is not listed yet, the menu says what to
+  check.
+
 - **Your voice is heard when a recording is played from its share link
   (Mac).** A recording now has one sound track with your microphone in it
   (and the computer's sound when you ask for it), a little louder than

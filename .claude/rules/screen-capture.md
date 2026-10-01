@@ -60,7 +60,7 @@ frontend switch. Moving a row on is a one-line change once its manual
 checklist passes; `release_lane_pins.rs` pins that production enables only
 production rows and that Windows recording needs a signed installer to get
 there. **Surfaces:** `support::Surfaces` (selection, modes, screenshotTimer,
-systemAudio, microphoneUnavailableMessage, shortcut) is flattened into
+systemAudio, microphoneUnavailableMessage, continuityHint, shortcut) is flattened into
 `capture_support` and `OverlayContext`; the bar draws only Rust's `modes`,
 hides the timer when `screenshotTimer` is false, hides "Record system audio"
 when `systemAudio` is false and captions the mic row with Rust's line (it
@@ -245,12 +245,26 @@ Camera only to a process whose Info.plist sets
 its plist (`macos/HippiusCapture/Info.plist`) linked in as `__TEXT,__info_plist`
 by `Package.swift`'s `-sectcreate`; `embed-capture-helper.sh` refuses a helper
 without it, pinned in `tests/capture_wiring.rs`. SwiftPM does not relink when
-only that plist changes: touch a source file. The list modes run one
-discovery, wait up to 1.5 s for the list to go quiet (0.4 s without a new
-`wasConnectedNotification`) because remote devices can arrive a beat late,
-then print. Names match through `deviceNameKey` (NFC, straight quotes, single
-spaces), since a phone's name carries a curly apostrophe. The bar re-reads
-both lists on menu open and on the overlay's `devicechange`; `MicMeter`
+only that plist changes: touch a source file. A phone's camera and
+microphone are separate devices and reach a fresh process late, the
+microphone often after the camera, so a one-shot list missed it. The list
+modes hold a `DeviceWatch` (live discovery sessions, connect/disconnect
+notifications, a Core Audio device-list listener) and wait up to 1.5 s for
+0.4 s of quiet, or up to 3 s while a Continuity camera is listed without its
+microphone. **Live lists:** `device_watch.rs` runs the helper's
+`--watch-devices` from the bar's first device read until `close_overlays`
+(stdin closing ends it; it also exits after 30 min) and every list it prints
+replaces `native_cameras` and goes out as `capture_cameras` /
+`capture_microphones`; the overlay's `devicechange` is only a bonus (WebKit
+fires it only for a page holding a capture grant). Pinned in
+`capture_wiring.rs`. Each device carries `continuity` (transport `ccwd` /
+`ccwl` / `ccap`, since `isContinuityCamera` is false for the phone's
+microphone), and a menu that lists none shows Rust's `continuityHint`
+(macOS only). Menus show skeleton rows until the first list and one while a
+read is in flight. `start` waits up to 3 s for a chosen microphone that is
+not listed yet, then records the default with a stderr line, matching what
+the bar shows for an unplugged choice. Names match through `deviceNameKey` (NFC, straight quotes, single
+spaces), since a phone's name carries a curly apostrophe. `MicMeter`
 reopens by name once the first grant names the microphones.
 Hardened builds need the `com.apple.security.device.camera` entitlement or the
 camera fails silently. The pill can hide a bubble (`capture_camera_toggle`),
