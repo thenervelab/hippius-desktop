@@ -135,6 +135,10 @@
         "depends": [
           "python3-nautilus"
         ],
+        "recommends": [
+          "xdg-desktop-portal",
+          "xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr"
+        ],
         "files": {
           "/usr/share/nautilus-python/extensions/hippius-share.py": "../linux/nautilus-python/hippius-share.py",
           "/usr/share/kio/servicemenus/hippius-share.desktop": "../linux/servicemenus/hippius-share.desktop",

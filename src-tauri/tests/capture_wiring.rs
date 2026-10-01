@@ -889,3 +889,69 @@ fn the_mic_meter_lets_go_before_the_recorder_starts() {
         "the helper must serve --meter"
     );
 }
+
+/// Wayland: a screenshot goes straight to the desktop's screenshot tool.
+/// No Hippius overlay may open first (on Wayland it could neither cover the
+/// screen nor see the windows under it), and the session is decided by
+/// Rust's surfaces, never by the frontend checking the platform.
+#[test]
+fn a_wayland_screenshot_skips_the_overlay_for_the_desktops_picker() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    let plan = start.find("support::start_plan(").expect("capture_start asks for the plan");
+    let picker = start.find("system_picker_screenshot(").expect("the picker path is spawned");
+    let overlay = start.find("open_capture_ui(").expect("the overlay path");
+    assert!(plan < picker && picker < overlay, "the picker returns before any overlay opens");
+    let take = fn_body(&src, "async fn take_with_system_picker(");
+    assert!(take.contains("linux_portal::request()") && take.contains("linux_portal::settle("));
+    assert!(
+        take.find("open_preview(").unwrap() < take.find("CaptureEvent::Captured").unwrap(),
+        "the card opens before the session ends, as for an overlay screenshot"
+    );
+    // A cancel in the desktop's tool is a cancel, not a failure.
+    let flow = fn_body(&src, "async fn system_picker_screenshot(");
+    assert!(flow.contains("Ok(false)") && flow.contains("CaptureEvent::Cancel"));
+    assert!(flow.contains("fail_capture("), "every other ending goes through fail_capture");
+}
+
+/// Linux X11 has no content protection: every X11 session clears the
+/// screen before the grab, and the overlay covers the panels so its (0, 0)
+/// is the display's.
+#[test]
+fn linux_overlays_close_before_the_grab_and_cover_the_panels() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    assert!(start.contains(r#"cfg!(target_os = "linux") || !super::permissions::windows_excludes_from_capture("#));
+    assert!(fn_body(&src, "async fn open_overlay(").contains("cover_whole_display(&window)"));
+    let linux_check = src
+        .split("#[cfg(not(any(windows, target_os = \"macos\")))]\nfn kept_out_of_captures")
+        .nth(1)
+        .expect("a Linux kept_out_of_captures");
+    assert!(
+        linux_check
+            .trim_start()
+            .starts_with("(_window: &tauri::WebviewWindow) -> bool {\n    false")
+    );
+}
+
+/// Linux capture adds no build or runtime package: x11rb and ashpd are
+/// pure Rust and Linux-only, and the .deb only RECOMMENDS a portal.
+#[test]
+fn linux_capture_is_linux_only_and_recommends_the_portal() {
+    let manifest = read("Cargo.toml");
+    let linux = manifest
+        .split("[target.'cfg(target_os = \"linux\")'.dependencies]")
+        .nth(1)
+        .expect("a Linux-only dependency table");
+    let table = linux.split("\n[").next().unwrap();
+    assert!(table.contains("x11rb = ") && table.contains("ashpd = "));
+    assert!(table.contains("default-features = false"), "ashpd brings only the portals capture uses");
+    let conf: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).unwrap();
+    let recommends = conf["bundle"]["linux"]["deb"]["recommends"].as_array().expect("deb recommends");
+    assert!(recommends.iter().any(|r| r == "xdg-desktop-portal"));
+    let depends = conf["bundle"]["linux"]["deb"]["depends"].as_array().unwrap();
+    assert!(
+        !depends.iter().any(|d| d.as_str().is_some_and(|d| d.contains("portal"))),
+        "a portal is recommended, never required: X11 desktops capture without one"
+    );
+}

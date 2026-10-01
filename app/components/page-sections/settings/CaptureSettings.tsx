@@ -2,11 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Camera, Keyboard, VideoOff } from "lucide-react";
+import { Camera, Keyboard, ScanEye, VideoOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
-import { captureDialogAtom, captureRecordingNoteAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import {
+  captureDialogAtom,
+  captureRecordingNoteAtom,
+  captureSupportedAtom,
+  captureSurfacesAtom,
+} from "@/app/lib/capture/captureFlow";
 import {
   acceleratorKeys,
   isMacPlatform,
@@ -32,11 +37,18 @@ const KBD =
  * bar, and the drive captures are saved to. Rust validates and registers the
  * shortcut (`capture::shortcut`); this only records the keys and shows what
  * Rust answered. Hidden where capture is not available. On a Mac whose build
- * or macOS cannot record, a third row says so in Rust's words.
+ * or macOS cannot record, a third row says so in Rust's words. Where Rust
+ * says there is no shortcut yet (Linux), its line replaces the shortcut
+ * controls; where the desktop's own tool takes screenshots (Wayland), a row
+ * says so.
  */
 export default function CaptureSettings() {
   const supported = useAtomValue(captureSupportedAtom);
   const recordingNote = useAtomValue(captureRecordingNoteAtom);
+  const surfaces = useAtomValue(captureSurfacesAtom);
+  // Rust's line where this system has no capture shortcut yet (Linux): it
+  // replaces the shortcut controls, which would save a shortcut that never fires.
+  const shortcutUnavailable = surfaces && !surfaces.shortcut.supported ? surfaces.shortcut.unavailableMessage : null;
   const setDialog = useSetAtom(captureDialogAtom);
   const [setting, setSetting] = useState<CaptureShortcutSetting | null>(null);
   const [recording, setRecording] = useState(false);
@@ -118,59 +130,83 @@ export default function CaptureSettings() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className={ROW}>
-        <div className="flex min-w-0 items-start gap-3">
-          <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-grey-10 dark:text-white">Capture shortcut</p>
-            <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-              {recording
-                ? "Press the new shortcut, with Command, Control or Option. Esc cancels."
-                : "Opens the capture bar from any app, to take a screenshot or start a recording."}
-            </p>
-            {(error ?? problem) && (
-              <p role="alert" className="mt-1 text-sm text-error-50">
-                {error ?? problem}
+      {surfaces?.systemPickerNote && (
+        <div className={ROW}>
+          <div className="flex min-w-0 items-start gap-3">
+            <ScanEye className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-grey-10 dark:text-white">Screenshots</p>
+              <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">{surfaces.systemPickerNote}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shortcutUnavailable ? (
+        <div className={ROW}>
+          <div className="flex min-w-0 items-start gap-3">
+            <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-grey-50 dark:text-grey-dark-600" strokeWidth={2} />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-grey-10 dark:text-white">Capture shortcut</p>
+              <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">{shortcutUnavailable}</p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className={ROW}>
+          <div className="flex min-w-0 items-start gap-3">
+            <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-grey-10 dark:text-white">Capture shortcut</p>
+              <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+                {recording
+                  ? "Press the new shortcut, with Command, Control or Option. Esc cancels."
+                  : "Opens the capture bar from any app, to take a screenshot or start a recording."}
               </p>
+              {(error ?? problem) && (
+                <p role="alert" className="mt-1 text-sm text-error-50">
+                  {error ?? problem}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {recording && held ? (
+              <span aria-live="polite">
+                <ShortcutKeys keys={acceleratorKeys(held, mac)} size="md" />
+              </span>
+            ) : recording ? (
+              <span aria-live="polite" className={`${KBD} animate-pulse motion-reduce:animate-none`}>
+                Waiting…
+              </span>
+            ) : current ? (
+              <ShortcutKeys keys={current} size="md" />
+            ) : (
+              <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
+            )}
+            <Button
+              variant="defaultStable"
+              size="sm"
+              onClick={() => {
+                setError(null);
+                setRecording((r) => !r);
+              }}
+            >
+              {recording ? "Cancel" : "Change"}
+            </Button>
+            {!recording && !isDefault && (
+              <Button variant="defaultStable" size="sm" onClick={() => void save(setting?.defaultAccelerator ?? null)}>
+                Reset
+              </Button>
+            )}
+            {!recording && current && (
+              <Button variant="defaultStable" size="sm" onClick={() => void save(null)}>
+                Turn off
+              </Button>
             )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {recording && held ? (
-            <span aria-live="polite">
-              <ShortcutKeys keys={acceleratorKeys(held, mac)} size="md" />
-            </span>
-          ) : recording ? (
-            <span aria-live="polite" className={`${KBD} animate-pulse motion-reduce:animate-none`}>
-              Waiting…
-            </span>
-          ) : current ? (
-            <ShortcutKeys keys={current} size="md" />
-          ) : (
-            <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
-          )}
-          <Button
-            variant="defaultStable"
-            size="sm"
-            onClick={() => {
-              setError(null);
-              setRecording((r) => !r);
-            }}
-          >
-            {recording ? "Cancel" : "Change"}
-          </Button>
-          {!recording && !isDefault && (
-            <Button variant="defaultStable" size="sm" onClick={() => void save(setting?.defaultAccelerator ?? null)}>
-              Reset
-            </Button>
-          )}
-          {!recording && current && (
-            <Button variant="defaultStable" size="sm" onClick={() => void save(null)}>
-              Turn off
-            </Button>
-          )}
-        </div>
-      </div>
+      )}
 
       <div className={ROW}>
         <div className="flex min-w-0 items-start gap-3">

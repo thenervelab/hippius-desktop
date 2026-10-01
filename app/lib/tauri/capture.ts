@@ -111,7 +111,12 @@ export interface CaptureSurfaces {
   microphoneUnavailableMessage: string | null;
   /** What to check when an iPhone is not in the camera or microphone menu (macOS); null elsewhere. */
   continuityHint: string | null;
-  shortcut: { supported: boolean; via: CaptureShortcutVia };
+  /** `unavailableMessage`: where there is no shortcut yet, Rust's line for what to use instead. */
+  shortcut: { supported: boolean; via: CaptureShortcutVia; unavailableMessage: string | null };
+  /** With the system picker, Rust's line saying the desktop's own tool chooses what is captured. */
+  systemPickerNote: string | null;
+  /** Which Linux session this is; null off Linux. */
+  linuxSession: "x11" | "wayland" | null;
 }
 
 export interface CaptureOverlayContext extends RecordingAvailability, CaptureSurfaces {

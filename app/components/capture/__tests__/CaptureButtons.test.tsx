@@ -3,13 +3,15 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 
-import CaptureButtons, { screenshotTooltip } from "../CaptureButtons";
+import CaptureButtons, { SYSTEM_PICKER_LABEL, screenshotTooltip } from "../CaptureButtons";
 import {
   captureDialogAtom,
   captureModesAtom,
   captureRecordingAtom,
   captureSupportedAtom,
+  captureSurfacesAtom,
 } from "@/app/lib/capture/captureFlow";
+import type { CaptureSurfaces } from "@/app/lib/tauri/capture";
 import { offeredModes, supportedModesOf, type SupportedModes } from "@/app/lib/capture/modes";
 import { recordAvailability, RECORDING_UNAVAILABLE_REASON } from "@/app/lib/capture/recordAvailability";
 
@@ -44,13 +46,15 @@ function renderWith(
     supported = true,
     recording = true,
     modes = null,
-  }: { supported?: boolean; recording?: boolean; modes?: SupportedModes | null } = {},
+    surfaces = null,
+  }: { supported?: boolean; recording?: boolean; modes?: SupportedModes | null; surfaces?: CaptureSurfaces | null } = {},
   props: Parameters<typeof CaptureButtons>[0] = {},
 ) {
   const store = createStore();
   store.set(captureSupportedAtom, supported);
   store.set(captureRecordingAtom, recording);
   store.set(captureModesAtom, modes);
+  store.set(captureSurfacesAtom, surfaces);
   const view = render(
     <Provider store={store}>
       <CaptureButtons {...props} />
@@ -228,6 +232,49 @@ describe("CaptureButtons", () => {
     for (const name of ["Screenshot", "Record"]) {
       expect(screen.getByRole("button", { name }).className).toContain("h-[26px]");
     }
+  });
+});
+
+/** Rust's surfaces on a Wayland session, as `capture_support` answers them. */
+const WAYLAND: CaptureSurfaces = {
+  selection: "systemPicker",
+  modes: { screenshot: [], recording: ["window", "screen"] },
+  screenshotTimer: false,
+  systemAudio: false,
+  microphoneUnavailableMessage: "Recording the microphone isn't available on this system yet",
+  continuityHint: null,
+  shortcut: {
+    supported: false,
+    via: "desktopSettings",
+    unavailableMessage: "A capture shortcut isn't available on Linux yet.",
+  },
+  systemPickerNote: "Your desktop's screenshot tool opens, so you can choose an area, a window or a whole screen there.",
+  linuxSession: "wayland",
+};
+
+describe("CaptureButtons where the desktop's own tool chooses (Wayland)", () => {
+  beforeEach(() => {
+    mac = false;
+  });
+
+  it("offers one Screenshot item that hands the choice to the desktop, and says so", async () => {
+    renderWith({ recording: false, surfaces: WAYLAND });
+    const menu = await openMenu("Screenshot");
+    expect(itemNames()).toEqual([SYSTEM_PICKER_LABEL, "Change capture drive…"]);
+    expect(menu).toHaveTextContent(WAYLAND.systemPickerNote!);
+    // No capture bar to open: there is no Hippius overlay on Wayland.
+    expect(screen.queryByRole("menuitem", { name: /capture bar/i })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: SYSTEM_PICKER_LABEL }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_start", { kind: "screenshot", mode: null }));
+  });
+
+  it("shows no shortcut where Rust says there is none", async () => {
+    renderWith({ recording: false, surfaces: { ...WAYLAND, selection: "overlay", linuxSession: "x11" } });
+    const button = screen.getByRole("button", { name: "Screenshot" });
+    expect(button).toHaveAttribute("title", "Take a screenshot");
+    await openMenu("Screenshot");
+    expect(screen.getByRole("menuitem", { name: /capture bar/i })).not.toHaveTextContent("Ctrl");
+    expect(invoke).not.toHaveBeenCalledWith("capture_get_shortcut");
   });
 });
 

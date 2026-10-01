@@ -95,10 +95,10 @@ const SYNC_FOLLOW_LIMIT: std::time::Duration = std::time::Duration::from_hours(2
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
-/// Whether this build can capture screenshots at all. Linux screenshots go
-/// through the desktop portal in a follow-up, so the surfaces hide themselves
-/// there.
-pub const CAPTURE_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
+/// Whether this build can capture screenshots at all: macOS and Windows
+/// through xcap, Linux through x11rb on X11 and the desktop's screenshot
+/// portal on Wayland (`linux_x11`, `linux_portal`).
+pub const CAPTURE_SUPPORTED: bool = cfg!(any(target_os = "macos", windows, target_os = "linux"));
 
 /// Whether screenshots are offered here: built for this platform, and the
 /// platform is on this build's lane (`rollout`). Every surface asks this, so
@@ -662,6 +662,7 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         None => options.last_kind,
     };
     let mode = mode.unwrap_or(options.last_mode);
+    let plan = super::support::start_plan(&super::support::surfaces(), kind);
 
     match advance(&app, &state.capture, CaptureEvent::Start { kind, mode }) {
         Ok(_) => {}
@@ -682,10 +683,22 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
 
     bring_back_failed_card(&app, &state.capture);
     hide_own_windows(&app, &state.capture).await;
-    // Below Windows 10 2004 nothing can be kept out of a capture; each
-    // overlay also checks for itself as it opens (`open_overlay`).
+    if plan == super::support::StartPlan::SystemPicker {
+        // Wayland: no overlay and no bar. The desktop's own screenshot tool
+        // chooses; the card is prepared hidden meanwhile, as for an overlay.
+        if let Err(e) = open_preview_window(&app, None) {
+            tracing::warn!(error = %e, "capture preview card not prepared");
+        }
+        show_card_if_any(&app, &state.capture);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { system_picker_screenshot(&app).await });
+        return Ok(());
+    }
+    // Below Windows 10 2004, and anywhere on Linux (X11 has no content
+    // protection), nothing can be kept out of a capture; each overlay also
+    // checks for itself as it opens (`open_overlay`).
     state.capture.ui_in_grabs.store(
-        !super::permissions::windows_excludes_from_capture(super::permissions::windows_build()),
+        cfg!(target_os = "linux") || !super::permissions::windows_excludes_from_capture(super::permissions::windows_build()),
         Ordering::SeqCst,
     );
     if let Err(e) = open_capture_ui(&app, &state.capture, &areas).await {
@@ -780,17 +793,23 @@ fn cursor_point(app: &AppHandle, _displays: &[DisplayTarget]) -> Option<(f64, f6
     app.cursor_position().ok().map(|p| (p.x, p.y))
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+/// X11: the pointer in root pixels, the space RandR places the displays in.
+#[cfg(target_os = "linux")]
+fn cursor_point(_app: &AppHandle, _displays: &[DisplayTarget]) -> Option<(f64, f64)> {
+    super::linux_x11::cursor_point()
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn cursor_point(_app: &AppHandle, _displays: &[DisplayTarget]) -> Option<(f64, f64)> {
     None
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn list_displays_blocking() -> Result<Vec<DisplayTarget>> {
     super::targets::list_displays()
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn list_displays_blocking() -> Result<Vec<DisplayTarget>> {
     Ok(Vec::new())
 }
@@ -816,11 +835,16 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool)
     // if it did not hold, this session's screenshot closes the overlays
     // first rather than photographing the dimmed selection UI.
     if !kept_out_of_captures(&window) {
-        tracing::warn!(
-            build = ?super::permissions::windows_build(),
-            "the capture overlay is not excluded from screen captures here; overlays will close before the grab"
-        );
-        app.state::<AppState>().capture.ui_in_grabs.store(true, Ordering::SeqCst);
+        let capture = &app.state::<AppState>().capture;
+        // Linux knows from the start (no content protection there); only a
+        // surprise is worth a warning.
+        if !capture.ui_in_grabs.load(Ordering::SeqCst) {
+            tracing::warn!(
+                build = ?super::permissions::windows_build(),
+                "the capture overlay is not excluded from screen captures here; overlays will close before the grab"
+            );
+        }
+        capture.ui_in_grabs.store(true, Ordering::SeqCst);
     }
 
     // Placed after building, in the display's own space: points on macOS,
@@ -838,11 +862,27 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool)
     window
         .show()
         .map_err(|e| AppError::Other(format!("Could not show the capture overlay: {e}")))?;
+    cover_whole_display(&window);
     if hosts_bar {
         let _ = window.set_focus();
     }
     Ok(())
 }
+
+/// X11 window managers keep an ordinary window clear of the panels (GNOME's
+/// top bar, KDE's panel), so an overlay sized to the display would be pushed
+/// down and every area read back shifted by the panel's height. A
+/// full-screen window covers the whole monitor it is on, panels included,
+/// and its (0, 0) is the display's. Elsewhere the overlay's level does it.
+#[cfg(target_os = "linux")]
+fn cover_whole_display(window: &tauri::WebviewWindow) {
+    if let Err(e) = window.set_fullscreen(true) {
+        tracing::warn!(error = %e, "capture overlay not made full screen; it may stop short of the panels");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cover_whole_display(_window: &tauri::WebviewWindow) {}
 
 fn build_overlay(app: &AppHandle, label: &str, display: &DisplayTarget) -> Result<tauri::WebviewWindow> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -1577,7 +1617,7 @@ pub async fn capture_destination_choices(state: tauri::State<'_, AppState>) -> R
     destination::choices(state.pool()?, &account_id).await
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn windows_on_display_blocking(display_id: u32) -> Result<Vec<WindowTarget>> {
     let display = super::targets::list_displays()?
         .into_iter()
@@ -1586,7 +1626,7 @@ fn windows_on_display_blocking(display_id: u32) -> Result<Vec<WindowTarget>> {
     super::targets::windows_on_display(&display)
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn windows_on_display_blocking(_display_id: u32) -> Result<Vec<WindowTarget>> {
     Ok(Vec::new())
 }
@@ -1692,7 +1732,7 @@ pub fn capture_share_done(state: tauri::State<'_, AppState>, token: u64) {
 
 /// The picture taking runs on its own thread: it is all blocking system calls,
 /// and it outlives the command that started it (the refreshes).
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn spawn_share_thread(app: &AppHandle, token: u64, first: share::ShareTab, tx: tokio::sync::mpsc::UnboundedSender<share::ShareMessage>) {
     let keep = app.clone();
     let icons_app = app.clone();
@@ -1709,7 +1749,7 @@ fn spawn_share_thread(app: &AppHandle, token: u64, first: share::ShareTab, tx: t
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn spawn_share_thread(_app: &AppHandle, _token: u64, _first: share::ShareTab, tx: tokio::sync::mpsc::UnboundedSender<share::ShareMessage>) {
     let _ = tx.send(share::ShareMessage::List(Err(AppError::Validation(
         "Screen capture isn't available on this system yet.".into(),
@@ -1734,7 +1774,9 @@ fn app_icons(app: &AppHandle, pids: &[u32]) -> HashMap<u32, String> {
     rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap_or_default()
 }
 
-#[cfg(windows)]
+/// No app icons on the picker's tiles off macOS yet; the tile shows the
+/// app's name.
+#[cfg(any(windows, target_os = "linux"))]
 fn app_icons(_app: &AppHandle, _pids: &[u32]) -> HashMap<u32, String> {
     HashMap::new()
 }
@@ -1822,6 +1864,79 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(())
+}
+
+/// A screenshot through the desktop's own screenshot tool (Wayland). The
+/// session is `Capturing` while the tool is open: the tool is the selection.
+/// Cancelling in the tool ends the session as a cancel (no toast, no failed
+/// card); anything else that goes wrong ends in [`fail_capture`].
+async fn system_picker_screenshot(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if advance(app, &state.capture, CaptureEvent::Selected).is_err() {
+        // Ended meanwhile (signed out): nothing was asked yet.
+        return;
+    }
+    match take_with_system_picker(app).await {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = advance(app, &state.capture, CaptureEvent::Cancel);
+            drop_unused_preview(app, &state.capture);
+            restore_main_window(app, &state.capture);
+            hand_focus_back(app, &state.capture);
+        }
+        Err(e) => fail_capture(app, &e).await,
+    }
+}
+
+/// Ask the portal, move its file into a fresh capture folder under the
+/// Hippius name, show the card, and start delivery. `Ok(false)` = the user
+/// cancelled in the desktop's tool.
+async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
+    let state = app.state::<AppState>();
+    let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
+    let answer = super::linux_portal::request().await;
+    let settled = {
+        let dir = dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            // Named for when it was taken, not when the tool opened.
+            let name = super::naming::capture_file_name(CaptureKind::Screenshot, chrono::Local::now().naive_local());
+            let shot = super::linux_portal::settle(answer, &dir.join(name))?;
+            Ok::<_, AppError>(match shot {
+                super::linux_portal::PortalShot::Taken { path, image } => {
+                    let thumbnail = image.and_then(|i| super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(i)).ok());
+                    Some((path, thumbnail))
+                }
+                super::linux_portal::PortalShot::Cancelled => None,
+            })
+        })
+        .await
+        .map_err(|e| AppError::Other(format!("capture task failed: {e}")))
+        .and_then(|r| r)
+    };
+    let (path, thumbnail) = match settled {
+        Ok(Some(taken)) => taken,
+        Ok(None) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Ok(false);
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+    };
+    restore_main_window(app, &state.capture);
+    let card_id = open_preview(app, CaptureKind::Screenshot, &path, thumbnail).await;
+    // The session ends here: the file exists, and the card owns the upload.
+    if let Err(e) = advance(app, &state.capture, CaptureEvent::Captured) {
+        let _ = std::fs::remove_dir_all(&dir);
+        close_preview(app, &state.capture);
+        return Err(e);
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        deliver_and_announce(&app, &path, card_id).await;
+    });
+    Ok(true)
 }
 
 /// Start the recorder on `selection`. Failures return to the caller, which
@@ -1997,9 +2112,16 @@ fn kept_out_of_captures(window: &tauri::WebviewWindow) -> bool {
     read.is_ok() && affinity == WDA_EXCLUDEFROMCAPTURE.0
 }
 
-#[cfg(not(windows))]
+/// macOS's `sharingType = none` holds wherever the app runs.
+#[cfg(target_os = "macos")]
 fn kept_out_of_captures(_window: &tauri::WebviewWindow) -> bool {
     true
+}
+
+/// Linux has no content protection: X11 reads whatever is on screen.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn kept_out_of_captures(_window: &tauri::WebviewWindow) -> bool {
+    false
 }
 
 /// Give the compositor two frames to take closed windows off the screen
@@ -2016,7 +2138,14 @@ fn settle_compositor() {
     }
 }
 
-#[cfg(not(windows))]
+/// X11: no portable "the compositor has redrawn" signal, so wait out a
+/// couple of frames (`linux_x11::COMPOSITOR_SETTLE`, spike L1).
+#[cfg(target_os = "linux")]
+fn settle_compositor() {
+    std::thread::sleep(super::linux_x11::COMPOSITOR_SETTLE);
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn settle_compositor() {}
 
 /// The screenshot in memory, its card picture, and where it will be written.
@@ -2046,12 +2175,12 @@ async fn take_screenshot(selection: Selection, clear: bool) -> Result<(image::Rg
     }
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn capture_blocking(selection: Selection) -> Result<image::RgbaImage> {
     super::screenshot::capture_image(selection)
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn capture_blocking(_selection: Selection) -> Result<image::RgbaImage> {
     Err(AppError::Validation("Screen capture isn't available on this system yet.".into()))
 }

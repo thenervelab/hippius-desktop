@@ -10,6 +10,8 @@ pub mod deliver;
 pub mod destination;
 pub mod device_watch;
 pub mod geometry;
+pub mod linux_portal;
+pub mod linux_x11;
 pub mod mic_meter;
 pub mod naming;
 pub mod permission_flow;

@@ -16,12 +16,13 @@ vi.mock("@/app/lib/capture/shortcutLabel", async (importOriginal) => ({
 }));
 
 import CaptureSettings from "../CaptureSettings";
-import { captureRecordingNoteAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import { captureRecordingNoteAtom, captureSupportedAtom, captureSurfacesAtom } from "@/app/lib/capture/captureFlow";
+import type { CaptureSurfaces } from "@/app/lib/tauri/capture";
 
 const DEFAULT = "CommandOrControl+Shift+2";
 let accelerator: string | null = DEFAULT;
 
-function setup(recordingNote: string | null = null) {
+function setup(recordingNote: string | null = null, surfaces: CaptureSurfaces | null = null) {
   tauri.onInvoke("capture_get_shortcut", () => ({ accelerator, defaultAccelerator: DEFAULT }));
   tauri.onInvoke("capture_get_destination", () => ({ label: "Work", displayName: "Work" }));
   tauri.onInvoke("capture_set_shortcut", (args) => {
@@ -31,6 +32,7 @@ function setup(recordingNote: string | null = null) {
   const store = createStore();
   store.set(captureSupportedAtom, true);
   store.set(captureRecordingNoteAtom, recordingNote);
+  store.set(captureSurfacesAtom, surfaces);
   return render(
     <Provider store={store}>
       <CaptureSettings />
@@ -143,5 +145,43 @@ describe("the capture card's recording row", () => {
     setup(null);
     await screen.findByText("Capture drive");
     expect(screen.queryByText("Screen recording")).toBeNull();
+  });
+});
+
+describe("the capture card on Linux", () => {
+  const LINUX_SHORTCUT = "A capture shortcut isn't available on Linux yet. Use the Screenshot button in Hippius or the Capture button in the tray menu.";
+  const linux = (over: Partial<CaptureSurfaces> = {}): CaptureSurfaces => ({
+    selection: "overlay",
+    modes: { screenshot: ["area", "window", "screen"], recording: ["area", "window", "screen"] },
+    screenshotTimer: true,
+    systemAudio: false,
+    microphoneUnavailableMessage: null,
+    continuityHint: null,
+    shortcut: { supported: false, via: "plugin", unavailableMessage: LINUX_SHORTCUT },
+    systemPickerNote: null,
+    linuxSession: "x11",
+    ...over,
+  });
+
+  /** A shortcut that would be saved but never fire is not offered. */
+  it("says what to use instead of a shortcut, with nothing to change", async () => {
+    setup(null, linux());
+    expect(await screen.findByText(LINUX_SHORTCUT)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Turn off" })).toBeNull();
+    // The drive row's Change is the only one left.
+    expect(screen.getAllByRole("button", { name: /Change|Choose/ })).toHaveLength(1);
+  });
+
+  it("says on Wayland that the desktop's own tool takes the screenshot", async () => {
+    const note = "Your desktop's screenshot tool opens, so you can choose an area, a window or a whole screen there.";
+    setup(null, linux({ selection: "systemPicker", systemPickerNote: note, linuxSession: "wayland" }));
+    expect(await screen.findByText(note)).toBeInTheDocument();
+    expect(screen.getByText("Screenshots")).toBeInTheDocument();
+  });
+
+  it("keeps the shortcut controls where the shortcut works", async () => {
+    setup(null, linux({ shortcut: { supported: true, via: "plugin", unavailableMessage: null } }));
+    expect(await screen.findByRole("button", { name: "Turn off" })).toBeInTheDocument();
+    expect(screen.queryByText(LINUX_SHORTCUT)).toBeNull();
   });
 });

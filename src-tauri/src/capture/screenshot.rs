@@ -229,6 +229,11 @@ mod os {
 #[cfg(any(target_os = "macos", windows))]
 pub use os::capture_image;
 
+/// Linux X11 reads the root window (`linux_x11`); a Wayland screenshot never
+/// comes here, it is the desktop portal's file (`linux_portal`).
+#[cfg(target_os = "linux")]
+pub use super::linux_x11::capture_image;
+
 /// Write a screenshot as a PNG. Fast compression: a Retina screenshot at the
 /// default level took most of a second, which the user waited through before
 /// the card appeared; the file is a little larger and loses nothing.

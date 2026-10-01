@@ -126,6 +126,17 @@ jobs:
           SQLX_OFFLINE: "true"
         run: cargo test
 
+      # Linux X11 screenshots against a real X server: the displays RandR
+      # lists and a grab of the root window (capture::linux_x11). Xvfb has
+      # RandR; the test is #[ignore]d so a plain `cargo test` stays hermetic.
+      - name: X11 capture under Xvfb
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb
+          xvfb-run -a cargo test --lib capture::linux_x11 -- --ignored
+
   rust-macos:
     # The macOS lane is the slow one (up to ~50 min cold), so run it only on
     # PROMOTION PRs (into beta/main) and on pushes to the three lane branches.
