@@ -709,8 +709,8 @@ fn the_bubble_is_filmed_with_a_window_recording() {
     let close = sync.find("window.close()").expect("the close arm");
     assert!(hide < close && sync[hide..close].contains("window.hide()"));
 
-    let macos = read("src/capture/recording/macos.rs");
-    assert!(macos.contains("camera_window_id: Option<u32>"));
+    let protocol = read("src/capture/recording/protocol.rs");
+    assert!(protocol.contains("pub camera_window_id: Option<u32>"));
     let swift = read("../macos/HippiusCapture/Sources/main.swift");
     assert!(swift.contains(r#"intU32(obj["cameraWindowId"])"#), "the helper reads the camera window");
     assert!(
@@ -736,4 +736,102 @@ fn a_recording_has_one_audio_track() {
     );
     let src = read("src/capture/commands.rs");
     assert!(fn_body(&src, "async fn begin_recording(").contains("system_audio: saved.system_audio"));
+}
+
+/// The recorder child is the app's own executable. If `main` reached the
+/// builder first, every recording would open a second window, tray and
+/// single-instance handler (which would hand the argv to the running app and
+/// exit), so the branch must come before all of it.
+#[test]
+fn the_recorder_child_branches_before_the_app_boots() {
+    let main = read("src/main.rs");
+    let body = fn_body(&main, "fn main()");
+    let branch = body.find("argv_requests_recorder(").expect("main branches into the recorder child");
+    for later in ["load_env()", "init_logging()", "Builder::default()"] {
+        let at = body.find(later).unwrap_or_else(|| panic!("main calls {later}"));
+        assert!(branch < at, "the recorder child must branch before {later}");
+    }
+    assert!(body[branch..].contains("recorder_child::run("), "the branch runs the recorder child");
+}
+
+/// Windows and Linux record with this executable in recorder mode, and the
+/// flag the app passes is the one `main` looks for.
+#[test]
+fn the_app_starts_its_recorder_with_the_flag_main_looks_for() {
+    let helper = read("src/capture/recording/helper.rs");
+    assert!(fn_body(&helper, "pub fn own_recorder_command(").contains("recorder_child::RECORDER_FLAG"));
+    let cli = read("src/cli.rs");
+    assert!(fn_body(&cli, "pub fn argv_requests_recorder<").contains("recorder_child::RECORDER_FLAG"));
+    let child = read("src/capture/recorder_child/mod.rs");
+    assert!(child.contains("pub const RECORDER_FLAG: &str = \"--capture-recorder\";"));
+    for platform in ["src/capture/recording/windows.rs", "src/capture/recording/linux.rs"] {
+        assert!(
+            fn_body(&read(platform), "pub fn helper_command(").contains("own_recorder_command()"),
+            "{platform} records with the app's own executable"
+        );
+    }
+}
+
+/// On Windows, content protection is `SetWindowDisplayAffinity`, whose
+/// failure tao discards. Every overlay reads its affinity back, and a
+/// session where it did not hold clears the screen before the grab, or the
+/// screenshot is of the dimmed selection UI.
+#[test]
+fn windows_overlays_check_that_they_are_kept_out_of_the_shot() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "async fn open_overlay(");
+    assert!(open.contains("kept_out_of_captures(&window)"), "every overlay checks its affinity");
+    assert!(open.contains("ui_in_grabs.store(true"), "a failed check is remembered for the grab");
+    let check = fn_body(&src, "fn kept_out_of_captures(window: &tauri::WebviewWindow) -> bool {");
+    assert!(check.contains("GetWindowDisplayAffinity") && check.contains("WDA_EXCLUDEFROMCAPTURE"));
+    let start = fn_body(&src, "pub async fn capture_start(");
+    assert!(
+        start.contains("windows_excludes_from_capture("),
+        "below Windows 10 2004 every session clears the screen first"
+    );
+    let finish = fn_body(&src, "async fn finish_screenshot(");
+    let cleared = finish.find("clear_screen_for_grab(").expect("the screen is cleared when needed");
+    let grab = finish.find("take_screenshot(").expect("finish_screenshot grabs");
+    assert!(cleared < grab, "the screen is cleared before the grab");
+    let take = fn_body(&src, "async fn take_screenshot(");
+    let settle = take.find("settle_compositor()").expect("the compositor is settled");
+    assert!(settle < take.find("capture_blocking(").unwrap(), "settled before the pixels are read");
+    let clear = fn_body(&src, "async fn clear_screen_for_grab(");
+    assert!(clear.contains("PREVIEW_LABEL") && clear.contains(".hide()"), "the card is hidden too");
+    assert!(clear.contains("OVERLAY_LABEL_PREFIX"), "the overlays are waited out");
+}
+
+/// Windows window shots go through Windows.Graphics.Capture (xcap `wgc`):
+/// GDI returns only part of a DPI-unaware app's window on a scaled monitor.
+#[test]
+fn windows_screenshots_use_windows_graphics_capture() {
+    let manifest = read("Cargo.toml");
+    assert!(
+        manifest.contains(r#"xcap = { version = "0.9", features = ["wgc"] }"#),
+        "xcap must be built with its wgc feature"
+    );
+}
+
+/// Screenshots and recording follow the per-platform rollout, so a platform
+/// still on staging is simply unsupported on beta and production.
+#[test]
+fn capture_follows_the_rollout_gate() {
+    let src = read("src/capture/commands.rs");
+    assert!(fn_body(&src, "pub fn capture_supported()").contains("rollout::allows(super::rollout::Feature::Screenshots)"));
+    assert!(fn_body(&src, "pub async fn capture_start(").contains("!capture_supported()"));
+    assert!(fn_body(&src, "pub fn capture_support()").contains("supported: capture_supported()"));
+    let recording = read("src/capture/recording/mod.rs");
+    assert!(fn_body(&recording, "pub fn recording_unavailable()").contains("rollout::allows(super::rollout::Feature::Recording)"));
+}
+
+/// Camera only on a platform that cannot record says so in the recording's
+/// own words before looking for the camera window (whose absence would read
+/// as "try again in a moment", which never helps).
+#[test]
+fn camera_only_refuses_with_the_recording_line_first() {
+    let src = read("src/capture/commands.rs");
+    let confirm = fn_body(&src, "pub async fn capture_confirm(");
+    let refusal = confirm.find("recording::recording_unavailable()").expect("checks recording first");
+    let lookup = confirm.find("camera_window_id(").expect("looks for the camera");
+    assert!(refusal < lookup);
 }

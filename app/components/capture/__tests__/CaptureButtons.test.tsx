@@ -241,9 +241,10 @@ describe("offeredModes", () => {
     expect(offeredModes("recording", { recording: ["screen", "area"] })).toEqual(["area", "screen"]);
   });
 
-  it("reads modes from a support answer only when it has them", () => {
-    expect(supportedModesOf({ supported: true })).toBeNull();
-    expect(supportedModesOf({ modes: { screenshot: ["area"] } })).toEqual({ screenshot: ["area"] });
+  it("reads Rust's modes from a support answer", () => {
+    const modes = { screenshot: ["area" as const], recording: ["screen" as const] };
+    expect(supportedModesOf({ modes })).toEqual(modes);
+    expect(supportedModesOf({})).toBeNull();
     expect(supportedModesOf(null)).toBeNull();
   });
 });

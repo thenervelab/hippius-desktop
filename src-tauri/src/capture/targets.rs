@@ -30,11 +30,11 @@ pub struct DisplayTarget {
 impl DisplayTarget {
     /// The display's width in logical points — the overlay's CSS width.
     pub fn logical_width(&self) -> f64 {
-        to_logical(f64::from(self.width), self.scale_factor)
+        to_logical_on(COORDS_ARE_LOGICAL, f64::from(self.width), self.scale_factor)
     }
 
     pub fn logical_height(&self) -> f64 {
-        to_logical(f64::from(self.height), self.scale_factor)
+        to_logical_on(COORDS_ARE_LOGICAL, f64::from(self.height), self.scale_factor)
     }
 }
 
@@ -69,8 +69,12 @@ const MIN_PICKABLE_POINTS: f64 = 40.0;
 /// would pick. macOS lists the menu bar, Dock and Control Center this way.
 const SYSTEM_OWNERS: &[&str] = &["Window Server", "Dock", "Control Center", "Notification Center", "SystemUIServer"];
 
-fn to_logical(native: f64, scale_factor: f64) -> f64 {
-    if COORDS_ARE_LOGICAL || scale_factor <= 0.0 {
+/// Native units to logical points: unchanged where the platform is already
+/// in points (macOS), divided by the display's OWN scale where it is in
+/// physical pixels (Windows). Per display, never the primary's: in a mixed
+/// setup (a 150 % laptop beside a 100 % monitor) each display has its own.
+fn to_logical_on(coords_are_logical: bool, native: f64, scale_factor: f64) -> f64 {
+    if coords_are_logical || scale_factor <= 0.0 {
         native
     } else {
         native / scale_factor
@@ -80,6 +84,12 @@ fn to_logical(native: f64, scale_factor: f64) -> f64 {
 /// Where `frame` sits on `display`, in the display's local logical points,
 /// clipped to the display. `None` when no part of it is on this display.
 pub fn window_rect_on_display(frame: NativeFrame, display: &DisplayTarget) -> Option<LogicalRect> {
+    window_rect_on_display_on(COORDS_ARE_LOGICAL, frame, display)
+}
+
+/// [`window_rect_on_display`] with the platform's coordinate space passed
+/// in, so the Windows (physical pixel) maths is tested on every OS.
+fn window_rect_on_display_on(coords_are_logical: bool, frame: NativeFrame, display: &DisplayTarget) -> Option<LogicalRect> {
     let left = i64::from(frame.x).max(i64::from(display.x));
     let top = i64::from(frame.y).max(i64::from(display.y));
     let right = (i64::from(frame.x) + i64::from(frame.width)).min(i64::from(display.x) + i64::from(display.width));
@@ -91,11 +101,12 @@ pub fn window_rect_on_display(frame: NativeFrame, display: &DisplayTarget) -> Op
     #[allow(clippy::cast_precision_loss)]
     let native = |v: i64| v as f64;
     let scale = display.scale_factor;
+    let logical = |v: i64| to_logical_on(coords_are_logical, native(v), scale);
     Some(LogicalRect {
-        x: to_logical(native(left - i64::from(display.x)), scale),
-        y: to_logical(native(top - i64::from(display.y)), scale),
-        width: to_logical(native(right - left), scale),
-        height: to_logical(native(bottom - top), scale),
+        x: logical(left - i64::from(display.x)),
+        y: logical(top - i64::from(display.y)),
+        width: logical(right - left),
+        height: logical(bottom - top),
     })
 }
 
@@ -259,6 +270,64 @@ mod tests {
         } else {
             assert_eq!((rect.x, rect.width), (100.0, 400.0));
         }
+    }
+
+    // ── Windows: physical pixels, a scale per display ──────────────────────
+
+    /// A 150 % laptop (2880 x 1800 physical, 1920 x 1200 points) left of a
+    /// 100 % monitor. Windows reports both in physical pixels, each monitor
+    /// at its own origin; the overlay on each draws in its own points.
+    #[test]
+    fn a_mixed_dpi_pair_places_windows_in_each_displays_own_points() {
+        let laptop = display(0, 0, 2880, 1800, 1.5);
+        let monitor = display(2880, 0, 1920, 1080, 1.0);
+        let on_laptop = window_rect_on_display_on(false, frame(300, 150, 1500, 900), &laptop).unwrap();
+        assert_eq!(
+            (on_laptop.x, on_laptop.y, on_laptop.width, on_laptop.height),
+            (200.0, 100.0, 1000.0, 600.0)
+        );
+        let on_monitor = window_rect_on_display_on(false, frame(3080, 100, 800, 600), &monitor).unwrap();
+        assert_eq!(
+            (on_monitor.x, on_monitor.y, on_monitor.width, on_monitor.height),
+            (200.0, 100.0, 800.0, 600.0)
+        );
+        assert!((laptop.scale_factor - 1.5).abs() < f64::EPSILON);
+    }
+
+    /// The reverse: a 100 % monitor on the left, the 150 % laptop to its
+    /// right. A window straddling the seam is clipped to each and each part
+    /// is divided by its own display's scale.
+    #[test]
+    fn a_window_straddling_a_mixed_dpi_seam_is_scaled_per_side() {
+        let monitor = display(0, 0, 1920, 1080, 1.0);
+        let laptop = display(1920, 0, 2880, 1800, 1.5);
+        let straddling = frame(1620, 60, 900, 600);
+        let left = window_rect_on_display_on(false, straddling, &monitor).unwrap();
+        let right = window_rect_on_display_on(false, straddling, &laptop).unwrap();
+        assert_eq!((left.x, left.width), (1620.0, 300.0));
+        assert_eq!((right.x, right.y, right.width, right.height), (0.0, 40.0, 400.0, 400.0));
+    }
+
+    /// A monitor ABOVE the primary has a negative y; windows on it are still
+    /// placed from its own top-left.
+    #[test]
+    fn a_display_above_the_primary_places_windows_locally() {
+        let above = display(-320, -1440, 2560, 1440, 1.25);
+        let rect = window_rect_on_display_on(false, frame(-70, -1190, 1000, 500), &above).unwrap();
+        assert_eq!((rect.x, rect.y, rect.width, rect.height), (200.0, 200.0, 800.0, 400.0));
+    }
+
+    /// The overlay's CSS size on Windows is the display's physical size over
+    /// its own scale, which is the unit the area crop is read back in.
+    #[test]
+    fn a_displays_logical_size_is_its_pixels_over_its_own_scale() {
+        assert!((to_logical_on(false, 2880.0, 1.5) - 1920.0).abs() < f64::EPSILON);
+        assert!((to_logical_on(false, 3000.0, 1.25) - 2400.0).abs() < f64::EPSILON);
+        assert!(
+            (to_logical_on(true, 1512.0, 2.0) - 1512.0).abs() < f64::EPSILON,
+            "macOS is already in points"
+        );
+        assert!((to_logical_on(false, 1920.0, 0.0) - 1920.0).abs() < f64::EPSILON, "a missing scale is 1");
     }
 
     #[test]

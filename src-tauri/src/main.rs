@@ -243,6 +243,17 @@ fn main() {
         }
     }
 
+    // The capture recorder child (`--capture-recorder`, Windows and Linux):
+    // the app starts its own executable in this mode to record, so a crashing
+    // encoder takes the child and not the app. It speaks JSON on stdin and
+    // stdout and must not start a window, tray, single-instance or deep-link
+    // handler, so it branches before everything else. Pinned by
+    // `tests/capture_wiring.rs`.
+    if crate::cli::argv_requests_recorder(std::env::args().skip(1)) {
+        let code = crate::capture::recorder_child::run(std::env::args().skip(1));
+        std::process::exit(code);
+    }
+
     // `--version` / `-V` must not boot the UI. Inspected *after*
     // `--finder-share` so a file-manager share click still wins if both
     // flags appear. `skip(1)` drops argv[0] so a strangely named binary

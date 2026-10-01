@@ -41,6 +41,12 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
   recordingUnavailableMessage: null,
   microphoneAvailable: true,
   showClicksAvailable: true,
+  selection: "overlay",
+  modes: { screenshot: ["area", "window", "screen"], recording: ["area", "window", "screen"] },
+  screenshotTimer: true,
+  systemAudio: true,
+  microphoneUnavailableMessage: null,
+  shortcut: { supported: true, via: "plugin" },
   cameraOnlyAvailable: true,
   cameraFilmed: true,
   destination: { label: "Work", displayName: "Work" },
@@ -277,9 +283,47 @@ describe("the capture bar's words", () => {
     }
   });
 
-  it("says why the microphone is off below macOS 15, on screen", async () => {
-    setup({ kind: "recording", microphoneAvailable: false });
+  it("says why the microphone is off in Rust's words, on screen", async () => {
+    setup({
+      kind: "recording",
+      microphoneAvailable: false,
+      microphoneUnavailableMessage: "Recording the microphone needs macOS 15 or later",
+    });
     expect(await screen.findByText("Recording the microphone needs macOS 15 or later")).toBeInTheDocument();
+  });
+
+  // The bar used to hard-code the macOS sentence, which a Windows user would
+  // have read the moment Windows recording shipped.
+  it("never names macOS for the microphone unless Rust does", async () => {
+    setup({
+      kind: "recording",
+      microphoneAvailable: false,
+      microphoneUnavailableMessage: "Recording the microphone isn't available on this system yet",
+    });
+    expect(await screen.findByText("Recording the microphone isn't available on this system yet")).toBeInTheDocument();
+    expect(screen.queryByText(/macOS/)).toBeNull();
+  });
+
+  it("offers only the modes Rust offers", async () => {
+    setup({ modes: { screenshot: ["area", "screen"], recording: ["screen"] } });
+    await screen.findByRole("radio", { name: "Capture an area" });
+    expect(screen.queryByRole("radio", { name: "Capture a window" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "Record entire screen" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Record an area" })).toBeNull();
+  });
+
+  it("leaves the screenshot timer out where Rust says it is not offered", async () => {
+    setup({ screenshotTimer: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Options" }));
+    expect(await screen.findByRole("menu", { name: "Capture options" })).toBeInTheDocument();
+    expect(screen.queryByText("Timer")).toBeNull();
+    expect(screen.getByText("After capture")).toBeInTheDocument();
+  });
+
+  it("offers the screenshot timer where Rust says it is", async () => {
+    setup({ screenshotTimer: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Options" }));
+    expect(await screen.findByText("Timer")).toBeInTheDocument();
   });
 
   it("announces a refusal that replaces the hint", async () => {
@@ -380,6 +424,13 @@ describe("the Options menu", () => {
         options: expect.objectContaining({ systemAudio: true }),
       }),
     );
+  });
+
+  it("offers no system audio where Rust says this platform cannot record it", async () => {
+    setup({ kind: "recording", countdownSecs: 3, systemAudio: false });
+    fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
+    await screen.findByRole("menuitemradio", { name: "3 seconds" });
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Record system audio" })).toBeNull();
   });
 
   it("offers no system audio for a screenshot", async () => {
@@ -566,7 +617,12 @@ describe("click to capture", () => {
   });
 
   it("does not switch to a mode Rust does not offer on this platform", async () => {
-    setup({ mode: "window", pending: null, windows: [FINDER], modes: { screenshot: ["window", "screen"] } } as Partial<CaptureOverlayContext>);
+    setup({
+      mode: "window",
+      pending: null,
+      windows: [FINDER],
+      modes: { screenshot: ["window", "screen"], recording: ["area", "window", "screen"] },
+    });
     await screen.findByRole("toolbar", { name: "Capture" });
     fireEvent.keyDown(window, { key: " " });
     expect(called("capture_set_mode")).toBe(false);

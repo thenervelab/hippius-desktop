@@ -1,5 +1,5 @@
 import { AppWindow, Monitor, SquareDashed } from "lucide-react";
-import type { CaptureKind, CaptureMode, RecordingAvailability } from "@/app/lib/tauri/capture";
+import type { CaptureKind, CaptureMode, CaptureSurfaces, RecordingAvailability } from "@/app/lib/tauri/capture";
 
 /**
  * One vocabulary for the capture modes, on every surface that names them
@@ -29,21 +29,18 @@ export const MENU_MODES: readonly CaptureMode[] = ["area", "window", "screen"];
 
 /**
  * The modes each kind may offer on this platform, as Rust reports them in
- * `capture_support` / the overlay context (`modes`). Absent on a build whose
- * Rust does not report them yet, which offers every mode.
+ * `capture_support` / the overlay context (`modes`, from `support::Surfaces`).
  */
 export type SupportedModes = Partial<Record<CaptureKind, readonly CaptureMode[]>>;
 
-/** `modes` from a `capture_support` or overlay-context answer, or null when Rust sent none. */
-export function supportedModesOf(answer: object | null | undefined): SupportedModes | null {
-  if (!answer || !("modes" in answer)) return null;
-  const modes = (answer as { modes?: unknown }).modes;
-  return modes && typeof modes === "object" ? (modes as SupportedModes) : null;
+/** `modes` from a `capture_support` or overlay-context answer; null before one has arrived. */
+export function supportedModesOf(answer: Partial<Pick<CaptureSurfaces, "modes">> | null | undefined): SupportedModes | null {
+  return answer?.modes ?? null;
 }
 
 /**
  * The modes a menu offers for `kind`, in {@link MENU_MODES} order: those Rust
- * says this platform supports, or all three when it did not say.
+ * says this platform supports, or all three before its answer has arrived.
  */
 export function offeredModes(kind: CaptureKind, supported: SupportedModes | null): CaptureMode[] {
   const allowed = supported?.[kind];
@@ -53,12 +50,13 @@ export function offeredModes(kind: CaptureKind, supported: SupportedModes | null
 /**
  * The line to show beside disabled Record modes, or null to show them
  * normally (recording works) or not at all (no recorder on this platform).
- * Only a Mac that could record with another build or a newer macOS gets the
- * disabled modes: a missing helper must be visible, not a vanished feature.
- * The words are Rust's (`recordingUnavailableMessage`).
+ * Every reason but `unsupportedPlatform` gets the disabled modes (a missing
+ * helper, an old OS, a missing codec or portal): something the user or
+ * another build can fix must be visible, not a vanished feature. The words
+ * are Rust's (`recordingUnavailableMessage`).
  */
 export function disabledRecordingNote(availability: RecordingAvailability): string | null {
   const reason = availability.recordingUnavailable;
-  if (reason !== "helperMissing" && reason !== "osTooOld") return null;
+  if (reason === null || reason === "unsupportedPlatform") return null;
   return availability.recordingUnavailableMessage;
 }

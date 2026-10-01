@@ -122,6 +122,15 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   record.** The Camera and Microphone menus in the capture bar now list an
   iPhone nearby (as a Continuity Camera and microphone), USB webcams and
   headsets, and update when one is connected or wakes up.
+- **Window screenshots on Windows come out whole.** Capturing the window of
+  an older app on a scaled display (125 % or 150 %) no longer gives only its
+  top-left corner with black around it.
+- **Screenshots on older Windows 10 never show the capture overlay.** Where
+  Windows cannot hide Hippius's selection screen from a screenshot, the
+  overlay and the preview card now step aside before the picture is taken.
+- **Windows' own screenshot keys stay Windows'.** Settings no longer accepts
+  Print Screen, Win+Shift+S or the Game Bar keys as the capture shortcut, and
+  says why.
 - **A capture that does not upload is never lost.** Its card comes back with
   your next capture until you retry or discard it, and the message says what
   went wrong in plain words: you are offline, or your storage is full.

@@ -53,6 +53,22 @@ describe("the capture bar", () => {
     expect(barGroups(true, note)[1].every((m) => m.unavailable === undefined)).toBe(true);
   });
 
+  // Rust says which modes each kind may offer (a Wayland recording has no
+  // area in v1); the bar draws only those, in its own order.
+  it("draws only the modes Rust offers, and drops a group left with none", () => {
+    const [shots, recordings] = barGroups(true, null, {
+      screenshot: ["area", "screen", "window"],
+      recording: ["window", "screen"],
+    });
+    expect(shots.map((m) => m.mode)).toEqual(["screen", "window", "area"]);
+    expect(recordings.map((m) => m.mode)).toEqual(["screen", "window"]);
+    const onlyShots = barGroups(true, null, { screenshot: ["area"], recording: [] });
+    expect(onlyShots).toHaveLength(1);
+    expect(onlyShots[0].map((m) => m.label)).toEqual(["Capture an area"]);
+    const disabled = barGroups(false, "Screen recording needs video codecs.", { screenshot: ["area"], recording: ["screen"] });
+    expect(disabled[1].map((m) => [m.mode, m.unavailable])).toEqual([["screen", "Screen recording needs video codecs."]]);
+  });
+
   it("names the Choose button for what it lists", () => {
     expect(chooseLabel("window")).toBe("Choose window…");
     expect(chooseLabel("screen")).toBe("Choose screen…");

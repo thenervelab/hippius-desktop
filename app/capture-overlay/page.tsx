@@ -584,7 +584,11 @@ export default function CaptureOverlayPage() {
             recordingAvailable={context.recordingAvailable}
             recordingNote={disabledRecordingNote(context)}
             microphoneAvailable={context.microphoneAvailable}
+            microphoneUnavailableMessage={context.microphoneUnavailableMessage}
             showClicksAvailable={context.showClicksAvailable}
+            modes={context.modes}
+            screenshotTimer={context.screenshotTimer}
+            systemAudioAvailable={context.systemAudio}
             cameraOnlyAvailable={context.cameraOnlyAvailable}
             cameraFilmed={context.cameraFilmed}
             hint={hint}

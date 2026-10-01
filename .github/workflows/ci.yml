@@ -9,12 +9,13 @@ name: ci
 #   - `rust-macos` (macOS): the SLOW lane (~15-20 min), gated to release-bound
 #     merges (PRs into staging/beta/main + pushes to them). Covers the macOS-only
 #     code (security-scoped bookmarks, App Translocation, apple-native keychain).
-#   - `rust-windows` (windows): a `cargo check` compile lane, gated to
-#     staging/beta/main like rust-macos. It exists because ONLY the release (publish)
-#     workflow ever built on Windows, so Windows-specific breakage (e.g. a
-#     `#[cfg(unix)]` module referenced unconditionally in `generate_handler!`)
-#     surfaced at release time instead of at PR time. This lane catches that
-#     class before a release.
+#   - `rust-windows` (windows): clippy (deny warnings) and the capture unit
+#     tests, gated to staging/beta/main like rust-macos, plus ANY PR that touches
+#     `src-tauri/src/capture/**` (screen capture carries the most `cfg(windows)`
+#     code, and no other lane compiles it). It exists because ONLY the release
+#     (publish) workflow ever built on Windows, so Windows-specific breakage
+#     (e.g. a `#[cfg(unix)]` module referenced unconditionally in
+#     `generate_handler!`) surfaced at release time instead of at PR time.
 #
 # All THREE long-lived branches cut releases — `staging` (tauri-staging.yml),
 # `beta` (tauri-beta.yml) and `main` (tauri-build.yml) — so the macOS and Windows
@@ -55,6 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
+      capture: ${{ steps.diff.outputs.capture }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -72,7 +74,15 @@ jobs:
           set -euo pipefail
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "rust=true" >> "$GITHUB_OUTPUT"
+            echo "capture=true" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # Screen capture is where most `cfg(windows)` code lives; a PR that
+          # touches it gets the Windows lane whatever its base.
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^src-tauri/src/capture/'; then
+            echo "capture=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "capture=false" >> "$GITHUB_OUTPUT"
           fi
           # Anything under src-tauri/ (the crate), .github/ (this pipeline and
           # its composite actions), or scripts/ (steps the jobs shell out to)
@@ -156,15 +166,18 @@ jobs:
     # Windows compile lane. Only the publish (release) workflow builds on Windows,
     # so a Windows-only compile break (a `#[cfg(unix)]` module referenced
     # unconditionally in `generate_handler!`) failed at release time, not PR time.
-    # A fast `cargo check` (lib + bins — what actually ships, no test crates) here
-    # catches it. Gated to promotion PRs and lane pushes like rust-macos so
-    # ordinary feature PRs stay quick. The shared rust-ci-setup composite is
+    # Clippy with -D warnings over every target (the test code's `cfg(windows)`
+    # arms included) and the capture unit tests catch it. Gated to promotion PRs
+    # and lane pushes like rust-macos so ordinary feature PRs stay quick, except
+    # a PR touching `src-tauri/src/capture/**`, which runs here on any base
+    # (`changes.outputs.capture`): capture carries the most Windows-only code. The shared rust-ci-setup composite is
     # Linux/macOS-oriented (ssh-agent, apt), so this job mirrors the PROVEN
     # Windows setup from tauri-build.yml: an ~/.ssh/config IdentityFile (no
     # ssh-agent) + git-CLI fetch for the private hcfs dep.
     needs: changes
     if: >-
       (github.event_name == 'pull_request' && (github.base_ref == 'beta' || github.base_ref == 'main') && needs.changes.outputs.rust == 'true') ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.capture == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
@@ -246,12 +259,22 @@ jobs:
           mkdir -p src-tauri
           printf '%s\n' "$TAURI_ENV_FILE" > src-tauri/.env
 
-      - name: Cargo check (Windows)
+      - name: Clippy (Windows, deny warnings)
         working-directory: src-tauri
         shell: bash
         env:
           SQLX_OFFLINE: "true"
-        run: cargo check
+        run: cargo clippy --all-targets -- -D warnings
+
+      # The capture unit tests: the recorder protocol and child loop, the
+      # rollout table, sizing and timeline, shortcut refusals. Windows-only
+      # arms (the OS build floor, the Windows shortcut list) run nowhere else.
+      - name: Capture tests (Windows)
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --lib "capture::"
 
   windows-shell-ext:
     # Compile + test the standalone IExplorerCommand COM DLL crate

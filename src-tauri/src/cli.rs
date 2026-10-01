@@ -18,6 +18,17 @@ where
     })
 }
 
+/// True when this process is the capture recorder child
+/// (`Hippius --capture-recorder`, started by the app itself on Windows and
+/// Linux). `skip(1)` is the caller's: argv[0] never counts.
+pub fn argv_requests_recorder<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| a.as_ref() == crate::capture::recorder_child::RECORDER_FLAG)
+}
+
 /// Write `CARGO_PKG_VERSION` plus a newline and flush.
 ///
 /// Uses `writeln!` rather than `println!` — the crate denies `print_stdout`.
@@ -31,7 +42,16 @@ pub fn write_version(out: &mut impl Write) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{argv_requests_version, write_version};
+    use super::{argv_requests_recorder, argv_requests_version, write_version};
+
+    #[test]
+    fn the_recorder_flag_is_a_recorder_request() {
+        assert!(argv_requests_recorder(["--capture-recorder"]));
+        assert!(argv_requests_recorder(["--capture-recorder", "--list-microphones"]));
+        assert!(!argv_requests_recorder(["--capture"]));
+        assert!(!argv_requests_recorder(["--version"]));
+        assert!(!argv_requests_recorder(Vec::<&str>::new()));
+    }
 
     #[test]
     fn long_flag_is_a_version_request() {

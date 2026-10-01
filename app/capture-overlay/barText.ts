@@ -22,16 +22,33 @@ const BAR_ORDER: readonly CaptureMode[] = ["screen", "window", "area"];
 const SHOTS: BarMode[] = BAR_ORDER.map((mode) => ({ kind: "screenshot", mode, label: modeLabel("screenshot", mode) }));
 const RECORDINGS: BarMode[] = BAR_ORDER.map((mode) => ({ kind: "recording", mode, label: modeLabel("recording", mode) }));
 
+/** What each kind may offer (`capture_support.modes`, Rust's); every mode when not said. */
+export interface OfferedModes {
+  screenshot: readonly CaptureMode[];
+  recording: readonly CaptureMode[];
+}
+
+const EVERY_MODE: OfferedModes = { screenshot: BAR_ORDER, recording: BAR_ORDER };
+
 /**
- * The bar's two groups. The recording group works where recording works; on
- * a Mac that could record with another build or a newer macOS it is shown
- * disabled with `recordingNote` (`disabledRecordingNote`), so a missing
- * helper is visible; elsewhere it is left out.
+ * The bar's two groups. The recording group works where recording works;
+ * where it could with another build, a newer OS or a missing package it is
+ * shown disabled with `recordingNote` (`disabledRecordingNote`), so the
+ * reason is visible; elsewhere it is left out. Only the modes Rust offers
+ * for each kind (`modes`) are drawn, in the bar's order, and a group left
+ * with none is dropped.
  */
-export function barGroups(recordingAvailable: boolean, recordingNote: string | null = null): BarMode[][] {
-  if (recordingAvailable) return [SHOTS, RECORDINGS];
-  if (recordingNote) return [SHOTS, RECORDINGS.map((m) => ({ ...m, unavailable: recordingNote }))];
-  return [SHOTS];
+export function barGroups(
+  recordingAvailable: boolean,
+  recordingNote: string | null = null,
+  modes: OfferedModes = EVERY_MODE,
+): BarMode[][] {
+  const shots = SHOTS.filter((m) => modes.screenshot.includes(m.mode));
+  const recordings = RECORDINGS.filter((m) => modes.recording.includes(m.mode));
+  const groups: BarMode[][] = [shots];
+  if (recordingAvailable) groups.push(recordings);
+  else if (recordingNote) groups.push(recordings.map((m) => ({ ...m, unavailable: recordingNote })));
+  return groups.filter((group) => group.length > 0);
 }
 
 /** "Capture" or "Record", on the bar's main button. */

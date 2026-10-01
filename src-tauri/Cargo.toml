@@ -268,11 +268,29 @@ objc = "0.2"
 # only: on Linux xcap links PipeWire and XCB, which would add build packages
 # to every release workflow and a runtime dependency to the .deb. Linux takes
 # screenshots through the xdg-desktop-portal instead (follow-up).
-xcap = "0.9"
+# `wgc`: Windows shots go through Windows.Graphics.Capture, which renders a
+# DPI-unaware app's window whole on a scaled monitor (GDI returned its
+# top-left fraction) and honours WDA_EXCLUDEFROMCAPTURE. A compile-time
+# switch with NO GDI fallback in 0.9.8; it only adds `windows` features, so
+# it is a no-op on macOS.
+xcap = { version = "0.9", features = ["wgc"] }
 keepawake = "=0.6.0"
 # The capture bar's system-wide shortcut (default Cmd/Ctrl+Shift+2), macOS and
 # Windows only like capture itself. Registered from Rust; no JS permission.
 tauri-plugin-global-shortcut = "2"
+
+# Windows-only capture calls: reading back an overlay's display affinity
+# (did WDA_EXCLUDEFROMCAPTURE hold?), settling DWM before a grab, and the OS
+# build (RtlGetVersion) the capture floor is checked against. The same 0.62
+# xcap uses, so no second copy; Tauri's own handles (0.61) cross as raw HWNDs.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_System_SystemInformation",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
