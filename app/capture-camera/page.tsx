@@ -16,6 +16,8 @@ import {
 import { GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { stepIndex } from "@/app/capture-overlay/keyNav";
 import {
+  CAMERA_FRAME_LAYOUT,
+  cameraFrameShape,
   camerasAreNamed,
   camerasFrom,
   cameraCloseLabel,
@@ -314,17 +316,22 @@ export default function CaptureCameraPage() {
   };
 
   return (
+    // Sized by the window, never by the video. <html> and <body> have no
+    // height here, so an `h-full` root collapsed to the content, and the
+    // content was the camera's own 16:9 picture: the round bubble came out
+    // as a 16:9 pill inside its square window. The full-size frame and the
+    // stage are 16:9 windows, which is why only the round sizes looked wrong.
     <div
-      className="h-full w-full p-1.5"
+      className={`fixed inset-0 p-1.5 ${CAMERA_FRAME_LAYOUT}`}
+      data-testid="camera-window"
       data-tauri-drag-region
       onMouseEnter={() => setHoverDom(true)}
       onMouseLeave={() => setHoverDom(false)}
     >
       <div
         data-tauri-drag-region
-        className={`relative h-full w-full cursor-grab overflow-hidden bg-[#1c1d21] shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-2 ring-white/85 transition-[border-radius] duration-200 active:cursor-grabbing motion-reduce:transition-none ${
-          round ? "rounded-full" : "rounded-[18px]"
-        }`}
+        data-testid="camera-frame"
+        className={`relative cursor-grab overflow-hidden bg-[#1c1d21] shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-2 ring-white/85 transition-[border-radius] duration-200 active:cursor-grabbing motion-reduce:transition-none ${cameraFrameShape(round)}`}
       >
         {failed ? (
           <div

@@ -4126,6 +4126,24 @@ mod tests {
         assert_eq!((p.width, p.height), (1, 1));
     }
 
+    /// A round bubble placed in physical pixels (Windows) stays square at
+    /// every common scale, wherever it sits, so the page draws a circle.
+    #[test]
+    fn a_round_bubble_is_square_in_pixels_at_every_scale() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 3.0] {
+            for side in [camera::BUBBLE_SIZE, camera::LARGE_BUBBLE_SIZE, 187.0] {
+                let f = camera::Frame {
+                    x: 33.5,
+                    y: 517.25,
+                    width: side,
+                    height: side,
+                };
+                let p = physical_frame(f, scale);
+                assert_eq!(p.width, p.height, "{side} pt at {scale}x");
+            }
+        }
+    }
+
     #[derive(Default)]
     struct Calls {
         stop: AtomicUsize,

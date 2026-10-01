@@ -140,7 +140,8 @@ pub fn frame(shape: CameraShape, size: CameraSize, area: Frame) -> Frame {
         (CameraShape::Bubble, Some(side)) => Some(
             side.min(area.width - 2.0 * BUBBLE_MARGIN)
                 .min(area.height - 2.0 * BUBBLE_MARGIN)
-                .max(MIN_BUBBLE),
+                .max(MIN_BUBBLE)
+                .floor(),
         ),
         _ => None,
     };
@@ -181,7 +182,8 @@ pub fn bubble_in_area(size: CameraSize, area: Frame) -> Frame {
         .unwrap_or(BUBBLE_SIZE)
         .min(area.width - 2.0 * AREA_BUBBLE_MARGIN)
         .min(area.height - 2.0 * AREA_BUBBLE_MARGIN)
-        .max(MIN_BUBBLE);
+        .max(MIN_BUBBLE)
+        .floor();
     Frame {
         x: (area.x + AREA_BUBBLE_MARGIN).round(),
         y: (area.y + area.height - side - AREA_BUBBLE_MARGIN).round(),
@@ -262,7 +264,9 @@ fn within(inner: Frame, outer: Frame) -> bool {
 /// kept inside `area`, so a large bubble never hangs off the screen.
 #[must_use]
 pub fn resize_bubble(current: Frame, side: f64, area: Frame) -> Frame {
-    let side = side.min(area.width).min(area.height);
+    // Whole points: the window's width and height then come out as the same
+    // whole number of pixels at any scale, so the bubble stays round.
+    let side = side.min(area.width).min(area.height).floor();
     let (cx, cy) = current.centre();
     let near_left = current.x - area.x <= SNAP_DISTANCE;
     let near_right = (area.x + area.width) - (current.x + current.width) <= SNAP_DISTANCE;
@@ -370,6 +374,52 @@ mod tests {
         let large = resize_bubble(small, LARGE_BUBBLE_SIZE, AREA);
         assert!(large.x + large.width <= AREA.x + AREA.width);
         assert!(large.y >= AREA.y && large.y + large.height <= AREA.y + AREA.height);
+    }
+
+    /// The round bubble is a circle only in a square window: every way the
+    /// bubble is placed or resized gives equal, whole sides, at both round
+    /// sizes, on odd-sized displays and against every edge.
+    #[test]
+    fn every_round_bubble_frame_is_a_whole_square() {
+        let odd = Frame {
+            x: -1111.5,
+            y: 23.5,
+            width: 1111.5,
+            height: 777.25,
+        };
+        let tiny = Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 301.5,
+            height: 259.75,
+        };
+        let square = |f: Frame, what: &str| {
+            assert!((f.width - f.height).abs() < f64::EPSILON, "{what}: {} x {}", f.width, f.height);
+            assert!((f.width - f.width.round()).abs() < f64::EPSILON, "{what}: {} is not whole", f.width);
+        };
+        for area in [AREA, odd, tiny] {
+            for size in [CameraSize::Small, CameraSize::Large] {
+                let side = bubble_side(size).unwrap();
+                let placed = frame(CameraShape::Bubble, size, area);
+                square(placed, "placed");
+                square(bubble_in_area(size, area), "in an area");
+                let filmed = Filmed::Display { area, usable: area };
+                square(bubble_for_recording(None, size, filmed).unwrap(), "moved for recording");
+                square(bubble_for_recording(None, size, Filmed::Region(odd)).unwrap(), "moved into a window");
+                // Resized from each corner and edge, and from the open.
+                for (x, y) in [
+                    (area.x, area.y),
+                    (area.x + area.width - BUBBLE_SIZE, area.y + area.height - BUBBLE_SIZE),
+                    (area.x + area.width / 2.0, area.y),
+                    (area.x + 37.25, area.y + 101.5),
+                ] {
+                    let resized = resize_bubble(bubble_at(x, y, BUBBLE_SIZE), side, area);
+                    square(resized, "resized");
+                    assert!(resized.x >= area.x - 1.0 && resized.x + resized.width <= area.x + area.width + 1.0);
+                    square(resize_bubble(resized, BUBBLE_SIZE, area), "resized back");
+                }
+            }
+        }
     }
 
     #[test]
