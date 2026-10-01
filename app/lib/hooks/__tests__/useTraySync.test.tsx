@@ -23,6 +23,7 @@ type TrayNewOpts = {
 
 const mocks = vi.hoisted(() => {
   const trayNewCalls: TrayNewOpts[] = [];
+  const trayCloseCalls: number[] = [];
   const setIconCalls: string[] = [];
   const invokeCmds: string[] = [];
   const windowActions: string[] = [];
@@ -96,6 +97,7 @@ const mocks = vi.hoisted(() => {
       setIconCalls.push(p);
     }
     async close() {
+      trayCloseCalls.push(Date.now());
       MockTrayIcon.current = null;
     }
   }
@@ -106,6 +108,7 @@ const mocks = vi.hoisted(() => {
     MockMenu,
     MockTrayIcon,
     trayNewCalls,
+    trayCloseCalls,
     setIconCalls,
     invokeCmds,
     windowActions,
@@ -161,13 +164,18 @@ vi.mock("@/app/lib/tray/trayWindowActions", () => ({
   }),
 }));
 
-async function mountTray(isAuth = true, opts: { failSetIconOnce?: boolean } = {}) {
+async function mountTray(
+  isAuth = true,
+  opts: { failSetIconOnce?: boolean; existingTray?: boolean } = {},
+) {
   vi.resetModules();
   mocks.trayNewCalls.length = 0;
+  mocks.trayCloseCalls.length = 0;
   mocks.setIconCalls.length = 0;
   mocks.invokeCmds.length = 0;
   mocks.windowActions.length = 0;
-  mocks.MockTrayIcon.current = null;
+  // `existingTray`: the page reloaded under an icon the previous page made.
+  mocks.MockTrayIcon.current = opts.existingTray ? new mocks.MockTrayIcon() : null;
   mocks.MockTrayIcon.failSetIconOnce = opts.failSetIconOnce ?? false;
 
   const store = createStore();
@@ -323,6 +331,53 @@ describe("useTrayInit — tray click", () => {
     await action({ ...leftClick(), button: "Right" });
     expect(mocks.invokeCmds).not.toContain("toggle_tray_panel");
     expect(mocks.windowActions).not.toContain("openApp");
+  });
+});
+
+describe("useTrayInit: the context menu is handed to Rust", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** How many times the page told Rust it attached a menu. */
+  const menuReports = () =>
+    mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length;
+
+  // On newer macOS a status item that owns a menu opens it on every click, so
+  // a left click never reached `handleTrayClick` and the popover never
+  // opened. Rust takes the menu off the status item, but only once told it
+  // is there: every attach must be reported.
+  it("reports the menu the new icon carries", async () => {
+    await mountTray(true);
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
+    await waitFor(() => expect(menuReports()).toBe(1));
+  });
+
+  it("reports the menu of an icon recreated after a failed icon update", async () => {
+    await mountTray(true, { failSetIconOnce: true });
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(menuReports()).toBe(mocks.trayNewCalls.length));
+  });
+});
+
+describe("useTrayInit: a reload under a live icon", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The old page's `action` callback died with it, so keeping that icon
+  // would leave a left click that never opens the popover.
+  it("replaces the icon so the left click reaches this page", async () => {
+    await mountTray(true, { existingTray: true });
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
+    expect(mocks.trayCloseCalls.length).toBe(1);
+
+    const action = await trayAction();
+    await action(leftClick());
+    expect(mocks.invokeCmds).toContain("toggle_tray_panel");
+    await waitFor(() =>
+      expect(mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length).toBe(1),
+    );
   });
 });
 
