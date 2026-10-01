@@ -80,6 +80,15 @@ export function barHint(
     : `Drag to choose what to ${verb}`;
 }
 
+/**
+ * The panel's line (the capture bar alone in a window, where the desktop's
+ * own screen-sharing dialog chooses): what Record leads to.
+ */
+export function panelHint(mode: CaptureMode, enterKey = "Return"): string {
+  const what = mode === "window" ? "a window" : "a screen";
+  return `Press Record or ${enterKey}, then choose ${what} in your desktop's sharing dialog`;
+}
+
 /** The bar's "Choose…" button, named for what it lists. */
 export function chooseLabel(mode: CaptureMode): string {
   return shareTabFor(mode) === "window" ? "Choose window…" : "Choose screen…";

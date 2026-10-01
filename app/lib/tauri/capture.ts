@@ -105,6 +105,8 @@ export interface CaptureSurfaces {
   modes: { screenshot: CaptureMode[]; recording: CaptureMode[] };
   /** Whether the screenshot timer is offered. */
   screenshotTimer: boolean;
+  /** Whether the recording countdown is offered (not with the system picker, whose dialog comes first). */
+  recordCountdown: boolean;
   /** Whether a recording can carry the system's sound (the user still turns it on in `CaptureOptions.systemAudio`). */
   systemAudio: boolean;
   /** Rust's line for why the microphone cannot be recorded; null when it can. */

@@ -5,6 +5,7 @@ import {
   chooseLabel,
   confirmLabel,
   isDeviceInUse,
+  panelHint,
   pickCamera,
   pickMicrophone,
   shareTabFor,
@@ -162,5 +163,13 @@ describe("the recording sources", () => {
     expect(pickCamera({ ...OPTIONS, cameraDevice: "cam1" }, "default")).toMatchObject({ camera: true, cameraDevice: null });
     expect(pickMicrophone(OPTIONS, "BuiltIn")).toMatchObject({ microphone: true, microphoneDevice: "BuiltIn" });
     expect(pickMicrophone({ ...OPTIONS, microphone: true }, null)).toMatchObject({ microphone: false });
+  });
+});
+
+describe("the panel's line (the desktop's dialog chooses)", () => {
+  it("says Record leads to the desktop's dialog, for what the mode records", () => {
+    expect(panelHint("window", "Enter")).toBe("Press Record or Enter, then choose a window in your desktop's sharing dialog");
+    expect(panelHint("screen", "Enter")).toBe("Press Record or Enter, then choose a screen in your desktop's sharing dialog");
+    expect(panelHint("screen")).not.toMatch(/Click/);
   });
 });

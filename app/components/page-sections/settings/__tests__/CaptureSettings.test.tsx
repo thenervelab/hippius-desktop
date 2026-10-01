@@ -154,6 +154,7 @@ describe("the capture card on Linux", () => {
     selection: "overlay",
     modes: { screenshot: ["area", "window", "screen"], recording: ["area", "window", "screen"] },
     screenshotTimer: true,
+    recordCountdown: true,
     systemAudio: false,
     microphoneUnavailableMessage: null,
     continuityHint: null,

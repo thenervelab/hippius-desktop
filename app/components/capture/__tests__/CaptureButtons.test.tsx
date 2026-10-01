@@ -240,6 +240,7 @@ const WAYLAND: CaptureSurfaces = {
   selection: "systemPicker",
   modes: { screenshot: [], recording: ["window", "screen"] },
   screenshotTimer: false,
+  recordCountdown: false,
   systemAudio: false,
   microphoneUnavailableMessage: "Recording the microphone isn't available on this system yet",
   continuityHint: null,

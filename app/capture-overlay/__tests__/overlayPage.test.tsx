@@ -44,6 +44,7 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
   selection: "overlay",
   modes: { screenshot: ["area", "window", "screen"], recording: ["area", "window", "screen"] },
   screenshotTimer: true,
+  recordCountdown: true,
   systemAudio: true,
   microphoneUnavailableMessage: null,
   continuityHint: null,
@@ -747,5 +748,70 @@ describe("the camera and microphone menus", () => {
     const menu = await screen.findByRole("menu", { name: "Choose a camera" });
     await waitFor(() => expect(menu).toHaveAttribute("aria-busy", "false"));
     expect(screen.getByText(HINT)).toBeInTheDocument();
+  });
+});
+
+/** Rust's context for the Wayland recording panel (`selection: systemPicker`). */
+const PANEL: Partial<CaptureOverlayContext> = {
+  kind: "recording",
+  mode: "window",
+  displayId: 0,
+  selection: "systemPicker",
+  modes: { screenshot: [], recording: ["window", "screen"] },
+  screenshotTimer: false,
+  recordCountdown: false,
+  systemPickerNote: "Your desktop's screenshot tool opens, so you can choose an area, a window or a whole screen there.",
+  linuxSession: "wayland",
+  cameraOnlyAvailable: false,
+  pending: null,
+};
+
+describe("the recording panel where the desktop's dialog chooses (Wayland)", () => {
+  beforeEach(() => {
+    window.history.replaceState({}, "", "/capture-overlay?display=0");
+  });
+
+  it("is the bar alone in a panel, with no selection surface and no list of windows", async () => {
+    setup(PANEL);
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(screen.getByTestId("capture-panel")).toHaveAttribute("data-tauri-drag-region");
+    expect(screen.queryByRole("button", { name: /Choose (window|screen)/ })).toBeNull();
+    expect(screen.queryByRole("radio", { name: /Capture/ })).toBeNull();
+    expect(screen.getByRole("radio", { name: "Record a window" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Record entire screen" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("then choose a window in your desktop's sharing dialog");
+  });
+
+  /** No window to click there: Record goes on to Rust, which asks the desktop. */
+  it("records a window without asking for a click", async () => {
+    setup(PANEL);
+    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 0 }));
+    expect(screen.queryByText(/Click a window/)).toBeNull();
+  });
+
+  it("takes Return as Record and never polls for windows", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    setup(PANEL);
+    await screen.findByRole("toolbar", { name: "Capture" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(called("capture_refresh_windows")).toBe(false);
+    fireEvent.keyDown(window, { key: "Enter" });
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 0 }));
+  });
+
+  it("offers no countdown, since the desktop's dialog comes first", async () => {
+    setup(PANEL);
+    fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
+    await screen.findByRole("menu", { name: "Capture options" });
+    expect(screen.queryByText("Recording countdown")).toBeNull();
+    expect(screen.getByText("Record system audio")).toBeInTheDocument();
+  });
+
+  it("says what Record leads to for a whole screen", async () => {
+    setup({ ...PANEL, mode: "screen" });
+    expect(await screen.findByRole("status")).toHaveTextContent("then choose a screen in your desktop's sharing dialog");
   });
 });

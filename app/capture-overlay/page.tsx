@@ -26,12 +26,12 @@ import {
   type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { CAPTURE_ACCENT, GLASS_FOCUS } from "@/app/lib/capture/glass";
+import { CAPTURE_ACCENT, GLASS_FOCUS, GLASS_PANEL } from "@/app/lib/capture/glass";
 import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
 import { disabledRecordingNote, supportedModesOf } from "@/app/lib/capture/modes";
 import CaptureBar from "./CaptureBar";
 import SharePicker from "./SharePicker";
-import { barHint, LAST_AREA_KEY } from "./barText";
+import { barHint, LAST_AREA_KEY, panelHint } from "./barText";
 import { isFromControl } from "./keyNav";
 import { selectionFor, type SharePick } from "./sharePickerState";
 import { pollWindows } from "./windowRefresh";
@@ -67,6 +67,12 @@ import {
  * The palette is fixed rather than themed: the overlay sits over OTHER apps'
  * windows, not over Hippius, so the app's light/dark setting says nothing
  * about what is underneath it.
+ *
+ * Where Rust's `selection` is `systemPicker` (a Wayland recording) this page
+ * is the PANEL instead: one small window with the capture bar and no
+ * selection surface, since Hippius can neither cover the screen nor see
+ * other windows there. Record goes straight to Rust, which has the
+ * desktop's own screen-sharing dialog choose the window or screen.
  */
 
 const DIM = "rgba(0, 0, 0, 0.38)";
@@ -273,6 +279,7 @@ export default function CaptureOverlayPage() {
   // with the mode, the count, or a hidden page.
   const pollingWindows =
     displayId !== null &&
+    context?.selection !== "systemPicker" &&
     context?.mode === "window" &&
     !(context.kind === "recording" && cameraShape === "stage") &&
     countdown === null &&
@@ -292,7 +299,8 @@ export default function CaptureOverlayPage() {
   const confirm = useCallback(() => {
     if (!context || displayId === null) return;
     const cameraOnly = context.kind === "recording" && cameraShape === "stage";
-    if (context.mode === "window" && !cameraOnly) {
+    // The panel has no window to click: the desktop's dialog picks one.
+    if (context.mode === "window" && !cameraOnly && context.selection !== "systemPicker") {
       setNotice(barHint(context.kind, "window", false));
       return;
     }
@@ -342,7 +350,7 @@ export default function CaptureOverlayPage() {
       if (countdown !== null || inFlightRef.current) return;
       // Space swaps window and area, as it does in macOS's ⌘⇧4. Not mid-drag,
       // and not with the camera alone (nothing on screen is chosen then).
-      if (e.key === " " && context && !latest.current.dragging) {
+      if (e.key === " " && context && context.selection !== "systemPicker" && !latest.current.dragging) {
         const stage = context.kind === "recording" && cameraShape === "stage";
         const next = stage ? null : spaceToggleMode(context.mode, context.kind, supportedModesOf(context));
         if (next) {
@@ -470,6 +478,66 @@ export default function CaptureOverlayPage() {
         : String(countdown);
   const KindIcon = kind === "recording" ? Video : Camera;
 
+  const captureBar = (barHintText: string, panel = false) => (
+    <CaptureBar
+      kind={kind}
+      mode={context.mode}
+      cameraOnly={cameraOnly}
+      options={context.options}
+      destination={context.destination}
+      recordingAvailable={context.recordingAvailable}
+      recordingNote={disabledRecordingNote(context)}
+      microphoneAvailable={context.microphoneAvailable}
+      microphoneUnavailableMessage={context.microphoneUnavailableMessage}
+      continuityHint={context.continuityHint}
+      showClicksAvailable={context.showClicksAvailable}
+      modes={context.modes}
+      screenshotTimer={context.screenshotTimer}
+      systemAudioAvailable={context.systemAudio}
+      cameraOnlyAvailable={context.cameraOnlyAvailable}
+      cameraFilmed={context.cameraFilmed}
+      recordCountdown={context.recordCountdown}
+      chooseAvailable={!panel}
+      hint={barHintText}
+      enterKey={enterKey}
+      onMode={onMode}
+      onChoose={(tab) => {
+        setNotice(null);
+        setPicker(tab);
+      }}
+      onConfirm={confirm}
+      onCancel={() => void cancelCapture()}
+      onOptionsSaved={(saved) =>
+        // Rust says what the countdown and the camera are now; the bar does not work them out.
+        setContext((c) =>
+          c ? { ...c, options: saved.options, countdownSecs: saved.countdownSecs, cameraFilmed: saved.cameraFilmed } : c,
+        )
+      }
+      onDestinationSaved={(destination) => setContext((c) => (c ? { ...c, destination } : c))}
+    />
+  );
+
+  if (context.selection === "systemPicker") {
+    // The panel: an ordinary window the compositor places, holding the bar.
+    // Dragging its empty part moves it; Escape and the bar's close button
+    // cancel, Return or Record go on to the desktop's dialog.
+    return (
+      <div className="fixed inset-0 select-none" onContextMenu={(e) => e.preventDefault()}>
+        <div
+          data-testid="capture-panel"
+          data-tauri-drag-region
+          className={`absolute inset-0 rounded-[18px] ${GLASS_PANEL}`}
+        />
+        <p className="sr-only" aria-live="assertive" aria-atomic="true">
+          {countdownSpeech}
+        </p>
+        {context.hostsBar && !counting && (
+          <div data-testid="capture-bar-slot">{captureBar(notice ?? panelHint(context.mode, enterKey), true)}</div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className="fixed inset-0 select-none"
@@ -575,40 +643,7 @@ export default function CaptureOverlayPage() {
         // pointer is a plain arrow and no window is lit, and its own handlers
         // keep a click on it from choosing anything underneath.
         <div data-testid="capture-bar-slot" style={{ cursor: "default" }} onPointerEnter={() => setHovered(null)}>
-          <CaptureBar
-            kind={kind}
-            mode={context.mode}
-            cameraOnly={cameraOnly}
-            options={context.options}
-            destination={context.destination}
-            recordingAvailable={context.recordingAvailable}
-            recordingNote={disabledRecordingNote(context)}
-            microphoneAvailable={context.microphoneAvailable}
-            microphoneUnavailableMessage={context.microphoneUnavailableMessage}
-            continuityHint={context.continuityHint}
-            showClicksAvailable={context.showClicksAvailable}
-            modes={context.modes}
-            screenshotTimer={context.screenshotTimer}
-            systemAudioAvailable={context.systemAudio}
-            cameraOnlyAvailable={context.cameraOnlyAvailable}
-            cameraFilmed={context.cameraFilmed}
-            hint={hint}
-            enterKey={enterKey}
-            onMode={onMode}
-            onChoose={(tab) => {
-              setNotice(null);
-              setPicker(tab);
-            }}
-            onConfirm={confirm}
-            onCancel={() => void cancelCapture()}
-            onOptionsSaved={(saved) =>
-              // Rust says what the countdown and the camera are now; the bar does not work them out.
-              setContext((c) =>
-                c ? { ...c, options: saved.options, countdownSecs: saved.countdownSecs, cameraFilmed: saved.cameraFilmed } : c,
-              )
-            }
-            onDestinationSaved={(destination) => setContext((c) => (c ? { ...c, destination } : c))}
-          />
+          {captureBar(hint)}
         </div>
       )}
 

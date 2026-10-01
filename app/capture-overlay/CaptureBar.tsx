@@ -170,6 +170,7 @@ function OptionsMenu({
   destination,
   showClicksAvailable,
   screenshotTimer,
+  recordCountdown,
   systemAudioAvailable,
   onOptions,
   onDestination,
@@ -181,6 +182,8 @@ function OptionsMenu({
   showClicksAvailable: boolean;
   /** Whether this platform offers the screenshot timer (Rust's `screenshotTimer`). */
   screenshotTimer: boolean;
+  /** Whether the recording countdown is offered (Rust's `recordCountdown`). */
+  recordCountdown: boolean;
   /** Whether a recording here can carry the computer's sound (Rust's `systemAudio`). */
   systemAudioAvailable: boolean;
   onOptions: (next: CaptureOptions) => void;
@@ -238,17 +241,21 @@ function OptionsMenu({
         )
       ) : (
         <>
-          <MenuHeading>Recording countdown</MenuHeading>
-          {RECORD_COUNTDOWN_OPTIONS.map((t) => (
-            <MenuRow
-              key={t.secs}
-              role="menuitemradio"
-              checked={options.recordCountdownSecs === t.secs}
-              onSelect={() => onOptions({ ...options, recordCountdownSecs: t.secs })}
-            >
-              {t.label}
-            </MenuRow>
-          ))}
+          {recordCountdown && (
+            <>
+              <MenuHeading>Recording countdown</MenuHeading>
+              {RECORD_COUNTDOWN_OPTIONS.map((t) => (
+                <MenuRow
+                  key={t.secs}
+                  role="menuitemradio"
+                  checked={options.recordCountdownSecs === t.secs}
+                  onSelect={() => onOptions({ ...options, recordCountdownSecs: t.secs })}
+                >
+                  {t.label}
+                </MenuRow>
+              ))}
+            </>
+          )}
           <MenuHeading>Recording</MenuHeading>
           {/* Off by default, as in Loom: with speakers it records the voice twice. */}
           {systemAudioAvailable && (
@@ -631,6 +638,13 @@ interface Props {
   modes?: OfferedModes;
   /** Whether the screenshot timer is offered (Rust's `screenshotTimer`); offered when left out. */
   screenshotTimer?: boolean;
+  /** Whether the recording countdown is offered (Rust's `recordCountdown`); offered when left out. */
+  recordCountdown?: boolean;
+  /**
+   * Whether "Choose window…" / "Choose screen…" is offered; offered when left
+   * out. Not in the panel, where the desktop's own dialog is the list.
+   */
+  chooseAvailable?: boolean;
   /** Whether "Record system audio" is offered (Rust's `systemAudio`); offered when left out. */
   systemAudioAvailable?: boolean;
   /** Camera only (the Screen switch) can be recorded here. */
@@ -811,7 +825,7 @@ export default function CaptureBar(props: Props) {
           </div>
         ))}
         <span aria-hidden className="mx-1.5 h-6 w-px bg-white/15" />
-        {!props.cameraOnly && (
+        {!props.cameraOnly && (props.chooseAvailable ?? true) && (
           <button
             type="button"
             aria-haspopup="dialog"
@@ -846,6 +860,7 @@ export default function CaptureBar(props: Props) {
               destination={destination}
               showClicksAvailable={props.showClicksAvailable}
               screenshotTimer={props.screenshotTimer ?? true}
+              recordCountdown={props.recordCountdown ?? true}
               systemAudioAvailable={props.systemAudioAvailable ?? true}
               onOptions={saveOptions}
               onDestination={saveDestination}
