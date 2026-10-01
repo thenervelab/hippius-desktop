@@ -104,28 +104,28 @@ const captureButton = cva(
 
 // Explicit colours: the shared DropdownMenuContent's base is `bg-popover`, a
 // token this theme does not define, so an unstyled menu has no background.
-const CONTENT_CLASSES = cn(
+export const CONTENT_CLASSES = cn(
   "min-w-[15rem] max-w-[calc(100vw-2rem)] rounded-lg p-1.5",
   "bg-white border border-grey-80",
   "dark:bg-black-500 dark:border-black-300",
   "shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.3)]",
 );
-const ITEM_CLASSES = cn(
+export const ITEM_CLASSES = cn(
   "flex cursor-pointer items-center gap-2.5 rounded-md px-1.5 py-1.5 outline-none",
   "font-geist text-[14px] font-medium tracking-[-0.4px]",
   "text-grey-50 hover:bg-grey-90 hover:text-grey-10 focus:bg-grey-90 focus:text-grey-10",
   "dark:text-grey-dark-200 dark:hover:bg-white/5 dark:hover:text-grey-light-100",
   "dark:focus:bg-white/5 dark:focus:text-grey-light-100",
 );
-const SEPARATOR_CLASSES = "my-1 h-px bg-grey-80 dark:bg-black-300";
+export const SEPARATOR_CLASSES = "my-1 h-px bg-grey-80 dark:bg-black-300";
 // A line of explanation inside a menu: wraps within the menu's width.
-const NOTE_CLASSES = cn(
+export const NOTE_CLASSES = cn(
   "max-w-[17rem] whitespace-normal px-1.5 pb-1 pt-0.5",
   "font-geist text-[12px] leading-[16px] tracking-normal text-grey-50 dark:text-grey-dark-600",
 );
 
 /** The Record glyph: a ring with a red dot, the way record reads everywhere. */
-function RecordGlyph({ className }: { className?: string }) {
+export function RecordGlyph({ className }: { className?: string }) {
   return (
     <span
       aria-hidden

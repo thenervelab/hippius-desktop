@@ -41,6 +41,16 @@ pub enum Source {
 }
 
 impl Source {
+    /// The source's name in the protocol's `device_lost` event, which the
+    /// app turns into the pill's line (`recording::device_lost_message`).
+    #[must_use]
+    pub const fn device_name(self) -> &'static str {
+        match self {
+            Self::Microphone => "microphone",
+            Self::System => "systemAudio",
+        }
+    }
+
     const fn gain(self) -> f32 {
         match self {
             Self::Microphone => MICROPHONE_GAIN,
@@ -232,6 +242,18 @@ mod tests {
     use super::*;
 
     const SWIFT: &str = include_str!("../../../../macos/HippiusCapture/Sources/main.swift");
+
+    /// The names the app's pill line is chosen by.
+    #[test]
+    fn each_source_has_the_name_the_app_reads() {
+        use crate::capture::recording::device_lost_message;
+        assert_eq!(Source::Microphone.device_name(), "microphone");
+        assert_eq!(Source::System.device_name(), "systemAudio");
+        assert_ne!(
+            device_lost_message(Source::Microphone.device_name()),
+            device_lost_message(Source::System.device_name())
+        );
+    }
 
     /// The Swift mixer's numbers; if they change there, they change here,
     /// or a Windows recording and a Mac recording sound different.

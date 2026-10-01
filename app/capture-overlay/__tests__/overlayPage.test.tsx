@@ -308,6 +308,48 @@ describe("the capture bar's words", () => {
     expect(screen.queryByText(/macOS/)).toBeNull();
   });
 
+  // Windows gives a desktop app no prompt: a switched-off privacy setting
+  // just keeps the device shut, so the row says so and opens the page.
+  it("offers Open Settings under a microphone Windows blocks, for that device only", async () => {
+    const line = "Windows is blocking the microphone. Turn on microphone access for desktop apps in Settings, Privacy & security, Microphone.";
+    tauri.onInvoke("capture_open_privacy_settings", () => null);
+    setup({
+      kind: "recording",
+      microphoneAvailable: false,
+      microphoneUnavailableMessage: line,
+      privacyBlocked: { microphone: true, camera: false },
+      cameraUnavailableMessage: null,
+    });
+    expect(await screen.findByText(line, { exact: false })).toBeInTheDocument();
+    const buttons = screen.getAllByRole("button", { name: "Open Settings" });
+    expect(buttons).toHaveLength(1);
+    fireEvent.click(buttons[0]);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_open_privacy_settings", { device: "microphone" }),
+    );
+  });
+
+  it("says a blocked camera is blocked in Rust's words, with its own Open Settings", async () => {
+    const line = "Windows is blocking the camera. Turn on camera access for desktop apps in Settings, Privacy & security, Camera.";
+    tauri.onInvoke("capture_open_privacy_settings", () => null);
+    setup({
+      kind: "recording",
+      privacyBlocked: { microphone: false, camera: true },
+      cameraUnavailableMessage: line,
+    });
+    expect(await screen.findByText(line, { exact: false })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_open_privacy_settings", { device: "camera" }),
+    );
+  });
+
+  it("offers no Open Settings where nothing is blocked", async () => {
+    setup({ kind: "recording" });
+    await screen.findByRole("switch", { name: "Screen" });
+    expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
+  });
+
   it("offers only the modes Rust offers", async () => {
     setup({ modes: { screenshot: ["area", "screen"], recording: ["screen"] } });
     await screen.findByRole("radio", { name: "Capture an area" });

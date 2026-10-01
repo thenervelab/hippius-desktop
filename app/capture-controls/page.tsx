@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Mic, Pause, Play, RotateCcw, Square, Trash2, Video, VideoOff } from "lucide-react";
+import { Mic, MicOff, Pause, Play, RotateCcw, Square, Trash2, Video, VideoOff, VolumeX } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
+  DEVICE_LOST_EVENT,
   cancelCapture,
   getCaptureCameraContext,
   getCaptureState,
@@ -14,6 +15,7 @@ import {
   stopCapture,
   toggleCaptureCamera,
   type CaptureCameraState,
+  type CaptureDeviceLost,
   type CapturePhase,
   type CapturePhaseEvent,
 } from "@/app/lib/tauri/capture";
@@ -58,6 +60,9 @@ export default function CaptureControlsPage() {
   const [busy, setBusy] = useState(false);
   const [camera, setCamera] = useState<CaptureCameraState | null>(null);
   const [confirming, setConfirming] = useState<Question | null>(null);
+  // A sound source that went away mid-recording, in Rust's words; the
+  // recording goes on without it.
+  const [lost, setLost] = useState<CaptureDeviceLost | null>(null);
   const keepRef = useRef<HTMLButtonElement | null>(null);
   // The button to give focus back to once the question is answered "keep".
   const focusBack = useRef<Question | null>(null);
@@ -88,6 +93,7 @@ export default function CaptureControlsPage() {
         heardCamera = true;
         setCamera(e.payload);
       }),
+      listen<CaptureDeviceLost>(DEVICE_LOST_EVENT, (e) => setLost(e.payload)),
     ];
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
@@ -97,7 +103,10 @@ export default function CaptureControlsPage() {
   const live = isLive(phase);
   // The question goes when the recording ends some other way (the tray's Stop).
   useEffect(() => {
-    if (!live) setConfirming(null);
+    if (!live) {
+      setConfirming(null);
+      setLost(null);
+    }
   }, [live]);
 
   // Asking: Escape and "Keep recording" both mean no, and focus starts on
@@ -228,7 +237,23 @@ export default function CaptureControlsPage() {
         >
           {mmss(phase.elapsedSecs)}
         </span>
-        {phase.microphone && <Mic className="size-3.5 text-white/60" role="img" aria-label="Recording the microphone" />}
+        {phase.microphone &&
+          (lost?.device === "microphone" ? (
+            <MicOff className="size-3.5 text-amber-400" role="img" aria-label={lost.message}>
+              <title>{lost.message}</title>
+            </MicOff>
+          ) : (
+            <Mic className="size-3.5 text-white/60" role="img" aria-label="Recording the microphone" />
+          ))}
+        {lost && lost.device !== "microphone" && (
+          <VolumeX className="size-3.5 text-amber-400" role="img" aria-label={lost.message}>
+            <title>{lost.message}</title>
+          </VolumeX>
+        )}
+        {/* Always mounted, so a screen reader hears the line when it arrives. */}
+        <span role="status" className="sr-only">
+          {lost?.message ?? ""}
+        </span>
 
         <div aria-hidden data-tauri-drag-region className="mx-1 h-4 w-px bg-white/15" />
 

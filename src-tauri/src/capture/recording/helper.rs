@@ -145,6 +145,16 @@ pub fn parse_devices(stdout: &str) -> Vec<MediaDevice> {
 fn read_events(stdout: impl Read, tx: &mpsc::Sender<Incoming>, shared: &Shared) {
     for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok) {
         match parse_event(&line) {
+            Ok(Incoming {
+                event: HelperEvent::DeviceLost { device },
+                ..
+            }) => {
+                // Not a reply to anything and not the end: kept for the
+                // session to tell the user, never handed to `wait_for`.
+                if let Ok(mut lost) = shared.lost.lock() {
+                    lost.push(device);
+                }
+            }
             Ok(incoming) => {
                 if incoming.event == HelperEvent::Started
                     && let Some(token) = &incoming.restore_token
@@ -197,6 +207,9 @@ struct Shared {
     reported: AtomicBool,
     /// The portal's restore token from `started` (Wayland only).
     restore_token: Mutex<Option<String>>,
+    /// Sound sources that went away mid-recording, oldest first, not yet
+    /// handed out by `take_lost_device`.
+    lost: Mutex<Vec<String>>,
 }
 
 impl Shared {
@@ -444,6 +457,11 @@ impl Recorder for HelperRecorder {
         }
         Some(death.to_error())
     }
+
+    fn take_lost_device(&self) -> Option<String> {
+        let mut lost = self.shared.lost.lock().ok()?;
+        (!lost.is_empty()).then(|| lost.remove(0))
+    }
 }
 
 impl Drop for HelperRecorder {
@@ -579,6 +597,36 @@ mod tests {
         let first = recorder.take_death().expect("reported");
         assert!(first.to_string().contains("display gone"));
         assert!(recorder.take_death().is_none(), "reported once");
+    }
+
+    /// A lost microphone is not a death and is no reply: the reader keeps
+    /// it for the session, which hands it out once.
+    #[test]
+    fn a_lost_device_is_kept_for_the_session_and_handed_out_once() {
+        let (tx, rx) = mpsc::channel();
+        let shared = Arc::new(Shared::default());
+        let out = format!(
+            "{}\n{}\n",
+            crate::capture::recording::protocol::ready_line(),
+            crate::capture::recording::protocol::device_lost_line("microphone", "the device went away")
+        );
+        read_events(out.as_bytes(), &tx, &shared);
+        assert_eq!(rx.try_iter().count(), 1, "only ready is forwarded");
+        let recorder = HelperRecorder {
+            child: None,
+            stdin: None,
+            events: mpsc::channel().1,
+            shared,
+            next_id: 0,
+            output: PathBuf::from("/nonexistent/out.mp4"),
+            microphone: true,
+            running_since: None,
+            accumulated: Duration::ZERO,
+            paused: false,
+        };
+        assert_eq!(recorder.take_lost_device().as_deref(), Some("microphone"));
+        assert_eq!(recorder.take_lost_device(), None);
+        assert_eq!(recorder.shared.death(), Some(Death::Exited), "only the stream closing ends it");
     }
 
     #[test]

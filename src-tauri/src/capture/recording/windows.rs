@@ -13,6 +13,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use super::{MediaDevice, RecordOptions, Recorder, helper};
+use crate::capture::recorder_child::sources::APP_PID_ENV;
 use crate::capture::recorder_child::windows::probe::{self, Probe};
 use crate::capture::screenshot::Selection;
 use crate::error::Result;
@@ -65,8 +66,28 @@ pub fn list_microphones() -> Vec<MediaDevice> {
     helper_command().map_or_else(|_| Vec::new(), |program| helper::list_devices(program, "--list-microphones"))
 }
 
+/// The cameras, from the child (`--list-cameras`: Media Foundation's video
+/// capture sources, the same ones WebView2 opens).
+pub fn list_cameras() -> Vec<MediaDevice> {
+    helper_command().map_or_else(|_| Vec::new(), |program| helper::list_devices(program, "--list-cameras"))
+}
+
+/// The child in meter mode (`--meter [endpointId]`) for the capture bar's
+/// level meter: WASAPI on the endpoint the bar lists, let go the moment the
+/// app closes its stdin (`capture::mic_meter`), before the recorder opens it.
+pub fn meter_command(device: Option<&str>) -> Option<Command> {
+    let mut command = helper_command().ok()?;
+    command.arg("--meter");
+    if let Some(id) = device.filter(|id| !id.is_empty()) {
+        command.arg(id);
+    }
+    Some(command)
+}
+
 /// The program that records: this executable in recorder mode, with no
-/// console window of its own (a debug build is a console program).
+/// console window of its own (a debug build is a console program). It is
+/// told the app's pid ([`APP_PID_ENV`]), so system audio can leave the app's
+/// own sounds out on Windows 11.
 ///
 /// # Errors
 ///
@@ -77,6 +98,7 @@ pub fn helper_command() -> Result<Command> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut program = helper::own_recorder_command()?;
     program.creation_flags(CREATE_NO_WINDOW);
+    program.env(APP_PID_ENV, std::process::id().to_string());
     Ok(program)
 }
 

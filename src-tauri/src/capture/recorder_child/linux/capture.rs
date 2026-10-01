@@ -215,8 +215,10 @@ pub struct Audio(Running);
 
 impl Audio {
     /// Open `device` (a PulseAudio source name; `None` = the default input)
-    /// and start sending its sound to the writer as `source`.
-    pub fn start(device: Option<&str>, source: Source, shared: Arc<Shared>) -> Result<Self, String> {
+    /// and start sending its sound to the writer as `source`. `lost` is
+    /// called once if the device goes away mid-recording (the app is told
+    /// `device_lost`, as on Windows).
+    pub fn start(device: Option<&str>, source: Source, shared: Arc<Shared>, lost: impl FnOnce(&str) + Send + 'static) -> Result<Self, String> {
         let pipeline = launch(&linux_plan::audio_capture(device))?;
         let sink = appsink(&pipeline, linux_plan::AUDIO_SINK)?;
         play(&pipeline)?;
@@ -226,7 +228,11 @@ impl Audio {
             .spawn({
                 let pipeline = pipeline.clone();
                 let stop = Arc::clone(&stop);
-                move || pull_audio(&pipeline, &sink, source, &shared, &stop)
+                move || {
+                    if let Err(reason) = pull_audio(&pipeline, &sink, source, &shared, &stop) {
+                        lost(&reason);
+                    }
+                }
             })
             .map_err(|e| format!("could not start the audio thread: {e}"))?;
         Ok(Self(Running {
@@ -247,17 +253,17 @@ pub(crate) fn floats(bytes: &[u8]) -> Vec<f32> {
 }
 
 /// A sound thread: pull, stamp, place, send. A device that fails (unplugged)
-/// ends only this thread; the recording goes on without it.
-fn pull_audio(pipeline: &gst::Pipeline, sink: &gst_app::AppSink, source: Source, shared: &Shared, stop: &AtomicBool) {
+/// ends only this thread with the reason; the recording goes on without it.
+fn pull_audio(pipeline: &gst::Pipeline, sink: &gst_app::AppSink, source: Source, shared: &Shared, stop: &AtomicBool) -> Result<(), String> {
     while !stop.load(Ordering::SeqCst) {
         if let Some(detail) = bus_error(pipeline) {
             say(&format!("a sound source stopped, recording goes on without it: {detail}"));
-            return;
+            return Err(detail);
         }
         let Some(sample) = sink.try_pull_sample(PULL) else {
             if sink.is_eos() {
                 say("a sound source ended, recording goes on without it");
-                return;
+                return Err("the source ended".into());
             }
             continue;
         };
@@ -274,7 +280,8 @@ fn pull_audio(pipeline: &gst::Pipeline, sink: &gst_app::AppSink, source: Source,
             time: placed,
             samples,
         }) {
-            return;
+            return Ok(());
         }
     }
+    Ok(())
 }

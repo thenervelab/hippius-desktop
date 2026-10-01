@@ -139,13 +139,18 @@ pub fn list_microphones() -> Vec<Microphone> {
 }
 
 /// The cameras the system has, named as the system names them. Listed by the
-/// helper on macOS and the recorder child on Linux (GStreamer, whose names
-/// WebKitGTK shows too) so the bar can offer them before the camera window
-/// has ever opened; empty elsewhere (the camera window names them there).
+/// helper on macOS, by the recorder child on Windows (Media Foundation) and
+/// on Linux (GStreamer, whose names WebKitGTK shows too), so the bar can
+/// offer them before the camera window has ever opened; empty elsewhere
+/// (the camera window names them there).
 pub fn list_cameras() -> Vec<MediaDevice> {
     #[cfg(target_os = "macos")]
     {
         tidy_devices(macos::list_cameras())
+    }
+    #[cfg(windows)]
+    {
+        tidy_devices(windows::list_cameras())
     }
     #[cfg(target_os = "linux")]
     {
@@ -155,7 +160,7 @@ pub fn list_cameras() -> Vec<MediaDevice> {
             Vec::new()
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
         Vec::new()
     }
@@ -213,14 +218,25 @@ pub fn meter_command(device: Option<&str>) -> Option<std::process::Command> {
         }
         Some(command)
     }
+    #[cfg(windows)]
+    {
+        // The recorder child's WASAPI meter, the same endpoint id the bar
+        // lists and the recording opens.
+        if !microphone_supported() {
+            return None;
+        }
+        windows::meter_command(device)
+    }
     #[cfg(target_os = "linux")]
     {
+        // The recorder child's pulsesrc meter, by the source name the bar
+        // lists and the recording opens.
         if !microphone_supported() {
             return None;
         }
         linux::meter_command(device)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
         let _ = device;
         None
@@ -250,6 +266,12 @@ pub trait Recorder: Send {
     fn restore_token(&self) -> Option<String> {
         None
     }
+    /// A sound source that went away mid-recording (`microphone` or
+    /// `systemAudio`); the recording goes on without it. Each is returned
+    /// once, oldest first.
+    fn take_lost_device(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Whether a recording's start was refused because the user closed the
@@ -260,6 +282,16 @@ pub trait Recorder: Send {
 #[must_use]
 pub fn cancelled_in_picker(e: &AppError) -> bool {
     matches!(e, AppError::Other(message) if message == protocol::PICKER_CANCELLED)
+}
+
+/// What the pill says when a sound source goes away mid-recording. Rust's
+/// copy, so the pill never words it itself.
+#[must_use]
+pub fn device_lost_message(device: &str) -> &'static str {
+    match device {
+        "systemAudio" => "System audio stopped. The recording goes on without it.",
+        _ => "The microphone was disconnected. The recording goes on without it.",
+    }
 }
 
 /// Refuse to start with less than `MIN_FREE_BYTES` free where the recording
@@ -649,6 +681,16 @@ mod tests {
         ]);
         let names: Vec<&str> = tidy.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["AirPods Pro", "Studio Display Microphone", "iPhone Microphone", "BlackHole 2ch"]);
+    }
+
+    #[test]
+    fn a_lost_device_is_named_in_plain_words() {
+        assert!(device_lost_message("microphone").starts_with("The microphone was disconnected."));
+        assert!(device_lost_message("systemAudio").starts_with("System audio stopped."));
+        assert_eq!(device_lost_message("anything else"), device_lost_message("microphone"));
+        for line in [device_lost_message("microphone"), device_lost_message("systemAudio")] {
+            assert!(!line.contains('\u{2014}'), "no em dashes in user copy");
+        }
     }
 
     #[test]

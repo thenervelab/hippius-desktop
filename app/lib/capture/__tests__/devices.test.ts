@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deviceIdByName } from "../devices";
+import { deviceIdByName, withoutUsbId } from "../devices";
 import { mmss } from "../time";
 import { cappedPercent } from "@/app/lib/upload-feed/percent";
 
@@ -38,6 +38,37 @@ describe("deviceIdByName", () => {
     expect(deviceIdByName(iphone, "audioinput", "Ahmad\u2019s iPhone Microphone")).toBe("a1");
     // Decomposed "é" and a doubled space on the webview side; composed on the helper's.
     expect(deviceIdByName(iphone, "audioinput", "Zo\u00e9\u2019s iPhone Microphone")).toBe("a2");
+  });
+
+  // Labels as WebView2 gives them once the camera window holds a grant,
+  // against the names the recorder child lists from Media Foundation and
+  // WASAPI (which carry no USB id).
+  it("finds Windows devices by the names Media Foundation and WASAPI give them", () => {
+    const windows = [
+      { kind: "videoinput" as const, deviceId: "w1", label: "USB Camera 2 (0c45:6366)" },
+      { kind: "videoinput" as const, deviceId: "w2", label: "USB Camera (0c45:6366)" },
+      { kind: "videoinput" as const, deviceId: "w3", label: "Integrated Camera (04f2:b6dd)" },
+      { kind: "videoinput" as const, deviceId: "w4", label: "Windows Virtual Camera" },
+      { kind: "videoinput" as const, deviceId: "w5", label: "Pixel 8 Pro (Windows Virtual Camera)" },
+      { kind: "audioinput" as const, deviceId: "default", label: "Default - Microphone Array (Realtek(R) Audio)" },
+      { kind: "audioinput" as const, deviceId: "communications", label: "Communications - Headset (Jabra Evolve2 65)" },
+      { kind: "audioinput" as const, deviceId: "m1", label: "Microphone Array (Realtek(R) Audio)" },
+      { kind: "audioinput" as const, deviceId: "m2", label: "Headset (Jabra Evolve2 65)" },
+    ];
+    // "USB Camera" must not pick the "USB Camera 2" listed before it.
+    expect(deviceIdByName(windows, "videoinput", "USB Camera")).toBe("w2");
+    expect(deviceIdByName(windows, "videoinput", "USB Camera 2")).toBe("w1");
+    expect(deviceIdByName(windows, "videoinput", "Integrated Camera")).toBe("w3");
+    // A Phone Link (connected) camera.
+    expect(deviceIdByName(windows, "videoinput", "Pixel 8 Pro (Windows Virtual Camera)")).toBe("w5");
+    expect(deviceIdByName(windows, "audioinput", "Microphone Array (Realtek(R) Audio)")).toBe("m1");
+    expect(deviceIdByName(windows, "audioinput", "Headset (Jabra Evolve2 65)")).toBe("m2");
+  });
+
+  it("drops only a trailing USB id from a label", () => {
+    expect(withoutUsbId("Logitech BRIO (046d:085e)")).toBe("Logitech BRIO");
+    expect(withoutUsbId("Microphone Array (Realtek(R) Audio)")).toBe("Microphone Array (Realtek(R) Audio)");
+    expect(withoutUsbId("Cam (046d:085e) Front")).toBe("Cam (046d:085e) Front");
   });
 
   it("ignores a name that is only whitespace", () => {

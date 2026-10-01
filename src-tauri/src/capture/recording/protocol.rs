@@ -157,6 +157,13 @@ pub enum HelperEvent {
         message: String,
         saved: bool,
     },
+    /// Unprompted and not fatal: a sound source went away mid-recording
+    /// (`device`: `microphone` or `systemAudio`) and the recording goes on
+    /// without it. Only the recorder child says this; the Swift helper does
+    /// not.
+    DeviceLost {
+        device: String,
+    },
 }
 
 /// One line from the recorder: the event, and the id of the command it
@@ -184,6 +191,8 @@ struct WireEvent {
     saved: Option<bool>,
     #[serde(default, rename = "restoreToken")]
     restore_token: Option<String>,
+    #[serde(default)]
+    device: Option<String>,
 }
 
 /// Read one event line.
@@ -193,7 +202,11 @@ struct WireEvent {
 /// A line that is not JSON, or names an event the app does not know.
 pub fn parse_event(line: &str) -> std::result::Result<Incoming, String> {
     let v: WireEvent = serde_json::from_str(line).map_err(|e| e.to_string())?;
-    let event = if v.event.as_deref() == Some("stream_stopped") {
+    let event = if v.event.as_deref() == Some("device_lost") {
+        HelperEvent::DeviceLost {
+            device: v.device.unwrap_or_default(),
+        }
+    } else if v.event.as_deref() == Some("stream_stopped") {
         HelperEvent::StreamStopped {
             message: v.error.unwrap_or_else(|| "the stream stopped".into()),
             saved: v.saved.unwrap_or(false),
@@ -333,6 +346,13 @@ pub fn error_line(error: &str, id: Option<u64>) -> String {
 #[must_use]
 pub fn stream_stopped_line(error: &str, saved: bool) -> String {
     serde_json::json!({ "ok": false, "event": "stream_stopped", "error": error, "saved": saved }).to_string()
+}
+
+/// A sound source went away and the recording goes on without it. `ok` is
+/// true: nothing failed that the app must act on, it only tells the user.
+#[must_use]
+pub fn device_lost_line(device: &str, error: &str) -> String {
+    serde_json::json!({ "ok": true, "event": "device_lost", "device": device, "error": error }).to_string()
 }
 
 #[cfg(test)]
@@ -499,6 +519,9 @@ mod tests {
                 }
             )
         );
+        // Not an error, though it carries the device's reason.
+        let lost = parse_event(&device_lost_line("microphone", "the device went away")).unwrap();
+        assert_eq!((lost.id, lost.event), (None, HelperEvent::DeviceLost { device: "microphone".into() }));
     }
 
     /// The child answers bad input in the Swift helper's words.

@@ -51,7 +51,7 @@ use super::mixer::Source;
 use super::writer_loop::{self, Msg, Shared};
 use super::{Live, Output, Started};
 use crate::capture::recording::RecordingUnavailable;
-use crate::capture::recording::protocol::StartCommand;
+use crate::capture::recording::protocol::{self, StartCommand};
 use crate::capture::rollout::{Platform, current_platform};
 
 /// How long the first picture may take after the source starts (a portal
@@ -133,13 +133,14 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         // A chosen microphone that is gone (unplugged since the bar listed
         // it) records the default instead, as the bar shows it.
         let chosen = cmd.microphone_device_id.as_deref().filter(|id| !id.is_empty() && *id != "default");
-        let opened = capture::Audio::start(chosen, Source::Microphone, Arc::clone(&shared)).or_else(|e| match chosen {
-            Some(_) => {
-                say(&format!("the chosen microphone could not be opened, recording the default: {e}"));
-                capture::Audio::start(None, Source::Microphone, Arc::clone(&shared))
-            }
-            None => Err(e),
-        });
+        let opened =
+            capture::Audio::start(chosen, Source::Microphone, Arc::clone(&shared), tell_lost(out, Source::Microphone)).or_else(|e| match chosen {
+                Some(_) => {
+                    say(&format!("the chosen microphone could not be opened, recording the default: {e}"));
+                    capture::Audio::start(None, Source::Microphone, Arc::clone(&shared), tell_lost(out, Source::Microphone))
+                }
+                None => Err(e),
+            });
         match opened {
             Ok(a) => {
                 sources.push(Source::Microphone);
@@ -149,7 +150,12 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         }
     }
     if cmd.system_audio {
-        match capture::Audio::start(Some(linux_plan::DEFAULT_MONITOR), Source::System, Arc::clone(&shared)) {
+        match capture::Audio::start(
+            Some(linux_plan::DEFAULT_MONITOR),
+            Source::System,
+            Arc::clone(&shared),
+            tell_lost(out, Source::System),
+        ) {
             Ok(a) => {
                 sources.push(Source::System);
                 audio.push(a);
@@ -179,6 +185,14 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
             Err(e)
         }
     }
+}
+
+/// What a sound thread calls when its device goes away mid-recording: the
+/// app is told (`device_lost`, the event Windows sends too), so the pill can
+/// say the recording goes on without it.
+fn tell_lost(out: &Output, source: Source) -> impl FnOnce(&str) + Send + 'static {
+    let out = Arc::clone(out);
+    move |error| super::emit(&out, &protocol::device_lost_line(source.device_name(), error))
 }
 
 fn spawn_writer(

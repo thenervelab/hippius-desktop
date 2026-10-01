@@ -68,6 +68,26 @@ pub const SHARE_ART_EVENT: &str = "capture_share_art";
 /// window that is not the key window does not always get the webview's own
 /// hover events on macOS.
 pub const CAMERA_HOVER_EVENT: &str = "capture_camera_hover";
+/// A sound source went away mid-recording and the recording goes on without
+/// it (`DeviceLost`): the pill says so in Rust's words.
+pub const DEVICE_LOST_EVENT: &str = "capture_device_lost";
+
+/// What [`DEVICE_LOST_EVENT`] carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceLost {
+    /// `microphone` or `systemAudio`.
+    pub device: String,
+    pub message: &'static str,
+}
+
+impl DeviceLost {
+    #[must_use]
+    pub fn new(device: String) -> Self {
+        let message = recording::device_lost_message(&device);
+        Self { device, message }
+    }
+}
 
 /// Overlay windows are labelled `capture-overlay-<display id>`, which is also
 /// the glob the overlay's capability file grants.
@@ -352,7 +372,11 @@ fn show_phase_in_tray(app: &AppHandle, event: PhaseEvent) {
             let text = tray_status::tray_text_for(event.phase);
             let mut last = lock(&state.capture.tray_last);
             if tray_status::tray_needs_write(last.as_ref(), &text) {
+                let was = last.as_ref().map_or(tray_status::TrayGlyph::None, tray_status::tray_glyph_of);
                 write_tray_text(&handle, &text);
+                if tray_status::TRAY_ICON_MARKS_RECORDING {
+                    write_tray_glyph(&handle, tray_status::icon_write(was, tray_status::tray_glyph_of(&text)));
+                }
                 *last = Some(text);
             }
         }
@@ -389,16 +413,76 @@ fn write_tray_text(app: &AppHandle, text: &TrayText) {
     }
 }
 
+/// The recording's mark came off the tray icon (Windows): the main window
+/// puts its own icon (syncing, synced) back (`useTraySync.ts`).
+pub const TRAY_ICON_RELEASED_EVENT: &str = "capture_tray_icon_released";
+
+/// The app's tray icon as bundled, decoded once.
+fn tray_base_icon() -> Option<&'static image::RgbaImage> {
+    static BASE: std::sync::OnceLock<Option<image::RgbaImage>> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        image::load_from_memory(include_bytes!("../../icons/TrayIcon.png"))
+            .map(|i| i.to_rgba8())
+            .inspect_err(|e| tracing::debug!(error = %e, "could not decode the tray icon"))
+            .ok()
+    })
+    .as_ref()
+}
+
+/// The tray icon with `glyph`'s dot, built once per glyph.
+fn marked_tray_icon(glyph: tray_status::TrayGlyph) -> Option<tauri::image::Image<'static>> {
+    static RECORDING: std::sync::OnceLock<Option<image::RgbaImage>> = std::sync::OnceLock::new();
+    static PAUSED: std::sync::OnceLock<Option<image::RgbaImage>> = std::sync::OnceLock::new();
+    let slot = match glyph {
+        tray_status::TrayGlyph::Recording => &RECORDING,
+        tray_status::TrayGlyph::Paused => &PAUSED,
+        tray_status::TrayGlyph::None => return None,
+    };
+    let icon = slot
+        .get_or_init(|| tray_base_icon().and_then(|base| tray_status::marked_icon(base, glyph)))
+        .as_ref()?;
+    Some(tauri::image::Image::new_owned(icon.as_raw().clone(), icon.width(), icon.height()))
+}
+
+/// Mark the tray icon while a recording runs, or put the app's icon back
+/// (plan XP-15). Windows only ([`tray_status::TRAY_ICON_MARKS_RECORDING`]):
+/// its tray shows no title. The main window owns the icon otherwise; on
+/// release it is told to re-apply its own, since only it knows whether a
+/// sync is running.
+fn write_tray_glyph(app: &AppHandle, write: tray_status::IconWrite) {
+    let Some(tray) = app.tray_by_id(tray_status::TRAY_ID) else {
+        return;
+    };
+    match write {
+        tray_status::IconWrite::Keep => {}
+        tray_status::IconWrite::Mark(glyph) => {
+            if let Some(icon) = marked_tray_icon(glyph)
+                && let Err(e) = tray.set_icon(Some(icon))
+            {
+                tracing::debug!(error = %e, "could not mark the tray icon");
+            }
+        }
+        tray_status::IconWrite::Release => {
+            if let Some(base) = tray_base_icon() {
+                let icon = tauri::image::Image::new_owned(base.as_raw().clone(), base.width(), base.height());
+                if let Err(e) = tray.set_icon(Some(icon)) {
+                    tracing::debug!(error = %e, "could not put the tray icon back");
+                }
+            }
+            let _ = app.emit(TRAY_ICON_RELEASED_EVENT, ());
+        }
+    }
+}
+
 /// A left click on the tray icon, received by `tray::panel` before it opens
-/// anything. During a recording the click brings the recording's pill back,
-/// without taking the keyboard from the app being recorded, and does NOT
-/// stop it (the pill has Stop); the popover does not open. Otherwise the
-/// route is the popover, or the main window when nobody is signed in
-/// ([`tray_status::tray_click_route`]).
+/// anything. During a recording the click also brings the recording's pill
+/// back, without taking the keyboard from the app being recorded, and does
+/// NOT stop it (the pill has Stop). The route is the popover when signed in,
+/// in every phase, else the main window ([`tray_status::tray_click_route`]).
 pub fn on_tray_click(app: &AppHandle, signed_in: bool) -> TrayClickRoute {
     let state = app.state::<AppState>();
     let route = tray_status::tray_click_route(signed_in, state.capture.current());
-    if route == TrayClickRoute::ShowRecordingControls {
+    if route.shows_recording_controls() {
         if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
             show_without_focus(&w);
         } else {
@@ -1452,6 +1536,10 @@ pub struct OverlayContext {
     /// line), the same as `capture_support` says.
     #[serde(flatten)]
     pub surfaces: super::support::Surfaces,
+    /// Which devices Windows' privacy settings block, and the camera's line
+    /// (the bar offers "Open Settings" under a blocked row).
+    #[serde(flatten)]
+    pub privacy: super::privacy::DevicePrivacy,
     pub destination: Option<CaptureDestination>,
     /// The area already drawn, on this display or another. At the start of a
     /// capture it is the area last drawn on the bar's display, fitted to it.
@@ -1495,6 +1583,7 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         camera_only_available: camera_only_supported(),
         recording_availability: recording::RecordingAvailability::now(),
         surfaces,
+        privacy: super::privacy::device_privacy(),
         destination,
         pending,
     })
@@ -2136,17 +2225,23 @@ fn tick_once(app: &AppHandle) -> Tick {
     // `try_lock`: a pause or resume holds the recorder while the helper
     // answers (up to seconds). The tick skips a beat rather than blocking an
     // async worker for that long.
-    let (elapsed, died) = match state.capture.recorder.try_lock() {
+    let (elapsed, died, lost) = match state.capture.recorder.try_lock() {
         Ok(guard) => match guard.as_ref() {
-            Some(r) => (r.elapsed_secs(), r.take_death()),
+            Some(r) => (r.elapsed_secs(), r.take_death(), r.take_lost_device()),
             None => return Tick::Done,
         },
         Err(std::sync::TryLockError::Poisoned(p)) => match p.into_inner().as_ref() {
-            Some(r) => (r.elapsed_secs(), r.take_death()),
+            Some(r) => (r.elapsed_secs(), r.take_death(), r.take_lost_device()),
             None => return Tick::Done,
         },
         Err(std::sync::TryLockError::WouldBlock) => return Tick::Continue,
     };
+    // A microphone unplugged mid-recording: the recording goes on, and the
+    // pill says so (one a tick; another waits for the next).
+    if let Some(device) = lost {
+        tracing::warn!(%device, "a sound source went away; recording goes on without it");
+        let _ = app.emit(DEVICE_LOST_EVENT, DeviceLost::new(device));
+    }
     // The recording ended on its own (display gone, helper crashed): end the
     // session as Stop would, delivering what was saved, instead of counting
     // on. Spawned, because `stop_inner` stops this very loop.
@@ -2715,6 +2810,21 @@ fn open_permission_settings(app: &AppHandle) -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn open_permission_settings(_app: &AppHandle) -> Result<()> {
     Err(AppError::Validation("Screen recording permission is only managed on macOS.".into()))
+}
+
+/// The bar's "Open Settings" under a camera or microphone row that Windows'
+/// privacy settings block (`privacy::device_privacy`): the Settings page
+/// holding that device's switches. `device` is `camera` or `microphone`;
+/// anything else, or any other system, is refused, so the webview can never
+/// open an arbitrary URI through it.
+#[tauri::command]
+pub fn capture_open_privacy_settings(app: AppHandle, device: String) -> Result<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let uri = super::privacy::settings_uri_for(super::rollout::current_platform(), &device)
+        .ok_or_else(|| AppError::Validation("There is no privacy setting to open here.".into()))?;
+    app.opener()
+        .open_url(uri, None::<&str>)
+        .map_err(|e| AppError::Other(format!("Could not open Settings: {e}")))
 }
 
 /// Read a permission preference; an empty value is a cleared one.
@@ -3506,34 +3616,17 @@ async fn recording_bubble_frame(app: &AppHandle, phase: CapturePhase, shape: Opt
             if !bar::WINDOW_RECORDING_ADDS_CAMERA {
                 return None;
             }
-            let frame = tauri::async_runtime::spawn_blocking(move || window_frame_blocking(window_id))
+            let native = tauri::async_runtime::spawn_blocking(move || super::targets::window_frame(window_id))
                 .await
                 .ok()
                 .flatten()?;
-            (camera::Filmed::Region(frame), 1.0)
+            let displays = lock(&state.capture.displays).clone();
+            let (frame, scale) = camera::window_region(native, &displays, super::targets::COORDS_ARE_LOGICAL)?;
+            (camera::Filmed::Region(frame), scale)
         }
     };
     let current = app.get_webview_window(CAMERA_LABEL).and_then(|w| current_camera_frame(&w));
     camera::bubble_for_recording(current, size, filmed).map(|f| (f, scale))
-}
-
-/// A window's frame in global points, for placing the bubble inside it. The
-/// only platform that adds the camera to a window recording is macOS, where
-/// xcap's coordinates are already points.
-#[cfg(target_os = "macos")]
-fn window_frame_blocking(window_id: u32) -> Option<camera::Frame> {
-    let f = super::targets::window_frame(window_id)?;
-    Some(camera::Frame {
-        x: f64::from(f.x),
-        y: f64::from(f.y),
-        width: f64::from(f.width),
-        height: f64::from(f.height),
-    })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn window_frame_blocking(_window_id: u32) -> Option<camera::Frame> {
-    None
 }
 
 /// What the camera page and the pill are told: the shape, the chosen camera
@@ -3549,8 +3642,11 @@ async fn camera_state_for(app: &AppHandle, shape: Option<CameraShape>, hidden: b
     let camera_filmed = match (phase, shape) {
         (CapturePhase::Selecting { kind, mode }, _) => options.camera_filmed(kind, mode),
         (_, Some(CameraShape::Stage)) => true,
-        // A window recording films that one window only.
-        (_, Some(CameraShape::Bubble)) => !matches!(*lock(&state.capture.selection), Some(Selection::Window { .. })),
+        // A window recording films that one window, plus the bubble where
+        // the recorder adds it.
+        (_, Some(CameraShape::Bubble)) => {
+            bar::WINDOW_RECORDING_ADDS_CAMERA || !matches!(*lock(&state.capture.selection), Some(Selection::Window { .. }))
+        }
         (_, None) => false,
     };
     CameraState {

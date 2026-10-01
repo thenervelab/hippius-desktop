@@ -10,7 +10,7 @@ paths:
   - "src-tauri/src/tray/**"
   - "app/components/page-sections/drive/highlightEntry.ts"
   - "app/components/page-sections/drive/useDriveHighlight.ts"
-  - "app/tray-panel/TrayCaptureButton.tsx"
+  - "app/tray-panel/TrayCaptureRow.tsx"
   - "macos/HippiusCapture/**"
 ---
 
@@ -87,12 +87,29 @@ side probes Media Foundation once per launch on its own thread
 the ConsentStore for a blocked mic (`MIC_BLOCKED_WINDOWS`), and
 `webview_media.rs` answers WebView2's `PermissionRequested` (camera, mic) for
 `capture-camera` and `capture-overlay-*` and the app's own origin only,
-pinned in `capture_wiring.rs`. Not done: process loopback (Hippius's own
-sounds are in system audio), the bubble in a window recording, a GPU colour
-converter, the tray glyph (XP-15). Cross-check from a Mac with the MSVC
+pinned in `capture_wiring.rs`. Not done: a GPU colour converter. Cross-check from a Mac with the MSVC
 headers from `xwin` (`CFLAGS_x86_64_pc_windows_msvc` with clang's own
 include dir FIRST, or the MSVC intrinsics headers break aws-lc), and pass
 `--target` before `--`, or clippy builds the build script for Windows.
+
+**Phases 5 and 6 for Windows are in code, not yet run on hardware.**
+The child's `--meter [endpointId]` (`meter.rs` pure, `windows/audio.rs`
+WASAPI) is `recording::meter_command` on Windows, so `mic_meter` and the
+one-owner rule work unchanged; `--list-cameras` is `MFEnumDeviceSources`.
+System audio is process loopback excluding the app's tree on build 22000+
+(`sources::system_audio_route`, the pid in `HIPPIUS_CAPTURE_APP_PID` set by
+`recording::windows::helper_command`), plain loopback otherwise or on any
+refusal. A device lost mid-recording is a non-fatal `device_lost` line,
+kept apart from replies and deaths by `HelperRecorder` and sent to the pill
+as `capture_device_lost` with Rust's line. `privacy.rs` puts
+`privacyBlocked` / `cameraUnavailableMessage` in the overlay context and
+`capture_open_privacy_settings` opens only the webcam or microphone page.
+A window recording with the bubble runs a second WGC session on the
+bubble's window and composites its latest picture into the window's
+(`wgc::WithCamera`, `overlay.rs` keeps only the bubble's shape, since a
+transparent margin can arrive black); both windows' pictures are kept even
+while paused. A start failure the user cannot act on reads
+`START_FAILED`, never an HRESULT. Plan: Phase 5 and 6 sections.
 
 **Phase 3 (Linux screenshots) is in.** X11 = `capture/linux_x11/` (x11rb:
 RandR monitors, EWMH windows front first, `GetImage` of the root; `model.rs`
@@ -132,8 +149,12 @@ fixed from the first frame (`plan::output_size`); the writer's `appsrc`s
 never block and the queues before `mp4mux` are unbounded, or the one writer
 thread deadlocks between the tracks; the portal's PipeWire fd stays open for
 the recording and the session is closed with it. The camera is never opened
-here, and the Linux mic meter is the child's `--meter` (same lines as the
-Swift meter), stopped before the recorder opens the mic. The bubble's
+here, and the Linux mic meter is the child's `--meter` through the shared
+`recorder_child/meter.rs` (Windows' and Linux's meters only open the device
+and hand samples to its `serve`, so both print the Swift meter's lines),
+stopped before the recorder opens the mic. A sound pipeline that fails
+mid-recording ends only its thread and says `device_lost` with its source's
+name, the same event Windows sends. The bubble's
 `getUserMedia` exists on Linux only because `webview_media_gtk.rs` turns
 WebKitGTK's media stream on and allows user-media and device-info requests,
 for the capture windows and the app's own pages only (pinned in
@@ -219,7 +240,7 @@ window's HWND, X11 its XID with the stage's margin cut by `videocrop`); the sour
 `cameraOnlyAvailable`, and the camera row says "Camera is only recorded with
 the entire screen or an area." whenever `cameraFilmed` is false (a window
 recording where the recorder cannot add the camera window:
-`bar::WINDOW_RECORDING_ADDS_CAMERA`, macOS only).
+`bar::WINDOW_RECORDING_ADDS_CAMERA`, macOS and Windows).
 
 **Screenshot:** selection → pixels in memory (`screenshot::capture_image`) and
 the card's JPEG from them (`thumbnail::from_image`) → preview card shown →
@@ -267,7 +288,8 @@ muted camera stays black until that page asks again, even after the other
 let go; WebKit's mic also runs voice processing that alters what the
 recorder hears from the same mic for a few seconds after it closes. So the
 mic row's level meter (`MicMeter`) is the helper's (`HippiusCapture --meter
-[deviceId]`, plain AVFoundation, by the helper's own id, no name matching),
+[deviceId]`, plain AVFoundation, by the helper's own id, no name matching;
+on Windows `Hippius --capture-recorder --meter [endpointId]`, WASAPI),
 run by `capture::mic_meter` (one process, a generation per start so a late
 stop never ends its replacement) and sent as `capture_mic_level` (0..1,
 `level_from_rms`). `meter_may_run` allows it only while choosing a
@@ -480,7 +502,11 @@ It is written only when the text changes (`tray_needs_write` against
 `tray_last`), so a screenshot never touches the status item.
 Empty, never `None`: `tray-icon` ignores a `None` title on macOS, which is
 what left a saved recording's time frozen in the menu bar. Windows has no
-title, so the tooltip carries the time (`tray_text_for`). The write is POSTED
+title, so the tooltip carries the time (`tray_text_for`) and Rust marks the
+icon with a red (paused: amber) dot (`write_tray_glyph`, XP-15), redrawn on
+every write so a sync icon swapped in by `useTraySync.ts` is covered within
+a second; at the end it puts the plain icon back and emits
+`capture_tray_icon_released`, on which the main window re-applies its own. The write is POSTED
 to the main thread (`run_on_main_thread`), never awaited: it runs under the
 phase lock and `set_title` blocks on the main thread, where a sync command may
 be waiting for that lock. A late write is dropped by `seq`
@@ -488,9 +514,10 @@ be waiting for that lock. A late write is dropped by `seq`
 (= `TRAY_ID` in `useTraySync.ts`). A left click reaches Rust's own tray
 listener (`Builder::on_tray_icon_event` → `tray::panel::on_tray_icon_event`),
 never a webview callback (see tray.md), which asks `commands::on_tray_click`:
-`tray_status::tray_click_route` sends Recording/Paused to the pill (without
-focus; never a stop, the pill has Stop), a signed-out click to the main
-window, anything else (Idle after a capture included) to the popover. Pinned
+`tray_status::tray_click_route` sends a signed-in click to the popover in
+every phase; Recording/Paused also bring the pill back (without focus; never
+a stop, the pill has Stop) and the popover opens content-protected. A
+signed-out click goes to the main window, or only to the pill mid-recording. Pinned
 by `tray_status` unit tests, the `commands.rs` session tests and
 `tests/capture_wiring.rs`. The camera and card
 pages keep the "an event beats a late first read" rule; the pill compares

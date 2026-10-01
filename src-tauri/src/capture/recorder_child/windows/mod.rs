@@ -131,19 +131,29 @@ fn target_of(cmd: &StartCommand) -> Result<Target, String> {
     }
 }
 
-/// Start recording what `cmd` asks for into `cmd.output`.
+/// Start recording what `cmd` asks for into `cmd.output`. A refusal the
+/// user can act on (the OS floor) is said as is; anything else (an encoder
+/// or capture HRESULT) goes to stderr, which the app logs, and the user reads
+/// [`super::start_failure_for_user`]'s plain line.
 pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
+    start_recording(cmd, out).map_err(|detail| {
+        let _ = writeln_stderr(&format!("the recording could not start: {detail}"));
+        super::start_failure_for_user(&detail)
+    })
+}
+
+fn start_recording(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
     use crate::capture::permissions::{windows_build, windows_excludes_from_capture};
     if !windows_excludes_from_capture(windows_build()) {
         return Err(crate::capture::recording::RecordingUnavailable::OsTooOld.message().into());
     }
     let target = target_of(cmd)?;
-    if cmd.camera_window_id.is_some() {
-        // A window recording films that one window; adding the camera
-        // bubble needs two captures composited, which this recorder does not
-        // do yet (`bar::WINDOW_RECORDING_ADDS_CAMERA` tells the bar so).
-        let _ = writeln_stderr("the camera window is not added to a window recording on Windows");
-    }
+    // A window recording films that one window: the camera bubble's window
+    // is captured too and drawn into it (`wgc::WithCamera`).
+    let camera = match target {
+        Target::Window { .. } => cmd.camera_window_id.map(handle_from_id),
+        Target::Monitor { .. } => None,
+    };
     let output = PathBuf::from(&cmd.output);
     let (tx, rx) = mpsc::channel::<Msg>();
     let shared = Arc::new(Shared {
@@ -162,7 +172,13 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         match audio::open(audio::Device::Microphone(cmd.microphone_device_id.clone())) {
             Ok(opened) => {
                 sources.push(Source::Microphone);
-                audio_threads.push(audio::spawn(opened, Source::Microphone, Arc::clone(&shared), Arc::clone(&stop_audio)));
+                audio_threads.push(audio::spawn(
+                    opened,
+                    Source::Microphone,
+                    Arc::clone(&shared),
+                    Arc::clone(&stop_audio),
+                    tell_lost(out, Source::Microphone),
+                ));
             }
             Err(e) => {
                 let _ = writeln_stderr(&format!("the microphone could not be opened, recording without it: {e}"));
@@ -170,10 +186,16 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         }
     }
     if cmd.system_audio {
-        match audio::open(audio::Device::SystemLoopback) {
+        match audio::open(audio::Device::system()) {
             Ok(opened) => {
                 sources.push(Source::System);
-                audio_threads.push(audio::spawn(opened, Source::System, Arc::clone(&shared), Arc::clone(&stop_audio)));
+                audio_threads.push(audio::spawn(
+                    opened,
+                    Source::System,
+                    Arc::clone(&shared),
+                    Arc::clone(&stop_audio),
+                    tell_lost(out, Source::System),
+                ));
             }
             Err(e) => {
                 let _ = writeln_stderr(&format!("system audio could not be opened, recording without it: {e}"));
@@ -189,7 +211,7 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         move || writer_loop(&rx, &shared, &out, &output, &sources, &ready_tx)
     });
 
-    let capture = match wgc::start(target, Arc::clone(&shared)) {
+    let capture = match wgc::start(target, Arc::clone(&shared), camera) {
         Ok(capture) => capture,
         Err(e) => {
             let session = Session::parts(output, shared, None, stop_audio, audio_threads, Some(writer_thread));
@@ -209,6 +231,14 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
             Err(e)
         }
     }
+}
+
+/// What an audio thread calls when its device goes away mid-recording: the
+/// app is told (`device_lost`), so the pill can say the recording goes on
+/// without it.
+fn tell_lost(out: &Output, source: Source) -> impl FnOnce(&str) + Send + 'static {
+    let out = Arc::clone(out);
+    move |error| emit(&out, &protocol::device_lost_line(source.device_name(), error))
 }
 
 /// Diagnostics go to stderr, which the app logs at `warn`.

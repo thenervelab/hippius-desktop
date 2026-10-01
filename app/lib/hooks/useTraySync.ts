@@ -31,7 +31,16 @@ const SYNC_COMPLETED_TRAY_ICON = "icons/SyncCompletedTrayIcon.png";
 let defaultIconPath: string | null = null;
 let syncingIconPath: string | null = null;
 let completedIconPath: string | null = null;
-let trayIconState: "default" | "syncing" | "completed" = "default";
+// "unknown": someone else drew on the icon (Rust's recording mark on
+// Windows), so the next request repaints whatever it asks for.
+let trayIconState: "default" | "syncing" | "completed" | "unknown" = "default";
+// The last icon asked for, re-applied when Rust hands the icon back.
+let lastIconRequest = { isSyncing: false, isCompleted: false };
+
+// Rust marks the icon while a recording runs on Windows (its tray has no
+// title for the time) and says when it is done; only this page knows which
+// sync icon belongs there then.
+const TRAY_ICON_RELEASED_EVENT = "capture_tray_icon_released";
 
 /* ─ State kept across React reloads ───────────────────────────── */
 // Idempotency guard for the one-time tray creation (a Fast Refresh re-run of
@@ -338,6 +347,10 @@ export function useTrayInit(isAuthenticated: boolean) {
       // disables the context-menu items) after the tray exists.
       startSyncActivityWatcher();
       startLoginStatusWatcher();
+      void listen(TRAY_ICON_RELEASED_EVENT, () => {
+        trayIconState = "unknown";
+        void setTrayIconSyncing(lastIconRequest.isSyncing, lastIconRequest.isCompleted);
+      });
     })();
   }, []);
 }
@@ -372,6 +385,7 @@ async function setTrayIconSyncing(
   isSyncing: boolean,
   isCompleted: boolean = false,
 ) {
+  lastIconRequest = { isSyncing, isCompleted };
   try {
     // Force resolve paths every time if they're missing
     if (!defaultIconPath)
