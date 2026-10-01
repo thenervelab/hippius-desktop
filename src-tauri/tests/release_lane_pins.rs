@@ -874,3 +874,61 @@ fn the_windows_lane_runs_clippy_and_the_capture_tests_for_capture_prs() {
         "the changes job must detect a capture change"
     );
 }
+
+/// Linux recording links GStreamer (gstreamer-rs), so every Linux build
+/// needs its development files: a lane without them fails at `pkg-config`
+/// only when it next builds, which for production is the release itself.
+/// The recorder's encoders and parsers are the distro's plugins, which the
+/// deb only RECOMMENDS: a minimal system still installs Hippius and is told
+/// which packages to add (`codecsMissing`).
+#[test]
+fn every_linux_build_has_gstreamer_and_the_deb_recommends_its_plugins() {
+    const DEV: [&str; 2] = ["libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev"];
+    let setup = repo_file("../.github/actions/rust-ci-setup/action.yml");
+    for package in DEV {
+        assert!(setup.contains(package), "rust-ci-setup must install {package}");
+    }
+    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
+        let text = repo_file(&format!("../.github/workflows/{lane}"));
+        let linux_installs: Vec<&str> = text.lines().filter(|l| l.contains("libwebkit2gtk-4.1-dev")).collect();
+        assert!(!linux_installs.is_empty(), "{lane} has a Linux leg");
+        for line in linux_installs {
+            for package in DEV {
+                assert!(line.contains(package), "{lane}'s Linux leg must install {package}: {line}");
+            }
+        }
+    }
+    let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
+    let deb = &config["bundle"]["linux"]["deb"];
+    let recommends: Vec<&str> = deb["recommends"]
+        .as_array()
+        .expect("deb recommends")
+        .iter()
+        .filter_map(|r| r.as_str())
+        .collect();
+    for plugin in [
+        "gstreamer1.0-pipewire",
+        "gstreamer1.0-plugins-base",
+        "gstreamer1.0-plugins-good",
+        "gstreamer1.0-plugins-bad",
+        "gstreamer1.0-plugins-ugly",
+        "gstreamer1.0-libav",
+    ] {
+        assert!(recommends.contains(&plugin), "the deb must recommend {plugin}");
+    }
+    let depends = deb["depends"].as_array().expect("deb depends");
+    assert!(
+        !depends.iter().any(|d| d.as_str().is_some_and(|d| d.contains("gstreamer"))),
+        "GStreamer plugins are recommended, never required"
+    );
+}
+
+/// The Linux lane runs the recorder's real GStreamer writer (the ignored
+/// self-tests), with the plugins it needs installed first.
+#[test]
+fn the_linux_lane_runs_the_recorder_against_real_gstreamer() {
+    let jobs = workflow_jobs("ci.yml");
+    let linux = jobs.get("rust-linux").expect("ci.yml has a rust-linux job");
+    assert!(linux.script.contains("gstreamer1.0-plugins-ugly") && linux.script.contains("gstreamer1.0-libav"));
+    assert!(linux.script.contains("cargo test --lib capture::recorder_child::linux -- --ignored"));
+}

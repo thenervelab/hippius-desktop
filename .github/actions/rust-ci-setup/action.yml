@@ -78,6 +78,8 @@ runs:
           libsoup-3.0-dev \
           libxdo-dev \
           libssl-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
           build-essential \
           file
 

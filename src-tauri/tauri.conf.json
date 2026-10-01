@@ -137,7 +137,13 @@
         ],
         "recommends": [
           "xdg-desktop-portal",
-          "xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr"
+          "xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr",
+          "gstreamer1.0-pipewire",
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-plugins-bad",
+          "gstreamer1.0-plugins-ugly",
+          "gstreamer1.0-libav"
         ],
         "files": {
           "/usr/share/nautilus-python/extensions/hippius-share.py": "../linux/nautilus-python/hippius-share.py",
