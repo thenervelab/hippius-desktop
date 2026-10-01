@@ -21,8 +21,20 @@ pub fn list_microphones() -> Vec<MediaDevice> {
     if monitor.start().is_err() {
         return Vec::new();
     }
-    let raw: Vec<RawAudioSource> = monitor.devices().into_iter().filter_map(|d| raw_source(&d)).collect();
+    let found = monitor.devices();
     monitor.stop();
+    microphones_of(found)
+}
+
+/// The bar's microphones out of what a device monitor found (only the
+/// `Audio/Source` devices are read; anything else is skipped).
+#[must_use]
+pub fn microphones_of(found: impl IntoIterator<Item = gst::Device>) -> Vec<MediaDevice> {
+    let raw: Vec<RawAudioSource> = found
+        .into_iter()
+        .filter(|d| d.has_classes("Audio/Source"))
+        .filter_map(|d| raw_source(&d))
+        .collect();
     microphones(raw)
 }
 
@@ -39,9 +51,18 @@ pub fn list_cameras() -> Vec<MediaDevice> {
     if monitor.start().is_err() {
         return Vec::new();
     }
-    let found: Vec<RawCamera> = monitor
-        .devices()
+    let found = monitor.devices();
+    monitor.stop();
+    cameras_of(found)
+}
+
+/// The bar's cameras out of what a device monitor found (only the
+/// `Video/Source` devices are read).
+#[must_use]
+pub fn cameras_of(found: impl IntoIterator<Item = gst::Device>) -> Vec<MediaDevice> {
+    let found: Vec<RawCamera> = found
         .into_iter()
+        .filter(|d| d.has_classes("Video/Source"))
         .map(|d| {
             let props = d.properties();
             let text = |key: &str| props.as_ref().and_then(|p| p.get::<String>(key).ok());
@@ -51,7 +72,6 @@ pub fn list_cameras() -> Vec<MediaDevice> {
             }
         })
         .collect();
-    monitor.stop();
     cameras(found)
 }
 

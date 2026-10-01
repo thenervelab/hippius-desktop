@@ -87,7 +87,9 @@ side probes Media Foundation once per launch on its own thread
 the ConsentStore for a blocked mic (`MIC_BLOCKED_WINDOWS`), and
 `webview_media.rs` answers WebView2's `PermissionRequested` (camera, mic) for
 `capture-camera` and `capture-overlay-*` and the app's own origin only,
-pinned in `capture_wiring.rs`. Not done: a GPU colour converter. Cross-check from a Mac with the MSVC
+pinned in `capture_wiring.rs`. Not done: a GPU colour converter (spike
+W3's measured CPU cost and the options are in the plan's "Parity gaps"
+section: 4K same-size is about one core, scaled 4K over two). Cross-check from a Mac with the MSVC
 headers from `xwin` (`CFLAGS_x86_64_pc_windows_msvc` with clang's own
 include dir FIRST, or the MSVC intrinsics headers break aws-lc), and pass
 `--target` before `--`, or clippy builds the build script for Windows.
@@ -309,8 +311,14 @@ middle, then three quarters), Rust keeps the first that is not black
 (`is_blank`) and `pick` falls back to the still of the selection taken as the
 recorder starts. That start still missed the camera bubble (it moves into
 what is filmed at that same moment) and gave a camera-only recording no
-picture at all. Windows and Linux have no `poster_command` yet, so they keep
-the start still.
+picture at all. On Windows and Linux `poster_command` is the recorder
+child's `--poster` (`recorder_child/poster.rs` shared: clamp, 1120 px, JPEG,
+the helper's line; `windows/poster.rs` Media Foundation Source Reader
+in NV12, `linux/poster.rs` GStreamer preroll and accurate seeks), which is
+the only picture a Wayland recording gets. The child stops after the first
+lit still (software decode from the key frame must fit `poster::WAIT`); a
+Linux machine with an encoder but no H.264 decoder gets no picture, and
+`codecsMissing` does not say so.
 
 **Camera and microphone** (`camera.rs`, `app/capture-camera`, label
 `capture-camera`): the bar's Loom-style sources panel (Screen / Camera / Mic
@@ -425,7 +433,13 @@ microphone. **Live lists:** `device_watch.rs` runs the helper's
 (stdin closing ends it; it also exits after 30 min) and every list it prints
 replaces `native_cameras` and goes out as `capture_cameras` /
 `capture_microphones`; the overlay's `devicechange` is only a bonus (WebKit
-fires it only for a page holding a capture grant). Pinned in
+fires it only for a page holding a capture grant). Windows and Linux run the
+recorder child's `--watch-devices` the same way (`watcher_command`; the
+shared loop is `recorder_child/watch.rs`: settle 300 ms, 3 s poll, print
+only on change, end on stdin close or 30 min). Windows nudges it from
+`IMMNotificationClient` and `CM_Register_Notification` on the camera
+interface classes, Linux from one `GstDeviceMonitor`'s bus; both re-read
+with the list modes' own code, so ids stay what the recorder opens. Pinned in
 `capture_wiring.rs`. Each device carries `continuity` (transport `ccwd` /
 `ccwl` / `ccap`, since `isContinuityCamera` is false for the phone's
 microphone), and a menu that lists none shows Rust's `continuityHint`

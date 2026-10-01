@@ -387,6 +387,46 @@ fn the_device_watcher_is_a_mode_the_helper_knows_and_ends_with_the_bar() {
     }
 }
 
+/// On Windows and Linux the watcher and the card's picture are the recorder
+/// child's `--watch-devices` and `--poster` modes. Both flags cross a
+/// process boundary nothing else checks: a child that did not know one
+/// would serve the recording protocol instead, the watcher would print
+/// nothing and every card would fall back to the start screenshot (none on
+/// Wayland), silently. The watcher must also end when its stdin closes.
+#[test]
+fn the_recorder_child_knows_the_watch_and_poster_modes_the_app_starts() {
+    let child = read("src/capture/recorder_child/mod.rs");
+    let run = fn_body(&child, "pub fn run<");
+    for (flag, windows, linux) in [
+        ("--poster", "windows::poster::run(&args)", "linux::poster::run(&args)"),
+        ("--watch-devices", "windows::watch::run()", "linux::watch::run()"),
+    ] {
+        assert!(run.contains(&format!("has(\"{flag}\")")), "the child handles {flag}");
+        assert!(run.contains(windows) && run.contains(linux), "{flag} reaches both platform readers");
+        // Before `--meter` and the list modes: a recording's name can be
+        // anything, and the poster's times follow the flag.
+        assert!(run.find(flag) < run.find("--meter"), "{flag} is matched first");
+    }
+
+    let watch = read("src/capture/device_watch.rs");
+    let command = fn_body(&watch, "fn watcher_command(");
+    assert!(command.contains("recording::windows::helper_command()"));
+    assert!(command.contains("recording::linux::helper_command()"));
+    let shared = read("src/capture/recorder_child/watch.rs");
+    assert!(
+        fn_body(&shared, "pub fn stop_on_stdin_close(").contains("Wake::Stop"),
+        "the child's watcher stops when its stdin closes"
+    );
+    for platform in ["windows", "linux"] {
+        let src = read(&format!("src/capture/recorder_child/{platform}/watch.rs"));
+        assert!(src.contains("watch::stop_on_stdin_close("), "{platform} watcher ends with the bar");
+    }
+
+    let recording = read("src/capture/recording/mod.rs");
+    let poster = fn_body(&recording, "pub fn poster_command(");
+    assert!(poster.contains("windows::helper_command()") && poster.contains("linux::helper_command()"));
+}
+
 /// Camera only records the stage window itself, and every way a recording
 /// ends takes the camera away with it.
 #[test]
