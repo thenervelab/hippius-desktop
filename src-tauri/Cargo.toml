@@ -287,10 +287,13 @@ tauri-plugin-global-shortcut = "2"
 # Plus, for the recorder child (`capture/recorder_child/windows`): Media
 # Foundation for the fragmented MP4, WASAPI (Media_Audio) for the microphone
 # and system audio, COM and property stores for device names, the registry
-# for the camera and microphone privacy switches, and power requests to keep
-# the display awake while recording.
+# for the camera and microphone privacy switches, power requests to keep
+# the display awake while recording, and device-interface notifications
+# (CM_Register_Notification) so the bar's camera list follows a camera
+# plugged in while it is open.
 windows = { version = "0.62", features = [
     "Wdk_System_SystemServices",
+    "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",

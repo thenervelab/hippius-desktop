@@ -30,8 +30,10 @@
 pub mod audio;
 mod com;
 pub mod devices;
+pub mod poster;
 pub mod probe;
 pub mod self_test;
+pub mod watch;
 mod wgc;
 mod writer;
 

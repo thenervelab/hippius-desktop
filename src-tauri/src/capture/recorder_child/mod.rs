@@ -38,10 +38,12 @@ pub mod pacing;
 pub mod pcm;
 pub mod pipeline;
 pub mod plan;
+pub mod poster;
 pub mod sizing;
 pub mod sources;
 pub mod synthetic;
 pub mod timeline;
+pub mod watch;
 #[cfg(windows)]
 pub mod windows;
 pub mod writer_loop;
@@ -393,10 +395,12 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
 }
 
 /// `Hippius --capture-recorder [--list-microphones | --list-cameras |
-/// --probe | --self-test | --meter [deviceId]]`: the one-shot modes print one
-/// JSON value and return; `--meter` prints the microphone's level until stdin
-/// closes ([`meter`]); otherwise serve the protocol on stdin and stdout.
-/// Returns the process exit code.
+/// --probe | --self-test | --poster <video> <seconds>... | --watch-devices |
+/// --meter [deviceId]]`: the one-shot modes print one JSON value and return
+/// (`--poster`: stills from a finished recording, [`poster`]); `--meter`
+/// prints the microphone's level and `--watch-devices` the device lists
+/// ([`watch`]) until stdin closes; otherwise serve the protocol on stdin
+/// and stdout. Returns the process exit code.
 #[must_use]
 pub fn run<I, S>(args: I) -> i32
 where
@@ -405,6 +409,34 @@ where
 {
     let args: Vec<String> = args.into_iter().map(|a| a.as_ref().to_string()).collect();
     let has = |flag: &str| args.iter().any(|a| a == flag);
+    // Before every other flag: the times after `--poster` are free text.
+    #[cfg(windows)]
+    {
+        if has("--poster") {
+            return windows::poster::run(&args);
+        }
+        if has("--watch-devices") {
+            return windows::watch::run();
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if has("--poster") {
+            return linux::poster::run(&args);
+        }
+        if has("--watch-devices") {
+            return linux::watch::run();
+        }
+    }
+    if has("--poster") {
+        // No reader here (macOS reads its files in the Swift helper): no
+        // stills, and the card keeps the start screenshot.
+        return print_line(&poster::empty_line());
+    }
+    if has("--watch-devices") {
+        // Nothing to watch with; the app's watcher sees the child end.
+        return 1;
+    }
     #[cfg(windows)]
     {
         if has("--meter") {

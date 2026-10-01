@@ -34,8 +34,10 @@ pub mod devices;
 pub mod encoder;
 pub mod meter;
 pub mod portal;
+pub mod poster;
 pub mod probe;
 pub mod self_test;
+pub mod watch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
