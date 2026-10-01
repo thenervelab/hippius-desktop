@@ -39,9 +39,10 @@ export function folderRowSharing(
       title: `Shared on its own with ${people}. ${FOLDER_SHARED_ON_ITS_OWN}`,
     };
   }
-  // Invited but nobody holds it yet, or every folder link has lapsed. Still
-  // marked, the same rule the drive mark keys on: the owner did share it, and
-  // the links are what they may want to review.
+  // Invited but nobody holds it yet: an emailed invitation not yet accepted,
+  // or a share link that still works. Rust counts only an invite that can
+  // still bring someone in (`invite_is_open`), so a spent one, such as the
+  // invitation a now-removed person accepted, leaves the folder unmarked.
   if (summary.hasInvite) {
     return {
       isShared: true,

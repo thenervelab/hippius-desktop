@@ -94,6 +94,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A folder stops showing as shared once nobody has access.** After you
+  remove the last person from a folder you shared by email, its "Shared" and
+  "Manage access" marks go away. A folder with an invitation still waiting or
+  a share link that still works keeps them.
+
 - **A rate limited email invite says which limit you hit and the wait in
   hours and minutes**, such as "You've sent too many invites to this address
   today. Try again in 24h."
