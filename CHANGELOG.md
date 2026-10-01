@@ -17,6 +17,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The menu bar popover shows your balance in dollars and who you are signed
+  in as.** It reads "Balance $0.36" like the rest of the app instead of a
+  credit count, and an account signed in with Google, Apple or GitHub shows
+  its email (or GitHub handle) with the account address underneath, in place
+  of the block number.
+
 - **A folder shared with you on its own is marked as one.** In Shared with me
   and when you open it, it carries a "Folder in a drive" badge so it no longer
   looks like a whole shared drive, and its row reads "Shared by" the owner

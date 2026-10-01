@@ -20,6 +20,12 @@ import { useRetainedCompletedUploads } from "@/app/lib/upload-feed/useRetainedCo
 export interface TrayMenuData {
   loggedIn: boolean;
   credits: number | null;
+  /** The balance as the billing API's exact decimal string (dollars). The
+   *  header formats this, not `credits`, which is a rounded `f64`. */
+  balance: string | null;
+  /** How an OAuth account signs in (email, or `@handle` for GitHub),
+   *  resolved in Rust; `null` for an access-key account. */
+  accountLabel: string | null;
   substrateAddress: string | null;
   /** Whether the in-memory backend session is hydrated for `substrateAddress`.
    *  `loggedIn` flips true from the persisted session row at boot, but the
