@@ -81,10 +81,12 @@ pub struct Surfaces {
     pub modes: Modes,
     /// Whether the screenshot timer is offered.
     pub screenshot_timer: bool,
-    /// Whether the recording countdown is offered. Off with the system
-    /// picker: the desktop's own dialog comes between Record and the
-    /// recording, so a count before it would end at a dialog.
+    /// Whether the recording countdown is offered (everywhere).
     pub record_countdown: bool,
+    /// Whether it counts in the pill once the desktop's dialog is answered,
+    /// rather than on the overlay before Record (the system picker: a count
+    /// before the dialog would end at a dialog, not at the recording).
+    pub countdown_after_picker: bool,
     /// Whether a recording can carry the system's sound. The user still turns
     /// it on (`CaptureOptions::system_audio`, off by default); where this is
     /// false the bar does not offer it and a recording never asks for it.
@@ -145,7 +147,8 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
         },
         // The desktop's tool has its own delay, where it has one.
         screenshot_timer: !wayland,
-        record_countdown: !wayland,
+        record_countdown: true,
+        countdown_after_picker: wayland,
         // ScreenCaptureKit (macOS), WASAPI loopback (Windows) and the
         // default output's monitor (Linux) can mix the system's sound into
         // the one audio track; the user turns it on in the bar's options.
@@ -201,6 +204,19 @@ pub fn shortcut_for(platform: Platform, portal: super::shortcut_portal::PortalSt
 pub const fn camera_only(platform: Platform) -> bool {
     !matches!(platform, Platform::LinuxWayland)
 }
+
+/// Whether the recording pill is filmed with the screen on `platform`:
+/// Linux has no content protection (X11 cannot keep a window out of a
+/// grab, Wayland's screen-sharing stream is the compositor's). The pill
+/// stays small there and says so once ([`PILL_FILMED_NOTE`]).
+#[must_use]
+pub const fn pill_filmed(platform: Platform) -> bool {
+    matches!(platform, Platform::LinuxX11 | Platform::LinuxWayland)
+}
+
+/// The pill's one-time line where it is filmed. Two short lines, sized for
+/// the 340 pt pill.
+pub const PILL_FILMED_NOTE: &str = "These controls show in screen recordings. They stay small; point at them to use them.";
 
 /// How a capture starts: Hippius's overlay, or (a screenshot on Wayland)
 /// straight to the desktop's screenshot tool with no Hippius window at all,
@@ -420,8 +436,8 @@ mod tests {
     }
 
     /// The panel's Record asks the recorder for a window or a screen; the
-    /// desktop's dialog picks which. No countdown there: a count before a
-    /// dialog would end at the dialog.
+    /// desktop's dialog picks which. The countdown runs after the dialog, in
+    /// the pill: a count before a dialog would end at the dialog.
     #[test]
     fn the_panel_asks_for_a_window_or_a_screen_without_a_countdown() {
         use crate::capture::screenshot::Selection;
@@ -434,12 +450,17 @@ mod tests {
             }
         );
         let wayland = surfaces_for(Platform::LinuxWayland, true, true);
-        assert!(!wayland.record_countdown);
-        assert_eq!(countdown_secs(&wayland, 3, Recording), 0);
+        assert!(wayland.record_countdown, "offered: it counts in the pill");
+        assert!(wayland.countdown_after_picker);
+        assert_eq!(countdown_secs(&wayland, 3, Recording), 0, "nothing counts before the dialog");
+        assert_eq!(countdown_after_picker(&wayland, 3, Recording), 3, "the pill counts after it");
         assert_eq!(countdown_secs(&wayland, 5, Screenshot), 5);
+        assert_eq!(countdown_after_picker(&wayland, 5, Screenshot), 0);
         let x11 = surfaces_for(Platform::LinuxX11, true, true);
         assert!(x11.record_countdown);
+        assert!(!x11.countdown_after_picker);
         assert_eq!(countdown_secs(&x11, 3, Recording), 3);
+        assert_eq!(countdown_after_picker(&x11, 3, Recording), 0, "the overlay already counted");
     }
 
     /// A remembered area opens a Wayland recording on the whole screen; an
@@ -454,6 +475,18 @@ mod tests {
         assert_eq!(offered_mode(&wayland, Screenshot, CaptureMode::Area), CaptureMode::Area);
         let x11 = surfaces_for(Platform::LinuxX11, true, true);
         assert_eq!(offered_mode(&x11, Recording, CaptureMode::Area), CaptureMode::Area);
+    }
+
+    /// Only Linux films the pill (no content protection), so only there it
+    /// stays small and says so once; no em dash in the line.
+    #[test]
+    fn only_linux_films_the_pill() {
+        assert!(!pill_filmed(Platform::MacOs));
+        assert!(!pill_filmed(Platform::Windows));
+        assert!(pill_filmed(Platform::LinuxX11));
+        assert!(pill_filmed(Platform::LinuxWayland));
+        assert!(!PILL_FILMED_NOTE.contains('\u{2014}'));
+        assert!(PILL_FILMED_NOTE.len() < 100, "two short lines in the pill");
     }
 
     /// Camera only records the stage window by its id: every platform but

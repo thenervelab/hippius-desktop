@@ -197,3 +197,70 @@ describe("a sound source lost mid-recording", () => {
     expect(screen.getByRole("img", { name: "Recording the microphone" })).toBeInTheDocument();
   });
 });
+
+describe("the countdown after the desktop's dialog (Wayland)", () => {
+  const starting: CapturePhaseEvent = { phase: "capturing", kind: "recording", seq: 1 };
+
+  it("counts in the pill, then the recording's controls take over", async () => {
+    setup(starting);
+    expect(await screen.findByText("Starting recording…")).toBeInTheDocument();
+    await act(() => tauri.emitEvent("capture_pill_countdown", 3));
+    expect(screen.getByRole("timer")).toHaveTextContent("Recording in 3");
+    await act(() => tauri.emitEvent("capture_pill_countdown", 2));
+    expect(screen.getByRole("timer")).toHaveTextContent("Recording in 2");
+    await act(() => tauri.emitEvent("capture_pill_countdown", null));
+    expect(screen.getByText("Starting recording…")).toBeInTheDocument();
+    await act(() => tauri.emitEvent("capture_state_changed", recording(0, 2)));
+    expect(screen.getByRole("button", { name: "Stop recording" })).toBeInTheDocument();
+  });
+
+  it("starts at once on Start now, and Cancel throws it away", async () => {
+    tauri.onInvoke("capture_skip_countdown", () => null);
+    setup(starting);
+    await screen.findByText("Starting recording…");
+    await act(() => tauri.emitEvent("capture_pill_countdown", 5));
+    fireEvent.click(screen.getByRole("button", { name: "Start now" }));
+    await waitFor(() => expect(called("capture_skip_countdown")).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel recording" }));
+    await waitFor(() => expect(called("capture_cancel")).toBe(true));
+  });
+});
+
+describe("where the pill is filmed (Linux)", () => {
+  const NOTE = "These controls show in screen recordings. They stay small; point at them to use them.";
+
+  it("stays a dot and the time until pointed at, then shows every control", async () => {
+    tauri.onInvoke("capture_controls_context", () => ({ compact: true, filmedNote: null }));
+    setup(recording(12));
+    const group = await screen.findByRole("group", { name: "Recording controls" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop recording" })).toBeNull());
+    expect(screen.getByRole("timer")).toHaveTextContent("00:12");
+    fireEvent.pointerEnter(group);
+    expect(screen.getByRole("button", { name: "Stop recording" })).toBeInTheDocument();
+  });
+
+  it("opens from the keyboard too", async () => {
+    tauri.onInvoke("capture_controls_context", () => ({ compact: true, filmedNote: null }));
+    setup(recording(12));
+    const group = await screen.findByRole("group", { name: "Recording controls" });
+    await waitFor(() => expect(group).toHaveAttribute("tabindex", "0"));
+    fireEvent.focus(group);
+    expect(screen.getByRole("button", { name: "Pause recording" })).toBeInTheDocument();
+  });
+
+  it("says once that it is filmed, until Got it", async () => {
+    tauri.onInvoke("capture_controls_context", () => ({ compact: true, filmedNote: NOTE }));
+    setup(recording(1));
+    expect(await screen.findByRole("status")).toHaveTextContent(NOTE);
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    expect(screen.queryByText(NOTE)).toBeNull();
+    expect(screen.getByRole("group", { name: "Recording controls" })).toBeInTheDocument();
+  });
+
+  it("keeps every control where it is not filmed (macOS, Windows)", async () => {
+    tauri.onInvoke("capture_controls_context", () => ({ compact: false, filmedNote: null }));
+    setup(recording(12));
+    expect(await screen.findByRole("button", { name: "Stop recording" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Recording controls" })).not.toHaveAttribute("tabindex");
+  });
+});

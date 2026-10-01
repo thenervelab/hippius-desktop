@@ -2,16 +2,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Mic, MicOff, Pause, Play, RotateCcw, Square, Trash2, Video, VideoOff, VolumeX } from "lucide-react";
+import { Mic, MicOff, Pause, Play, RotateCcw, Square, Trash2, Video, VideoOff, VolumeX, X } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
   DEVICE_LOST_EVENT,
+  PILL_COUNTDOWN_EVENT,
   cancelCapture,
   getCaptureCameraContext,
+  getCaptureControlsContext,
   getCaptureState,
   pauseCapture,
   restartCapture,
   resumeCapture,
+  skipCaptureCountdown,
   stopCapture,
   toggleCaptureCamera,
   type CaptureCameraState,
@@ -33,6 +36,11 @@ import { discardNeedsConfirm } from "./discard";
  * (`data-tauri-drag-region`). The same dark glass as the capture bar; the
  * menu bar carries a second Stop (tray title).
  *
+ * Where the pill is filmed with the screen (Linux has no content
+ * protection, Rust's `compact`), it stays a small dot and time until it is
+ * pointed at or focused, and the first time ever it says so (Rust's
+ * `filmedNote`). The tray menu and the shortcut stop a recording there too.
+ *
  * Escape does nothing here. The pill becomes the key window as soon as it is
  * clicked (Pause, say), so a stray Escape meant for another app landed here
  * and threw a recording away. Discarding is the trash button only, and past
@@ -45,6 +53,10 @@ function isLive(phase: CapturePhase): phase is Extract<CapturePhase, { phase: "r
 }
 
 const PILL = `flex items-center rounded-full ${GLASS_BAR}`;
+/** How long the one-time "filmed" line stays before the pill folds up. */
+const NOTE_MS = 8000;
+/** The grace before a pointed-at compact pill folds up again. */
+const COLLAPSE_MS = 600;
 const ICON_BUTTON = `grid size-7 place-items-center rounded-full ${GLASS_BUTTON}`;
 
 /** What the pill is asking before it throws the recording away. */
@@ -63,6 +75,14 @@ export default function CaptureControlsPage() {
   // A sound source that went away mid-recording, in Rust's words; the
   // recording goes on without it.
   const [lost, setLost] = useState<CaptureDeviceLost | null>(null);
+  // Seconds left before the recording begins, where it counts here (after
+  // the desktop's own dialog on Wayland); null otherwise.
+  const [countdown, setCountdown] = useState<number | null>(null);
+  // Filmed here: small until pointed at or focused, and a one-time line.
+  const [compact, setCompact] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const collapseTimer = useRef<number | null>(null);
   const keepRef = useRef<HTMLButtonElement | null>(null);
   // The button to give focus back to once the question is answered "keep".
   const focusBack = useRef<Question | null>(null);
@@ -87,6 +107,12 @@ export default function CaptureControlsPage() {
     void getCaptureCameraContext()
       .then((c) => !heardCamera && setCamera(c))
       .catch(() => undefined);
+    void getCaptureControlsContext()
+      .then((c) => {
+        setCompact(c.compact);
+        setNote(c.filmedNote);
+      })
+      .catch(() => undefined);
     const unlisteners = [
       listen<CapturePhaseEvent>("capture_state_changed", (e) => take(e.payload)),
       listen<CaptureCameraState>("capture_camera_state", (e) => {
@@ -94,6 +120,7 @@ export default function CaptureControlsPage() {
         setCamera(e.payload);
       }),
       listen<CaptureDeviceLost>(DEVICE_LOST_EVENT, (e) => setLost(e.payload)),
+      listen<number | null>(PILL_COUNTDOWN_EVENT, (e) => setCountdown(e.payload)),
     ];
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
@@ -101,6 +128,29 @@ export default function CaptureControlsPage() {
   }, []);
 
   const live = isLive(phase);
+  // The one-time line goes by itself after a while; "Got it" sooner.
+  useEffect(() => {
+    if (!note || !live) return;
+    const timer = window.setTimeout(() => setNote(null), NOTE_MS);
+    return () => window.clearTimeout(timer);
+  }, [note, live]);
+  useEffect(
+    () => () => {
+      if (collapseTimer.current !== null) window.clearTimeout(collapseTimer.current);
+    },
+    [],
+  );
+  const expand = () => {
+    if (collapseTimer.current !== null) window.clearTimeout(collapseTimer.current);
+    collapseTimer.current = null;
+    setExpanded(true);
+  };
+  // A short grace, so moving the pointer across a gap between buttons does
+  // not fold the controls away under it.
+  const collapseSoon = () => {
+    if (collapseTimer.current !== null) window.clearTimeout(collapseTimer.current);
+    collapseTimer.current = window.setTimeout(() => setExpanded(false), COLLAPSE_MS);
+  };
   // The question goes when the recording ends some other way (the tray's Stop).
   useEffect(() => {
     if (!live) {
@@ -143,6 +193,35 @@ export default function CaptureControlsPage() {
   };
 
   const starting = phase.phase === "capturing" && phase.kind === "recording";
+  if (starting && countdown !== null) {
+    return (
+      <div className="flex h-full w-full items-center justify-center">
+        <div data-tauri-drag-region className={`${PILL} gap-2 py-1.5 pl-3.5 pr-1.5`}>
+          <span aria-hidden data-tauri-drag-region className="size-2.5 rounded-full bg-[#FF453A]" />
+          <span data-tauri-drag-region role="timer" aria-live="assertive" className="whitespace-nowrap text-sm">
+            Recording in <span className="font-mono tabular-nums">{countdown}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => void skipCaptureCountdown().catch(() => undefined)}
+            className={`h-7 shrink-0 rounded-full bg-white/10 px-2.5 text-[11.5px] font-medium ${GLASS_BUTTON}`}
+          >
+            Start now
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            aria-label="Cancel recording"
+            title="Cancel (nothing is recorded)"
+            className={ICON_BUTTON}
+            onClick={() => void run(cancelCapture)}
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (starting || phase.phase === "finalizing") {
     return (
       <div className="flex h-full w-full items-center justify-center">
@@ -213,7 +292,28 @@ export default function CaptureControlsPage() {
     }
   };
 
+  if (note) {
+    return (
+      <div className="flex h-full w-full items-center justify-center">
+        <div data-tauri-drag-region className={`${PILL} max-w-full gap-2 py-1.5 pl-3.5 pr-1.5`}>
+          <span aria-hidden data-tauri-drag-region className="size-2.5 shrink-0 rounded-full bg-[#FF453A]" />
+          <p role="status" data-tauri-drag-region className="min-w-0 flex-1 text-[11px] leading-tight text-white/80">
+            {note}
+          </p>
+          <button
+            type="button"
+            onClick={() => setNote(null)}
+            className={`h-7 shrink-0 rounded-full bg-white/10 px-2.5 text-[11.5px] font-medium ${GLASS_BUTTON}`}
+          >
+            Got it
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const paused = phase.phase === "paused";
+  const collapsed = compact && !expanded && !busy;
   // Only a bubble can be hidden: the camera-only stage IS the recording.
   // `shape` goes null while hidden, so a hidden bubble is still a bubble here.
   const hasBubble = camera?.shape === "bubble" || camera?.hidden === true;
@@ -221,7 +321,25 @@ export default function CaptureControlsPage() {
 
   return (
     <div className="flex h-full w-full items-center justify-center">
-      <div data-tauri-drag-region className={`${PILL} gap-2 py-1.5 pl-3.5 pr-1.5`}>
+      <div
+        data-tauri-drag-region
+        role="group"
+        aria-label="Recording controls"
+        // Compact: the controls open on pointing or on focus (Tab reaches the
+        // group itself while they are folded away).
+        tabIndex={collapsed ? 0 : undefined}
+        onPointerEnter={compact ? expand : undefined}
+        onPointerLeave={compact ? collapseSoon : undefined}
+        onFocus={compact ? expand : undefined}
+        onBlur={
+          compact
+            ? (e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) collapseSoon();
+              }
+            : undefined
+        }
+        className={`${PILL} gap-2 py-1.5 ${collapsed ? "px-3" : "pl-3.5 pr-1.5"} ${GLASS_FOCUS}`}
+      >
         <span
           aria-hidden
           data-tauri-drag-region
@@ -255,9 +373,9 @@ export default function CaptureControlsPage() {
           {lost?.message ?? ""}
         </span>
 
-        <div aria-hidden data-tauri-drag-region className="mx-1 h-4 w-px bg-white/15" />
+        {!collapsed && <div aria-hidden data-tauri-drag-region className="mx-1 h-4 w-px bg-white/15" />}
 
-        <div className="flex items-center gap-1">
+        <div hidden={collapsed} className={collapsed ? "hidden" : "flex items-center gap-1"}>
           {hasBubble && (
             <button
               type="button"

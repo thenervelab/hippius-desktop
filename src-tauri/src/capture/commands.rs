@@ -71,6 +71,9 @@ pub const CAMERA_HOVER_EVENT: &str = "capture_camera_hover";
 /// A sound source went away mid-recording and the recording goes on without
 /// it (`DeviceLost`): the pill says so in Rust's words.
 pub const DEVICE_LOST_EVENT: &str = "capture_device_lost";
+/// To the pill: seconds left before a recording begins (Wayland counts down
+/// there, after the desktop's dialog), or `null` once it has.
+pub const PILL_COUNTDOWN_EVENT: &str = "capture_pill_countdown";
 
 /// What [`DEVICE_LOST_EVENT`] carries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -242,6 +245,9 @@ pub struct CaptureState {
     /// Which hover watch is current (see `spawn_camera_hover_watch`).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     camera_watch: AtomicU64,
+    /// The pill's "Start now" during a countdown after the desktop's dialog
+    /// (`count_down_in_pill`).
+    countdown_skip: AtomicBool,
 }
 
 /// A camera the bar's picker offers: from the system list (a platform id) or
@@ -1185,22 +1191,43 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
         let state = app.state::<AppState>();
         if let Some(d) = lock(&state.capture.bar_display).clone() {
             let area = work_area(&state.capture, &d);
-            place(
-                &window,
-                camera::Frame {
-                    x: area.x + (area.width - CONTROLS_WIDTH) / 2.0,
-                    y: area.y + area.height - CONTROLS_HEIGHT - CONTROLS_MARGIN,
-                    width: CONTROLS_WIDTH,
-                    height: CONTROLS_HEIGHT,
-                },
-                area.scale,
-            );
+            let usual = camera::Frame {
+                x: area.x + (area.width - CONTROLS_WIDTH) / 2.0,
+                y: area.y + area.height - CONTROLS_HEIGHT - CONTROLS_MARGIN,
+                width: CONTROLS_WIDTH,
+                height: CONTROLS_HEIGHT,
+            };
+            let frame = pill_clear_of_area(&state.capture, &d, area).unwrap_or(usual);
+            place(&window, frame, area.scale);
         }
     }
     if show {
         show_without_focus(&window);
     }
     Ok(())
+}
+
+/// Where nothing keeps the pill out of the video (Linux), an area recording
+/// on the bar's display gets the pill outside the area
+/// ([`camera::pill_outside`]); `None` keeps the usual bottom centre.
+fn pill_clear_of_area(state: &CaptureState, bar: &DisplayTarget, work: LogicalArea) -> Option<camera::Frame> {
+    if !super::support::pill_filmed(super::rollout::current_platform()) {
+        return None;
+    }
+    let Some(Selection::Area { display_id, rect }) = *lock(&state.selection) else {
+        return None;
+    };
+    if display_id != bar.id {
+        return None;
+    }
+    let origin = display_area(bar);
+    let recorded = camera::Frame {
+        x: origin.x + rect.x,
+        y: origin.y + rect.y,
+        width: rect.width,
+        height: rect.height,
+    };
+    camera::pill_outside(work.frame(), recorded, (CONTROLS_WIDTH, CONTROLS_HEIGHT), CONTROLS_MARGIN)
 }
 
 /// Take the pill off screen at once (Stop), before the file is closed.
@@ -2245,9 +2272,15 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
 
     let poster = poster_task.await.ok().flatten();
     *lock(&state.capture.poster) = poster;
-    let recorder = started?;
+    let mut recorder = started?;
     if system_picker && let Ok(pool) = state.pool() {
         super::screencast_token::remember(pool, recorder.restore_token()).await;
+    }
+    // The desktop's dialog came between Record and now, so the countdown
+    // runs here, in the pill, with the recording held paused.
+    let count = super::support::countdown_after_picker(&surfaces, saved.record_countdown_secs, CaptureKind::Recording);
+    if count > 0 {
+        recorder = count_down_in_pill(app, recorder, count).await?;
     }
 
     if let Err(orphan) = state.capture.adopt_recorder(recorder, |e| emit_phase(app, e)) {
@@ -2266,6 +2299,86 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     }
     spawn_tick_loop(app.clone());
     Ok(())
+}
+
+/// Count `secs` down in the pill with the recorder paused, then resume it.
+/// The recorder has already started (the desktop's dialog is answered), so
+/// a pause keeps the count out of the video; a recorder that cannot pause
+/// records straight away. A Cancel from the pill during the count moves the
+/// phase on, which ends the count; [`adopt_recorder`] then hands the
+/// recorder back to be thrown away, as for any cancel while starting.
+async fn count_down_in_pill(app: &AppHandle, mut recorder: Box<dyn Recorder>, secs: u8) -> Result<Box<dyn Recorder>> {
+    let state = app.state::<AppState>();
+    let (mut recorder, paused) = tauri::async_runtime::spawn_blocking(move || {
+        let paused = recorder
+            .pause()
+            .inspect_err(|e| tracing::warn!(error = %e, "could not hold the recording for its countdown"))
+            .is_ok();
+        (recorder, paused)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("recording task failed: {e}")))?;
+    if !paused {
+        return Ok(recorder);
+    }
+    state.capture.countdown_skip.store(false, Ordering::SeqCst);
+    'count: for left in (1..=secs).rev() {
+        let _ = app.emit_to(CONTROLS_LABEL, PILL_COUNTDOWN_EVENT, Some(left));
+        for _ in 0..10 {
+            let starting = matches!(
+                state.capture.current(),
+                CapturePhase::Capturing {
+                    kind: CaptureKind::Recording
+                }
+            );
+            if !starting || state.capture.countdown_skip.swap(false, Ordering::SeqCst) {
+                break 'count;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    let _ = app.emit_to(CONTROLS_LABEL, PILL_COUNTDOWN_EVENT, None::<u8>);
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(e) = recorder.resume() {
+            tracing::warn!(error = %e, "could not resume the recording after its countdown");
+        }
+        recorder
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("recording task failed: {e}")))
+}
+
+/// What the pill needs besides the phase: whether it is filmed here (it then
+/// stays small until pointed at) and, the first time ever, the line saying
+/// so. The line is marked seen as it is handed out.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlsContext {
+    pub compact: bool,
+    pub filmed_note: Option<&'static str>,
+}
+
+const PILL_NOTE_SEEN_KEY: &str = "capture_pill_note_seen_v1";
+
+#[tauri::command]
+pub async fn capture_controls_context(state: tauri::State<'_, AppState>) -> Result<ControlsContext> {
+    let compact = super::support::pill_filmed(super::rollout::current_platform());
+    let mut filmed_note = None;
+    if compact {
+        let pool = state.pool()?;
+        let seen = crate::utils::preferences::get_user_preference_internal(pool, PILL_NOTE_SEEN_KEY).await?;
+        if seen.is_none() {
+            crate::utils::preferences::save_user_preference_internal(pool, PILL_NOTE_SEEN_KEY, "1").await?;
+            filmed_note = Some(super::support::PILL_FILMED_NOTE);
+        }
+    }
+    Ok(ControlsContext { compact, filmed_note })
+}
+
+/// The pill's "Start now" during the countdown after the desktop's dialog.
+#[tauri::command]
+pub fn capture_skip_countdown(state: tauri::State<'_, AppState>) {
+    state.capture.countdown_skip.store(true, Ordering::SeqCst);
 }
 
 /// The bubble's window number, for a window recording to film it too: set

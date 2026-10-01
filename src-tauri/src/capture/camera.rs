@@ -63,7 +63,7 @@ pub struct CameraState {
     pub recording: bool,
     /// Whether the camera ends up in the video. False for a bubble over a
     /// window recording where the recorder films that one window only
-    /// (`bar::WINDOW_RECORDING_ADDS_CAMERA`).
+    /// (`bar::window_recording_adds_camera`).
     pub camera_filmed: bool,
 }
 
@@ -295,8 +295,127 @@ pub fn resize_bubble(current: Frame, side: f64, area: Frame) -> Frame {
     }
 }
 
+/// Where the recording pill goes so it stays out of an area being recorded,
+/// where nothing keeps it out of the video (Linux): centred below the area,
+/// else above it, else beside it (right, then left), always inside `work`
+/// with `margin` around it. `None` when the area leaves no room anywhere
+/// (the pill then takes its usual place and is filmed).
+#[must_use]
+pub fn pill_outside(work: Frame, area: Frame, pill: (f64, f64), margin: f64) -> Option<Frame> {
+    let (w, h) = pill;
+    let fits = |f: &Frame| {
+        f.x >= work.x - 0.5 && f.y >= work.y - 0.5 && f.x + f.width <= work.x + work.width + 0.5 && f.y + f.height <= work.y + work.height + 0.5
+    };
+    let clamp_x = |x: f64| x.clamp(work.x + margin, (work.x + work.width - w - margin).max(work.x + margin));
+    let clamp_y = |y: f64| y.clamp(work.y + margin, (work.y + work.height - h - margin).max(work.y + margin));
+    let (cx, cy) = area.centre();
+    let candidates = [
+        // Below, then above: the pill's usual bottom-centre neighbourhood.
+        Frame {
+            x: clamp_x(cx - w / 2.0),
+            y: area.y + area.height + margin,
+            width: w,
+            height: h,
+        },
+        Frame {
+            x: clamp_x(cx - w / 2.0),
+            y: area.y - margin - h,
+            width: w,
+            height: h,
+        },
+        // Beside it, for an area as tall as the screen.
+        Frame {
+            x: area.x + area.width + margin,
+            y: clamp_y(cy - h / 2.0),
+            width: w,
+            height: h,
+        },
+        Frame {
+            x: area.x - margin - w,
+            y: clamp_y(cy - h / 2.0),
+            width: w,
+            height: h,
+        },
+    ];
+    candidates.into_iter().find(fits)
+}
+
 #[cfg(test)]
 mod tests {
+
+    const WORK: Frame = Frame {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1050.0,
+    };
+    const PILL: (f64, f64) = (340.0, 60.0);
+
+    fn overlaps(a: &Frame, b: &Frame) -> bool {
+        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+
+    /// The pill goes below a recorded area, centred under it, when there
+    /// is room; never on it.
+    #[test]
+    fn the_pill_sits_under_a_recorded_area() {
+        let area = Frame {
+            x: 400.0,
+            y: 200.0,
+            width: 800.0,
+            height: 500.0,
+        };
+        let f = pill_outside(WORK, area, PILL, 24.0).unwrap();
+        assert!((f.y - 724.0).abs() < 1e-9);
+        assert!((f.x + f.width / 2.0 - 800.0).abs() < 1e-9);
+        assert!(!overlaps(&f, &area));
+    }
+
+    /// No room below: above; an area as tall as the screen: beside it; a
+    /// whole screen: nowhere (the pill keeps its usual place).
+    #[test]
+    fn the_pill_moves_round_an_area_that_fills_the_bottom_or_the_height() {
+        let low = Frame {
+            x: 0.0,
+            y: 600.0,
+            width: 1920.0,
+            height: 450.0,
+        };
+        let above = pill_outside(WORK, low, PILL, 24.0).unwrap();
+        assert!((above.y - (600.0 - 24.0 - 60.0)).abs() < 1e-9);
+        let tall = Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 1200.0,
+            height: 1050.0,
+        };
+        let beside = pill_outside(WORK, tall, PILL, 24.0).unwrap();
+        assert!((beside.x - 1224.0).abs() < 1e-9);
+        assert!(!overlaps(&beside, &tall));
+        let right_edge = Frame {
+            x: 720.0,
+            y: 0.0,
+            width: 1200.0,
+            height: 1050.0,
+        };
+        let left = pill_outside(WORK, right_edge, PILL, 24.0).unwrap();
+        assert!(left.x + left.width <= 720.0);
+        assert_eq!(pill_outside(WORK, WORK, PILL, 24.0), None);
+    }
+
+    /// An area near a side keeps the pill on screen, not centred off it.
+    #[test]
+    fn the_pill_stays_on_screen_under_an_area_at_the_edge() {
+        let corner = Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
+        };
+        let f = pill_outside(WORK, corner, PILL, 24.0).unwrap();
+        assert!((f.x - 24.0).abs() < 1e-9);
+        assert!((f.y - 224.0).abs() < 1e-9);
+    }
     use super::*;
 
     #[test]
