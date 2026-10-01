@@ -23,10 +23,9 @@ phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
 `SCREEN_CAPTURE_ENABLED = enabledFrom("staging")`, and behind Rust's
 `capture_support` for the platform: **screenshots on macOS, Windows and
 Linux** (Linux on staging only); **recording on macOS 13+** when
-`HippiusCapture` is built, and on Windows 10 2004+ in debug and staging
-builds only (`capture::rollout`, until its hardware checklist passes). Linux
-recording is stubbed behind the `Recorder` trait
-(`capture_support.recording == false`).
+`HippiusCapture` is built, and on Windows 10 2004+ and Linux (X11 and
+Wayland) in debug and staging builds only (`capture::rollout`, until each
+platform's checklist passes).
 
 **Windows and Linux parity plan:** `docs/plans/2026-10-01-capture-windows-linux.md`.
 Read it before touching a non-macOS capture path. Its load-bearing decisions:
@@ -117,6 +116,38 @@ only on Rust's `selection` (one "Take a screenshot…" item, no capture bar)
 and `shortcut.supported` / `unavailableMessage` (no keycaps, Settings shows
 the line). Linux has no shortcut until Phase 6. The `rust-linux` CI job runs
 the X server test under Xvfb. Pinned by `capture_wiring.rs`.
+
+**Phase 4 (Linux recording) is in code, not yet run on Linux.** The child
+(`recorder_child/linux/`) has one GStreamer pipeline and one pulling thread
+per device (`capture.rs`: `ximagesrc` or the ScreenCast portal's
+`pipewiresrc`; `pulsesrc` for the mic and `@DEFAULT_MONITOR@`), and writes
+through an `appsrc` pipeline (`encoder.rs`) driven by the shared
+`writer_loop.rs`; pause, mixing and held pictures are Rust's (`timeline`,
+`mixer`, `pacing`), never pad probes on a live pipeline. The pure decisions
+are `linux_plan.rs`, tested everywhere. Rules that fail silently: **every
+pipeline uses `gst::SystemClock`** (`launch` sets it), since a buffer's
+capture time is base time plus timestamp and pause reads the same clock;
+`ximagesrc` corners are INCLUSIVE; the `size` capsfilter starts open and is
+fixed from the first frame (`plan::output_size`); the writer's `appsrc`s
+never block and the queues before `mp4mux` are unbounded, or the one writer
+thread deadlocks between the tracks; the portal's PipeWire fd stays open for
+the recording and the session is closed with it. The camera is never opened
+here, and the Linux mic meter is the child's `--meter` (same lines as the
+Swift meter), stopped before the recorder opens the mic. The app probes once
+per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
+`codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
+Wayland (the desktop's dialog). **Wayland records from the panel**
+(`StartPlan::Panel`): one `capture-overlay-0` window with the bar alone,
+no display watch, no countdown (`recordCountdown`), Record resolved by
+`support::system_picker_selection`; a cancel in the desktop's dialog is the
+child's exact `PICKER_CANCELLED` refusal, which `fail_capture` ends quietly.
+The restore token (`screencast_token.rs`, device-wide) is sent only for a
+whole screen on a one-display machine: a restored session skips the dialog.
+CI's `rust-linux` runs the ignored real-writer tests
+(`capture::recorder_child::linux -- --ignored`). Cross-check from a Mac with
+the fake `.pc` files: `cargo check` and `cargo clippy --lib --tests` for
+`x86_64-unknown-linux-gnu` work; `-- -D warnings` rebuilds the build script
+for the target and fails, so read the warnings instead.
 
 ## Flow
 

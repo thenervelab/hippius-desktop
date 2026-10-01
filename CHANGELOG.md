@@ -242,7 +242,15 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   (Ubuntu, Fedora and KDE's default) Screenshot opens your desktop's own
   screenshot tool, where you choose an area, a window or a screen; the
   picture then lands in your drive with a link copied, and nothing is left
-  behind in your Pictures folder. Recording on Linux follows later.
+  behind in your Pictures folder.
+- **Record your screen on Linux (internal builds first).** On X11 record a
+  whole screen, a window or an area from the capture bar; on Wayland a small
+  panel holds the same sources and options, and your desktop's own
+  screen-sharing dialog picks the screen or window (with one display it
+  remembers the choice). Your microphone and your computer's sound go into
+  one soundtrack, with pause and resume, the camera bubble filmed with the
+  screen, and a live microphone level. If your system lacks the video
+  codecs, Record says which packages to install.
 - **Record your screen on Windows (test builds first).** Record a whole
   screen, one window or an area, with your microphone, your computer's sound
   or both in one soundtrack, pause and resume, and the camera bubble or the

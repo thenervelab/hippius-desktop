@@ -4,8 +4,10 @@
 checklists are still to run, so Windows screenshots and Windows recording
 stay on staging in `capture::rollout`. Phase 3 (Linux screenshots) done in
 code and type-checked for Linux from macOS; its checklist needs real Linux
-sessions, so Linux stays on staging. Phase 4 has its pure groundwork
-(`recorder_child/linux_plan.rs`) and nothing else. Phases 5 and 6 not started here. Written against `feat/screen-capture` at 8a4e21f2;
+sessions, so Linux stays on staging. Phase 4 (Linux recording) done in
+code, type-checked and linted for Linux from macOS; its checklist needs real
+Linux sessions, so Linux recording stays on staging too. Phases 5 and 6 not
+started here. Written against `feat/screen-capture` at 8a4e21f2;
 Phases 0 and 1 merged with the permission, external-device, button-menu and
 camera/audio work at 2fd6e468.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
@@ -852,20 +854,174 @@ Dolphin and Thunar on the right folder; the card's behaviour per L4.
 
 ### Phase 4: Linux recording (L, 3 to 4 weeks)
 
-**Status: groundwork only.** `recorder_child/linux_plan.rs` holds the pure
-decisions, tested on every OS and linked into nothing yet: the encoder
-choice in this plan's order (`vah264enc`, `vaapih264enc`, `x264enc`,
-`openh264enc`; `avenc_aac`, `fdkaacenc`, `voaacenc`; `None` =
-`codecsMissing`), each encoder's bit rate in its own units, the source
-element (`ximagesrc` with INCLUSIVE `endx`/`endy`, or by `xid`;
-`pipewiresrc fd=… path=…`), the gst-launch description (size from
-`sizing::capped`, evened; `sizing::video_bit_rate`; one `audiomixer` into one
-AAC track at 160 kbps; `mp4mux fragment-duration=2000`; paths quoted) and
-the microphone list without monitor sources, default first. The `ashpd`
-`screencast` feature, the GStreamer crates, the panel, the pill and the CI
-self-test are all still to do.
+**Status: code done, Linux checklist pending.** Verified only from a Mac:
+`cargo check` and `cargo clippy --lib --tests` (pedantic, no warnings) for
+`x86_64-unknown-linux-gnu` with fake `.pc` files and a no-op C compiler (this
+type-checks every Linux line, gstreamer-rs and ashpd included, and links
+nothing), plus the platform-free tests on macOS. Nothing in it has run on
+Linux yet. The rollout rows are unchanged: Linux recording shows in debug and
+staging builds only, never on beta or production.
 
-**Scope**
+**What landed**
+- **Platform-free, tested on every OS:** `recorder_child/linux_plan.rs`
+  (encoder order and every installed candidate in turn, the `--probe`
+  answer and its `codecsMissing` / `portalMissing` decision, the capture and
+  writer pipeline texts, X11 rectangles from RandR displays with the crop
+  through `plan::area_pixels`, what the portal is asked, why a stream ended,
+  the microphone list without monitors), `recorder_child/writer_loop.rs`
+  (the writer thread generic over `pipeline::Encoder`: first picture fixes
+  the size and answers Start, `Ended` finishes and says `stream_stopped`
+  with `saved`, Stop / Cancel, at most 4 pictures waiting) and
+  `recorder_child/meter.rs` (50 ms RMS windows, the Swift meter's exact
+  lines). `capture/screencast_token.rs` decides and stores the restore
+  token. `support::Surfaces` gains `recordCountdown`, `StartPlan::Panel`,
+  `system_picker_selection` and `countdown_secs`.
+- **The recorder child on Linux** (`recorder_child/linux/`): `capture.rs`
+  (one GStreamer pipeline and one pulling thread per device: the picture,
+  the microphone, the system's sound; every pipeline on the monotonic system
+  clock, so a buffer's time is base time plus timestamp, and pause / resume
+  read the same clock), `encoder.rs` (`appsrc` into H.264, one AAC track,
+  `mp4mux fragment-duration=2000`; times set on every buffer; installed
+  encoders tried in order, so a VA encoder that cannot start falls back to
+  x264 or OpenH264), `portal.rs` (ScreenCast: monitor or window, embedded
+  pointer where offered, persist only a monitor, the PipeWire fd kept open;
+  Inhibit idle on both sessions; both closed with the recording so the
+  desktop's indicator goes), `devices.rs`, `probe.rs`, `meter.rs`,
+  `self_test.rs` and `mod.rs` (the `Live` session).
+- **One owner per device.** The camera is never opened by the recorder (the
+  bubble's webview owns it and is filmed as a window); the mic meter is the
+  child in `--meter` mode, stopped before the recorder opens the same
+  microphone (`mic_meter::meter_may_run`); screen, system audio, microphone
+  and camera therefore run side by side. A device that will not open is left
+  out with a stderr line; a chosen microphone that is gone records the
+  default; a sound device lost mid-recording ends only its thread.
+- **App side:** `recording::linux` probes once per launch on its own thread
+  (warmed at launch by `warn_if_helper_missing`), lists microphones and
+  starts the meter through the child, and waits up to 5 minutes for
+  `started` on Wayland (the user is in the desktop's dialog). Linux
+  microphone and system audio are offered whenever Linux records. The
+  protocol carries `restoreToken` in `start` and `started`, and a refusal of
+  exactly `PICKER_CANCELLED` ends the session quietly (`fail_capture` emits
+  nothing).
+- **Wayland panel:** `capture_start` opens one `capture-overlay-0` window
+  (the overlay page, so the overlay capability and media permission apply)
+  at 520 x 600, centred by the compositor, with no display watch. The page
+  draws the bar alone on the glass (draggable, `core:window:allow-start-dragging`
+  added to `capture-overlay.json`), no selection surface, no window polling,
+  no Choose button, no countdown; `capture_confirm` turns Record into
+  `Selection::Window { 0 }` or `Selection::Screen { 0 }` and the child asks
+  the portal for that kind.
+- **Packaging and CI:** deb `recommends` the GStreamer plugins (base, good,
+  bad, ugly, libav, pipewire); `rust-ci-setup` and the three release lanes'
+  Linux legs install `libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev`;
+  `rust-linux` installs the encoder plugins and runs the ignored recorder
+  tests (`cargo test --lib capture::recorder_child::linux -- --ignored`: a
+  paused take read back at 5 s with one H.264 and one AAC track, and the
+  test binary run as a writer, SIGKILLed after 6 s, whose file must play at
+  least 4 s). Pinned in `release_lane_pins.rs` and `capture_wiring.rs`.
+
+**Deviations from the scope below**
+- **Pause is retimed in Rust, not in pad probes.** Each device has its own
+  capture pipeline ending in an `appsink`, and the file is written by an
+  `appsrc` pipeline: Rust places samples on `timeline.rs`, mixes with the
+  same `mixer.rs` Windows uses and holds still pictures (`pacing.rs`). One
+  live pipeline with `audiomixer` would drop retimed audio as late, and a
+  device that fails would fail the whole pipeline.
+- **No separate `x11.rs` / `pipeline.rs` / `audio.rs`:** the X11 decision is
+  `linux_plan::x11_source`, the pipelines are `capture.rs` and `encoder.rs`.
+- **The restore token is device-wide, not per account,** and sent only for a
+  whole screen on a machine with one display: a restored session skips the
+  dialog, so with two displays (or a window) it would record the old choice
+  unasked with no way to pick another.
+- **No countdown on Wayland** (`recordCountdown: false`): the desktop's
+  dialog comes between Record and the recording, so a count before it would
+  end at a dialog. The plan's "countdown in the pill after the picker" is
+  left for Phase 6.
+- **No poster on Wayland:** Hippius cannot read the screen there, so the
+  card of a Wayland recording has no picture.
+- **Not done:** the pill's compact form and one-time "visible in screen
+  recordings" note, placing the pill outside an X11 area recording, the
+  bubble in a window recording (`WINDOW_RECORDING_ADDS_CAMERA` stays macOS
+  only), camera only on Linux (Phase 5: `cameraOnly` false), Wayland area
+  recording (spike L6), the staging `rpm` bundle, `--list-cameras` (still
+  `[]`), and the `codecsMissing` line names every package rather than the
+  missing one (the probe logs exactly which elements are missing).
+
+**Needs real Linux sessions to know** (none of this ran from a Mac)
+- that `gst::parse::launch` accepts every pipeline text with the distro's
+  plugins, `ximagesrc` honours the inclusive corners and `xid`, and
+  `pipewiresrc fd=… path=…` negotiates with GNOME's and KDE's streams
+  (spike L3, including DMA-BUF-only streams);
+- that renegotiating the `size` capsfilter after the first frame takes,
+  and a resized window letterboxes (`videoscale add-borders`);
+- that `mp4mux` fragments survive SIGKILL in Firefox, Chrome and the Drive
+  preview (CI covers it once `rust-linux` runs it);
+- pulsesrc timestamps against the system clock over an hour (A/V sync),
+  `@DEFAULT_MONITOR@` on PipeWire, PulseAudio and with Bluetooth outputs;
+- the portal: the dialog for monitor and window, restore tokens (L7), the
+  desktop's "stop sharing" ending the file with `saved`, cancel being quiet;
+- the panel window on GNOME and KDE (transparent corners, dragging,
+  focus), the Inhibit portal keeping the screen on;
+- the probe's timing on a first run (registry build) and the `codecsMissing`
+  line on a minimal install.
+
+**Linux recording checklist** (a debug or staging build; every row in
+light and dark mode, the panel and pill at the smallest window and 200 %)
+
+*All sessions:*
+1. `hippius --capture-recorder --probe` prints `gstreamer: true`, both
+   encoders and an empty `missing`; on Wayland `screencastPortal: true`.
+   `--list-microphones` lists every input, the default first, no
+   "Monitor of" entries. `--self-test` prints `"ok":true`.
+2. `--meter` prints `ready` then a level about every 50 ms that moves when
+   you speak; closing stdin (Ctrl+D) exits at once.
+3. Remove `gstreamer1.0-plugins-ugly` and `gstreamer1.0-libav` (or on
+   Fedora the OpenH264 plugin), restart: Record shows disabled with the
+   packages line, in the bar, the Capture menu and Settings.
+
+*Ubuntu 24.04, "Ubuntu on Xorg":*
+1. Entire screen, 10 s, each display of a two-display setup (side by side,
+   then one above): plays in Firefox, Chrome and the Drive preview with
+   sound; the pill is visible in the video (accepted), the bubble too.
+2. Area on a `GDK_SCALE=2` screen: the video is exactly the drawn area.
+3. Window: move and resize it mid-recording (letterboxed, never stretched);
+   close it: the card delivers what was recorded.
+4. Pause and resume three times in 2 minutes: duration equals the recorded
+   time, a clap stays in sync.
+5. Microphone only, system audio only (a YouTube video), both: one audio
+   track (`ffprobe`), mic louder than system; a USB mic unplugged
+   mid-recording (recording goes on); a Bluetooth headset in HFP.
+6. The mic meter moves in the bar for each microphone; Record right after
+   (the meter stops first, the recording has the mic).
+7. Camera bubble small, large and full over Entire screen and Area.
+8. `kill -9` the `--capture-recorder` child after 20 s: the file in
+   `~/.hippius/capture-tmp` plays at least 18 s.
+
+*Ubuntu 24.04, GNOME, Wayland (the default):*
+1. Record opens the panel (centred): sources, Window / Entire screen,
+   Options without a countdown; Record opens GNOME's sharing dialog.
+2. Pick a screen: GNOME's top-bar indicator shows; Stop delivers the file.
+   Record again: on one display no dialog the second time; on two displays
+   the dialog shows every time.
+3. Window mode: pick a window; it is recorded even when covered; close it:
+   the file is delivered.
+4. Cancel in GNOME's dialog: no toast, no card, the main window comes back.
+5. Stop sharing from the top-bar indicator mid-recording: the file is
+   delivered like a Stop.
+6. Leave it recording for 15 minutes with the screen idle: it does not
+   blank (Inhibit).
+7. Remove `xdg-desktop-portal-gnome` (or stop the portal): Record says the
+   portal line.
+
+*Fedora 42 KDE Plasma 6, Wayland:*
+1. KDE's sharing dialog, monitor and window; the tray's sharing indicator
+   stops it; OpenH264 + fdk-aac path (`--probe` names them).
+2. Restore token honoured on the second recording (one display).
+
+*An x86_64 machine with Intel graphics:* `vah264enc` is chosen, CPU stays
+low at 1080p30; on a machine without VA, x264 is used.
+
+**Original scope**
 - `recorder_child/linux/`: `portal.rs` (ScreenCast session in the child:
   monitor or window per the mode, embedded cursor, persist mode 2, the restore
   token handed back in `started` and passed in the next `start`), `x11.rs`
