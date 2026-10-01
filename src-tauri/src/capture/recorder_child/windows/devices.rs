@@ -4,17 +4,30 @@
 //! recorder opens, so the recording side never matches by name.
 //!
 //! The app tidies the list (`recording::tidy_devices`: default first, each
-//! once), so this prints what Windows says.
+//! once), so this prints what Windows says. It prints its own row type, in
+//! the shape the app reads `MediaDevice` from, so the child does not
+//! depend on fields only the app's side carries.
 
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{DEVICE_STATE_ACTIVE, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture, eConsole};
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, STGM_READ};
 
+use serde::Serialize;
+
 use super::com;
-use crate::capture::recording::MediaDevice;
+
+/// One microphone, as `--list-microphones` prints it (the keys the app's
+/// `recording::MediaDevice` reads).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Listed {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
 
 /// The microphones, or none when Windows cannot say.
-pub fn list_microphones() -> Vec<MediaDevice> {
+pub fn list_microphones() -> Vec<Listed> {
     let _com = com::Apartment::enter();
     list().unwrap_or_else(|e| {
         let _ = super::writeln_stderr(&format!("the microphones could not be listed: {e}"));
@@ -22,7 +35,7 @@ pub fn list_microphones() -> Vec<MediaDevice> {
     })
 }
 
-fn list() -> windows::core::Result<Vec<MediaDevice>> {
+fn list() -> windows::core::Result<Vec<Listed>> {
     // SAFETY: COM calls inside this thread's apartment on objects created
     // here; the id strings WASAPI allocates are freed with CoTaskMemFree.
     unsafe {
@@ -39,7 +52,7 @@ fn list() -> windows::core::Result<Vec<MediaDevice>> {
                 continue;
             };
             let name = friendly_name(&device).unwrap_or_default();
-            out.push(MediaDevice {
+            out.push(Listed {
                 is_default: default_id.as_deref() == Some(id.as_str()),
                 id,
                 name,
@@ -70,5 +83,24 @@ unsafe fn friendly_name(device: &IMMDevice) -> Option<String> {
         let value = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
         let name = value.to_string();
         (!name.trim().is_empty()).then_some(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the child prints is what the app's device list reads.
+    #[test]
+    fn a_listed_microphone_reads_back_as_the_apps_device() {
+        let line = serde_json::to_string(&vec![Listed {
+            id: "{0.0.1.00000000}.{guid}".into(),
+            name: "Microphone (USB Audio)".into(),
+            is_default: true,
+        }])
+        .unwrap();
+        let devices = crate::capture::recording::helper::parse_devices(&line);
+        assert_eq!(devices.len(), 1);
+        assert_eq!((devices[0].name.as_str(), devices[0].is_default), ("Microphone (USB Audio)", true));
     }
 }

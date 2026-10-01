@@ -835,3 +835,47 @@ fn camera_only_refuses_with_the_recording_line_first() {
     let lookup = confirm.find("camera_window_id(").expect("looks for the camera");
     assert!(refusal < lookup);
 }
+
+/// WebView2 denies `getUserMedia` unless its host answers: the camera bubble
+/// stays black and the bar's mic meter never moves on Windows. The answer is
+/// given to the camera window and the overlays (the meter) only; the pill
+/// and the card never open a device. The camera stays filmed (not
+/// protected) and the pill stays out of the recording.
+#[test]
+fn only_the_camera_and_overlay_webviews_may_open_devices() {
+    let src = read("src/capture/commands.rs");
+    assert!(fn_body(&src, "fn open_camera_window(").contains("webview_media::allow_capture_devices(&window)"));
+    assert!(fn_body(&src, "fn build_overlay(").contains("webview_media::allow_capture_devices(window)"));
+    assert_eq!(
+        src.matches("allow_capture_devices(").count(),
+        2,
+        "the device permission is given to the camera and overlay windows only"
+    );
+    assert!(!fn_body(&src, "fn open_controls(").contains("allow_capture_devices"));
+    assert!(fn_body(&src, "fn open_camera_window(").contains(".content_protected(false)"));
+    assert!(fn_body(&src, "fn open_controls(").contains(".content_protected(true)"));
+    let media = read("src/capture/webview_media.rs");
+    let gate = fn_body(&media, "pub fn allows_capture_devices(");
+    assert!(gate.contains("CAMERA_LABEL") && gate.contains("OVERLAY_LABEL_PREFIX"));
+    assert!(
+        media.contains("COREWEBVIEW2_PERMISSION_KIND_CAMERA") && media.contains("is_app_origin(&uri)"),
+        "only the camera and microphone, only for the app's own pages"
+    );
+}
+
+/// The Windows recorder is the app's own executable started without a
+/// console window, and Windows recording stays on staging until its
+/// hardware checklist passes.
+#[test]
+fn windows_records_in_its_own_child_and_stays_on_staging() {
+    let windows = read("src/capture/recording/windows.rs");
+    assert!(fn_body(&windows, "pub fn helper_command(").contains("own_recorder_command()"));
+    assert!(fn_body(&windows, "pub fn helper_command(").contains("CREATE_NO_WINDOW"));
+    use tauri_project_lib::capture::rollout::{Feature, Platform, enabled};
+    use tauri_project_lib::release_channel::ReleaseChannel;
+    assert!(enabled(ReleaseChannel::Staging, Platform::Windows, Feature::Recording));
+    assert!(
+        !enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording),
+        "Windows recording leaves staging only once its hardware checklist passes"
+    );
+}

@@ -73,6 +73,9 @@ pub struct Surfaces {
 pub const MIC_NEEDS_MACOS_15: &str = "Recording the microphone needs macOS 15 or later";
 /// Elsewhere it comes with the platform's recorder.
 pub const MIC_NOT_YET: &str = "Recording the microphone isn't available on this system yet";
+/// Windows records it, but its privacy settings keep desktop apps from it.
+pub const MIC_BLOCKED_WINDOWS: &str =
+    "Windows is blocking the microphone. Turn on microphone access for desktop apps in Settings, Privacy & security, Microphone";
 
 const ALL_MODES: [CaptureMode; 3] = [CaptureMode::Area, CaptureMode::Window, CaptureMode::Screen];
 
@@ -86,9 +89,10 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
             recording: ALL_MODES.to_vec(),
         },
         screenshot_timer: true,
-        // ScreenCaptureKit can mix the system's sound into the one audio
-        // track; the user turns it on in the bar's options.
-        system_audio: platform == Platform::MacOs && recording,
+        // ScreenCaptureKit (macOS) and WASAPI loopback (Windows) can mix
+        // the system's sound into the one audio track; the user turns it on
+        // in the bar's options.
+        system_audio: matches!(platform, Platform::MacOs | Platform::Windows) && recording,
         microphone_unavailable_message: match (microphone, platform) {
             (true, _) => None,
             (false, Platform::MacOs) => Some(MIC_NEEDS_MACOS_15),
@@ -114,11 +118,21 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
 /// What this machine offers now.
 #[must_use]
 pub fn surfaces() -> Surfaces {
-    surfaces_for(
-        super::rollout::current_platform(),
-        super::recording::recording_supported(),
-        super::recording::microphone_supported(),
-    )
+    let platform = super::rollout::current_platform();
+    let recording = super::recording::recording_supported();
+    let mut surfaces = surfaces_for(platform, recording, super::recording::microphone_supported());
+    if let Some(line) = microphone_blocked_line(platform, recording, || {
+        super::permissions::windows_privacy_blocks(super::permissions::PrivacyDevice::Microphone)
+    }) {
+        surfaces.microphone_unavailable_message = Some(line);
+    }
+    surfaces
+}
+
+/// Where Windows records but its privacy settings block the microphone, the
+/// mic row says so (and what to switch on) instead of "not available".
+fn microphone_blocked_line(platform: Platform, recording: bool, blocked: impl FnOnce() -> bool) -> Option<&'static str> {
+    (platform == Platform::Windows && recording && blocked()).then_some(MIC_BLOCKED_WINDOWS)
 }
 
 #[cfg(test)]
@@ -154,6 +168,23 @@ mod tests {
             let line = surfaces_for(platform, false, false).microphone_unavailable_message.unwrap();
             assert!(!line.contains("macOS"), "{platform:?}: {line}");
         }
+    }
+
+    /// Windows records the system's sound like macOS; a Windows whose
+    /// privacy settings block the microphone says so and how to fix it.
+    #[test]
+    fn windows_offers_system_audio_and_names_a_blocked_microphone() {
+        assert!(surfaces_for(Platform::Windows, true, true).system_audio);
+        assert!(!surfaces_for(Platform::LinuxX11, true, true).system_audio, "not until Linux records");
+        assert_eq!(microphone_blocked_line(Platform::Windows, true, || true), Some(MIC_BLOCKED_WINDOWS));
+        assert_eq!(microphone_blocked_line(Platform::Windows, true, || false), None);
+        assert_eq!(
+            microphone_blocked_line(Platform::Windows, false, || true),
+            None,
+            "no recorder, no mic line"
+        );
+        assert_eq!(microphone_blocked_line(Platform::MacOs, true, || true), None);
+        assert!(!MIC_BLOCKED_WINDOWS.contains('\u{2014}'), "no em dashes in Rust's copy");
     }
 
     /// No behaviour change yet: every platform keeps the overlay, every mode

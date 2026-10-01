@@ -201,3 +201,20 @@ fn read_back(path: &Path) -> Report {
     }
     report
 }
+
+#[cfg(test)]
+mod tests {
+    /// The real Media Foundation writer, on the Windows CI lane and on any
+    /// Windows dev machine: a paused take comes back 5 s long with one
+    /// H.264 and one AAC stream. Skipped where Windows has no encoders (a
+    /// Server or N edition without Media Foundation), which `--probe`
+    /// reports as `mediaFeaturePackMissing`.
+    #[test]
+    fn the_real_writer_records_a_paused_take_that_reads_back() {
+        if !super::super::probe::probe().encoders() {
+            return;
+        }
+        let report = super::run();
+        assert!(report.ok, "{report:?}");
+    }
+}

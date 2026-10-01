@@ -24,3 +24,4 @@ pub mod support;
 pub mod targets;
 pub mod thumbnail;
 pub mod tray_status;
+pub mod webview_media;
