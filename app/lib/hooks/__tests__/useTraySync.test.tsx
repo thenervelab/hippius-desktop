@@ -384,6 +384,37 @@ describe("useTrayInit — tray click", () => {
   });
 });
 
+describe("useTrayInit: the context menu is handed to Rust", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** How many times the page told Rust it attached a menu. */
+  const menuReports = () => mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length;
+
+  // On macOS a status item that owns a menu opens it on every click, so a
+  // left click never reached Rust and the popover never opened. Rust takes
+  // the menu off the status item, but only once told it is there: every
+  // attach must be reported.
+  it("reports the menu the new icon carries", async () => {
+    await mountTray(true);
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
+    await waitFor(() => expect(menuReports()).toBe(1));
+  });
+
+  it("reports the menu of an icon recreated after a failed icon update", async () => {
+    await mountTray(true, { failSetIconOnce: true });
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(menuReports()).toBe(mocks.trayNewCalls.length));
+  });
+
+  it("reports the menu re-attached to an icon that outlived a reload", async () => {
+    await mountTray(true, { existingTray: true });
+    await waitFor(() => expect(mocks.setMenuCalls.length).toBe(1));
+    await waitFor(() => expect(menuReports()).toBe(1));
+  });
+});
+
 describe("useTrayInit — Linux context menu", () => {
   beforeEach(() => {
     vi.clearAllMocks();

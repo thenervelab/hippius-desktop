@@ -1169,9 +1169,11 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             .title("Hippius recording")
             .decorations(false)
             .transparent(true)
-            // A DWM shadow on a transparent undecorated window draws a
-            // rectangle around the pill on Windows; the page draws its own.
-            .shadow(cfg!(target_os = "macos"))
+            // No native shadow on any platform: on a transparent window it is
+            // drawn from the window's rectangle (DWM on Windows, AppKit on
+            // macOS), not the pill's rounded shape, so it framed the pill in a
+            // border. The page draws its own shadow, sized to fit the window.
+            .shadow(false)
             .resizable(false)
             .skip_taskbar(true)
             .always_on_top(true)

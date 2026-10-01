@@ -22,7 +22,7 @@ import {
   type CapturePhase,
   type CapturePhaseEvent,
 } from "@/app/lib/tauri/capture";
-import { GLASS_BAR, GLASS_BUTTON, GLASS_FOCUS } from "@/app/lib/capture/glass";
+import { GLASS_BUTTON, GLASS_FOCUS, GLASS_PILL } from "@/app/lib/capture/glass";
 import { mmss } from "@/app/lib/capture/time";
 import { discardNeedsConfirm } from "./discard";
 
@@ -52,7 +52,7 @@ function isLive(phase: CapturePhase): phase is Extract<CapturePhase, { phase: "r
   return phase.phase === "recording" || phase.phase === "paused";
 }
 
-const PILL = `flex items-center rounded-full ${GLASS_BAR}`;
+const PILL = `flex items-center rounded-full ${GLASS_PILL}`;
 /** How long the one-time "filmed" line stays before the pill folds up. */
 const NOTE_MS = 8000;
 /** The grace before a pointed-at compact pill folds up again. */

@@ -667,6 +667,7 @@ fn main() {
             // Tray popover panel (replaces the native tray menu)
             toggle_tray_panel,
             tray_set_signed_in,
+            crate::tray::status_menu::tray_menu_attached,
             check_for_update,
             note_update_prompted,
             install_update,
