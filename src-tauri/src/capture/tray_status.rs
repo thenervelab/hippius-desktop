@@ -116,6 +116,117 @@ pub fn tray_click_route(signed_in: bool, phase: CapturePhase) -> TrayClickRoute 
     }
 }
 
+/// The mark drawn on the tray icon while a recording runs (plan XP-15).
+/// Windows shows no text beside a tray icon, so without it nothing on the
+/// taskbar said a recording was running; macOS and Linux show the time as
+/// the title and keep their icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayGlyph {
+    /// The app's own icon, whatever the main window last set.
+    None,
+    /// A red dot: recording.
+    Recording,
+    /// An amber dot: paused.
+    Paused,
+}
+
+/// Whether this system marks the tray icon itself (Windows only: the
+/// others carry the time as the title).
+pub const TRAY_ICON_MARKS_RECORDING: bool = cfg!(windows);
+
+#[must_use]
+pub fn tray_glyph_for(phase: CapturePhase) -> TrayGlyph {
+    match phase {
+        CapturePhase::Recording { .. } => TrayGlyph::Recording,
+        CapturePhase::Paused { .. } => TrayGlyph::Paused,
+        _ => TrayGlyph::None,
+    }
+}
+
+/// The glyph a written text stands for, so the last write says which mark
+/// is on the icon now (the title is `tray_title_for`'s, so its first
+/// character names the phase).
+#[must_use]
+pub fn tray_glyph_of(text: &TrayText) -> TrayGlyph {
+    if text.title.starts_with('◼') {
+        TrayGlyph::Recording
+    } else if text.title.starts_with('❚') {
+        TrayGlyph::Paused
+    } else {
+        TrayGlyph::None
+    }
+}
+
+/// What to do to the tray icon after a write that moves it from `was` to
+/// `now`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconWrite {
+    /// Leave the icon alone.
+    Keep,
+    /// Draw the mark. Done on every write while recording (once a second),
+    /// so a sync icon the main window swaps in mid-recording is covered
+    /// again within a second.
+    Mark(TrayGlyph),
+    /// The recording is over: put the app's icon back and let the main
+    /// window re-apply its own (syncing, synced) icon.
+    Release,
+}
+
+#[must_use]
+pub fn icon_write(was: TrayGlyph, now: TrayGlyph) -> IconWrite {
+    match (was, now) {
+        (_, TrayGlyph::Recording | TrayGlyph::Paused) => IconWrite::Mark(now),
+        (TrayGlyph::None, TrayGlyph::None) => IconWrite::Keep,
+        (_, TrayGlyph::None) => IconWrite::Release,
+    }
+}
+
+/// The side of the square the marked icon is drawn at: big enough for a
+/// 200 % taskbar (32 px), small enough to rebuild nothing per second.
+pub const GLYPH_ICON_SIZE: u32 = 64;
+
+/// The app's tray icon (`base`, any size, RGBA) fitted into a
+/// [`GLYPH_ICON_SIZE`] square, with a dot in the bottom-right corner for
+/// `glyph` (red recording, amber paused), ringed in white so it reads on a
+/// dark and a light taskbar. `None` for [`TrayGlyph::None`].
+#[must_use]
+pub fn marked_icon(base: &image::RgbaImage, glyph: TrayGlyph) -> Option<image::RgbaImage> {
+    let fill = match glyph {
+        TrayGlyph::None => return None,
+        // The pill's own colours (#FF453A, amber-400).
+        TrayGlyph::Recording => image::Rgba([0xFF, 0x45, 0x3A, 0xFF]),
+        TrayGlyph::Paused => image::Rgba([0xFB, 0xBF, 0x24, 0xFF]),
+    };
+    let size = GLYPH_ICON_SIZE;
+    let mut icon = image::RgbaImage::new(size, size);
+    if base.width() > 0 && base.height() > 0 {
+        // Fitted inside the square with its aspect kept, then centred.
+        let scale = f64::from(size) / f64::from(base.width().max(base.height()));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (w, h) = (
+            ((f64::from(base.width()) * scale).round() as u32).clamp(1, size),
+            ((f64::from(base.height()) * scale).round() as u32).clamp(1, size),
+        );
+        let fitted = image::imageops::resize(base, w, h, image::imageops::FilterType::Triangle);
+        image::imageops::overlay(&mut icon, &fitted, i64::from((size - w) / 2), i64::from((size - h) / 2));
+    }
+    let radius = f64::from(size) * 0.22;
+    let ring = radius + f64::from(size) * 0.05;
+    let centre = f64::from(size) - ring - 0.5;
+    let white = image::Rgba([0xFF, 0xFF, 0xFF, 0xFF]);
+    for y in 0..size {
+        for x in 0..size {
+            let d = (f64::from(x) - centre).hypot(f64::from(y) - centre);
+            if d <= radius {
+                icon.put_pixel(x, y, fill);
+            } else if d <= ring {
+                icon.put_pixel(x, y, white);
+            }
+        }
+    }
+    Some(icon)
+}
+
 /// Whether the tray needs writing: only when its text changes. The icon is
 /// then left alone through a screenshot (every phase of one clears), and a
 /// status item is not resized and re-hit-tested on phase changes that show
@@ -309,6 +420,54 @@ mod tests {
             let tip = tray_text_for(phase).tooltip;
             assert!(tip.encode_utf16().count() <= 127, "{tip}");
         }
+    }
+
+    #[test]
+    fn the_icon_is_marked_only_while_a_recording_runs() {
+        assert_eq!(tray_glyph_for(RECORDING), TrayGlyph::Recording);
+        assert_eq!(tray_glyph_for(PAUSED), TrayGlyph::Paused);
+        for phase in not_recording() {
+            assert_eq!(tray_glyph_for(phase), TrayGlyph::None, "{phase:?}");
+        }
+        // The written text names the same mark, so the last write says
+        // which mark is on the icon.
+        for phase in not_recording().into_iter().chain([RECORDING, PAUSED]) {
+            assert_eq!(tray_glyph_of(&tray_text_for(phase)), tray_glyph_for(phase), "{phase:?}");
+        }
+    }
+
+    /// Marked on every write while recording, put back once when it ends,
+    /// and never touched through a screenshot.
+    #[test]
+    fn the_mark_is_redrawn_while_recording_and_released_once() {
+        use TrayGlyph::{None as Plain, Paused as P, Recording as R};
+        assert_eq!(icon_write(Plain, R), IconWrite::Mark(R));
+        assert_eq!(icon_write(R, R), IconWrite::Mark(R), "covers a sync icon swapped in");
+        assert_eq!(icon_write(R, P), IconWrite::Mark(P));
+        assert_eq!(icon_write(P, Plain), IconWrite::Release);
+        assert_eq!(icon_write(R, Plain), IconWrite::Release);
+        assert_eq!(icon_write(Plain, Plain), IconWrite::Keep);
+    }
+
+    #[test]
+    fn the_marked_icon_keeps_the_logo_and_adds_a_ringed_dot() {
+        // A wide logo: opaque blue, 100 x 50.
+        let base = image::RgbaImage::from_pixel(100, 50, image::Rgba([0x31, 0x67, 0xDD, 0xFF]));
+        assert!(marked_icon(&base, TrayGlyph::None).is_none());
+        let icon = marked_icon(&base, TrayGlyph::Recording).unwrap();
+        assert_eq!(icon.dimensions(), (GLYPH_ICON_SIZE, GLYPH_ICON_SIZE));
+        // Letterboxed, not stretched: the top rows stay clear.
+        assert_eq!(icon.get_pixel(32, 2)[3], 0);
+        // The logo's middle survives on the left.
+        assert_eq!(*icon.get_pixel(10, 32), image::Rgba([0x31, 0x67, 0xDD, 0xFF]));
+        // The dot sits in the bottom-right corner, in the pill's red.
+        let near_corner = GLYPH_ICON_SIZE - 12;
+        assert_eq!(*icon.get_pixel(near_corner, near_corner), image::Rgba([0xFF, 0x45, 0x3A, 0xFF]));
+        let paused = marked_icon(&base, TrayGlyph::Paused).unwrap();
+        assert_eq!(*paused.get_pixel(near_corner, near_corner), image::Rgba([0xFB, 0xBF, 0x24, 0xFF]));
+        // The bundled icon decodes and marks.
+        let bundled = image::load_from_memory(include_bytes!("../../icons/TrayIcon.png")).unwrap().to_rgba8();
+        assert!(marked_icon(&bundled, TrayGlyph::Recording).is_some());
     }
 
     /// The tooltip carries the running time, since Windows has no tray title.

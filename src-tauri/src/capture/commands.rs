@@ -372,7 +372,11 @@ fn show_phase_in_tray(app: &AppHandle, event: PhaseEvent) {
             let text = tray_status::tray_text_for(event.phase);
             let mut last = lock(&state.capture.tray_last);
             if tray_status::tray_needs_write(last.as_ref(), &text) {
+                let was = last.as_ref().map_or(tray_status::TrayGlyph::None, tray_status::tray_glyph_of);
                 write_tray_text(&handle, &text);
+                if tray_status::TRAY_ICON_MARKS_RECORDING {
+                    write_tray_glyph(&handle, tray_status::icon_write(was, tray_status::tray_glyph_of(&text)));
+                }
                 *last = Some(text);
             }
         }
@@ -406,6 +410,67 @@ fn write_tray_text(app: &AppHandle, text: &TrayText) {
     }
     if let Err(e) = tray.set_tooltip(Some(text.tooltip.as_str())) {
         tracing::debug!(error = %e, "could not set the tray tooltip");
+    }
+}
+
+/// The recording's mark came off the tray icon (Windows): the main window
+/// puts its own icon (syncing, synced) back (`useTraySync.ts`).
+pub const TRAY_ICON_RELEASED_EVENT: &str = "capture_tray_icon_released";
+
+/// The app's tray icon as bundled, decoded once.
+fn tray_base_icon() -> Option<&'static image::RgbaImage> {
+    static BASE: std::sync::OnceLock<Option<image::RgbaImage>> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        image::load_from_memory(include_bytes!("../../icons/TrayIcon.png"))
+            .map(|i| i.to_rgba8())
+            .inspect_err(|e| tracing::debug!(error = %e, "could not decode the tray icon"))
+            .ok()
+    })
+    .as_ref()
+}
+
+/// The tray icon with `glyph`'s dot, built once per glyph.
+fn marked_tray_icon(glyph: tray_status::TrayGlyph) -> Option<tauri::image::Image<'static>> {
+    static RECORDING: std::sync::OnceLock<Option<image::RgbaImage>> = std::sync::OnceLock::new();
+    static PAUSED: std::sync::OnceLock<Option<image::RgbaImage>> = std::sync::OnceLock::new();
+    let slot = match glyph {
+        tray_status::TrayGlyph::Recording => &RECORDING,
+        tray_status::TrayGlyph::Paused => &PAUSED,
+        tray_status::TrayGlyph::None => return None,
+    };
+    let icon = slot
+        .get_or_init(|| tray_base_icon().and_then(|base| tray_status::marked_icon(base, glyph)))
+        .as_ref()?;
+    Some(tauri::image::Image::new_owned(icon.as_raw().clone(), icon.width(), icon.height()))
+}
+
+/// Mark the tray icon while a recording runs, or put the app's icon back
+/// (plan XP-15). Windows only ([`tray_status::TRAY_ICON_MARKS_RECORDING`]):
+/// its tray shows no title. The main window owns the icon otherwise; on
+/// release it is told to re-apply its own, since only it knows whether a
+/// sync is running.
+fn write_tray_glyph(app: &AppHandle, write: tray_status::IconWrite) {
+    let Some(tray) = app.tray_by_id(tray_status::TRAY_ID) else {
+        return;
+    };
+    match write {
+        tray_status::IconWrite::Keep => {}
+        tray_status::IconWrite::Mark(glyph) => {
+            if let Some(icon) = marked_tray_icon(glyph)
+                && let Err(e) = tray.set_icon(Some(icon))
+            {
+                tracing::debug!(error = %e, "could not mark the tray icon");
+            }
+        }
+        tray_status::IconWrite::Release => {
+            if let Some(base) = tray_base_icon() {
+                let icon = tauri::image::Image::new_owned(base.as_raw().clone(), base.width(), base.height());
+                if let Err(e) = tray.set_icon(Some(icon)) {
+                    tracing::debug!(error = %e, "could not put the tray icon back");
+                }
+            }
+            let _ = app.emit(TRAY_ICON_RELEASED_EVENT, ());
+        }
     }
 }
 
