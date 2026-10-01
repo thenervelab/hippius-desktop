@@ -3,6 +3,7 @@
 //!
 //! Design and phasing: `docs/plans/2026-09-22-screen-capture.md`.
 
+pub mod area_pick;
 pub mod bar;
 pub mod camera;
 pub mod commands;

@@ -57,6 +57,12 @@ const CAPTURE_PREVIEW_ROUTE = "/capture-preview";
 const CAPTURE_CAMERA_ROUTE = "/capture-camera";
 
 /**
+ * Wayland's area selection (`app/capture-area`): the chosen monitor's
+ * picture to draw the area to record on. Same provider rules as the overlay.
+ */
+const CAPTURE_AREA_ROUTE = "/capture-area";
+
+/**
  * Top-level shell that decides which provider tree to mount based on the
  * window we are running in.
  *
@@ -80,7 +86,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     pathname?.startsWith(CAPTURE_OVERLAY_ROUTE) ||
     pathname?.startsWith(CAPTURE_CONTROLS_ROUTE) ||
     pathname?.startsWith(CAPTURE_PREVIEW_ROUTE) ||
-    pathname?.startsWith(CAPTURE_CAMERA_ROUTE)
+    pathname?.startsWith(CAPTURE_CAMERA_ROUTE) ||
+    pathname?.startsWith(CAPTURE_AREA_ROUTE)
   ) {
     // The popover skips the app providers but still mounts the theme
     // provider so it follows the System/Light/Dark preference (shared

@@ -705,6 +705,8 @@ fn main() {
             crate::capture::commands::capture_set_shortcut,
             crate::capture::commands::capture_configure_shortcut,
             crate::capture::commands::capture_skip_countdown,
+            crate::capture::commands::capture_area_context,
+            crate::capture::commands::capture_area_choose,
             crate::capture::commands::capture_controls_context,
             crate::capture::commands::capture_add_desktop_shortcut,
             crate::capture::commands::capture_camera_context,

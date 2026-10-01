@@ -1073,18 +1073,77 @@ fn linux_records_in_its_own_child_and_stays_on_staging() {
 }
 
 /// One owner per device on Linux: the recorder opens the screen and the
-/// sound sources, never the camera (the bubble's webview owns it and is
-/// filmed), and each source has its own pipeline and thread.
+/// sound sources, and the camera only for camera only on Wayland (no window
+/// to film there), from GStreamer's own device rather than a source written
+/// by hand; the app asks for that only there, and the stage page lets go
+/// of the camera whenever Rust says the recorder has it.
 #[test]
-fn the_linux_recorder_never_opens_the_camera() {
+fn the_linux_recorder_opens_the_camera_only_where_no_window_can_be_filmed() {
     for file in ["mod.rs", "capture.rs", "encoder.rs", "portal.rs"] {
         let src = read(&format!("src/capture/recorder_child/linux/{file}"));
-        for camera in ["v4l2src", "pipewiresrc camera", "Camera"] {
-            assert!(!src.contains(&format!("\"{camera}")), "{file} must not open a camera ({camera})");
+        for camera in ["v4l2src", "pipewiresrc camera"] {
+            assert!(!src.contains(&format!("\"{camera}")), "{file} must not write a camera source ({camera})");
         }
     }
     let session = read("src/capture/recorder_child/linux/mod.rs");
     assert!(session.contains("capture::Audio::start(") && session.contains("capture::Video::start("));
+    assert_eq!(session.matches("capture::Video::start_camera(").count(), 1);
+    let start = fn_body(&session, "pub fn start(");
+    assert!(
+        start.find("if let Some(pick) = cmd.camera.clone()").unwrap() < start.find("capture::Video::start_camera(").unwrap(),
+        "the camera is opened only when the app named one"
+    );
+    let capture = read("src/capture/recorder_child/linux/capture.rs");
+    assert!(fn_body(&capture, "fn open_camera(").contains("device.create_element(None)"));
+
+    let commands = read("src/capture/commands.rs");
+    let begin = fn_body(&commands, "async fn begin_recording(");
+    assert!(begin.contains("if recorder_opens_camera(*lock(&state.capture.recording_camera))"));
+    let opens = fn_body(&commands, "fn recorder_opens_camera(");
+    assert!(opens.contains("CameraShape::Stage") && opens.contains("support::camera_by_recorder("));
+    let camera_state = fn_body(&commands, "async fn camera_state_for(");
+    assert!(camera_state.contains("recorder_owns_camera: recording && recorder_opens_camera(shape)"));
+    let page = read("../app/capture-camera/page.tsx");
+    assert!(
+        page.contains("const live = !!camera?.shape && !camera.hidden && !handedOver;"),
+        "the stage page closes its stream when the recorder has the camera"
+    );
+}
+
+/// A Wayland area: the recorder answers with the monitor's picture, the
+/// area is drawn on it in its own window (a selection surface every ending
+/// closes), mapped onto the stream's pixels in Rust, and the window is gone
+/// from the screen before the recorder crops, so the first picture never
+/// shows it. The countdown and the restore token come after the area.
+#[test]
+fn a_wayland_area_is_drawn_on_the_streams_picture_then_cropped() {
+    let commands = read("src/capture/commands.rs");
+    let begin = fn_body(&commands, "async fn begin_recording(");
+    let drawn = begin.find("draw_area(app, recorder, still)").expect("the area is drawn");
+    assert!(begin.find("take_area_still()").unwrap() < drawn);
+    assert!(drawn < begin.find("screencast_token::remember(").unwrap());
+    assert!(drawn < begin.find("count_down_in_pill(").unwrap(), "the pill counts after the area");
+    assert!(begin.contains("support::picks_area_after_dialog(&surfaces, selection)"));
+    let draw = fn_body(&commands, "async fn draw_area(");
+    let gone = draw.find("window.destroy()").expect("the window comes down");
+    assert!(gone < draw.find("COMPOSITOR_SETTLE").unwrap());
+    assert!(draw.find("COMPOSITOR_SETTLE").unwrap() < draw.find("recorder.crop(area)").unwrap());
+    assert!(fn_body(&commands, "pub fn capture_area_choose(").contains("stream_area("));
+    assert!(fn_body(&commands, "fn close_overlays(").contains("label == AREA_LABEL"));
+
+    let label = commands
+        .lines()
+        .find(|l| l.contains("pub const AREA_LABEL"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("AREA_LABEL");
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-area.json")).expect("capability parses");
+    assert_eq!(capability["windows"], serde_json::json!([label]));
+    for permission in capability["permissions"].as_array().expect("permissions") {
+        assert!(permission.as_str().unwrap_or_default().starts_with("core:"), "{permission}");
+    }
+    let shell = read("../app/components/AppShell.tsx");
+    assert!(shell.contains(&format!("\"/{label}\"")), "the area page boots without the app");
+    assert!(fn_body(&commands, "fn open_area_window(").contains(&format!("\"{label}.html\"")));
 }
 
 /// Wayland's recording panel: one window (the overlay page, so its

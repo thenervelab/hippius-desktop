@@ -84,7 +84,12 @@ export function barHint(
  * The panel's line (the capture bar alone in a window, where the desktop's
  * own screen-sharing dialog chooses): what Record leads to.
  */
-export function panelHint(mode: CaptureMode, enterKey = "Return"): string {
+export function panelHint(mode: CaptureMode, enterKey = "Return", cameraOnly = false): string {
+  // Camera only: the recorder opens the camera itself; no dialog comes.
+  if (cameraOnly) return `Press Record or ${enterKey} to record your camera`;
+  if (mode === "area") {
+    return `Press Record or ${enterKey}, choose a screen in your desktop's sharing dialog, then drag the area to record`;
+  }
   const what = mode === "window" ? "a window" : "a screen";
   return `Press Record or ${enterKey}, then choose ${what} in your desktop's sharing dialog`;
 }

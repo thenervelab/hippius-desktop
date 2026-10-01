@@ -534,7 +534,7 @@ export default function CaptureOverlayPage() {
           {countdownSpeech}
         </p>
         {context.hostsBar && !counting && (
-          <div data-testid="capture-bar-slot">{captureBar(notice ?? panelHint(context.mode, enterKey), true)}</div>
+          <div data-testid="capture-bar-slot">{captureBar(notice ?? panelHint(context.mode, enterKey, cameraOnly), true)}</div>
         )}
       </div>
     );

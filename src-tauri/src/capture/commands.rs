@@ -98,6 +98,9 @@ pub const OVERLAY_LABEL_PREFIX: &str = "capture-overlay-";
 pub const CONTROLS_LABEL: &str = "capture-controls";
 pub const PREVIEW_LABEL: &str = "capture-preview";
 pub const CAMERA_LABEL: &str = "capture-camera";
+/// Wayland's area selection: one full-screen window showing the chosen
+/// monitor's picture to draw the area on (`area_pick`).
+pub const AREA_LABEL: &str = "capture-area";
 
 /// The card's window, in logical points; the card fills it.
 const PREVIEW_WIDTH: f64 = 316.0;
@@ -134,10 +137,17 @@ pub fn capture_supported() -> bool {
 /// Whether camera only (the stage) can be recorded here: it records the
 /// camera window by its system window id (macOS's window number, Windows'
 /// HWND, the XID on X11), which those recorders take. Wayland has no window
-/// id to give (`support::camera_only`); there the bar must not offer it.
+/// id to give, so there the recorder opens the camera itself, and only
+/// where this machine has what that needs (`support::camera_only`).
 #[must_use]
 pub fn camera_only_supported() -> bool {
-    super::support::camera_only(super::rollout::current_platform()) && recording::recording_supported()
+    recording::recording_supported() && super::support::camera_only(super::rollout::current_platform(), recording::recorder_camera_available())
+}
+
+/// Whether this recording's camera is opened by the recorder (camera only
+/// on Wayland), so the stage page must let go of it.
+fn recorder_opens_camera(shape: Option<CameraShape>) -> bool {
+    shape == Some(CameraShape::Stage) && super::support::camera_by_recorder(super::rollout::current_platform())
 }
 
 /// A lock that survives a panic elsewhere: a poisoned recorder lock must not
@@ -248,6 +258,17 @@ pub struct CaptureState {
     /// The pill's "Start now" during a countdown after the desktop's dialog
     /// (`count_down_in_pill`).
     countdown_skip: AtomicBool,
+    /// A Wayland area being drawn on the chosen monitor's picture
+    /// (`draw_area`): the picture, the step, and where the drawn area goes.
+    area_pick: Mutex<Option<AreaPick>>,
+}
+
+/// A Wayland area recording between the desktop's dialog and its crop.
+struct AreaPick {
+    step: super::area_pick::AreaStep,
+    still: recording::protocol::StreamStill,
+    /// Taken once, by the first area that maps onto the picture.
+    chosen: Option<tokio::sync::oneshot::Sender<recording::protocol::StreamCrop>>,
 }
 
 /// A camera the bar's picker offers: from the system list (a platform id) or
@@ -788,7 +809,8 @@ fn close_overlays(app: &AppHandle) {
     // The bar is going: nothing needs live device lists until it is back.
     super::device_watch::stop();
     for (label, window) in app.webview_windows() {
-        if label.starts_with(OVERLAY_LABEL_PREFIX) {
+        // The Wayland area window is a selection surface too.
+        if label.starts_with(OVERLAY_LABEL_PREFIX) || label == AREA_LABEL {
             // Destroyed, not closed: `close` finishes later, and a capture
             // started straight after would find the label still taken.
             let _ = window.destroy();
@@ -1819,11 +1841,20 @@ pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
                 "Recording the camera on its own isn't available on this system yet.".into(),
             ));
         }
-        // Camera only: what is recorded is the stage window itself.
-        let window_id = camera_window_id(&app)
-            .await
-            .ok_or_else(|| AppError::Validation("The camera isn't on screen yet. Try again in a moment.".into()))?;
-        Selection::Window { window_id }
+        if super::support::camera_by_recorder(super::rollout::current_platform()) {
+            // Wayland: no window to film; the recorder opens the camera
+            // itself (`begin_recording` names it), so the selection is only
+            // nominal and no desktop dialog is asked.
+            Selection::Screen {
+                display_id: super::support::PANEL_DISPLAY_ID,
+            }
+        } else {
+            // Camera only: what is recorded is the stage window itself.
+            let window_id = camera_window_id(&app)
+                .await
+                .ok_or_else(|| AppError::Validation("The camera isn't on screen yet. Try again in a moment.".into()))?;
+            Selection::Window { window_id }
+        }
     } else if kind == CaptureKind::Recording && super::support::surfaces().selection == super::support::SelectionUi::SystemPicker {
         // The panel: the desktop's screen-sharing dialog chooses the window
         // or screen once the recorder asks it.
@@ -2225,7 +2256,22 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     let saved = bar::load_options(state.pool()?).await.unwrap_or_default();
     let surfaces = super::support::surfaces();
     let system_picker = surfaces.selection == super::support::SelectionUi::SystemPicker;
-    let restore_token = if system_picker {
+    // Camera only on Wayland: the recorder opens the camera the stage
+    // showed (the stage page lets go of it as the phase moves on), and no
+    // desktop dialog is asked.
+    let camera = if recorder_opens_camera(*lock(&state.capture.recording_camera)) {
+        let name = match &saved.camera_device {
+            Some(id) => camera_name(app, id).await,
+            None => None,
+        };
+        Some(recording::protocol::CameraPick {
+            id: saved.camera_device.clone(),
+            name,
+        })
+    } else {
+        None
+    };
+    let restore_token = if system_picker && camera.is_none() {
         let displays = app.available_monitors().map_or(0, |m| m.len());
         super::screencast_token::for_start(state.pool()?, selection, displays).await
     } else {
@@ -2238,6 +2284,8 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         system_audio: saved.system_audio && surfaces.system_audio,
         camera_window: filmed_camera_window(&state.capture),
         restore_token,
+        pick_area: camera.is_none() && super::support::picks_area_after_dialog(&surfaces, selection),
+        camera,
     };
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     *lock(&state.capture.recording_dir) = Some(dir.clone());
@@ -2275,6 +2323,11 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     let poster = poster_task.await.ok().flatten();
     *lock(&state.capture.poster) = poster;
     let mut recorder = started?;
+    // A Wayland area: the desktop's dialog chose the monitor; the area is
+    // drawn on its picture now, and only then does the recording start.
+    if let Some(still) = recorder.take_area_still() {
+        recorder = draw_area(app, recorder, still).await?;
+    }
     if system_picker && let Ok(pool) = state.pool() {
         super::screencast_token::remember(pool, recorder.restore_token()).await;
     }
@@ -2301,6 +2354,211 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     }
     spawn_tick_loop(app.clone());
     Ok(())
+}
+
+/// Show the chosen monitor's picture full screen, wait for the area drawn
+/// on it (`capture_area_choose`), and crop the recorder to it in the
+/// stream's own pixels (`area_pick`). A cancel at any step (Escape, the
+/// pill, sign-out) moves the phase on: the recorder is handed back
+/// uncropped and [`adopt_recorder`] gives it to be thrown away, as for any
+/// cancel while starting. Left undrawn for [`area_pick::DRAW_WITHIN`], the
+/// recording ends as quietly as a cancelled dialog.
+///
+/// [`area_pick::DRAW_WITHIN`]: super::area_pick::DRAW_WITHIN
+async fn draw_area(app: &AppHandle, recorder: Box<dyn Recorder>, still: recording::protocol::StreamStill) -> Result<Box<dyn Recorder>> {
+    use super::area_pick::{AreaEvent, AreaStep, DRAW_WITHIN, next};
+    let state = app.state::<AppState>();
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let placement = still.placement;
+    *lock(&state.capture.area_pick) = Some(AreaPick {
+        step: next(AreaStep::Choosing, AreaEvent::StillArrived).unwrap_or(AreaStep::Drawing),
+        still,
+        chosen: Some(tx),
+    });
+    let end = |event: AreaEvent| {
+        let mut slot = lock(&state.capture.area_pick);
+        if let Some(pick) = slot.as_mut()
+            && let Some(step) = next(pick.step, event)
+        {
+            pick.step = step;
+        }
+        slot.take();
+    };
+    if let Err(e) = open_area_window(app, placement) {
+        end(AreaEvent::Failed);
+        return Err(e);
+    }
+    let deadline = std::time::Instant::now() + DRAW_WITHIN;
+    let chosen = loop {
+        let starting = matches!(
+            state.capture.current(),
+            CapturePhase::Capturing {
+                kind: CaptureKind::Recording
+            }
+        );
+        if !starting {
+            break Ok(None);
+        }
+        if std::time::Instant::now() >= deadline {
+            break Err(());
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(100), &mut rx).await {
+            Ok(Ok(area)) => break Ok(Some(area)),
+            Ok(Err(_)) => break Ok(None),
+            Err(_) => {}
+        }
+    };
+    if let Some(window) = app.get_webview_window(AREA_LABEL) {
+        let _ = window.destroy();
+    }
+    let area = match chosen {
+        Ok(Some(area)) => area,
+        // Cancelled meanwhile: `adopt_recorder` refuses it and it is thrown
+        // away there.
+        Ok(None) => {
+            end(AreaEvent::Cancelled);
+            return Ok(recorder);
+        }
+        Err(()) => {
+            end(AreaEvent::Cancelled);
+            tracing::info!("capture area: nothing drawn in time; the recording is given up");
+            return Err(AppError::Other(recording::protocol::PICKER_CANCELLED.into()));
+        }
+    };
+    // The selection window is in the stream until the compositor has
+    // taken it down; the first cropped picture must not show it.
+    tokio::time::sleep(super::linux_x11::COMPOSITOR_SETTLE * 2).await;
+    let (recorder, cropped) = tauri::async_runtime::spawn_blocking(move || {
+        let mut recorder = recorder;
+        let cropped = recorder.crop(area);
+        (recorder, cropped)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("recording task failed: {e}")))?;
+    end(if cropped.is_ok() { AreaEvent::Started } else { AreaEvent::Failed });
+    cropped.map(|()| recorder)
+}
+
+/// The full-screen window the area is drawn in, over the monitor the stream
+/// shows when the compositor said where that is.
+fn open_area_window(app: &AppHandle, placement: Option<recording::protocol::StreamPlacement>) -> Result<()> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    if let Some(stale) = app.get_webview_window(AREA_LABEL) {
+        let _ = stale.destroy();
+    }
+    // The tray panel's dev/export split.
+    let route = if cfg!(dev) { "capture-area" } else { "capture-area.html" };
+    let window = WebviewWindowBuilder::new(app, AREA_LABEL, WebviewUrl::App(route.into()))
+        .title("Choose the area to record")
+        .decorations(false)
+        .resizable(false)
+        .shadow(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible(false)
+        .build()
+        .map_err(|e| AppError::Other(format!("Could not open the area selection: {e}")))?;
+    fill_stream_monitor(&window, placement);
+    window
+        .show()
+        .map_err(|e| AppError::Other(format!("Could not show the area selection: {e}")))?;
+    let _ = window.set_focus();
+    Ok(())
+}
+
+/// Full screen on the monitor the stream covers (GTK's own monitor
+/// geometry is the layout the portal places streams in), or wherever the
+/// compositor puts a full-screen window when the portal did not say.
+#[cfg(target_os = "linux")]
+fn fill_stream_monitor(window: &tauri::WebviewWindow, placement: Option<recording::protocol::StreamPlacement>) {
+    let target = window.clone();
+    let posted = window.run_on_main_thread(move || {
+        use gtk::prelude::*;
+        let Ok(gtk_window) = target.gtk_window() else {
+            let _ = target.set_fullscreen(true);
+            return;
+        };
+        let display = WidgetExt::display(&gtk_window);
+        let monitors: Vec<super::area_pick::MonitorBox> = (0..display.n_monitors())
+            .filter_map(|i| display.monitor(i))
+            .map(|m| {
+                let g = m.geometry();
+                super::area_pick::MonitorBox {
+                    x: f64::from(g.x()),
+                    y: f64::from(g.y()),
+                    width: f64::from(g.width()),
+                    height: f64::from(g.height()),
+                }
+            })
+            .collect();
+        match (super::area_pick::monitor_for(placement, &monitors), WidgetExt::screen(&gtk_window)) {
+            (Some(index), Some(screen)) => gtk_window.fullscreen_on_monitor(&screen, i32::try_from(index).unwrap_or(0)),
+            _ => gtk_window.fullscreen(),
+        }
+    });
+    if posted.is_err() {
+        let _ = window.set_fullscreen(true);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn fill_stream_monitor(window: &tauri::WebviewWindow, _placement: Option<recording::protocol::StreamPlacement>) {
+    let _ = window.set_fullscreen(true);
+}
+
+/// What the area window draws on: the monitor's picture (a JPEG data URL)
+/// and its size in the stream's pixels.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaContext {
+    pub picture: String,
+    pub stream_width: u32,
+    pub stream_height: u32,
+}
+
+/// The area window's picture, while an area is being drawn.
+#[tauri::command]
+pub fn capture_area_context(state: tauri::State<'_, AppState>) -> Result<AreaContext> {
+    let slot = lock(&state.capture.area_pick);
+    match slot.as_ref() {
+        Some(pick) if pick.step == super::area_pick::AreaStep::Drawing => Ok(AreaContext {
+            picture: format!("data:image/jpeg;base64,{}", pick.still.jpeg),
+            stream_width: pick.still.width,
+            stream_height: pick.still.height,
+        }),
+        _ => Err(AppError::Validation("No area is waiting to be drawn.".into())),
+    }
+}
+
+/// The area drawn on the picture: `drawn` in the page's CSS pixels, `shown`
+/// where the page showed the picture. Mapped onto the stream's pixels here
+/// (`area_pick::stream_area`); a rectangle with nothing of the picture in
+/// it is refused with the line the bar shows, and the page stays up.
+#[tauri::command]
+pub fn capture_area_choose(
+    state: tauri::State<'_, AppState>,
+    drawn: super::geometry::LogicalRect,
+    shown: super::area_pick::ShownPicture,
+) -> Result<()> {
+    use super::area_pick::{AreaEvent, next, stream_area};
+    let mut slot = lock(&state.capture.area_pick);
+    let pick = slot
+        .as_mut()
+        .ok_or_else(|| AppError::Validation("No area is waiting to be drawn.".into()))?;
+    let Some(step) = next(pick.step, AreaEvent::AreaChosen) else {
+        return Err(AppError::Validation("No area is waiting to be drawn.".into()));
+    };
+    let area = stream_area(drawn, shown, (pick.still.width, pick.still.height))
+        .ok_or_else(|| AppError::Validation("Drag to select an area to record.".into()))?;
+    let sender = pick
+        .chosen
+        .take()
+        .ok_or_else(|| AppError::Validation("No area is waiting to be drawn.".into()))?;
+    pick.step = step;
+    sender
+        .send(area)
+        .map_err(|_| AppError::Validation("No area is waiting to be drawn.".into()))
 }
 
 /// Count `secs` down in the pill with the recorder paused, then resume it.
@@ -3873,6 +4131,9 @@ async fn recording_bubble_frame(app: &AppHandle, phase: CapturePhase, shape: Opt
     let selection = (*lock(&state.capture.selection))?;
     let display_of = |id: u32| lock(&state.capture.displays).iter().find(|d| d.id == id).cloned();
     let (filmed, scale) = match selection {
+        // A Wayland area is drawn after Record, on the stream's picture,
+        // and Wayland places no window anyway.
+        Selection::Area { rect, .. } if rect.width <= 0.0 || rect.height <= 0.0 => return None,
         Selection::Area { display_id, rect } => {
             let origin = display_area(&display_of(display_id)?);
             let region = camera::Frame {
@@ -3932,14 +4193,18 @@ async fn camera_state_for(app: &AppHandle, shape: Option<CameraShape>, hidden: b
         }
         (_, None) => false,
     };
+    let recording = camera::is_recording(phase);
     CameraState {
         shape,
         hidden,
         device_id: options.camera_device.clone(),
         device_name,
         size: options.camera_size,
-        recording: camera::is_recording(phase),
+        recording,
         camera_filmed,
+        // Camera only on Wayland: the recorder opens the camera from Record
+        // on, so the stage page lets go of it (one owner per device).
+        recorder_owns_camera: recording && recorder_opens_camera(shape),
     }
 }
 

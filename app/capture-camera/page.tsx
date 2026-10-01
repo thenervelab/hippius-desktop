@@ -65,6 +65,12 @@ import {
  * stays black until it is opened again. The bar's microphone meter is
  * therefore measured by Rust, and a camera muted anyway is opened again
  * after `MUTE_RECOVERY_MS` (`shouldReopenMuted`).
+ *
+ * Where Rust says the recorder has the camera (`recorderOwnsCamera`: camera
+ * only on Wayland, where there is no window to film, so the recorder opens
+ * the camera itself), this page closes its stream at once and shows a
+ * placeholder: one owner per device. The stage is not filmed there, so the
+ * placeholder may say in words what is happening.
  */
 
 function SizeGlyph({ icon }: { icon: SizeIcon }) {
@@ -148,7 +154,9 @@ export default function CaptureCameraPage() {
     return () => media.removeEventListener("devicechange", onChange);
   }, []);
 
-  const live = !!camera?.shape && !camera.hidden;
+  // The recorder has the camera: this page must not hold it.
+  const handedOver = !!camera?.recorderOwnsCamera;
+  const live = !!camera?.shape && !camera.hidden && !handedOver;
   const deviceId = camera?.deviceId ?? null;
   const deviceName = camera?.deviceName ?? null;
 
@@ -292,6 +300,26 @@ export default function CaptureCameraPage() {
   }, []);
 
   if (!camera?.shape || camera.hidden) return null;
+  if (handedOver) {
+    return (
+      <div className="fixed inset-0 p-1.5" data-testid="camera-window" data-tauri-drag-region>
+        <div
+          data-tauri-drag-region
+          data-testid="camera-handed-over"
+          role="status"
+          className={`flex flex-col items-center justify-center gap-2 overflow-hidden bg-gradient-to-br from-[#2a2c33] to-[#1c1d21] px-4 text-center ring-2 ring-white/85 ${cameraFrameShape(false)}`}
+        >
+          <span aria-hidden className="pointer-events-none flex items-center gap-2">
+            <span className="size-2.5 rounded-full bg-[#e5484d]" />
+            <Video className="size-6 text-white/75" />
+          </span>
+          <span className="pointer-events-none text-[13px] font-medium leading-snug text-white/85">
+            Recording your camera
+          </span>
+        </div>
+      </div>
+    );
+  }
   const bubble = camera.shape === "bubble";
   const round = bubble && camera.size !== "full";
   // The strip is for the bubble only (the camera-only stage is the

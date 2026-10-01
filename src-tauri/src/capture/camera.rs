@@ -65,6 +65,10 @@ pub struct CameraState {
     /// window recording where the recorder films that one window only
     /// (`bar::window_recording_adds_camera`).
     pub camera_filmed: bool,
+    /// The recorder has the camera (camera only on Wayland, from Record
+    /// on): the page closes its own stream and shows a placeholder, so the
+    /// device has one owner.
+    pub recorder_owns_camera: bool,
 }
 
 /// Whether a capture in `phase` is recording, or about to (the countdown is

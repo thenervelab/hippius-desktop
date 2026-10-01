@@ -186,6 +186,12 @@ export interface CaptureCameraState {
   recording: boolean;
   /** Whether the camera is in the video (false for a bubble over a window recording). */
   cameraFilmed: boolean;
+  /**
+   * The recorder has the camera (camera only on Wayland, from Record on):
+   * the page closes its own stream and shows a placeholder, so the device
+   * has one owner.
+   */
+  recorderOwnsCamera: boolean;
 }
 
 /** A camera or microphone the bar's pickers offer. Mirrors Rust's `recording::MediaDevice`. */
@@ -534,6 +540,29 @@ export function getCaptureControlsContext(): Promise<CaptureControlsContext> {
 /** The pill's "Start now" while it counts down after the desktop's dialog. */
 export function skipCaptureCountdown(): Promise<void> {
   return invoke("capture_skip_countdown");
+}
+
+/** The Wayland area window's picture: the chosen monitor's first frame. Mirrors Rust's `AreaContext`. */
+export interface CaptureAreaContext {
+  /** A JPEG data URL. */
+  picture: string;
+  /** The stream's own size in pixels (what the area is recorded in). */
+  streamWidth: number;
+  streamHeight: number;
+}
+
+export function getCaptureAreaContext(): Promise<CaptureAreaContext> {
+  return invoke("capture_area_context");
+}
+
+/**
+ * The area drawn on the picture, in this page's CSS pixels, with where the
+ * page shows the picture. Rust maps it onto the stream's pixels and starts
+ * the recording; a rectangle with nothing of the picture in it is refused
+ * with Rust's line.
+ */
+export function chooseCaptureArea(drawn: LogicalRect, shown: LogicalRect): Promise<void> {
+  return invoke("capture_area_choose", { drawn, shown });
 }
 
 /** To the pill: seconds left before the recording begins (after the desktop's dialog), or null once it has. */

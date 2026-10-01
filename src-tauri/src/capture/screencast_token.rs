@@ -8,7 +8,9 @@
 //! screen is the screen. With two or more, the token is not sent, so the
 //! user picks every time (a restored session would record the display
 //! chosen last, unasked, with no way to pick the other). A window is always
-//! chosen afresh (`linux_plan::portal_ask` never persists one).
+//! chosen afresh (`linux_plan::portal_ask` never persists one). An area is
+//! a whole monitor as far as the portal knows (it is drawn on the
+//! monitor's picture afterwards), so it shares the screen's token.
 //!
 //! The token is device-wide (`user_preferences`, like the bar's options),
 //! not per account: the desktop grants screen sharing to this app on this
@@ -24,7 +26,7 @@ const TOKEN_KEY: &str = "capture_screencast_restore_v1";
 /// Whether a saved token is sent for `selection` with `displays` connected.
 #[must_use]
 pub const fn applies(selection: Selection, displays: usize) -> bool {
-    matches!(selection, Selection::Screen { .. }) && displays == 1
+    matches!(selection, Selection::Screen { .. } | Selection::Area { .. }) && displays == 1
 }
 
 /// The token to start a recording of `selection` with, when it applies.
@@ -73,7 +75,8 @@ mod tests {
                 height: 10.0,
             },
         };
-        assert!(!applies(area, 1));
+        assert!(applies(area, 1), "an area is drawn on the one monitor after the portal");
+        assert!(!applies(area, 2));
     }
 
     #[tokio::test]

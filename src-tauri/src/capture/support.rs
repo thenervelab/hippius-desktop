@@ -14,6 +14,12 @@
 //! desktop has one, and elsewhere `shortcut.unavailableMessage` and
 //! `shortcut.command` tell the user what to bind in the desktop's settings
 //! ([`shortcut_for`]).
+//!
+//! A Wayland area recording is drawn after the dialog, on a picture of the
+//! monitor the user chose (`area_pick`), so Area is offered there wherever
+//! Wayland records. Camera only on Wayland has no window to film: the
+//! recorder opens the camera itself ([`camera_by_recorder`]), offered only
+//! where the probe found what that needs.
 
 use serde::Serialize;
 
@@ -138,8 +144,9 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
             // Hippius offers none of its own there.
             screenshot: if wayland { Vec::new() } else { ALL_MODES.to_vec() },
             // The ScreenCast portal records a monitor or a window; an area
-            // is not in v1 (spike L6).
-            recording: if wayland {
+            // is a monitor cropped to what is drawn on its picture after the
+            // dialog (`area_pick`), so it needs only a recorder.
+            recording: if wayland && !recording {
                 vec![CaptureMode::Window, CaptureMode::Screen]
             } else {
                 ALL_MODES.to_vec()
@@ -197,12 +204,27 @@ pub fn shortcut_for(platform: Platform, portal: super::shortcut_portal::PortalSt
     }
 }
 
-/// Whether `platform` can record the camera alone (the stage window, by its
-/// window id). Wayland gives an app no window ids, and the portal's dialog
-/// would make the user pick Hippius's own window, so not there in v1.
+/// Whether `platform` can record the camera alone. Everywhere but Wayland
+/// the stage window is filmed by its window id; Wayland gives an app no
+/// window ids (and the portal's dialog would make the user pick Hippius's
+/// own window), so there the recorder opens the camera itself
+/// ([`camera_by_recorder`]) and camera only is offered when
+/// `recorder_camera` says this machine has what that needs.
 #[must_use]
-pub const fn camera_only(platform: Platform) -> bool {
-    !matches!(platform, Platform::LinuxWayland)
+pub const fn camera_only(platform: Platform, recorder_camera: bool) -> bool {
+    match platform {
+        Platform::LinuxWayland => recorder_camera,
+        Platform::MacOs | Platform::Windows | Platform::LinuxX11 => true,
+    }
+}
+
+/// Whether camera only on `platform` is recorded by the recorder opening
+/// the camera (GStreamer, by the device the bubble showed) rather than by
+/// filming the stage window. The stage page lets go of the camera first:
+/// one owner per device.
+#[must_use]
+pub const fn camera_by_recorder(platform: Platform) -> bool {
+    matches!(platform, Platform::LinuxWayland)
 }
 
 /// Whether the recording pill is filmed with the screen on `platform`:
@@ -245,16 +267,35 @@ pub fn start_plan(surfaces: &Surfaces, kind: super::session::CaptureKind) -> Sta
 pub const PANEL_DISPLAY_ID: u32 = 0;
 
 /// What Record in the panel asks the recorder for: a window or a whole
-/// screen, chosen in the desktop's dialog. The ids mean nothing there; only
-/// which kind of selection it is reaches the portal.
+/// screen, chosen in the desktop's dialog, or an area, which is a screen
+/// chosen there and then drawn on its picture (`area_pick`); its rectangle
+/// is empty until then. The ids mean nothing there; only which kind of
+/// selection it is reaches the portal.
 #[must_use]
 pub fn system_picker_selection(mode: CaptureMode) -> super::screenshot::Selection {
     match mode {
         CaptureMode::Window => super::screenshot::Selection::Window { window_id: 0 },
-        CaptureMode::Area | CaptureMode::Screen => super::screenshot::Selection::Screen {
+        CaptureMode::Area => super::screenshot::Selection::Area {
+            display_id: PANEL_DISPLAY_ID,
+            rect: super::geometry::LogicalRect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+        },
+        CaptureMode::Screen => super::screenshot::Selection::Screen {
             display_id: PANEL_DISPLAY_ID,
         },
     }
+}
+
+/// Whether a recording of `selection` with these surfaces draws its area
+/// after the desktop's dialog (`pickArea`): an area through the system
+/// picker. Everywhere else the area was drawn on the overlay already.
+#[must_use]
+pub fn picks_area_after_dialog(surfaces: &Surfaces, selection: super::screenshot::Selection) -> bool {
+    surfaces.selection == SelectionUi::SystemPicker && matches!(selection, super::screenshot::Selection::Area { .. })
 }
 
 /// `mode` if these surfaces offer it for `kind`, else what they do offer
@@ -412,7 +453,16 @@ mod tests {
         let s = surfaces_for(Platform::LinuxWayland, false, false);
         assert_eq!(s.selection, SelectionUi::SystemPicker);
         assert!(s.modes.screenshot.is_empty());
-        assert_eq!(s.modes.recording, [CaptureMode::Window, CaptureMode::Screen], "no area recording in v1");
+        assert_eq!(
+            s.modes.recording,
+            [CaptureMode::Window, CaptureMode::Screen],
+            "no recorder, no area to crop"
+        );
+        assert_eq!(
+            surfaces_for(Platform::LinuxWayland, true, true).modes.recording,
+            ALL_MODES,
+            "an area is a monitor cropped after the dialog"
+        );
         assert!(!s.screenshot_timer);
         assert_eq!(s.system_picker_note, Some(WAYLAND_SCREENSHOT_NOTE));
         assert_eq!(s.linux_session, Some(LinuxSession::Wayland));
@@ -435,9 +485,10 @@ mod tests {
         }
     }
 
-    /// The panel's Record asks the recorder for a window or a screen; the
-    /// desktop's dialog picks which. The countdown runs after the dialog, in
-    /// the pill: a count before a dialog would end at the dialog.
+    /// The panel's Record asks the recorder for a window, a screen or an
+    /// area (a screen whose area is drawn after the dialog); the desktop's
+    /// dialog picks which. The countdown runs after the dialog (and the
+    /// area), in the pill: a count before a dialog would end at the dialog.
     #[test]
     fn the_panel_asks_for_a_window_or_a_screen_without_a_countdown() {
         use crate::capture::screenshot::Selection;
@@ -449,7 +500,24 @@ mod tests {
                 display_id: PANEL_DISPLAY_ID
             }
         );
+        let area = system_picker_selection(CaptureMode::Area);
+        assert!(
+            matches!(
+                area,
+                Selection::Area {
+                    display_id: PANEL_DISPLAY_ID,
+                    ..
+                }
+            ),
+            "{area:?}"
+        );
         let wayland = surfaces_for(Platform::LinuxWayland, true, true);
+        assert!(picks_area_after_dialog(&wayland, area));
+        assert!(!picks_area_after_dialog(&wayland, system_picker_selection(CaptureMode::Screen)));
+        assert!(
+            !picks_area_after_dialog(&surfaces_for(Platform::LinuxX11, true, true), area),
+            "X11 draws its area on the overlay"
+        );
         assert!(wayland.record_countdown, "offered: it counts in the pill");
         assert!(wayland.countdown_after_picker);
         assert_eq!(countdown_secs(&wayland, 3, Recording), 0, "nothing counts before the dialog");
@@ -463,14 +531,16 @@ mod tests {
         assert_eq!(countdown_after_picker(&x11, 3, Recording), 0, "the overlay already counted");
     }
 
-    /// A remembered area opens a Wayland recording on the whole screen; an
-    /// offered mode is kept, and a kind with no modes of its own (Wayland's
-    /// screenshot, the desktop's tool) is left as it was.
+    /// A remembered area opens a Wayland recording that cannot crop on the
+    /// whole screen; an offered mode is kept, and a kind with no modes of
+    /// its own (Wayland's screenshot, the desktop's tool) is left as it was.
     #[test]
     fn a_mode_this_platform_lacks_falls_back_to_one_it_offers() {
         use crate::capture::session::CaptureKind::{Recording, Screenshot};
+        let no_recorder = surfaces_for(Platform::LinuxWayland, false, false);
+        assert_eq!(offered_mode(&no_recorder, Recording, CaptureMode::Area), CaptureMode::Screen);
         let wayland = surfaces_for(Platform::LinuxWayland, true, true);
-        assert_eq!(offered_mode(&wayland, Recording, CaptureMode::Area), CaptureMode::Screen);
+        assert_eq!(offered_mode(&wayland, Recording, CaptureMode::Area), CaptureMode::Area);
         assert_eq!(offered_mode(&wayland, Recording, CaptureMode::Window), CaptureMode::Window);
         assert_eq!(offered_mode(&wayland, Screenshot, CaptureMode::Area), CaptureMode::Area);
         let x11 = surfaces_for(Platform::LinuxX11, true, true);
@@ -489,14 +559,18 @@ mod tests {
         assert!(PILL_FILMED_NOTE.len() < 100, "two short lines in the pill");
     }
 
-    /// Camera only records the stage window by its id: every platform but
-    /// Wayland has one.
+    /// Camera only records the stage window by its id where there is one;
+    /// Wayland has none, so there the recorder opens the camera, and camera
+    /// only is offered only when this machine can do that.
     #[test]
-    fn camera_only_needs_a_window_id() {
-        assert!(camera_only(Platform::MacOs));
-        assert!(camera_only(Platform::Windows));
-        assert!(camera_only(Platform::LinuxX11));
-        assert!(!camera_only(Platform::LinuxWayland));
+    fn camera_only_films_the_stage_or_opens_the_camera_in_the_recorder() {
+        for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
+            assert!(camera_only(platform, false), "{platform:?} films the stage");
+            assert!(!camera_by_recorder(platform), "{platform:?}");
+        }
+        assert!(camera_only(Platform::LinuxWayland, true));
+        assert!(!camera_only(Platform::LinuxWayland, false), "no camera source or decoder: not offered");
+        assert!(camera_by_recorder(Platform::LinuxWayland));
     }
 
     /// The shortcut per platform: the plugin's key grab on macOS, Windows
