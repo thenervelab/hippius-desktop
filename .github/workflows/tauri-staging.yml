@@ -541,7 +541,7 @@ jobs:
         env:
           NODE_ENV: production
 
-      - name: Build & publish (deb)
+      - name: Build & publish (deb, rpm)
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -561,7 +561,10 @@ jobs:
           prerelease: true
           makeLatest: false
           overwrite: true
-          args: '--bundles deb'
+          # Staging also builds an .rpm so Fedora can be tested from an
+          # artifact (the capture plan's Linux checklist); beta and
+          # production ship the .deb only, and no updater manifest names it.
+          args: '--bundles deb,rpm'
 
   # Windows preview: the app installer (NSIS) + a separate, self-signed shell
   # extension bundle testers register manually (register-preview.ps1). The

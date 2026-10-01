@@ -391,6 +391,19 @@ impl RecordingUnavailable {
     }
 }
 
+impl RecordingUnavailable {
+    /// The line said on this machine: [`Self::message`], except that on
+    /// Linux the codec line names only the packages this machine lacks.
+    #[must_use]
+    pub fn line(self) -> &'static str {
+        #[cfg(target_os = "linux")]
+        if self == Self::CodecsMissing {
+            return linux::codecs_missing_line();
+        }
+        self.message()
+    }
+}
+
 /// The OS floor, named for the system it is said on.
 const fn os_too_old_message() -> &'static str {
     if cfg!(windows) {
@@ -495,7 +508,11 @@ impl RecordingAvailability {
 
     #[must_use]
     pub fn now() -> Self {
-        Self::from_reason(recording_unavailable())
+        let reason = recording_unavailable();
+        Self {
+            recording_unavailable: reason,
+            recording_unavailable_message: reason.map(RecordingUnavailable::line),
+        }
     }
 }
 

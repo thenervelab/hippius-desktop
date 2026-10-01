@@ -923,6 +923,38 @@ fn every_linux_build_has_gstreamer_and_the_deb_recommends_its_plugins() {
     );
 }
 
+/// Staging also builds an `.rpm`, so Fedora can be tested from an artifact
+/// (the capture plan's Linux checklist); beta and production ship the
+/// `.deb` alone. The rpm, like the deb, only RECOMMENDS the GStreamer
+/// plugins and the portal, in Fedora's names.
+#[test]
+fn only_staging_builds_an_rpm_and_it_recommends_fedoras_plugins() {
+    let staging = repo_file("../.github/workflows/tauri-staging.yml");
+    assert!(staging.contains("args: '--bundles deb,rpm'"), "staging builds deb and rpm");
+    for lane in ["tauri-beta.yml", "tauri-build.yml"] {
+        let text = repo_file(&format!("../.github/workflows/{lane}"));
+        assert!(!text.contains("rpm"), "{lane} must not build an rpm");
+    }
+    let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
+    let rpm = &config["bundle"]["linux"]["rpm"];
+    let recommends: Vec<&str> = rpm["recommends"]
+        .as_array()
+        .expect("rpm recommends")
+        .iter()
+        .filter_map(|r| r.as_str())
+        .collect();
+    for package in [
+        "gstreamer1-plugins-good",
+        "gstreamer1-plugin-openh264",
+        "gstreamer1-plugins-bad-free",
+        "gstreamer1-plugin-libav",
+        "pipewire-gstreamer",
+    ] {
+        assert!(recommends.contains(&package), "the rpm must recommend {package}");
+    }
+    assert!(rpm.get("depends").is_none_or(|d| !d.to_string().contains("gstreamer")));
+}
+
 /// The Linux lane runs the recorder's real GStreamer writer (the ignored
 /// self-tests), with the plugins it needs installed first.
 #[test]

@@ -73,6 +73,22 @@ pub fn unavailable() -> Option<RecordingUnavailable> {
     machine().unavailable(wayland())
 }
 
+/// The codec line for this machine: only the packages it lacks, in its
+/// distribution's names (worked out once from the launch's probe), or the
+/// line that names every package when the probe cannot tell.
+pub fn codecs_missing_line() -> &'static str {
+    use crate::capture::recorder_child::linux_plan::{codecs_missing_line, distro_family, missing_packages};
+    static LINE: OnceLock<String> = OnceLock::new();
+    LINE.get_or_init(|| {
+        let os_release = std::fs::read_to_string("/etc/os-release")
+            .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+            .unwrap_or_default();
+        missing_packages(&machine(), distro_family(&os_release))
+            .and_then(|packages| codecs_missing_line(&packages))
+            .unwrap_or_else(|| RecordingUnavailable::CodecsMissing.message().to_string())
+    })
+}
+
 /// The microphones, from the child (`--list-microphones`: PipeWire or
 /// PulseAudio inputs without the monitors, the default marked).
 pub fn list_microphones() -> Vec<MediaDevice> {

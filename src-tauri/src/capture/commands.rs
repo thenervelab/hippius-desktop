@@ -825,7 +825,7 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
     if kind == Some(CaptureKind::Recording)
         && let Some(why) = recording::recording_unavailable()
     {
-        return Err(AppError::Validation(why.message().into()));
+        return Err(AppError::Validation(why.line().into()));
     }
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
@@ -1725,7 +1725,7 @@ pub async fn capture_set_mode(state: tauri::State<'_, AppState>, app: AppHandle,
     if kind == CaptureKind::Recording
         && let Some(why) = recording::recording_unavailable()
     {
-        return Err(AppError::Validation(why.message().into()));
+        return Err(AppError::Validation(why.line().into()));
     }
     advance(&app, &state.capture, CaptureEvent::SetMode { kind, mode })?;
     let pool = state.pool()?;
@@ -1810,7 +1810,7 @@ pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
         // before any window is looked for: "the camera isn't on screen yet"
         // would be untrue and could never be fixed by waiting.
         if let Some(why) = recording::recording_unavailable() {
-            return Err(AppError::Validation(why.message().into()));
+            return Err(AppError::Validation(why.line().into()));
         }
         if !camera_only_supported() {
             return Err(AppError::Validation(

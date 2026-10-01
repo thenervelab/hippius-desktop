@@ -242,6 +242,99 @@ impl Probe {
     }
 }
 
+/// Which family of distribution this is, for naming its packages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Distro {
+    /// Debian, Ubuntu, Mint, Pop!_OS...: `gstreamer1.0-*`.
+    Debian,
+    /// Fedora, RHEL, CentOS, Nobara...: `gstreamer1-*`.
+    Fedora,
+    /// Anything else: both families' names are given.
+    Other,
+}
+
+/// The family from `/etc/os-release` (`ID` and `ID_LIKE`).
+#[must_use]
+pub fn distro_family(os_release: &str) -> Distro {
+    let mut ids: Vec<String> = Vec::new();
+    for line in os_release.lines() {
+        let Some((key, value)) = line.split_once('=') else { continue };
+        if matches!(key.trim(), "ID" | "ID_LIKE") {
+            let value = value.trim().trim_matches(['"', '\'']);
+            ids.extend(value.split_whitespace().map(str::to_ascii_lowercase));
+        }
+    }
+    if ids.iter().any(|id| matches!(id.as_str(), "debian" | "ubuntu")) {
+        Distro::Debian
+    } else if ids.iter().any(|id| matches!(id.as_str(), "fedora" | "rhel" | "centos")) {
+        Distro::Fedora
+    } else {
+        Distro::Other
+    }
+}
+
+/// The package that brings `element` (Debian's name, Fedora's name), or
+/// `None` for an element no recording needs.
+fn package_of(element: &str) -> Option<(&'static str, &'static str)> {
+    match element {
+        "appsrc" | "appsink" | "videoconvert" | "videoscale" | "audioconvert" | "audioresample" => {
+            Some(("gstreamer1.0-plugins-base", "gstreamer1-plugins-base"))
+        }
+        "mp4mux" | "pulsesrc" | "videocrop" | "ximagesrc" | "aacparse" => Some(("gstreamer1.0-plugins-good", "gstreamer1-plugins-good")),
+        "h264parse" => Some(("gstreamer1.0-plugins-bad", "gstreamer1-plugins-bad-free")),
+        "pipewiresrc" => Some(("gstreamer1.0-pipewire", "pipewire-gstreamer")),
+        _ => None,
+    }
+}
+
+/// What a missing H.264 or AAC encoder is installed with: x264 and libav
+/// on Debian's family, OpenH264 (Cisco's build) and libav on Fedora's.
+const H264_PACKAGES: (&str, &str) = ("gstreamer1.0-plugins-ugly", "gstreamer1-plugin-openh264");
+const AAC_PACKAGES: (&str, &str) = ("gstreamer1.0-libav", "gstreamer1-plugin-libav");
+
+/// Exactly the packages this machine lacks, in the order to say them, for
+/// `distro`'s family; `None` when the probe says too little to know
+/// (GStreamer itself did not start), so the full line is said instead.
+#[must_use]
+pub fn missing_packages(probe: &Probe, distro: Distro) -> Option<Vec<&'static str>> {
+    if !probe.gstreamer || distro == Distro::Other {
+        return None;
+    }
+    let pick = |(debian, fedora): (&'static str, &'static str)| if distro == Distro::Fedora { fedora } else { debian };
+    let mut packages: Vec<&'static str> = Vec::new();
+    let mut add = |p: &'static str| {
+        if !packages.contains(&p) {
+            packages.push(p);
+        }
+    };
+    for element in &probe.missing {
+        if let Some(pair) = package_of(element) {
+            add(pick(pair));
+        }
+    }
+    if probe.h264_encoder.is_none() {
+        add(pick(H264_PACKAGES));
+    }
+    if probe.aac_encoder.is_none() {
+        add(pick(AAC_PACKAGES));
+    }
+    Some(packages)
+}
+
+/// The codec line naming only `packages`: "Install a, b and c, then
+/// restart Hippius."
+#[must_use]
+pub fn codecs_missing_line(packages: &[&str]) -> Option<String> {
+    let list = match packages {
+        [] => return None,
+        [one] => (*one).to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    Some(format!(
+        "Screen recording needs video codecs your system doesn't have. Install {list}, then restart Hippius."
+    ))
+}
+
 /// Where the pictures come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoSource {
@@ -723,6 +816,61 @@ mod tests {
         for package in ["gstreamer1.0-plugins-ugly", "gstreamer1.0-libav", "gstreamer1-plugin-openh264"] {
             assert!(line.contains(package), "{line}");
         }
+    }
+
+    /// The line names exactly what this machine lacks, in its family's
+    /// package names; a probe too broken to tell, or an unknown family,
+    /// keeps the line that names everything.
+    #[test]
+    fn the_codec_line_names_only_the_missing_packages() {
+        let stock: Vec<&str> = UBUNTU_FULL.iter().copied().filter(|e| !matches!(*e, "x264enc" | "avenc_aac")).collect();
+        let probe = Probe::from_registry(false, with(&stock));
+        assert_eq!(
+            missing_packages(&probe, Distro::Debian).unwrap(),
+            ["gstreamer1.0-plugins-ugly", "gstreamer1.0-libav"]
+        );
+        assert_eq!(
+            codecs_missing_line(&missing_packages(&probe, Distro::Debian).unwrap()).unwrap(),
+            "Screen recording needs video codecs your system doesn't have. Install gstreamer1.0-plugins-ugly and gstreamer1.0-libav, then restart Hippius."
+        );
+        assert_eq!(
+            missing_packages(&probe, Distro::Fedora).unwrap(),
+            ["gstreamer1-plugin-openh264", "gstreamer1-plugin-libav"]
+        );
+        // Only the AAC encoder missing: only libav.
+        let no_aac: Vec<&str> = UBUNTU_FULL.iter().copied().filter(|e| *e != "avenc_aac").collect();
+        assert_eq!(
+            missing_packages(&Probe::from_registry(false, with(&no_aac)), Distro::Debian).unwrap(),
+            ["gstreamer1.0-libav"]
+        );
+        // A parser and the PipeWire source on Wayland, each once.
+        let parts: Vec<&str> = UBUNTU_FULL
+            .iter()
+            .copied()
+            .filter(|e| !matches!(*e, "h264parse" | "pipewiresrc" | "mp4mux" | "aacparse"))
+            .collect();
+        assert_eq!(
+            missing_packages(&Probe::from_registry(true, with(&parts)), Distro::Fedora).unwrap(),
+            ["gstreamer1-plugins-good", "gstreamer1-plugins-bad-free", "pipewire-gstreamer"]
+        );
+        assert_eq!(missing_packages(&Probe::default(), Distro::Debian), None, "GStreamer did not start");
+        assert_eq!(missing_packages(&probe, Distro::Other), None);
+        assert_eq!(codecs_missing_line(&[]), None);
+        assert_eq!(
+            codecs_missing_line(&["a", "b", "c"]).unwrap(),
+            "Screen recording needs video codecs your system doesn't have. Install a, b and c, then restart Hippius."
+        );
+    }
+
+    #[test]
+    fn the_family_comes_from_os_release() {
+        assert_eq!(distro_family("NAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\n"), Distro::Debian);
+        assert_eq!(distro_family("ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n"), Distro::Debian);
+        assert_eq!(distro_family("ID=debian\n"), Distro::Debian);
+        assert_eq!(distro_family("ID=fedora\nVERSION_ID=42\n"), Distro::Fedora);
+        assert_eq!(distro_family("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n"), Distro::Fedora);
+        assert_eq!(distro_family("ID=arch\n"), Distro::Other);
+        assert_eq!(distro_family(""), Distro::Other);
     }
 
     /// Encoders without a parser or the picture's source still cannot

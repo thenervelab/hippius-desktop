@@ -158,6 +158,17 @@
           "/usr/share/hippius/shell-integration/thunar/uca-snippet.xml": "../linux/thunar/uca-snippet.xml"
         },
         "postInstallScript": "../linux/deb/postinst.sh"
+      },
+      "rpm": {
+        "recommends": [
+          "xdg-desktop-portal",
+          "gstreamer1-plugins-base",
+          "gstreamer1-plugins-good",
+          "gstreamer1-plugins-bad-free",
+          "gstreamer1-plugin-openh264",
+          "gstreamer1-plugin-libav",
+          "pipewire-gstreamer"
+        ]
       }
     }
   }
