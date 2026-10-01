@@ -146,6 +146,30 @@ pub fn microphone_supported() -> bool {
     }
 }
 
+/// The helper in microphone-meter mode (`--meter [deviceId]`), for the
+/// capture bar's level meter. `None` where the microphone cannot be recorded
+/// or there is no helper. See `capture::mic_meter` for why the level is not
+/// measured in the webview.
+pub fn meter_command(device: Option<&str>) -> Option<std::process::Command> {
+    #[cfg(target_os = "macos")]
+    {
+        if !macos::microphone_supported() {
+            return None;
+        }
+        let mut command = macos::helper_command()?;
+        command.arg("--meter");
+        if let Some(id) = device.filter(|id| !id.is_empty()) {
+            command.arg(id);
+        }
+        Some(command)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = device;
+        None
+    }
+}
+
 /// A live recording session. One at a time; owned by `CaptureState`.
 pub trait Recorder: Send {
     fn pause(&mut self) -> Result<()>;

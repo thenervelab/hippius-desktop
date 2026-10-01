@@ -314,6 +314,8 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
       "capture_set_cameras",
       "capture_cameras",
       "capture_microphones",
+      "capture_mic_meter_start",
+      "capture_mic_meter_stop",
       "capture_camera_toggle",
       "capture_camera_set_size",
       "capture_camera_dismiss",

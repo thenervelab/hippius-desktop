@@ -221,3 +221,86 @@ describe("the camera picture", () => {
     play.mockRestore();
   });
 });
+
+describe("the camera while it starts or is taken away", () => {
+  type Listener = () => void;
+  const makeStream = () => {
+    const listeners: Record<string, Listener[]> = {};
+    const track = {
+      muted: false,
+      readyState: "live",
+      stop: vi.fn(),
+      getSettings: () => ({}),
+      addEventListener: (name: string, fn: Listener) => (listeners[name] ??= []).push(fn),
+      fire(name: string) {
+        for (const fn of listeners[name] ?? []) fn();
+      },
+    };
+    return { track, stream: { getTracks: () => [track], getVideoTracks: () => [track] } };
+  };
+  let getUserMedia: ReturnType<typeof vi.fn>;
+  let play: ReturnType<typeof vi.spyOn>;
+  let first: ReturnType<typeof makeStream>;
+
+  beforeEach(() => {
+    play = vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    first = makeStream();
+    let calls = 0;
+    getUserMedia = vi.fn(async () => (++calls === 1 ? first.stream : makeStream().stream));
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: vi.fn(async () => []),
+        getUserMedia,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+  });
+
+  // The bubble is filmed: before the first frame it must not be a black disc.
+  it("shows a placeholder, not black, until the first frame plays", async () => {
+    const { container } = setup();
+    await waitFor(() => expect(container.querySelector("video")?.srcObject).toBe(first.stream));
+    expect(screen.getByTestId("camera-starting")).toBeInTheDocument();
+    fireEvent(container.querySelector("video")!, new Event("playing"));
+    expect(screen.queryByTestId("camera-starting")).toBeNull();
+    play.mockRestore();
+  });
+
+  /**
+   * WebKit mutes this page's camera when another page starts capturing, and
+   * it stays black until the camera is asked for again.
+   */
+  it("covers a muted camera and opens it again when it stays muted", async () => {
+    const { container } = setup();
+    await waitFor(() => expect(container.querySelector("video")?.srcObject).toBe(first.stream));
+    const video = container.querySelector("video")!;
+    fireEvent(video, new Event("playing"));
+    expect(screen.queryByTestId("camera-starting")).toBeNull();
+
+    first.track.muted = true;
+    act(() => first.track.fire("mute"));
+    expect(screen.getByTestId("camera-starting")).toBeInTheDocument();
+    expect(video.className).toContain("opacity-0");
+
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    await waitFor(() => expect(container.querySelector("video")?.srcObject).not.toBe(first.stream));
+    expect(first.track.stop).toHaveBeenCalled();
+    play.mockRestore();
+  });
+
+  it("leaves a camera that unmutes on its own alone", async () => {
+    const { container } = setup();
+    await waitFor(() => expect(container.querySelector("video")?.srcObject).toBe(first.stream));
+    fireEvent(container.querySelector("video")!, new Event("playing"));
+    first.track.muted = true;
+    act(() => first.track.fire("mute"));
+    first.track.muted = false;
+    act(() => first.track.fire("unmute"));
+    expect(screen.queryByTestId("camera-starting")).toBeNull();
+    await new Promise((r) => setTimeout(r, 1800));
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    play.mockRestore();
+  });
+});

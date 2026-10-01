@@ -41,6 +41,12 @@ struct HippiusCaptureMain {
             printDevices(listCameras())
             return
         }
+        // `--meter [deviceId]`: the capture bar's microphone level until stdin
+        // closes (Meter.swift says why it is not measured in the webview).
+        if let at = CommandLine.arguments.firstIndex(of: "--meter") {
+            let next = CommandLine.arguments.index(after: at)
+            runMeter(deviceId: next < CommandLine.arguments.endIndex ? CommandLine.arguments[next] : nil)
+        }
         let runner = Runner()
         emit(["ok": true, "event": "ready"])
         runner.run()
