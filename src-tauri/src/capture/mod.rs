@@ -9,6 +9,7 @@ pub mod commands;
 pub mod deliver;
 pub mod destination;
 pub mod geometry;
+pub mod mic_meter;
 pub mod naming;
 pub mod permission_flow;
 pub mod permissions;

@@ -697,6 +697,8 @@ fn main() {
             crate::capture::commands::capture_set_cameras,
             crate::capture::commands::capture_cameras,
             crate::capture::commands::capture_microphones,
+            crate::capture::commands::capture_mic_meter_start,
+            crate::capture::commands::capture_mic_meter_stop,
             crate::capture::commands::capture_camera_toggle,
             crate::capture::commands::capture_camera_set_size,
             crate::capture::commands::capture_camera_dismiss,

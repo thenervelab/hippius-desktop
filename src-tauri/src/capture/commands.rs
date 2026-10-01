@@ -153,6 +153,9 @@ pub struct CaptureState {
     previous_app: Mutex<Option<i32>>,
     /// Live recording backend, if any.
     recorder: Mutex<Option<Box<dyn Recorder>>>,
+    /// The capture bar's microphone meter; stopped whenever the phase leaves
+    /// choosing a recording, before the recorder opens the microphone.
+    pub(crate) mic_meter: super::mic_meter::MicMeter,
     /// The folder the live recording writes into, removed if it is thrown away.
     recording_dir: Mutex<Option<PathBuf>>,
     /// What the live recording records, so Restart can start it again.
@@ -319,6 +322,11 @@ fn advance(app: &AppHandle, state: &CaptureState, event: CaptureEvent) -> Result
 /// `tests/capture_wiring.rs`), so the tray follows every change: the webview
 /// hears the event, and the menu bar's title is written by Rust.
 fn emit_phase(app: &AppHandle, event: PhaseEvent) {
+    // The microphone is the recorder's from here on: the meter lets go of it
+    // before the recorder starts (`mic_meter` says why they never overlap).
+    if !super::mic_meter::meter_may_run(event.phase) {
+        app.state::<AppState>().capture.mic_meter.stop();
+    }
     let _ = app.emit(STATE_CHANGED_EVENT, event);
     show_phase_in_tray(app, event);
 }
@@ -3708,6 +3716,56 @@ pub async fn capture_microphones() -> Vec<Microphone> {
     tauri::async_runtime::spawn_blocking(recording::list_microphones)
         .await
         .unwrap_or_default()
+}
+
+/// Start the capture bar's microphone meter on `device` (the id the bar
+/// lists; none = the system default), sending `capture_mic_level`. Answers
+/// the meter's generation for [`capture_mic_meter_stop`], or `None` where
+/// there is no meter (no helper, no microphone recording, or the session is
+/// not choosing a recording). Measured by the helper, never the webview: see
+/// `capture::mic_meter`.
+#[tauri::command]
+pub async fn capture_mic_meter_start(app: AppHandle, device: Option<String>) -> Result<Option<u64>> {
+    let state = app.state::<AppState>();
+    if !super::mic_meter::meter_may_run(state.capture.snapshot().phase) {
+        return Ok(None);
+    }
+    let emitter = app.clone();
+    let task_app = app.clone();
+    let started = tauri::async_runtime::spawn_blocking(move || {
+        let state = task_app.state::<AppState>();
+        let wanted = device.clone();
+        state.capture.mic_meter.start(
+            device,
+            || recording::meter_command(wanted.as_deref()),
+            move |level| {
+                let _ = emitter.emit(super::mic_meter::LEVEL_EVENT, level);
+            },
+        )
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("microphone meter task failed: {e}")))?;
+    let generation = match started {
+        Ok(generation) => generation,
+        Err(reason) => {
+            tracing::debug!(%reason, "no microphone meter");
+            return Ok(None);
+        }
+    };
+    // The phase may have moved on while the meter started; `emit_phase`
+    // stopped whatever was running then, so stop this one if it was late.
+    if !super::mic_meter::meter_may_run(state.capture.snapshot().phase) {
+        state.capture.mic_meter.stop_if(generation);
+        return Ok(None);
+    }
+    Ok(Some(generation))
+}
+
+/// Stop the meter started as `generation`. A newer meter (another
+/// microphone chosen) is left running.
+#[tauri::command]
+pub fn capture_mic_meter_stop(state: tauri::State<'_, AppState>, generation: u64) {
+    state.capture.mic_meter.stop_if(generation);
 }
 
 /// The pill's camera button: hide or show the bubble mid-recording, returning
