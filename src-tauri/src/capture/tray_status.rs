@@ -1,6 +1,6 @@
 //! The menu bar's part in a recording, as macOS's own recording does it: the
 //! elapsed time beside the Hippius icon while a recording runs, and a click
-//! on the icon brings the recording's controls back.
+//! on the icon opens the popover and brings the recording's controls back.
 //!
 //! Rust is the only writer of the tray's title and the only judge of what a
 //! tray click does during a capture. The title used to be written from the
@@ -68,23 +68,11 @@ pub fn tray_text_for(phase: CapturePhase) -> TrayText {
     }
 }
 
-/// What a left click on the tray icon does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrayClickAction {
-    /// A recording is running or paused: show its pill (without taking focus
-    /// from the app being recorded). The pill has Stop, so stopping stays one
-    /// click away, and a stray click never ends a recording.
-    ShowRecordingControls,
-    /// Anything else: the normal tray popover.
-    OpenPanel,
-}
-
+/// Whether `phase` is a recording that is running or paused: the one time a
+/// tray click also brings the recording's pill back.
 #[must_use]
-pub fn tray_click_action(phase: CapturePhase) -> TrayClickAction {
-    match phase {
-        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } => TrayClickAction::ShowRecordingControls,
-        _ => TrayClickAction::OpenPanel,
-    }
+pub fn recording_running(phase: CapturePhase) -> bool {
+    matches!(phase, CapturePhase::Recording { .. } | CapturePhase::Paused { .. })
 }
 
 /// Where a left click on the tray icon goes, all things considered. Rust
@@ -94,25 +82,39 @@ pub fn tray_click_action(phase: CapturePhase) -> TrayClickAction {
 /// nothing, so the popover stopped opening.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayClickRoute {
-    /// A recording is running or paused: its pill comes back.
+    /// Signed out while a recording runs: only its pill comes back (the
+    /// popover has nothing to show, and the pill must never be unreachable).
     ShowRecordingControls,
     /// Nobody is signed in: the popover has nothing to show, so the main
     /// window comes forward on its sign-in screen.
     OpenMainWindow,
-    /// The popover opens (or closes, if it is open).
-    TogglePanel,
+    /// The popover opens (or closes, if it is open). `recording`: a
+    /// recording is running or paused, so its pill comes back as well and
+    /// the popover is kept out of the video.
+    TogglePanel { recording: bool },
 }
 
-/// The route for a left click. A recording wins over everything (it cannot
-/// outlive a sign-out, but its pill must never be unreachable); otherwise a
-/// signed-out click opens the app and a signed-in one the popover, in every
-/// other phase, a finished capture's Idle included.
+impl TrayClickRoute {
+    /// Whether this click brings the recording's pill back (without focus).
+    #[must_use]
+    pub fn shows_recording_controls(self) -> bool {
+        matches!(self, Self::ShowRecordingControls | Self::TogglePanel { recording: true })
+    }
+}
+
+/// The route for a left click. A signed-in click ALWAYS reaches the
+/// popover, whatever the capture is doing: the popover is where Stop is not,
+/// but everything else is, and routing a recording's click to the pill alone
+/// left the menu bar icon doing nothing visible for the whole recording (the
+/// pill was already on screen). A recording adds its pill to the popover; a
+/// signed-out click opens the app, or only the pill mid-recording.
 #[must_use]
 pub fn tray_click_route(signed_in: bool, phase: CapturePhase) -> TrayClickRoute {
-    match (tray_click_action(phase), signed_in) {
-        (TrayClickAction::ShowRecordingControls, _) => TrayClickRoute::ShowRecordingControls,
-        (TrayClickAction::OpenPanel, false) => TrayClickRoute::OpenMainWindow,
-        (TrayClickAction::OpenPanel, true) => TrayClickRoute::TogglePanel,
+    let recording = recording_running(phase);
+    match (signed_in, recording) {
+        (true, recording) => TrayClickRoute::TogglePanel { recording },
+        (false, true) => TrayClickRoute::ShowRecordingControls,
+        (false, false) => TrayClickRoute::OpenMainWindow,
     }
 }
 
@@ -211,28 +213,33 @@ mod tests {
         assert!(tray_text_for(PAUSED).tooltip.contains("paused at 02:05"));
     }
 
+    /// The popover never opened during a recording: the click went to the
+    /// pill alone, which was already on screen, so the icon looked dead.
+    /// A signed-in click reaches the popover in every phase; a recording only
+    /// adds its pill.
     #[test]
-    fn a_click_during_a_recording_shows_its_controls_and_never_stops_it() {
-        assert_eq!(tray_click_action(RECORDING), TrayClickAction::ShowRecordingControls);
-        assert_eq!(tray_click_action(PAUSED), TrayClickAction::ShowRecordingControls);
-    }
-
-    #[test]
-    fn a_click_at_any_other_time_opens_the_popover() {
+    fn a_signed_in_click_opens_the_popover_even_while_recording() {
+        for phase in [RECORDING, PAUSED] {
+            let route = tray_click_route(true, phase);
+            assert_eq!(route, TrayClickRoute::TogglePanel { recording: true }, "{phase:?}");
+            assert!(route.shows_recording_controls(), "the pill comes back too ({phase:?})");
+        }
         for phase in not_recording() {
-            assert_eq!(tray_click_action(phase), TrayClickAction::OpenPanel, "{phase:?}");
+            let route = tray_click_route(true, phase);
+            assert_eq!(route, TrayClickRoute::TogglePanel { recording: false }, "{phase:?}");
+            assert!(!route.shows_recording_controls(), "{phase:?}");
         }
     }
 
     #[test]
-    fn a_click_is_routed_in_every_phase() {
+    fn a_signed_out_click_opens_the_app_or_only_the_pill() {
         for phase in not_recording() {
-            assert_eq!(tray_click_route(true, phase), TrayClickRoute::TogglePanel, "{phase:?}");
             assert_eq!(tray_click_route(false, phase), TrayClickRoute::OpenMainWindow, "{phase:?}");
         }
         for phase in [RECORDING, PAUSED] {
-            assert_eq!(tray_click_route(true, phase), TrayClickRoute::ShowRecordingControls);
-            assert_eq!(tray_click_route(false, phase), TrayClickRoute::ShowRecordingControls);
+            let route = tray_click_route(false, phase);
+            assert_eq!(route, TrayClickRoute::ShowRecordingControls);
+            assert!(route.shows_recording_controls());
         }
     }
 
@@ -251,7 +258,7 @@ mod tests {
         ];
         let after_shot = shot.iter().try_fold(CapturePhase::Idle, |p, &e| transition(p, e)).unwrap();
         assert_eq!(after_shot, CapturePhase::Idle);
-        assert_eq!(tray_click_route(true, after_shot), TrayClickRoute::TogglePanel);
+        assert_eq!(tray_click_route(true, after_shot), TrayClickRoute::TogglePanel { recording: false });
 
         let recording = [
             CaptureEvent::Start {
@@ -265,11 +272,11 @@ mod tests {
         ];
         let after_recording = recording.iter().try_fold(CapturePhase::Idle, |p, &e| transition(p, e)).unwrap();
         assert_eq!(after_recording, CapturePhase::Idle);
-        assert_eq!(tray_click_route(true, after_recording), TrayClickRoute::TogglePanel);
+        assert_eq!(tray_click_route(true, after_recording), TrayClickRoute::TogglePanel { recording: false });
         // A cancelled or failed one too.
         for end in [CaptureEvent::Cancel, CaptureEvent::Failed] {
             let phase = transition(RECORDING, end).unwrap();
-            assert_eq!(tray_click_route(true, phase), TrayClickRoute::TogglePanel, "{end:?}");
+            assert_eq!(tray_click_route(true, phase), TrayClickRoute::TogglePanel { recording: false }, "{end:?}");
         }
     }
 

@@ -22,7 +22,10 @@ vi.mock("sonner", () => ({ toast: { error: h.toastError } }));
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => ({}) }));
 vi.mock("@/app/lib/wallet-auth-context", () => ({ useWalletAuth: () => ({ polkadotAddress: "5Grw" }) }));
 vi.mock("@/app/lib/utils/fileMutationEvents", () => ({ notifyFilesMutated: h.notifyFilesMutated }));
-vi.mock("@/app/lib/tray/trayWindowActions", () => ({ openAppWindow: h.openAppWindow }));
+vi.mock("@/app/lib/tray/trayWindowActions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/lib/tray/trayWindowActions")>()),
+  openAppWindow: h.openAppWindow,
+}));
 vi.mock("@/app/lib/featureFlags", () => ({ SCREEN_CAPTURE_ENABLED: true }));
 vi.mock("../CaptureDestinationDialog", () => ({ default: () => null }));
 vi.mock("../CapturePermissionDialog", () => ({ default: () => null }));
@@ -126,6 +129,21 @@ describe("CaptureHost", () => {
     expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: null, mode: null });
     await act(() => tauri.emitEvent("hippius:tray-capture", { kind: "screenshot", mode: "area" }));
     expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: "screenshot", mode: "area" });
+  });
+
+  // The tray popover's Record button sends no mode: the bar opens on the last one.
+  it("starts a recording from the tray on the last mode", async () => {
+    mountHost();
+    await act(() => tauri.emitEvent("hippius:tray-capture", { kind: "recording" }));
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: "recording", mode: null });
+  });
+
+  it("opens the capture drive picker, in front, for the tray's Change capture drive", async () => {
+    const store = mountHost();
+    await act(() => tauri.emitEvent("hippius:tray-capture-drive", {}));
+    await waitFor(() => expect(store.get(captureDialogAtom)).toEqual({ kind: "destination", resume: null }));
+    expect(h.openAppWindow).toHaveBeenCalled();
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_start", expect.anything());
   });
 });
 

@@ -10,7 +10,7 @@ paths:
   - "src-tauri/src/tray/**"
   - "app/components/page-sections/drive/highlightEntry.ts"
   - "app/components/page-sections/drive/useDriveHighlight.ts"
-  - "app/tray-panel/TrayCaptureButton.tsx"
+  - "app/tray-panel/TrayCaptureRow.tsx"
   - "macos/HippiusCapture/**"
 ---
 
@@ -451,9 +451,10 @@ be waiting for that lock. A late write is dropped by `seq`
 (= `TRAY_ID` in `useTraySync.ts`). A left click reaches Rust's own tray
 listener (`Builder::on_tray_icon_event` → `tray::panel::on_tray_icon_event`),
 never a webview callback (see tray.md), which asks `commands::on_tray_click`:
-`tray_status::tray_click_route` sends Recording/Paused to the pill (without
-focus; never a stop, the pill has Stop), a signed-out click to the main
-window, anything else (Idle after a capture included) to the popover. Pinned
+`tray_status::tray_click_route` sends a signed-in click to the popover in
+every phase; Recording/Paused also bring the pill back (without focus; never
+a stop, the pill has Stop) and the popover opens content-protected. A
+signed-out click goes to the main window, or only to the pill mid-recording. Pinned
 by `tray_status` unit tests, the `commands.rs` session tests and
 `tests/capture_wiring.rs`. The camera and card
 pages keep the "an event beats a late first read" rule; the pill compares

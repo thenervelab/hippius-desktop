@@ -47,6 +47,26 @@ const MARGIN: f64 = 8.0;
 /// and the tray click as a single user gesture. See [`toggle_tray_panel`].
 const REOPEN_COOLDOWN_MS: u64 = 350;
 
+/// Window after a show within which a blur is the activation settling, not a
+/// click outside: [`on_panel_blur`] gives the panel the keyboard back instead
+/// of hiding it. Activating the app can hand the keyboard to the window that
+/// last had it (a capture card the user clicked, the recording pill) a beat
+/// after the panel took it, which used to hide the popover the moment it
+/// appeared. Shorter than any deliberate click elsewhere.
+pub const SHOW_SETTLE_MS: u64 = 400;
+
+/// The popover's window level on macOS: `NSPopUpMenuWindowLevel`, the level
+/// of a menu dropped from the menu bar. Tauri's `always_on_top` is
+/// `NSFloatingWindowLevel` (3), the SAME level as the capture preview card
+/// (`capture::commands::float_over_full_screen`), which is ordered front with
+/// `orderFrontRegardless` whenever it shows; on a laptop display the 330pt
+/// card in the bottom-right corner overlaps the 672pt popover hanging from a
+/// right-hand menu bar icon, so a card shown or brought back after the
+/// popover covered its lower half. Above the card and the Dock, still below
+/// the capture overlays (1000) and the camera bubble (1001), which the user
+/// is placing over the whole screen.
+pub const PANEL_WINDOW_LEVEL: i64 = 101;
+
 /// Tray-icon bounding rectangle forwarded from the frontend tray click.
 ///
 /// JavaScript numbers are `f64`; the tray event reports physical pixels. The
@@ -169,7 +189,7 @@ fn on_left_click(app: &AppHandle, rect: Option<TrayIconRect>) -> Result<()> {
             show_main_window(app);
             Ok(())
         }
-        TrayClickRoute::TogglePanel => toggle_panel(app, rect),
+        TrayClickRoute::TogglePanel { recording } => toggle_panel(app, rect, recording),
     }
 }
 
@@ -200,6 +220,11 @@ pub fn toggle_tray_panel(app: AppHandle, rect: Option<TrayIconRect>) -> Result<(
 /// left-click event carries it. With `None` the panel uses a deterministic
 /// top-right anchor (see [`fallback_anchor`]).
 ///
+/// `recording`: a screen recording is running or paused. The popover still
+/// opens (the menu bar icon must never go dead mid-recording), kept out of
+/// the video by content protection, which is lifted again on the next open
+/// after the recording.
+///
 /// Runs on the main thread (the tray listener runs on the event loop), which
 /// macOS requires for `show`/`set_position`/`set_focus`.
 ///
@@ -207,7 +232,7 @@ pub fn toggle_tray_panel(app: AppHandle, rect: Option<TrayIconRect>) -> Result<(
 /// Returns [`AppError::Other`] if the window cannot be built, no monitor can be
 /// resolved, or a window operation (position/show/focus/hide)
 /// fails.
-fn toggle_panel(app: &AppHandle, rect: Option<TrayIconRect>) -> Result<()> {
+fn toggle_panel(app: &AppHandle, rect: Option<TrayIconRect>, recording: bool) -> Result<()> {
     let win = match app.get_webview_window(PANEL_LABEL) {
         Some(w) => w,
         None => build_panel(app)?,
@@ -248,6 +273,11 @@ fn toggle_panel(app: &AppHandle, rect: Option<TrayIconRect>) -> Result<()> {
 
     win.set_position(PhysicalPosition::new(x, y))
         .map_err(|e| AppError::Other(format!("failed to position tray panel: {e}")))?;
+    if let Err(e) = win.set_content_protected(recording) {
+        warn!("tray panel content protection: {e}");
+    }
+    raise_above_capture_surfaces(&win);
+    app.state::<AppState>().tray_panel_shown_at.store(now_ms(), Ordering::Relaxed);
     win.show().map_err(|e| AppError::Other(format!("failed to show tray panel: {e}")))?;
     win.set_focus().map_err(|e| AppError::Other(format!("failed to focus tray panel: {e}")))?;
     // Clear the dismiss timestamp now that the panel is open again, so a stale
@@ -305,6 +335,12 @@ pub fn on_panel_blur(app: &AppHandle) {
         return;
     };
     if win.is_visible().unwrap_or(false) {
+        let shown_at = app.state::<AppState>().tray_panel_shown_at.load(Ordering::Relaxed);
+        if !blur_dismisses(now_ms(), shown_at) {
+            // The activation settling, not a click outside: keep the keyboard.
+            let _ = win.set_focus();
+            return;
+        }
         if let Err(e) = win.hide() {
             warn!("failed to hide tray panel on blur: {e}");
             return;
@@ -312,6 +348,40 @@ pub fn on_panel_blur(app: &AppHandle) {
         app.state::<AppState>().tray_panel_hidden_at.store(now_ms(), Ordering::Relaxed);
     }
 }
+
+/// Whether a blur at `now` hides the panel shown at `shown_at` (Unix ms;
+/// `0` = never shown): only once [`SHOW_SETTLE_MS`] have passed since the
+/// show. A clock that went backwards dismisses, so it can never hold the
+/// panel open.
+fn blur_dismisses(now: u64, shown_at: u64) -> bool {
+    shown_at == 0 || now < shown_at || now - shown_at >= SHOW_SETTLE_MS
+}
+
+/// Put the panel at [`PANEL_WINDOW_LEVEL`], above every capture surface it
+/// can meet, and let it open over a full-screen app's Space like a real menu
+/// bar popover. macOS only; elsewhere `always_on_top` and show order decide.
+#[cfg(target_os = "macos")]
+fn raise_above_capture_surfaces(win: &WebviewWindow) {
+    use objc::{msg_send, sel, sel_impl};
+    /// NSWindowCollectionBehaviorFullScreenAuxiliary.
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+    let target = win.clone();
+    let _ = win.run_on_main_thread(move || {
+        if let Ok(ns_window) = target.ns_window() {
+            let ns_window = ns_window.cast::<objc::runtime::Object>();
+            // SAFETY: the panel's live NSWindow, touched only here, on the
+            // main thread.
+            unsafe {
+                let () = msg_send![ns_window, setLevel: PANEL_WINDOW_LEVEL];
+                let behavior: usize = msg_send![ns_window, collectionBehavior];
+                let () = msg_send![ns_window, setCollectionBehavior: behavior | FULL_SCREEN_AUXILIARY];
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_above_capture_surfaces(_win: &WebviewWindow) {}
 
 /// Eagerly create the (hidden) panel window at startup so the first tray click
 /// only has to position and show it — the webview + Next route load cost is
@@ -323,8 +393,9 @@ pub fn prewarm(app: &AppHandle) {
     if app.get_webview_window(PANEL_LABEL).is_some() {
         return;
     }
-    if let Err(e) = build_panel(app) {
-        warn!("failed to prewarm tray panel: {e}");
+    match build_panel(app) {
+        Ok(win) => raise_above_capture_surfaces(&win),
+        Err(e) => warn!("failed to prewarm tray panel: {e}"),
     }
 }
 
@@ -462,6 +533,39 @@ mod tests {
         assert_eq!(huge.y, -max);
         assert_eq!(huge.width, max, "width clamped to the safe bound");
         assert_eq!(huge.height, 0, "negative dimension clamps to 0");
+    }
+
+    /// A capture window taking the keyboard back as the app activates used to
+    /// hide the popover the moment it appeared; a real click outside, later,
+    /// still dismisses it.
+    #[test]
+    fn a_blur_right_after_the_show_does_not_dismiss() {
+        let shown = 1_000_000;
+        assert!(!blur_dismisses(shown, shown));
+        assert!(!blur_dismisses(shown + SHOW_SETTLE_MS - 1, shown));
+        assert!(blur_dismisses(shown + SHOW_SETTLE_MS, shown));
+        assert!(blur_dismisses(shown + 5_000, shown));
+        assert!(blur_dismisses(shown, 0), "never shown: nothing to protect");
+        // A clock that went backwards must not pin the panel open.
+        assert!(blur_dismisses(shown - 10, shown));
+    }
+
+    /// The settle window must stay shorter than a deliberate click elsewhere,
+    /// and at least as long as the reopen cooldown it sits beside.
+    #[test]
+    fn the_settle_window_is_short() {
+        const { assert!(SHOW_SETTLE_MS >= REOPEN_COOLDOWN_MS && SHOW_SETTLE_MS <= 500) };
+    }
+
+    /// The popover sits above the capture card (`NSFloatingWindowLevel`, 3,
+    /// which is also `always_on_top`) and the Dock (20), and below the
+    /// capture overlays (1000) and the camera bubble (1001).
+    #[test]
+    fn the_popover_level_is_above_the_card_and_below_the_overlays() {
+        const FLOATING: i64 = 3;
+        const DOCK: i64 = 20;
+        const OVERLAY: i64 = 1000;
+        const { assert!(PANEL_WINDOW_LEVEL > FLOATING && PANEL_WINDOW_LEVEL > DOCK && PANEL_WINDOW_LEVEL < OVERLAY) };
     }
 
     #[test]

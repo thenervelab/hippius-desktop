@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
 import {
+  captureDialogAtom,
   captureModesAtom,
   capturePermissionPaneAtom,
   captureRecordingAtom,
@@ -28,6 +29,7 @@ import {
 } from "@/app/lib/tauri/capture";
 import { BILLING_ROUTE, driveFolderRoute } from "@/app/lib/routes";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
+import { openAppWindow, TRAY_CAPTURE_DRIVE_EVENT, TRAY_CAPTURE_EVENT } from "@/app/lib/tray/trayWindowActions";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import CaptureDestinationDialog from "./CaptureDestinationDialog";
 import CapturePermissionDialog from "./CapturePermissionDialog";
@@ -46,6 +48,7 @@ export default function CaptureHost() {
   const setPermissionPane = useSetAtom(capturePermissionPaneAtom);
   const setModes = useSetAtom(captureModesAtom);
   const setSurfaces = useSetAtom(captureSurfacesAtom);
+  const setDialog = useSetAtom(captureDialogAtom);
   const startCapture = useStartCapture();
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -79,8 +82,12 @@ export default function CaptureHost() {
       listen<CaptureFailed>("capture_failed", (e) => {
         if (!e.payload.cardShowing) toast.error(e.payload.message);
       }),
-      listen<{ kind?: CaptureKind; mode?: CaptureMode }>("hippius:tray-capture", (e) => {
+      listen<{ kind?: CaptureKind; mode?: CaptureMode }>(TRAY_CAPTURE_EVENT, (e) => {
         void startCapture(e.payload.kind, e.payload.mode);
+      }),
+      // The popover's "Change capture drive…": the picker is this window's.
+      listen(TRAY_CAPTURE_DRIVE_EVENT, () => {
+        void openAppWindow().then(() => setDialog({ kind: "destination", resume: null }));
       }),
       // The system-wide shortcut opens the bar on whatever was used last.
       listen("capture_shortcut_pressed", () => void startCapture()),
@@ -95,7 +102,7 @@ export default function CaptureHost() {
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
     };
-  }, [startCapture, queryClient, polkadotAddress, router]);
+  }, [startCapture, queryClient, polkadotAddress, router, setDialog]);
 
   if (!SCREEN_CAPTURE_ENABLED) return null;
   return (

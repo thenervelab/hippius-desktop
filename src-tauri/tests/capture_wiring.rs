@@ -620,8 +620,9 @@ fn every_phase_change_updates_the_tray() {
     assert!(write.contains("set_tooltip("), "Windows reads the time from the tooltip");
 }
 
-/// A tray click during a recording shows the pill and never reaches the
-/// popover or Stop; the webview no longer decides it.
+/// A tray click during a recording brings the pill back and never reaches
+/// Stop; the webview no longer decides it. (It opens the popover as well:
+/// `tests/tray_popover_wiring.rs`.)
 #[test]
 fn the_tray_click_asks_the_capture_first() {
     let panel = read("src/tray/panel.rs");

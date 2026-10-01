@@ -149,6 +149,12 @@ pub struct AppState {
     /// panel, then fires the toggle, which would see it hidden and re-show it.
     /// `0` means "never hidden by blur". See `tray::panel` for the cooldown.
     pub tray_panel_hidden_at: AtomicU64,
+    /// Unix-millis timestamp of the last time the tray panel was shown. A
+    /// blur arriving within `tray::panel::SHOW_SETTLE_MS` of it is the
+    /// activation settling (another of the app's windows, such as a capture
+    /// card, briefly taking the keyboard back), not a click outside, so the
+    /// panel keeps focus instead of hiding. `0` = never shown.
+    pub tray_panel_shown_at: AtomicU64,
     /// Whether the app on screen is signed in, as the main window's auth
     /// context says (`tray::panel::tray_set_signed_in`). Decides whether a
     /// tray click opens the popover or the main window's sign-in screen.
@@ -337,6 +343,7 @@ impl AppState {
             remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
+            tray_panel_shown_at: AtomicU64::new(0),
             tray_signed_in: std::sync::atomic::AtomicBool::new(false),
             recovery_cancel: std::sync::atomic::AtomicBool::new(false),
             recovery_in_progress: std::sync::atomic::AtomicBool::new(false),
