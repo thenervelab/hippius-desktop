@@ -100,6 +100,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Clicking the Hippius icon in the menu bar opens the popover again on newer
+  macOS versions.** A click used to show only the small Open Drive / Quit
+  menu; that menu now opens with a right click.
+
 - **A folder stops showing as shared once nobody has access.** After you
   remove the last person from a folder you shared by email, its "Shared" and
   "Manage access" marks go away. A folder with an invitation still waiting or
