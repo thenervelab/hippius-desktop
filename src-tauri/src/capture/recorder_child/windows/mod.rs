@@ -131,8 +131,18 @@ fn target_of(cmd: &StartCommand) -> Result<Target, String> {
     }
 }
 
-/// Start recording what `cmd` asks for into `cmd.output`.
+/// Start recording what `cmd` asks for into `cmd.output`. A refusal the
+/// user can act on (the OS floor) is said as is; anything else (an encoder
+/// or capture HRESULT) goes to stderr, which the app logs, and the user reads
+/// [`super::start_failure_for_user`]'s plain line.
 pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
+    start_recording(cmd, out).map_err(|detail| {
+        let _ = writeln_stderr(&format!("the recording could not start: {detail}"));
+        super::start_failure_for_user(&detail)
+    })
+}
+
+fn start_recording(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
     use crate::capture::permissions::{windows_build, windows_excludes_from_capture};
     if !windows_excludes_from_capture(windows_build()) {
         return Err(crate::capture::recording::RecordingUnavailable::OsTooOld.message().into());

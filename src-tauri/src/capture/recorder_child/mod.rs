@@ -160,6 +160,23 @@ pub trait Live: Send {
 /// What `start` hands back: the recording and its picture's pixel size.
 pub type Started = (Box<dyn Live>, (u32, u32));
 
+/// What the user reads when a platform recorder cannot start for a reason
+/// that is not theirs to fix (an encoder or capture call failed). The detail
+/// is in the log, from the child's stderr.
+pub const START_FAILED: &str = "Recording could not start. Try again, and restart Hippius if it keeps happening.";
+
+/// The line the app shows for a recorder's start failure: Rust's own
+/// sentences (the OS floor, the Media Feature Pack) as they are, anything
+/// else (an HRESULT, an internal message) as [`START_FAILED`].
+#[must_use]
+pub fn start_failure_for_user(detail: &str) -> String {
+    use crate::capture::recording::RecordingUnavailable;
+    let ours = [RecordingUnavailable::OsTooOld, RecordingUnavailable::MediaFeaturePackMissing]
+        .iter()
+        .any(|r| r.message() == detail);
+    if ours { detail.to_string() } else { START_FAILED.to_string() }
+}
+
 /// Start what `cmd` asks for: the test pattern, or this platform's recorder.
 fn start_live(cmd: &StartCommand, out: &Output) -> std::result::Result<Started, String> {
     if cmd.synthetic {
@@ -528,6 +545,25 @@ mod tests {
         }
         child.join().unwrap();
         assert!(!dest.exists());
+    }
+
+    /// A start failure never shows the user an HRESULT; Rust's own lines
+    /// pass through.
+    #[test]
+    fn a_start_failure_reads_as_plain_words() {
+        use crate::capture::recording::RecordingUnavailable;
+        assert_eq!(
+            start_failure_for_user("The screen could not be captured: 0x80070005 Access is denied."),
+            START_FAILED
+        );
+        assert_eq!(start_failure_for_user("creating the video encoder: 0xC00D36B4"), START_FAILED);
+        for line in [
+            RecordingUnavailable::OsTooOld.message(),
+            RecordingUnavailable::MediaFeaturePackMissing.message(),
+        ] {
+            assert_eq!(start_failure_for_user(line), line);
+        }
+        assert!(!START_FAILED.contains('\u{2014}'));
     }
 
     /// The helper's replies to a command that makes no sense now.

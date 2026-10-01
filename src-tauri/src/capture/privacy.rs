@@ -19,7 +19,7 @@ use super::rollout::Platform;
 
 /// The camera row's line when Windows keeps desktop apps from the camera.
 pub const CAMERA_BLOCKED_WINDOWS: &str =
-    "Windows is blocking the camera. Turn on camera access for desktop apps in Settings, Privacy & security, Camera";
+    "Windows is blocking the camera. Turn on camera access for desktop apps in Settings, Privacy & security, Camera.";
 
 /// Which devices Windows' privacy settings keep from Hippius right now.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]

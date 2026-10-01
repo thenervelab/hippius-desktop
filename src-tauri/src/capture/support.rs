@@ -110,7 +110,7 @@ pub const LINUX_SHORTCUT_NOT_YET: &str =
 
 /// Windows records it, but its privacy settings keep desktop apps from it.
 pub const MIC_BLOCKED_WINDOWS: &str =
-    "Windows is blocking the microphone. Turn on microphone access for desktop apps in Settings, Privacy & security, Microphone";
+    "Windows is blocking the microphone. Turn on microphone access for desktop apps in Settings, Privacy & security, Microphone.";
 
 const ALL_MODES: [CaptureMode; 3] = [CaptureMode::Area, CaptureMode::Window, CaptureMode::Screen];
 

@@ -310,7 +310,7 @@ describe("the capture bar's words", () => {
   // Windows gives a desktop app no prompt: a switched-off privacy setting
   // just keeps the device shut, so the row says so and opens the page.
   it("offers Open Settings under a microphone Windows blocks, for that device only", async () => {
-    const line = "Windows is blocking the microphone. Turn on microphone access for desktop apps in Settings, Privacy & security, Microphone";
+    const line = "Windows is blocking the microphone. Turn on microphone access for desktop apps in Settings, Privacy & security, Microphone.";
     tauri.onInvoke("capture_open_privacy_settings", () => null);
     setup({
       kind: "recording",
@@ -329,7 +329,7 @@ describe("the capture bar's words", () => {
   });
 
   it("says a blocked camera is blocked in Rust's words, with its own Open Settings", async () => {
-    const line = "Windows is blocking the camera. Turn on camera access for desktop apps in Settings, Privacy & security, Camera";
+    const line = "Windows is blocking the camera. Turn on camera access for desktop apps in Settings, Privacy & security, Camera.";
     tauri.onInvoke("capture_open_privacy_settings", () => null);
     setup({
       kind: "recording",
