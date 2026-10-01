@@ -390,15 +390,14 @@ fn write_tray_text(app: &AppHandle, text: &TrayText) {
 }
 
 /// A left click on the tray icon, received by `tray::panel` before it opens
-/// anything. During a recording the click brings the recording's pill back,
-/// without taking the keyboard from the app being recorded, and does NOT
-/// stop it (the pill has Stop); the popover does not open. Otherwise the
-/// route is the popover, or the main window when nobody is signed in
-/// ([`tray_status::tray_click_route`]).
+/// anything. During a recording the click also brings the recording's pill
+/// back, without taking the keyboard from the app being recorded, and does
+/// NOT stop it (the pill has Stop). The route is the popover when signed in,
+/// in every phase, else the main window ([`tray_status::tray_click_route`]).
 pub fn on_tray_click(app: &AppHandle, signed_in: bool) -> TrayClickRoute {
     let state = app.state::<AppState>();
     let route = tray_status::tray_click_route(signed_in, state.capture.current());
-    if route == TrayClickRoute::ShowRecordingControls {
+    if route.shows_recording_controls() {
         if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
             show_without_focus(&w);
         } else {
