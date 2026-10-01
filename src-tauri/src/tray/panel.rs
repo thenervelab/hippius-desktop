@@ -145,20 +145,23 @@ fn now_ms() -> u64 {
 /// Linux gets no left-click event from `tray-icon` (the menu opens instead),
 /// and never shows the popover.
 pub fn on_tray_icon_event(app: &AppHandle, event: &TrayIconEvent) {
-    if cfg!(target_os = "linux") {
+    if cfg!(target_os = "linux") || event.id().as_ref() != crate::capture::tray_status::TRAY_ID {
         return;
     }
+    // macOS: keep the context menu off the status item, or the status item
+    // opens it on every click and the left click never arrives (see
+    // `tray::status_menu`). Also opens it on a right click.
+    super::status_menu::on_tray_event(app, event);
     let TrayIconEvent::Click {
-        id,
         rect,
-        button: MouseButton::Left,
+        button,
         button_state: MouseButtonState::Up,
         ..
     } = event
     else {
         return;
     };
-    if id.as_ref() != crate::capture::tray_status::TRAY_ID {
+    if *button != MouseButton::Left {
         return;
     }
     if let Err(e) = on_left_click(app, Some(TrayIconRect::from_tray(*rect))) {
