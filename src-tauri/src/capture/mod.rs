@@ -9,6 +9,8 @@ pub mod commands;
 pub mod deliver;
 pub mod destination;
 pub mod geometry;
+pub mod linux_portal;
+pub mod linux_x11;
 pub mod naming;
 pub mod permission_flow;
 pub mod permissions;
