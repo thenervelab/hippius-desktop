@@ -93,3 +93,41 @@ fn a_blur_right_after_the_show_keeps_the_popover() {
         "every show records when it happened"
     );
 }
+
+/// macOS: a status item that owns a menu opens it on every click before the
+/// `tray-icon` click view sees the mouse, so no left click ever reached the
+/// app and the popover never opened (left click showed the small context
+/// menu). The menu must come off the status item: told by the page after
+/// every attach, and again on any hover over the icon, before the click
+/// route runs. `tray::status_menu` unit-tests which event does what.
+#[test]
+fn the_context_menu_never_sits_on_the_status_item() {
+    let panel = read("src/tray/panel.rs");
+    let listener = fn_body(&panel, "pub fn on_tray_icon_event(");
+    let menu = listener
+        .find("status_menu::on_tray_event(app, event)")
+        .expect("every event of the icon reaches status_menu");
+    let left = listener.find("on_left_click(").expect("the left click is routed");
+    assert!(menu < left, "the menu is handled before the left-click route");
+    assert!(
+        !listener.contains("button: MouseButton::Left,\n        button_state"),
+        "the listener must not filter out the hover events status_menu needs"
+    );
+
+    let status_menu = read("src/tray/status_menu.rs");
+    let detach = fn_body(&status_menu, "pub fn detach(app: &AppHandle) -> bool {\n        let Some(tray)");
+    assert!(detach.contains("msg_send![item, setMenu: nil]"), "detach takes the menu off the item");
+    let pop_up = fn_body(&status_menu, "pub fn pop_up(app: &AppHandle) {\n        let menu");
+    let attach = pop_up.find("setMenu: menu as *mut Object").expect("the kept menu is attached to open it");
+    let click = pop_up.find("performClick: nil").expect("and opened");
+    let off = pop_up.rfind("setMenu: nil").expect("and taken off again");
+    assert!(attach < click && click < off, "attach, open, take off, in that order");
+
+    let main = read("src/main.rs");
+    assert!(
+        main.contains("crate::tray::status_menu::tray_menu_attached,"),
+        "the page's report is a registered command"
+    );
+    let hook = std::fs::read_to_string(format!("{}/../app/lib/hooks/useTraySync.ts", env!("CARGO_MANIFEST_DIR"))).expect("read useTraySync.ts");
+    assert!(hook.contains("invoke(\"tray_menu_attached\")"), "the page reports every menu it attaches");
+}
