@@ -17,6 +17,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Screenshot and Record from the menu bar.** Click the Hippius icon, then
+  Screenshot or Record under the search field, and the capture starts on any
+  screen, with the share link copied when it is done. The arrow beside each
+  picks an area, a window or the entire screen, or the drive captures go to.
+
 - **Screenshot and Record are one click away in Drive.** The Capture menu is
   now two buttons, Screenshot and Record, on the Drive page and inside every
   drive (including drives shared with you). Each opens its own menu: capture
@@ -99,6 +104,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Overview and Drive, for free and paid plans — uploads are paused.
 
 ### Fixed
+
+- **The menu bar popover opens under its icon again, recording or not.** It
+  no longer does nothing while a recording runs, vanishes the moment it
+  opens, or hides behind a capture's preview card.
 
 - **Camera and microphone now record together.** With both turned on, the
   camera bubble no longer goes black and the microphone no longer drops out,
@@ -329,8 +338,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Show in folder opens the folder every time, even a Captures folder the
   capture has just created. A capture saved into a synced drive is shown
   arriving in its folder as well.
-- **Capture is easier to find and name.** The menu bar has a labelled Capture
-  button, the Drive menu and the bar use the same words ("Capture an area",
+- **Capture is easier to find and name.** The Drive menu and the bar use the
+  same words ("Capture an area",
   "Capture a window", "Capture entire screen"), and the shortcut setting shows
   the keys as you hold them and says when a key cannot be used.
 - **Capture windows open with less to load**, so the bar appears sooner.
