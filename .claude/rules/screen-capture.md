@@ -5,6 +5,7 @@ paths:
   - "app/capture-controls/**"
   - "app/capture-camera/**"
   - "app/capture-preview/**"
+  - "app/capture-area/**"
   - "app/components/capture/**"
   - "app/lib/capture/**"
   - "src-tauri/src/tray/**"
@@ -155,8 +156,8 @@ capture time is base time plus timestamp and pause reads the same clock;
 fixed from the first frame (`plan::output_size`); the writer's `appsrc`s
 never block and the queues before `mp4mux` are unbounded, or the one writer
 thread deadlocks between the tracks; the portal's PipeWire fd stays open for
-the recording and the session is closed with it. The camera is never opened
-here, and the Linux mic meter is the child's `--meter` through the shared
+the recording and the session is closed with it. The camera is opened here
+only for camera only on Wayland (below), and the Linux mic meter is the child's `--meter` through the shared
 `recorder_child/meter.rs` (Windows' and Linux's meters only open the device
 and hand samples to its `serve`, so both print the Swift meter's lines),
 stopped before the recorder opens the mic. A sound pipeline that fails
@@ -208,6 +209,41 @@ like Windows (`Video::start_with_camera`, `linux_x11::WindowReader`,
 `overlay.rs`), from the XID the app stores when the camera opens.
 `RecordingUnavailable::line` names only the missing packages on Linux; use
 it, not `message`, for anything the user reads.
+
+**Wayland area and camera only are in code, not yet run on Linux.**
+*Area* (`area_pick.rs`, pure): offered wherever Wayland records; the panel's
+Record is `system_picker_selection(Area)` (an empty rect) and
+`begin_recording` sets `pickArea` (`support::picks_area_after_dialog`). The
+child asks the portal for a monitor (the screen's restore token applies,
+`screencast_token::applies`), reads it whole as BGRx (`capture::Held`) and
+answers `start` with `area_still` (the first picture as JPEG, at most
+2560 px, the stream's size in pixels, the portal's place for it when
+given), holding every later picture back with no sound open and no file.
+`draw_area` shows `capture-area` (own capability, provider-free route,
+closed by `close_overlays`) full screen on the GTK monitor at the stream's
+place (`monitor_for`, else the compositor's pick); the page sends the drawn
+rect in CSS px with the picture's box, Rust maps it to stream pixels
+(`stream_area` over `plan::area_pixels`: ratio = stream width over shown
+width, so HiDPI and fractional scaling need nothing more), destroys the
+window, waits two `COMPOSITOR_SETTLE`s (the window is in the stream until
+the compositor drops it) and sends `crop`; the child then opens the sound
+and the writer as a plain start would and cuts each picture in Rust
+(`frame::to_nv12` reading the area's rows in place; nothing renegotiates).
+`AreaStep` takes one area, only while drawing; a cancel at any step hands
+the recorder back uncropped to `adopt_recorder`; five minutes undrawn ends
+as quietly as a cancelled dialog. The pill counts after the crop, and may
+sit inside the area (Wayland places no window). *Camera only*:
+`support::camera_only(platform, recorder_camera)` is true on Wayland only
+where the probe's `camera` found a camera source, `decodebin` and
+`videoflip` (`Probe::records_camera`). `capture_confirm` gives a nominal
+screen, `begin_recording` names the camera (`CameraPick`, the bar's id and
+name) and asks no dialog, and `CameraState.recorderOwnsCamera` makes the
+stage page close its stream for a placeholder (one owner per device). The
+child finds the device in `GstDeviceMonitor` by id, then by
+`camera_name_key`, else the default (`pick_camera`), makes the device's
+own element (what WebKitGTK makes), retries a busy one for 3 s, tries
+bounded caps then any, mirrors it like the stage and records it with the
+same writer, mixer and pause. Pinned by `capture_wiring.rs`.
 
 ## Flow
 
@@ -268,9 +304,11 @@ recording countdown (None / 3 / 5 seconds), "Record system audio"
 twice; offered only where Rust's `systemAudio` surface says this platform
 can record it, and `begin_recording` asks for it only there), Show mouse clicks, and "Copy a share link after capture" (`copyLink`). Clicking the countdown numeral or
 pressing Return while counting runs the waiting action at once. Camera only
-is macOS, Windows and X11 (`camera_only_supported` from `support::camera_only`,
-`for_system` turns the screen back on elsewhere; Windows records the camera
-window's HWND, X11 its XID with the stage's margin cut by `videocrop`); the sources panel shows the Screen switch only when
+is macOS, Windows and X11, and Wayland where the probe allows it
+(`camera_only_supported` from `support::camera_only`, `for_system` turns
+the screen back on elsewhere; Windows records the camera window's HWND, X11
+its XID with the stage's margin cut by `videocrop`, Wayland has the
+recorder open the camera itself); the sources panel shows the Screen switch only when
 `cameraOnlyAvailable`, and the camera row says "Camera is only recorded with
 the entire screen or an area." whenever `cameraFilmed` is false (a window
 recording where the recorder cannot add the camera window:

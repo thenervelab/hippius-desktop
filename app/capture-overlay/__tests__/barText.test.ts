@@ -171,5 +171,11 @@ describe("the panel's line (the desktop's dialog chooses)", () => {
     expect(panelHint("window", "Enter")).toBe("Press Record or Enter, then choose a window in your desktop's sharing dialog");
     expect(panelHint("screen", "Enter")).toBe("Press Record or Enter, then choose a screen in your desktop's sharing dialog");
     expect(panelHint("screen")).not.toMatch(/Click/);
+    // An area is drawn after the dialog, on the chosen screen's picture.
+    expect(panelHint("area", "Enter")).toBe(
+      "Press Record or Enter, choose a screen in your desktop's sharing dialog, then drag the area to record",
+    );
+    // Camera only asks no dialog: the recorder opens the camera itself.
+    expect(panelHint("screen", "Enter", true)).toBe("Press Record or Enter to record your camera");
   });
 });

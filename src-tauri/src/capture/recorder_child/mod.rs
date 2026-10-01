@@ -41,6 +41,7 @@ pub mod plan;
 pub mod poster;
 pub mod sizing;
 pub mod sources;
+pub mod still;
 pub mod synthetic;
 pub mod timeline;
 pub mod watch;
@@ -174,6 +175,26 @@ pub trait Live: Send {
 /// What `start` hands back: the recording and its picture's pixel size.
 pub type Started = (Box<dyn Live>, (u32, u32));
 
+/// What a `start` begins: a recording, or (a Wayland area, `pickArea`) the
+/// chosen monitor's first picture and a recording that waits for its area.
+pub enum Begun {
+    Live(Started),
+    Picking(Box<dyn Picking>, protocol::StreamStill),
+}
+
+/// A recording whose area is still being drawn: the desktop's stream is
+/// open and its pictures are held back; no sound is open and no file
+/// exists until [`Picking::crop`].
+pub trait Picking: Send {
+    /// Record `area` of the stream (its own pixels) from now on.
+    ///
+    /// # Errors
+    /// The stream stopped meanwhile, or the recording could not start.
+    fn crop(self: Box<Self>, area: protocol::StreamCrop) -> std::result::Result<Started, String>;
+    /// Close the stream; nothing was recorded.
+    fn cancel(self: Box<Self>);
+}
+
 /// What the user reads when a platform recorder cannot start for a reason
 /// that is not theirs to fix (an encoder or capture call failed). The detail
 /// is in the log, from the child's stderr.
@@ -192,14 +213,29 @@ pub fn start_failure_for_user(detail: &str) -> String {
 }
 
 /// Start what `cmd` asks for: the test pattern, or this platform's recorder.
-fn start_live(cmd: &StartCommand, out: &Output) -> std::result::Result<Started, String> {
+fn start_live(cmd: &StartCommand, out: &Output) -> std::result::Result<Begun, String> {
     if cmd.synthetic {
+        if cmd.pick_area {
+            // The test pattern's "monitor", for the area flow without a
+            // desktop.
+            let still = protocol::StreamStill {
+                width: synthetic::WIDTH,
+                height: synthetic::HEIGHT,
+                jpeg: String::new(),
+                placement: None,
+            };
+            let picking = SyntheticPick {
+                cmd: cmd.clone(),
+                out: Arc::clone(out),
+            };
+            return Ok(Begun::Picking(Box::new(picking), still));
+        }
         let (session, size) = Session::start(cmd, out)?;
-        return Ok((Box::new(session), size));
+        return Ok(Begun::Live((Box::new(session), size)));
     }
     #[cfg(windows)]
     {
-        windows::start(cmd, out)
+        windows::start(cmd, out).map(Begun::Live)
     }
     #[cfg(target_os = "linux")]
     {
@@ -213,6 +249,21 @@ fn start_live(cmd: &StartCommand, out: &Output) -> std::result::Result<Started, 
         let _ = out;
         Err(crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message().into())
     }
+}
+
+/// The test pattern waiting for its area: the crop only sizes the output.
+struct SyntheticPick {
+    cmd: StartCommand,
+    out: Output,
+}
+
+impl Picking for SyntheticPick {
+    fn crop(self: Box<Self>, area: protocol::StreamCrop) -> std::result::Result<Started, String> {
+        let (session, _) = Session::start(&self.cmd, &self.out)?;
+        Ok((Box::new(session), plan::output_size(area.width, area.height)))
+    }
+
+    fn cancel(self: Box<Self>) {}
 }
 
 /// The test pattern's recording.
@@ -334,6 +385,8 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
     let out: Output = Arc::new(Mutex::new(Box::new(output)));
     emit(&out, &protocol::ready_line());
     let mut session: Option<Box<dyn Live>> = None;
+    // A Wayland area being drawn: the stream is open, nothing is recorded.
+    let mut picking: Option<Box<dyn Picking>> = None;
     for line in input.lines().map_while(std::result::Result::ok) {
         let line = line.trim();
         if line.is_empty() {
@@ -342,19 +395,34 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
         match protocol::parse_command(line) {
             Err(bad) => emit(&out, &protocol::error_line(&bad.error, bad.id)),
             Ok(Command::Start(cmd)) => {
-                if session.is_some() {
+                if session.is_some() || picking.is_some() {
                     emit(&out, &protocol::error_line("already recording", Some(cmd.id)));
                     continue;
                 }
                 match start_live(&cmd, &out) {
-                    Ok((live, size)) => {
+                    Ok(Begun::Live((live, size))) => {
                         let token = live.restore_token();
                         session = Some(live);
                         emit(&out, &protocol::started_line(Some(cmd.id), size, token.as_deref()));
                     }
+                    Ok(Begun::Picking(waiting, still)) => {
+                        picking = Some(waiting);
+                        emit(&out, &protocol::area_still_line(Some(cmd.id), &still));
+                    }
                     Err(e) => emit(&out, &protocol::error_line(&e, Some(cmd.id))),
                 }
             }
+            Ok(Command::Crop { id, area }) => match picking.take() {
+                Some(waiting) => match waiting.crop(area) {
+                    Ok((live, size)) => {
+                        let token = live.restore_token();
+                        session = Some(live);
+                        emit(&out, &protocol::started_line(id, size, token.as_deref()));
+                    }
+                    Err(e) => emit(&out, &protocol::error_line(&e, id)),
+                },
+                None => emit(&out, &protocol::error_line("not waiting for an area", id)),
+            },
             Ok(Command::Pause { id }) => match &session {
                 Some(live) => {
                     live.pause();
@@ -380,9 +448,16 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
                 if let Some(live) = session.take() {
                     live.cancel();
                 }
+                if let Some(waiting) = picking.take() {
+                    waiting.cancel();
+                }
                 emit(&out, &protocol::ok_line("cancelled", id, None));
             }
         }
+    }
+    // An area never drawn recorded nothing: there is no file to keep.
+    if let Some(waiting) = picking.take() {
+        waiting.cancel();
     }
     // stdin closed without a stop: the app is gone. Keep what was recorded;
     // only an explicit `cancel` deletes.
@@ -661,5 +736,65 @@ mod tests {
                 protocol::error_line("malformed command", None),
             ]
         );
+    }
+
+    /// A Wayland area through the real serve loop: `start` with `pickArea`
+    /// is answered with the monitor's picture, nothing is written until the
+    /// `crop`, which is answered `started` at the area's size; a crop with
+    /// no area waiting is refused, and a cancel while drawing leaves no file.
+    #[test]
+    fn an_area_is_drawn_on_the_streams_picture_before_anything_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("area.txt");
+        let (child_in, app_out) = std::io::pipe().unwrap();
+        let (app_in, child_out) = std::io::pipe().unwrap();
+        let child = std::thread::spawn(move || serve(BufReader::new(child_in), child_out));
+        let options = RecordOptions {
+            pick_area: true,
+            ..RecordOptions::default()
+        };
+        let mut recorder = HelperRecorder::begin(None, Box::new(app_out), app_in, dest.clone(), false, |id| {
+            let mut cmd = StartCommand::from_selection(id, Selection::Screen { display_id: 0 }, &dest, options)?;
+            cmd.synthetic = true;
+            Ok(cmd)
+        })
+        .expect("the picture first");
+        let still = recorder.take_area_still().expect("a still");
+        assert_eq!((still.width, still.height), (synthetic::WIDTH, synthetic::HEIGHT));
+        assert!(!dest.exists(), "no file while the area is drawn");
+        recorder
+            .crop(protocol::StreamCrop {
+                x: 10,
+                y: 10,
+                width: 401,
+                height: 300,
+            })
+            .expect("started");
+        std::thread::sleep(Duration::from_millis(150));
+        let path = Box::new(recorder).stop().expect("stopped");
+        child.join().unwrap();
+        assert!(end_of(&lines(&path)) > 0);
+
+        let (child_in, mut app_out) = std::io::pipe().unwrap();
+        let (app_in, child_out) = std::io::pipe().unwrap();
+        let child = std::thread::spawn(move || serve(BufReader::new(child_in), child_out));
+        let gone = dir.path().join("gone.txt");
+        app_out
+            .write_all(b"{\"cmd\":\"crop\",\"id\":2,\"x\":0,\"y\":0,\"width\":10,\"height\":10}\n")
+            .unwrap();
+        let start = serde_json::json!({ "cmd": "start", "id": 3, "output": gone, "synthetic": true, "pickArea": true });
+        writeln!(app_out, "{start}").unwrap();
+        app_out.write_all(b"{\"cmd\":\"cancel\",\"id\":4}\n").unwrap();
+        drop(app_out);
+        child.join().unwrap();
+        let replies: Vec<String> = BufReader::new(app_in).lines().map(Result::unwrap).collect();
+        assert_eq!(replies[1], protocol::error_line("not waiting for an area", Some(2)));
+        assert!(matches!(
+            protocol::parse_event(&replies[2]).unwrap().event,
+            protocol::HelperEvent::AreaStill(_)
+        ));
+        assert_eq!(replies[3], protocol::ok_line("cancelled", Some(4), None));
+        assert_eq!(replies.len(), 4, "nothing to finish at the end: {replies:?}");
+        assert!(!gone.exists());
     }
 }

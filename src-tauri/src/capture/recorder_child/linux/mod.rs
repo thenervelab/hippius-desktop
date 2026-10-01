@@ -17,9 +17,17 @@
 //! - **The writer** ([`super::writer_loop`]): one thread owns the encoding
 //!   pipeline ([`encoder::GstEncoder`]) and the mixer; nothing else touches
 //!   the file.
-//! - **The camera** is never opened here: the bubble's webview owns it and
-//!   is filmed as a window, so screen, system audio, microphone and camera
-//!   run side by side, each with one owner.
+//! - **The camera** is opened here only for camera only on Wayland, where
+//!   there is no window to film ([`capture::Video::start_camera`]); the
+//!   stage page has let go of it by then (the app tells it to as Record is
+//!   pressed), and the open retries briefly while the device is still
+//!   busy. Everywhere else the bubble's webview owns it and is filmed as a
+//!   window. Either way every device has one owner.
+//! - **A Wayland area** ([`AreaPicking`]): the monitor's stream is open and
+//!   its first picture goes to the app to draw the area on; later pictures
+//!   are held back and no sound is open until `crop`, which starts the
+//!   recording as a plain `start` would, cutting the area out of each
+//!   picture in Rust ([`capture::Held`]).
 //! - **The desktop** ([`portal::Desktop`]): on Wayland the ScreenCast
 //!   session belongs to this process's D-Bus connection, so if the child
 //!   dies the desktop's "sharing" indicator goes with it. Both sessions ask
@@ -51,7 +59,7 @@ use gstreamer::prelude::*;
 use super::linux_plan;
 use super::mixer::Source;
 use super::writer_loop::{self, Msg, Shared};
-use super::{Live, Output, Started};
+use super::{Begun, Live, Output, Picking, Started};
 use crate::capture::recording::RecordingUnavailable;
 use crate::capture::recording::protocol::{self, StartCommand};
 use crate::capture::rollout::{Platform, current_platform};
@@ -88,13 +96,21 @@ pub(crate) fn installed(name: &str) -> bool {
     gst::ElementFactory::find(name).is_some()
 }
 
-/// Start recording what `cmd` asks for into `cmd.output`.
-pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
+/// Start recording what `cmd` asks for into `cmd.output`, or (a Wayland
+/// area) open the monitor and answer with its first picture.
+pub fn start(cmd: &StartCommand, out: &Output) -> Result<Begun, String> {
     init()?;
     let wayland = current_platform() == Platform::LinuxWayland;
     let candidates = linux_plan::candidates(installed);
     if candidates.is_empty() {
         return Err(RecordingUnavailable::CodecsMissing.message().into());
+    }
+
+    // Camera only with no window to film: the camera itself, no dialog.
+    if let Some(pick) = cmd.camera.clone() {
+        let mut desktop = portal::Desktop::new()?;
+        desktop.keep_awake();
+        return record(cmd, out, desktop, candidates, move |shared| capture::Video::start_camera(&pick, shared)).map(Begun::Live);
     }
 
     // The desktop first: on Wayland the user chooses in its dialog before
@@ -117,6 +133,38 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         });
         linux_plan::x11_source(cmd, &displays, inset)?
     };
+    if wayland && cmd.pick_area {
+        // The monitor is open; its first picture goes to the app, which
+        // answers with the area (`crop`).
+        desktop.keep_awake();
+        let (held, first) = match capture::Held::start(source) {
+            Ok(opened) => opened,
+            Err(e) => {
+                desktop.close();
+                return Err(e);
+            }
+        };
+        let Some(jpeg) = super::still::jpeg_from_bgrx(&first.bgrx, first.width as usize * 4, first.width, first.height) else {
+            held.stop();
+            desktop.close();
+            return Err("The screen sent no picture to record.".into());
+        };
+        let still = protocol::StreamStill {
+            width: first.width,
+            height: first.height,
+            jpeg,
+            placement: desktop.stream_placement(),
+        };
+        let picking = AreaPicking {
+            cmd: cmd.clone(),
+            out: Arc::clone(out),
+            desktop: Some(desktop),
+            candidates,
+            held: Some(held),
+        };
+        return Ok(Begun::Picking(Box::new(picking), still));
+    }
+
     // A window recording on X11 with the camera bubble: the bubble is drawn
     // in (`capture::Video::start_with_camera`). Wayland never gets an id.
     let with_camera = match (&source, cmd.camera_window_id) {
@@ -130,7 +178,58 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         _ => None,
     };
     desktop.keep_awake();
+    record(cmd, out, desktop, candidates, move |shared| match with_camera {
+        Some((camera, scale)) => capture::Video::start_with_camera(source, camera, scale, shared),
+        None => capture::Video::start(source, shared),
+    })
+    .map(Begun::Live)
+}
 
+/// A Wayland area being drawn: the desktop's stream, its pictures held
+/// back, and everything a recording needs to start once the area is known.
+struct AreaPicking {
+    cmd: StartCommand,
+    out: Output,
+    desktop: Option<portal::Desktop>,
+    candidates: Vec<linux_plan::Encoders>,
+    held: Option<capture::Held>,
+}
+
+impl Picking for AreaPicking {
+    fn crop(mut self: Box<Self>, area: protocol::StreamCrop) -> Result<Started, String> {
+        let (Some(desktop), Some(held)) = (self.desktop.take(), self.held.take()) else {
+            return Err("The screen is no longer being shared.".into());
+        };
+        let rect = super::plan::PixelRect {
+            x0: area.x,
+            y0: area.y,
+            x1: area.x.saturating_add(area.width),
+            y1: area.y.saturating_add(area.height),
+        };
+        let candidates = std::mem::take(&mut self.candidates);
+        record(&self.cmd, &self.out, desktop, candidates, move |shared| held.release(rect, shared))
+    }
+
+    fn cancel(mut self: Box<Self>) {
+        if let Some(held) = self.held.take() {
+            held.stop();
+        }
+        if let Some(desktop) = self.desktop.take() {
+            desktop.close();
+        }
+    }
+}
+
+/// Open the sound, the writer and then the picture (`video`, handed the
+/// shared state), and wait for the first picture, which fixes the file's
+/// size and answers `started`. Anything that fails takes the rest down.
+fn record(
+    cmd: &StartCommand,
+    out: &Output,
+    desktop: portal::Desktop,
+    candidates: Vec<linux_plan::Encoders>,
+    video: impl FnOnce(Arc<Shared>) -> Result<capture::Video, String>,
+) -> Result<Started, String> {
     let output = PathBuf::from(&cmd.output);
     let (tx, rx) = mpsc::channel::<Msg>();
     let shared = Arc::new(Shared::new(tx, clock_micros));
@@ -178,20 +277,19 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(u32, u32), String>>();
     let writer = spawn_writer(rx, Arc::clone(&shared), Arc::clone(out), output.clone(), sources, ready_tx, candidates);
 
-    let video = match with_camera {
-        Some((camera, scale)) => capture::Video::start_with_camera(source, camera, scale, Arc::clone(&shared)),
-        None => capture::Video::start(source, Arc::clone(&shared)),
-    };
-    let video = match video {
+    let video = match video(Arc::clone(&shared)) {
         Ok(video) => video,
         Err(e) => {
             Box::new(Session::parts(output, shared, None, audio, Some(writer), desktop)).cancel();
             return Err(e);
         }
     };
-    let ready = ready_rx
-        .recv_timeout(FIRST_FRAME_WITHIN)
-        .unwrap_or_else(|_| Err("The screen sent no picture to record.".into()));
+    let silent = if cmd.camera.is_some() {
+        "The camera sent no picture to record."
+    } else {
+        "The screen sent no picture to record."
+    };
+    let ready = ready_rx.recv_timeout(FIRST_FRAME_WITHIN).unwrap_or_else(|_| Err(silent.into()));
     let session = Session::parts(output, shared, Some(video), audio, Some(writer), desktop);
     match ready {
         Ok(size) => Ok((Box::new(session), size)),

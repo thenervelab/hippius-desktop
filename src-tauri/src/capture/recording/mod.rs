@@ -49,6 +49,13 @@ pub struct RecordOptions {
     /// a whole screen, so the desktop can skip its dialog
     /// (`capture::screencast_token` decides when it applies).
     pub restore_token: Option<String>,
+    /// Wayland area: the recorder shows the chosen monitor's first picture
+    /// ([`Recorder::take_area_still`]) and records once
+    /// [`Recorder::crop`] names the area on it.
+    pub pick_area: bool,
+    /// Camera only where the recorder opens the camera itself (Wayland):
+    /// which camera. The stage page lets go of it first.
+    pub camera: Option<protocol::CameraPick>,
 }
 
 /// A microphone or camera the bar's pickers offer.
@@ -163,6 +170,21 @@ pub fn list_cameras() -> Vec<MediaDevice> {
     #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
         Vec::new()
+    }
+}
+
+/// Whether the recorder can open the camera itself, for camera only where
+/// there is no window to film (Wayland): the launch's probe found a camera
+/// source and what camera pictures need on a machine that records. False
+/// everywhere else, where camera only films the stage window.
+pub fn recorder_camera_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::camera_available()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
     }
 }
 
@@ -297,6 +319,22 @@ pub trait Recorder: Send {
     /// once, oldest first.
     fn take_lost_device(&self) -> Option<String> {
         None
+    }
+    /// A Wayland area recording that has not started yet: the chosen
+    /// monitor's first picture, to draw the area on. Handed out once;
+    /// `None` for every recording that started at once.
+    fn take_area_still(&mut self) -> Option<protocol::StreamStill> {
+        None
+    }
+    /// Record `area` (the stream's own pixels) of the monitor the still
+    /// showed, and start: the recording's clock begins here.
+    ///
+    /// # Errors
+    ///
+    /// This recorder was not waiting for an area, or refused it.
+    fn crop(&mut self, area: protocol::StreamCrop) -> Result<()> {
+        let _ = area;
+        Err(AppError::Other("This recording is not waiting for an area.".into()))
     }
 }
 

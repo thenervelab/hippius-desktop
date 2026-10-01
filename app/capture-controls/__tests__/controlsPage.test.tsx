@@ -22,6 +22,7 @@ const NO_CAMERA = {
   size: "small",
   recording: true,
   cameraFilmed: true,
+  recorderOwnsCamera: false,
 };
 const called = (cmd: string) => tauri.core.invoke.mock.calls.some(([c]) => c === cmd);
 

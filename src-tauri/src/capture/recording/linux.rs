@@ -73,6 +73,12 @@ pub fn unavailable() -> Option<RecordingUnavailable> {
     machine().unavailable(wayland())
 }
 
+/// Whether the recorder can open a camera itself (camera only on
+/// Wayland), from the launch's probe.
+pub fn camera_available() -> bool {
+    wayland() && machine().records_camera(true)
+}
+
 /// The codec line for this machine: only the packages it lacks, in its
 /// distribution's names (worked out once from the launch's probe), or the
 /// line that names every package when the probe cannot tell.

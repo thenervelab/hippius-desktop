@@ -289,6 +289,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   recording of one window now includes the camera bubble, and a system
   missing video codecs is told exactly which packages to install. Fedora
   testers get an .rpm package.
+- **Record an area, or just your camera, on Wayland (internal builds
+  first).** After you pick a screen in your desktop's sharing dialog, Hippius
+  shows that screen so you can drag the area to record, sharp on high
+  resolution and scaled displays. Camera only now works on Wayland too: turn
+  the screen off in the capture panel and Record captures your camera with
+  your microphone and sound, no sharing dialog needed.
 - **Record your screen on Windows (test builds first).** Record a whole
   screen, one window or an area, with your microphone, your computer's sound
   or both in one soundtrack, pause and resume, and the camera bubble or the

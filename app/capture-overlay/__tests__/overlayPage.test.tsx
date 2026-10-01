@@ -70,6 +70,7 @@ function setup(over: Partial<CaptureOverlayContext> = {}) {
     size: "small",
     recording: false,
     cameraFilmed: true,
+    recorderOwnsCamera: false,
   }));
   tauri.onInvoke("capture_refresh_windows", () => []);
   tauri.onInvoke("capture_destination_choices", () => [{ label: "Work", remote: false }]);

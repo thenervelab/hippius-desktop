@@ -21,6 +21,7 @@ const BUBBLE: CaptureCameraState = {
   size: "small",
   recording: false,
   cameraFilmed: true,
+  recorderOwnsCamera: false,
 };
 const RECORDING: CaptureCameraState = { ...BUBBLE, recording: true };
 
@@ -348,3 +349,40 @@ describe("the camera while it starts or is taken away", () => {
     play.mockRestore();
   });
 });
+
+// Camera only on Wayland: the recorder opens the camera itself, so this
+// page must let go of it the moment Rust says so (one owner per device),
+// and shows a placeholder instead of a black or frozen picture.
+describe("the stage when the recorder has the camera", () => {
+  const STAGE: CaptureCameraState = { ...BUBBLE, shape: "stage", size: "full" };
+  let stop: ReturnType<typeof vi.fn>;
+  let getUserMedia: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    stop = vi.fn();
+    const track = { muted: false, readyState: "live", stop, getSettings: () => ({}), addEventListener: vi.fn() };
+    getUserMedia = vi.fn(async () => ({ getTracks: () => [track], getVideoTracks: () => [track] }));
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { enumerateDevices: vi.fn(async () => []), getUserMedia, addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    });
+  });
+
+  it("closes its own stream and says the camera is being recorded", async () => {
+    setup(STAGE);
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+    await act(() => tauri.emitEvent("capture_camera_state", { ...STAGE, recording: true, recorderOwnsCamera: true }));
+    await waitFor(() => expect(stop).toHaveBeenCalled());
+    expect(screen.getByTestId("camera-handed-over")).toHaveTextContent("Recording your camera");
+    expect(document.querySelector("video")).toBeNull();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("never opens the camera while the recorder has it", async () => {
+    setup({ ...STAGE, recording: true, recorderOwnsCamera: true });
+    await screen.findByTestId("camera-handed-over");
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+});
+

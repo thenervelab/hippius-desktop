@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use super::protocol::{HelperEvent, Incoming, SimpleCommand, StartCommand, parse_event};
+use super::protocol::{CropCommand, HelperEvent, Incoming, SimpleCommand, StartCommand, StreamCrop, StreamStill, parse_event};
 use super::{MediaDevice, RecordOptions, Recorder};
 use crate::capture::screenshot::Selection;
 use crate::error::{AppError, Result};
@@ -263,6 +263,11 @@ pub struct HelperRecorder {
     running_since: Option<Instant>,
     accumulated: Duration,
     paused: bool,
+    /// A Wayland area recording waits for its area: the monitor's first
+    /// picture until [`Recorder::take_area_still`] takes it, and `true`
+    /// until [`Recorder::crop`] has been answered `started`.
+    area_still: Option<StreamStill>,
+    awaiting_crop: bool,
 }
 
 impl HelperRecorder {
@@ -308,14 +313,23 @@ impl HelperRecorder {
             running_since: None,
             accumulated: Duration::ZERO,
             paused: false,
+            area_still: None,
+            awaiting_crop: false,
         };
         // The recorder's ready handshake comes before the start.
         wait_for(&session.events, None, |e| matches!(e, HelperEvent::Ready), READY_WITHIN)?;
         let id = session.next_id();
         let cmd = start_cmd(id)?;
         session.write_cmd(&cmd)?;
-        session.wait(id, |e| matches!(e, HelperEvent::Started), start_within)?;
-        session.running_since = Some(Instant::now());
+        // A Wayland area answers with the monitor's picture instead, and
+        // starts only at `crop`.
+        match session.wait(id, |e| matches!(e, HelperEvent::Started | HelperEvent::AreaStill(_)), start_within)? {
+            HelperEvent::AreaStill(still) => {
+                session.area_still = Some(still);
+                session.awaiting_crop = true;
+            }
+            _ => session.running_since = Some(Instant::now()),
+        }
         Ok(session)
     }
 
@@ -341,10 +355,10 @@ impl HelperRecorder {
     fn command(&mut self, cmd: &'static str, pred: impl Fn(&HelperEvent) -> bool, timeout: Duration) -> Result<()> {
         let id = self.next_id();
         self.write_cmd(&SimpleCommand { cmd, id })?;
-        self.wait(id, pred, timeout)
+        self.wait(id, pred, timeout).map(|_| ())
     }
 
-    fn wait(&self, id: u64, pred: impl Fn(&HelperEvent) -> bool, timeout: Duration) -> Result<()> {
+    fn wait(&self, id: u64, pred: impl Fn(&HelperEvent) -> bool, timeout: Duration) -> Result<HelperEvent> {
         wait_for(&self.events, Some(id), pred, timeout)
     }
 
@@ -484,6 +498,25 @@ impl Recorder for HelperRecorder {
         let mut lost = self.shared.lost.lock().ok()?;
         (!lost.is_empty()).then(|| lost.remove(0))
     }
+
+    fn take_area_still(&mut self) -> Option<StreamStill> {
+        self.area_still.take()
+    }
+
+    fn crop(&mut self, area: StreamCrop) -> Result<()> {
+        if !self.awaiting_crop {
+            return Err(AppError::Other("This recording is not waiting for an area.".into()));
+        }
+        let id = self.next_id();
+        self.write_cmd(&CropCommand::new(id, area))?;
+        // The child opens the sound and the file now and waits for the
+        // first cropped picture, as a plain `start` does.
+        self.wait(id, |e| matches!(e, HelperEvent::Started), START_WITHIN)?;
+        self.awaiting_crop = false;
+        self.area_still = None;
+        self.running_since = Some(Instant::now());
+        Ok(())
+    }
 }
 
 impl Drop for HelperRecorder {
@@ -495,7 +528,7 @@ impl Drop for HelperRecorder {
 /// Wait for the reply to command `id` (any reply when `None`). A reply that
 /// names another command is a late answer to an earlier one and is skipped;
 /// a `stream_stopped` ends the wait whatever was asked.
-fn wait_for(rx: &Receiver<Incoming>, id: Option<u64>, pred: impl Fn(&HelperEvent) -> bool, timeout: Duration) -> Result<()> {
+fn wait_for(rx: &Receiver<Incoming>, id: Option<u64>, pred: impl Fn(&HelperEvent) -> bool, timeout: Duration) -> Result<HelperEvent> {
     let deadline = Instant::now() + timeout;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -514,7 +547,7 @@ fn wait_for(rx: &Receiver<Incoming>, id: Option<u64>, pred: impl Fn(&HelperEvent
                 event: HelperEvent::Error(msg),
                 ..
             }) => return Err(AppError::Other(msg)),
-            Ok(incoming) if pred(&incoming.event) => return Ok(()),
+            Ok(incoming) if pred(&incoming.event) => return Ok(incoming.event),
             Ok(_) => {}
             Err(RecvTimeoutError::Timeout) => {
                 return Err(AppError::Other("The recording helper did not respond in time.".into()));
@@ -631,6 +664,8 @@ mod tests {
             running_since: None,
             accumulated: Duration::ZERO,
             paused: false,
+            area_still: None,
+            awaiting_crop: false,
         };
         let first = recorder.take_death().expect("reported");
         assert!(first.to_string().contains("display gone"));
@@ -661,6 +696,8 @@ mod tests {
             running_since: None,
             accumulated: Duration::ZERO,
             paused: false,
+            area_still: None,
+            awaiting_crop: false,
         };
         assert_eq!(recorder.take_lost_device().as_deref(), Some("microphone"));
         assert_eq!(recorder.take_lost_device(), None);
@@ -714,5 +751,60 @@ mod tests {
         .err()
         .expect("refused");
         assert!(err.to_string().contains("exited unexpectedly"), "{err}");
+    }
+
+    /// A Wayland area: `start` is answered with the monitor's picture, the
+    /// recording's clock does not run while the area is drawn, and only the
+    /// `crop` (in the stream's pixels) is answered `started`. A second crop
+    /// is refused without asking the child.
+    #[test]
+    fn a_wayland_area_waits_for_its_crop_then_starts() {
+        use crate::capture::recording::protocol::{self, Command, StreamCrop, StreamStill, parse_command};
+        use std::io::{BufRead, Write};
+
+        let (from_child, mut child_out) = std::io::pipe().unwrap();
+        let (child_in, to_child) = std::io::pipe().unwrap();
+        let child = thread::spawn(move || {
+            let mut lines = std::io::BufReader::new(child_in).lines();
+            writeln!(child_out, "{}", protocol::ready_line()).unwrap();
+            let Ok(Command::Start(start)) = parse_command(&lines.next().unwrap().unwrap()) else {
+                panic!("a start first");
+            };
+            assert!(start.pick_area && start.crop.is_none(), "{start:?}");
+            let still = StreamStill {
+                width: 2880,
+                height: 1800,
+                jpeg: "AAAA".into(),
+                placement: None,
+            };
+            writeln!(child_out, "{}", protocol::area_still_line(Some(start.id), &still)).unwrap();
+            let Ok(Command::Crop { id, area }) = parse_command(&lines.next().unwrap().unwrap()) else {
+                panic!("then a crop");
+            };
+            writeln!(child_out, "{}", protocol::started_line(id, (area.width, area.height), None)).unwrap();
+            area
+        });
+        let options = RecordOptions {
+            pick_area: true,
+            ..RecordOptions::default()
+        };
+        let mut recorder = HelperRecorder::begin(None, Box::new(to_child), from_child, PathBuf::from("/tmp/a.mp4"), false, |id| {
+            StartCommand::from_selection(id, Selection::Screen { display_id: 0 }, Path::new("/tmp/a.mp4"), options)
+        })
+        .expect("answered with the picture");
+        assert!(recorder.running_since.is_none(), "nothing is recorded while the area is drawn");
+        let still = recorder.take_area_still().expect("the monitor's picture");
+        assert_eq!((still.width, still.height), (2880, 1800));
+        assert!(recorder.take_area_still().is_none(), "handed out once");
+        let area = StreamCrop {
+            x: 300,
+            y: 150,
+            width: 1000,
+            height: 604,
+        };
+        recorder.crop(area).expect("started");
+        assert!(recorder.running_since.is_some());
+        assert_eq!(child.join().unwrap(), area);
+        assert!(recorder.crop(area).is_err(), "only one area per recording");
     }
 }
