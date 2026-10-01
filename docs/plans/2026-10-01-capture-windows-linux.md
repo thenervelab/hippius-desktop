@@ -1586,7 +1586,7 @@ the list modes (`devices::microphones_of`, `cameras_of`). This closes the
 Phase 5 deviation "lists still refresh on menu open".
 
 **Spike W3 (GPU colour conversion), analysis and a measured CPU cost.**
-No code change. `frame::to_nv12` (BGRA to NV12 with bilinear scaling,
+`frame::to_nv12` (BGRA to NV12 with bilinear scaling,
 single-threaded, on the WGC frame thread) measured in a release build on an
 Apple M3 Max performance core, 30 frames after warm-up:
 
@@ -1616,9 +1616,26 @@ not a broken file. Options, cheapest first:
    the read-back halves (NV12 is 1.5 bytes a pixel, BGRA 4). Needs the
    hardware checklist on Intel, NVIDIA, AMD and WARP, and a CPU fallback
    when the processor refuses a size.
-Recommendation: do 1 when the Windows hardware checklist shows dropped
-frames at 4K (row 11 below), keep 2 for when CPU load at 4K is the
-complaint. The other half of W3 (hardware H.264 encoders and odd sizes)
+Option 1 is done: a picture of 4K or more (3840 x 2160 output pixels) is
+converted in up to 4 bands with `std::thread::scope` (`frame::bands_for`;
+below 4K one thread, where the hand-off costs more than it saves), and
+`bands_give_the_same_bytes_as_one_thread` proves the bytes are identical
+across copy, scale up and down, letterbox, pillarbox, row padding and more
+bands than blocks. Measured the same way (release build, M3 Max, 30
+frames after 5 warm-up):
+
+| Picture | 1 band | 2 bands | 4 bands |
+|---|---|---|---|
+| 1080p, same size (not split in the app) | 5.3 ms | 2.8 ms | 1.4 ms |
+| 4K, same size | 21.2 ms | 11.0 ms | 6.1 ms |
+| 5K display capped to 4K (scaled) | 58.1 ms | 29.6 ms | 15.0 ms |
+| 4K window resized (scaled) | 55.9 ms | 28.5 ms | 14.5 ms |
+
+About 3.5 to 3.9x with 4 bands, so scaled 4K lands near 25 to 40 ms on a
+laptop core (from 90 to 150 ms) and same-size 4K well inside the budget.
+The pacing gate still holds the last frame if a machine falls behind.
+Keep 2 for when CPU load at 4K is the complaint (row 11 below measures
+it). The other half of W3 (hardware H.264 encoders and odd sizes)
 still needs the hardware.
 
 **Windows checklist additions**
@@ -1673,6 +1690,19 @@ executable, so nothing extra to sign.
 
 ## CI changes, in one place
 
+- `ci.yml` `capture-runtime-windows` (windows-latest) and
+  `capture-runtime-linux` (ubuntu-latest, Xvfb, a PulseAudio null sink):
+  the BUILT app binary run as the recorder child, every mode, the
+  self-test, a real screen recording with a pause read back by `ffprobe`
+  and `--poster`, the meter and the device watcher, and a screenshot
+  (`tests/capture_recorder_runtime.rs` through
+  `scripts/capture-runtime-check.sh`). PR-only, gated by
+  `changes.outputs.capture_runtime` (capture's code, `main.rs` / `cli.rs`,
+  `Cargo.*`, the test, the script, `ci.yml`, `rust-ci-setup`), never a
+  required check, restore-only on the shared Rust cache (`save-cache:
+  "false"` on `rust-ci-setup`). Pinned by
+  `release_lane_pins::the_capture_runtime_jobs_run_the_built_recorder_for_capture_prs_only`.
+
 - `ci.yml` `rust-windows`: `clippy -D warnings`, `cargo test --lib capture::`,
   the recorder self-test; triggered for PRs touching `src-tauri/src/capture/**`
   on any base, not only promotions (Phase 0, 2).
@@ -1696,13 +1726,33 @@ executable, so nothing extra to sign.
 | Pure Rust | `timeline` retiming, `sizing` bitrate and alignment, encoder selection, device tidying, EWMH parsing, portal URI handling, rollout table, `capture_support` per platform | every OS, `cargo test --lib capture::` |
 | Protocol | `helper.rs` against a fake child (ids, death, EOF, timeouts); the child's loop against the synthetic source | every OS |
 | Real encoders | `--capture-recorder --self-test`: synthetic source through Media Foundation (Windows) or GStreamer (Linux), pause in the middle, a SIGKILL variant on Linux | `rust-windows`, `rust-linux` |
+| Runtime, the built binary | `tests/capture_recorder_runtime.rs` (all `#[ignore]`): `--probe`, `--list-microphones`, `--list-cameras`, `--poster` of a missing file, `--meter` and `--watch-devices` ending when stdin closes, a screenshot of a display, `--self-test`, and a real recording over the app's protocol (start, pause 1 s, resume, stop) of the runner's screen: WGC on Windows (video only, no audio device on the runner), `ximagesrc` of Xvfb on Linux with the microphone and system audio from a PulseAudio null sink; `ffprobe` must find one H.264 track (and one AAC track on Linux) about 3 s long, and `--poster` must decode stills from it | `capture-runtime-windows`, `capture-runtime-linux` |
 | X11 | display listing and root grab under `xvfb-run` | `rust-linux` |
 | Wiring pins | `capture_wiring.rs`: permission handlers scoped by label, content protection per window, commands registered, rollout gate used by `capture_start` | every OS |
 | Frontend | vitest: `CaptureBar` modes, panel layout, captions from Rust, pill compact form, Settings shortcut `via` | `pnpm test` |
 | Lanes | `release_lane_pins.rs` additions | every OS |
 
-WGC, portals, real devices and compositor behaviour cannot run on hosted
-runners; they are the manual matrix.
+How to run the runtime checks: they run by themselves on a PR that
+touches capture (see "CI changes"). On a Windows or Linux machine:
+`bash scripts/capture-runtime-check.sh` (Linux under `xvfb-run -a -s
+"-screen 0 1280x720x24"` when headless; set
+`HIPPIUS_CAPTURE_RUNTIME_AUDIO=1` when an audio server with a default
+output is running). With `HIPPIUS_CAPTURE_RUNTIME_REQUIRE=1` (CI sets it)
+anything the job installs being missing FAILS; a runner limit prints
+`RUNTIME-SKIP:` and the script turns it into a workflow warning:
+- Windows: Media Foundation's encoders absent (a Server without the Server
+  Media Foundation feature; the job tries `Install-WindowsFeature` and warns
+  if it needs a reboot), or no display listed (no interactive desktop).
+- Either: no microphone to meter.
+
+What stays manual, because a hosted runner cannot do it: the Wayland
+portal paths (ScreenCast and Screenshot portals, restore tokens,
+GlobalShortcuts; no portal backend answers without a person), a WGC
+window recording and the camera bubble, the Windows yellow border and
+`IsBorderRequired`, real microphones, cameras and hot-plug, WASAPI
+loopback of real sound, hardware H.264 encoders and odd sizes on real
+GPUs (W3), mixed DPI and several displays, and compositor behaviour (L1,
+L4). They are the manual matrix.
 
 ### Manual matrix
 
@@ -1731,7 +1781,7 @@ supported display (1280 x 720) and at 200 % scale.
 |---|---|---|
 | W1 | xcap `wgc` makes monitor shots slower or flashes a border on Windows 10, and has no GDI fallback | Time 20 area shots with and without `wgc` on Windows 10 and 11 hardware; decide wgc-for-all or own WGC for windows only. 0.5 day |
 | W2 | `IsBorderRequired(false)` refused for an unpackaged app on Windows 11 | One WGC session from the child with and without `GraphicsCaptureAccess::RequestAccessAsync(Borderless)`. 0.5 day |
-| W3 | Hardware H.264 MFTs need 16-aligned sizes or reject NV12 from our video processor; CPU cost at 4K30 | FMPEG4 writer at 1080p, 1440p, 4K and odd area sizes on Intel, NVIDIA, AMD and WARP; record CPU and output. 2 days. The CPU half is measured (see "Parity gaps closed after Phase 6"): 4K at the same size is about one core, scaled 4K over two |
+| W3 | Hardware H.264 MFTs need 16-aligned sizes or reject NV12 from our video processor; CPU cost at 4K30 | FMPEG4 writer at 1080p, 1440p, 4K and odd area sizes on Intel, NVIDIA, AMD and WARP; record CPU and output. 2 days. The CPU half is measured and addressed (see "Parity gaps closed after Phase 6"): 4K was about one core at the same size and over two scaled; 4K is now converted on up to 4 threads, about 3.5 to 3.9x faster |
 | W4 | An FMPEG4 file killed mid-write does not play, or fragments are too far apart | `taskkill /F` the child after 10 s; play in Edge, VLC, ffprobe. 0.5 day |
 | W5 | AAC encoder input rules (16-bit PCM, 44.1/48 kHz) plus resampling and mixing two clocks drift over an hour | 60 min recording with mic and loopback; measure A/V offset at the end against a clap. 1 day |
 | W6 | Defender or SmartScreen flags an unsigned build that captures the screen and mic | Install a staging build on a fresh Windows 11 with default Defender; record. 0.5 day |
