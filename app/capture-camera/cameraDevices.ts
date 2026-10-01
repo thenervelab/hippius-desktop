@@ -103,3 +103,32 @@ export function sizeControls(size: CameraSize, lastRound: RoundSize): SizeContro
 export function nextRoundSize(size: CameraSize, lastRound: RoundSize): RoundSize {
   return size === "full" ? lastRound : size;
 }
+
+/**
+ * How long a muted camera is given to come back on its own before the page
+ * opens it again, and how many times in a row it tries.
+ *
+ * WebKit lets one page per process capture at a time: another Hippius window
+ * starting `getUserMedia` mutes this one, and a muted track stays muted (a
+ * black picture) until this page asks for the camera again, even after the
+ * other page let go. Opening it again takes it back. Nothing else in the app
+ * opens a camera or microphone in a webview any more (the bar's meter is
+ * Rust's), so this is the safety net, bounded so a camera muted for good
+ * (the screen locked) does not loop.
+ */
+export const MUTE_RECOVERY_MS = 1500;
+export const MUTE_RECOVERY_TRIES = 3;
+
+/** Whether a muted camera should be opened again, after `tries` already. */
+export function shouldReopenMuted(muted: boolean, tries: number): boolean {
+  return muted && tries < MUTE_RECOVERY_TRIES;
+}
+
+/**
+ * Whether the bubble shows its "starting" placeholder instead of the
+ * picture: until the first frame plays, and while the camera is muted (a
+ * muted camera draws black). Never black on the bubble, which is filmed.
+ */
+export function showsPlaceholder(playing: boolean, muted: boolean): boolean {
+  return !playing || muted;
+}

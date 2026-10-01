@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { camerasAreNamed, camerasFrom, resolveCameraId, videoConstraints } from "../cameraDevices";
+import {
+  camerasAreNamed,
+  camerasFrom,
+  MUTE_RECOVERY_TRIES,
+  resolveCameraId,
+  shouldReopenMuted,
+  showsPlaceholder,
+  videoConstraints,
+} from "../cameraDevices";
 
 const dev = (kind: MediaDeviceKind, deviceId: string, label = "") => ({ kind, deviceId, label });
 
@@ -73,5 +81,20 @@ describe("resolveCameraId", () => {
   it("knows when the webview cannot name its cameras yet", () => {
     expect(camerasAreNamed([dev("videoinput", "w1")])).toBe(false);
     expect(camerasAreNamed(devices)).toBe(true);
+  });
+});
+
+describe("a muted camera", () => {
+  it("is opened again a bounded number of times", () => {
+    expect(shouldReopenMuted(false, 0)).toBe(false);
+    expect(shouldReopenMuted(true, 0)).toBe(true);
+    expect(shouldReopenMuted(true, MUTE_RECOVERY_TRIES - 1)).toBe(true);
+    expect(shouldReopenMuted(true, MUTE_RECOVERY_TRIES)).toBe(false);
+  });
+
+  it("shows the placeholder until it plays and while it is muted", () => {
+    expect(showsPlaceholder(false, false)).toBe(true);
+    expect(showsPlaceholder(true, true)).toBe(true);
+    expect(showsPlaceholder(true, false)).toBe(false);
   });
 });

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Circle, Maximize2, Minimize2, VideoOff, X } from "lucide-react";
+import { Circle, Maximize2, Minimize2, Video, VideoOff, X } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
   cancelCapture,
@@ -19,8 +19,11 @@ import {
   camerasAreNamed,
   camerasFrom,
   cameraCloseLabel,
+  MUTE_RECOVERY_MS,
   nextRoundSize,
   resolveCameraId,
+  shouldReopenMuted,
+  showsPlaceholder,
   sizeControls,
   stripShown,
   videoConstraints,
@@ -51,8 +54,15 @@ import {
  * The <video> is mirrored, so WebKit's own start-playback button (drawn over
  * a video that is paused or not playing yet) came out as a backwards
  * triangle on the bubble. CSS cannot remove WebKit's modern media controls,
- * so the video stays invisible until it is actually playing (the bubble's
- * dark fill shows instead), and the page starts playback itself.
+ * so the video stays invisible until it is actually playing, and the page
+ * starts playback itself. Until then, and while the camera is muted, the
+ * bubble shows a "starting" placeholder rather than black.
+ *
+ * This page must be the only one capturing: WebKit mutes every other page's
+ * camera and microphone when one starts `getUserMedia`, and a muted camera
+ * stays black until it is opened again. The bar's microphone meter is
+ * therefore measured by Rust, and a camera muted anyway is opened again
+ * after `MUTE_RECOVERY_MS` (`shouldReopenMuted`).
  */
 
 function SizeGlyph({ icon }: { icon: SizeIcon }) {
@@ -96,6 +106,10 @@ export default function CaptureCameraPage() {
   const [tip, setTip] = useState<string | null>(null);
   /** Frames are flowing; until then the video (and WebKit's play button) is hidden. */
   const [playing, setPlaying] = useState(false);
+  /** The open camera track is muted (it draws black until it is opened again). */
+  const [muted, setMuted] = useState(false);
+  /** Reopens in a row for a muted camera; reset when it unmutes. */
+  const muteTries = useRef(0);
 
   useEffect(() => {
     cameraRef.current = camera;
@@ -143,6 +157,7 @@ export default function CaptureCameraPage() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     openFor.current = null;
+    setMuted(false);
   }, [live]);
 
   useEffect(
@@ -174,8 +189,21 @@ export default function CaptureCameraPage() {
         videoRef.current.srcObject = s;
         playVideo(videoRef.current);
       }
+      const track = s.getVideoTracks()[0];
       // An unplugged camera ends its track; look again.
-      s.getVideoTracks()[0]?.addEventListener("ended", () => setDevicesSeen((n) => n + 1));
+      track?.addEventListener("ended", () => setDevicesSeen((n) => n + 1));
+      // Muted by WebKit (another page started capturing) or the system: the
+      // picture is black until it unmutes or is opened again.
+      setMuted(track?.muted ?? false);
+      if (!track?.muted) muteTries.current = 0;
+      track?.addEventListener("mute", () => {
+        if (streamRef.current === s) setMuted(true);
+      });
+      track?.addEventListener("unmute", () => {
+        if (streamRef.current !== s) return;
+        muteTries.current = 0;
+        setMuted(false);
+      });
       setFailed(false);
     };
 
@@ -184,7 +212,8 @@ export default function CaptureCameraPage() {
       if (stale()) return;
       let wanted = resolveCameraId(before, deviceId, deviceName);
       const current = streamRef.current?.getVideoTracks()[0];
-      if (current?.readyState === "live" && openFor.current === (wanted ?? "default")) return;
+      // A muted track is not kept: opening the camera again is what unmutes it.
+      if (current?.readyState === "live" && !current.muted && openFor.current === (wanted ?? "default")) return;
 
       let s = await media.getUserMedia({ video: videoConstraints(wanted), audio: false });
       if (stale()) {
@@ -221,6 +250,17 @@ export default function CaptureCameraPage() {
     });
   }, [live, deviceId, deviceName, devicesSeen]);
 
+  // A camera that stays muted is opened again, a bounded number of times.
+  useEffect(() => {
+    if (!live || !muted) return;
+    const t = window.setTimeout(() => {
+      if (!shouldReopenMuted(true, muteTries.current)) return;
+      muteTries.current += 1;
+      setDevicesSeen((n) => n + 1);
+    }, MUTE_RECOVERY_MS);
+    return () => window.clearTimeout(t);
+  }, [live, muted, devicesSeen]);
+
   // A re-render can swap the <video> (failed, then recovered); keep it fed.
   useEffect(() => {
     if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
@@ -255,6 +295,7 @@ export default function CaptureCameraPage() {
   // The strip is for the bubble only (the camera-only stage is the
   // recording), and only while choosing.
   const hasStrip = bubble && stripShown(camera);
+  const placeholder = showsPlaceholder(playing, muted);
   const hovered = hoverRust || hoverDom;
   const closeLabel = cameraCloseLabel(camera);
   const controls = sizeControls(camera.size, lastRound);
@@ -314,9 +355,23 @@ export default function CaptureCameraPage() {
             data-playing={playing}
             // Mirrored, as every camera preview is: moving left moves left.
             className={`h-full w-full -scale-x-100 object-cover transition-opacity duration-150 motion-reduce:transition-none ${
-              playing ? "opacity-100" : "opacity-0"
+              placeholder ? "opacity-0" : "opacity-100"
             }`}
           />
+        )}
+
+        {!failed && placeholder && (
+          // Until the first frame (and while muted): a soft placeholder, never
+          // a black disc. The bubble is filmed, so it says nothing in words.
+          <div
+            data-tauri-drag-region
+            data-testid="camera-starting"
+            aria-label="Starting camera"
+            role="img"
+            className="absolute inset-0 grid place-items-center bg-gradient-to-br from-[#2a2c33] to-[#1c1d21] animate-pulse motion-reduce:animate-none"
+          >
+            <Video className="pointer-events-none size-6 text-white/60" aria-hidden />
+          </div>
         )}
 
         {hasStrip && (
