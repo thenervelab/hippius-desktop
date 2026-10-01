@@ -28,6 +28,15 @@ export const GLASS_FOCUS =
 export const GLASS_BAR =
   "border border-white/10 bg-[#1c1d21]/85 text-white shadow-[0_14px_36px_rgba(0,0,0,0.45)] backdrop-blur-xl";
 
+/**
+ * The recording pill: the bar's glass with a shadow that fits its window.
+ * The pill's window leaves about 9px around it, and a window clips whatever
+ * is drawn past its edge, so the bar's 50px shadow was cut into a hard-edged
+ * dark rectangle around the pill. This one reaches at most 8px.
+ */
+export const GLASS_PILL =
+  "border border-white/10 bg-[#1c1d21]/85 text-white shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur-xl";
+
 /** Menus, the share picker and the preview card. */
 export const GLASS_PANEL =
   "border border-white/10 bg-[#1c1d21]/95 text-white shadow-[0_18px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl";
