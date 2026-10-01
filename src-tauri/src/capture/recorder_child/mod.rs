@@ -19,6 +19,7 @@
 //! deletes; a recording that ends on its own says `stream_stopped` with
 //! `saved` after finishing the file.
 
+pub mod linux_plan;
 pub mod sizing;
 pub mod synthetic;
 pub mod timeline;
