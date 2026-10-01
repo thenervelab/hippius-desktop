@@ -25,19 +25,20 @@ struct HippiusCaptureMain {
         // itself, but building a window filter does not and aborts in
         // CGS_REQUIRE_INIT, so touch CoreGraphics before any SCK call.
         _ = CGMainDisplayID()
-        // `--list-microphones`: print the microphones as JSON and exit. Rust
-        // offers them in the capture bar and passes the chosen id to "start".
-        if CommandLine.arguments.contains("--list-microphones") {
-            _ = listMicrophones()
-            settleDevices()
+        let arguments = CommandLine.arguments
+        // `--list-microphones` / `--list-cameras`: print one list as JSON and
+        // exit. Rust offers them in the capture bar and passes the chosen id
+        // to "start"; cameras are listed here so the bar has them before the
+        // camera window has opened one.
+        if arguments.contains("--list-microphones") {
+            let watch = DeviceWatch()
+            watch.settle(waitForPhoneMicrophone: true)
             printDevices(listMicrophones())
             return
         }
-        // `--list-cameras`: the same for cameras, so the bar can offer them
-        // before the camera window has opened one.
-        if CommandLine.arguments.contains("--list-cameras") {
-            _ = listCameras()
-            settleDevices()
+        if arguments.contains("--list-cameras") {
+            let watch = DeviceWatch()
+            watch.settle(waitForPhoneMicrophone: false)
             printDevices(listCameras())
             return
         }
@@ -47,53 +48,73 @@ struct HippiusCaptureMain {
             let next = CommandLine.arguments.index(after: at)
             runMeter(deviceId: next < CommandLine.arguments.endIndex ? CommandLine.arguments[next] : nil)
         }
+        // `--watch-devices`: stay up while the capture bar is, printing both
+        // lists again whenever a device comes or goes, until stdin closes.
+        if arguments.contains("--watch-devices") {
+            watchDevices()
+            return
+        }
         let runner = Runner()
         emit(["ok": true, "event": "ready"])
         runner.run()
     }
 }
 
-private final class LastConnect: @unchecked Sendable {
-    var at = Date()
-}
-
-/// Give devices a moment to reach this process before listing them.
-///
-/// The helper lists and exits in one go, but a remote device (a Continuity
-/// Camera iPhone, whose camera and microphone are published to each process
-/// by the system's Continuity service) can arrive a beat after the first
-/// discovery. A long-lived app sees it through `wasConnectedNotification`;
-/// this waits for the list to go quiet, bounded, so a menu opening never
-/// waits long. The caller runs one discovery first to start the connection.
-func settleDevices(quiet: TimeInterval = 0.4, cap: TimeInterval = 1.5) {
-    let last = LastConnect()
-    let token = NotificationCenter.default.addObserver(
-        forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: .main
-    ) { _ in last.at = Date() }
-    defer { NotificationCenter.default.removeObserver(token) }
-    let deadline = Date(timeIntervalSinceNow: cap)
-    while Date() < deadline, Date().timeIntervalSince(last.at) < quiet {
-        RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
-    }
-}
+// MARK: - Devices
 
 /// One device as Rust reads it (`recording::MediaDevice`).
-struct ListedDevice {
+struct ListedDevice: Equatable {
     let id: String
     let name: String
     var isDefault: Bool
+    /// Reached through Continuity (an iPhone's camera or microphone).
+    var continuity: Bool
 }
 
-/// `[{"id": uniqueID, "name": localizedName, "isDefault": bool}]` on one line.
-/// Rust drops repeats and puts the default first (`recording::tidy_devices`).
+private func fourCC(_ code: String) -> UInt32 {
+    code.utf8.reduce(0) { ($0 << 8) | UInt32($1) }
+}
+
+/// Core Audio's transport types for a Continuity device: by cable, over the
+/// air, and the macOS 13 value both replaced.
+private let continuityTransports: Set<UInt32> = [fourCC("ccwd"), fourCC("ccwl"), fourCC("ccap")]
+
+/// Whether `device` is an iPhone (or iPad) reached through Continuity.
+/// `isContinuityCamera` is false for the phone's MICROPHONE, so the transport
+/// type is what tells a Continuity microphone apart.
+func isContinuity(_ device: AVCaptureDevice) -> Bool {
+    if device.isContinuityCamera { return true }
+    if #available(macOS 14.0, *), device.deviceType == .continuityCamera { return true }
+    return continuityTransports.contains(UInt32(bitPattern: device.transportType))
+}
+
+private func deviceObjects(_ devices: [ListedDevice]) -> [[String: Any]] {
+    devices.map { ["id": $0.id, "name": $0.name, "isDefault": $0.isDefault, "continuity": $0.continuity] }
+}
+
+private func jsonLine(_ value: Any) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+          let text = String(data: data, encoding: .utf8)
+    else { return "[]" }
+    return text
+}
+
+/// `[{"id": uniqueID, "name": localizedName, "isDefault": bool, "continuity": bool}]`
+/// on one line. Rust drops repeats and puts the default first
+/// (`recording::tidy_devices`).
 func printDevices(_ devices: [ListedDevice]) {
-    let list = devices.map { ["id": $0.id, "name": $0.name, "isDefault": $0.isDefault] as [String: Any] }
-    if let data = try? JSONSerialization.data(withJSONObject: list),
-       let text = String(data: data, encoding: .utf8) {
-        print(text)
-    } else {
-        print("[]")
-    }
+    print(jsonLine(deviceObjects(devices)))
+    fflush(stdout)
+}
+
+private var microphoneTypes: [AVCaptureDevice.DeviceType] {
+    if #available(macOS 14.0, *) { return [.microphone] }
+    return [.builtInMicrophone, .externalUnknown]
+}
+
+private var cameraTypes: [AVCaptureDevice.DeviceType] {
+    if #available(macOS 14.0, *) { return [.builtInWideAngleCamera, .external, .continuityCamera, .deskViewCamera] }
+    return [.builtInWideAngleCamera, .externalUnknown, .deskViewCamera]
 }
 
 /// Every audio input on the Mac: built-in, USB, Bluetooth, Continuity
@@ -106,17 +127,17 @@ func printDevices(_ devices: [ListedDevice]) {
 /// Audio device's UID is the same string as `AVCaptureDevice.uniqueID`, which
 /// is what ScreenCaptureKit's `microphoneCaptureDeviceID` takes.
 func listMicrophones() -> [ListedDevice] {
-    var types: [AVCaptureDevice.DeviceType]
-    if #available(macOS 14.0, *) {
-        types = [.microphone]
-    } else {
-        types = [.builtInMicrophone, .externalUnknown]
-    }
-    let discovered = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .audio, position: .unspecified).devices
+    let discovered = AVCaptureDevice.DiscoverySession(deviceTypes: microphoneTypes, mediaType: .audio, position: .unspecified).devices
     let defaultId = AVCaptureDevice.default(for: .audio)?.uniqueID ?? coreAudioDefaultInputUID()
-    var out = discovered.map { ListedDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: $0.uniqueID == defaultId) }
-    for device in coreAudioInputDevices() where !out.contains(where: { $0.id == device.id }) {
-        out.append(ListedDevice(id: device.id, name: device.name, isDefault: device.id == defaultId))
+    var out = discovered.map {
+        ListedDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: $0.uniqueID == defaultId, continuity: isContinuity($0))
+    }
+    for device in coreAudioInputDevices() {
+        if let i = out.firstIndex(where: { $0.id == device.id }) {
+            out[i].continuity = out[i].continuity || device.continuity
+        } else {
+            out.append(ListedDevice(id: device.id, name: device.name, isDefault: device.id == defaultId, continuity: device.continuity))
+        }
     }
     return out
 }
@@ -128,15 +149,148 @@ func listMicrophones() -> [ListedDevice] {
 /// (`NSCameraUseContinuityCameraDeviceType`); without that macOS 14+ files it
 /// under `.builtInWideAngleCamera`, which is asked for too.
 func listCameras() -> [ListedDevice] {
-    var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
-    if #available(macOS 14.0, *) {
-        types += [.external, .continuityCamera, .deskViewCamera]
-    } else {
-        types += [.externalUnknown, .deskViewCamera]
-    }
-    let devices = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video, position: .unspecified).devices
+    let devices = AVCaptureDevice.DiscoverySession(deviceTypes: cameraTypes, mediaType: .video, position: .unspecified).devices
     let defaultId = AVCaptureDevice.default(for: .video)?.uniqueID
-    return devices.map { ListedDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: $0.uniqueID == defaultId) }
+    return devices.map {
+        ListedDevice(id: $0.uniqueID, name: $0.localizedName, isDefault: $0.uniqueID == defaultId, continuity: isContinuity($0))
+    }
+}
+
+/// A phone is offered as a camera, but its microphone has not reached this
+/// process yet. macOS publishes the two as separate devices, and over the air
+/// the microphone can follow the camera by a second or more.
+func phoneMicrophoneMissing() -> Bool {
+    listCameras().contains { $0.continuity } && !listMicrophones().contains { $0.continuity }
+}
+
+/// Keeps device discovery running in this process and notes when the device
+/// list last changed, from AVFoundation's connect and disconnect
+/// notifications and from Core Audio's device list.
+///
+/// A remote device (an iPhone through Continuity, whose camera and
+/// microphone are published to each process by the system's Continuity
+/// service) arrives a beat after the first discovery, and only to a process
+/// that is still looking: a list read once at start-up can miss it.
+final class DeviceWatch: @unchecked Sendable {
+    private(set) var lastChange = Date()
+    var onChange: (() -> Void)?
+    private var tokens: [NSObjectProtocol] = []
+    private var sessions: [AVCaptureDevice.DiscoverySession] = []
+    private var coreAudioListener: AudioObjectPropertyListenerBlock?
+
+    init() {
+        // Held, not dropped: a live discovery session is what keeps
+        // AVFoundation looking for devices while this process waits.
+        sessions = [
+            AVCaptureDevice.DiscoverySession(deviceTypes: microphoneTypes, mediaType: .audio, position: .unspecified),
+            AVCaptureDevice.DiscoverySession(deviceTypes: cameraTypes, mediaType: .video, position: .unspecified),
+        ]
+        for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
+            tokens.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.changed()
+            }
+            )
+        }
+        var address = coreAudioProperty(kAudioHardwarePropertyDevices)
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
+        if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, listener) == noErr {
+            coreAudioListener = listener
+        }
+    }
+
+    deinit {
+        tokens.forEach { NotificationCenter.default.removeObserver($0) }
+        if let listener = coreAudioListener {
+            var address = coreAudioProperty(kAudioHardwarePropertyDevices)
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, listener)
+        }
+    }
+
+    private func changed() {
+        lastChange = Date()
+        onChange?()
+    }
+
+    /// Wait, bounded, for the lists to go quiet (`quiet` without a change),
+    /// so a menu opening never waits long. With `waitForPhoneMicrophone`, a
+    /// phone whose camera is here but whose microphone is not yet is given
+    /// up to `phoneCap` for the microphone to follow.
+    func settle(waitForPhoneMicrophone: Bool, quiet: TimeInterval = 0.4, cap: TimeInterval = 1.5, phoneCap: TimeInterval = 3.0) {
+        let start = Date()
+        var lastPhoneCheck = Date.distantPast
+        var phoneMicMissing = false
+        while true {
+            let now = Date()
+            if waitForPhoneMicrophone, now.timeIntervalSince(lastPhoneCheck) >= 0.2 {
+                phoneMicMissing = phoneMicrophoneMissing()
+                lastPhoneCheck = now
+            }
+            let elapsed = now.timeIntervalSince(start)
+            if elapsed >= (phoneMicMissing ? phoneCap : cap) { break }
+            if !phoneMicMissing, now.timeIntervalSince(lastChange) >= quiet { break }
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+        }
+    }
+}
+
+/// `--watch-devices`: print `{"microphones": [...], "cameras": [...]}` once
+/// the lists settle, then again whenever either changes, until stdin closes
+/// (the app stopped watching, or is gone). A slow poll backs up the
+/// notifications, which do not cover every Core Audio change.
+func watchDevices() {
+    let watch = DeviceWatch()
+    watch.settle(waitForPhoneMicrophone: true)
+    var printed = ""
+    let report = {
+        let line = jsonLine([
+            "microphones": deviceObjects(listMicrophones()),
+            "cameras": deviceObjects(listCameras()),
+        ])
+        guard line != printed else { return }
+        printed = line
+        print(line)
+        fflush(stdout)
+    }
+    report()
+    // A burst of changes (a phone publishing its camera, then its
+    // microphone) is reported once, a moment after it ends.
+    var pending: DispatchWorkItem?
+    watch.onChange = {
+        pending?.cancel()
+        let work = DispatchWorkItem { report() }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+    let poll = Timer(timeInterval: 3, repeats: true) { _ in report() }
+    RunLoop.main.add(poll, forMode: .default)
+    Thread {
+        while readLine() != nil {}
+        exit(0)
+    }.start()
+    // Never outlive a forgotten watch by long.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 30 * 60) { exit(0) }
+    withExtendedLifetime(watch) { RunLoop.main.run() }
+}
+
+/// The microphone a recording asked for, once this process can see it.
+///
+/// A fresh process sees a Continuity microphone only after discovery has run
+/// for a moment, so a chosen iPhone microphone is waited for (bounded) rather
+/// than handed to ScreenCaptureKit as an id it cannot open yet. One that
+/// never arrives is reported on stderr and the system default is recorded,
+/// which is also what the bar shows when the chosen device is not listed.
+func resolveMicrophone(_ id: String?) -> String? {
+    guard let id, !id.isEmpty else { return nil }
+    let present = { listMicrophones().contains { $0.id == id } }
+    if present() { return id }
+    let watch = DeviceWatch()
+    let deadline = Date(timeIntervalSinceNow: 3)
+    while Date() < deadline {
+        RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
+        if present() { return withExtendedLifetime(watch) { id } }
+    }
+    fputs("microphone \(id) is not connected; recording the default microphone\n", stderr)
+    return nil
 }
 
 private func coreAudioProperty(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
@@ -152,8 +306,24 @@ private func coreAudioString(_ device: AudioObjectID, _ selector: AudioObjectPro
     return value.takeRetainedValue() as String
 }
 
-/// Whether the device has at least one input channel.
+private func coreAudioUInt32(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
+    var address = coreAudioProperty(selector)
+    var value: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return nil }
+    return value
+}
+
+/// Whether the device records: it has an input stream, or an input channel.
+/// Both are asked because a device that is listed but not yet streaming (a
+/// Continuity microphone before the phone connects) can report its streams
+/// before it reports any channel layout.
 private func coreAudioHasInput(_ device: AudioObjectID) -> Bool {
+    var streams = coreAudioProperty(kAudioDevicePropertyStreams, scope: kAudioDevicePropertyScopeInput)
+    var streamsSize: UInt32 = 0
+    if AudioObjectGetPropertyDataSize(device, &streams, 0, nil, &streamsSize) == noErr, streamsSize > 0 {
+        return true
+    }
     var address = coreAudioProperty(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeInput)
     var size: UInt32 = 0
     guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0 else { return false }
@@ -164,7 +334,7 @@ private func coreAudioHasInput(_ device: AudioObjectID) -> Bool {
     return buffers.contains { $0.mNumberChannels > 0 }
 }
 
-private func coreAudioInputDevices() -> [(id: String, name: String)] {
+private func coreAudioInputDevices() -> [(id: String, name: String, continuity: Bool)] {
     var address = coreAudioProperty(kAudioHardwarePropertyDevices)
     var size: UInt32 = 0
     let system = AudioObjectID(kAudioObjectSystemObject)
@@ -172,11 +342,15 @@ private func coreAudioInputDevices() -> [(id: String, name: String)] {
     var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
     guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &ids) == noErr else { return [] }
     return ids.compactMap { device in
-        guard coreAudioHasInput(device),
+        // A hidden device is one its owner keeps out of device lists (a
+        // private aggregate); the Sound settings do not show it either.
+        guard coreAudioUInt32(device, kAudioDevicePropertyIsHidden) != 1,
+              coreAudioHasInput(device),
               let uid = coreAudioString(device, kAudioDevicePropertyDeviceUID),
               let name = coreAudioString(device, kAudioObjectPropertyName)
         else { return nil }
-        return (uid, name)
+        let transport = coreAudioUInt32(device, kAudioDevicePropertyTransportType) ?? 0
+        return (uid, name, continuityTransports.contains(transport))
     }
 }
 
@@ -317,8 +491,11 @@ final class Runner: @unchecked Sendable {
         if current() != nil {
             return reply(["ok": false, "error": "already recording"])
         }
-        guard let options = StartOptions(obj) else {
+        guard var options = StartOptions(obj) else {
             return reply(["ok": false, "error": "missing output path"])
+        }
+        if options.microphone {
+            options.microphoneDeviceId = resolveMicrophone(options.microphoneDeviceId)
         }
         let result = pumpUntilDone(timeout: nil) { [weak self] in
             try await RecordSession.start(options) { live, message in
@@ -404,7 +581,9 @@ struct StartOptions {
     /// camera stage's margin when the window is the app's own, else none.
     let inset: CGFloat?
     let microphone: Bool
-    let microphoneDeviceId: String?
+    /// The chosen microphone's uniqueID; `Runner.start` swaps it for nil
+    /// (the system default) when the device never shows up.
+    var microphoneDeviceId: String?
     /// Record what the Mac plays (ScreenCaptureKit's audio). Off by default:
     /// with speakers it also picks up the voice a second time, as an echo.
     let systemAudio: Bool

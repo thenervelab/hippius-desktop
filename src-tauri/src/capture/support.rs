@@ -66,6 +66,10 @@ pub struct Surfaces {
     /// Why the microphone cannot be recorded, in Rust's words; `None` when it
     /// can. The bar shows it under the dimmed microphone row.
     pub microphone_unavailable_message: Option<&'static str>,
+    /// What to check when an iPhone is not in the camera or microphone menu,
+    /// shown under a menu that lists no Continuity device; `None` where
+    /// phones are not offered that way (Continuity is macOS only).
+    pub continuity_hint: Option<&'static str>,
     pub shortcut: ShortcutSupport,
 }
 
@@ -73,6 +77,10 @@ pub struct Surfaces {
 pub const MIC_NEEDS_MACOS_15: &str = "Recording the microphone needs macOS 15 or later";
 /// Elsewhere it comes with the platform's recorder.
 pub const MIC_NOT_YET: &str = "Recording the microphone isn't available on this system yet";
+/// The checks that bring an iPhone into the menus (Continuity Camera's own
+/// requirements), and that it takes a moment to arrive.
+pub const CONTINUITY_HINT: &str =
+    "iPhone not listed? Keep it close by, signed in to the same Apple Account, with Wi-Fi and Bluetooth on. It can take a few seconds to appear.";
 
 const ALL_MODES: [CaptureMode; 3] = [CaptureMode::Area, CaptureMode::Window, CaptureMode::Screen];
 
@@ -94,6 +102,7 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
             (false, Platform::MacOs) => Some(MIC_NEEDS_MACOS_15),
             (false, _) => Some(MIC_NOT_YET),
         },
+        continuity_hint: (platform == Platform::MacOs).then_some(CONTINUITY_HINT),
         shortcut: match platform {
             Platform::MacOs | Platform::Windows => ShortcutSupport {
                 supported: true,
@@ -137,6 +146,7 @@ mod tests {
                 "screenshotTimer": true,
                 "systemAudio": true,
                 "microphoneUnavailableMessage": null,
+                "continuityHint": CONTINUITY_HINT,
                 "shortcut": { "supported": true, "via": "plugin" },
             })
         );
@@ -170,5 +180,16 @@ mod tests {
         }
         assert!(surfaces_for(Platform::Windows, false, false).shortcut.supported);
         assert!(!surfaces_for(Platform::LinuxX11, false, false).shortcut.supported);
+    }
+
+    /// The iPhone hint is a Mac's alone: Windows and Linux have no
+    /// Continuity, and the hint names checks that only apply to it.
+    #[test]
+    fn only_a_mac_offers_the_iphone_hint() {
+        assert_eq!(surfaces_for(Platform::MacOs, true, true).continuity_hint, Some(CONTINUITY_HINT));
+        for platform in [Platform::Windows, Platform::LinuxX11, Platform::LinuxWayland] {
+            assert_eq!(surfaces_for(platform, true, true).continuity_hint, None, "{platform:?}");
+        }
+        assert!(!CONTINUITY_HINT.contains('\u{2014}'), "no em dashes in user copy");
     }
 }

@@ -56,6 +56,10 @@ pub struct MediaDevice {
     /// The system's default input of this kind.
     #[serde(default)]
     pub is_default: bool,
+    /// Reached through Continuity: an iPhone's camera or microphone. The
+    /// pickers offer a hint about bringing the phone closer when none is.
+    #[serde(default)]
+    pub continuity: bool,
 }
 
 pub type Microphone = MediaDevice;
@@ -74,11 +78,15 @@ pub fn tidy_devices(devices: Vec<MediaDevice>) -> Vec<MediaDevice> {
             continue;
         }
         match out.iter_mut().find(|seen| seen.id == id) {
-            Some(seen) => seen.is_default |= d.is_default,
+            Some(seen) => {
+                seen.is_default |= d.is_default;
+                seen.continuity |= d.continuity;
+            }
             None => out.push(MediaDevice {
                 id: id.to_string(),
                 name: name.to_string(),
                 is_default: d.is_default,
+                continuity: d.continuity,
             }),
         }
     }
@@ -471,6 +479,7 @@ mod tests {
             id: id.into(),
             name: name.into(),
             is_default,
+            continuity: false,
         }
     }
 
@@ -564,5 +573,26 @@ mod tests {
         let tidy = tidy_devices(mics);
         assert_eq!(tidy.len(), 3, "the iPhone mic from both macOS APIs shows once");
         assert_eq!(tidy[0], dev("iPhoneMic-UID", "Ahmad\u{2019}s iPhone Microphone", true));
+    }
+
+    /// AVFoundation's `isContinuityCamera` is false for the phone's
+    /// microphone, so only one of the two APIs may mark it; the merged entry
+    /// must keep the mark, or the picker shows the "bring your iPhone
+    /// closer" hint next to the phone it already lists.
+    #[test]
+    fn a_continuity_mark_from_either_api_survives_the_merge() {
+        let mics: Vec<MediaDevice> = serde_json::from_str(concat!(
+            r#"[{"id":"BuiltInMicrophoneDevice","name":"MacBook Pro Microphone","isDefault":true,"continuity":false},"#,
+            r#"{"id":"iPhoneMic-UID","name":"Ahmad’s iPhone Microphone","isDefault":false,"continuity":false},"#,
+            r#"{"id":"iPhoneMic-UID","name":"Ahmad’s iPhone Microphone","isDefault":false,"continuity":true}]"#
+        ))
+        .unwrap();
+        let tidy = tidy_devices(mics);
+        assert_eq!(tidy.len(), 2);
+        assert!(!tidy[0].continuity);
+        assert!(tidy[1].continuity, "the phone stays marked as a Continuity device");
+        // An older helper sends no mark at all: read as not Continuity.
+        let old: Vec<MediaDevice> = serde_json::from_str(r#"[{"id":"a","name":"Mic","isDefault":true}]"#).unwrap();
+        assert!(!old[0].continuity);
     }
 }

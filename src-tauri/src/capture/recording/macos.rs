@@ -107,7 +107,7 @@ fn helper_path() -> Option<PathBuf> {
 /// in the cache the permission checks share ([`permissions::macos_version`]).
 ///
 /// [`permissions::macos_version`]: crate::capture::permissions::macos_version
-fn macos_at_least(major: u64, minor: u64) -> bool {
+pub(crate) fn macos_at_least(major: u64, minor: u64) -> bool {
     crate::capture::permissions::macos_version().is_some_and(|v| v >= (major, minor))
 }
 

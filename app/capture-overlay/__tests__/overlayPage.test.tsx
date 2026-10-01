@@ -46,6 +46,7 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
   screenshotTimer: true,
   systemAudio: true,
   microphoneUnavailableMessage: null,
+  continuityHint: null,
   shortcut: { supported: true, via: "plugin" },
   cameraOnlyAvailable: true,
   cameraFilmed: true,
@@ -673,5 +674,76 @@ describe("click to capture", () => {
     await screen.findByRole("toolbar", { name: "Capture" });
     fireEvent.keyDown(window, { key: " " });
     expect(called("capture_set_mode")).toBe(false);
+  });
+});
+
+describe("the camera and microphone menus", () => {
+  const HINT = "iPhone not listed? Keep it close by, signed in to the same Apple Account, with Wi-Fi and Bluetooth on. It can take a few seconds to appear.";
+  const BUILT_IN = { id: "BuiltInMicrophoneDevice", name: "MacBook Pro Microphone", isDefault: true, continuity: false };
+  const PHONE_MIC = { id: "iPhoneMic-UID", name: "Ahmad\u2019s iPhone Microphone", isDefault: false, continuity: true };
+  const recording = { kind: "recording" as const, continuityHint: HINT };
+
+  const openMicrophones = async () => {
+    fireEvent.click(await screen.findByRole("button", { name: /^Microphone:/ }));
+    return screen.findByRole("menu", { name: "Choose a microphone" });
+  };
+
+  // An iPhone's microphone reaches the Mac after its camera, often after the
+  // menu was read. Rust's watcher sends the new list; the open menu takes it.
+  it("adds a phone microphone Rust reports after the menu was read, and drops the iPhone hint", async () => {
+    setup(recording);
+    tauri.onInvoke("capture_microphones", () => [BUILT_IN]);
+    const menu = await openMicrophones();
+    await waitFor(() => expect(menu).toHaveAttribute("aria-busy", "false"));
+    expect(screen.getByRole("menuitemradio", { name: /MacBook Pro Microphone/ })).toBeInTheDocument();
+    expect(screen.getByText(HINT)).toBeInTheDocument();
+
+    await act(() => tauri.emitEvent("capture_microphones", [BUILT_IN, PHONE_MIC]));
+    expect(await screen.findByRole("menuitemradio", { name: /iPhone Microphone/ })).toBeInTheDocument();
+    expect(screen.queryByText(HINT)).toBeNull();
+  });
+
+  it("records from the microphone picked: its system id is what is saved", async () => {
+    tauri.onInvoke("capture_set_options", (args) => ({
+      options: (args as { options: CaptureOverlayContext["options"] }).options,
+      countdownSecs: 3,
+      cameraFilmed: true,
+    }));
+    setup(recording);
+    tauri.onInvoke("capture_microphones", () => [BUILT_IN, PHONE_MIC]);
+    await openMicrophones();
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /iPhone Microphone/ }));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: expect.objectContaining({ microphone: true, microphoneDevice: "iPhoneMic-UID" }),
+      }),
+    );
+  });
+
+  it("shows placeholders, not an empty menu, until the first list arrives", async () => {
+    setup(recording);
+    tauri.onInvoke("capture_microphones", () => new Promise(() => undefined));
+    const menu = await openMicrophones();
+    expect(menu).toHaveAttribute("aria-busy", "true");
+    expect(menu.querySelectorAll("[data-device-skeleton]").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Only the default microphone/)).toBeNull();
+    expect(screen.getByText("Looking for microphones")).toBeInTheDocument();
+  });
+
+  it("gives no iPhone hint where Rust has none (Windows, Linux)", async () => {
+    setup({ kind: "recording", continuityHint: null });
+    tauri.onInvoke("capture_microphones", () => [BUILT_IN]);
+    const menu = await openMicrophones();
+    await waitFor(() => expect(menu).toHaveAttribute("aria-busy", "false"));
+    expect(screen.queryByText(/iPhone not listed/)).toBeNull();
+  });
+
+  it("gives the same hint under the camera menu while no iPhone camera is listed", async () => {
+    setup(recording);
+    tauri.onInvoke("capture_cameras", () => [{ id: "1F06", name: "FaceTime HD Camera", isDefault: true }]);
+    fireEvent.click(await screen.findByRole("button", { name: /^Camera:/ }));
+    const menu = await screen.findByRole("menu", { name: "Choose a camera" });
+    await waitFor(() => expect(menu).toHaveAttribute("aria-busy", "false"));
+    expect(screen.getByText(HINT)).toBeInTheDocument();
   });
 });

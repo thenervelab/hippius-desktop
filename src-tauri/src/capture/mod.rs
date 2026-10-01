@@ -8,6 +8,7 @@ pub mod camera;
 pub mod commands;
 pub mod deliver;
 pub mod destination;
+pub mod device_watch;
 pub mod geometry;
 pub mod mic_meter;
 pub mod naming;

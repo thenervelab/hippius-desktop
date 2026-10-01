@@ -357,6 +357,36 @@ fn the_app_and_the_helper_opt_in_to_continuity_camera() {
     );
 }
 
+/// The bar's device lists stay live through the helper's `--watch-devices`
+/// mode, so a phone's microphone that arrives after the menu was read still
+/// shows up. The flag crosses a language boundary nothing else checks: a
+/// helper that does not know it would start a recording session instead and
+/// the lists would silently stop updating. The watcher must also end with
+/// the bar (closing the overlays stops it, and the helper exits when its
+/// stdin closes), or a discovery process would outlive every capture.
+#[test]
+fn the_device_watcher_is_a_mode_the_helper_knows_and_ends_with_the_bar() {
+    let watch = read("src/capture/device_watch.rs");
+    let helper = read("../macos/HippiusCapture/Sources/main.swift");
+    assert!(watch.contains("\"--watch-devices\""), "device_watch.rs starts the helper's watch mode");
+    assert!(
+        helper.contains("arguments.contains(\"--watch-devices\")"),
+        "the helper must handle --watch-devices"
+    );
+    let watcher = fn_body(&helper, "func watchDevices(");
+    assert!(watcher.contains("while readLine() != nil {}"), "the watcher exits when its stdin closes");
+    assert!(watcher.contains("exit(0)"), "the watcher exits when its stdin closes");
+
+    let commands = read("src/capture/commands.rs");
+    assert!(
+        fn_body(&commands, "fn close_overlays(").contains("device_watch::stop()"),
+        "closing the overlays stops the device watcher"
+    );
+    for sig in ["pub async fn capture_microphones(", "pub async fn capture_cameras("] {
+        assert!(fn_body(&commands, sig).contains("watch_devices("), "{sig} starts the watcher");
+    }
+}
+
 /// Camera only records the stage window itself, and every way a recording
 /// ends takes the camera away with it.
 #[test]

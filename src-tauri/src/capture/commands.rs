@@ -52,8 +52,11 @@ pub const OPEN_PLANS_EVENT: &str = "capture_open_plans";
 /// The camera window's shape or device changed (`camera::CameraState`); the
 /// camera page and the recording pill both read it.
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
-/// The camera window listed the cameras it can use.
+/// The camera window listed the cameras it can use, or the system's list
+/// changed while the bar is up.
 pub const CAMERAS_EVENT: &str = "capture_cameras";
+/// The system's microphones changed while the bar is up (`device_watch`).
+pub const MICROPHONES_EVENT: &str = "capture_microphones";
 /// The saved options changed from outside the bar (the camera's own size
 /// strip or its ×); the bar replaces its copy (`bar::CaptureOptions`).
 pub const OPTIONS_EVENT: &str = "capture_options_changed";
@@ -600,6 +603,8 @@ fn reactivate_app(app: &AppHandle, pid: i32) {
 fn reactivate_app(_app: &AppHandle, _pid: i32) {}
 
 fn close_overlays(app: &AppHandle) {
+    // The bar is going: nothing needs live device lists until it is back.
+    super::device_watch::stop();
     for (label, window) in app.webview_windows() {
         if label.starts_with(OVERLAY_LABEL_PREFIX) {
             // Destroyed, not closed: `close` finishes later, and a capture
@@ -3619,9 +3624,27 @@ pub fn camera_list(native: Vec<CameraDevice>, webview: Vec<CameraDevice>) -> Vec
 /// menu opens, so a camera plugged in since shows up).
 #[tauri::command]
 pub async fn capture_cameras(app: AppHandle) -> Vec<CameraDevice> {
+    watch_devices(&app);
     let native = refresh_native_cameras(&app).await;
     let webview = lock(&app.state::<AppState>().capture.cameras).clone();
     camera_list(native, webview)
+}
+
+/// Keep the bar's device lists live while it is up: the first read starts
+/// the watcher (`device_watch`), and every change it reports replaces the
+/// system's camera list and is sent to the bar, so a phone or USB device
+/// that arrives after a menu was read still shows up. A no-op while one runs.
+fn watch_devices(app: &AppHandle) {
+    let app = app.clone();
+    super::device_watch::ensure_running(move |lists| {
+        let state = app.state::<AppState>();
+        lock(&state.capture.native_cameras).clone_from(&lists.cameras);
+        let webview = lock(&state.capture.cameras).clone();
+        let _ = app.emit(CAMERAS_EVENT, camera_list(lists.cameras, webview));
+        if recording::microphone_supported() {
+            let _ = app.emit(MICROPHONES_EVENT, lists.microphones);
+        }
+    });
 }
 
 /// The bubble's size strip: small, large or full. Saved with the options (so
@@ -3709,10 +3732,11 @@ pub async fn capture_camera_dismiss(app: AppHandle) -> Result<()> {
 /// The microphones the bar's picker offers. Lists through the recording
 /// helper, so it is empty where recording with a microphone is not available.
 #[tauri::command]
-pub async fn capture_microphones() -> Vec<Microphone> {
+pub async fn capture_microphones(app: AppHandle) -> Vec<Microphone> {
     if !recording::microphone_supported() {
         return Vec::new();
     }
+    watch_devices(&app);
     tauri::async_runtime::spawn_blocking(recording::list_microphones)
         .await
         .unwrap_or_default()
