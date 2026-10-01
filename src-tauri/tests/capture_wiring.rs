@@ -835,3 +835,27 @@ fn camera_only_refuses_with_the_recording_line_first() {
     let lookup = confirm.find("camera_window_id(").expect("looks for the camera");
     assert!(refusal < lookup);
 }
+
+/// The recorder owns the microphone: every phase broadcast outside choosing a
+/// recording stops the bar's meter, so the meter has let go before the
+/// recorder opens the device. A meter left running would keep the microphone
+/// open in a second process through the whole recording.
+#[test]
+fn the_mic_meter_lets_go_before_the_recorder_starts() {
+    let src = read("src/capture/commands.rs");
+    let emit = fn_body(&src, "fn emit_phase(");
+    assert!(
+        emit.contains("meter_may_run(event.phase)") && emit.contains("mic_meter.stop()"),
+        "emit_phase must stop the microphone meter outside choosing a recording"
+    );
+    let start = fn_body(&src, "pub async fn capture_mic_meter_start(");
+    assert!(
+        start.matches("meter_may_run(").count() >= 2 && start.contains("stop_if(generation)"),
+        "a meter started while the phase moved must re-check and stop itself"
+    );
+    let helper = read("../macos/HippiusCapture/Sources/main.swift");
+    assert!(
+        helper.contains("\"--meter\"") && helper.contains("runMeter("),
+        "the helper must serve --meter"
+    );
+}
