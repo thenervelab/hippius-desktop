@@ -133,7 +133,12 @@ never block and the queues before `mp4mux` are unbounded, or the one writer
 thread deadlocks between the tracks; the portal's PipeWire fd stays open for
 the recording and the session is closed with it. The camera is never opened
 here, and the Linux mic meter is the child's `--meter` (same lines as the
-Swift meter), stopped before the recorder opens the mic. The app probes once
+Swift meter), stopped before the recorder opens the mic. The bubble's
+`getUserMedia` exists on Linux only because `webview_media_gtk.rs` turns
+WebKitGTK's media stream on and allows user-media and device-info requests,
+for the capture windows and the app's own pages only (pinned in
+`capture_wiring.rs`); `--list-cameras` names cameras as WebKitGTK does
+(both are GStreamer's names). The app probes once
 per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
 `codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
 Wayland (the desktop's dialog). **Wayland records from the panel**
@@ -208,8 +213,9 @@ recording countdown (None / 3 / 5 seconds), "Record system audio"
 twice; offered only where Rust's `systemAudio` surface says this platform
 can record it, and `begin_recording` asks for it only there), Show mouse clicks, and "Copy a share link after capture" (`copyLink`). Clicking the countdown numeral or
 pressing Return while counting runs the waiting action at once. Camera only
-is macOS and Windows (`camera_only_supported`, `for_system` turns the screen
-back on elsewhere; Windows records the camera window's HWND); the sources panel shows the Screen switch only when
+is macOS, Windows and X11 (`camera_only_supported` from `support::camera_only`,
+`for_system` turns the screen back on elsewhere; Windows records the camera
+window's HWND, X11 its XID with the stage's margin cut by `videocrop`); the sources panel shows the Screen switch only when
 `cameraOnlyAvailable`, and the camera row says "Camera is only recorded with
 the entire screen or an area." whenever `cameraFilmed` is false (a window
 recording where the recorder cannot add the camera window:

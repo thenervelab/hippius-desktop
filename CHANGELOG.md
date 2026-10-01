@@ -249,8 +249,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   screen-sharing dialog picks the screen or window (with one display it
   remembers the choice). Your microphone and your computer's sound go into
   one soundtrack, with pause and resume, the camera bubble filmed with the
-  screen, and a live microphone level. If your system lacks the video
-  codecs, Record says which packages to install.
+  screen (or the camera on its own on X11), and a live microphone level. If
+  your system lacks the video codecs, Record says which packages to install.
 - **Record your screen on Windows (test builds first).** Record a whole
   screen, one window or an area, with your microphone, your computer's sound
   or both in one soundtrack, pause and resume, and the camera bubble or the

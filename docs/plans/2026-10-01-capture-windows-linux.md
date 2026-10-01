@@ -6,8 +6,9 @@ stay on staging in `capture::rollout`. Phase 3 (Linux screenshots) done in
 code and type-checked for Linux from macOS; its checklist needs real Linux
 sessions, so Linux stays on staging. Phase 4 (Linux recording) done in
 code, type-checked and linted for Linux from macOS; its checklist needs real
-Linux sessions, so Linux recording stays on staging too. Phases 5 and 6 not
-started here. Written against `feat/screen-capture` at 8a4e21f2;
+Linux sessions, so Linux recording stays on staging too. Phase 5's Linux
+part (the camera in WebKitGTK, the camera list, camera only on X11) done in
+code the same way; its Windows part and Phase 6 not started here. Written against `feat/screen-capture` at 8a4e21f2;
 Phases 0 and 1 merged with the permission, external-device, button-menu and
 camera/audio work at 2fd6e468.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
@@ -942,10 +943,12 @@ staging builds only, never on beta or production.
 - **Not done:** the pill's compact form and one-time "visible in screen
   recordings" note, placing the pill outside an X11 area recording, the
   bubble in a window recording (`WINDOW_RECORDING_ADDS_CAMERA` stays macOS
-  only), camera only on Linux (Phase 5: `cameraOnly` false), Wayland area
-  recording (spike L6), the staging `rpm` bundle, `--list-cameras` (still
-  `[]`), and the `codecsMissing` line names every package rather than the
-  missing one (the probe logs exactly which elements are missing).
+  only), camera only on Wayland (no window ids there), Wayland area
+  recording (spike L6), the staging `rpm` bundle, and the `codecsMissing`
+  line names every package rather than the missing one (the probe logs
+  exactly which elements are missing). The camera on Linux (the WebKitGTK
+  permission, `--list-cameras`, camera only on X11) landed with Phase 5's
+  Linux part, below.
 
 **Needs real Linux sessions to know** (none of this ran from a Mac)
 - that `gst::parse::launch` accepts every pipeline text with the distro's
@@ -1088,6 +1091,40 @@ Chrome with sound.
 Linux recording moves to beta.
 
 ### Phase 5: camera, microphone and audio parity (M, 1.5 to 2 weeks)
+
+**Status: the Linux part is in code** (with Phase 4, verified the same way:
+Linux `cargo check` and `clippy --lib --tests` from a Mac, the pure tests on
+macOS); the Windows part is separate work.
+- `capture/webview_media_gtk.rs`: on the camera and overlay windows only
+  (the same `allows_capture_devices` gate as WebView2's), WebKitGTK's media
+  stream is turned on and `UserMediaPermissionRequest` /
+  `DeviceInfoPermissionRequest` are allowed for the app's own pages
+  (`is_app_origin`), denied for any other page; every other request returns
+  to WebKitGTK's default. Pinned in `capture_wiring.rs`.
+- `--list-cameras` on Linux: `GstDeviceMonitor` `Video/Source`, by the names
+  WebKitGTK shows (it lists through GStreamer too), id = PipeWire's
+  `node.name` or the V4L2 path (`linux_plan::cameras`); `recording::list_cameras`
+  asks the child, so the bar lists cameras before the bubble opens.
+- Camera only on X11 (`support::camera_only`, false on Wayland):
+  `camera_window_id` reads the camera window's XID on the GTK thread
+  (`gdkx11`), the child records it with `ximagesrc xid=` and, when the
+  window's `_NET_WM_PID` is the app's (the stage), cuts `STAGE_INSET` at the
+  screen's scale from each edge with `videocrop` (`linux_plan::stage_inset`).
+- Not done on Linux: the non-fatal `device_lost` event and the pill saying a
+  device went (a lost microphone ends only its thread and logs it), label
+  matching fixtures recorded from real devices, and the empty-state text
+  about Bluetooth headsets' HFP profile.
+
+**Linux camera checklist** (with the recording checklist's machines)
+1. The camera bubble shows the camera on Ubuntu 22.04 and 24.04 (WebKitGTK
+   2.4x) and Fedora; spike L5: no `getUserMedia` error in the camera page.
+2. The camera menu lists the built-in and a USB camera before the bubble
+   ever opened, and picking one opens that one in the bubble (names match).
+3. A phone through v4l2loopback (DroidCam) and a PipeWire camera node are
+   listed and open.
+4. X11: Screen off (camera only) records the stage without its margin or
+   black corners, small and full sizes, at 100 % and `GDK_SCALE=2`.
+5. Wayland: the Screen switch is not offered.
 
 **Scope**
 - Linux webviews: through `with_webview` on the camera and overlay/panel
