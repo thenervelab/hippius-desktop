@@ -5,7 +5,10 @@ checklists are still to run, so Windows screenshots and Windows recording
 stay on staging in `capture::rollout`. Phase 3 (Linux screenshots) done in
 code and type-checked for Linux from macOS; its checklist needs real Linux
 sessions, so Linux stays on staging. Phase 4 has its pure groundwork
-(`recorder_child/linux_plan.rs`) and nothing else. Phases 5 and 6 not started here. Written against `feat/screen-capture` at 8a4e21f2;
+(`recorder_child/linux_plan.rs`) and nothing else. Phases 5 and 6 are done
+in code for Windows (cross-checked from a Mac, not yet run on a Windows
+PC; their checklist rows are below) and not started for Linux; Windows
+recording stays on staging. Written against `feat/screen-capture` at 8a4e21f2;
 Phases 0 and 1 merged with the permission, external-device, button-menu and
 camera/audio work at 2fd6e468.
 **Scope:** every capture feature the macOS app has (screenshots, the capture
@@ -497,32 +500,26 @@ builds only, never on beta or production.
   the `NonPackaged` switch, HKCU or HKLM) dims the mic row with a Windows
   sentence.
 
-**Deviations from the scope above**
+**Deviations from the scope above** (the ones marked *closed* were done
+with Phase 5 and 6, below)
 - No `gpu.rs`: BGRA to NV12 and any scaling run on the CPU (`frame.rs`) after
   a GPU crop. Fine at 1080p30 by arithmetic; spike W3 decides whether 4K30
   needs the D3D11 video processor.
-- No process loopback: system audio is plain endpoint loopback, so
-  Hippius's own sounds are recorded too (rare: notifications). Windows 11's
-  `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` needs
-  `ActivateAudioInterfaceAsync` with a COM completion handler; left as a
-  seam in `audio::Device`.
-- The camera bubble is not added to a window recording
-  (`WINDOW_RECORDING_ADDS_CAMERA` stays macOS-only, so the bar already says
-  "Camera is only recorded with the entire screen or an area."): WGC takes
-  one item, so it needs two captures composited.
-- No button to `ms-settings:privacy-*` yet: Rust has the URIs
-  (`PrivacyDevice::settings_uri`) and the mic line says where to go; a
-  blocked camera has no surface yet (the bubble stays black). Both belong
-  with Phase 5's device work.
-- XP-15 (a recording glyph on the tray icon) is not done: the icon is
-  created and swapped by the main window (`useTraySync.ts`), and a second
-  writer from Rust would fight it. Phase 6.
+- *Closed.* No process loopback: system audio was plain endpoint
+  loopback, so Hippius's own sounds were recorded too.
+- *Closed.* The camera bubble was not added to a window recording (WGC
+  takes one item, so it needs two captures composited).
+- *Closed.* No button to `ms-settings:privacy-*`, and a blocked camera had
+  no surface (the bubble stayed black).
+- *Closed.* XP-15 (a recording glyph on the tray icon): the icon is created
+  and swapped by the main window (`useTraySync.ts`), so Rust's writes had to
+  be designed not to fight it.
 - The CI self-test runs as a unit test (`cargo test --lib capture::` already
   runs on the Windows lane) instead of a separate `--self-test` step; it
   skips itself where the runner has no Media Foundation encoders.
-- `--list-cameras` still prints `[]` on Windows: the bubble names cameras
-  from WebView2 once the permission handler lets it (Phase 5 lists them
-  from `MFEnumDeviceSources`).
+- *Closed.* `--list-cameras` printed `[]` on Windows, and the bar's
+  microphone meter never moved there (`recording::meter_command` was
+  macOS-only).
 
 **Needs a Windows PC to know** (none of this could be exercised from a Mac)
 - that WGC starts from the child for a monitor, a window and the stage, and
@@ -933,7 +930,128 @@ Linux recording moves to beta.
 
 ### Phase 5: camera, microphone and audio parity (M, 1.5 to 2 weeks)
 
-**Scope**
+**Status (Windows): code done, hardware checklist pending. Linux: not
+started.** Cross-checked from a Mac only (`cargo check` and `cargo clippy
+--all-targets -D warnings` for `x86_64-pc-windows-msvc` with the xwin
+headers; the platform-free halves tested on macOS). Windows recording
+stays on staging in `capture::rollout`.
+
+**What landed (Windows)**
+- **Microphone meter:** `Hippius --capture-recorder --meter [endpointId]`
+  (`recorder_child/meter.rs` for the pure part: the 50 ms level window, the
+  Swift helper's exact lines, stdin EOF as the stop; `windows/audio.rs::
+  run_meter` opens the same WASAPI client the recording uses).
+  `recording::meter_command` starts it on Windows, so `capture::mic_meter`
+  and the bar's `MicMeter` work unchanged. One owner per device holds as on
+  macOS: `emit_phase` stops the meter on every phase but choosing a
+  recording, before the recorder opens the microphone. The webview never
+  opens the microphone, so there is no system prompt to put behind a click
+  (NT-16's rule is moot on Windows: a desktop app gets no prompt at all).
+- **Cameras listed natively:** `--list-cameras` is Media Foundation's
+  video capture sources (`MFEnumDeviceSources`, symbolic link as id,
+  friendly name, the first marked default since Windows has none), which
+  include USB, Phone Link's connected camera and frame-server virtual
+  cameras. `recording::list_cameras` reads it on Windows, so the bar lists
+  cameras before the bubble ever opened. The bubble still finds the camera
+  by name in WebView2's list; `deviceIdByName` now tries an exact match on
+  the label without WebView2's trailing " (vvvv:pppp)" USB id before the
+  contains match, so "USB Camera" never opens a "USB Camera 2 (...)"
+  listed first. Pinned with Windows label fixtures in `devices.test.ts`.
+- **Process loopback (Windows 11):** system audio is
+  `ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)` with
+  `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` on the app's pid
+  (passed to the child as `HIPPIUS_CAPTURE_APP_PID`; WebView2's processes
+  are children of the app, so its tree covers what the webviews play). The
+  client is asked for 48 kHz float, then 16-bit PCM, in event mode; a
+  packet without a QPC position is stamped from the clock when read, less
+  its length (`sources::packet_time_us`). Below build 22000, without the
+  pid (the child driven by hand), or on any refusal it falls back to plain
+  loopback of the default output, with a stderr line.
+- **Hot-plug:** a microphone or system audio that goes away mid-recording
+  ends only its thread, as before, and now says so: the child emits a
+  non-fatal `{"ok":true,"event":"device_lost","device":"microphone"}`,
+  `HelperRecorder` keeps it apart from replies and deaths,
+  `Recorder::take_lost_device` hands it to the tick, and the pill gets
+  `capture_device_lost` with Rust's line (`recording::device_lost_message`):
+  the mic icon turns into an amber crossed-out one carrying the line (a
+  muted-speaker icon for system audio) and a live region announces it.
+- **Privacy switches:** the bar's camera row says
+  `privacy::CAMERA_BLOCKED_WINDOWS` when the ConsentStore blocks the camera
+  for desktop apps, and a blocked camera or microphone row offers **Open
+  Settings** (`capture_open_privacy_settings`, which opens only the webcam
+  or microphone page, chosen in Rust). The overlay context carries
+  `privacyBlocked` and `cameraUnavailableMessage`.
+- **The bubble in a window recording:** the child runs a second WGC
+  session on the bubble's window and keeps the latest picture of each
+  window (`wgc::WithCamera`); the bubble is drawn into the recorded
+  window's picture where it sits on screen (`DWMWA_EXTENDED_FRAME_BOUNDS`
+  of both windows), whenever either changes, so a talking head keeps
+  moving over a still window, and not while the pill has hidden it. Only
+  the bubble's shape is drawn (`overlay::bubble_shape`: the page's 6 px
+  margin left out, the 2 px ring kept, round for a square window and
+  20 px corners otherwise, edge-smoothed), so a transparent margin handed
+  over as black never shows. `WINDOW_RECORDING_ADDS_CAMERA` is true on
+  Windows; at Record the bubble is moved inside the window
+  (`camera::window_region`: xcap's physical frame in the units of the
+  display holding the window's centre).
+
+**Deviations**
+- Lists still refresh on menu open and the overlay's `devicechange` only;
+  there is no Windows `--watch-devices` (`IMMNotificationClient` /
+  `MFCreateDeviceSourceActivate` notifications). The plan said a
+  list-per-menu-open design does not need one; a USB mic plugged in while
+  the menu is open appears on the next open.
+- The bubble in a window recording is composited on the CPU (a copy of the
+  window's picture per output frame, at most 30 a second). Fine by
+  arithmetic at 1080p; spike W3 decides whether a 4K window needs the GPU.
+- `device_lost` is not sent by the macOS helper; the pill simply never
+  hears one there.
+
+**Needs a Windows PC to know**
+- that WebView2's camera labels match Media Foundation's names for the
+  built-in camera, a USB camera, OBS's virtual camera and a Phone Link
+  camera;
+- that process loopback activates from the unpackaged child, honours the
+  float format (or the 16-bit fallback), reports QPC positions, and really
+  leaves Hippius's own sounds (a notification, the preview card) out;
+- that WGC delivers the transparent bubble window with alpha, and that the
+  extended frame bounds line the bubble up with what WGC films at 100, 150
+  and 200 %;
+- that `IsWindowVisible` goes false when the pill hides the bubble.
+
+**Windows checklist additions** (debug or staging build, Windows 11 x64,
+then Windows 10 22H2 where noted)
+1. `Hippius.exe --capture-recorder --list-cameras` lists the built-in
+   camera, a USB camera and (Windows 11) a Phone Link camera with the phone
+   connected; the bar's camera menu shows the same names before the bubble
+   has opened. Pick each: the bubble opens that camera, not another.
+2. `Hippius.exe --capture-recorder --meter` prints `ready` then a level
+   about every 50 ms, rising when you speak; closing its stdin (Ctrl+Z,
+   Enter) ends it at once. In the bar, the meter beside the microphone row
+   moves for the default mic and for each listed mic; press Record and the
+   meter process is gone from Task Manager before the recording's child
+   opens the mic.
+3. Windows 11, Record system audio on, a YouTube video playing and a file
+   uploading so Hippius shows its card: the video's sound is in the file,
+   Hippius's own sounds are not, and the log has no "not available"
+   line. Windows 10: everything played is recorded (no process loopback
+   there).
+4. Unplug the USB mic 10 s into a recording: the pill's mic icon turns
+   amber with "The microphone was disconnected. The recording goes on
+   without it." as its label; the recording continues and the file has the
+   sound up to the unplug.
+5. Settings, Privacy & security, Camera, "Let desktop apps access your
+   camera" off: reopen the bar; the camera row says Windows is blocking the
+   camera, Open Settings opens that page. Same for the microphone. Turn
+   both back on and reopen the bar: the lines are gone.
+6. Window recording with the camera bubble, small, large and full: the
+   bubble is in the video where it was on screen, round (or rounded) with
+   its ring and no black corners, its video moving while the recorded
+   window is still; hide it from the pill mid-recording and it leaves the
+   video; drag the bubble off the window and it is cut at the window's
+   edge. Repeat on the 150 % display.
+
+**Original scope**
 - Linux webviews: through `with_webview` on the camera and overlay/panel
   windows, `WebKitSettings::set_enable_media_stream(true)` (wry never turns it
   on, so `getUserMedia` does not exist there today) and a `permission-request`
@@ -976,7 +1094,58 @@ accepted Wayland limits.
 
 ### Phase 6: shortcuts, tray and polish (M, 1 to 1.5 weeks)
 
-**Scope**
+**Status (Windows): code done, hardware checklist pending. Linux: not
+started** (the Wayland and X11 shortcut and the Linux tray menu are Phase
+4 and 6 Linux work).
+
+**What landed (Windows)**
+- **XP-15, the tray's recording mark, from Rust.** `show_phase_in_tray`
+  draws a red dot (amber while paused, the pill's colours) on the app's
+  tray icon when it writes a recording's time, on Windows only
+  (`tray_status::TRAY_ICON_MARKS_RECORDING`: macOS and Linux show the time
+  as the title). Each second's write redraws it, so a sync icon
+  `useTraySync.ts` swaps in mid-recording is covered again within a second;
+  when the recording ends Rust puts the plain icon back and emits
+  `capture_tray_icon_released`, on which `useTraySync` re-applies the sync
+  icon it last asked for (only the main window knows whether a sync is
+  running). `useTraySync` still never reads the capture phase. The marked
+  icon is drawn once per glyph from the bundled `TrayIcon.png`
+  (`tray_status::marked_icon`, 64 px, pure and tested on every OS).
+- **Copy review.** Every Windows sentence Rust says was reread as end-user
+  copy: a recording that cannot start no longer shows an HRESULT
+  (`recorder_child::start_failure_for_user`: Rust's own lines pass through,
+  anything else reads "Recording could not start. Try again, and restart
+  Hippius if it keeps happening.", the detail in the log); the camera and
+  microphone privacy lines end with a full stop now that Open Settings
+  follows them. The OS floor, Media Feature Pack, shortcut refusal and
+  lost-device lines were already plain.
+- **XP-16** stays accepted and documented (the pill and card do not follow
+  a virtual desktop switch on Windows).
+
+**Deviations**
+- The Windows default shortcut is still Ctrl+Shift+2; changing it remains
+  an open product decision (below), not a code task.
+- Settings does not read `shortcut.via` yet: Windows is always `plugin`,
+  and the Linux values arrive with Linux Phase 6.
+
+**Needs a Windows PC to know**
+- that `TrayIcon::set_icon` with a 64 px RGBA image looks right on a 100 %
+  and a 200 % taskbar, light and dark, and that the main window's icon is
+  back (syncing or synced) after the recording.
+
+**Windows checklist additions**
+7. Record 20 s with a sync running: the tray icon shows the red dot,
+   amber while paused, the tooltip carries the time; on Stop the dot goes
+   and the syncing icon is back (not the plain one). Repeat with no sync
+   running: the plain icon comes back.
+8. Light and dark taskbar, 100 % and 200 %: the dot reads on both.
+9. Start a recording on a machine where WGC refuses (a remote desktop
+   session, say): the failure says "Recording could not start. ..." with
+   no code in it, and the log has the HRESULT.
+10. A full-screen game on the second monitor, start a recording there from
+    the shortcut: the pill appears on that monitor and is not in the video.
+
+**Original scope**
 - Wayland shortcut: the GlobalShortcuts portal (KDE Plasma 5.27+, GNOME 48+,
   Hyprland) through ashpd, bound once with the portal's own dialog, with its
   `Activated` signal feeding `commands::on_shortcut`. Where the portal is

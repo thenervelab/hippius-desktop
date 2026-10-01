@@ -81,6 +81,7 @@ dependencies = [
  "which",
  "windows 0.62.2",
  "windows-capture",
+ "windows-core 0.62.2",
  "x11rb",
  "x25519-dalek",
  "xcap",

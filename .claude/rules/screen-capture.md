@@ -88,12 +88,29 @@ side probes Media Foundation once per launch on its own thread
 the ConsentStore for a blocked mic (`MIC_BLOCKED_WINDOWS`), and
 `webview_media.rs` answers WebView2's `PermissionRequested` (camera, mic) for
 `capture-camera` and `capture-overlay-*` and the app's own origin only,
-pinned in `capture_wiring.rs`. Not done: process loopback (Hippius's own
-sounds are in system audio), the bubble in a window recording, a GPU colour
-converter, the tray glyph (XP-15). Cross-check from a Mac with the MSVC
+pinned in `capture_wiring.rs`. Not done: a GPU colour converter. Cross-check from a Mac with the MSVC
 headers from `xwin` (`CFLAGS_x86_64_pc_windows_msvc` with clang's own
 include dir FIRST, or the MSVC intrinsics headers break aws-lc), and pass
 `--target` before `--`, or clippy builds the build script for Windows.
+
+**Phases 5 and 6 for Windows are in code, not yet run on hardware.**
+The child's `--meter [endpointId]` (`meter.rs` pure, `windows/audio.rs`
+WASAPI) is `recording::meter_command` on Windows, so `mic_meter` and the
+one-owner rule work unchanged; `--list-cameras` is `MFEnumDeviceSources`.
+System audio is process loopback excluding the app's tree on build 22000+
+(`sources::system_audio_route`, the pid in `HIPPIUS_CAPTURE_APP_PID` set by
+`recording::windows::helper_command`), plain loopback otherwise or on any
+refusal. A device lost mid-recording is a non-fatal `device_lost` line,
+kept apart from replies and deaths by `HelperRecorder` and sent to the pill
+as `capture_device_lost` with Rust's line. `privacy.rs` puts
+`privacyBlocked` / `cameraUnavailableMessage` in the overlay context and
+`capture_open_privacy_settings` opens only the webcam or microphone page.
+A window recording with the bubble runs a second WGC session on the
+bubble's window and composites its latest picture into the window's
+(`wgc::WithCamera`, `overlay.rs` keeps only the bubble's shape, since a
+transparent margin can arrive black); both windows' pictures are kept even
+while paused. A start failure the user cannot act on reads
+`START_FAILED`, never an HRESULT. Plan: Phase 5 and 6 sections.
 
 **Phase 3 (Linux screenshots) is in.** X11 = `capture/linux_x11/` (x11rb:
 RandR monitors, EWMH windows front first, `GetImage` of the root; `model.rs`
@@ -182,7 +199,7 @@ back on elsewhere; Windows records the camera window's HWND); the sources panel 
 `cameraOnlyAvailable`, and the camera row says "Camera is only recorded with
 the entire screen or an area." whenever `cameraFilmed` is false (a window
 recording where the recorder cannot add the camera window:
-`bar::WINDOW_RECORDING_ADDS_CAMERA`, macOS only).
+`bar::WINDOW_RECORDING_ADDS_CAMERA`, macOS and Windows).
 
 **Screenshot:** selection → pixels in memory (`screenshot::capture_image`) and
 the card's JPEG from them (`thumbnail::from_image`) → preview card shown →
@@ -230,7 +247,8 @@ muted camera stays black until that page asks again, even after the other
 let go; WebKit's mic also runs voice processing that alters what the
 recorder hears from the same mic for a few seconds after it closes. So the
 mic row's level meter (`MicMeter`) is the helper's (`HippiusCapture --meter
-[deviceId]`, plain AVFoundation, by the helper's own id, no name matching),
+[deviceId]`, plain AVFoundation, by the helper's own id, no name matching;
+on Windows `Hippius --capture-recorder --meter [endpointId]`, WASAPI),
 run by `capture::mic_meter` (one process, a generation per start so a late
 stop never ends its replacement) and sent as `capture_mic_level` (0..1,
 `level_from_rms`). `meter_may_run` allows it only while choosing a
@@ -443,7 +461,11 @@ It is written only when the text changes (`tray_needs_write` against
 `tray_last`), so a screenshot never touches the status item.
 Empty, never `None`: `tray-icon` ignores a `None` title on macOS, which is
 what left a saved recording's time frozen in the menu bar. Windows has no
-title, so the tooltip carries the time (`tray_text_for`). The write is POSTED
+title, so the tooltip carries the time (`tray_text_for`) and Rust marks the
+icon with a red (paused: amber) dot (`write_tray_glyph`, XP-15), redrawn on
+every write so a sync icon swapped in by `useTraySync.ts` is covered within
+a second; at the end it puts the plain icon back and emits
+`capture_tray_icon_released`, on which the main window re-applies its own. The write is POSTED
 to the main thread (`run_on_main_thread`), never awaited: it runs under the
 phase lock and `set_title` blocks on the main thread, where a sync command may
 be waiting for that lock. A late write is dropped by `seq`

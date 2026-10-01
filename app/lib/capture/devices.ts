@@ -16,12 +16,23 @@ export function deviceNameKey(name: string): string {
 }
 
 /**
+ * A webview label without the " (046d:0825)" USB vendor and product id that
+ * WebView2 and Chromium add to many cameras and microphones. The system's own
+ * list (Media Foundation, WASAPI, AVFoundation) names them without it.
+ */
+export function withoutUsbId(label: string): string {
+  return label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, "");
+}
+
+/**
  * The webview's `deviceId` for a camera or microphone chosen in the bar. The
  * helper lists devices by the system's own ids, which the webview never uses,
- * so the device is found by name: an exact match first, then a label that
- * contains the name (some webviews add a USB vendor id or " (Built-in)").
- * Null means open the default device. The "default" alias some platforms add
- * is skipped, so it never shadows the real entry.
+ * so the device is found by name: an exact match first, then an exact match
+ * once the webview's USB id is dropped (so "USB Camera" never picks "USB
+ * Camera 2 (…)" listed before it), then a label that contains the name (some
+ * webviews add " (Built-in)"). Null means open the default device. The
+ * "default" alias some platforms add is skipped, so it never shadows the
+ * real entry.
  */
 export function deviceIdByName(
   devices: Pick<MediaDeviceInfo, "kind" | "deviceId" | "label">[],
@@ -32,7 +43,9 @@ export function deviceIdByName(
   const listed = devices.filter((d) => d.kind === kind && d.deviceId && d.deviceId !== "default");
   const wanted = deviceNameKey(name);
   if (!wanted) return null;
-  const exact = listed.find((d) => deviceNameKey(d.label) === wanted);
+  const exact =
+    listed.find((d) => deviceNameKey(d.label) === wanted) ??
+    listed.find((d) => deviceNameKey(withoutUsbId(d.label)) === wanted);
   const loose = exact ?? listed.find((d) => deviceNameKey(d.label).includes(wanted));
   return loose?.deviceId ?? null;
 }

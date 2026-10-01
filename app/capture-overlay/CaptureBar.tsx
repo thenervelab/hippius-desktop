@@ -7,6 +7,7 @@ import {
   getCaptureCameras,
   getCaptureDestinationChoices,
   getCaptureMicrophones,
+  openCapturePrivacySettings,
   saveCaptureOptions,
   setCaptureDestination,
   type CaptureDestination,
@@ -15,11 +16,12 @@ import {
   type CaptureKind,
   type CaptureMode,
   type CaptureOptions,
+  type CapturePrivacyDevice,
   type CaptureSavedOptions,
   type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { MODE_ICON } from "@/app/lib/capture/modes";
-import { GLASS_BAR, GLASS_BUTTON, GLASS_FOCUS, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
+import { GLASS_BAR, GLASS_BUTTON, GLASS_FOCUS, GLASS_LINK, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
 import {
   barGroups,
   CAMERA_NOT_FILMED,
@@ -54,6 +56,9 @@ import MicMeter from "./MicMeter";
  */
 
 type OpenMenu = "options" | "camera" | "microphone";
+
+/** No device blocked by the system's privacy settings (every system but Windows). */
+const NOTHING_BLOCKED = { microphone: false, camera: false } as const;
 
 const MENU_ITEMS = '[role="menuitemradio"], [role="menuitemcheckbox"], [role="menuitem"]';
 
@@ -335,6 +340,7 @@ function SourceRow({
   open,
   disabled,
   extra,
+  captionAction,
   triggerRef,
   menuRef,
   onOpen,
@@ -347,6 +353,8 @@ function SourceRow({
   switchLabel?: string;
   on: boolean;
   caption?: string | null;
+  /** A button after the caption that fixes what it says (Windows' privacy settings). */
+  captionAction?: { label: string; onAction: () => void } | null;
   /** The device menu's name; no menu for a row without devices (Screen). */
   menuLabel?: string;
   /** Null until the first list arrives (the menu shows placeholders). */
@@ -394,7 +402,23 @@ function SourceRow({
         {extra}
         <Switch on={lit} label={switchLabel ?? menuLabel ?? label} disabled={disabled} onToggle={onToggle} />
       </div>
-      {caption && <p className={`pb-0.5 pl-[26px] text-[11.5px] leading-snug ${GLASS_MUTED}`}>{caption}</p>}
+      {caption && (
+        <p className={`pb-0.5 pl-[26px] text-[11.5px] leading-snug ${GLASS_MUTED}`}>
+          {caption}
+          {captionAction && (
+            <>
+              {" "}
+              <button
+                type="button"
+                onClick={captionAction.onAction}
+                className={GLASS_LINK}
+              >
+                {captionAction.label}
+              </button>
+            </>
+          )}
+        </p>
+      )}
       {open && devices !== undefined && onPick && (
         <div
           ref={menuRef}
@@ -488,6 +512,8 @@ function SourcesPanel({
   options,
   microphoneAvailable,
   microphoneUnavailableMessage,
+  cameraUnavailableMessage,
+  privacyBlocked,
   continuityHint,
   cameraOnlyAvailable,
   cameraFilmed,
@@ -502,6 +528,10 @@ function SourcesPanel({
   microphoneAvailable: boolean;
   /** Rust's line for why the microphone is off here; shown under the dimmed row. */
   microphoneUnavailableMessage: string | null;
+  /** Rust's line for why the camera cannot open (Windows' privacy settings); null when it can. */
+  cameraUnavailableMessage: string | null;
+  /** Devices Windows' privacy settings block: their rows offer "Open Settings". */
+  privacyBlocked: { microphone: boolean; camera: boolean };
   /** Rust's iPhone checklist, under a device menu that lists no iPhone; null where it does not apply. */
   continuityHint: string | null;
   /** The Screen switch (off = camera only) is offered only where Rust can record the camera alone. */
@@ -559,6 +589,12 @@ function SourcesPanel({
   };
 
   const micOn = options.microphone && microphoneAvailable;
+  const openSettings = (device: CapturePrivacyDevice) => ({
+    label: "Open Settings",
+    onAction: () => {
+      void openCapturePrivacySettings(device).catch(() => undefined);
+    },
+  });
 
   return (
     <div role="group" aria-label="Recording sources" className={`w-[300px] max-w-[calc(100vw-32px)] rounded-[14px] p-1 ${GLASS_BAR}`}>
@@ -576,7 +612,8 @@ function SourcesPanel({
         label={sourceLabel(options.camera, options.cameraDevice, cameras, "camera")}
         menuLabel="Camera"
         on={options.camera}
-        caption={cameraFilmed ? null : CAMERA_NOT_FILMED}
+        caption={cameraUnavailableMessage ?? (cameraFilmed ? null : CAMERA_NOT_FILMED)}
+        captionAction={privacyBlocked.camera ? openSettings("camera") : null}
         devices={camerasList.devices}
         loading={camerasList.loading}
         hint={continuityHint}
@@ -594,6 +631,7 @@ function SourcesPanel({
         menuLabel="Microphone"
         on={options.microphone}
         caption={microphoneAvailable ? null : microphoneUnavailableMessage}
+        captionAction={privacyBlocked.microphone ? openSettings("microphone") : null}
         devices={microphonesList.devices}
         loading={microphonesList.loading}
         hint={continuityHint}
@@ -624,6 +662,10 @@ interface Props {
   microphoneAvailable: boolean;
   /** Rust's line for why the microphone is off here (`microphoneUnavailableMessage`). */
   microphoneUnavailableMessage?: string | null;
+  /** Rust's line for why the camera cannot open (`cameraUnavailableMessage`); none when left out. */
+  cameraUnavailableMessage?: string | null;
+  /** Devices Windows' privacy settings block (`privacyBlocked`); none when left out. */
+  privacyBlocked?: { microphone: boolean; camera: boolean };
   /** Rust's iPhone checklist for the device menus (`continuityHint`); none when left out. */
   continuityHint?: string | null;
   showClicksAvailable: boolean;
@@ -778,6 +820,8 @@ export default function CaptureBar(props: Props) {
           options={options}
           microphoneAvailable={props.microphoneAvailable}
           microphoneUnavailableMessage={props.microphoneUnavailableMessage ?? null}
+          cameraUnavailableMessage={props.cameraUnavailableMessage ?? null}
+          privacyBlocked={props.privacyBlocked ?? NOTHING_BLOCKED}
           continuityHint={props.continuityHint ?? null}
           cameraOnlyAvailable={props.cameraOnlyAvailable}
           cameraFilmed={props.cameraFilmed}

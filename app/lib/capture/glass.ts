@@ -38,5 +38,8 @@ export const GLASS_BUTTON = `text-white/85 transition-colors hover:bg-white/10 h
 /** The main action on the glass: Capture, Record, Show in folder. */
 export const GLASS_PRIMARY = `bg-[#3167DD] font-semibold text-white transition-colors hover:bg-[#2a5bc6] disabled:cursor-not-allowed disabled:opacity-45 ${GLASS_FOCUS}`;
 
+/** An inline text action on the glass, inside a caption ("Open Settings"). */
+export const GLASS_LINK = `rounded-[4px] font-semibold text-white underline underline-offset-2 hover:text-white/85 ${GLASS_FOCUS}`;
+
 /** Secondary text on the glass: captions, headings, "Default". */
 export const GLASS_MUTED = "text-white/60";

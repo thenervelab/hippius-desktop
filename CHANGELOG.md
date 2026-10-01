@@ -257,6 +257,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   or both in one soundtrack, pause and resume, and the camera bubble or the
   camera on its own. It reaches beta once it has been checked on real
   Windows PCs.
+- **More of the Mac recording experience on Windows (test builds first).**
+  The microphone level meter in the capture bar moves as you speak; the
+  camera menu lists every camera, including a phone connected through Phone
+  Link; the camera bubble now appears in recordings of a single window; on
+  Windows 11, "Record system audio" leaves out Hippius's own sounds; the
+  taskbar icon shows a red dot while recording (amber when paused); and the
+  recording controls say so if your microphone is unplugged mid-recording,
+  while the recording carries on.
+- **Hippius tells you when Windows is blocking your camera or microphone.**
+  The capture bar says so under the camera or microphone and has an Open
+  Settings button that goes straight to the right privacy page.
 - **Choose whether a recording includes your computer's sound (Mac).** The
   capture bar's Options menu has "Record system audio", off by default so
   your voice is not recorded twice through the speakers; turn it on to

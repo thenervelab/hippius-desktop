@@ -217,7 +217,9 @@ fn read_levels(stdout: impl std::io::Read, generation: u64, current: &AtomicU64,
 mod tests {
     use super::*;
     use crate::capture::session::CaptureMode;
+    #[cfg(unix)]
     use std::sync::mpsc;
+    #[cfg(unix)]
     use std::time::Duration;
 
     #[test]

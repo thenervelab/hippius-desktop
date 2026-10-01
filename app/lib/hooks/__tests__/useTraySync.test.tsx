@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
   const windowActions: string[] = [];
   const listenedEvents: string[] = [];
   let snapshotListener: ((e: { payload: unknown }) => void) | null = null;
+  let releasedListener: ((e: { payload: unknown }) => void) | null = null;
 
   // A syncing snapshot — only the fields `deriveTrayIconState` reads matter.
   const SYNCING_SNAPSHOT = {
@@ -123,6 +124,10 @@ const mocks = vi.hoisted(() => {
       snapshotListener = h;
     },
     getSnapshotListener: () => snapshotListener,
+    setReleasedListener: (h: (e: { payload: unknown }) => void) => {
+      releasedListener = h;
+    },
+    getReleasedListener: () => releasedListener,
   };
 });
 
@@ -154,6 +159,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (event: string, handler: (e: { payload: unknown }) => void) => {
     mocks.listenedEvents.push(event);
     if (event === "sync_progress_snapshot") mocks.setSnapshotListener(handler);
+    if (event === "capture_tray_icon_released") mocks.setReleasedListener(handler);
     return () => {
       /* noop unlisten */
     };
@@ -275,6 +281,26 @@ describe("useTrayInit — tray creation", () => {
     await waitFor(() => {
       expect(mocks.setIconCalls.some((p) => p.includes("Completed"))).toBe(true);
     });
+  });
+});
+
+describe("useTrayInit: after a recording's mark", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Windows: Rust draws a recording dot on the icon and puts the plain icon
+  // back when the recording ends. Only this page knows a sync was running,
+  // so it paints its own icon again, even though it asked for that one
+  // before the recording.
+  it("puts its own sync icon back when Rust releases the icon", async () => {
+    await mountTray();
+    await waitFor(() => expect(mocks.setIconCalls.some((p) => p.includes("Syncing"))).toBe(true));
+    await waitFor(() => expect(mocks.getReleasedListener()).toBeTruthy());
+    const before = mocks.setIconCalls.length;
+    mocks.getReleasedListener()!({ payload: null });
+    await waitFor(() => expect(mocks.setIconCalls.length).toBe(before + 1));
+    expect(mocks.setIconCalls[mocks.setIconCalls.length - 1]).toContain("Syncing");
   });
 });
 

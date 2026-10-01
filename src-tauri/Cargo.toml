@@ -299,6 +299,7 @@ windows = { version = "0.62", features = [
     "Win32_Media_KernelStreaming",
     "Win32_Media_MediaFoundation",
     "Win32_Media_Multimedia",
+    "Win32_Security",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Performance",
@@ -316,6 +317,10 @@ windows = { version = "0.62", features = [
 # NOT used (plain MP4 with the index last, frame-stamped times): see decision
 # 1 of docs/plans/2026-10-01-capture-windows-linux.md.
 windows-capture = "2.0.1"
+# `#[implement]` for the one COM object the recorder child hands Windows
+# (process loopback's completion handler): the macro names `windows_core`
+# directly. The same 0.62 `windows` re-exports, already in the lock file.
+windows-core = "0.62"
 # WebView2's PermissionRequested, so the camera bubble and the bar's mic meter
 # can open their devices. The same 0.38 wry already uses (windows 0.61).
 webview2-com = "0.38"

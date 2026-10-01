@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use super::bar::{CameraShape, CameraSize, CaptureOptions};
 use super::session::CapturePhase;
+use super::targets::{DisplayTarget, NativeFrame};
 
 /// The small bubble's window, in logical points.
 pub const BUBBLE_SIZE: f64 = 200.0;
@@ -61,7 +62,8 @@ pub struct CameraState {
     /// which would otherwise be filmed each time the pointer crosses it).
     pub recording: bool,
     /// Whether the camera ends up in the video. False for a bubble over a
-    /// window recording, which films that one window only.
+    /// window recording where the recorder films that one window only
+    /// (`bar::WINDOW_RECORDING_ADDS_CAMERA`).
     pub camera_filmed: bool,
 }
 
@@ -212,6 +214,35 @@ pub fn bubble_for_recording(current: Option<Frame>, size: CameraSize, filmed: Fi
         Some(now) if within(now, inside) => None,
         _ => Some(corner),
     }
+}
+
+/// A window's frame from the system's window list as the region a bubble is
+/// placed in, with the scale the camera window is placed at. On macOS the
+/// list is in points already (`coords_are_logical`: scale 1); on Windows it
+/// is physical pixels, divided by the scale of the display that holds the
+/// window's centre (the first display when none does), the same space an
+/// area recording's region is in.
+#[must_use]
+pub fn window_region(window: NativeFrame, displays: &[DisplayTarget], coords_are_logical: bool) -> Option<(Frame, f64)> {
+    let as_frame = |scale: f64| Frame {
+        x: f64::from(window.x) / scale,
+        y: f64::from(window.y) / scale,
+        width: f64::from(window.width) / scale,
+        height: f64::from(window.height) / scale,
+    };
+    if coords_are_logical {
+        return Some((as_frame(1.0), 1.0));
+    }
+    let (cx, cy) = (
+        i64::from(window.x) + i64::from(window.width) / 2,
+        i64::from(window.y) + i64::from(window.height) / 2,
+    );
+    let holds = |d: &&DisplayTarget| {
+        cx >= i64::from(d.x) && cx < i64::from(d.x) + i64::from(d.width) && cy >= i64::from(d.y) && cy < i64::from(d.y) + i64::from(d.height)
+    };
+    let display = displays.iter().find(holds).or_else(|| displays.first())?;
+    let scale = display.scale_factor.max(1.0);
+    Some((as_frame(scale), scale))
 }
 
 /// `inner` lies wholly inside `outer`, give or take a point of rounding.
@@ -606,5 +637,50 @@ mod tests {
             },
         );
         assert!(wide.height <= 600.0 * STAGE_SHARE + 1.0);
+    }
+
+    fn display(id: u32, x: i32, y: i32, width: u32, height: u32, scale_factor: f64) -> DisplayTarget {
+        DisplayTarget {
+            id,
+            name: format!("Display {id}"),
+            x,
+            y,
+            width,
+            height,
+            scale_factor,
+            is_primary: id == 1,
+        }
+    }
+
+    /// Windows lists a window in physical pixels; the bubble is placed in
+    /// the display's own logical units, as for an area recording, so a window
+    /// on the 150 % laptop beside a 100 % monitor lands where it is.
+    #[test]
+    fn a_windows_window_is_placed_in_its_own_displays_units() {
+        let displays = [display(1, 0, 0, 2880, 1800, 1.5), display(2, 2880, 0, 1920, 1080, 1.0)];
+        let on_laptop = NativeFrame {
+            x: 300,
+            y: 150,
+            width: 1500,
+            height: 900,
+        };
+        let (frame, scale) = window_region(on_laptop, &displays, false).unwrap();
+        assert!((scale - 1.5).abs() < 1e-9);
+        assert_eq!((frame.x, frame.y, frame.width, frame.height), (200.0, 100.0, 1000.0, 600.0));
+        // Mostly on the monitor (its centre is): the monitor's scale.
+        let straddling = NativeFrame {
+            x: 2600,
+            y: 100,
+            width: 1000,
+            height: 500,
+        };
+        assert!((window_region(straddling, &displays, false).unwrap().1 - 1.0).abs() < 1e-9);
+        // macOS lists points: as they are.
+        let (mac, one) = window_region(on_laptop, &displays, true).unwrap();
+        assert_eq!((mac.x, mac.width, one), (300.0, 1500.0, 1.0));
+        // Off every display: the first one's scale; no displays: none.
+        let lost = NativeFrame { x: -9000, ..on_laptop };
+        assert!((window_region(lost, &displays, false).unwrap().1 - 1.5).abs() < 1e-9);
+        assert!(window_region(on_laptop, &[], false).is_none());
     }
 }
