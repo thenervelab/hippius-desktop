@@ -142,8 +142,183 @@ impl Video {
         }))
     }
 
+    /// A window recording with the camera bubble drawn in (X11), as the
+    /// Windows recorder does it: `ximagesrc` films one window, so the
+    /// bubble (another window, always on top) is read from the X server on
+    /// each picture and drawn where it sits over the recorded window
+    /// ([`overlay`]), only its round or rounded shape, and not while the
+    /// pill has hidden it. Anything that keeps the bubble from being read
+    /// falls back to the window alone, with a stderr line.
+    pub fn start_with_camera(source: VideoSource, camera_xid: u32, scale: f64, shared: Arc<Shared>) -> Result<Self, String> {
+        let VideoSource::X11Window { xid, .. } = source else {
+            return Self::start(source, shared);
+        };
+        let reader = match crate::capture::linux_x11::WindowReader::open() {
+            Ok(reader) => reader,
+            Err(e) => {
+                say(&format!("the camera bubble cannot be added to the window recording: {e}"));
+                return Self::start(source, shared);
+            }
+        };
+        let pipeline = launch(&linux_plan::video_capture_bgrx(&source))?;
+        let sink = appsink(&pipeline, linux_plan::VIDEO_SINK)?;
+        play(&pipeline).map_err(|detail| {
+            say(&format!("the window could not be read: {detail}"));
+            "The window to record has closed.".to_string()
+        })?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = std::thread::Builder::new()
+            .name("capture-video".into())
+            .spawn({
+                let pipeline = pipeline.clone();
+                let stop = Arc::clone(&stop);
+                move || {
+                    let mut composer = Composer {
+                        reader,
+                        window: xid,
+                        camera: camera_xid,
+                        scale,
+                        size: None,
+                        gate: Gate::new(),
+                        composed: Vec::new(),
+                    };
+                    pull_composed(&pipeline, &sink, &source, &mut composer, &shared, &stop);
+                }
+            })
+            .map_err(|e| format!("could not start the capture thread: {e}"))?;
+        Ok(Self(Running {
+            pipeline,
+            stop,
+            thread: Some(thread),
+        }))
+    }
+
     pub fn stop(self) {
         self.0.stop();
+    }
+}
+
+/// How the picture's pipeline ended on its own, if it did.
+fn ended(pipeline: &gst::Pipeline) -> Option<VideoEnd> {
+    pipeline
+        .bus()?
+        .pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])
+        .map(|msg| match msg.view() {
+            gst::MessageView::Error(err) => VideoEnd::Error(err.error().to_string()),
+            _ => VideoEnd::Eos,
+        })
+}
+
+/// The recorded window and the bubble drawn into it.
+struct Composer {
+    reader: crate::capture::linux_x11::WindowReader,
+    window: u32,
+    camera: u32,
+    /// The screen's one scale: the bubble page's CSS pixels to the window's.
+    scale: f64,
+    size: Option<(u32, u32)>,
+    gate: Gate,
+    composed: Vec<u8>,
+}
+
+impl Composer {
+    /// The window's picture (`w` x `h` BGRx) with the bubble drawn where it
+    /// sits, as NV12 at the recording's size.
+    fn compose(&mut self, picture: &[u8], w: u32, h: u32) -> (Vec<u8>, (u32, u32)) {
+        use super::super::frame::{self, Bgra};
+        use super::super::overlay::{self, Pixels, Rect};
+
+        let out = *self.size.get_or_insert_with(|| plan::output_size(w, h));
+        self.composed.clear();
+        self.composed.extend_from_slice(picture);
+        let rect = |f: crate::capture::targets::NativeFrame| Rect {
+            x: f.x,
+            y: f.y,
+            width: i32::try_from(f.width).unwrap_or(i32::MAX),
+            height: i32::try_from(f.height).unwrap_or(i32::MAX),
+        };
+        // The pill hides the bubble by unmapping it: no placement, no bubble.
+        if let (Some(on_screen), Some(bubble)) = (self.reader.placement(self.window), self.reader.placement(self.camera))
+            && let Some(camera) = self.reader.pixels(self.camera, bubble.width, bubble.height)
+        {
+            let mut bgra = camera.into_raw();
+            for px in bgra.chunks_exact_mut(4) {
+                px.swap(0, 2);
+            }
+            let at = overlay::placement(rect(on_screen), rect(bubble), (w, h));
+            let shape = overlay::bubble_shape(bubble.width, bubble.height, self.scale);
+            overlay::composite(
+                &mut self.composed,
+                w,
+                h,
+                w as usize * 4,
+                Pixels {
+                    data: &bgra,
+                    width: bubble.width,
+                    height: bubble.height,
+                    stride: bubble.width as usize * 4,
+                },
+                at,
+                shape,
+            );
+        }
+        let mut nv12 = Vec::new();
+        frame::to_nv12(
+            Bgra {
+                data: &self.composed,
+                width: w,
+                height: h,
+                stride: w as usize * 4,
+            },
+            out.0,
+            out.1,
+            &mut nv12,
+        );
+        (nv12, out)
+    }
+}
+
+/// The picture thread with the bubble: pull, stamp, place, pace, compose,
+/// send.
+fn pull_composed(
+    pipeline: &gst::Pipeline,
+    sink: &gst_app::AppSink,
+    source: &VideoSource,
+    composer: &mut Composer,
+    shared: &Shared,
+    stop: &AtomicBool,
+) {
+    let mut quiet = Quiet { last: None };
+    while !stop.load(Ordering::SeqCst) {
+        if let Some(end) = ended(pipeline) {
+            if let VideoEnd::Error(detail) = &end {
+                say(&format!("the picture's pipeline failed: {detail}"));
+            }
+            shared.send(Msg::Ended(linux_plan::ended_reason(source, &end)));
+            return;
+        }
+        let Some(sample) = sink.try_pull_sample(PULL) else {
+            if sink.is_eos() {
+                shared.send(Msg::Ended(linux_plan::ended_reason(source, &VideoEnd::Eos)));
+                return;
+            }
+            continue;
+        };
+        let Some((w, h)) = sample_size(&sample) else { continue };
+        let Some(buffer) = sample.buffer() else { continue };
+        let Some(time) = micros_of(pipeline, buffer.pts()) else { continue };
+        let Some(placed) = shared.place(time) else { continue };
+        if !composer.gate.accept(placed) {
+            continue;
+        }
+        let Ok(map) = buffer.map_readable() else { continue };
+        if map.as_slice().len() < w as usize * h as usize * 4 {
+            continue;
+        }
+        let (nv12, out) = composer.compose(map.as_slice(), w, h);
+        if !shared.send_frame(placed, nv12, out) {
+            quiet.say("the writer is behind; pictures are being dropped");
+        }
     }
 }
 

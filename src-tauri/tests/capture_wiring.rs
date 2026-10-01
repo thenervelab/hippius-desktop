@@ -1200,7 +1200,26 @@ fn a_windows_window_recording_films_the_bubble() {
     let wgc = read("src/capture/recorder_child/windows/wgc.rs");
     assert!(fn_body(&wgc, "fn render(").contains("overlay::composite("));
     let bar = read("src/capture/bar.rs");
-    assert!(bar.contains("pub const WINDOW_RECORDING_ADDS_CAMERA: bool = cfg!(any(target_os = \"macos\", windows));"));
+    assert!(bar.contains("pub const fn window_recording_adds_camera_on("));
     let commands = read("src/capture/commands.rs");
+    // The app hands the child the bubble's window on Windows too.
+    assert!(commands.contains("#[cfg(windows)]\nfn remember_camera_window_number("));
     assert!(fn_body(&commands, "async fn recording_bubble_frame(").contains("camera::window_region("));
+}
+
+/// An X11 window recording films the bubble: the app remembers the camera
+/// window's XID, the child reads the window raw and draws the bubble in
+/// with the same `overlay` code Windows uses; Wayland never gets an id.
+#[test]
+fn an_x11_window_recording_films_the_bubble() {
+    let commands = read("src/capture/commands.rs");
+    let remember = fn_body(&commands, "#[cfg(target_os = \"linux\")]\nfn remember_camera_window_number(");
+    assert!(remember.contains("Platform::LinuxX11") && remember.contains("camera_window_number.store("));
+    let child = read("src/capture/recorder_child/linux/mod.rs");
+    assert!(child.contains("capture::Video::start_with_camera(source, camera, scale"));
+    let capture = read("src/capture/recorder_child/linux/capture.rs");
+    let compose = fn_body(&capture, "fn compose(");
+    assert!(compose.contains("overlay::composite(") && compose.contains("overlay::bubble_shape("));
+    assert!(compose.contains("frame::to_nv12("));
+    assert!(fn_body(&capture, "pub fn start_with_camera(").contains("video_capture_bgrx("));
 }

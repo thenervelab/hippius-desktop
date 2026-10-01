@@ -246,14 +246,63 @@ pub fn cursor_point() -> Option<(f64, f64)> {
     Some(model::pointer_point(reply.root_x, reply.root_y))
 }
 
+/// One X connection a recording keeps for the camera bubble it draws into
+/// a window recording: where the two windows are, and the bubble's own
+/// pixels. Opened once in the recorder child, read up to 30 times a second;
+/// a connection per read would add a round trip and an atom lookup each.
+pub struct WindowReader {
+    x: X,
+}
+
+impl WindowReader {
+    /// # Errors
+    /// No X server (or a Wayland session).
+    pub fn open() -> Result<Self> {
+        Ok(Self { x: connect()? })
+    }
+
+    /// Window `id`'s own area (without the window manager's frame) on the
+    /// root, in pixels; `None` when it is not on screen (unmapped, hidden
+    /// from the pill) or gone.
+    #[must_use]
+    pub fn placement(&self, id: u32) -> Option<NativeFrame> {
+        use x11rb::protocol::xproto::MapState;
+        let attrs = self.x.conn.get_window_attributes(id).ok()?.reply().ok()?;
+        if attrs.map_state != MapState::VIEWABLE {
+            return None;
+        }
+        let geometry = self.x.conn.get_geometry(id).ok()?.reply().ok()?;
+        let at = self.x.conn.translate_coordinates(id, self.x.root(), 0, 0).ok()?.reply().ok()?;
+        Some(NativeFrame {
+            x: i32::from(at.dst_x),
+            y: i32::from(at.dst_y),
+            width: u32::from(geometry.width),
+            height: u32::from(geometry.height),
+        })
+    }
+
+    /// Window `id`'s own pixels (what it draws, even where something covers
+    /// it), `width` x `height` from its top-left, as opaque RGBA; `None`
+    /// when it is not on screen.
+    #[must_use]
+    pub fn pixels(&self, id: u32, width: u32, height: u32) -> Option<image::RgbaImage> {
+        grab_drawable(&self.x, id, PixelRect { x: 0, y: 0, width, height }).ok()
+    }
+}
+
 /// The pixels of `rect` of the root window, as RGBA.
 fn grab(x: &X, rect: PixelRect) -> Result<image::RgbaImage> {
+    grab_drawable(x, x.root(), rect)
+}
+
+/// The pixels of `rect` of `drawable` (the root, or one window), as RGBA.
+fn grab_drawable(x: &X, drawable: Window, rect: PixelRect) -> Result<image::RgbaImage> {
     let too_big = || AppError::Validation("That part of the screen is too large to capture.".into());
     let reply = x
         .conn
         .get_image(
             ImageFormat::Z_PIXMAP,
-            x.root(),
+            drawable,
             i16::try_from(rect.x).map_err(|_| too_big())?,
             i16::try_from(rect.y).map_err(|_| too_big())?,
             u16::try_from(rect.width).map_err(|_| too_big())?,

@@ -18,7 +18,7 @@ pub mod model;
 mod os;
 
 #[cfg(target_os = "linux")]
-pub use os::{capture_image, cursor_point, grab_root, list_displays, list_windows, window_frame, windows_on_display};
+pub use os::{WindowReader, capture_image, cursor_point, grab_root, list_displays, list_windows, window_frame, windows_on_display};
 
 /// How long to wait after the overlays close before reading the screen on
 /// X11. There is no content protection there, so the overlays, the bar and

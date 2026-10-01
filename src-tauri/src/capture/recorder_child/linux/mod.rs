@@ -94,9 +94,6 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
     if candidates.is_empty() {
         return Err(RecordingUnavailable::CodecsMissing.message().into());
     }
-    if cmd.camera_window_id.is_some() {
-        say("the camera window is not added to a window recording on Linux");
-    }
 
     // The desktop first: on Wayland the user chooses in its dialog before
     // anything else opens, and a cancel there leaves nothing behind.
@@ -117,6 +114,18 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
             linux_plan::stage_inset(pid, std::os::unix::process::parent_id(), scale)
         });
         linux_plan::x11_source(cmd, &displays, inset)?
+    };
+    // A window recording on X11 with the camera bubble: the bubble is drawn
+    // in (`capture::Video::start_with_camera`). Wayland never gets an id.
+    let with_camera = match (&source, cmd.camera_window_id) {
+        (linux_plan::VideoSource::X11Window { .. }, Some(camera)) if !wayland => {
+            let scale = crate::capture::linux_x11::list_displays()
+                .ok()
+                .and_then(|d| d.first().map(|d| d.scale_factor))
+                .unwrap_or(1.0);
+            Some((camera, scale))
+        }
+        _ => None,
     };
     desktop.keep_awake();
 
@@ -167,7 +176,11 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(u32, u32), String>>();
     let writer = spawn_writer(rx, Arc::clone(&shared), Arc::clone(out), output.clone(), sources, ready_tx, candidates);
 
-    let video = match capture::Video::start(source, Arc::clone(&shared)) {
+    let video = match with_camera {
+        Some((camera, scale)) => capture::Video::start_with_camera(source, camera, scale, Arc::clone(&shared)),
+        None => capture::Video::start(source, Arc::clone(&shared)),
+    };
+    let video = match video {
         Ok(video) => video,
         Err(e) => {
             Box::new(Session::parts(output, shared, None, audio, Some(writer), desktop)).cancel();

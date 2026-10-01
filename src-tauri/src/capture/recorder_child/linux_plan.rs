@@ -356,6 +356,21 @@ pub fn video_capture(source: &VideoSource) -> String {
     )
 }
 
+/// The capture pipeline for a window that gets the camera bubble drawn in
+/// (X11): the window's own pictures at their own size, as BGRx, for the
+/// recorder to draw the bubble into and fit into the recording's size
+/// itself (`frame::to_nv12`), the way Windows does. No crop: the stage is
+/// never recorded with a bubble (camera only has no screen to film).
+#[must_use]
+pub fn video_capture_bgrx(source: &VideoSource) -> String {
+    format!(
+        "{src} name=vsrc ! video/x-raw,framerate={FPS}/1 ! queue max-size-buffers=3 leaky=downstream ! videoconvert ! \
+         capsfilter caps={caps} ! appsink name={VIDEO_SINK} max-buffers=4 drop=true sync=false",
+        src = source.element(),
+        caps = quoted("video/x-raw,format=BGRx"),
+    )
+}
+
 /// What "Record system audio" records: the default output's monitor. Both
 /// PulseAudio and `pipewire-pulse` resolve the name, so it follows the
 /// output the user is listening on.
@@ -801,6 +816,21 @@ mod tests {
             text.contains("videoscale add-borders=true"),
             "a resized window is letterboxed, never stretched"
         );
+        assert!(text.ends_with("appsink name=video max-buffers=4 drop=true sync=false"));
+    }
+
+    /// A window with the bubble drawn in is read whole, as BGRx at its own
+    /// size, at 30 fps: the recorder composes and sizes it.
+    #[test]
+    fn a_window_with_the_bubble_is_read_raw_for_the_recorder_to_compose() {
+        let text = video_capture_bgrx(&VideoSource::X11Window { xid: 0x40_0007, inset: 0 });
+        assert!(
+            text.starts_with("ximagesrc use-damage=false show-pointer=true xid=0x400007 name=vsrc"),
+            "{text}"
+        );
+        assert!(text.contains("framerate=30/1"));
+        assert!(text.contains("caps=\"video/x-raw,format=BGRx\""), "{text}");
+        assert!(!text.contains("videoscale") && !text.contains("name=size"), "no sizing in the pipeline");
         assert!(text.ends_with("appsink name=video max-buffers=4 drop=true sync=false"));
     }
 

@@ -166,22 +166,32 @@ impl CaptureOptions {
     /// filmed (it IS the recording); the bubble is moved inside what is
     /// recorded when Record is pressed. A window recording films that one
     /// window, so the bubble is in it only where the recorder can add the
-    /// camera window to it ([`WINDOW_RECORDING_ADDS_CAMERA`]).
+    /// camera window to it ([`window_recording_adds_camera`]).
     #[must_use]
     pub fn camera_filmed(&self, kind: CaptureKind, mode: CaptureMode) -> bool {
         match self.camera_shape(kind) {
             Some(CameraShape::Stage) => true,
-            Some(CameraShape::Bubble) => mode != CaptureMode::Window || WINDOW_RECORDING_ADDS_CAMERA,
+            Some(CameraShape::Bubble) => mode != CaptureMode::Window || window_recording_adds_camera(),
             None => false,
         }
     }
 }
 
-/// The recorder films the camera window with a window recording
-/// (`cameraWindowId`): the macOS helper filters both windows into one
-/// stream, the Windows recorder child draws the bubble into the window's
-/// pictures. Linux's recorder cannot yet.
-pub const WINDOW_RECORDING_ADDS_CAMERA: bool = cfg!(any(target_os = "macos", windows));
+/// Whether the recorder films the camera window with a window recording
+/// (`cameraWindowId`) on `platform`: the macOS helper filters both windows
+/// into one stream, the Windows and X11 recorder children draw the bubble
+/// into the window's pictures. Wayland gives an app no window ids, so the
+/// bubble cannot be found there.
+#[must_use]
+pub const fn window_recording_adds_camera_on(platform: super::rollout::Platform) -> bool {
+    !matches!(platform, super::rollout::Platform::LinuxWayland)
+}
+
+/// [`window_recording_adds_camera_on`] for this session.
+#[must_use]
+pub fn window_recording_adds_camera() -> bool {
+    window_recording_adds_camera_on(super::rollout::current_platform())
+}
 
 const OPTIONS_KEY: &str = "capture_options_v1";
 
@@ -530,10 +540,17 @@ mod tests {
         assert!(bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Area));
         assert_eq!(
             bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Window),
-            WINDOW_RECORDING_ADDS_CAMERA
+            window_recording_adds_camera()
         );
         #[cfg(any(target_os = "macos", windows))]
         assert!(bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Window));
+        {
+            use crate::capture::rollout::Platform;
+            for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
+                assert!(window_recording_adds_camera_on(platform), "{platform:?}");
+            }
+            assert!(!window_recording_adds_camera_on(Platform::LinuxWayland), "no window ids on Wayland");
+        }
         let stage = CaptureOptions {
             screen: false,
             ..bubble.clone()

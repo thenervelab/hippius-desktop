@@ -223,9 +223,9 @@ pub struct CaptureState {
     /// that refused `WDA_EXCLUDEFROMCAPTURE`). The overlays are then gone,
     /// the card hidden and the compositor settled before the grab.
     ui_in_grabs: AtomicBool,
-    /// The camera window's system window number, read once when it opens
-    /// (0 = not known yet). Camera only records that window.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// The camera window's system window number (the XID on X11), read once
+    /// when it opens (0 = not known yet). Camera only records that window,
+    /// and a window recording draws the bubble from it.
     camera_window_number: AtomicU64,
     /// The cameras the camera window found (the webview's `deviceId`s). The
     /// bar's picker falls back to these where the system list is empty.
@@ -3894,7 +3894,7 @@ async fn recording_bubble_frame(app: &AppHandle, phase: CapturePhase, shape: Opt
             )
         }
         Selection::Window { window_id } => {
-            if !bar::WINDOW_RECORDING_ADDS_CAMERA {
+            if !bar::window_recording_adds_camera() {
                 return None;
             }
             let native = tauri::async_runtime::spawn_blocking(move || super::targets::window_frame(window_id))
@@ -3926,7 +3926,7 @@ async fn camera_state_for(app: &AppHandle, shape: Option<CameraShape>, hidden: b
         // A window recording films that one window, plus the bubble where
         // the recorder adds it.
         (_, Some(CameraShape::Bubble)) => {
-            bar::WINDOW_RECORDING_ADDS_CAMERA || !matches!(*lock(&state.capture.selection), Some(Selection::Window { .. }))
+            bar::window_recording_adds_camera() || !matches!(*lock(&state.capture.selection), Some(Selection::Window { .. }))
         }
         (_, None) => false,
     };
@@ -4098,7 +4098,47 @@ fn remember_camera_window_number(app: &AppHandle, window: &tauri::WebviewWindow)
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+/// X11: the camera window's XID, read once on the GTK thread, so a window
+/// recording can draw the bubble in (`filmed_camera_window`). Wayland has
+/// no window ids and stores nothing.
+#[cfg(target_os = "linux")]
+fn remember_camera_window_number(app: &AppHandle, window: &tauri::WebviewWindow) {
+    use gtk::glib::Cast;
+    use gtk::prelude::WidgetExt;
+    if super::rollout::current_platform() != super::rollout::Platform::LinuxX11 {
+        return;
+    }
+    let target = window.clone();
+    let app = app.clone();
+    let _ = window.run_on_main_thread(move || {
+        let xid = target
+            .gtk_window()
+            .ok()
+            .and_then(|gtk| gtk.window())
+            .and_then(|gdk| gdk.downcast::<gdkx11::X11Window>().ok())
+            .map(|x11| x11.xid());
+        if let Some(n) = xid.filter(|x| *x > 0) {
+            app.state::<AppState>().capture.camera_window_number.store(n, Ordering::SeqCst);
+        }
+    });
+}
+
+/// Windows: the camera window's HWND (its low 32 bits, xcap's id, which the
+/// recorder child sign-extends back), so a window recording composites the
+/// bubble (`wgc::WithCamera`). It was never stored here, so the child was
+/// never given the bubble.
+#[cfg(windows)]
+fn remember_camera_window_number(app: &AppHandle, window: &tauri::WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        #[allow(clippy::cast_possible_truncation)]
+        let id = u64::from(hwnd.0 as usize as u32);
+        if id > 0 {
+            app.state::<AppState>().capture.camera_window_number.store(id, Ordering::SeqCst);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn remember_camera_window_number(_app: &AppHandle, _window: &tauri::WebviewWindow) {}
 
 /// Tell the camera page when the pointer is over it, so its size controls
