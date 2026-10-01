@@ -75,13 +75,18 @@ describe("emailed invitation choices", () => {
     }
   });
 
-  it("offers Viewer, Editor and Manager for a whole drive", () => {
+  it("offers Viewer, Editor and Manager for a whole drive while Manager by email is on", () => {
     expect([...EMAIL_INVITE_ROLES]).toEqual(["reader", "writer", "manager"]);
-    expect([...emailInviteRolesFor(false)]).toEqual(["reader", "writer", "manager"]);
+    expect([...emailInviteRolesFor(false, true)]).toEqual(["reader", "writer", "manager"]);
+  });
+
+  it("offers Viewer and Editor only for a whole drive while Manager by email is off", () => {
+    expect([...emailInviteRolesFor(false, false)]).toEqual(["reader", "writer"]);
   });
 
   it("never offers Manager for a folder", () => {
-    expect([...emailInviteRolesFor(true)]).toEqual(["reader", "writer"]);
+    expect([...emailInviteRolesFor(true, true)]).toEqual(["reader", "writer"]);
+    expect([...emailInviteRolesFor(true, false)]).toEqual(["reader", "writer"]);
   });
 
   it("snaps a link-only lifetime back to the default", () => {

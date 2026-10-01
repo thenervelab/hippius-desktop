@@ -123,9 +123,16 @@ export const FOLDER_INVITE_ROLES: ReadonlyArray<Exclude<DriveRole, "manager">> =
   "writer",
 ];
 
-/** The roles the By email tab offers: Manager on a whole drive only. */
-export function emailInviteRolesFor(folder: boolean): ReadonlyArray<DriveRole> {
-  return folder ? FOLDER_INVITE_ROLES : EMAIL_INVITE_ROLES;
+/**
+ * The roles the By email tab offers: Manager on a whole drive only, and
+ * only while `managerByEmail` (`MANAGER_EMAIL_INVITES_ENABLED`) is on.
+ */
+export function emailInviteRolesFor(
+  folder: boolean,
+  managerByEmail: boolean,
+): ReadonlyArray<DriveRole> {
+  if (folder) return FOLDER_INVITE_ROLES;
+  return managerByEmail ? EMAIL_INVITE_ROLES : EMAIL_INVITE_ROLES.filter((r) => r !== "manager");
 }
 
 /**

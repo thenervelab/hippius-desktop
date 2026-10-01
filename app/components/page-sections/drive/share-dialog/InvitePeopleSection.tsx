@@ -26,6 +26,7 @@ import {
   driveRoleLabel,
   type DriveRole,
 } from "@/app/lib/shared-drives/roles";
+import { MANAGER_EMAIL_INVITES_ENABLED } from "@/app/lib/featureFlags";
 import { UserPlus } from "lucide-react";
 import { COMING_SOON_COPY, emailInviteRolesFor } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
@@ -35,6 +36,12 @@ import { useUnlockThenResume } from "./useUnlockThenResume";
 
 /** Under the email field, on drives and folders alike. */
 export const EMAIL_INVITE_HINT = "They get their own invite, just for them.";
+/**
+ * Added for a drive while an address is being typed and Manager is not
+ * offered by email (`MANAGER_EMAIL_INVITES_ENABLED` off).
+ */
+export const EMAIL_MANAGER_HINT =
+  "To add a Manager, invite them as an Editor, then change their role once they join.";
 
 const NOT_CHECKED: InviteEmailCheck = { valid: false };
 
@@ -225,7 +232,7 @@ export function InvitePeopleSection({
                 setRole(value as DriveRole);
                 setNotice((n) => (n?.kind === "folderEditor" ? null : n));
               }}
-              options={emailInviteRolesFor(folder).map((r) => ({
+              options={emailInviteRolesFor(folder, MANAGER_EMAIL_INVITES_ENABLED).map((r) => ({
                 label: driveRoleLabel(r),
                 value: r,
                 description: driveRoleDescription(r),
@@ -254,11 +261,15 @@ export function InvitePeopleSection({
       ) : null}
 
       {/* What an emailed invite is, at rest too; with Manager picked, that
-          it works once and has to be taken up within 24 hours. */}
+          it works once and has to be taken up within 24 hours. While Manager
+          is not offered by email, how to add one on a drive instead. */}
       <div className="mt-2 flex flex-col gap-1">
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_INVITE_HINT}</p>
         {composing && roleNote ? (
           <p className="text-xs text-grey-50 dark:text-grey-dark-600">{roleNote}</p>
+        ) : null}
+        {composing && !folder && !MANAGER_EMAIL_INVITES_ENABLED ? (
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_MANAGER_HINT}</p>
         ) : null}
       </div>
 
