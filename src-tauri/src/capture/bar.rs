@@ -177,9 +177,11 @@ impl CaptureOptions {
     }
 }
 
-/// The macOS helper films the camera window with a window recording
-/// (`cameraWindowId`); the other platforms' recorders cannot yet.
-pub const WINDOW_RECORDING_ADDS_CAMERA: bool = cfg!(target_os = "macos");
+/// The recorder films the camera window with a window recording
+/// (`cameraWindowId`): the macOS helper filters both windows into one
+/// stream, the Windows recorder child draws the bubble into the window's
+/// pictures. Linux's recorder cannot yet.
+pub const WINDOW_RECORDING_ADDS_CAMERA: bool = cfg!(any(target_os = "macos", windows));
 
 const OPTIONS_KEY: &str = "capture_options_v1";
 
@@ -530,7 +532,7 @@ mod tests {
             bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Window),
             WINDOW_RECORDING_ADDS_CAMERA
         );
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         assert!(bubble.camera_filmed(CaptureKind::Recording, CaptureMode::Window));
         let stage = CaptureOptions {
             screen: false,

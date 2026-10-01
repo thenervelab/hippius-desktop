@@ -27,6 +27,7 @@ pub mod frame;
 pub mod linux_plan;
 pub mod meter;
 pub mod mixer;
+pub mod overlay;
 pub mod pacing;
 pub mod pcm;
 pub mod pipeline;

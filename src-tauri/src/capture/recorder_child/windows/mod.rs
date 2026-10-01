@@ -138,12 +138,12 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         return Err(crate::capture::recording::RecordingUnavailable::OsTooOld.message().into());
     }
     let target = target_of(cmd)?;
-    if cmd.camera_window_id.is_some() {
-        // A window recording films that one window; adding the camera
-        // bubble needs two captures composited, which this recorder does not
-        // do yet (`bar::WINDOW_RECORDING_ADDS_CAMERA` tells the bar so).
-        let _ = writeln_stderr("the camera window is not added to a window recording on Windows");
-    }
+    // A window recording films that one window: the camera bubble's window
+    // is captured too and drawn into it (`wgc::WithCamera`).
+    let camera = match target {
+        Target::Window { .. } => cmd.camera_window_id.map(handle_from_id),
+        Target::Monitor { .. } => None,
+    };
     let output = PathBuf::from(&cmd.output);
     let (tx, rx) = mpsc::channel::<Msg>();
     let shared = Arc::new(Shared {
@@ -201,7 +201,7 @@ pub fn start(cmd: &StartCommand, out: &Output) -> Result<Started, String> {
         move || writer_loop(&rx, &shared, &out, &output, &sources, &ready_tx)
     });
 
-    let capture = match wgc::start(target, Arc::clone(&shared)) {
+    let capture = match wgc::start(target, Arc::clone(&shared), camera) {
         Ok(capture) => capture,
         Err(e) => {
             let session = Session::parts(output, shared, None, stop_audio, audio_threads, Some(writer_thread));

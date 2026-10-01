@@ -3466,34 +3466,17 @@ async fn recording_bubble_frame(app: &AppHandle, phase: CapturePhase, shape: Opt
             if !bar::WINDOW_RECORDING_ADDS_CAMERA {
                 return None;
             }
-            let frame = tauri::async_runtime::spawn_blocking(move || window_frame_blocking(window_id))
+            let native = tauri::async_runtime::spawn_blocking(move || super::targets::window_frame(window_id))
                 .await
                 .ok()
                 .flatten()?;
-            (camera::Filmed::Region(frame), 1.0)
+            let displays = lock(&state.capture.displays).clone();
+            let (frame, scale) = camera::window_region(native, &displays, super::targets::COORDS_ARE_LOGICAL)?;
+            (camera::Filmed::Region(frame), scale)
         }
     };
     let current = app.get_webview_window(CAMERA_LABEL).and_then(|w| current_camera_frame(&w));
     camera::bubble_for_recording(current, size, filmed).map(|f| (f, scale))
-}
-
-/// A window's frame in global points, for placing the bubble inside it. The
-/// only platform that adds the camera to a window recording is macOS, where
-/// xcap's coordinates are already points.
-#[cfg(target_os = "macos")]
-fn window_frame_blocking(window_id: u32) -> Option<camera::Frame> {
-    let f = super::targets::window_frame(window_id)?;
-    Some(camera::Frame {
-        x: f64::from(f.x),
-        y: f64::from(f.y),
-        width: f64::from(f.width),
-        height: f64::from(f.height),
-    })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn window_frame_blocking(_window_id: u32) -> Option<camera::Frame> {
-    None
 }
 
 /// What the camera page and the pill are told: the shape, the chosen camera
@@ -3509,8 +3492,11 @@ async fn camera_state_for(app: &AppHandle, shape: Option<CameraShape>, hidden: b
     let camera_filmed = match (phase, shape) {
         (CapturePhase::Selecting { kind, mode }, _) => options.camera_filmed(kind, mode),
         (_, Some(CameraShape::Stage)) => true,
-        // A window recording films that one window only.
-        (_, Some(CameraShape::Bubble)) => !matches!(*lock(&state.capture.selection), Some(Selection::Window { .. })),
+        // A window recording films that one window, plus the bubble where
+        // the recorder adds it.
+        (_, Some(CameraShape::Bubble)) => {
+            bar::WINDOW_RECORDING_ADDS_CAMERA || !matches!(*lock(&state.capture.selection), Some(Selection::Window { .. }))
+        }
         (_, None) => false,
     };
     CameraState {
