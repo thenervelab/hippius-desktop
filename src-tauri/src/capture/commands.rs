@@ -109,11 +109,12 @@ pub fn capture_supported() -> bool {
 }
 
 /// Whether camera only (the stage) can be recorded here: it records the
-/// camera window by its system window number, which only the macOS recorder
-/// takes. Elsewhere the bar must not offer it.
+/// camera window by its system window id (macOS's window number, Windows'
+/// HWND), which the macOS and Windows recorders take. Elsewhere the bar must
+/// not offer it.
 #[must_use]
 pub fn camera_only_supported() -> bool {
-    cfg!(target_os = "macos") && recording::recording_supported()
+    cfg!(any(target_os = "macos", windows)) && recording::recording_supported()
 }
 
 /// A lock that survives a panic elsewhere: a poisoned recorder lock must not
@@ -907,6 +908,10 @@ fn build_overlay(app: &AppHandle, label: &str, display: &DisplayTarget) -> Resul
         .visible(false)
         .build()
         .map_err(|e| AppError::Other(format!("Could not open the capture overlay: {e}")))
+        .inspect(|window| {
+            // The bar's microphone meter calls `getUserMedia` here too.
+            super::webview_media::allow_capture_devices(window);
+        })
 }
 
 /// The recording pill, bottom-centre of the bar's display, above the Dock.
@@ -3597,6 +3602,8 @@ fn open_camera_window(app: &AppHandle, shape: CameraShape, size: CameraSize, anc
         .accept_first_mouse(true)
         .visible(false);
     let window = builder.build().map_err(|e| AppError::Other(format!("Could not open the camera: {e}")))?;
+    // WebView2 asks the app before `getUserMedia` may open the camera.
+    super::webview_media::allow_capture_devices(&window);
     if let Some((f, scale)) = anchored.or_else(|| camera_frame(app, shape, size)) {
         place(&window, f, scale);
     }
@@ -3707,8 +3714,22 @@ async fn camera_window_id(app: &AppHandle) -> Option<u32> {
     u32::try_from(number).ok().filter(|n| *n > 0)
 }
 
+/// The camera window's HWND, which is also xcap's window id on Windows, so
+/// camera only records it like any other window (the recorder trims the
+/// stage's margin). The handle's low 32 bits: handles are 32-bit values
+/// sign-extended to the pointer size, and the recorder extends it back.
+#[cfg(windows)]
+#[allow(clippy::unused_async)]
+async fn camera_window_id(app: &AppHandle) -> Option<u32> {
+    let window = app.get_webview_window(CAMERA_LABEL)?;
+    let hwnd = window.hwnd().ok()?;
+    #[allow(clippy::cast_possible_truncation)]
+    let id = hwnd.0 as usize as u32;
+    (id != 0).then_some(id)
+}
+
 // Async to match the macOS version, which waits on the main thread.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 #[allow(clippy::unused_async)]
 async fn camera_window_id(_app: &AppHandle) -> Option<u32> {
     None

@@ -2,10 +2,11 @@
 //!
 //! Every platform records in another process driven by the same
 //! [`helper::HelperRecorder`] over one protocol ([`protocol`]): macOS runs the
-//! Swift helper (ScreenCaptureKit to H.264 MP4); Windows and Linux will run
-//! the app's own executable as `--capture-recorder`
-//! (`capture::recorder_child`). Until their recorders land, recording is
-//! unavailable there (`UnsupportedPlatform`) and Record stays hidden.
+//! Swift helper (ScreenCaptureKit to H.264 MP4); Windows runs the app's own
+//! executable as `--capture-recorder` (`capture::recorder_child::windows`:
+//! WGC, WASAPI, Media Foundation), and Linux will too. Until Linux's
+//! recorder lands, recording is unavailable there (`UnsupportedPlatform`)
+//! and Record stays hidden.
 //! Plan: `docs/plans/2026-10-01-capture-windows-linux.md`.
 
 pub mod helper;
@@ -110,7 +111,15 @@ pub fn list_microphones() -> Vec<Microphone> {
     {
         tidy_devices(macos::list_microphones())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        if microphone_supported() {
+            tidy_devices(windows::list_microphones())
+        } else {
+            Vec::new()
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         Vec::new()
     }
@@ -148,7 +157,11 @@ pub fn microphone_supported() -> bool {
     {
         macos::microphone_supported()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        recording_supported() && windows::microphone_supported()
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         false
     }
@@ -255,7 +268,7 @@ pub enum RecordingUnavailable {
     PortalMissing,
     /// Windows N and KN editions without the Media Feature Pack have no
     /// H.264 or AAC encoder.
-    #[allow(dead_code)]
+    #[cfg_attr(not(windows), allow(dead_code))]
     MediaFeaturePackMissing,
 }
 
@@ -304,6 +317,18 @@ const fn unavailable_reason(platform_records: bool, os_supported: bool, helper_p
     }
 }
 
+/// Windows' decision: the lane and the build first (as everywhere), then the
+/// encoders, which a Windows N edition lacks until the Media Feature Pack is
+/// added.
+#[cfg_attr(not(windows), allow(dead_code))]
+const fn windows_unavailable_reason(on_lane: bool, os_supported: bool, encoders: bool) -> Option<RecordingUnavailable> {
+    match unavailable_reason(on_lane, os_supported, true) {
+        Some(reason) => Some(reason),
+        None if !encoders => Some(RecordingUnavailable::MediaFeaturePackMissing),
+        None => None,
+    }
+}
+
 /// Why recording is unavailable on this machine and build; `None` = it works.
 pub fn recording_unavailable() -> Option<RecordingUnavailable> {
     // A platform still below this lane's floor (`rollout`) reports exactly
@@ -315,7 +340,10 @@ pub fn recording_unavailable() -> Option<RecordingUnavailable> {
     }
     #[cfg(windows)]
     {
-        unavailable_reason(on_this_lane && windows::recording_supported(), windows::os_supports_recording(), true)
+        let on_lane = on_this_lane && windows::recording_supported();
+        // The encoder probe runs only where it can matter.
+        let encoders = !on_lane || !windows::os_supports_recording() || windows::encoders_present();
+        windows_unavailable_reason(on_lane, windows::os_supports_recording(), encoders)
     }
     #[cfg(target_os = "linux")]
     {
@@ -470,8 +498,24 @@ mod tests {
     #[test]
     fn recording_is_supported_exactly_when_there_is_no_reason() {
         assert_eq!(recording_supported(), recording_unavailable().is_none());
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         assert_eq!(recording_unavailable(), Some(RecordingUnavailable::UnsupportedPlatform));
+    }
+
+    /// A Windows N edition without the Media Feature Pack is told what to
+    /// add; the lane and the OS floor still come first.
+    #[test]
+    fn windows_without_encoders_is_told_to_add_the_media_feature_pack() {
+        assert_eq!(windows_unavailable_reason(true, true, true), None);
+        assert_eq!(
+            windows_unavailable_reason(true, true, false),
+            Some(RecordingUnavailable::MediaFeaturePackMissing)
+        );
+        assert_eq!(windows_unavailable_reason(true, false, false), Some(RecordingUnavailable::OsTooOld));
+        assert_eq!(
+            windows_unavailable_reason(false, true, false),
+            Some(RecordingUnavailable::UnsupportedPlatform)
+        );
     }
 
     fn dev(id: &str, name: &str, is_default: bool) -> MediaDevice {

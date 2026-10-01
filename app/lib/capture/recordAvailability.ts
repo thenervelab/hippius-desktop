@@ -7,8 +7,9 @@ import { isMacPlatform } from "./shortcutLabel";
 /**
  * Whether the Record button is offered, and in what state.
  *
- * - `hidden`: recording does not exist on this platform (Windows and Linux
- *   today), so a Record button would only ever say no.
+ * - `hidden`: recording does not exist on this platform or lane (Linux
+ *   today, Windows outside staging), so a Record button would only ever say
+ *   no.
  * - `disabled`: it exists here but not in this build or on this Mac (the
  *   recording helper is missing), so the button stays, dimmed, and says why.
  * - `available`: pressing it opens the capture bar on recording.

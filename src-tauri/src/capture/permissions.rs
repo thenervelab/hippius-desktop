@@ -127,6 +127,90 @@ pub const fn windows_excludes_from_capture(build: Option<u32>) -> bool {
     }
 }
 
+/// A device Windows' privacy settings can block (Settings, Privacy &
+/// security, Camera or Microphone).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivacyDevice {
+    Camera,
+    Microphone,
+}
+
+impl PrivacyDevice {
+    /// The `CapabilityAccessManager\ConsentStore` key Windows keeps the
+    /// switches under.
+    #[must_use]
+    pub const fn consent_store_key(self) -> &'static str {
+        match self {
+            Self::Camera => "webcam",
+            Self::Microphone => "microphone",
+        }
+    }
+
+    /// The Settings page that holds the switches.
+    #[must_use]
+    pub const fn settings_uri(self) -> &'static str {
+        match self {
+            Self::Camera => "ms-settings:privacy-webcam",
+            Self::Microphone => "ms-settings:privacy-microphone",
+        }
+    }
+}
+
+/// Whether the consent store's switches block a desktop app: the device
+/// switch for everyone (`<device>\Value`) or the one for desktop apps
+/// (`<device>\NonPackaged\Value`) says `Deny`. A missing value is allowed,
+/// which is Windows' own default.
+#[must_use]
+pub fn privacy_denies(device_switch: Option<&str>, desktop_apps_switch: Option<&str>) -> bool {
+    let deny = |v: Option<&str>| v.is_some_and(|v| v.trim().eq_ignore_ascii_case("deny"));
+    deny(device_switch) || deny(desktop_apps_switch)
+}
+
+/// Whether Windows' privacy settings keep Hippius (a desktop app) from
+/// `device` right now. Read each time: the user may flip it in Settings
+/// while the bar is up. Always `false` off Windows.
+#[must_use]
+pub fn windows_privacy_blocks(device: PrivacyDevice) -> bool {
+    #[cfg(windows)]
+    {
+        let base = format!(
+            "Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\{}",
+            device.consent_store_key()
+        );
+        let machine = read_consent(true, &base);
+        let user = read_consent(false, &base);
+        let user_desktop = read_consent(false, &format!("{base}\\NonPackaged"));
+        privacy_denies(machine.as_deref(), None) || privacy_denies(user.as_deref(), user_desktop.as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = device;
+        false
+    }
+}
+
+/// The `Value` string under `key` in HKLM (`machine`) or HKCU.
+#[cfg(windows)]
+fn read_consent(machine: bool, key: &str) -> Option<String> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+    use windows::core::HSTRING;
+
+    let root = if machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let key = HSTRING::from(key);
+    let name = HSTRING::from("Value");
+    let mut buf = [0u16; 64];
+    let mut len = u32::try_from(std::mem::size_of_val(&buf)).ok()?;
+    // SAFETY: a fixed-size buffer whose byte length is passed in and
+    // updated by the call; only a REG_SZ is accepted.
+    let status = unsafe { RegGetValueW(root, &key, &name, RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr().cast()), Some(&raw mut len)) };
+    if status.is_err() {
+        return None;
+    }
+    let chars = (len as usize / 2).min(buf.len());
+    let text = String::from_utf16_lossy(&buf[..chars]);
+    Some(text.trim_end_matches('\0').to_string())
+}
+
 /// `"15.1.1\n"` to `(15, 1)`, `"26"` to `(26, 0)`; anything unreadable is
 /// `None`, which no feature gate passes.
 #[cfg(any(target_os = "macos", test))]
@@ -225,6 +309,22 @@ mod tests {
     }
 
     /// Read once, and only on Windows.
+    /// Either switch set to Deny blocks a desktop app; a missing value is
+    /// Windows' default, allowed.
+    #[test]
+    fn a_deny_in_either_privacy_switch_blocks_the_device() {
+        assert!(!privacy_denies(None, None));
+        assert!(!privacy_denies(Some("Allow"), Some("Allow")));
+        assert!(privacy_denies(Some("Deny"), Some("Allow")));
+        assert!(privacy_denies(Some("Allow"), Some("Deny")));
+        assert!(privacy_denies(None, Some(" deny ")));
+        assert_eq!(PrivacyDevice::Microphone.settings_uri(), "ms-settings:privacy-microphone");
+        assert_eq!(PrivacyDevice::Camera.consent_store_key(), "webcam");
+        if !cfg!(windows) {
+            assert!(!windows_privacy_blocks(PrivacyDevice::Microphone));
+        }
+    }
+
     #[test]
     fn the_windows_build_is_read_on_windows_only() {
         let build = windows_build();
