@@ -964,3 +964,69 @@ fn the_linux_lane_runs_the_recorder_against_real_gstreamer() {
     assert!(linux.script.contains("gstreamer1.0-plugins-ugly") && linux.script.contains("gstreamer1.0-libav"));
     assert!(linux.script.contains("cargo test --lib capture::recorder_child::linux -- --ignored"));
 }
+
+/// The capture runtime jobs run the BUILT recorder child on real Windows and
+/// Linux runners through the script that fails on "0 tests executed", only
+/// for PRs that can change the child, and never on an unrelated PR (a job
+/// that is skipped there must not be one anything waits on). Each failure
+/// here is silent: a dropped `--ignored` or a lost gate keeps CI green while
+/// the runtime evidence quietly stops.
+#[test]
+fn the_capture_runtime_jobs_run_the_built_recorder_for_capture_prs_only() {
+    let jobs = workflow_jobs("ci.yml");
+    let ci = repo_file("../.github/workflows/ci.yml");
+    let document: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    for name in ["capture-runtime-windows", "capture-runtime-linux"] {
+        let job = jobs.get(name).unwrap_or_else(|| panic!("ci.yml has a {name} job"));
+        assert!(job.needs.iter().any(|n| n == "changes"), "{name} waits for the changes gate");
+        assert!(
+            job.script.contains("cargo test --test capture_recorder_runtime --no-run") && job.script.contains("scripts/capture-runtime-check.sh"),
+            "{name} builds the app binary and runs the runtime checks through the script"
+        );
+        let body = &document["jobs"][name];
+        assert_eq!(
+            body["if"].as_str(),
+            Some("github.event_name == 'pull_request' && needs.changes.outputs.capture_runtime == 'true'"),
+            "{name} runs only for PRs that touch what the recorder child is built from"
+        );
+        let env_of = |key: &str| {
+            body["steps"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .filter_map(|step| step["env"][key].as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            env_of("HIPPIUS_CAPTURE_RUNTIME_REQUIRE"),
+            vec!["1"],
+            "{name} turns a missing setup into a failure"
+        );
+        assert_eq!(
+            env_of("CAPTURE_RUNTIME_MIN_TESTS"),
+            vec!["8"],
+            "{name} expects every runtime test to execute"
+        );
+    }
+    let linux = jobs.get("capture-runtime-linux").expect("linux runtime job");
+    assert!(linux.script.contains("xvfb-run") && linux.script.contains("module-null-sink"));
+    assert!(
+        ci.contains("echo \"capture_runtime=true\" >> \"$GITHUB_OUTPUT\""),
+        "the changes job sets the gate"
+    );
+    let script = repo_file("../scripts/capture-runtime-check.sh");
+    assert!(script.contains("--ignored") && script.contains("CAPTURE_RUNTIME_MIN_TESTS") && script.contains("RUNTIME-SKIP:"));
+    // The test file's count: every test in it is #[ignore]d, and the jobs
+    // expect all of them to run.
+    let tests = repo_file("tests/capture_recorder_runtime.rs");
+    assert_eq!(
+        tests.matches("#[test]").count(),
+        8,
+        "update CAPTURE_RUNTIME_MIN_TESTS in ci.yml with the test count"
+    );
+    assert_eq!(
+        tests.matches("#[ignore = \"").count(),
+        8,
+        "every runtime check is #[ignore]d, so plain `cargo test` stays hermetic"
+    );
+}

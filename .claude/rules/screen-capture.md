@@ -87,9 +87,14 @@ side probes Media Foundation once per launch on its own thread
 the ConsentStore for a blocked mic (`MIC_BLOCKED_WINDOWS`), and
 `webview_media.rs` answers WebView2's `PermissionRequested` (camera, mic) for
 `capture-camera` and `capture-overlay-*` and the app's own origin only,
-pinned in `capture_wiring.rs`. Not done: a GPU colour converter (spike
-W3's measured CPU cost and the options are in the plan's "Parity gaps"
-section: 4K same-size is about one core, scaled 4K over two). Cross-check from a Mac with the MSVC
+pinned in `capture_wiring.rs`. `frame::to_nv12` converts a 4K or larger
+picture in up to 4 row bands (`bands_for`), byte-identical to one thread
+(pinned by `bands_give_the_same_bytes_as_one_thread`; spike W3's numbers
+are in the plan's "Parity gaps" section). Not done: a GPU colour converter.
+Run-time proof on real runners, not only compile checks: `ci.yml`'s
+`capture-runtime-windows` / `capture-runtime-linux` drive the built binary
+as the child (`tests/capture_recorder_runtime.rs`, `.claude/rules/testing.md`).
+Cross-check from a Mac with the MSVC
 headers from `xwin` (`CFLAGS_x86_64_pc_windows_msvc` with clang's own
 include dir FIRST, or the MSVC intrinsics headers break aws-lc), and pass
 `--target` before `--`, or clippy builds the build script for Windows.

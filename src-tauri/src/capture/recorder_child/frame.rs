@@ -13,9 +13,10 @@
 //! one. NV12 is what every H.264 encoder takes (hardware ones take nothing
 //! else), so the encoder never has to insert a converter of its own.
 //!
-//! Pure CPU code, so it is tested on every OS. A GPU video processor would
-//! do the same work for free on most machines (the plan's `gpu.rs`); spike
-//! W3 measures whether 4K at 30 fps needs it.
+//! Pure CPU code, so it is tested on every OS. A 4K picture is converted in
+//! horizontal bands on up to four threads ([`bands_for`]), byte for byte what
+//! one thread writes. A GPU video processor would do the same work for free
+//! on most machines (the plan's `gpu.rs`); spike W3 weighs the two.
 
 /// Where a picture goes inside the output: the fitted rectangle, in output
 /// pixels.
@@ -146,15 +147,47 @@ impl Sampler<'_> {
     }
 }
 
+/// Output pictures of at least this many pixels (4K) are converted in
+/// horizontal bands on up to [`MAX_BANDS`] threads. Measured (spike W3, the
+/// plan's "Parity gaps closed after Phase 6"): 4K on one core takes 27 ms a
+/// frame at the same size and 75 ms scaled on an M3 Max, beyond the 33 ms a
+/// frame 30 fps allows once a laptop core is slower; 1440p and below fit on
+/// one core, where a thread hand-off would cost more than it saves.
+const PARALLEL_FROM_PIXELS: u64 = 3840 * 2160;
+/// Four bands: about 4x on the scaled 4K path, and the capture thread does
+/// not take every core of a 4-core laptop from the encoder.
+const MAX_BANDS: usize = 4;
+
+/// How many bands an `out_w` x `out_h` picture is converted in, given the
+/// machine's parallelism.
+#[must_use]
+pub fn bands_for(out_w: u32, out_h: u32, parallelism: usize) -> usize {
+    if u64::from(out_w) * u64::from(out_h) >= PARALLEL_FROM_PIXELS {
+        parallelism.clamp(1, MAX_BANDS)
+    } else {
+        1
+    }
+}
+
 /// Draw `src` into an NV12 picture of `out_w` x `out_h` (even), fitted and
-/// centred, black around it. `out` is resized to [`nv12_len`].
+/// centred, black around it. `out` is resized to [`nv12_len`]. A 4K picture
+/// is converted on several threads ([`bands_for`]); the bytes are the same
+/// as on one.
 ///
 /// # Panics
 ///
 /// Never for a well-formed picture; a `src` whose `data` is shorter than
 /// `stride * height` is drawn as black instead of read out of bounds.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn to_nv12(src: Bgra<'_>, out_w: u32, out_h: u32, out: &mut Vec<u8>) {
+    let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    to_nv12_in_bands(src, out_w, out_h, out, bands_for(out_w, out_h, parallelism));
+}
+
+/// [`to_nv12`] in `bands` horizontal bands, each on its own thread (the
+/// first on the caller's). A band owns whole 2-row blocks, so its luma rows
+/// and its chroma row are its own and no two threads write one byte.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn to_nv12_in_bands(src: Bgra<'_>, out_w: u32, out_h: u32, out: &mut Vec<u8>, bands: usize) {
     let (cols, rows) = (out_w as usize, out_h as usize);
     out.clear();
     out.resize(nv12_len(out_w, out_h), 0);
@@ -176,13 +209,44 @@ pub fn to_nv12(src: Bgra<'_>, out_w: u32, out_h: u32, out: &mut Vec<u8>) {
         sy: f64::from(src.height) / f64::from(place.height),
         identity: place.width == src.width && place.height == src.height,
     };
+    // The placed rectangle's 2-row blocks: `place.y` is even, so block `k`
+    // is luma rows `place.y + 2k` and `+ 1` and chroma row `place.y / 2 + k`.
+    let first = place.y as usize;
+    let pairs = place.height as usize / 2;
+    if pairs == 0 {
+        return;
+    }
+    let luma_rows = &mut luma_plane[first * cols..(first + pairs * 2) * cols];
+    let chroma_rows = &mut chroma_plane[first / 2 * cols..(first / 2 + pairs) * cols];
+    let per_band = pairs.div_ceil(bands.max(1));
+    let mut work = luma_rows
+        .chunks_mut(per_band * 2 * cols)
+        .zip(chroma_rows.chunks_mut(per_band * cols))
+        .enumerate();
+    let Some((_, (own_luma, own_chroma))) = work.next() else {
+        return;
+    };
+    let sampler = &sampler;
+    std::thread::scope(|scope| {
+        for (band, (y_rows, c_rows)) in work {
+            scope.spawn(move || draw_band(sampler, place, cols, band * per_band * 2, y_rows, c_rows));
+        }
+        draw_band(sampler, place, cols, 0, own_luma, own_chroma);
+    });
+}
+
+/// Draw the 2-row blocks of the placed rectangle from output row
+/// `first_row` (relative to `place.y`): `y_rows` holds two luma rows a
+/// block, `c_rows` one chroma row.
+#[allow(clippy::cast_possible_truncation)]
+fn draw_band(sampler: &Sampler<'_>, place: Placement, cols: usize, first_row: usize, y_rows: &mut [u8], c_rows: &mut [u8]) {
     // Two rows at a time: each 2x2 block yields four luma samples and one
     // chroma pair, averaged from the block's four colours.
-    let mut oy = 0;
-    while oy + 1 < place.height {
-        let row0 = (place.y + oy) as usize * cols;
+    for block in 0..c_rows.len() / cols {
+        let oy = (first_row + block * 2) as u32;
+        let row0 = block * 2 * cols;
         let row1 = row0 + cols;
-        let crow = (place.y + oy) as usize / 2 * cols;
+        let crow = block * cols;
         let mut ox = 0;
         while ox + 1 < place.width {
             let p00 = sampler.rgb(ox, oy);
@@ -190,19 +254,18 @@ pub fn to_nv12(src: Bgra<'_>, out_w: u32, out_h: u32, out: &mut Vec<u8>) {
             let p10 = sampler.rgb(ox, oy + 1);
             let p11 = sampler.rgb(ox + 1, oy + 1);
             let col = (place.x + ox) as usize;
-            luma_plane[row0 + col] = luma(p00.0, p00.1, p00.2);
-            luma_plane[row0 + col + 1] = luma(p01.0, p01.1, p01.2);
-            luma_plane[row1 + col] = luma(p10.0, p10.1, p10.2);
-            luma_plane[row1 + col + 1] = luma(p11.0, p11.1, p11.2);
+            y_rows[row0 + col] = luma(p00.0, p00.1, p00.2);
+            y_rows[row0 + col + 1] = luma(p01.0, p01.1, p01.2);
+            y_rows[row1 + col] = luma(p10.0, p10.1, p10.2);
+            y_rows[row1 + col + 1] = luma(p11.0, p11.1, p11.2);
             let red = (p00.0 + p01.0 + p10.0 + p11.0 + 2) / 4;
             let green = (p00.1 + p01.1 + p10.1 + p11.1 + 2) / 4;
             let blue = (p00.2 + p01.2 + p10.2 + p11.2 + 2) / 4;
             let (cb, cr) = chroma(red, green, blue);
-            chroma_plane[crow + col] = cb;
-            chroma_plane[crow + col + 1] = cr;
+            c_rows[crow + col] = cb;
+            c_rows[crow + col + 1] = cr;
             ox += 2;
         }
-        oy += 2;
     }
 }
 
@@ -343,6 +406,70 @@ mod tests {
             &mut out,
         );
         assert_eq!(&out[..4], &[235, 235, 235, 235]);
+    }
+
+    /// A picture whose bytes are all different, so a band drawn from the
+    /// wrong rows (or not drawn) shows.
+    fn noise(height: u32, stride: usize) -> Vec<u8> {
+        let mut state = 0x9E37_79B9_u32;
+        (0..stride * height as usize)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state.to_le_bytes()[0]
+            })
+            .collect()
+    }
+
+    /// Spike W3: the banded conversion writes exactly the bytes the single
+    /// thread does, whether the picture is copied, scaled down or up,
+    /// letterboxed or pillarboxed, padded, and whether the blocks divide
+    /// evenly into bands or there are more bands than blocks.
+    #[test]
+    fn bands_give_the_same_bytes_as_one_thread() {
+        // (source width, height, row padding in bytes, output width, height)
+        let cases = [
+            (64, 36, 0, 64, 36),  // same size
+            (100, 70, 0, 64, 36), // scaled down, letterboxed
+            (30, 60, 8, 64, 36),  // pillarboxed, padded rows
+            (33, 19, 4, 66, 38),  // scaled up; 19 blocks, not a multiple of 4
+            (8, 2, 0, 8, 2),      // one block, more bands than blocks
+            (50, 50, 0, 40, 30),  // a square in a wide frame
+        ];
+        for (w, h, pad, out_w, out_h) in cases {
+            let stride = w as usize * 4 + pad;
+            let data = noise(h, stride);
+            let src = Bgra {
+                data: &data,
+                width: w,
+                height: h,
+                stride,
+            };
+            let mut one = Vec::new();
+            to_nv12_in_bands(src, out_w, out_h, &mut one, 1);
+            for bands in 2..=5 {
+                let mut many = Vec::new();
+                to_nv12_in_bands(src, out_w, out_h, &mut many, bands);
+                assert!(one == many, "{w}x{h} into {out_w}x{out_h} in {bands} bands differs from one thread");
+            }
+            let mut public = Vec::new();
+            to_nv12(src, out_w, out_h, &mut public);
+            assert!(one == public, "to_nv12 for {w}x{h} into {out_w}x{out_h}");
+        }
+    }
+
+    /// Only 4K and above is split, into at most four bands; a machine with
+    /// one core never spawns.
+    #[test]
+    fn only_4k_pictures_are_split_and_into_four_bands_at_most() {
+        assert_eq!(bands_for(2560, 1440, 16), 1);
+        assert_eq!(bands_for(3840, 2158, 16), 1);
+        assert_eq!(bands_for(3840, 2160, 16), 4);
+        assert_eq!(bands_for(3840, 2160, 2), 2);
+        assert_eq!(bands_for(3840, 2160, 1), 1);
+        assert_eq!(bands_for(3840, 2160, 0), 1);
+        assert_eq!(bands_for(5120, 2880, 8), 4);
     }
 
     #[test]
