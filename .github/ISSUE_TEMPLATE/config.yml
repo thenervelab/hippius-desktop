@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Hippius task board
+    url: https://github.com/orgs/thenervelab/projects/1
+    about: See what is planned and in progress before opening a new issue.

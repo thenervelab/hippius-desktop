@@ -1,0 +1,41 @@
+name: Feature
+description: New capability or improvement
+title: "[feature] "
+labels: ["feature"]
+body:
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product
+      options:
+        - Drive
+        - S3 Storage
+        - Hub
+        - Confidential Computing
+        - Website
+        - Console
+        - Mobile
+        - Docs
+        - Infra
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What / Why
+      description: What we build, for whom, and why now.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: How we know it's done
+      description: Observable result. What can Izori check to confirm it works?
+      placeholder: "- Go to ... and see ...\n- ... returns ..."
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Links
+      description: Mattermost thread, design, related issues or PRs.
