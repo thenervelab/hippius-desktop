@@ -5,7 +5,10 @@
 //! macOS, Windows and Linux on X11 use the overlay, offer every mode and the
 //! screenshot timer. Wayland cannot draw over the screen, so a screenshot
 //! there is the desktop's own screenshot tool (`SystemPicker`): Hippius
-//! offers no mode and no timer, and says so in `systemPickerNote`. The
+//! offers no mode and no timer, and says so in `systemPickerNote`. A
+//! Wayland recording opens the capture bar alone in a small window (the
+//! panel: sources, window or screen, options) and Record hands the choice
+//! to the desktop's screen-sharing dialog, so there is no countdown. The
 //! shortcut is the plugin's on macOS and Windows; Linux gets its own in
 //! Phase 6 of `docs/plans/2026-10-01-capture-windows-linux.md`, and until
 //! then `shortcut.unavailableMessage` says how to start a capture instead.
@@ -73,6 +76,10 @@ pub struct Surfaces {
     pub modes: Modes,
     /// Whether the screenshot timer is offered.
     pub screenshot_timer: bool,
+    /// Whether the recording countdown is offered. Off with the system
+    /// picker: the desktop's own dialog comes between Record and the
+    /// recording, so a count before it would end at a dialog.
+    pub record_countdown: bool,
     /// Whether a recording can carry the system's sound. The user still turns
     /// it on (`CaptureOptions::system_audio`, off by default); where this is
     /// false the bar does not offer it and a recording never asks for it.
@@ -136,10 +143,11 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
         },
         // The desktop's tool has its own delay, where it has one.
         screenshot_timer: !wayland,
-        // ScreenCaptureKit (macOS) and WASAPI loopback (Windows) can mix
-        // the system's sound into the one audio track; the user turns it on
-        // in the bar's options.
-        system_audio: matches!(platform, Platform::MacOs | Platform::Windows) && recording,
+        record_countdown: !wayland,
+        // ScreenCaptureKit (macOS), WASAPI loopback (Windows) and the
+        // default output's monitor (Linux) can mix the system's sound into
+        // the one audio track; the user turns it on in the bar's options.
+        system_audio: recording,
         microphone_unavailable_message: match (microphone, platform) {
             (true, _) => None,
             (false, Platform::MacOs) => Some(MIC_NEEDS_MACOS_15),
@@ -173,21 +181,51 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
 }
 
 /// How a capture starts: Hippius's overlay, or (a screenshot on Wayland)
-/// straight to the desktop's screenshot tool with no Hippius window at all.
+/// straight to the desktop's screenshot tool with no Hippius window at all,
+/// or (a recording on Wayland) the capture bar alone in a small window
+/// whose Record opens the desktop's screen-sharing dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartPlan {
     Overlay,
     SystemPicker,
+    Panel,
 }
 
-/// The plan for a capture of `kind` with these surfaces. Recording on
-/// Wayland will open the capture panel first (Phase 4), so only a
-/// screenshot goes straight to the picker.
+/// The plan for a capture of `kind` with these surfaces.
 #[must_use]
 pub fn start_plan(surfaces: &Surfaces, kind: super::session::CaptureKind) -> StartPlan {
     match (surfaces.selection, kind) {
         (SelectionUi::SystemPicker, super::session::CaptureKind::Screenshot) => StartPlan::SystemPicker,
-        _ => StartPlan::Overlay,
+        (SelectionUi::SystemPicker, super::session::CaptureKind::Recording) => StartPlan::Panel,
+        (SelectionUi::Overlay, _) => StartPlan::Overlay,
+    }
+}
+
+/// The display id the panel's one window uses. Hippius sees no displays on
+/// Wayland; the panel is not a display's overlay, and the recorder ignores
+/// the id (the desktop's dialog chooses).
+pub const PANEL_DISPLAY_ID: u32 = 0;
+
+/// What Record in the panel asks the recorder for: a window or a whole
+/// screen, chosen in the desktop's dialog. The ids mean nothing there; only
+/// which kind of selection it is reaches the portal.
+#[must_use]
+pub fn system_picker_selection(mode: CaptureMode) -> super::screenshot::Selection {
+    match mode {
+        CaptureMode::Window => super::screenshot::Selection::Window { window_id: 0 },
+        CaptureMode::Area | CaptureMode::Screen => super::screenshot::Selection::Screen {
+            display_id: PANEL_DISPLAY_ID,
+        },
+    }
+}
+
+/// The countdown for a capture of `kind`: the saved one, except where
+/// these surfaces offer none.
+#[must_use]
+pub fn countdown_secs(surfaces: &Surfaces, saved: u8, kind: super::session::CaptureKind) -> u8 {
+    match kind {
+        super::session::CaptureKind::Recording if !surfaces.record_countdown => 0,
+        _ => saved,
     }
 }
 
@@ -225,6 +263,7 @@ mod tests {
                 "selection": "overlay",
                 "modes": { "screenshot": ["area", "window", "screen"], "recording": ["area", "window", "screen"] },
                 "screenshotTimer": true,
+                "recordCountdown": true,
                 "systemAudio": true,
                 "microphoneUnavailableMessage": null,
                 "continuityHint": CONTINUITY_HINT,
@@ -249,12 +288,14 @@ mod tests {
         }
     }
 
-    /// Windows records the system's sound like macOS; a Windows whose
-    /// privacy settings block the microphone says so and how to fix it.
+    /// Every platform that records offers the system's sound; a Windows
+    /// whose privacy settings block the microphone says so and how to fix it.
     #[test]
     fn windows_offers_system_audio_and_names_a_blocked_microphone() {
-        assert!(surfaces_for(Platform::Windows, true, true).system_audio);
-        assert!(!surfaces_for(Platform::LinuxX11, true, true).system_audio, "not until Linux records");
+        for platform in Platform::ALL {
+            assert!(surfaces_for(platform, true, true).system_audio, "{platform:?}");
+            assert!(!surfaces_for(platform, false, true).system_audio, "{platform:?} without a recorder");
+        }
         assert_eq!(microphone_blocked_line(Platform::Windows, true, || true), Some(MIC_BLOCKED_WINDOWS));
         assert_eq!(microphone_blocked_line(Platform::Windows, true, || false), None);
         assert_eq!(
@@ -309,18 +350,42 @@ mod tests {
         assert_eq!(surfaces_for(Platform::MacOs, true, true).linux_session, None);
     }
 
-    /// Only a Wayland screenshot skips the overlay: X11 draws its own, and a
-    /// Wayland recording will open the capture panel first.
+    /// Only Wayland skips the overlay: a screenshot goes straight to the
+    /// desktop's tool, a recording to the panel. X11 draws its own overlay.
     #[test]
-    fn only_a_wayland_screenshot_goes_straight_to_the_picker() {
+    fn wayland_goes_to_the_picker_or_the_panel() {
         use crate::capture::session::CaptureKind::{Recording, Screenshot};
-        let wayland = surfaces_for(Platform::LinuxWayland, false, false);
+        let wayland = surfaces_for(Platform::LinuxWayland, true, true);
         assert_eq!(start_plan(&wayland, Screenshot), StartPlan::SystemPicker);
-        assert_eq!(start_plan(&wayland, Recording), StartPlan::Overlay);
+        assert_eq!(start_plan(&wayland, Recording), StartPlan::Panel);
         for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
             let s = surfaces_for(platform, true, true);
             assert_eq!(start_plan(&s, Screenshot), StartPlan::Overlay, "{platform:?}");
+            assert_eq!(start_plan(&s, Recording), StartPlan::Overlay, "{platform:?}");
         }
+    }
+
+    /// The panel's Record asks the recorder for a window or a screen; the
+    /// desktop's dialog picks which. No countdown there: a count before a
+    /// dialog would end at the dialog.
+    #[test]
+    fn the_panel_asks_for_a_window_or_a_screen_without_a_countdown() {
+        use crate::capture::screenshot::Selection;
+        use crate::capture::session::CaptureKind::{Recording, Screenshot};
+        assert_eq!(system_picker_selection(CaptureMode::Window), Selection::Window { window_id: 0 });
+        assert_eq!(
+            system_picker_selection(CaptureMode::Screen),
+            Selection::Screen {
+                display_id: PANEL_DISPLAY_ID
+            }
+        );
+        let wayland = surfaces_for(Platform::LinuxWayland, true, true);
+        assert!(!wayland.record_countdown);
+        assert_eq!(countdown_secs(&wayland, 3, Recording), 0);
+        assert_eq!(countdown_secs(&wayland, 5, Screenshot), 5);
+        let x11 = surfaces_for(Platform::LinuxX11, true, true);
+        assert!(x11.record_countdown);
+        assert_eq!(countdown_secs(&x11, 3, Recording), 3);
     }
 
     /// Linux has no capture shortcut yet; Settings shows what to use

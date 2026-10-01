@@ -20,6 +20,7 @@ pub mod preview;
 pub mod recorder_child;
 pub mod recording;
 pub mod rollout;
+pub mod screencast_token;
 pub mod screenshot;
 pub mod session;
 pub mod share;

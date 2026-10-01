@@ -49,7 +49,24 @@ const STOP_WITHIN: Duration = Duration::from_mins(2);
 /// # Errors
 ///
 /// The program could not start, never said `ready`, or refused the `start`.
-pub fn start(mut program: Command, selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
+pub fn start(program: Command, selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
+    start_within(program, selection, dest, options, START_WITHIN)
+}
+
+/// [`start`], allowing `start_within` for the `started` reply: a recorder
+/// that opens the desktop's screen-sharing dialog (the Wayland ScreenCast
+/// portal) waits for the user, who may take a while to choose.
+///
+/// # Errors
+///
+/// The program could not start, never said `ready`, or refused the `start`.
+pub fn start_within(
+    mut program: Command,
+    selection: Selection,
+    dest: &Path,
+    options: RecordOptions,
+    start_within: Duration,
+) -> Result<Box<dyn Recorder>> {
     let mut child = program
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -76,9 +93,15 @@ pub fn start(mut program: Command, selection: Selection, dest: &Path, options: R
         });
     }
     let microphone = options.microphone;
-    let recorder = HelperRecorder::begin(Some(child), Box::new(stdin), stdout, dest.to_path_buf(), microphone, |id| {
-        StartCommand::from_selection(id, selection, dest, options)
-    })?;
+    let recorder = HelperRecorder::begin_within(
+        Some(child),
+        Box::new(stdin),
+        stdout,
+        dest.to_path_buf(),
+        microphone,
+        |id| StartCommand::from_selection(id, selection, dest, options),
+        start_within,
+    )?;
     Ok(Box::new(recorder))
 }
 
@@ -123,6 +146,12 @@ fn read_events(stdout: impl Read, tx: &mpsc::Sender<Incoming>, shared: &Shared) 
     for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok) {
         match parse_event(&line) {
             Ok(incoming) => {
+                if incoming.event == HelperEvent::Started
+                    && let Some(token) = &incoming.restore_token
+                    && let Ok(mut slot) = shared.restore_token.lock()
+                {
+                    *slot = Some(token.clone());
+                }
                 if let HelperEvent::StreamStopped { message, saved } = &incoming.event {
                     shared.died(Death::StreamStopped {
                         message: message.clone(),
@@ -166,6 +195,8 @@ struct Shared {
     death: Mutex<Option<Death>>,
     /// `take_death` has handed the death out once already.
     reported: AtomicBool,
+    /// The portal's restore token from `started` (Wayland only).
+    restore_token: Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -203,6 +234,7 @@ impl HelperRecorder {
     /// Wait for `ready`, send the `start` that `start_cmd` builds with its
     /// id, and wait for `started`. The recorder is shut down (killed if it
     /// is a child) when any of that fails.
+    #[cfg(test)]
     pub(crate) fn begin(
         child: Option<Child>,
         stdin: Box<dyn Write + Send>,
@@ -210,6 +242,19 @@ impl HelperRecorder {
         output: PathBuf,
         microphone: bool,
         start_cmd: impl FnOnce(u64) -> Result<StartCommand>,
+    ) -> Result<Self> {
+        Self::begin_within(child, stdin, stdout, output, microphone, start_cmd, START_WITHIN)
+    }
+
+    /// [`Self::begin`], waiting up to `start_within` for `started`.
+    pub(crate) fn begin_within(
+        child: Option<Child>,
+        stdin: Box<dyn Write + Send>,
+        stdout: impl Read + Send + 'static,
+        output: PathBuf,
+        microphone: bool,
+        start_cmd: impl FnOnce(u64) -> Result<StartCommand>,
+        start_within: Duration,
     ) -> Result<Self> {
         let shared = Arc::new(Shared::default());
         let (tx, rx) = mpsc::channel::<Incoming>();
@@ -234,7 +279,7 @@ impl HelperRecorder {
         let id = session.next_id();
         let cmd = start_cmd(id)?;
         session.write_cmd(&cmd)?;
-        session.wait(id, |e| matches!(e, HelperEvent::Started), START_WITHIN)?;
+        session.wait(id, |e| matches!(e, HelperEvent::Started), start_within)?;
         session.running_since = Some(Instant::now());
         Ok(session)
     }
@@ -386,6 +431,10 @@ impl Recorder for HelperRecorder {
 
     fn microphone(&self) -> bool {
         self.microphone
+    }
+
+    fn restore_token(&self) -> Option<String> {
+        self.shared.restore_token.lock().ok().and_then(|slot| slot.clone())
     }
 
     fn take_death(&self) -> Option<AppError> {

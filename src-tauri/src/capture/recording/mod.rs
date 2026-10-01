@@ -2,11 +2,12 @@
 //!
 //! Every platform records in another process driven by the same
 //! [`helper::HelperRecorder`] over one protocol ([`protocol`]): macOS runs the
-//! Swift helper (ScreenCaptureKit to H.264 MP4); Windows runs the app's own
-//! executable as `--capture-recorder` (`capture::recorder_child::windows`:
-//! WGC, WASAPI, Media Foundation), and Linux will too. Until Linux's
-//! recorder lands, recording is unavailable there (`UnsupportedPlatform`)
-//! and Record stays hidden.
+//! Swift helper (ScreenCaptureKit to H.264 MP4); Windows and Linux run the
+//! app's own executable as `--capture-recorder`
+//! (`capture::recorder_child::windows`: WGC, WASAPI, Media Foundation;
+//! `capture::recorder_child::linux`: X11 or the ScreenCast portal,
+//! PulseAudio / PipeWire, GStreamer). Each platform is still gated by its
+//! lane in `capture::rollout`.
 //! Plan: `docs/plans/2026-10-01-capture-windows-linux.md`.
 
 pub mod helper;
@@ -44,6 +45,10 @@ pub struct RecordOptions {
     /// The camera bubble's window (its system window number), added to a
     /// window recording, which otherwise films that one window only.
     pub camera_window: Option<u32>,
+    /// Wayland: the ScreenCast portal's token from an earlier recording of
+    /// a whole screen, so the desktop can skip its dialog
+    /// (`capture::screencast_token` decides when it applies).
+    pub restore_token: Option<String>,
 }
 
 /// A microphone or camera the bar's pickers offer.
@@ -119,7 +124,15 @@ pub fn list_microphones() -> Vec<Microphone> {
             Vec::new()
         }
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(target_os = "linux")]
+    {
+        if microphone_supported() {
+            tidy_devices(linux::list_microphones())
+        } else {
+            Vec::new()
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
         Vec::new()
     }
@@ -161,16 +174,23 @@ pub fn microphone_supported() -> bool {
     {
         recording_supported() && windows::microphone_supported()
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    // PulseAudio and PipeWire ask nobody: a Linux that records can record
+    // the microphone.
+    #[cfg(target_os = "linux")]
+    {
+        recording_supported()
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
         false
     }
 }
 
 /// The helper in microphone-meter mode (`--meter [deviceId]`), for the
-/// capture bar's level meter. `None` where the microphone cannot be recorded
-/// or there is no helper. See `capture::mic_meter` for why the level is not
-/// measured in the webview.
+/// capture bar's level meter: the Swift helper on macOS, the recorder child
+/// on Linux. `None` where the microphone cannot be recorded or there is no
+/// helper (Windows measures it in WebView2). See `capture::mic_meter` for
+/// why the level is not measured in the webview on macOS and Linux.
 pub fn meter_command(device: Option<&str>) -> Option<std::process::Command> {
     #[cfg(target_os = "macos")]
     {
@@ -184,7 +204,14 @@ pub fn meter_command(device: Option<&str>) -> Option<std::process::Command> {
         }
         Some(command)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        if !microphone_supported() {
+            return None;
+        }
+        linux::meter_command(device)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = device;
         None
@@ -208,6 +235,22 @@ pub trait Recorder: Send {
     fn take_death(&self) -> Option<AppError> {
         None
     }
+    /// Wayland: the token the ScreenCast portal handed back for restoring
+    /// this choice next time, once the recording has started. `None`
+    /// everywhere else.
+    fn restore_token(&self) -> Option<String> {
+        None
+    }
+}
+
+/// Whether a recording's start was refused because the user closed the
+/// desktop's screen-sharing dialog (Wayland) without choosing: the session
+/// then ends quietly, as a cancel. The recorder refuses with exactly
+/// [`protocol::PICKER_CANCELLED`], and the helper hands a refusal back as
+/// its text.
+#[must_use]
+pub fn cancelled_in_picker(e: &AppError) -> bool {
+    matches!(e, AppError::Other(message) if message == protocol::PICKER_CANCELLED)
 }
 
 /// Refuse to start with less than `MIN_FREE_BYTES` free where the recording
@@ -259,12 +302,10 @@ pub enum RecordingUnavailable {
     OsTooOld,
     /// No recorder on this platform (or in this lane) yet.
     UnsupportedPlatform,
-    /// Linux: no H.264 or AAC encoder among the distro's GStreamer plugins.
-    /// Produced once the Linux recorder lands (Phase 4 of the parity plan).
-    #[allow(dead_code)]
+    /// Linux: no H.264 or AAC encoder, or another element a recording needs,
+    /// among the distro's GStreamer plugins (`--probe`).
     CodecsMissing,
     /// Wayland: no xdg-desktop-portal ScreenCast backend to ask.
-    #[allow(dead_code)]
     PortalMissing,
     /// Windows N and KN editions without the Media Feature Pack have no
     /// H.264 or AAC encoder.
@@ -281,7 +322,7 @@ impl RecordingUnavailable {
             Self::OsTooOld => os_too_old_message(),
             Self::UnsupportedPlatform => "Screen recording isn't available on this system yet.",
             Self::CodecsMissing => {
-                "Screen recording needs video codecs your system doesn't have. Install gstreamer1.0-plugins-ugly and gstreamer1.0-libav (Ubuntu, Debian) or gstreamer1-plugin-openh264 (Fedora), then restart Hippius."
+                "Screen recording needs video codecs your system doesn't have. Install gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav and gstreamer1.0-pipewire (Ubuntu, Debian) or gstreamer1-plugins-good, gstreamer1-plugins-bad-free, gstreamer1-plugin-openh264, gstreamer1-plugin-libav and pipewire-gstreamer (Fedora), then restart Hippius."
             }
             Self::PortalMissing => {
                 "Screen recording needs your desktop's screen sharing service (xdg-desktop-portal). Install it for your desktop, then sign out and back in."
@@ -329,6 +370,19 @@ const fn windows_unavailable_reason(on_lane: bool, os_supported: bool, encoders:
     }
 }
 
+/// Linux's decision: the lane first (as everywhere), then what the recorder
+/// child's probe found (`portalMissing` on a Wayland without a ScreenCast
+/// portal, `codecsMissing` without the GStreamer elements). The probe runs
+/// only where the lane allows recording.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_unavailable_reason(on_lane: bool, probe: impl FnOnce() -> Option<RecordingUnavailable>) -> Option<RecordingUnavailable> {
+    if on_lane {
+        probe()
+    } else {
+        Some(RecordingUnavailable::UnsupportedPlatform)
+    }
+}
+
 /// Why recording is unavailable on this machine and build; `None` = it works.
 pub fn recording_unavailable() -> Option<RecordingUnavailable> {
     // A platform still below this lane's floor (`rollout`) reports exactly
@@ -347,7 +401,7 @@ pub fn recording_unavailable() -> Option<RecordingUnavailable> {
     }
     #[cfg(target_os = "linux")]
     {
-        unavailable_reason(on_this_lane && linux::recording_supported(), true, true)
+        linux_unavailable_reason(on_this_lane && linux::recording_supported(), linux::unavailable)
     }
     #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     {
@@ -393,7 +447,14 @@ impl RecordingAvailability {
 /// checkout without a built helper is normal. Reads `sw_vers`, so callers
 /// run it off the main thread.
 pub fn warn_if_helper_missing() {
-    if cfg!(debug_assertions) {
+    // Linux: ask the recorder child what this machine has now, off the main
+    // thread, so the first `capture_support` does not wait for GStreamer's
+    // registry; a missing codec or portal is logged by the probe itself.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = recording_unavailable();
+    }
+    if cfg!(debug_assertions) || cfg!(target_os = "linux") {
         return;
     }
     if recording_unavailable() == Some(RecordingUnavailable::HelperMissing) {
@@ -498,8 +559,37 @@ mod tests {
     #[test]
     fn recording_is_supported_exactly_when_there_is_no_reason() {
         assert_eq!(recording_supported(), recording_unavailable().is_none());
+        // A test binary is no recorder child: its probe answers nothing,
+        // which must read as unavailable, never as "works".
         #[cfg(target_os = "linux")]
-        assert_eq!(recording_unavailable(), Some(RecordingUnavailable::UnsupportedPlatform));
+        assert!(recording_unavailable().is_some());
+    }
+
+    /// The dialog's cancel is told apart from a failure by the exact
+    /// refusal, never by a fragment of some other message.
+    #[test]
+    fn a_cancel_in_the_desktops_dialog_is_not_a_failure() {
+        assert!(cancelled_in_picker(&AppError::Other(protocol::PICKER_CANCELLED.into())));
+        assert!(!cancelled_in_picker(&AppError::Other(format!("x {}", protocol::PICKER_CANCELLED))));
+        assert!(!cancelled_in_picker(&AppError::Validation(protocol::PICKER_CANCELLED.into())));
+        assert!(!cancelled_in_picker(&AppError::Other(
+            "The recording helper did not respond in time.".into()
+        )));
+    }
+
+    /// Linux: the lane first, then the probe, which is not even asked
+    /// below the lane.
+    #[test]
+    fn linux_asks_its_probe_only_on_its_lane() {
+        assert_eq!(
+            linux_unavailable_reason(false, || panic!("no probe below the lane")),
+            Some(RecordingUnavailable::UnsupportedPlatform)
+        );
+        assert_eq!(linux_unavailable_reason(true, || None), None);
+        assert_eq!(
+            linux_unavailable_reason(true, || Some(RecordingUnavailable::PortalMissing)),
+            Some(RecordingUnavailable::PortalMissing)
+        );
     }
 
     /// A Windows N edition without the Media Feature Pack is told what to

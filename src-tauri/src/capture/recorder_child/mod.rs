@@ -15,8 +15,12 @@
 //! thread's logic ([`pipeline`]) and a test pattern ([`synthetic`]) written
 //! through a stand-in writer. A platform recorder is a [`Live`] recording:
 //! Windows' is [`windows`] (Windows.Graphics.Capture, WASAPI, Media
-//! Foundation). Where none has landed yet, a `start` for a real screen is
-//! refused with the same line `recording_unavailable` gives.
+//! Foundation), Linux's is [`linux`] (X11 or the ScreenCast portal,
+//! PulseAudio / PipeWire, GStreamer), both writing through [`pipeline`]
+//! (Linux's through the shared [`writer_loop`]). Where no recorder exists, a
+//! `start` for a real screen is refused with the same line
+//! `recording_unavailable` gives. `--meter` ([`meter`]) is the bar's
+//! microphone level on Linux.
 //!
 //! Rules kept from the Swift helper: every reply echoes its command's `id`;
 //! closing stdin FINISHES the file and keeps it (the app died); only `cancel`
@@ -24,7 +28,10 @@
 //! `saved` after finishing the file.
 
 pub mod frame;
+#[cfg(target_os = "linux")]
+pub mod linux;
 pub mod linux_plan;
+pub mod meter;
 pub mod mixer;
 pub mod pacing;
 pub mod pcm;
@@ -35,6 +42,7 @@ pub mod synthetic;
 pub mod timeline;
 #[cfg(windows)]
 pub mod windows;
+pub mod writer_loop;
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -152,6 +160,11 @@ pub trait Live: Send {
     fn finish(self: Box<Self>) -> std::result::Result<(), String>;
     /// Stop capturing and throw the file away.
     fn cancel(self: Box<Self>);
+    /// The ScreenCast portal's token for restoring this choice next time
+    /// (Wayland), said with `started`.
+    fn restore_token(&self) -> Option<String> {
+        None
+    }
 }
 
 /// What `start` hands back: the recording and its picture's pixel size.
@@ -167,10 +180,16 @@ fn start_live(cmd: &StartCommand, out: &Output) -> std::result::Result<Started, 
     {
         windows::start(cmd, out)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        // No screen recorder on this platform yet: the app never gets
-        // here (Record is hidden), and a hand-driven start is told why.
+        linux::start(cmd, out)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        // No screen recorder on this platform (macOS records with the Swift
+        // helper): the app never gets here, and a hand-driven start is
+        // told why.
+        let _ = out;
         Err(crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message().into())
     }
 }
@@ -308,8 +327,9 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
                 }
                 match start_live(&cmd, &out) {
                     Ok((live, size)) => {
+                        let token = live.restore_token();
                         session = Some(live);
-                        emit(&out, &protocol::ok_line("started", Some(cmd.id), Some(size)));
+                        emit(&out, &protocol::started_line(Some(cmd.id), size, token.as_deref()));
                     }
                     Err(e) => emit(&out, &protocol::error_line(&e, Some(cmd.id))),
                 }
@@ -354,9 +374,10 @@ pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
 }
 
 /// `Hippius --capture-recorder [--list-microphones | --list-cameras |
-/// --probe | --self-test]`: the one-shot modes print one JSON value and
-/// return; otherwise serve the protocol on stdin and stdout. Returns the
-/// process exit code.
+/// --probe | --self-test | --meter [deviceId]]`: the one-shot modes print
+/// one JSON value and return (`--meter` prints levels until stdin closes);
+/// otherwise serve the protocol on stdin and stdout. Returns the process
+/// exit code.
 #[must_use]
 pub fn run<I, S>(args: I) -> i32
 where
@@ -378,6 +399,25 @@ where
             let ok = report.ok;
             let code = print_line(&serde_json::to_string(&report).unwrap_or_else(|_| "{}".into()));
             return if ok { code } else { 1 };
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if has("--list-microphones") {
+            return print_line(&serde_json::to_string(&linux::devices::list_microphones()).unwrap_or_else(|_| "[]".into()));
+        }
+        if has("--probe") {
+            return print_line(&serde_json::to_string(&linux::probe::probe()).unwrap_or_else(|_| "{}".into()));
+        }
+        if has("--self-test") {
+            let report = linux::self_test::run();
+            let ok = report.ok;
+            let code = print_line(&serde_json::to_string(&report).unwrap_or_else(|_| "{}".into()));
+            return if ok { code } else { 1 };
+        }
+        if let Some(at) = args.iter().position(|a| a == "--meter") {
+            let device = args.get(at + 1).map(String::as_str).filter(|d| !d.starts_with("--"));
+            return linux::meter::run(device);
         }
     }
     if has("--list-microphones") || has("--list-cameras") {
@@ -496,16 +536,16 @@ mod tests {
     }
 
     /// A real screen is not recorded where no recorder has landed: the start
-    /// is refused with the line the app shows. On Windows the recorder is
-    /// real, and display 1 is no monitor: refused all the same. Either way
-    /// no file is left behind.
+    /// is refused with the line the app shows. On Windows and Linux the
+    /// recorder is real, and display 1 is no monitor (a test runner has no
+    /// desktop): refused all the same. Either way no file is left behind.
     #[test]
     fn a_real_start_that_cannot_record_is_refused_and_leaves_no_file() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("rec.mp4");
         let (recorder, child) = wire(&dest, false);
         let err = recorder.err().expect("refused");
-        if !cfg!(windows) {
+        if !cfg!(any(windows, target_os = "linux")) {
             assert_eq!(
                 err.to_string(),
                 crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message()

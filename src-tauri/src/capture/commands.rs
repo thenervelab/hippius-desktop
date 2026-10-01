@@ -437,6 +437,11 @@ async fn fail_capture(app: &AppHandle, e: &AppError) {
     restore_main_window(app, &state.capture);
     hand_focus_back(app, &state.capture);
     end_camera(app).await;
+    // Closing the desktop's screen-sharing dialog is a cancel, not a failure.
+    if failed && recording::cancelled_in_picker(e) {
+        tracing::info!("screen sharing cancelled in the desktop's dialog");
+        return;
+    }
     if failed {
         tracing::warn!(error = %e, "capture failed");
         let _ = app.emit(
@@ -702,7 +707,12 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         cfg!(target_os = "linux") || !super::permissions::windows_excludes_from_capture(super::permissions::windows_build()),
         Ordering::SeqCst,
     );
-    if let Err(e) = open_capture_ui(&app, &state.capture, &areas).await {
+    let opened = if plan == super::support::StartPlan::Panel {
+        open_panel(&app, &state.capture).await
+    } else {
+        open_capture_ui(&app, &state.capture, &areas).await
+    };
+    if let Err(e) = opened {
         // Everything this start put up comes down again, the camera included.
         close_overlays(&app);
         close_controls(&app);
@@ -727,7 +737,10 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
     {
         tracing::warn!(error = %e, "recording controls not prepared");
     }
-    spawn_display_watch(app.clone());
+    // The panel is no display's overlay: nothing for the watch to follow.
+    if plan != super::support::StartPlan::Panel {
+        spawn_display_watch(app.clone());
+    }
     Ok(())
 }
 
@@ -763,6 +776,55 @@ async fn open_capture_ui(app: &AppHandle, state: &CaptureState, areas: &bar::Rem
         open_overlay(app, display, Some(display.id) == host).await?;
     }
     Ok(())
+}
+
+/// The panel's size in logical pixels: the bar, the sources above it and an
+/// open menu fit; the compositor decides where it goes.
+const PANEL_SIZE: (f64, f64) = (520.0, 600.0);
+
+/// Wayland's recording panel: the capture bar alone in one ordinary window,
+/// with no selection surface (Hippius can neither cover the screen nor see
+/// other windows there); its Record opens the desktop's screen-sharing
+/// dialog (`support::system_picker_selection`). It is the overlay page in
+/// `capture-overlay-0`, so the overlay's capability and media permission
+/// cover it, and every path that closes overlays closes it.
+async fn open_panel(app: &AppHandle, state: &CaptureState) -> Result<()> {
+    let display = panel_display(app);
+    *lock(&state.pending) = None;
+    *lock(&state.bar_display) = Some(display.clone());
+    *lock(&state.displays) = vec![display.clone()];
+    let label = format!("{OVERLAY_LABEL_PREFIX}{}", display.id);
+    if let Some(stale) = app.get_webview_window(&label) {
+        let _ = stale.destroy();
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+    let window = build_overlay(app, &label, &display)?;
+    let _ = window.set_size(tauri::LogicalSize::new(PANEL_SIZE.0, PANEL_SIZE.1));
+    let _ = window.center();
+    window
+        .show()
+        .map_err(|e| AppError::Other(format!("Could not show the capture panel: {e}")))?;
+    let _ = window.set_focus();
+    Ok(())
+}
+
+/// The display the panel stands for: the primary monitor as GTK reports it
+/// (Hippius has no display list of its own on Wayland), under the panel's id.
+fn panel_display(app: &AppHandle) -> DisplayTarget {
+    let monitor = app.primary_monitor().ok().flatten();
+    let (width, height, scale) = monitor
+        .as_ref()
+        .map_or((1920, 1080, 1.0), |m| (m.size().width, m.size().height, m.scale_factor()));
+    DisplayTarget {
+        id: super::support::PANEL_DISPLAY_ID,
+        name: String::new(),
+        x: 0,
+        y: 0,
+        width,
+        height,
+        scale_factor: scale,
+        is_primary: true,
+    }
 }
 
 /// The area last drawn on `display`, fitted to it as it is now.
@@ -1400,7 +1462,9 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
     let CapturePhase::Selecting { mode, kind } = state.capture.current() else {
         return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
-    let windows = if mode == CaptureMode::Window {
+    let surfaces = super::support::surfaces();
+    // The panel (system picker) lists no windows: the desktop's dialog does.
+    let windows = if mode == CaptureMode::Window && surfaces.selection == super::support::SelectionUi::Overlay {
         tauri::async_runtime::spawn_blocking(move || windows_on_display_blocking(display_id))
             .await
             .map_err(|e| AppError::Other(format!("window listing task failed: {e}")))??
@@ -1421,7 +1485,7 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         kind,
         windows,
         hosts_bar,
-        countdown_secs: options.countdown_secs(kind),
+        countdown_secs: super::support::countdown_secs(&surfaces, options.countdown_secs(kind), kind),
         camera_filmed: options.camera_filmed(kind, mode),
         options,
         recording_available: recording::recording_supported(),
@@ -1429,7 +1493,7 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         show_clicks_available: recording::show_clicks_supported(),
         camera_only_available: camera_only_supported(),
         recording_availability: recording::RecordingAvailability::now(),
-        surfaces: super::support::surfaces(),
+        surfaces,
         destination,
         pending,
     })
@@ -1555,6 +1619,10 @@ pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
             .await
             .ok_or_else(|| AppError::Validation("The camera isn't on screen yet. Try again in a moment.".into()))?;
         Selection::Window { window_id }
+    } else if kind == CaptureKind::Recording && super::support::surfaces().selection == super::support::SelectionUi::SystemPicker {
+        // The panel: the desktop's screen-sharing dialog chooses the window
+        // or screen once the recorder asks it.
+        super::support::system_picker_selection(mode)
     } else {
         let pending = *lock(&state.capture.pending);
         // Entire screen: the display under the pointer, as a click takes it.
@@ -1609,7 +1677,7 @@ pub async fn capture_set_options(state: tauri::State<'_, AppState>, app: AppHand
         _ => (options.last_kind, options.last_mode),
     };
     Ok(SavedOptions {
-        countdown_secs: options.countdown_secs(kind),
+        countdown_secs: super::support::countdown_secs(&super::support::surfaces(), options.countdown_secs(kind), kind),
         camera_filmed: options.camera_filmed(kind, mode),
         options,
     })
@@ -1950,12 +2018,21 @@ async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
 async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     let state = app.state::<AppState>();
     let saved = bar::load_options(state.pool()?).await.unwrap_or_default();
+    let surfaces = super::support::surfaces();
+    let system_picker = surfaces.selection == super::support::SelectionUi::SystemPicker;
+    let restore_token = if system_picker {
+        let displays = app.available_monitors().map_or(0, |m| m.len());
+        super::screencast_token::for_start(state.pool()?, selection, displays).await
+    } else {
+        None
+    };
     let options = RecordOptions {
         microphone: saved.microphone && recording::microphone_supported(),
         microphone_device: saved.microphone_device.clone(),
         show_clicks: saved.show_clicks && recording::show_clicks_supported(),
-        system_audio: saved.system_audio && super::support::surfaces().system_audio,
+        system_audio: saved.system_audio && surfaces.system_audio,
         camera_window: filmed_camera_window(&state.capture),
+        restore_token,
     };
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     *lock(&state.capture.recording_dir) = Some(dir.clone());
@@ -1972,7 +2049,12 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     // effort: a recording without a picture on its card is still a recording.
     // Taken in memory and alongside the recorder's start, so it adds nothing
     // to the wait before recording begins.
+    // With the system picker Hippius cannot read the screen itself, and the
+    // selection is not chosen yet: no still, the card shows none.
     let poster_task = tauri::async_runtime::spawn_blocking(move || {
+        if system_picker {
+            return None;
+        }
         capture_blocking(selection)
             .ok()
             .and_then(|image| super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(image)).ok())
@@ -1986,6 +2068,9 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     let poster = poster_task.await.ok().flatten();
     *lock(&state.capture.poster) = poster;
     let recorder = started?;
+    if system_picker && let Ok(pool) = state.pool() {
+        super::screencast_token::remember(pool, recorder.restore_token()).await;
+    }
 
     if let Err(orphan) = state.capture.adopt_recorder(recorder, |e| emit_phase(app, e)) {
         // Cancelled (or ended) while the recorder was starting. It must not

@@ -213,7 +213,7 @@ pub async fn request() -> PortalAnswer {
 /// `PortalNotFound`, or as a D-Bus "no such service / method / interface"
 /// error from a bus with no portal frontend at all.
 #[cfg(target_os = "linux")]
-fn classify(e: &ashpd::Error) -> PortalAnswer {
+pub(crate) fn classify(e: &ashpd::Error) -> PortalAnswer {
     use ashpd::desktop::ResponseError;
 
     match e {
@@ -224,7 +224,8 @@ fn classify(e: &ashpd::Error) -> PortalAnswer {
     }
 }
 
-/// The D-Bus error names that mean nobody serves the Screenshot portal.
+/// The D-Bus error names that mean nobody serves the portal (Screenshot,
+/// and the recorder's ScreenCast).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_missing_service(error_name: &str) -> bool {
     matches!(

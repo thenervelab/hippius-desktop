@@ -486,7 +486,9 @@ fn a_recording_that_dies_is_stopped_and_delivered() {
 fn a_start_that_fails_takes_its_windows_down() {
     let src = read("src/capture/commands.rs");
     let start = fn_body(&src, "pub async fn capture_start(");
-    let arm_start = start.find("if let Err(e) = open_capture_ui(").expect("the failure arm");
+    // The overlay and the Wayland panel open through one failure arm.
+    assert!(start.contains("open_capture_ui(&app, &state.capture, &areas)") && start.contains("open_panel(&app, &state.capture)"));
+    let arm_start = start.find("if let Err(e) = opened {").expect("the failure arm");
     let arm = &start[arm_start..];
     let arm = &arm[..arm.find("return Err(e);").expect("the arm returns")];
     for step in [
@@ -934,8 +936,9 @@ fn linux_overlays_close_before_the_grab_and_cover_the_panels() {
     );
 }
 
-/// Linux capture adds no build or runtime package: x11rb and ashpd are
-/// pure Rust and Linux-only, and the .deb only RECOMMENDS a portal.
+/// Linux capture is Linux-only and requires nothing at run time: x11rb and
+/// ashpd are pure Rust, GStreamer (recording) links only libraries WebKitGTK
+/// already brings, and the .deb only RECOMMENDS a portal and the plugins.
 #[test]
 fn linux_capture_is_linux_only_and_recommends_the_portal() {
     let manifest = read("Cargo.toml");
@@ -945,6 +948,14 @@ fn linux_capture_is_linux_only_and_recommends_the_portal() {
         .expect("a Linux-only dependency table");
     let table = linux.split("\n[").next().unwrap();
     assert!(table.contains("x11rb = ") && table.contains("ashpd = "));
+    assert!(
+        table.contains("gstreamer = ") && table.contains("gstreamer-app = "),
+        "GStreamer is Linux-only"
+    );
+    assert!(
+        !manifest.split("[target.").next().unwrap().contains("gstreamer"),
+        "never a dependency of every OS"
+    );
     assert!(table.contains("default-features = false"), "ashpd brings only the portals capture uses");
     let conf: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).unwrap();
     let recommends = conf["bundle"]["linux"]["deb"]["recommends"].as_array().expect("deb recommends");
@@ -998,4 +1009,60 @@ fn windows_records_in_its_own_child_and_stays_on_staging() {
         !enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording),
         "Windows recording leaves staging only once its hardware checklist passes"
     );
+}
+
+/// Linux records in the app's own child, waits for the user in the
+/// desktop's screen-sharing dialog, and stays on staging until its
+/// checklist passes on real sessions.
+#[test]
+fn linux_records_in_its_own_child_and_stays_on_staging() {
+    let linux = read("src/capture/recording/linux.rs");
+    assert!(fn_body(&linux, "pub fn helper_command(").contains("own_recorder_command()"));
+    assert!(fn_body(&linux, "pub fn start(").contains("helper::start_within("));
+    assert!(fn_body(&linux, "pub fn meter_command(").contains("\"--meter\""));
+    use tauri_project_lib::capture::rollout::{Feature, Platform, enabled};
+    use tauri_project_lib::release_channel::ReleaseChannel;
+    for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
+        assert!(enabled(ReleaseChannel::Staging, platform, Feature::Recording));
+        assert!(
+            !enabled(ReleaseChannel::Beta, platform, Feature::Recording),
+            "{platform:?} recording leaves staging only once its Linux checklist passes"
+        );
+    }
+}
+
+/// One owner per device on Linux: the recorder opens the screen and the
+/// sound sources, never the camera (the bubble's webview owns it and is
+/// filmed), and each source has its own pipeline and thread.
+#[test]
+fn the_linux_recorder_never_opens_the_camera() {
+    for file in ["mod.rs", "capture.rs", "encoder.rs", "portal.rs"] {
+        let src = read(&format!("src/capture/recorder_child/linux/{file}"));
+        for camera in ["v4l2src", "pipewiresrc camera", "Camera"] {
+            assert!(!src.contains(&format!("\"{camera}")), "{file} must not open a camera ({camera})");
+        }
+    }
+    let session = read("src/capture/recorder_child/linux/mod.rs");
+    assert!(session.contains("capture::Audio::start(") && session.contains("capture::Video::start("));
+}
+
+/// Wayland's recording panel: one window (the overlay page, so its
+/// capability and media permission apply), no display watch (it is no
+/// display's overlay), Record resolved to the desktop's dialog, and a cancel
+/// in that dialog ending the session quietly.
+#[test]
+fn the_wayland_panel_hands_the_choice_to_the_desktop() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    assert!(start.contains("open_panel(&app, &state.capture)"));
+    assert!(start.contains("if plan != super::support::StartPlan::Panel {\n        spawn_display_watch("));
+    assert!(fn_body(&src, "async fn open_panel(").contains("build_overlay(app, &label, &display)"));
+    assert!(fn_body(&src, "pub async fn capture_confirm(").contains("support::system_picker_selection(mode)"));
+    let fail = fn_body(&src, "async fn fail_capture(");
+    assert!(
+        fail.find("recording::cancelled_in_picker(e)").unwrap() < fail.find("FAILED_EVENT").unwrap(),
+        "a cancel in the desktop's dialog is not reported as a failure"
+    );
+    let begin = fn_body(&src, "async fn begin_recording(");
+    assert!(begin.contains("screencast_token::for_start(") && begin.contains("screencast_token::remember("));
 }

@@ -1,21 +1,93 @@
 //! Linux recording: the app's own executable as `--capture-recorder`,
-//! driven by the shared [`HelperRecorder`](super::helper).
+//! driven by the shared [`HelperRecorder`](super::helper). The recorder
+//! itself (X11 or the ScreenCast portal, PulseAudio / PipeWire, GStreamer)
+//! lives in `capture::recorder_child::linux`; this side only says whether
+//! this machine can record, lists the microphones and starts it.
 //!
-//! The recorder itself (the ScreenCast portal or X11, into GStreamer) is
-//! Phase 4 of `docs/plans/2026-10-01-capture-windows-linux.md`. Until it
-//! lands, recording is unavailable here and the child refuses a real `start`.
+//! Whether Record is offered at all is still `capture::rollout`'s: Linux
+//! recording stays on staging until its checklist passes on real sessions
+//! (Phase 4 of `docs/plans/2026-10-01-capture-windows-linux.md`).
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
+use std::time::Duration;
 
-use super::{RecordOptions, Recorder, RecordingUnavailable, helper};
+use super::{MediaDevice, RecordOptions, Recorder, RecordingUnavailable, helper};
+use crate::capture::recorder_child::linux_plan::Probe;
+use crate::capture::rollout::{Platform, current_platform};
 use crate::capture::screenshot::Selection;
-use crate::error::{AppError, Result};
+use crate::error::Result;
 
-/// Whether this build records the screen on Linux. False until the recorder
-/// child can.
-pub fn recording_supported() -> bool {
-    false
+/// How long the probe may take: the first GStreamer run after an install
+/// builds the plugin registry, which can take several seconds.
+const PROBE_WITHIN: Duration = Duration::from_secs(20);
+/// How long the user may take in the desktop's screen-sharing dialog.
+const PICKER_WITHIN: Duration = Duration::from_mins(5);
+
+/// This build has a Linux recorder.
+pub const fn recording_supported() -> bool {
+    true
+}
+
+fn wayland() -> bool {
+    current_platform() == Platform::LinuxWayland
+}
+
+/// What the recorder child says this machine has, asked once per launch
+/// (`--probe`) on a thread of its own and cached. A probe that could not
+/// run reads as nothing installed: Record shows disabled with the codec
+/// line rather than failing at Stop.
+fn machine() -> Probe {
+    static PROBE: OnceLock<Probe> = OnceLock::new();
+    PROBE
+        .get_or_init(|| {
+            let found = run_probe().unwrap_or_default();
+            tracing::info!(?found, "linux recording probe");
+            if !found.missing.is_empty() {
+                tracing::warn!(missing = ?found.missing, "screen recording needs GStreamer elements this system lacks");
+            }
+            found
+        })
+        .clone()
+}
+
+fn run_probe() -> Option<Probe> {
+    let mut program = helper_command().ok()?;
+    program.arg("--probe").stdin(Stdio::null()).stderr(Stdio::null());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("capture-probe".into())
+        .spawn(move || {
+            let _ = tx.send(program.output());
+        })
+        .ok()?;
+    let out = rx.recv_timeout(PROBE_WITHIN).ok()?.ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().find_map(|line| serde_json::from_str::<Probe>(line.trim()).ok())
+}
+
+/// Why this machine cannot record, once the lane allows Linux recording:
+/// no ScreenCast portal on Wayland, or GStreamer elements missing.
+pub fn unavailable() -> Option<RecordingUnavailable> {
+    machine().unavailable(wayland())
+}
+
+/// The microphones, from the child (`--list-microphones`: PipeWire or
+/// PulseAudio inputs without the monitors, the default marked).
+pub fn list_microphones() -> Vec<MediaDevice> {
+    helper_command().map_or_else(|_| Vec::new(), |program| helper::list_devices(program, "--list-microphones"))
+}
+
+/// The microphone meter: the child in `--meter` mode on `device` (a
+/// PulseAudio source name; none = the default input).
+pub fn meter_command(device: Option<&str>) -> Option<Command> {
+    let mut command = helper_command().ok()?;
+    command.arg("--meter");
+    if let Some(id) = device.filter(|id| !id.is_empty()) {
+        command.arg(id);
+    }
+    Some(command)
 }
 
 /// The program that records: this executable in recorder mode.
@@ -28,8 +100,8 @@ pub fn helper_command() -> Result<Command> {
 }
 
 pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
-    if !recording_supported() {
-        return Err(AppError::Validation(RecordingUnavailable::UnsupportedPlatform.message().into()));
-    }
-    helper::start(helper_command()?, selection, dest, options)
+    // On Wayland `started` waits for the user to choose in the desktop's
+    // dialog.
+    let within = if wayland() { PICKER_WITHIN } else { Duration::from_secs(30) };
+    helper::start_within(helper_command()?, selection, dest, options, within)
 }

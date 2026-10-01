@@ -73,6 +73,11 @@ pub struct StartCommand {
     /// A window recording also films this window (the camera bubble).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_window_id: Option<u32>,
+    /// Wayland: the ScreenCast portal's restore token from an earlier
+    /// recording, so the desktop can bring the same monitor back without its
+    /// dialog. Only the Rust child reads it; left off the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_token: Option<String>,
     /// Record the child's test pattern instead of the screen. Only the Rust
     /// child knows it; never sent by the app's own sessions, and left off the
     /// wire when false so the Swift helper never sees it.
@@ -113,6 +118,7 @@ impl StartCommand {
             show_clicks: options.show_clicks,
             system_audio: options.system_audio,
             camera_window_id: None,
+            restore_token: options.restore_token.clone(),
             synthetic: false,
         };
         match selection {
@@ -159,6 +165,9 @@ pub enum HelperEvent {
 pub struct Incoming {
     pub id: Option<u64>,
     pub event: HelperEvent,
+    /// `started` on Wayland: the portal's token for restoring this choice
+    /// next time (the Rust child only).
+    pub restore_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -173,6 +182,8 @@ struct WireEvent {
     id: Option<u64>,
     #[serde(default)]
     saved: Option<bool>,
+    #[serde(default, rename = "restoreToken")]
+    restore_token: Option<String>,
 }
 
 /// Read one event line.
@@ -200,7 +211,11 @@ pub fn parse_event(line: &str) -> std::result::Result<Incoming, String> {
             other => return Err(format!("unknown helper event: {other:?}")),
         }
     };
-    Ok(Incoming { id: v.id, event })
+    Ok(Incoming {
+        id: v.id,
+        event,
+        restore_token: v.restore_token,
+    })
 }
 
 // ── The recorder's side ─────────────────────────────────────────────────────
@@ -283,6 +298,26 @@ pub fn ok_line(event: &str, id: Option<u64>, size: Option<(u32, u32)>) -> String
     body.to_string()
 }
 
+/// `started`, with the picture's size and, on Wayland, the portal's token
+/// for restoring the choice next time.
+#[must_use]
+pub fn started_line(id: Option<u64>, size: (u32, u32), restore_token: Option<&str>) -> String {
+    let line = ok_line("started", id, Some(size));
+    match restore_token {
+        Some(token) => {
+            let mut body: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+            body["restoreToken"] = token.into();
+            body.to_string()
+        }
+        None => line,
+    }
+}
+
+/// The recorder's refusal when the user closed the desktop's screen-sharing
+/// dialog (Wayland) without choosing: the app ends the session quietly, as
+/// a cancel, on this exact text. Both ends are this crate.
+pub const PICKER_CANCELLED: &str = "Screen sharing was cancelled.";
+
 /// A refused command.
 #[must_use]
 pub fn error_line(error: &str, id: Option<u64>) -> String {
@@ -326,6 +361,7 @@ mod tests {
                 show_clicks: true,
                 system_audio: true,
                 camera_window: Some(99),
+                restore_token: None,
             },
         )
         .unwrap();
@@ -341,8 +377,33 @@ mod tests {
         assert_eq!(v["systemAudio"], true);
         // The screen and area filters film every window, the bubble included.
         assert!(v.get("cameraWindowId").is_none());
-        // The child's test pattern never reaches the Swift helper.
+        // The child's test pattern and the portal token never reach the
+        // Swift helper.
         assert!(v.get("synthetic").is_none(), "{v}");
+        assert!(v.get("restoreToken").is_none(), "{v}");
+    }
+
+    /// Wayland: the portal's token goes to the child with `start` and comes
+    /// back with `started`, where the app keeps it for next time.
+    #[test]
+    fn the_portal_token_goes_out_with_start_and_back_with_started() {
+        let options = RecordOptions {
+            restore_token: Some("tok-1".into()),
+            ..RecordOptions::default()
+        };
+        let cmd = StartCommand::from_selection(4, Selection::Screen { display_id: 0 }, Path::new("/tmp/s.mp4"), options).unwrap();
+        let line = serde_json::to_string(&cmd).unwrap();
+        assert!(line.contains(r#""restoreToken":"tok-1""#), "{line}");
+        assert_eq!(parse_command(&line), Ok(Command::Start(cmd)));
+
+        let started = parse_event(&started_line(Some(4), (1920, 1080), Some("tok-2"))).unwrap();
+        assert_eq!(
+            (started.id, started.event, started.restore_token.as_deref()),
+            (Some(4), HelperEvent::Started, Some("tok-2"))
+        );
+        // Without a token, exactly the line the Swift helper writes.
+        assert_eq!(started_line(Some(4), (1920, 1080), None), ok_line("started", Some(4), Some((1920, 1080))));
+        assert_eq!(parse_event(&ok_line("started", Some(4), None)).unwrap().restore_token, None);
     }
 
     /// A window recording films one window; the bubble is added by number,
