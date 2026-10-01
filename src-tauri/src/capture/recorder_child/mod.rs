@@ -13,8 +13,9 @@
 //! [`plan`]), the frame pacing ([`pacing`]), the one-track audio mixer
 //! ([`mixer`], [`pcm`]), the BGRA to NV12 conversion ([`frame`]), the writer
 //! thread's logic ([`pipeline`]) and a test pattern ([`synthetic`]) written
-//! through a stand-in writer. A platform recorder is a [`Live`] recording.
-//! Where none has landed yet, a `start` for a real screen is
+//! through a stand-in writer. A platform recorder is a [`Live`] recording:
+//! Windows' is [`windows`] (Windows.Graphics.Capture, WASAPI, Media
+//! Foundation). Where none has landed yet, a `start` for a real screen is
 //! refused with the same line `recording_unavailable` gives.
 //!
 //! Rules kept from the Swift helper: every reply echoes its command's `id`;
@@ -31,6 +32,8 @@ pub mod plan;
 pub mod sizing;
 pub mod synthetic;
 pub mod timeline;
+#[cfg(windows)]
+pub mod windows;
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -159,10 +162,16 @@ fn start_live(cmd: &StartCommand, out: &Output) -> std::result::Result<Started, 
         let (session, size) = Session::start(cmd, out)?;
         return Ok((Box::new(session), size));
     }
-    // No screen recorder on this platform yet: the app never gets here
-    // (Record is hidden), and a hand-driven start is told why.
-    let _ = out;
-    Err(crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message().into())
+    #[cfg(windows)]
+    {
+        windows::start(cmd, out)
+    }
+    #[cfg(not(windows))]
+    {
+        // No screen recorder on this platform yet: the app never gets
+        // here (Record is hidden), and a hand-driven start is told why.
+        Err(crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message().into())
+    }
 }
 
 /// The test pattern's recording.
@@ -355,6 +364,21 @@ where
 {
     let args: Vec<String> = args.into_iter().map(|a| a.as_ref().to_string()).collect();
     let has = |flag: &str| args.iter().any(|a| a == flag);
+    #[cfg(windows)]
+    {
+        if has("--list-microphones") {
+            return print_line(&serde_json::to_string(&windows::devices::list_microphones()).unwrap_or_else(|_| "[]".into()));
+        }
+        if has("--probe") {
+            return print_line(&serde_json::to_string(&windows::probe::probe()).unwrap_or_else(|_| "{}".into()));
+        }
+        if has("--self-test") {
+            let report = windows::self_test::run();
+            let ok = report.ok;
+            let code = print_line(&serde_json::to_string(&report).unwrap_or_else(|_| "{}".into()));
+            return if ok { code } else { 1 };
+        }
+    }
     if has("--list-microphones") || has("--list-cameras") {
         // No devices where the platform's recorder does not list them (the
         // camera window names cameras from the webview on Windows).

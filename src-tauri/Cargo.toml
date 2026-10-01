@@ -284,13 +284,41 @@ tauri-plugin-global-shortcut = "2"
 # build (RtlGetVersion) the capture floor is checked against. The same 0.62
 # xcap uses, so no second copy; Tauri's own handles (0.61) cross as raw HWNDs.
 [target.'cfg(windows)'.dependencies]
+# Plus, for the recorder child (`capture/recorder_child/windows`): Media
+# Foundation for the fragmented MP4, WASAPI (Media_Audio) for the microphone
+# and system audio, COM and property stores for device names, the registry
+# for the camera and microphone privacy switches, and power requests to keep
+# the display awake while recording.
 windows = { version = "0.62", features = [
     "Wdk_System_SystemServices",
+    "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_Multimedia",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Performance",
+    "Win32_System_Power",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# Windows.Graphics.Capture sessions for a monitor or a window (the recorder
+# child's frames): MIT, on the same windows 0.62 as xcap. Its own encoder is
+# NOT used (plain MP4 with the index last, frame-stamped times): see decision
+# 1 of docs/plans/2026-10-01-capture-windows-linux.md.
+windows-capture = "2.0.1"
+# WebView2's PermissionRequested, so the camera bubble and the bar's mic meter
+# can open their devices. The same 0.38 wry already uses (windows 0.61).
+webview2-com = "0.38"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
