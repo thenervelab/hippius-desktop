@@ -137,6 +137,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Recordings get the right picture on their card (Mac).** The preview card
   now shows a frame from the recording itself, so a camera-only recording has
   a picture and a screen recording shows the camera bubble, as the video does.
+- **Recordings get the right picture on their card on Windows and Linux
+  too.** The card shows a frame from the recording itself, camera bubble
+  included, and a recording made on a Wayland desktop now has a picture at
+  all.
+- **Camera and microphone menus keep up on Windows and Linux.** A USB
+  microphone, headset or camera plugged in while the capture bar is open
+  shows up in its menu without reopening it, and an unplugged one goes away.
 
 - **Screen recording permission no longer gets stuck (Mac).** Allow always
   adds Hippius to macOS's Screen Recording list, so you never have to add it

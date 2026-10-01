@@ -935,8 +935,9 @@ staging builds only, never on beta or production.
   dialog comes between Record and the recording, so a count before it would
   end at a dialog. The plan's "countdown in the pill after the picker" is
   left for Phase 6.
-- **No poster on Wayland:** Hippius cannot read the screen there, so the
-  card of a Wayland recording has no picture.
+- *Closed.* **No poster on Wayland:** Hippius cannot read the screen
+  there, so the card of a Wayland recording had no picture; the child's
+  `--poster` now reads one from the saved file.
 - **Not done:** the pill's compact form and one-time "visible in screen
   recordings" note, placing the pill outside an X11 area recording, the
   bubble in a window recording (`WINDOW_RECORDING_ADDS_CAMERA` stays macOS
@@ -1191,11 +1192,9 @@ stays on staging in `capture::rollout`.
   display holding the window's centre).
 
 **Deviations**
-- Lists still refresh on menu open and the overlay's `devicechange` only;
-  there is no Windows `--watch-devices` (`IMMNotificationClient` /
-  `MFCreateDeviceSourceActivate` notifications). The plan said a
-  list-per-menu-open design does not need one; a USB mic plugged in while
-  the menu is open appears on the next open.
+- *Closed* (see "Parity gaps closed after Phase 6"). Lists refreshed on
+  menu open and the overlay's `devicechange` only; there was no Windows
+  `--watch-devices`.
 - The bubble in a window recording is composited on the CPU (a copy of the
   window's picture per output frame, at most 30 a second). Fine by
   arithmetic at 1080p; spike W3 decides whether a 4K window needs the GPU.
@@ -1387,6 +1386,131 @@ Phases 3 and 4 do not depend on Phase 2 beyond Phase 0, so a second engineer
 could take Linux in parallel from week 2 and bring the calendar to about 9
 weeks.
 
+## Parity gaps closed after Phase 6
+
+**Status: code done, cross-checked from a Mac, not yet run on Windows or
+Linux.** Verified with `cargo clippy --all-targets -D warnings` for
+`x86_64-pc-windows-msvc` (xwin), `cargo clippy --lib --tests` for
+`x86_64-unknown-linux-gnu` (fake `.pc` files), and the pure tests on macOS.
+
+**The card's picture from the saved file, on Windows and Linux.** The
+recorder child has the Swift helper's `--poster <video> <seconds>...` and
+prints the same line (`{"duration","frames":[{"jpeg","time"}]}`), so
+`recording::poster_command` is the child on both and `poster::pick`
+prefers the file's frame (camera bubble included) over the start
+screenshot, exactly as on macOS. Shared and tested everywhere
+(`recorder_child/poster.rs`): the argument parsing, the helper's time clamp
+(never past the last frame minus 0.1 s), the 1120 px long edge, JPEG at
+quality 85, the line, and NV12 / RGBx to RGB. Windows
+(`windows/poster.rs`) reads with Media Foundation's Source Reader, asking
+for NV12 (the decoder's own output, so no per-frame colour converter),
+seeking to each time and reading forward to the first frame within 0.25 s;
+the display aperture crops the decoder's 16-row padding. Linux
+(`linux/poster.rs`) prerolls `filesrc ! decodebin ! videoconvert !
+video/x-raw,format=RGBx ! appsink` paused and does an accurate flushing seek
+per time. **This gives a Wayland recording a picture at all** (Hippius
+cannot screenshot the screen there, so it had none). Differences from the
+helper:
+- The child stops after the first still that is not black. The app keeps
+  the first lit one anyway (`choose`), and both readers decode in software
+  from the key frame before each time (up to 60 frames at 30 fps), so the
+  later stills would only eat into `poster::WAIT` (3 s, unchanged). All
+  black still reads all three, so the app can show the first one marked
+  black.
+- Linux needs an H.264 decoder (`gstreamer1.0-libav`, openh264 or a VA-API
+  one) besides the encoder the probe checks; without one the pipeline does
+  not preroll, the line is empty, and the card keeps the start screenshot
+  (none on Wayland). `codecsMissing` does not cover the decoder: a machine
+  that records may still have no picture on its cards.
+
+**Live device lists on Windows and Linux.** `device_watch.rs` now runs
+the recorder child's `--watch-devices` there (`watcher_command`: the child
+with no console window on Windows), from the bar's first device read until
+`close_overlays`, and every line replaces `native_cameras` and goes out as
+`capture_cameras` / `capture_microphones` as on macOS. The child's loop is
+shared (`recorder_child/watch.rs`, tested everywhere): the lists at once,
+then again a settled 300 ms after a burst of notifications and on a 3 s
+poll behind them, only when they changed; it ends when stdin closes, when
+the app stops reading, or after 30 minutes. Windows (`windows/watch.rs`):
+`IMMNotificationClient` (endpoint added, removed, state, new default;
+property changes are ignored, they fire constantly) and
+`CM_Register_Notification` on `KSCATEGORY_VIDEO_CAMERA` and
+`KSCATEGORY_VIDEO` interfaces (new `windows` feature
+`Win32_Devices_DeviceAndDriverInstallation`); the lists are read with the
+same calls as `--list-microphones` / `--list-cameras`. Linux
+(`linux/watch.rs`): one `GstDeviceMonitor` on `Audio/Source` and
+`Video/Source`, nudged by its bus's device added / removed messages (a
+new default input is caught by the 3 s poll: `DeviceChanged` needs the
+`v1_16` binding feature, not switched on), the lists read from the running monitor with the same rules as
+the list modes (`devices::microphones_of`, `cameras_of`). This closes the
+Phase 5 deviation "lists still refresh on menu open".
+
+**Spike W3 (GPU colour conversion), analysis and a measured CPU cost.**
+No code change. `frame::to_nv12` (BGRA to NV12 with bilinear scaling,
+single-threaded, on the WGC frame thread) measured in a release build on an
+Apple M3 Max performance core, 30 frames after warm-up:
+
+| Picture | ms per frame | One core at 30 fps |
+|---|---|---|
+| 1080p, same size | 6.8 | 20 % |
+| 1440p, same size | 12.1 | 36 % |
+| 4K, same size | 27.1 | 81 % |
+| 5K display capped to 4K (scaled) | 76.5 | 230 % |
+| 4K window resized mid-recording (scaled) | 75.0 | 225 % |
+
+A typical Windows laptop core is about 1.5 to 2.5 times slower than this
+one, so: 1080p and 1440p are fine; 4K at the same size needs 40 to 70 ms a
+frame there, which is above the 33 ms a frame budget; any scaled 4K
+picture (a display above the 3840 cap, a resized window, the bubble
+composite on top) cannot reach 30 fps on one core anywhere. The pacing
+gate holds the last frame, so the effect is a 4K video at 12 to 25 fps,
+not a broken file. Options, cheapest first:
+1. Split `to_nv12` into horizontal bands across 4 threads
+   (`std::thread::scope`, each band owns its rows of Y and UV): a small,
+   pure change testable on every OS, about 4x on the scaled path, which
+   brings scaled 4K to about 20 ms on this machine and 30 to 50 ms on a
+   laptop.
+2. The D3D11 video processor (`ID3D11VideoProcessor::VideoProcessorBlt`,
+   BGRA texture to NV12 texture on the GPU, scaling included) before the
+   read-back, as the plan's `gpu.rs` described: conversion near free, and
+   the read-back halves (NV12 is 1.5 bytes a pixel, BGRA 4). Needs the
+   hardware checklist on Intel, NVIDIA, AMD and WARP, and a CPU fallback
+   when the processor refuses a size.
+Recommendation: do 1 when the Windows hardware checklist shows dropped
+frames at 4K (row 11 below), keep 2 for when CPU load at 4K is the
+complaint. The other half of W3 (hardware H.264 encoders and odd sizes)
+still needs the hardware.
+
+**Windows checklist additions**
+11. Record a 4K display for 20 s with Task Manager open: note the
+    recorder child's CPU and count frames (`ffprobe -count_frames`); 30 fps
+    means option 1 above can wait.
+12. Record 10 s with the camera bubble on, Stop: the card's picture shows
+    the bubble where it was (it is a frame of the file, not the start
+    screenshot). Camera only: the card shows the stage.
+13. `Hippius.exe --capture-recorder --poster "<a recording>.mp4" 1 5 9`
+    prints one line with a `frames` array; a 4K recording answers in under
+    3 s; a file that does not exist prints `{"duration":0.0,"frames":[]}`.
+14. Open the bar, open no menu, plug in a USB microphone and a USB camera:
+    both menus list them within about a second; unplug: they go. Change the
+    default input in Sound settings: the new default is first. Turn a
+    Phone Link camera on and off: it comes and goes. Close the bar: no
+    `--watch-devices` child left in Task Manager.
+
+**Linux checklist additions**
+1. Wayland (GNOME): record 10 s; the card has a picture (it had none
+   before). X11: the card's picture shows the camera bubble.
+2. Remove `gstreamer1.0-libav` with OpenH264 absent: Record still works
+   (encoder present) and the card falls back to the start screenshot on
+   X11, no picture on Wayland; the log has `poster:` on stderr.
+3. `hippius --capture-recorder --poster "<a recording>.mp4" 1 5` prints
+   one line with frames; a missing file prints the empty line.
+4. Open the bar, plug in a USB headset and a USB camera, then a phone
+   through v4l2loopback: the menus follow within about a second, without
+   reopening them; change the default input in Settings, Sound: it moves
+   first. Close the bar: no `--watch-devices` child left (`pgrep -af
+   watch-devices`).
+
 ## What each installer gains
 
 | Installer | Bundles | Declares | Size |
@@ -1467,7 +1591,7 @@ supported display (1280 x 720) and at 200 % scale.
 |---|---|---|
 | W1 | xcap `wgc` makes monitor shots slower or flashes a border on Windows 10, and has no GDI fallback | Time 20 area shots with and without `wgc` on Windows 10 and 11 hardware; decide wgc-for-all or own WGC for windows only. 0.5 day |
 | W2 | `IsBorderRequired(false)` refused for an unpackaged app on Windows 11 | One WGC session from the child with and without `GraphicsCaptureAccess::RequestAccessAsync(Borderless)`. 0.5 day |
-| W3 | Hardware H.264 MFTs need 16-aligned sizes or reject NV12 from our video processor; CPU cost at 4K30 | FMPEG4 writer at 1080p, 1440p, 4K and odd area sizes on Intel, NVIDIA, AMD and WARP; record CPU and output. 2 days |
+| W3 | Hardware H.264 MFTs need 16-aligned sizes or reject NV12 from our video processor; CPU cost at 4K30 | FMPEG4 writer at 1080p, 1440p, 4K and odd area sizes on Intel, NVIDIA, AMD and WARP; record CPU and output. 2 days. The CPU half is measured (see "Parity gaps closed after Phase 6"): 4K at the same size is about one core, scaled 4K over two |
 | W4 | An FMPEG4 file killed mid-write does not play, or fragments are too far apart | `taskkill /F` the child after 10 s; play in Edge, VLC, ffprobe. 0.5 day |
 | W5 | AAC encoder input rules (16-bit PCM, 44.1/48 kHz) plus resampling and mixing two clocks drift over an hour | 60 min recording with mic and loopback; measure A/V offset at the end against a clap. 1 day |
 | W6 | Defender or SmartScreen flags an unsigned build that captures the screen and mic | Install a staging build on a fresh Windows 11 with default Defender; record. 0.5 day |
@@ -1538,8 +1662,9 @@ webview opens the camera found by name.
   named by `PKEY_Device_FriendlyName`, default from `GetDefaultAudioEndpoint(eCapture, eConsole)`.
   That covers USB, Bluetooth hands-free and virtual cables. The endpoint id
   is what the recorder opens, so no name matching on the recording side.
-- Refresh: `IMMNotificationClient` is not needed for a list-per-menu-open
-  design; the overlay's `devicechange` re-reads as on macOS. WebView2 needs
+- Refresh: the child's `--watch-devices` (`IMMNotificationClient` and
+  camera-interface arrival) keeps the lists live while the bar is up, as
+  the helper's does on macOS; the menu-open re-read stays. WebView2 needs
   the camera and microphone permission granted for the capture windows
   (`PermissionRequested` handler scoped to those labels) or labels stay empty.
 - Spike: confirm a Phone Link camera is visible to a Win32 (unpackaged) app
@@ -1559,8 +1684,9 @@ webview opens the camera found by name.
   `enable-mediastream-device-info` for labels) set on the capture windows,
   plus the `permission-request` handler already planned in Phase 5, or
   `enumerateDevices` returns nothing usable to match against.
-- Refresh: WebKitGTK's `devicechange` support varies by version; keep the
-  menu-open re-read as the guarantee and treat `devicechange` as a bonus.
+- Refresh: the child's `--watch-devices` (one `GstDeviceMonitor` on both
+  classes) keeps the lists live while the bar is up; WebKitGTK's
+  `devicechange` varies by version and stays a bonus.
 
 **Tests to add with Phase 5:** device-list parsing fixtures from each OS
 (WASAPI friendly names, a Phone Link camera name, a PipeWire source list with
