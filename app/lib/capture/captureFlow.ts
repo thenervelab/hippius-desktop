@@ -1,5 +1,5 @@
 import { atom } from "jotai";
-import type { CaptureKind, CaptureMode } from "@/app/lib/tauri/capture";
+import type { CaptureKind, CaptureMode, CaptureSurfaces } from "@/app/lib/tauri/capture";
 import type { SupportedModes } from "./modes";
 import {
   isCaptureDestinationUnset,
@@ -47,6 +47,13 @@ export const captureRecordingNoteAtom = atom<string | null>(null);
  * null when Rust does not say, which offers every mode (`offeredModes`).
  */
 export const captureModesAtom = atom<SupportedModes | null>(null);
+
+/**
+ * How this platform captures (Rust's `capture_support` surfaces): whether a
+ * screenshot goes through Hippius's bar or the desktop's own tool, and
+ * whether the shortcut works here. Null until Rust has answered.
+ */
+export const captureSurfacesAtom = atom<CaptureSurfaces | null>(null);
 
 /** What System Settings calls the Screen Recording pane on this Mac (Rust's `permissionPane`); null until known. */
 export const capturePermissionPaneAtom = atom<string | null>(null);

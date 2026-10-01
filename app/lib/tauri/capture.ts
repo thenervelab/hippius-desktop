@@ -109,7 +109,12 @@ export interface CaptureSurfaces {
   systemAudio: boolean;
   /** Rust's line for why the microphone cannot be recorded; null when it can. */
   microphoneUnavailableMessage: string | null;
-  shortcut: { supported: boolean; via: CaptureShortcutVia };
+  /** `unavailableMessage`: where there is no shortcut yet, Rust's line for what to use instead. */
+  shortcut: { supported: boolean; via: CaptureShortcutVia; unavailableMessage: string | null };
+  /** With the system picker, Rust's line saying the desktop's own tool chooses what is captured. */
+  systemPickerNote: string | null;
+  /** Which Linux session this is; null off Linux. */
+  linuxSession: "x11" | "wayland" | null;
 }
 
 export interface CaptureOverlayContext extends RecordingAvailability, CaptureSurfaces {

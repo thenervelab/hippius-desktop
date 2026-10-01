@@ -2,11 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Camera, Keyboard, VideoOff } from "lucide-react";
+import { Camera, Keyboard, ScanEye, VideoOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
-import { captureDialogAtom, captureRecordingNoteAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import {
+  captureDialogAtom,
+  captureRecordingNoteAtom,
+  captureSupportedAtom,
+  captureSurfacesAtom,
+} from "@/app/lib/capture/captureFlow";
 import {
   acceleratorKeys,
   isMacPlatform,
@@ -37,6 +42,10 @@ const KBD =
 export default function CaptureSettings() {
   const supported = useAtomValue(captureSupportedAtom);
   const recordingNote = useAtomValue(captureRecordingNoteAtom);
+  const surfaces = useAtomValue(captureSurfacesAtom);
+  // Rust's line where this system has no capture shortcut yet (Linux): it
+  // replaces the shortcut controls, which would save a shortcut that never fires.
+  const shortcutUnavailable = surfaces && !surfaces.shortcut.supported ? surfaces.shortcut.unavailableMessage : null;
   const setDialog = useSetAtom(captureDialogAtom);
   const [setting, setSetting] = useState<CaptureShortcutSetting | null>(null);
   const [recording, setRecording] = useState(false);
@@ -118,6 +127,29 @@ export default function CaptureSettings() {
 
   return (
     <div className="flex flex-col gap-3">
+      {surfaces?.systemPickerNote && (
+        <div className={ROW}>
+          <div className="flex min-w-0 items-start gap-3">
+            <ScanEye className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-grey-10 dark:text-white">Screenshots</p>
+              <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">{surfaces.systemPickerNote}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shortcutUnavailable ? (
+        <div className={ROW}>
+          <div className="flex min-w-0 items-start gap-3">
+            <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-grey-50 dark:text-grey-dark-600" strokeWidth={2} />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-grey-10 dark:text-white">Capture shortcut</p>
+              <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">{shortcutUnavailable}</p>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className={ROW}>
         <div className="flex min-w-0 items-start gap-3">
           <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
@@ -171,6 +203,7 @@ export default function CaptureSettings() {
           )}
         </div>
       </div>
+      )}
 
       <div className={ROW}>
         <div className="flex min-w-0 items-start gap-3">

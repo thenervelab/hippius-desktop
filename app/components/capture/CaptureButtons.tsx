@@ -15,7 +15,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
-import { captureDialogAtom, captureModesAtom, captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import {
+  captureDialogAtom,
+  captureModesAtom,
+  captureSupportedAtom,
+  captureSurfacesAtom,
+} from "@/app/lib/capture/captureFlow";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
 import { useRecordAvailability } from "@/app/lib/capture/recordAvailability";
 import { MODE_ICON, modeLabel, offeredModes } from "@/app/lib/capture/modes";
@@ -29,6 +34,8 @@ export const RECORD_LABEL = "Record";
 export const RECORD_TOOLTIP = "Record your screen";
 export const OPEN_BAR_LABEL = "Open capture bar";
 export const CHANGE_DRIVE_LABEL = "Change capture drive…";
+/** The one Screenshot item where the desktop's own tool chooses (Wayland). */
+export const SYSTEM_PICKER_LABEL = "Take a screenshot…";
 
 /** "Take a screenshot (⇧⌘2)", or without the brackets when no shortcut is set. */
 export function screenshotTooltip(keys: string[], mac: boolean): string {
@@ -111,6 +118,11 @@ const ITEM_CLASSES = cn(
   "dark:focus:bg-white/5 dark:focus:text-grey-light-100",
 );
 const SEPARATOR_CLASSES = "my-1 h-px bg-grey-80 dark:bg-black-300";
+// A line of explanation inside a menu: wraps within the menu's width.
+const NOTE_CLASSES = cn(
+  "max-w-[17rem] whitespace-normal px-1.5 pb-1 pt-0.5",
+  "font-geist text-[12px] leading-[16px] tracking-normal text-grey-50 dark:text-grey-dark-600",
+);
 
 /** The Record glyph: a ring with a red dot, the way record reads everywhere. */
 function RecordGlyph({ className }: { className?: string }) {
@@ -144,18 +156,29 @@ export interface CaptureButtonsProps {
 export default function CaptureButtons({ size = "regular", labels = "auto", className }: CaptureButtonsProps) {
   const supported = useAtomValue(captureSupportedAtom);
   const modes = useAtomValue(captureModesAtom);
+  const surfaces = useAtomValue(captureSurfacesAtom);
   const record = useRecordAvailability();
   const setDialog = useSetAtom(captureDialogAtom);
   const startCapture = useStartCapture();
   const [shortcut, setShortcut] = useState<string[]>([]);
   const mac = isMacPlatform();
 
+  // Where Rust says there is no shortcut (Linux, for now), none is shown:
+  // keycaps for a shortcut that never fires would send people looking.
+  const shortcutWorks = surfaces?.shortcut.supported ?? true;
+  // Wayland: the desktop's own screenshot tool chooses area, window or screen.
+  const systemPicker = surfaces?.selection === "systemPicker";
+
   useEffect(() => {
     if (!SCREEN_CAPTURE_ENABLED || !supported) return;
+    if (!shortcutWorks) {
+      setShortcut([]);
+      return;
+    }
     getCaptureShortcut()
       .then((s) => setShortcut(s.accelerator ? acceleratorKeys(s.accelerator, isMacPlatform()) : []))
       .catch(() => setShortcut([]));
-  }, [supported]);
+  }, [supported, shortcutWorks]);
 
   if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
 
@@ -164,6 +187,26 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
   const label = (text: string) =>
     labels === "auto" ? <span className="hidden @[52rem]:inline">{text}</span> : null;
   const recordUnavailable = record.state === "disabled";
+
+  /**
+   * Screenshot where the desktop's own tool chooses (Wayland): one item that
+   * opens it, Rust's line saying so, and the capture drive. No capture bar:
+   * there is no Hippius overlay to open.
+   */
+  const systemPickerMenu = (name: string) => (
+    <DropdownMenuContent align="start" aria-label={name} className={CONTENT_CLASSES}>
+      <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => void startCapture("screenshot")}>
+        <Camera aria-hidden className="size-4 shrink-0" />
+        {SYSTEM_PICKER_LABEL}
+      </DropdownMenuItem>
+      {surfaces?.systemPickerNote && <p className={NOTE_CLASSES}>{surfaces.systemPickerNote}</p>}
+      <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
+      <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => setDialog({ kind: "destination", resume: null })}>
+        <Settings2 aria-hidden className="size-4 shrink-0" />
+        {CHANGE_DRIVE_LABEL}
+      </DropdownMenuItem>
+    </DropdownMenuContent>
+  );
 
   /** One kind's menu: its modes, then the two items that belong to both. */
   const menu = (kind: CaptureKind, name: string) => (
@@ -220,7 +263,7 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
           screenshotTooltip(shortcut, mac),
           <Camera aria-hidden className={cn(icon, "shrink-0")} />,
         )}
-        {menu("screenshot", SCREENSHOT_LABEL)}
+        {systemPicker ? systemPickerMenu(SCREENSHOT_LABEL) : menu("screenshot", SCREENSHOT_LABEL)}
       </DropdownMenu>
 
       {record.state === "available" && (
