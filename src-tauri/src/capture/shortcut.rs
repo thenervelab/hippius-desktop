@@ -1,10 +1,19 @@
 //! The system-wide shortcut that opens the capture bar from any app.
 //!
-//! One shortcut, default Cmd+Shift+2 on macOS and Ctrl+Shift+2 on Windows:
-//! next to macOS's own Cmd+Shift+3/4/5/6 and unused by the system. The user
-//! can change it or turn it off in Settings. Each system's own capture
-//! shortcuts are refused ([`reserved_by`]): macOS's Cmd+Shift+3 to 6, and
-//! Windows' Snipping Tool, Print Screen and Game Bar keys.
+//! One shortcut, default Cmd+Shift+2 on macOS and Ctrl+Shift+2 on Windows and
+//! Linux: next to macOS's own Cmd+Shift+3/4/5/6 and unused by the system. The
+//! user can change it or turn it off in Settings. Each system's own capture
+//! shortcuts are refused ([`reserved_by`]): macOS's Cmd+Shift+3 to 6,
+//! Windows' Snipping Tool, Print Screen and Game Bar keys, and the Print
+//! Screen keys GNOME and KDE take for their screenshot tools.
+//!
+//! How it is registered differs on Linux. On X11 the plugin grabs the keys
+//! like it does on macOS and Windows ([`plugin_grabs_keys`]). A Wayland app
+//! cannot grab keys at all: where the desktop has the GlobalShortcuts portal
+//! (KDE Plasma, GNOME 48 and later) the shortcut is bound through it
+//! (`shortcut_portal`), and elsewhere Settings gives the command to bind in
+//! the desktop's own keyboard settings (`hippius --capture`, which reaches
+//! this app through the single-instance handler).
 //!
 //! Ctrl+Shift+2 is also Windows Terminal's "new tab with profile 2" and an
 //! Excel format shortcut, which a global registration takes away from them.
@@ -22,8 +31,8 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use super::session::CapturePhase;
-// AppError is only raised where a shortcut can be registered (macOS, Windows).
-#[cfg(any(target_os = "macos", windows))]
+// AppError is only raised where a shortcut can be registered.
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 use crate::error::AppError;
 use crate::error::Result;
 
@@ -64,13 +73,13 @@ const OFF: &str = "off";
 
 /// macOS keeps these for its own screenshot tools; registering one would
 /// either fail or take the system's shortcut away.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 const MACOS_RESERVED: [&str; 4] = ["Command+Shift+3", "Command+Shift+4", "Command+Shift+5", "Command+Shift+6"];
 
 /// Windows' own capture keys: Snipping Tool (Win+Shift+S), Print Screen with
 /// and without Win or Alt, and the Game Bar's record and screenshot keys.
 /// Taking one would break the system's capture for as long as Hippius runs.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 const WINDOWS_RESERVED: [&str; 6] = [
     "Super+Shift+S",
     "PrintScreen",
@@ -80,19 +89,39 @@ const WINDOWS_RESERVED: [&str; 6] = [
     "Super+Alt+PrintScreen",
 ];
 
+/// The Print Screen keys GNOME and KDE take for their own screenshot tools
+/// (GNOME: Print, Shift+Print, Alt+Print; KDE Spectacle: Print, Meta+Print,
+/// Meta+Shift+Print), and GNOME's own screen recording key.
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+const LINUX_RESERVED: [&str; 6] = [
+    "PrintScreen",
+    "Shift+PrintScreen",
+    "Alt+PrintScreen",
+    "Super+PrintScreen",
+    "Super+Shift+PrintScreen",
+    "Control+Alt+Shift+R",
+];
+
 /// Which system's reserved shortcuts apply.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShortcutSystem {
     MacOs,
     Windows,
+    Linux,
 }
 
-#[cfg(any(target_os = "macos", windows))]
-const THIS_SYSTEM: ShortcutSystem = if cfg!(windows) { ShortcutSystem::Windows } else { ShortcutSystem::MacOs };
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+const THIS_SYSTEM: ShortcutSystem = if cfg!(windows) {
+    ShortcutSystem::Windows
+} else if cfg!(target_os = "linux") {
+    ShortcutSystem::Linux
+} else {
+    ShortcutSystem::MacOs
+};
 
 /// The refusal for a shortcut `system` keeps for itself, or `None`.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn reserved_by(system: ShortcutSystem, shortcut: &tauri_plugin_global_shortcut::Shortcut) -> Option<&'static str> {
     use std::str::FromStr;
     use tauri_plugin_global_shortcut::Shortcut;
@@ -102,6 +131,10 @@ fn reserved_by(system: ShortcutSystem, shortcut: &tauri_plugin_global_shortcut::
         ShortcutSystem::Windows => (
             &WINDOWS_RESERVED,
             "Windows uses that shortcut for its own screenshots and recordings. Choose another.",
+        ),
+        ShortcutSystem::Linux => (
+            &LINUX_RESERVED,
+            "Your desktop uses that shortcut for its own screenshots or recordings. Choose another.",
         ),
     };
     list.iter()
@@ -121,6 +154,16 @@ pub struct ShortcutSetting {
     /// registered when the app started), in Rust's words; `None` when it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
+    /// Wayland's shortcut portal: how the desktop describes the shortcut it
+    /// bound ("Ctrl+Shift+2"), which may differ from `accelerator` (the
+    /// desktop has the last word); `None` while nothing is bound or elsewhere.
+    pub desktop_trigger: Option<String>,
+    /// The desktop's own dialog can change it (the portal's version 2).
+    pub can_change_in_desktop: bool,
+    /// Where the shortcut lives in the desktop's keyboard settings: whether
+    /// Hippius's entry is there (`Some(false)`: Hippius can add it, on
+    /// GNOME); `None` where Hippius cannot add one.
+    pub added_to_desktop: Option<bool>,
 }
 
 /// The refusal when the system says the shortcut is taken.
@@ -131,7 +174,7 @@ pub const HELD_BY_ANOTHER_HIPPIUS: &str = "Another copy of Hippius is using this
 
 /// The sentence for a shortcut the system refused to register.
 #[must_use]
-#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows, target_os = "linux")), allow(dead_code))]
 pub fn held_message(another_hippius_running: bool) -> &'static str {
     if another_hippius_running {
         HELD_BY_ANOTHER_HIPPIUS
@@ -193,9 +236,9 @@ fn another_hippius_running(identifier: &str) -> bool {
     })
 }
 
-/// Windows has no cheap equivalent worth the risk here; the plain refusal
-/// is said instead.
-#[cfg(windows)]
+/// Windows and Linux have no cheap equivalent worth the risk here; the plain
+/// refusal is said instead.
+#[cfg(any(windows, target_os = "linux"))]
 fn another_hippius_running(_identifier: &str) -> bool {
     false
 }
@@ -225,7 +268,7 @@ pub async fn save(pool: &SqlitePool, accelerator: Option<&str>) -> Result<()> {
 /// # Errors
 ///
 /// [`AppError::Validation`] with the sentence Settings shows.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 pub fn validate(accelerator: &str) -> Result<tauri_plugin_global_shortcut::Shortcut> {
     use std::str::FromStr;
     use tauri_plugin_global_shortcut::{Modifiers, Shortcut};
@@ -239,11 +282,35 @@ pub fn validate(accelerator: &str) -> Result<tauri_plugin_global_shortcut::Short
     }
     let needs = Modifiers::SUPER | Modifiers::CONTROL | Modifiers::ALT;
     if !shortcut.mods.intersects(needs) {
-        return Err(AppError::Validation(
-            "Use Command, Control or Option (Alt) in the shortcut, so it doesn't take over a key in every app.".into(),
-        ));
+        return Err(AppError::Validation(needs_modifier(THIS_SYSTEM).into()));
     }
     Ok(shortcut)
+}
+
+/// The refusal for a shortcut without a real modifier, in the names this
+/// system's keyboards print.
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+const fn needs_modifier(system: ShortcutSystem) -> &'static str {
+    match system {
+        ShortcutSystem::MacOs => "Use Command, Control or Option in the shortcut, so it doesn't take over a key in every app.",
+        ShortcutSystem::Windows => "Use Ctrl, Alt or the Windows key in the shortcut, so it doesn't take over a key in every app.",
+        ShortcutSystem::Linux => "Use Ctrl, Alt or Super in the shortcut, so it doesn't take over a key in every app.",
+    }
+}
+
+/// Whether this session registers the shortcut through the plugin's key
+/// grab: macOS, Windows and Linux on X11. A Wayland session gives no app a
+/// key grab (the plugin's X11 grab would only see keys typed into XWayland
+/// windows), so `main.rs` does not register the plugin there and the
+/// shortcut goes through the portal or the desktop's settings instead.
+#[must_use]
+pub fn plugin_grabs_keys() -> bool {
+    plugin_grabs_keys_on(super::rollout::current_platform())
+}
+
+#[must_use]
+pub const fn plugin_grabs_keys_on(platform: super::rollout::Platform) -> bool {
+    !matches!(platform, super::rollout::Platform::LinuxWayland)
 }
 
 /// Make `accelerator` the one registered shortcut (or none).
@@ -254,10 +321,18 @@ pub fn validate(accelerator: &str) -> Result<tauri_plugin_global_shortcut::Short
 /// # Errors
 ///
 /// [`AppError::Validation`] when the shortcut is invalid or another app holds it.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 pub fn apply(app: &tauri::AppHandle, accelerator: Option<&str>) -> Result<()> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
+    if !plugin_grabs_keys() {
+        // Wayland: the plugin is not registered (its state would be
+        // missing), so the portal binds it, or nothing does.
+        #[cfg(target_os = "linux")]
+        return super::shortcut_portal::apply(app, accelerator);
+        #[cfg(not(target_os = "linux"))]
+        return Ok(());
+    }
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
     let Some(accelerator) = accelerator else {
@@ -270,14 +345,14 @@ pub fn apply(app: &tauri::AppHandle, accelerator: Option<&str>) -> Result<()> {
     })
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 pub fn apply(_app: &tauri::AppHandle, _accelerator: Option<&str>) -> Result<()> {
     Ok(())
 }
 
 /// The plugin, with the one handler every capture shortcut shares; what a
 /// press does is [`action_for`], carried out by `commands::on_shortcut`.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     use tauri_plugin_global_shortcut::ShortcutState;
 
@@ -346,13 +421,13 @@ mod tests {
         assert_eq!(stored_to_active(Some("Alt+Shift+C")).as_deref(), Some("Alt+Shift+C"));
     }
 
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     #[test]
     fn the_default_is_a_valid_shortcut() {
         assert!(validate(DEFAULT_SHORTCUT).is_ok());
     }
 
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     #[test]
     fn a_shortcut_needs_a_real_modifier() {
         assert!(matches!(validate("Shift+2"), Err(AppError::Validation(_))));
@@ -370,7 +445,7 @@ mod tests {
         assert!(validate("Command+Shift+7").is_ok());
     }
 
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     fn parsed(accelerator: &str) -> tauri_plugin_global_shortcut::Shortcut {
         use std::str::FromStr;
         tauri_plugin_global_shortcut::Shortcut::from_str(accelerator).unwrap()
@@ -378,7 +453,7 @@ mod tests {
 
     /// Windows' Snipping Tool, Print Screen and Game Bar keys are refused
     /// with a Windows sentence; macOS's own are not Windows' business.
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     #[test]
     fn windows_keeps_its_own_capture_shortcuts() {
         for reserved in [
@@ -403,7 +478,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     #[test]
     fn macos_reserves_only_its_own_on_its_own_list() {
         assert!(reserved_by(ShortcutSystem::MacOs, &parsed("Super+Shift+4")).is_some());
@@ -426,13 +501,63 @@ mod tests {
 
     /// The default is not changed here (an open product decision), and it
     /// is not one the system keeps.
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     #[test]
     fn the_default_is_not_a_system_shortcut_anywhere() {
         assert_eq!(DEFAULT_SHORTCUT, "CommandOrControl+Shift+2");
-        for system in [ShortcutSystem::MacOs, ShortcutSystem::Windows] {
+        for system in [ShortcutSystem::MacOs, ShortcutSystem::Windows, ShortcutSystem::Linux] {
             assert_eq!(reserved_by(system, &parsed(DEFAULT_SHORTCUT)), None, "{system:?}");
         }
+    }
+
+    /// GNOME's and KDE's screenshot keys and GNOME's recording key are
+    /// refused on Linux with a sentence that names no system, since the
+    /// desktop (not "Linux") owns them; the other systems' keys are not
+    /// Linux's business.
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    #[test]
+    fn linux_desktops_keep_their_own_capture_keys() {
+        for reserved in [
+            "PrintScreen",
+            "Shift+PrintScreen",
+            "Alt+PrintScreen",
+            "Super+PrintScreen",
+            "Shift+Super+PrintScreen",
+            "Control+Alt+Shift+R",
+        ] {
+            assert_eq!(
+                reserved_by(ShortcutSystem::Linux, &parsed(reserved)),
+                Some("Your desktop uses that shortcut for its own screenshots or recordings. Choose another."),
+                "{reserved}"
+            );
+        }
+        for free in ["Control+Shift+2", "Super+Shift+S", "Super+Alt+R", "Control+Alt+R"] {
+            assert_eq!(reserved_by(ShortcutSystem::Linux, &parsed(free)), None, "{free}");
+        }
+    }
+
+    /// The modifier refusal names the keys printed on that system's
+    /// keyboards; no em dashes in any of them.
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    #[test]
+    fn the_modifier_refusal_names_this_systems_keys() {
+        assert!(needs_modifier(ShortcutSystem::MacOs).contains("Command, Control or Option"));
+        assert!(needs_modifier(ShortcutSystem::Windows).contains("Windows key"));
+        assert!(needs_modifier(ShortcutSystem::Linux).contains("Super"));
+        for system in [ShortcutSystem::MacOs, ShortcutSystem::Windows, ShortcutSystem::Linux] {
+            assert!(!needs_modifier(system).contains('\u{2014}'));
+        }
+    }
+
+    /// The plugin's key grab works everywhere but Wayland, where no app may
+    /// grab keys; `main.rs` registers the plugin only where this is true.
+    #[test]
+    fn only_wayland_has_no_key_grab() {
+        use crate::capture::rollout::Platform;
+        for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
+            assert!(plugin_grabs_keys_on(platform), "{platform:?}");
+        }
+        assert!(!plugin_grabs_keys_on(Platform::LinuxWayland));
     }
 
     #[tokio::test]

@@ -20,12 +20,15 @@ import {
 } from "@/app/lib/capture/shortcutLabel";
 import ShortcutKeys from "@/app/components/capture/ShortcutKeys";
 import {
+  addCaptureDesktopShortcut,
+  configureCaptureShortcut,
   getCaptureDestination,
   getCaptureShortcut,
   setCaptureShortcut,
   type CaptureShortcutSetting,
 } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { isLinuxPlatform } from "@/app/lib/utils/isMacPlatform";
 
 const ROW =
   "flex flex-wrap items-center justify-between gap-4 rounded-[8px] border border-grey-dark-100 bg-white px-4 py-3 dark:border-black-300 dark:bg-black-600";
@@ -37,18 +40,24 @@ const KBD =
  * bar, and the drive captures are saved to. Rust validates and registers the
  * shortcut (`capture::shortcut`); this only records the keys and shows what
  * Rust answered. Hidden where capture is not available. On a Mac whose build
- * or macOS cannot record, a third row says so in Rust's words. Where Rust
- * says there is no shortcut yet (Linux), its line replaces the shortcut
- * controls; where the desktop's own tool takes screenshots (Wayland), a row
- * says so.
+ * or macOS cannot record, a third row says so in Rust's words. The shortcut
+ * row follows Rust's `shortcut.via`: the key recorder where Hippius grabs the
+ * keys (`plugin`); the desktop's own description and dialog where Wayland's
+ * shortcut portal binds it (`portal`); and where neither can, Rust's line
+ * with the command to bind in the desktop's keyboard settings, which Hippius
+ * adds itself on GNOME (`desktopSettings`). Where the desktop's own tool
+ * takes screenshots (Wayland), a row says so.
  */
 export default function CaptureSettings() {
   const supported = useAtomValue(captureSupportedAtom);
   const recordingNote = useAtomValue(captureRecordingNoteAtom);
   const surfaces = useAtomValue(captureSurfacesAtom);
-  // Rust's line where this system has no capture shortcut yet (Linux): it
-  // replaces the shortcut controls, which would save a shortcut that never fires.
+  // Rust's line where Hippius cannot set the shortcut itself (Wayland without
+  // the shortcut portal): it replaces the key recorder, which would save a
+  // shortcut that never fires.
   const shortcutUnavailable = surfaces && !surfaces.shortcut.supported ? surfaces.shortcut.unavailableMessage : null;
+  const desktopCommand = surfaces && !surfaces.shortcut.supported ? (surfaces.shortcut.command ?? null) : null;
+  const viaPortal = !!surfaces && surfaces.shortcut.supported && surfaces.shortcut.via === "portal";
   const setDialog = useSetAtom(captureDialogAtom);
   const [setting, setSetting] = useState<CaptureShortcutSetting | null>(null);
   const [recording, setRecording] = useState(false);
@@ -119,6 +128,32 @@ export default function CaptureSettings() {
     };
   }, [recording, save]);
 
+  // The portal binds in the background and the desktop may ask first: ask
+  // Rust again until the desktop has answered (a trigger or a problem).
+  const awaitingDesktop = viaPortal && !!setting?.accelerator && !setting.desktopTrigger && !setting.problem;
+  useEffect(() => {
+    if (!awaitingDesktop) return;
+    const timer = window.setInterval(reload, 2000);
+    const stop = window.setTimeout(() => window.clearInterval(timer), 60_000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(stop);
+    };
+  }, [awaitingDesktop, reload]);
+
+  const run = useCallback(
+    async (action: () => Promise<unknown>) => {
+      setError(null);
+      try {
+        await action();
+        reload();
+      } catch (e) {
+        setError(errorMessage(e));
+      }
+    },
+    [reload],
+  );
+
   if (!SCREEN_CAPTURE_ENABLED || !supported) return null;
 
   const current = setting?.accelerator ? acceleratorKeys(setting.accelerator, mac) : null;
@@ -144,12 +179,92 @@ export default function CaptureSettings() {
 
       {shortcutUnavailable ? (
         <div className={ROW}>
-          <div className="flex min-w-0 items-start gap-3">
+          <div className="flex min-w-0 flex-1 items-start gap-3">
             <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-grey-50 dark:text-grey-dark-600" strokeWidth={2} />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-grey-10 dark:text-white">Capture shortcut</p>
               <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">{shortcutUnavailable}</p>
+              {desktopCommand && (
+                <code
+                  data-testid="capture-shortcut-command"
+                  className={`${KBD} mt-2 block select-all break-all font-mono text-[12px]`}
+                >
+                  {desktopCommand}
+                </code>
+              )}
+              {setting?.addedToDesktop && (
+                <p className="mt-2 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+                  Added to your desktop&apos;s keyboard shortcuts. Change the keys there.
+                </p>
+              )}
+              {error && (
+                <p role="alert" className="mt-1 text-sm text-error-50">
+                  {error}
+                </p>
+              )}
             </div>
+          </div>
+          {desktopCommand && (
+            <div className="flex flex-wrap items-center gap-2">
+              {setting?.addedToDesktop === false && (
+                <Button variant="defaultStable" size="sm" onClick={() => void run(addCaptureDesktopShortcut)}>
+                  Add for me
+                </Button>
+              )}
+              <Button
+                variant="defaultStable"
+                size="sm"
+                onClick={() => void navigator.clipboard?.writeText(desktopCommand).catch(() => undefined)}
+              >
+                Copy command
+              </Button>
+            </div>
+          )}
+        </div>
+      ) : viaPortal ? (
+        <div className={ROW}>
+          <div className="flex min-w-0 items-start gap-3">
+            <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-grey-10 dark:text-white">Capture shortcut</p>
+              <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+                Opens the capture bar from any app. Your desktop keeps this shortcut and may ask you to confirm it.
+              </p>
+              {(error ?? setting?.problem) && (
+                <p role="alert" className="mt-1 text-sm text-error-50">
+                  {error ?? setting?.problem}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {!setting ? (
+              <span aria-hidden className="h-7 w-24 animate-pulse rounded-[6px] bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500" />
+            ) : !setting.accelerator ? (
+              <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
+            ) : setting.desktopTrigger ? (
+              <span className={KBD}>{setting.desktopTrigger}</span>
+            ) : awaitingDesktop ? (
+              <span
+                role="status"
+                aria-label="Waiting for your desktop"
+                className="h-7 w-24 animate-pulse rounded-[6px] bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500"
+              />
+            ) : null}
+            {setting?.accelerator && setting.canChangeInDesktop && (
+              <Button variant="defaultStable" size="sm" onClick={() => void run(configureCaptureShortcut)}>
+                Change
+              </Button>
+            )}
+            {setting && (
+              <Button
+                variant="defaultStable"
+                size="sm"
+                onClick={() => void save(setting.accelerator ? null : setting.defaultAccelerator)}
+              >
+                {setting.accelerator ? "Turn off" : "Turn on"}
+              </Button>
+            )}
           </div>
         </div>
       ) : (
@@ -160,7 +275,11 @@ export default function CaptureSettings() {
               <p className="text-sm font-medium text-grey-10 dark:text-white">Capture shortcut</p>
               <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
                 {recording
-                  ? "Press the new shortcut, with Command, Control or Option. Esc cancels."
+                  ? mac
+                    ? "Press the new shortcut, with Command, Control or Option. Esc cancels."
+                    : isLinuxPlatform()
+                      ? "Press the new shortcut, with Ctrl, Alt or Super. Esc cancels."
+                      : "Press the new shortcut, with Ctrl, Alt or the Windows key. Esc cancels."
                   : "Opens the capture bar from any app, to take a screenshot or start a recording."}
               </p>
               {(error ?? problem) && (

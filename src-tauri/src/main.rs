@@ -317,6 +317,14 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             info!("Another instance attempted to start with argv: {:?}", argv);
+            // `hippius --capture`: a keyboard shortcut in the desktop's own
+            // settings (Wayland without a shortcut portal). It does what the
+            // capture shortcut does and nothing else; bringing the main
+            // window forward would put it in a recording.
+            if crate::cli::argv_requests_capture(&argv) {
+                crate::capture::commands::on_shortcut(app);
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(e) = window.unminimize() {
                     debug!("Failed to unminimize window: {e}");
@@ -694,6 +702,10 @@ fn main() {
             crate::capture::commands::capture_sync_shortcut,
             crate::capture::commands::capture_get_shortcut,
             crate::capture::commands::capture_set_shortcut,
+            crate::capture::commands::capture_configure_shortcut,
+            crate::capture::commands::capture_skip_countdown,
+            crate::capture::commands::capture_controls_context,
+            crate::capture::commands::capture_add_desktop_shortcut,
             crate::capture::commands::capture_camera_context,
             crate::capture::commands::capture_set_cameras,
             crate::capture::commands::capture_cameras,
@@ -805,9 +817,16 @@ fn main() {
 
     // The capture bar's system-wide shortcut. Registered later, from Rust, once
     // the saved choice is read (`capture_sync_shortcut`); the plugin only
-    // carries the handler.
+    // carries the handler. On Linux only an X11 session gets it: a Wayland
+    // app cannot grab keys, and binds through the GlobalShortcuts portal.
     #[cfg(any(target_os = "macos", windows))]
     let builder = builder.plugin(crate::capture::shortcut::plugin());
+    #[cfg(target_os = "linux")]
+    let builder = if crate::capture::shortcut::plugin_grabs_keys() {
+        builder.plugin(crate::capture::shortcut::plugin())
+    } else {
+        builder
+    };
 
     info!("Running Tauri application...");
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
@@ -1013,6 +1032,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // Say in the log, once, when a release build has no recording helper
         // (Record is shown disabled). Its own thread: it runs `sw_vers`.
         std::thread::spawn(crate::capture::recording::warn_if_helper_missing);
+        // Whether a Wayland session has the GlobalShortcuts portal, so
+        // Settings shows the right shortcut route.
+        #[cfg(target_os = "linux")]
+        crate::capture::shortcut_portal::warm();
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);

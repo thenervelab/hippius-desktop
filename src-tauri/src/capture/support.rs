@@ -8,10 +8,12 @@
 //! offers no mode and no timer, and says so in `systemPickerNote`. A
 //! Wayland recording opens the capture bar alone in a small window (the
 //! panel: sources, window or screen, options) and Record hands the choice
-//! to the desktop's screen-sharing dialog, so there is no countdown. The
-//! shortcut is the plugin's on macOS and Windows; Linux gets its own in
-//! Phase 6 of `docs/plans/2026-10-01-capture-windows-linux.md`, and until
-//! then `shortcut.unavailableMessage` says how to start a capture instead.
+//! to the desktop's screen-sharing dialog; its countdown runs in the pill
+//! once the dialog is answered. The shortcut is the plugin's on macOS,
+//! Windows and X11; on Wayland it is the GlobalShortcuts portal's where the
+//! desktop has one, and elsewhere `shortcut.unavailableMessage` and
+//! `shortcut.command` tell the user what to bind in the desktop's settings
+//! ([`shortcut_for`]).
 
 use serde::Serialize;
 
@@ -41,7 +43,7 @@ pub struct Modes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ShortcutVia {
-    /// `tauri-plugin-global-shortcut` (macOS, Windows, and X11 later).
+    /// `tauri-plugin-global-shortcut` (macOS, Windows, Linux on X11).
     Plugin,
     /// The GlobalShortcuts portal (KDE, GNOME 48+).
     Portal,
@@ -54,10 +56,13 @@ pub enum ShortcutVia {
 pub struct ShortcutSupport {
     pub supported: bool,
     pub via: ShortcutVia,
-    /// Where there is no shortcut yet, what to use instead, in Rust's words;
-    /// `None` where the shortcut works. Settings shows it in place of the
-    /// shortcut controls.
+    /// Where Hippius cannot set the shortcut itself, what to do instead, in
+    /// Rust's words; `None` where the shortcut works. Settings shows it in
+    /// place of the shortcut controls.
     pub unavailable_message: Option<&'static str>,
+    /// With `desktopSettings`, the command a shortcut in the desktop's own
+    /// keyboard settings runs (`<this app> --capture`); `None` otherwise.
+    pub command: Option<&'static str>,
 }
 
 /// Which Linux session this is: they capture in different ways.
@@ -111,9 +116,6 @@ pub const CONTINUITY_HINT: &str =
 
 /// Wayland: what the Capture menu and Settings say about the screenshot.
 pub const WAYLAND_SCREENSHOT_NOTE: &str = "Your desktop's screenshot tool opens, so you can choose an area, a window or a whole screen there.";
-/// Linux has no capture shortcut yet (Phase 6 of the parity plan).
-pub const LINUX_SHORTCUT_NOT_YET: &str =
-    "A capture shortcut isn't available on Linux yet. Use the Screenshot button in Hippius or the Capture button in the tray menu.";
 
 /// Windows records it, but its privacy settings keep desktop apps from it.
 pub const MIC_BLOCKED_WINDOWS: &str =
@@ -154,28 +156,40 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
             (false, _) => Some(MIC_NOT_YET),
         },
         continuity_hint: (platform == Platform::MacOs).then_some(CONTINUITY_HINT),
-        shortcut: match platform {
-            Platform::MacOs | Platform::Windows => ShortcutSupport {
-                supported: true,
-                via: ShortcutVia::Plugin,
-                unavailable_message: None,
-            },
-            Platform::LinuxX11 => ShortcutSupport {
-                supported: false,
-                via: ShortcutVia::Plugin,
-                unavailable_message: Some(LINUX_SHORTCUT_NOT_YET),
-            },
-            Platform::LinuxWayland => ShortcutSupport {
-                supported: false,
-                via: ShortcutVia::DesktopSettings,
-                unavailable_message: Some(LINUX_SHORTCUT_NOT_YET),
-            },
-        },
+        shortcut: shortcut_for(platform, super::shortcut_portal::PortalStatus::Missing),
         system_picker_note: wayland.then_some(WAYLAND_SCREENSHOT_NOTE),
         linux_session: match platform {
             Platform::LinuxX11 => Some(LinuxSession::X11),
             Platform::LinuxWayland => Some(LinuxSession::Wayland),
             Platform::MacOs | Platform::Windows => None,
+        },
+    }
+}
+
+/// How the capture shortcut works on `platform`, given whether a Wayland
+/// session has the GlobalShortcuts portal: the plugin's key grab everywhere
+/// but Wayland; there the portal where it answers, else a shortcut the
+/// user adds in the desktop's keyboard settings, running [`ShortcutSupport::command`].
+#[must_use]
+pub fn shortcut_for(platform: Platform, portal: super::shortcut_portal::PortalStatus) -> ShortcutSupport {
+    match platform {
+        Platform::MacOs | Platform::Windows | Platform::LinuxX11 => ShortcutSupport {
+            supported: true,
+            via: ShortcutVia::Plugin,
+            unavailable_message: None,
+            command: None,
+        },
+        Platform::LinuxWayland if portal.available() => ShortcutSupport {
+            supported: true,
+            via: ShortcutVia::Portal,
+            unavailable_message: None,
+            command: None,
+        },
+        Platform::LinuxWayland => ShortcutSupport {
+            supported: false,
+            via: ShortcutVia::DesktopSettings,
+            unavailable_message: Some(super::desktop_shortcut::DESKTOP_SETTINGS_LINE),
+            command: Some(super::desktop_shortcut::command()),
         },
     }
 }
@@ -246,13 +260,24 @@ pub fn offered_mode(surfaces: &Surfaces, kind: super::session::CaptureKind, mode
     }
 }
 
-/// The countdown for a capture of `kind`: the saved one, except where
-/// these surfaces offer none.
+/// The countdown the overlay runs before it confirms a capture of `kind`:
+/// the saved one, except where these surfaces offer none or count in the
+/// pill after the desktop's dialog instead.
 #[must_use]
 pub fn countdown_secs(surfaces: &Surfaces, saved: u8, kind: super::session::CaptureKind) -> u8 {
     match kind {
-        super::session::CaptureKind::Recording if !surfaces.record_countdown => 0,
+        super::session::CaptureKind::Recording if !surfaces.record_countdown || surfaces.countdown_after_picker => 0,
         _ => saved,
+    }
+}
+
+/// The countdown the pill runs once the desktop's dialog is answered: the
+/// saved one with the system picker, none elsewhere (the overlay counted).
+#[must_use]
+pub fn countdown_after_picker(surfaces: &Surfaces, saved: u8, kind: super::session::CaptureKind) -> u8 {
+    match kind {
+        super::session::CaptureKind::Recording if surfaces.record_countdown && surfaces.countdown_after_picker => saved,
+        _ => 0,
     }
 }
 
@@ -262,6 +287,7 @@ pub fn surfaces() -> Surfaces {
     let platform = super::rollout::current_platform();
     let recording = super::recording::recording_supported();
     let mut surfaces = surfaces_for(platform, recording, super::recording::microphone_supported());
+    surfaces.shortcut = shortcut_for(platform, super::shortcut_portal::status());
     if let Some(line) = microphone_blocked_line(platform, recording, || {
         super::permissions::windows_privacy_blocks(super::permissions::PrivacyDevice::Microphone)
     }) {
@@ -291,10 +317,11 @@ mod tests {
                 "modes": { "screenshot": ["area", "window", "screen"], "recording": ["area", "window", "screen"] },
                 "screenshotTimer": true,
                 "recordCountdown": true,
+                "countdownAfterPicker": false,
                 "systemAudio": true,
                 "microphoneUnavailableMessage": null,
                 "continuityHint": CONTINUITY_HINT,
-                "shortcut": { "supported": true, "via": "plugin", "unavailableMessage": null },
+                "shortcut": { "supported": true, "via": "plugin", "unavailableMessage": null, "command": null },
                 "systemPickerNote": null,
                 "linuxSession": null,
             })
@@ -348,7 +375,7 @@ mod tests {
             assert!(!s.system_audio, "{platform:?} records no system audio without recording");
         }
         assert!(surfaces_for(Platform::Windows, false, false).shortcut.supported);
-        assert!(!surfaces_for(Platform::LinuxX11, false, false).shortcut.supported);
+        assert!(surfaces_for(Platform::LinuxX11, false, false).shortcut.supported);
     }
 
     /// The iPhone hint is a Mac's alone: Windows and Linux have no
@@ -439,21 +466,35 @@ mod tests {
         assert!(!camera_only(Platform::LinuxWayland));
     }
 
-    /// Linux has no capture shortcut yet; Settings shows what to use
-    /// instead rather than a shortcut that would never fire.
+    /// The shortcut per platform: the plugin's key grab on macOS, Windows
+    /// and X11; on Wayland the portal where the desktop has it, and the
+    /// desktop's own keyboard settings (with the command to bind) where it
+    /// does not or has not answered yet.
     #[test]
-    fn where_there_is_no_shortcut_settings_is_told_what_to_use() {
-        for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
-            let shortcut = surfaces_for(platform, false, false).shortcut;
-            assert!(!shortcut.supported);
-            assert_eq!(shortcut.unavailable_message, Some(LINUX_SHORTCUT_NOT_YET));
+    fn each_session_gets_the_shortcut_route_that_works_there() {
+        use crate::capture::shortcut_portal::PortalStatus;
+        for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
+            let s = shortcut_for(platform, PortalStatus::Missing);
+            assert!(s.supported, "{platform:?}");
+            assert_eq!(s.via, ShortcutVia::Plugin, "{platform:?}");
+            assert_eq!(s.unavailable_message, None);
+            assert_eq!(s.command, None);
         }
-        for platform in [Platform::MacOs, Platform::Windows] {
-            assert_eq!(surfaces_for(platform, false, false).shortcut.unavailable_message, None);
+        let portal = shortcut_for(Platform::LinuxWayland, PortalStatus::Available { configurable: true });
+        assert!(portal.supported);
+        assert_eq!(portal.via, ShortcutVia::Portal);
+        assert_eq!(portal.command, None);
+        for status in [PortalStatus::Missing, PortalStatus::Unknown] {
+            let s = shortcut_for(Platform::LinuxWayland, status);
+            assert!(!s.supported, "{status:?}");
+            assert_eq!(s.via, ShortcutVia::DesktopSettings);
+            assert_eq!(s.unavailable_message, Some(crate::capture::desktop_shortcut::DESKTOP_SETTINGS_LINE));
+            assert!(s.command.is_some_and(|c| c.ends_with(" --capture")), "{s:?}");
         }
         let v = serde_json::to_value(surfaces_for(Platform::LinuxWayland, false, false)).unwrap();
         assert_eq!(v["selection"], "systemPicker");
         assert_eq!(v["linuxSession"], "wayland");
-        assert_eq!(v["shortcut"]["unavailableMessage"], LINUX_SHORTCUT_NOT_YET);
+        assert_eq!(v["shortcut"]["via"], "desktopSettings");
+        assert!(v["shortcut"]["command"].as_str().is_some_and(|c| c.ends_with(" --capture")));
     }
 }

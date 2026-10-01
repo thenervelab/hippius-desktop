@@ -29,6 +29,19 @@ where
     args.into_iter().any(|a| a.as_ref() == crate::capture::recorder_child::RECORDER_FLAG)
 }
 
+/// True when a second launch asks the running app for the capture
+/// shortcut's action (`hippius --capture`, what a keyboard shortcut in a
+/// Wayland desktop's own settings runs where there is no shortcut portal).
+/// Read by the single-instance handler, which then does only that: the
+/// main window is not brought forward.
+pub fn argv_requests_capture<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| a.as_ref() == crate::capture::desktop_shortcut::CAPTURE_FLAG)
+}
+
 /// Write `CARGO_PKG_VERSION` plus a newline and flush.
 ///
 /// Uses `writeln!` rather than `println!` — the crate denies `print_stdout`.
@@ -42,7 +55,7 @@ pub fn write_version(out: &mut impl Write) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{argv_requests_recorder, argv_requests_version, write_version};
+    use super::{argv_requests_capture, argv_requests_recorder, argv_requests_version, write_version};
 
     #[test]
     fn the_recorder_flag_is_a_recorder_request() {
@@ -51,6 +64,17 @@ mod tests {
         assert!(!argv_requests_recorder(["--capture"]));
         assert!(!argv_requests_recorder(["--version"]));
         assert!(!argv_requests_recorder(Vec::<&str>::new()));
+    }
+
+    /// `--capture` (a desktop shortcut's command) is told apart from the
+    /// recorder child's flag, and only the exact flag counts.
+    #[test]
+    fn capture_flag_is_the_desktop_shortcuts_and_nothing_else() {
+        assert!(argv_requests_capture(["/usr/bin/hippius", "--capture"]));
+        assert!(!argv_requests_capture(["/usr/bin/hippius", "--capture-recorder"]));
+        assert!(!argv_requests_capture(["/usr/bin/hippius", "--captures"]));
+        assert!(!argv_requests_capture(["/usr/bin/hippius"]));
+        assert!(!argv_requests_recorder(["--capture"]));
     }
 
     #[test]

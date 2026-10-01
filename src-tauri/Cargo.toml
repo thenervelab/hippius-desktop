@@ -275,9 +275,6 @@ objc = "0.2"
 # it is a no-op on macOS.
 xcap = { version = "0.9", features = ["wgc"] }
 keepawake = "=0.6.0"
-# The capture bar's system-wide shortcut (default Cmd/Ctrl+Shift+2), macOS and
-# Windows only like capture itself. Registered from Rust; no JS permission.
-tauri-plugin-global-shortcut = "2"
 
 # Windows-only capture calls: reading back an overlay's display affinity
 # (did WDA_EXCLUDEFROMCAPTURE hold?), settling DWM before a grab, and the OS
@@ -332,7 +329,8 @@ webview2-com = "0.38"
 # Linux build already carries (notify-rust, opener, single-instance), so no
 # second D-Bus stack. Only the portals capture uses are switched on: Phase 4
 # adds `screencast` (Wayland recording) and `inhibit` (no screen blanking
-# while recording); Phase 6 adds `global_shortcuts`.
+# while recording), and Phase 6 `global_shortcuts` (the capture shortcut on
+# Wayland, KDE Plasma and GNOME 48+).
 #
 # Linux recording (Phase 4): GStreamer from the distro through gstreamer-rs
 # (MIT/Apache). It links only libgstreamer-1.0 and libgstapp-1.0, which
@@ -342,7 +340,7 @@ webview2-com = "0.38"
 # libgstreamer-plugins-base1.0-dev.
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["randr"] }
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot", "screencast", "inhibit"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot", "screencast", "inhibit", "global_shortcuts"] }
 gstreamer = "0.25"
 gstreamer-app = "0.25"
 # The camera bubble's getUserMedia (Phase 5): WebKitGTK's media-stream
@@ -356,6 +354,11 @@ gdkx11 = "0.18"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
+# The capture bar's system-wide shortcut (default Cmd/Ctrl+Shift+2).
+# Registered from Rust; no JS permission. On Linux it grabs the keys on X11
+# only (global-hotkey's backend is x11rb, pure Rust, nothing new to build or
+# install); a Wayland session uses the GlobalShortcuts portal instead.
+tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = { version = "2", default-features = false, features = [

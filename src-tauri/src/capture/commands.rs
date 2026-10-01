@@ -3399,11 +3399,79 @@ fn shortcut_problem_text(e: &AppError) -> String {
 
 #[tauri::command]
 pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>) -> Result<ShortcutSetting> {
+    let route = super::support::surfaces().shortcut.via;
+    let portal = route == super::support::ShortcutVia::Portal;
+    let problem = lock(&state.capture.shortcut_problem)
+        .clone()
+        .or_else(|| portal.then(super::shortcut_portal::problem).flatten());
+    let desktop_trigger = if portal { super::shortcut_portal::trigger() } else { None };
+    let can_change_in_desktop = portal
+        && desktop_trigger.is_some()
+        && matches!(
+            super::shortcut_portal::status(),
+            super::shortcut_portal::PortalStatus::Available { configurable: true }
+        );
+    let added_to_desktop = if route == super::support::ShortcutVia::DesktopSettings {
+        desktop_shortcut_added().await
+    } else {
+        None
+    };
     Ok(ShortcutSetting {
         accelerator: shortcut::load(state.pool()?).await?,
         default_accelerator: shortcut::DEFAULT_SHORTCUT.to_string(),
-        problem: lock(&state.capture.shortcut_problem).clone(),
+        problem,
+        desktop_trigger,
+        can_change_in_desktop,
+        added_to_desktop,
     })
+}
+
+/// Whether Hippius can add the shortcut to the desktop's own settings
+/// itself (GNOME), and whether it has; `None` where it cannot.
+#[cfg(target_os = "linux")]
+async fn desktop_shortcut_added() -> Option<bool> {
+    tauri::async_runtime::spawn_blocking(super::desktop_shortcut::gnome_shortcut_added)
+        .await
+        .ok()
+        .flatten()
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::unused_async)]
+async fn desktop_shortcut_added() -> Option<bool> {
+    None
+}
+
+/// Open the desktop's own dialog to change the capture shortcut (Wayland's
+/// GlobalShortcuts portal, version 2).
+#[tauri::command]
+pub async fn capture_configure_shortcut(app: AppHandle) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    return super::shortcut_portal::configure(&app).await;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        Err(AppError::Validation("Change the shortcut here in Settings.".into()))
+    }
+}
+
+/// Add the capture shortcut to the desktop's own keyboard settings (GNOME on
+/// Wayland without the shortcut portal): the saved shortcut, or the default
+/// when it is off, runs `hippius --capture`.
+#[tauri::command]
+pub async fn capture_add_desktop_shortcut(state: tauri::State<'_, AppState>) -> Result<()> {
+    let accelerator = shortcut::load(state.pool()?)
+        .await?
+        .unwrap_or_else(|| shortcut::DEFAULT_SHORTCUT.to_string());
+    #[cfg(target_os = "linux")]
+    return tauri::async_runtime::spawn_blocking(move || super::desktop_shortcut::add_gnome_shortcut(&accelerator))
+        .await
+        .map_err(|e| AppError::Other(format!("adding the shortcut failed: {e}")))?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = accelerator;
+        Err(AppError::Validation("Change the shortcut here in Settings.".into()))
+    }
 }
 
 /// Change the shortcut (`None` turns it off). Registered before it is saved,

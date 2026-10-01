@@ -163,9 +163,11 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
   const [shortcut, setShortcut] = useState<string[]>([]);
   const mac = isMacPlatform();
 
-  // Where Rust says there is no shortcut (Linux, for now), none is shown:
-  // keycaps for a shortcut that never fires would send people looking.
-  const shortcutWorks = surfaces?.shortcut.supported ?? true;
+  // Keycaps only where Hippius itself holds the keys (`plugin`): where it has
+  // none (Wayland without the shortcut portal) keycaps would send people
+  // looking, and where the desktop binds it (`portal`) the desktop may have
+  // chosen other keys, which Settings shows in the desktop's own words.
+  const shortcutWorks = surfaces ? surfaces.shortcut.supported && surfaces.shortcut.via === "plugin" : true;
   // Wayland: the desktop's own screenshot tool chooses area, window or screen.
   const systemPicker = surfaces?.selection === "systemPicker";
 

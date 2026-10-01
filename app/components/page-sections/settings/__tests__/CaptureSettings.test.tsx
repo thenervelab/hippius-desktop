@@ -149,7 +149,9 @@ describe("the capture card's recording row", () => {
 });
 
 describe("the capture card on Linux", () => {
-  const LINUX_SHORTCUT = "A capture shortcut isn't available on Linux yet. Use the Screenshot button in Hippius or the Capture button in the tray menu.";
+  const DESKTOP_LINE =
+    "Your desktop doesn't let apps set a shortcut themselves. Add one in your desktop's keyboard settings that runs this command:";
+  const COMMAND = "/usr/bin/hippius --capture";
   const linux = (over: Partial<CaptureSurfaces> = {}): CaptureSurfaces => ({
     selection: "overlay",
     modes: { screenshot: ["area", "window", "screen"], recording: ["area", "window", "screen"] },
@@ -158,19 +160,96 @@ describe("the capture card on Linux", () => {
     systemAudio: false,
     microphoneUnavailableMessage: null,
     continuityHint: null,
-    shortcut: { supported: false, via: "plugin", unavailableMessage: LINUX_SHORTCUT },
+    shortcut: { supported: true, via: "plugin", unavailableMessage: null, command: null },
     systemPickerNote: null,
     linuxSession: "x11",
     ...over,
   });
+  const wayland = (shortcut: CaptureSurfaces["shortcut"]) =>
+    linux({ selection: "systemPicker", linuxSession: "wayland", shortcut });
+  const desktopSettings = wayland({ supported: false, via: "desktopSettings", unavailableMessage: DESKTOP_LINE, command: COMMAND });
 
-  /** A shortcut that would be saved but never fire is not offered. */
-  it("says what to use instead of a shortcut, with nothing to change", async () => {
+  /** X11 grabs the keys like macOS and Windows: the recorder and its buttons. */
+  it("keeps the shortcut controls where Hippius grabs the keys (X11)", async () => {
     setup(null, linux());
-    expect(await screen.findByText(LINUX_SHORTCUT)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Turn off" })).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP_LINE)).toBeNull();
+  });
+
+  /** A shortcut that would be saved but never fire is not offered; the command to bind is. */
+  it("gives the command to bind where the desktop lets no app set one", async () => {
+    setup(null, desktopSettings);
+    expect(await screen.findByText(DESKTOP_LINE)).toBeInTheDocument();
+    expect(screen.getByTestId("capture-shortcut-command")).toHaveTextContent(COMMAND);
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Turn off" })).toBeNull();
-    // The drive row's Change is the only one left.
-    expect(screen.getAllByRole("button", { name: /Change|Choose/ })).toHaveLength(1);
+    // Not GNOME: Hippius cannot add it, so it does not offer to.
+    expect(screen.queryByRole("button", { name: "Add for me" })).toBeNull();
+  });
+
+  it("adds it on GNOME and then says where it lives", async () => {
+    let added = false;
+    setup(null, desktopSettings);
+    tauri.onInvoke("capture_get_shortcut", () => ({ accelerator, defaultAccelerator: DEFAULT, addedToDesktop: added }));
+    tauri.onInvoke("capture_add_desktop_shortcut", () => {
+      added = true;
+      return null;
+    });
+    // The first read ran before the GNOME answer was mocked: read again.
+    fireEvent.click(await screen.findByRole("button", { name: "Copy command" }));
+    cleanupAndRender();
+    fireEvent.click(await screen.findByRole("button", { name: "Add for me" }));
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_add_desktop_shortcut"));
+    expect(await screen.findByText(/Added to your desktop's keyboard shortcuts/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add for me" })).toBeNull();
+
+    function cleanupAndRender() {
+      document.body.innerHTML = "";
+      const store = createStore();
+      store.set(captureSupportedAtom, true);
+      store.set(captureSurfacesAtom, desktopSettings);
+      render(
+        <Provider store={store}>
+          <CaptureSettings />
+        </Provider>,
+      );
+    }
+  });
+
+  /** The portal's desktop owns the binding: its own words for the keys, its own dialog to change them. */
+  it("shows the desktop's shortcut and opens its dialog through the portal", async () => {
+    setup(null, wayland({ supported: true, via: "portal", unavailableMessage: null, command: null }));
+    tauri.onInvoke("capture_get_shortcut", () => ({
+      accelerator,
+      defaultAccelerator: DEFAULT,
+      desktopTrigger: "Meta+Shift+2",
+      canChangeInDesktop: true,
+    }));
+    tauri.onInvoke("capture_configure_shortcut", () => null);
+    // Turning it off and on reads again; the mock now answers the trigger.
+    fireEvent.click(await screen.findByRole("button", { name: "Turn off" }));
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_shortcut", { accelerator: null }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_shortcut", { accelerator: DEFAULT }));
+    expect(await screen.findByText("Meta+Shift+2")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]);
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_configure_shortcut"));
+    // No key recorder here: the desktop takes the keys.
+    expect(screen.queryByText(/Press the new shortcut/)).toBeNull();
+  });
+
+  it("says why when the desktop did not bind it", async () => {
+    setup(null, wayland({ supported: true, via: "portal", unavailableMessage: null, command: null }));
+    tauri.onInvoke("capture_get_shortcut", () => ({
+      accelerator,
+      defaultAccelerator: DEFAULT,
+      problem: "The shortcut wasn't added because the desktop's dialog was closed. Turn it on to be asked again.",
+    }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn off" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("the desktop's dialog was closed");
+    // Only the drive row's Change: nothing is bound for the desktop to change.
+    expect(screen.getAllByRole("button", { name: "Change" })).toHaveLength(1);
   });
 
   it("says on Wayland that the desktop's own tool takes the screenshot", async () => {
@@ -178,11 +257,5 @@ describe("the capture card on Linux", () => {
     setup(null, linux({ selection: "systemPicker", systemPickerNote: note, linuxSession: "wayland" }));
     expect(await screen.findByText(note)).toBeInTheDocument();
     expect(screen.getByText("Screenshots")).toBeInTheDocument();
-  });
-
-  it("keeps the shortcut controls where the shortcut works", async () => {
-    setup(null, linux({ shortcut: { supported: true, via: "plugin", unavailableMessage: null } }));
-    expect(await screen.findByRole("button", { name: "Turn off" })).toBeInTheDocument();
-    expect(screen.queryByText(LINUX_SHORTCUT)).toBeNull();
   });
 });

@@ -105,16 +105,21 @@ export interface CaptureSurfaces {
   modes: { screenshot: CaptureMode[]; recording: CaptureMode[] };
   /** Whether the screenshot timer is offered. */
   screenshotTimer: boolean;
-  /** Whether the recording countdown is offered (not with the system picker, whose dialog comes first). */
+  /** Whether the recording countdown is offered. */
   recordCountdown: boolean;
+  /** It counts in the pill once the desktop's dialog is answered (the system picker), not on the overlay. */
+  countdownAfterPicker?: boolean;
   /** Whether a recording can carry the system's sound (the user still turns it on in `CaptureOptions.systemAudio`). */
   systemAudio: boolean;
   /** Rust's line for why the microphone cannot be recorded; null when it can. */
   microphoneUnavailableMessage: string | null;
   /** What to check when an iPhone is not in the camera or microphone menu (macOS); null elsewhere. */
   continuityHint: string | null;
-  /** `unavailableMessage`: where there is no shortcut yet, Rust's line for what to use instead. */
-  shortcut: { supported: boolean; via: CaptureShortcutVia; unavailableMessage: string | null };
+  /**
+   * `unavailableMessage`: where Hippius cannot set the shortcut itself, Rust's line for what to do instead.
+   * `command`: with `desktopSettings`, the command a shortcut in the desktop's own keyboard settings runs.
+   */
+  shortcut: { supported: boolean; via: CaptureShortcutVia; unavailableMessage: string | null; command?: string | null };
   /** With the system picker, Rust's line saying the desktop's own tool chooses what is captured. */
   systemPickerNote: string | null;
   /** Which Linux session this is; null off Linux. */
@@ -325,6 +330,12 @@ export interface CaptureShortcutSetting {
   defaultAccelerator: string;
   /** Why the saved shortcut is not working now (Rust's sentence); absent when it is. */
   problem?: string;
+  /** Wayland's shortcut portal: the desktop's own description of the shortcut it bound; null while none is. */
+  desktopTrigger?: string | null;
+  /** The desktop's own dialog can change the shortcut (`configureCaptureShortcut`). */
+  canChangeInDesktop?: boolean;
+  /** Where the shortcut lives in the desktop's keyboard settings: whether Hippius's entry is there; null where Hippius cannot add one. */
+  addedToDesktop?: boolean | null;
 }
 
 /** The drive captures are filed in. Owner + hash only for a shared drive. */
@@ -506,6 +517,36 @@ export function getCaptureShortcut(): Promise<CaptureShortcutSetting> {
 /** Change the shortcut; `null` turns it off. Refused if another app holds it. */
 export function setCaptureShortcut(accelerator: string | null): Promise<void> {
   return invoke("capture_set_shortcut", { accelerator });
+}
+
+/** What the pill needs besides the phase. Mirrors Rust's `ControlsContext`. */
+export interface CaptureControlsContext {
+  /** The pill is filmed with the screen here (Linux): it stays small until pointed at. */
+  compact: boolean;
+  /** The first time ever, Rust's line saying it is filmed; null afterwards. */
+  filmedNote: string | null;
+}
+
+export function getCaptureControlsContext(): Promise<CaptureControlsContext> {
+  return invoke("capture_controls_context");
+}
+
+/** The pill's "Start now" while it counts down after the desktop's dialog. */
+export function skipCaptureCountdown(): Promise<void> {
+  return invoke("capture_skip_countdown");
+}
+
+/** To the pill: seconds left before the recording begins (after the desktop's dialog), or null once it has. */
+export const PILL_COUNTDOWN_EVENT = "capture_pill_countdown";
+
+/** Open the desktop's own dialog to change the shortcut (Wayland's shortcut portal). */
+export function configureCaptureShortcut(): Promise<void> {
+  return invoke("capture_configure_shortcut");
+}
+
+/** Add the shortcut to the desktop's own keyboard settings (GNOME without the shortcut portal). */
+export function addCaptureDesktopShortcut(): Promise<void> {
+  return invoke("capture_add_desktop_shortcut");
 }
 
 export function getCaptureCameraContext(): Promise<CaptureCameraState> {
