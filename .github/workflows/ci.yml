@@ -66,6 +66,7 @@ jobs:
       rust: ${{ steps.diff.outputs.rust }}
       capture: ${{ steps.diff.outputs.capture }}
       capture_runtime: ${{ steps.diff.outputs.capture_runtime }}
+      capture_helper: ${{ steps.diff.outputs.capture_helper }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -88,6 +89,7 @@ jobs:
               echo "rust=true"
               echo "capture=true"
               echo "capture_runtime=false"
+              echo "capture_helper=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -107,6 +109,14 @@ jobs:
           else
             echo "capture_runtime=false" >> "$GITHUB_OUTPUT"
           fi
+          # The macOS recording helper is built only by the release workflows,
+          # so its own job follows the Swift package, its build script and
+          # this pipeline.
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(macos/HippiusCapture/|macos/build-capture-helper\.sh$|\.github/workflows/ci\.yml$)'; then
+            echo "capture_helper=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "capture_helper=false" >> "$GITHUB_OUTPUT"
+          fi
           # Anything under src-tauri/ (the crate), .github/ (this pipeline and
           # its composite actions), or scripts/ (steps the jobs shell out to)
           # can change what the Rust jobs verify; everything else cannot.
@@ -115,6 +125,41 @@ jobs:
           else
             echo "rust=false" >> "$GITHUB_OUTPUT"
           fi
+
+  release-deps-linux:
+    # The release builds install their system packages on ubuntu-22.04 (the
+    # older glibc they ship against), which no other job uses. A package that
+    # cannot install there failed the staging release after merge, so the
+    # install runs here first. Same script the release workflows run.
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Linux release build's packages
+        run: bash scripts/install-linux-release-deps.sh
+
+  capture-helper-macos:
+    # The screen-recording helper (Swift) is built only by the release
+    # workflows, so a helper that does not compile used to surface as a
+    # failed release after merge. Same build the release runs (universal).
+    needs: changes
+    if: needs.changes.outputs.capture_helper == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Build the screen-recording helper
+        run: bash macos/build-capture-helper.sh --universal
 
   rust-linux:
     needs: changes
@@ -178,10 +223,14 @@ jobs:
     # Ordinary feature PRs target staging and rely on `rust-linux`; the push to
     # staging after merge is the macOS backstop, and it lands before anything
     # can promote toward users. It exists to cover the macOS-only code the
-    # Linux lane compiles out.
+    # Linux lane compiles out. Like rust-windows, it also runs for any PR that
+    # touches `src-tauri/src/capture/**` (`changes.outputs.capture`): capture
+    # carries the most macOS-only code, and a macOS failure found only on the
+    # promotion PR holds the whole release back.
     needs: changes
     if: >-
       (github.event_name == 'pull_request' && (github.base_ref == 'beta' || github.base_ref == 'main') && needs.changes.outputs.rust == 'true') ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.capture == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: macos-latest
     steps:

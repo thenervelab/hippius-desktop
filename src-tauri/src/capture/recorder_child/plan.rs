@@ -224,7 +224,7 @@ mod tests {
     /// camera page; both platforms trim the same margin.
     #[test]
     fn the_stage_inset_is_the_swift_helpers() {
-        let swift = include_str!("../../../../macos/HippiusCapture/Sources/main.swift");
+        let swift = include_str!("../../../../macos/HippiusCapture/Sources/HippiusCapture.swift");
         assert!(swift.contains("let stageInset: CGFloat = 12"));
         assert!((STAGE_INSET - 12.0).abs() < f64::EPSILON);
     }

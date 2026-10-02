@@ -280,7 +280,7 @@ The macOS helper used to write system audio and the microphone as **two** AAC
 tracks. Browser `<video>` elements and most web players play only the first
 audio track, so a recording shared by link was heard without its narration.
 macOS now mixes them into one stereo 48 kHz 160 kbps AAC track (`AudioMixer`
-in `main.swift`: mic +6 dB with a soft limiter, system audio only when the
+in `HippiusCapture.swift`: mic +6 dB with a soft limiter, system audio only when the
 user turns on `systemAudio`, off by default). Windows and Linux do the same:
 one stereo 160 kbps AAC track (mic centred, the system mix ducked 6 dB while
 the mic is active is a later nicety).
@@ -369,7 +369,7 @@ hand on macOS and through the in-process pipe tests on every OS.
   loop, protocol types shared with `helper.rs` through one `protocol.rs`),
   `timeline.rs` (pause retiming as a pure function of sample times and pause
   intervals), `sizing.rs` (`videoBitRate` and `alignToPixels` from
-  `main.swift`, same numbers, with tests pinning them against the Swift
+  `HippiusCapture.swift`, same numbers, with tests pinning them against the Swift
   constants), `synthetic.rs` (a test source: moving frames and a tone). Wired
   from `main.rs` before the builder (`cli::argv_requests_recorder`).
 - `capture_support` / `OverlayContext` fields from decision 7, with today's
@@ -461,7 +461,7 @@ builds only, never on beta or production.
 
 **What landed**
 - `recorder_child/` platform-free pieces, tested on every OS: `mixer.rs`
-  (the Swift `AudioMixer` ported, numbers pinned against `main.swift`),
+  (the Swift `AudioMixer` ported, numbers pinned against `HippiusCapture.swift`),
   `pcm.rs` (any WASAPI mix format to stereo 48 kHz float, linear
   resampling carried across packets), `frame.rs` (BGRA to BT.709 limited
   NV12, letterboxed into the fixed output size), `pacing.rs` (30 fps gate,
@@ -1981,7 +1981,7 @@ Not part of this plan's phases, recorded so they are not lost:
 
 1. **Two audio tracks.** Confirmed and fixed: the helper now mixes the
    microphone and (only when `systemAudio` is on, off by default) the system
-   audio into one stereo 48 kHz AAC track, `AudioMixer` in `main.swift`. The
+   audio into one stereo 48 kHz AAC track, `AudioMixer` in `HippiusCapture.swift`. The
    start command carries `systemAudio` and, for a window recording,
    `cameraWindowId`; both are fields of the shared `StartCommand` in
    `recording/protocol.rs`, so `HelperRecorder` sends them on every platform

@@ -1,5 +1,5 @@
 //! One audio track from every source: the Swift helper's `AudioMixer`
-//! (`macos/HippiusCapture/Sources/main.swift`) in Rust, with the same
+//! (`macos/HippiusCapture/Sources/HippiusCapture.swift`) in Rust, with the same
 //! numbers, so a Windows or Linux recording sounds like a Mac one.
 //!
 //! Browsers and most players play only a file's first audio track, so the
@@ -241,7 +241,7 @@ pub fn to_i16(samples: &[f32]) -> Vec<i16> {
 mod tests {
     use super::*;
 
-    const SWIFT: &str = include_str!("../../../../macos/HippiusCapture/Sources/main.swift");
+    const SWIFT: &str = include_str!("../../../../macos/HippiusCapture/Sources/HippiusCapture.swift");
 
     /// The names the app's pill line is chosen by.
     #[test]
@@ -268,7 +268,7 @@ mod tests {
             "static let maxChunk: Int64 = 48_000",
             "let knee: Float = 0.8",
         ] {
-            assert!(SWIFT.contains(line), "main.swift no longer says `{line}`");
+            assert!(SWIFT.contains(line), "HippiusCapture.swift no longer says `{line}`");
         }
     }
 
