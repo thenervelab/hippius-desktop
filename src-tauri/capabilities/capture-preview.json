@@ -1,0 +1,11 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "capture-preview",
+    "description": "Least-privilege capability for the capture preview card (label capture-preview), which floats in a screen corner after a screenshot or recording. It listens for capture_preview_changed and remote_upload_progress, and calls the app-defined capture_preview_* commands, which are not capability-gated. core permissions only: it floats over every app, and its picture arrives as a data: URL, so it needs no asset protocol.",
+    "windows": ["capture-preview"],
+    "permissions": [
+        "core:default",
+        "core:event:allow-listen",
+        "core:event:allow-unlisten"
+    ]
+}

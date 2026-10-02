@@ -17,6 +17,26 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The link icon beside a shared file takes you straight to its link.**
+  Shared Links scrolls to that file's row and highlights it, the way Show in
+  folder points out a file in Drive, so it is easy to find among many links.
+
+- **Screenshot and Record from the menu bar.** Click the Hippius icon, then
+  Screenshot or Record under the search field, and the capture starts on any
+  screen, with the share link copied when it is done. The arrow beside each
+  picks an area, a window or the entire screen, or the drive captures go to.
+
+- **Screenshot and Record are one click away in Drive.** The Capture menu is
+  now two buttons, Screenshot and Record, on the Drive page and inside every
+  drive (including drives shared with you). Each opens its own menu: capture
+  an area, a window or the entire screen, open the capture bar, or choose
+  which drive captures go to. On a narrow window they shrink to icons.
+
+- **Capturing a window or a whole screen is a single click, like on a Mac.**
+  The pointer turns into a camera, the window under it lights up with its
+  name, and clicking takes it; for the entire screen, click the display you
+  want. Press Space to switch between picking a window and dragging an area.
+
 - **The menu bar popover shows your balance in dollars and who you are signed
   in as.** It reads "Balance $0.36" like the rest of the app instead of a
   credit count, and an account signed in with Google, Apple or GitHub shows
@@ -100,9 +120,112 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Clicking the Hippius icon in the menu bar opens the popover again on newer
-  macOS versions.** A click used to show only the small Open Drive / Quit
-  menu; that menu now opens with a right click.
+- **The menu bar popover opens under its icon again, recording or not.** It
+  no longer does nothing while a recording runs, vanishes the moment it
+  opens, or hides behind a capture's preview card.
+
+- **Camera and microphone now record together.** With both turned on, the
+  camera bubble no longer goes black and the microphone no longer drops out,
+  however many times you switch either one off and on before recording. The
+  bubble also shows a soft placeholder while the camera starts, instead of a
+  black circle.
+- **Your iPhone microphone now shows up when you record.** The camera and
+  microphone lists in the capture bar update by themselves as devices come and
+  go, so an iPhone nearby, a USB microphone or a headset appears without
+  reopening the menu. If your iPhone is not listed yet, the menu says what to
+  check.
+- **Your voice is heard when a recording is played from its share link
+  (Mac).** A recording now has one sound track with your microphone in it
+  (and the computer's sound when you ask for it), a little louder than
+  before, so browsers and video players no longer play a silent track
+  instead of your voice.
+- **The camera bubble is in every recording that shows it (Mac).** Recording
+  a single window now includes the bubble, and pressing Record moves the
+  bubble inside the window or area you chose if it was outside it.
+- **The camera bubble is easier to resize.** At full size its button now
+  says "Exit full size" and takes it back to the size it had (Escape does the
+  same), each size button names itself when you point at it, and the bubble
+  no longer shows a backwards play symbol before the camera starts.
+- **The camera bubble is a true circle.** At the small and large sizes it was
+  drawn as a stretched oval, on screen and in the video; it is now round,
+  with your picture filling it.
+- **Recordings get the right picture on their card (Mac).** The preview card
+  now shows a frame from the recording itself, so a camera-only recording has
+  a picture and a screen recording shows the camera bubble, as the video does.
+- **Recordings get the right picture on their card on Windows and Linux
+  too.** The card shows a frame from the recording itself, camera bubble
+  included, and a recording made on a Wayland desktop now has a picture at
+  all.
+- **Camera and microphone menus keep up on Windows and Linux.** A USB
+  microphone, headset or camera plugged in while the capture bar is open
+  shows up in its menu without reopening it, and an unplugged one goes away.
+
+- **Screen recording permission no longer gets stuck (Mac).** Allow always
+  adds Hippius to macOS's Screen Recording list, so you never have to add it
+  by hand, and Relaunch Hippius picks the permission up. If macOS still says
+  no after the relaunch, the dialog explains why and Allow again clears the
+  old entry for you.
+- **Your iPhone and other external cameras and microphones show up when you
+  record.** The Camera and Microphone menus in the capture bar now list an
+  iPhone nearby (as a Continuity Camera and microphone), USB webcams and
+  headsets, and update when one is connected or wakes up.
+- **Window screenshots on Windows come out whole.** Capturing the window of
+  an older app on a scaled display (125 % or 150 %) no longer gives only its
+  top-left corner with black around it.
+- **Screenshots on older Windows 10 never show the capture overlay.** Where
+  Windows cannot hide Hippius's selection screen from a screenshot, the
+  overlay and the preview card now step aside before the picture is taken.
+- **Windows' own screenshot keys stay Windows'.** Settings no longer accepts
+  Print Screen, Win+Shift+S or the Game Bar keys as the capture shortcut, and
+  says why.
+- **A capture that does not upload is never lost.** Its card comes back with
+  your next capture until you retry or discard it, and the message says what
+  went wrong in plain words: you are offline, or your storage is full.
+  Empty leftovers from a capture are cleared later; a saved capture never is.
+- **Recording checks there is room first.** With less than 2 GB free it says
+  so before recording, instead of failing at the end.
+- **Recording no longer pulls Hippius in front of what you are recording**,
+  and typing goes back to the app you were in once the capture bar closes.
+- **You can start a new capture while the last one uploads**, and a capture
+  sent to a paused drive uploads instead of waiting for sync to resume.
+- **Cancelling while a recording starts really stops it**, stopping a camera
+  only recording saves it properly, and a capture bar that could not open no
+  longer leaves the camera on screen.
+- **A capture copied to a drive on another disk never leaves a half-written
+  file**, and never replaces a file of the same name.
+- **The capture bar follows your displays.** Unplugging one closes its part of
+  the bar and forgets an area drawn on it; the camera stage no longer covers
+  the bar on a small screen.
+- **A failed capture upload is reported once**, on its card, instead of on the
+  card and in a pop-up in Hippius as well.
+- **The recording time leaves the menu bar as soon as you stop.** It could
+  stay there, frozen, after the recording was saved, and the Hippius icon
+  stopped opening its menu. Clicking the icon while recording now brings the
+  recording controls back instead of stopping at once.
+- **Show in folder points out the file.** From a capture's card or the sync
+  queue, the folder opens on the page that holds the file, scrolls to it and
+  highlights it for a few seconds, even in a folder of dozens of files.
+- **When recording is not available, Hippius says why.** On a Mac whose copy
+  of Hippius was built without screen recording, or that runs a macOS older
+  than 13, the Record options stay on the capture bar, the Record button and
+  in Settings, greyed out with the reason, instead of disappearing and
+  leaving only screenshots.
+- **The capture card moves on as soon as your capture is in the drive.** It
+  could sit on "Preparing upload" while the sync queue already showed the
+  file synced. It now follows the upload, says Uploaded once it lands, and
+  waits for the link before it slides away.
+- **The capture card's buttons stay on one line.** Show in folder and Copy
+  link sit side by side, and Show in Finder and Revoke link are in the More
+  menu.
+- **Screenshot and Record are on Overview too**, in the Recent Files toolbar
+  beside Folder and File, where they sit on the Drive page.
+- **Settings says when the capture shortcut is not working**, and when
+  another copy of Hippius is holding it.
+
+- **Clicking the Hippius icon in the menu bar opens the popover again**, on
+  newer macOS versions and after the app reloaded in the background. A click
+  used to show only the small Open Drive / Quit menu; that menu now opens
+  with a right click.
 
 - **A folder stops showing as shared once nobody has access.** After you
   remove the last person from a folder you shared by email, its "Shared" and
@@ -160,6 +283,153 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   remain the last line of defence.
 
 ### Added
+
+- **Screenshots on Linux (internal builds first).** On an X11 desktop the
+  capture bar works as it does on a Mac or Windows: drag an area, click a
+  window or a screen, or pick one from the live previews. On Wayland
+  (Ubuntu, Fedora and KDE's default) Screenshot opens your desktop's own
+  screenshot tool, where you choose an area, a window or a screen; the
+  picture then lands in your drive with a link copied, and nothing is left
+  behind in your Pictures folder.
+- **Record your screen on Linux (internal builds first).** On X11 record a
+  whole screen, a window or an area from the capture bar; on Wayland a small
+  panel holds the same sources and options, and your desktop's own
+  screen-sharing dialog picks the screen or window (with one display it
+  remembers the choice). Your microphone and your computer's sound go into
+  one soundtrack, with pause and resume, the camera bubble filmed with the
+  screen (or the camera on its own on X11), and a live microphone level. If
+  your system lacks the video codecs, Record says which packages to install.
+- **The capture shortcut and the tray on Linux (internal builds first).**
+  On X11, Ctrl+Shift+2 (or the keys you choose in Settings) opens the
+  capture bar from any app. On Wayland, KDE Plasma and GNOME 48 or later add
+  the shortcut through your desktop, which may ask you to confirm it; on
+  other desktops Settings gives you the command to bind in your keyboard
+  settings, and on GNOME adds it for you. While recording, the tray icon
+  shows a red dot (amber when paused) and its menu has Stop, Pause and the
+  recording controls.
+- **Recording on Linux feels more like a Mac (internal builds first).** On
+  Wayland the countdown runs after you pick what to share, in the recording
+  controls, with Start now to skip it. The controls stay a small dot and
+  timer until you point at them, since Linux films them in screen
+  recordings, and they move out of the way of an area you record. On X11 a
+  recording of one window now includes the camera bubble, and a system
+  missing video codecs is told exactly which packages to install. Fedora
+  testers get an .rpm package.
+- **Record an area, or just your camera, on Wayland (internal builds
+  first).** After you pick a screen in your desktop's sharing dialog, Hippius
+  shows that screen so you can drag the area to record, sharp on high
+  resolution and scaled displays. Camera only now works on Wayland too: turn
+  the screen off in the capture panel and Record captures your camera with
+  your microphone and sound, no sharing dialog needed.
+- **Record your screen on Windows (test builds first).** Record a whole
+  screen, one window or an area, with your microphone, your computer's sound
+  or both in one soundtrack, pause and resume, and the camera bubble or the
+  camera on its own. It reaches beta once it has been checked on real
+  Windows PCs.
+- **More of the Mac recording experience on Windows (test builds first).**
+  The microphone level meter in the capture bar moves as you speak; the
+  camera menu lists every camera, including a phone connected through Phone
+  Link; the camera bubble now appears in recordings of a single window; on
+  Windows 11, "Record system audio" leaves out Hippius's own sounds; the
+  taskbar icon shows a red dot while recording (amber when paused); and the
+  recording controls say so if your microphone is unplugged mid-recording,
+  while the recording carries on.
+- **Hippius tells you when Windows is blocking your camera or microphone.**
+  The capture bar says so under the camera or microphone and has an Open
+  Settings button that goes straight to the right privacy page.
+- **Choose whether a recording includes your computer's sound (Mac).** The
+  capture bar's Options menu has "Record system audio", off by default so
+  your voice is not recorded twice through the speakers; turn it on to
+  record a video or a call together with your narration.
+
+- **Take a screenshot or record your screen straight into Hippius.** Press
+  ⇧⌘2 (Ctrl+Shift+2 on Windows) from any app, or use Capture on the Drive page
+  or the menu bar icon, and a capture bar like macOS's own appears: capture or
+  record the whole screen, one window or an area you can resize. Options set
+  the drive, a 5 or 10 second timer, the microphone and mouse-click rings, and
+  the bar remembers your last area and mode. Change or turn off the shortcut in
+  Settings, Sync & Storage.
+- **See your capture upload, and jump to it.** A preview card slides into the
+  corner with the upload's progress, then whether the public link was copied.
+  Show in folder opens the drive's Captures folder, where the file is shown
+  arriving; the upload is also in the sync widget and the menu bar popover. If
+  an upload fails, Retry sends the same file again and Discard throws it away;
+  when your storage is full, Upgrade opens the plans in Hippius.
+- **Recording controls you can always reach (Mac).** A countdown starts every
+  recording: 3 seconds unless you pick none or 5 in Options, and clicking the
+  number or pressing Return starts at once. A small pill shows the time, the
+  microphone, pause, restart, stop and discard, and the menu bar shows the time
+  too: click the Hippius icon to bring the controls back. Needs macOS 13+, with the microphone and click rings on macOS 15+.
+  Screenshots work on Mac and Windows; Windows recording follows later.
+  Available in internal builds first.
+- **Sharp recordings that keep what you recorded (Mac).** Recordings are
+  saved at your screen's full resolution, so text stays crisp on Retina
+  displays, at a file size you can still share. Pausing leaves no frozen gap
+  and the sound stays in step with the picture. If a recording stops by
+  itself, for example because a display was unplugged or the recorded window
+  closed, what was recorded is saved and shared as usual.
+- **Show your face while you record, like Loom (Mac).** Above the capture bar,
+  switch the screen, camera and microphone on or off and pick which camera and
+  microphone, with a level meter that shows the microphone hears you. The
+  camera appears as a round bubble you can drag anywhere; before you record,
+  hover it (or Tab to it) to make it small, large or full size, or to turn it
+  off, and those controls never appear in the video. With the screen turned
+  off, the camera records on its own.
+- **Choose exactly what to share from a list.** Choose window… or Choose
+  screen… on the capture bar opens a Window and an Entire screen tab with a
+  live picture of every window and screen, the way video calls ask, so you can
+  pick a window hidden behind others. The frontmost window is picked, so
+  Return shares it, and the arrow keys move through the list.
+- **Every microphone shows up (Mac).** USB, Bluetooth, iPhone and virtual
+  microphones are listed with the system default first, and cameras are
+  listed before the camera has ever been turned on.
+- **Captures save straight into your synced drive folder.** When the capture
+  drive is synced on this Mac, the file lands in its Captures folder at once and
+  syncs from there, so it shows up once in the sync queue instead of twice, and
+  the preview card no longer sits under the Dock.
+- **A quicker, easier capture card.** It appears as soon as a screenshot is
+  taken, its buttons work on the first click, clicking the picture opens the
+  folder, and it stays for 10 seconds, or for as long as the pointer is on it.
+- **Capture sits with the upload buttons** on the Drive page, and its menu
+  shows the shortcut as clear, readable keys.
+- **Show in folder from the sync queue.** Each file in the sync widget has a
+  folder button that opens the Drive folder it is in, however deep.
+- **Press the capture shortcut again to stop.** A second press stops the
+  recording, or closes the capture bar while you are still choosing. Signed
+  out, it brings Hippius forward so you can sign in.
+- **You decide what happens to the link.** Captures still copy a public link
+  by default, and the card now says so. Turn it off to only file the capture;
+  the card can make a link later, revoke one, or show the file in Finder or
+  Explorer when the drive is synced on this computer.
+- **Restart a take without starting over (Mac).** Restart on the recording
+  controls throws the current take away and records the same area, window or
+  screen again. The camera bubble sits inside the area you are recording so it
+  is always in the video, and the camera row says when a window recording will
+  not include it.
+- **A recording is never thrown away by a stray key (Mac).** Escape does
+  nothing on the recording controls, and discarding or restarting a recording
+  of five seconds or more asks first. The controls can be dragged out of the
+  way.
+- **The capture bar works from the keyboard and with a screen reader.**
+  Escape closes an open menu before it closes the bar, Return on a focused
+  button presses that button, the arrow keys nudge a drawn area (Shift for
+  bigger steps), and the countdown and hints are read aloud.
+- **The capture card fits in every state**, a failed upload included, and
+  Show in folder opens the folder every time, even a Captures folder the
+  capture has just created. A capture saved into a synced drive is shown
+  arriving in its folder as well.
+- **Capture is easier to find and name.** The Drive menu and the bar use the
+  same words ("Capture an area",
+  "Capture a window", "Capture entire screen"), and the shortcut setting shows
+  the keys as you hold them and says when a key cannot be used.
+- **Capture windows open with less to load**, so the bar appears sooner.
+- **Picking a window follows your windows.** While you choose a window, the
+  highlight keeps up with windows that move, open or close.
+- **Allowing screen recording takes one click (Mac).** Open System Settings
+  shows macOS's own prompt the first time and the right settings pane after
+  that, named the way your version of macOS names it.
+- **The capture bar's hints, the camera's controls and the countdown sit on a
+  dark backing**, so they stay readable over a light screen.
 
 - **Invite a Manager by email.** The By email tab now offers Manager for a
   whole drive. The invite works once and expires after 24 hours, so the

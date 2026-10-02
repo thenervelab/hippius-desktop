@@ -70,8 +70,8 @@ type NameCellProps = {
   syncedBadgeMs?: number;
   /** Opens share-link management for this row. Passed through to the
    *  shared-link badge so clicking the link icon manages the share
-   *  instead of opening the file preview. */
-  onManageShare?: () => void;
+   *  instead of opening the file preview. Gets the row's share ids. */
+  onManageShare?: (shareRowIds: string[]) => void;
 };
 
 type BadgeStatus = LiveFileStatus | "excluded" | "hidden";

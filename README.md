@@ -88,10 +88,25 @@ This will generate static files in the `out` directory.
 To build the desktop application:
 
 ```bash
-pnpm tauri build
+pnpm tauri:build
 ```
 
 This will create platform-specific installers in the `src-tauri/target/release/bundle` directory.
+
+On a Mac, that build has no screen recording: the recording helper is added by the release pipeline, not by Tauri, so the app offers screenshots and shows Record as "not included in this build". To build a Mac app you can install and test with recording, camera and microphone included, use:
+
+```bash
+pnpm build:mac-local                     # staging channel, this Mac's architecture, DMG on the Desktop
+pnpm build:mac-local --channel beta      # another channel: staging, beta or production
+pnpm build:mac-local --no-dmg            # stop at the signed Hippius.app
+pnpm build:mac-local --dry-run           # run the checks and show the steps only
+```
+
+Stop `pnpm tauri:dev` first and have about 18 GB free; the script checks both. It works on Intel and Apple silicon Macs. The result is `~/Desktop/Hippius-<version>-local.dmg`, signed on your Mac but not notarized by Apple, so:
+
+1. Quit any running Hippius, open the DMG and drag Hippius onto Applications.
+2. The first time, right-click Hippius in Applications and choose **Open**.
+3. If Capture says Screen Recording is not allowed although it is switched on in System Settings, run `tccutil reset ScreenCapture hippius.com`, allow it again when asked, and relaunch Hippius. Each rebuild has a new signature, which macOS treats as a new app.
 
 ## 📁 Project Structure
 

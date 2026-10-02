@@ -519,6 +519,28 @@ pub async fn upload_files_to_remote_folder(
     folder_hash: Option<String>,
 ) -> Result<Vec<RemoteUploadFailure>> {
     let account_id = state.require_session_account(&account_id)?;
+    upload_files_to_remote_folder_inner(state.inner(), app, &account_id, &label, parent_path, &file_paths, owner_ss58, folder_hash).await
+}
+
+/// Body of [`upload_files_to_remote_folder`], for callers inside the backend
+/// that have no `tauri::State` — screen capture files its screenshots through
+/// here, so a capture takes exactly the path, gate and progress rows a
+/// dropped file does rather than a second upload path.
+///
+/// `account_id` MUST already be the validated session account.
+#[allow(clippy::too_many_arguments)] // the IPC payload's shape, passed through
+pub(crate) async fn upload_files_to_remote_folder_inner(
+    state: &AppState,
+    app: tauri::AppHandle,
+    account_id: &str,
+    label: &str,
+    parent_path: Option<String>,
+    file_paths: &[String],
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<Vec<RemoteUploadFailure>> {
+    let account_id = account_id.to_string();
+    let label = label.to_string();
 
     let pool = state.pool()?;
     // Resolved BEFORE the gate, and resolved ONCE. Two things depend on it:
@@ -531,7 +553,7 @@ pub async fn upload_files_to_remote_folder(
 
     let total_bytes: u64 = file_paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
     crate::billing::eligibility::require_eligible_for_drive(
-        state.inner(),
+        state,
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
         total_bytes,
@@ -552,10 +574,10 @@ pub async fn upload_files_to_remote_folder(
     // derivation for every file, and for an unsynced shared drive that is an
     // Argon2id grant open apiece.
     let keys = {
-        let mnemonic = crate::sync::fileops::remote::session_mnemonic(state.inner())?;
-        crate::sync::fileops::remote::drive_key_material_for_label(state.inner(), &account_id, &label, &mnemonic, &identity).await?
+        let mnemonic = crate::sync::fileops::remote::session_mnemonic(state)?;
+        crate::sync::fileops::remote::drive_key_material_for_label(state, &account_id, &label, &mnemonic, &identity).await?
     };
-    for path in &file_paths {
+    for path in file_paths {
         let source = std::path::Path::new(path);
         let Some(name) = source.file_name().and_then(|n| n.to_str()) else {
             continue;
@@ -573,7 +595,7 @@ pub async fn upload_files_to_remote_folder(
     }
 
     let mut failures = Vec::new();
-    for path in &file_paths {
+    for path in file_paths {
         let source = std::path::Path::new(path);
         let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &parent, source, &identity, &keys, Some(&batch)).await;
         if let Err(e) = sent {

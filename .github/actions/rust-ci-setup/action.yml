@@ -16,6 +16,14 @@ inputs:
     description: "Install Tauri's Linux system deps (set 'true' on ubuntu runners)."
     required: false
     default: "false"
+  save-cache:
+    description: >-
+      Save the Rust cache when the job ends. 'false' for jobs that build only
+      part of the crate (the capture runtime jobs): the cache is shared per OS
+      (shared-key "ci"), so a partial build saved first would leave the full
+      lanes a cold cache.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -78,6 +86,8 @@ runs:
           libsoup-3.0-dev \
           libxdo-dev \
           libssl-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
           build-essential \
           file
 
@@ -145,6 +155,7 @@ runs:
         # run doesn't force the next one to recompile the whole graph from
         # scratch — the difference between a ~20-min and a ~3-min retry.
         cache-on-failure: "true"
+        save-if: ${{ inputs.save-cache == 'true' }}
 
     # tauri-build requires the frontendDist dir (../out) to exist; the Rust
     # suite never serves the frontend, so a placeholder satisfies the build.

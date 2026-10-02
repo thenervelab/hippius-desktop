@@ -4,7 +4,9 @@ import localFont from "next/font/local";
 import "@/app/globals.css";
 import "sonner/dist/styles.css";
 import AppShell from "@/app/components/AppShell";
-import { cn } from "./lib/utils";
+// Straight to the module, not the `lib/utils` barrel: the barrel carries
+// WebGL and file helpers into every window's first chunk list.
+import cn from "./lib/utils/cn";
 import { THEME_STORAGE_KEY } from "./lib/theme";
 
 /**

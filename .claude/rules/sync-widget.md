@@ -95,3 +95,7 @@ Pure projections live in `app/components/page-sections/drive/stagedChangesLogic.
 - **Layout**: conflicts render FIRST and the informational plan sections (`PlanSection`) are collapsed disclosure rows carrying their counts, with a warning edge on the two destructive ones. Everything used to sit in one flat 420px scroll container, so the only actionable section was below 60+ rows.
 
 The engine-side half of the hex-path fix is hcfs-client `SyncState::display_path` (path_index → decrypt `remote_encrypted_paths` → `remote_file_names` → hex). Rungs 2 and 3 read `#[serde(skip)]` maps that only a remote fetch populates, so a cold `stage()` still degrades to hex — which is why the FE guard stays regardless of the pin.
+
+## Show in folder from a queue row
+
+A row's folder button sends the file's folder AND its name (`driveFolderRoute(label, remote, parentOf(path), baseNameOf(path))`), so the Drive page opens on the page that holds the file and highlights it. The Drive side of it (paging to the file, retrying while it is not listed yet) is in `.claude/rules/screen-capture.md`, "Show in folder points the file out". Pinned by `SyncStatusDialog.test.tsx`.

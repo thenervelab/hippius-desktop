@@ -492,3 +492,40 @@ body.body-scroll-locked {
     opacity: 1;
   }
 }
+
+/* "Show in folder" points a file out: its Drive row or card carries
+   `data-drive-highlight` for `HIGHLIGHT_MS` (drive/highlightEntry.ts), a
+   brand-blue tint plus outline that holds, then fades. The tint is a
+   background IMAGE so it lies over the row's own zebra stripe instead of
+   fighting its (more specific) background-color classes. `--drive-highlight`
+   is registered so it animates smoothly; where it is not, the highlight
+   simply ends at once. */
+@property --drive-highlight {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+[data-drive-highlight] {
+  --drive-highlight-rgb: var(--primary-50);
+  --drive-highlight-tint: 0.14;
+  background-image: linear-gradient(
+    rgb(var(--drive-highlight-rgb) / calc(var(--drive-highlight-tint) * var(--drive-highlight))),
+    rgb(var(--drive-highlight-rgb) / calc(var(--drive-highlight-tint) * var(--drive-highlight)))
+  );
+  outline: 2px solid rgb(var(--drive-highlight-rgb) / var(--drive-highlight));
+  outline-offset: -2px;
+  animation: drive-highlight 3600ms ease-out forwards;
+}
+.dark [data-drive-highlight] {
+  --drive-highlight-rgb: var(--primary-65);
+  --drive-highlight-tint: 0.24;
+}
+@keyframes drive-highlight {
+  0%,
+  70% {
+    --drive-highlight: 1;
+  }
+  100% {
+    --drive-highlight: 0;
+  }
+}
