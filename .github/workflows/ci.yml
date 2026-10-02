@@ -223,10 +223,14 @@ jobs:
     # Ordinary feature PRs target staging and rely on `rust-linux`; the push to
     # staging after merge is the macOS backstop, and it lands before anything
     # can promote toward users. It exists to cover the macOS-only code the
-    # Linux lane compiles out.
+    # Linux lane compiles out. Like rust-windows, it also runs for any PR that
+    # touches `src-tauri/src/capture/**` (`changes.outputs.capture`): capture
+    # carries the most macOS-only code, and a macOS failure found only on the
+    # promotion PR holds the whole release back.
     needs: changes
     if: >-
       (github.event_name == 'pull_request' && (github.base_ref == 'beta' || github.base_ref == 'main') && needs.changes.outputs.rust == 'true') ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.capture == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: macos-latest
     steps:

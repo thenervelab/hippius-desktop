@@ -226,17 +226,28 @@ mod tests {
                 );
             }
         });
-        std::thread::sleep(Duration::from_millis(30));
-        // A headset arrives: three nudges in quick succession.
+        // Waits on what the watcher has done, never on a fixed sleep: a slow
+        // CI runner stretched the 10 ms gaps this test used to leave between
+        // nudges past the 40 ms settle, and split one burst into two.
+        let reads_reach = |n: u32| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while *reads.lock().unwrap() < n {
+                assert!(Instant::now() < deadline, "the watcher never read {n} times");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        reads_reach(1);
+        // A headset arrives: three nudges in one burst.
         *state.lock().unwrap() = 2;
         for _ in 0..3 {
             tx.send(Wake::Changed).unwrap();
-            std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_millis(150));
+        reads_reach(2);
         // A nudge that changed nothing a user would see.
         tx.send(Wake::Changed).unwrap();
-        std::thread::sleep(Duration::from_millis(150));
+        reads_reach(3);
+        // Longer than a settle: nothing more is read for that burst.
+        std::thread::sleep(fast().settle * 3);
         tx.send(Wake::Stop).unwrap();
         thread.join().unwrap();
         assert_eq!(out.lines(), vec!["lists 1", "lists 2"]);
