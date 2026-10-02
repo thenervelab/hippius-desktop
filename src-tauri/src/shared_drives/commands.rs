@@ -34,7 +34,7 @@ use crate::error::{AppError, NotReadyKind, Result};
 use crate::shared_drives::grant;
 use crate::sync::identity::MemberDriveIdentity;
 use base64::Engine;
-use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse};
+use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse, FolderGrantEntry};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
@@ -1848,6 +1848,11 @@ pub struct MyFolderGrantInfo {
     /// writer grants on at the server, and the owner not frozen. Decided here
     /// so the frontend never combines role and capability itself.
     pub can_write: bool,
+    /// How many people hold a grant on exactly this folder, this account
+    /// included. `None` when the server omitted it (0, or an older server) —
+    /// the FE must never draw "0 members" from absence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_count: Option<u32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub frozen: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1867,13 +1872,18 @@ pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolder
     }
 
     let resp = http_list_memberships(&state.api_client.clone(), &ctx.base_url, &ctx.bearer).await?;
-    Ok(resp
-        .folder_grants
+    Ok(my_folder_grants(resp.folder_grants, caps.folder_grant_writes))
+}
+
+/// Project the listing's held folder grants onto the FE's rows, each with
+/// its own folder's member count.
+fn my_folder_grants(grants: Vec<FolderGrantEntry>, folder_grant_writes: bool) -> Vec<MyFolderGrantInfo> {
+    grants
         .into_iter()
         .map(|g| {
             let role = super::folder_roles::grant_role(Some(&g.role));
             MyFolderGrantInfo {
-                can_write: super::folder_roles::grant_can_write(&role, caps.folder_grant_writes, g.frozen),
+                can_write: super::folder_roles::grant_can_write(&role, folder_grant_writes, g.frozen),
                 owner_ss58: g.owner_ss58,
                 owner_name: present_text(g.owner_name),
                 folder_hash: g.folder_hash,
@@ -1881,11 +1891,12 @@ pub async fn list_my_folder_grants(app: tauri::AppHandle) -> Result<Vec<MyFolder
                 path_prefix: g.path_prefix,
                 role,
                 created_at: g.created_at,
+                member_count: present_member_count(g.member_count),
                 frozen: g.frozen,
                 frozen_until: present_text(g.frozen_until),
             }
         })
-        .collect())
+        .collect()
 }
 
 /// Remove a member or a folder holder from a drive this account owns or
@@ -2104,7 +2115,7 @@ pub(crate) const EMAIL_INVITE_MAX_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// A validated emailed-invite request, ready for the wire.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct EmailInvitePolicy {
+pub struct EmailInvitePolicy {
     pub email: String,
     pub role: String,
     pub expires_in_secs: u64,
@@ -2113,30 +2124,39 @@ pub(crate) struct EmailInvitePolicy {
 /// Validate what the dialog asked for, before any network call.
 ///
 /// Rules are the server's, refused here by name so the dialog can say which
-/// one: one address; Viewer or Editor only (a Manager invite has to be a
-/// link, because the server caps those at a day and a mailed one would
-/// expire before anyone could approve it); a lifetime between one hour and
-/// thirty days, defaulting to the ordinary seven.
-pub(crate) fn resolve_email_invite(email: &str, role: Option<String>, expires_in_secs: Option<u64>) -> Result<EmailInvitePolicy> {
+/// one: one address; Viewer, Editor or Manager for a whole drive, Viewer or
+/// Editor for a folder (Manager is never a folder role, `folder_roles`); a
+/// lifetime between one hour and thirty days, defaulting to the ordinary
+/// seven.
+///
+/// A Manager invitation is then held to the manager link cap of one day
+/// (hcfs #521 answers anything longer with a 400): clamped, not refused, as
+/// [`apply_manager_invite_caps`] does for a link, so the omitted seven-day
+/// default still mints. The server makes it single use by itself and does
+/// not stretch it on the first key request, so the recipient has that one
+/// day to open it.
+pub fn resolve_email_invite(email: &str, role: Option<String>, expires_in_secs: Option<u64>, folder: bool) -> Result<EmailInvitePolicy> {
     let email = validate_invite_email(email)?;
+
     let role = role.unwrap_or_else(|| "writer".to_string());
-    match role.as_str() {
-        "reader" | "writer" => {}
-        "manager" => {
-            return Err(AppError::Validation(
-                "A Manager invite has to be a link. Invite them as an Editor by email and change their role after they join.".into(),
-            ));
-        }
-        other => {
-            return Err(AppError::Validation(format!("Unknown drive role: {other}. Expected reader or writer.")));
-        }
+    if folder {
+        super::folder_roles::resolve_folder_role(Some(role.clone()))?;
+    } else {
+        require_drive_role(&role)?;
     }
+
     let expires_in_secs = expires_in_secs.unwrap_or(DEFAULT_INVITE_EXPIRES_IN_SECS);
     if !(EMAIL_INVITE_MIN_SECS..=EMAIL_INVITE_MAX_SECS).contains(&expires_in_secs) {
         return Err(AppError::Validation(
             "An emailed invitation must expire between 1 hour and 30 days from now.".into(),
         ));
     }
+    let expires_in_secs = if role == "manager" {
+        expires_in_secs.min(MANAGER_INVITE_MAX_SECS)
+    } else {
+        expires_in_secs
+    };
+
     Ok(EmailInvitePolicy {
         email,
         role,
@@ -2201,13 +2221,22 @@ pub fn check_invite_email(email: String) -> InviteEmailCheck {
     invite_email_check(&email)
 }
 
+/// What a server from before hcfs #521 answers a mailed Manager invite with
+/// (`email_drive_invite` in hcfs-server's `drives/routes.rs`), matched
+/// exactly: a plain `bad_request` with no slug of its own, and no capability
+/// flag to ask first. Nothing was sent.
+const MANAGER_EMAIL_UNSUPPORTED: &str =
+    "manager invites must be sent as a link, not by email; invite as a writer and change the role after they join";
+
 /// Map a failed `POST /v1/drive-invites/email`.
 ///
-/// Three outcomes need their own words, each matched on status or slug and
-/// never on the English message:
+/// These outcomes need their own words, each matched on status or slug, and
+/// on the exact English message only where the server offers nothing else:
 /// - 503 `email_invites_unavailable`: no mail service; the FE says email
 ///   invites are coming soon.
 /// - 400 on a folder: folder invites cannot be mailed yet (`folder_roles`).
+/// - 400 [`MANAGER_EMAIL_UNSUPPORTED`]: this server cannot mail a Manager
+///   invite yet; say to send a Manager link instead.
 /// - 429 `rate_limited`: too many invitations; say how long to wait.
 /// - 502 `mail_send_failed`: the server could not send it and has already
 ///   revoked the invite, so trying again is safe and is what we say.
@@ -2216,6 +2245,8 @@ fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: 
     struct Envelope {
         #[serde(default)]
         error: String,
+        #[serde(default)]
+        message: String,
         #[serde(default)]
         retry_after_secs: Option<u64>,
     }
@@ -2227,10 +2258,15 @@ fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: 
     if let Some(err) = super::folder_roles::classify_folder_email_refusal(status, body) {
         return err;
     }
+    if code == 400 && envelope.message == MANAGER_EMAIL_UNSUPPORTED {
+        return AppError::Validation(
+            "This server cannot email a Manager invite yet, so nothing was sent. Send a Manager link from By link instead.".into(),
+        );
+    }
     if code == 429 || envelope.error == "rate_limited" {
         let wait = envelope.retry_after_secs.or(retry_after_header);
         return AppError::NotReady(NotReadyKind::RateLimited {
-            message: rate_limited_message(wait),
+            message: rate_limited_message(&envelope.message, wait),
         });
     }
     if code == 502 || envelope.error == "mail_send_failed" {
@@ -2239,26 +2275,71 @@ fn classify_email_invite_error(status: reqwest::StatusCode, retry_after_header: 
     classify_error_status(status, body)
 }
 
-/// "Try again in N minutes" for a rate-limited mint, rounded UP so the user is
-/// never told a time at which the server will still refuse them.
-fn rate_limited_message(retry_after_secs: Option<u64>) -> String {
+/// Said when the server's reason is missing or not one we know.
+const RATE_LIMITED_GENERIC: &str = "Too many invites sent recently.";
+
+/// The server's rate limit reasons (`mail/quota.rs` in hcfs-server), matched
+/// case-insensitively, and how each reads here.
+const RATE_LIMIT_REASONS: &[(&str, &str)] = &[
+    (
+        "This address was already invited to this drive recently",
+        "This address was invited to this drive a few minutes ago.",
+    ),
+    (
+        "You have sent too many invitations to this address in the last day",
+        "You've sent too many invites to this address today.",
+    ),
+    (
+        "Too many invitations sent in the last hour",
+        "You've sent too many invites in the last hour.",
+    ),
+    ("Too many invitations sent in the last day", "You've sent too many invites today."),
+    (
+        "This drive has sent too many invitations in the last day",
+        "This drive has sent too many invites today.",
+    ),
+];
+
+/// The server's rate limit reason in plain words, or the generic sentence.
+fn rate_limit_reason(server_message: &str) -> &'static str {
+    let key = server_message.trim();
+    let key = key.strip_suffix('.').unwrap_or(key);
+    RATE_LIMIT_REASONS
+        .iter()
+        .find(|(server, _)| server.eq_ignore_ascii_case(key))
+        .map_or(RATE_LIMITED_GENERIC, |(_, plain)| plain)
+}
+
+/// A wait as a person reads it: "less than a minute", "5 minutes", "5h 10m",
+/// "24h", and past two days "2d 3h". Always rounded UP, so the user is never
+/// told a time at which the server will still refuse them.
+fn format_retry_wait(secs: u64) -> String {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    if secs < MINUTE {
+        return "less than a minute".into();
+    }
+    if secs > 2 * DAY {
+        let hours = secs.div_ceil(HOUR);
+        let (days, rest) = (hours / 24, hours % 24);
+        return if rest == 0 { format!("{days}d") } else { format!("{days}d {rest}h") };
+    }
+    let minutes = secs.div_ceil(MINUTE);
+    if minutes < 60 {
+        return format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" });
+    }
+    let (hours, rest) = (minutes / 60, minutes % 60);
+    if rest == 0 { format!("{hours}h") } else { format!("{hours}h {rest}m") }
+}
+
+/// Which limit a rate-limited invite hit, then how long to wait:
+/// "You've sent too many invites to this address today. Try again in 24h."
+fn rate_limited_message(server_message: &str, retry_after_secs: Option<u64>) -> String {
+    let reason = rate_limit_reason(server_message);
     match retry_after_secs {
-        Some(secs) if secs >= 3600 => {
-            let hours = secs.div_ceil(3600);
-            format!(
-                "Too many invitations sent recently. Try again in {hours} hour{}.",
-                if hours == 1 { "" } else { "s" }
-            )
-        }
-        Some(secs) if secs >= 60 => {
-            let minutes = secs.div_ceil(60);
-            format!(
-                "Too many invitations sent recently. Try again in {minutes} minute{}.",
-                if minutes == 1 { "" } else { "s" }
-            )
-        }
-        Some(secs) => format!("Too many invitations sent recently. Try again in {} seconds.", secs.max(1)),
-        None => "Too many invitations sent recently. Try again later.".into(),
+        Some(secs) => format!("{reason} Try again in {}.", format_retry_wait(secs)),
+        None => format!("{reason} Try again later."),
     }
 }
 
@@ -2409,7 +2490,7 @@ pub async fn email_drive_invite(
     folder_hash: Option<String>,
     path_prefix: Option<String>,
 ) -> Result<EmailInviteResult> {
-    let policy = resolve_email_invite(&email, role, expires_in_secs)?;
+    let policy = resolve_email_invite(&email, role, expires_in_secs, path_prefix.is_some())?;
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
     let identity = resolve_managed_target(state.pool()?, &ctx.account_id, &label, owner_ss58, folder_hash).await?;
@@ -2869,7 +2950,7 @@ fn folder_key(path: &str) -> Option<String> {
 }
 
 /// One folder of an own drive that is shared on its own: people hold a grant
-/// on exactly this folder, or a folder invite for it is listed.
+/// on exactly this folder, or a folder invite for it is still open.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderSharingSummary {
@@ -2878,21 +2959,26 @@ pub struct FolderSharingSummary {
     /// People holding a grant on exactly this folder. A grant on a folder
     /// around it is that folder's, not this one's, so nobody is counted twice.
     pub holder_count: u32,
-    /// A folder invite for exactly this folder is listed, live or spent: the
-    /// same "any invite" rule the drive mark keys on, since an owner whose
-    /// folder link lapsed still shared the folder.
+    /// A folder invite for exactly this folder can still bring someone in:
+    /// an emailed invitation still waiting, or an active link (see
+    /// `access_panel::invite_is_open`). A spent one does not count. Counting
+    /// every listed invite kept a folder marked "Shared" after its last person
+    /// was removed, because the email invitation they had accepted is still
+    /// listed, and the mark then opened a Manage access with nobody in it.
     pub has_invite: bool,
 }
 
 /// Fold one own drive's folder grants and folder invites into the folders
 /// that are shared on their own, sorted by path. Whole-drive members and
 /// whole-drive invites are the drive's, never a folder's, so they are left
-/// out. `None` for either listing means it failed; the other still answers.
+/// out, and so are invites that can no longer bring anyone in. `None` for
+/// either listing means it failed; the other still answers.
 ///
-/// Pure, so the rule is testable without a server.
+/// Pure (the clock is passed in), so the rule is testable without a server.
 fn fold_folder_sharing(
     grants: Option<&[hcfs_shared::network::DriveGrantHolderEntry]>,
     invites: Option<&[DriveInviteInfo]>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<FolderSharingSummary> {
     use std::collections::{BTreeMap, BTreeSet};
     let mut by_path: BTreeMap<String, (BTreeSet<&str>, bool)> = BTreeMap::new();
@@ -2902,6 +2988,9 @@ fn fold_folder_sharing(
         }
     }
     for invite in invites.into_iter().flatten() {
+        if !super::access_panel::invite_is_open(invite, now) {
+            continue;
+        }
         if let Some(path) = invite_folder(invite) {
             by_path.entry(path).or_default().1 = true;
         }
@@ -2946,7 +3035,11 @@ pub async fn list_owned_folder_sharing(app: tauri::AppHandle, label: String) -> 
         ),
     };
 
-    let folders = fold_folder_sharing(listing.as_ref().map(|l| l.folder_grants.as_slice()), invites.as_deref());
+    let folders = fold_folder_sharing(
+        listing.as_ref().map(|l| l.folder_grants.as_slice()),
+        invites.as_deref(),
+        chrono::Utc::now(),
+    );
     info!(label = %label, shared_folders = folders.len(), "Listed owned folder sharing");
     Ok(folders)
 }
@@ -3746,8 +3839,8 @@ mod tests {
             grant("5Bo", "Clients/ACME"),
             grant("5Di", "Work"),
         ];
-        let invites = [folder_invite("Clients/ACME", false), folder_invite("Photos", false), invite(true, false)];
-        let folders = fold_folder_sharing(Some(&grants), Some(&invites));
+        let invites = [folder_invite("Clients/ACME", true), folder_invite("Photos", true), invite(true, false)];
+        let folders = fold_folder_sharing(Some(&grants), Some(&invites), chrono::Utc::now());
         assert_eq!(
             folders,
             vec![
@@ -3774,15 +3867,94 @@ mod tests {
     #[test]
     fn folder_fold_answers_from_either_listing_and_normalises_paths() {
         let grants = [grant("5Bo", "Cafe\u{0301}")];
-        let folders = fold_folder_sharing(Some(&grants), None);
+        let folders = fold_folder_sharing(Some(&grants), None, chrono::Utc::now());
         assert_eq!(folders.len(), 1);
         assert_eq!(folders[0].path, "Caf\u{00E9}", "keyed NFC, as the server stores a grant");
 
-        let folders = fold_folder_sharing(None, Some(&[folder_invite("Work", true)]));
+        let folders = fold_folder_sharing(None, Some(&[folder_invite("Work", true)]), chrono::Utc::now());
         assert_eq!((folders[0].holder_count, folders[0].has_invite), (0, true));
 
-        assert!(fold_folder_sharing(None, None).is_empty());
-        assert!(fold_folder_sharing(Some(&[]), Some(&[invite(true, false)])).is_empty());
+        assert!(fold_folder_sharing(None, None, chrono::Utc::now()).is_empty());
+        assert!(fold_folder_sharing(Some(&[]), Some(&[invite(true, false)]), chrono::Utc::now()).is_empty());
+    }
+
+    /// The emailed invitation a person accepted, as the server still lists
+    /// it after they joined: one use, used.
+    fn accepted_email_invite(path: &str) -> DriveInviteInfo {
+        DriveInviteInfo {
+            email_status: Some("sealed".into()),
+            recipient_email: Some("bob@example.com".into()),
+            use_count: 1,
+            ..folder_invite(path, false)
+        }
+    }
+
+    // The reported bug: a folder shared by email, the person removed. Their
+    // grant is gone but the invitation they accepted is still listed, and it
+    // kept the folder's "Shared" and "Manage access" pills up over a Manage
+    // access with nobody in it.
+    #[test]
+    fn folder_is_not_shared_once_its_last_person_is_removed() {
+        let folders = fold_folder_sharing(Some(&[]), Some(&[accepted_email_invite("Clients")]), chrono::Utc::now());
+        assert!(folders.is_empty(), "an accepted invitation shares nothing: {folders:?}");
+
+        // While they still hold it, the folder is shared by them alone.
+        let grants = [grant("5Bo", "Clients")];
+        let folders = fold_folder_sharing(Some(&grants), Some(&[accepted_email_invite("Clients")]), chrono::Utc::now());
+        assert_eq!(
+            folders,
+            vec![FolderSharingSummary {
+                path: "Clients".into(),
+                holder_count: 1,
+                has_invite: false,
+            }]
+        );
+    }
+
+    // What still shares a folder nobody holds: something that can bring a
+    // person in. Each spent kind of invite is history and shares nothing.
+    #[test]
+    fn folder_stays_shared_only_while_an_invite_can_still_bring_someone_in() {
+        let now = chrono::Utc::now();
+        let shared = |invite: DriveInviteInfo| !fold_folder_sharing(Some(&[]), Some(&[invite]), now).is_empty();
+
+        let pending_email = || DriveInviteInfo {
+            email_status: Some("sent".into()),
+            recipient_email: Some("bob@example.com".into()),
+            ..folder_invite("Clients", true)
+        };
+        assert!(shared(pending_email()), "an invitation not yet accepted");
+        assert!(shared(folder_invite("Clients", true)), "an active share link");
+
+        assert!(
+            !shared(DriveInviteInfo {
+                revoked: true,
+                ..pending_email()
+            }),
+            "a cancelled invitation"
+        );
+        assert!(
+            !shared(DriveInviteInfo {
+                revoked: true,
+                ..folder_invite("Clients", true)
+            }),
+            "a revoked link"
+        );
+        assert!(
+            !shared(DriveInviteInfo {
+                use_count: 1,
+                ..folder_invite("Clients", true)
+            }),
+            "a single-use link already used"
+        );
+        assert!(
+            !shared(DriveInviteInfo {
+                expires_at: (now - chrono::Duration::hours(1)).to_rfc3339(),
+                ..folder_invite("Clients", true)
+            }),
+            "an expired link the server still calls valid"
+        );
+        assert!(!shared(folder_invite("Clients", false)), "a link the server calls invalid");
     }
 
     #[test]
@@ -4055,29 +4227,63 @@ mod tests {
 
     #[test]
     fn email_invite_policy_accepts_viewer_and_editor_within_the_window() {
-        let p = resolve_email_invite("  ada@example.com ", Some("reader".into()), Some(3600)).expect("ok");
+        let p = resolve_email_invite("  ada@example.com ", Some("reader".into()), Some(3600), false).expect("ok");
         assert_eq!(p.email, "ada@example.com");
         assert_eq!(p.role, "reader");
         assert_eq!(p.expires_in_secs, 3600);
 
-        let p = resolve_email_invite("ada@example.com", None, None).expect("defaults");
+        let p = resolve_email_invite("ada@example.com", None, None, false).expect("defaults");
         assert_eq!(p.role, "writer", "the dialog's default role");
         assert_eq!(p.expires_in_secs, DEFAULT_INVITE_EXPIRES_IN_SECS);
-        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS)).is_ok());
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS), false).is_ok());
     }
 
     #[test]
-    fn email_invite_policy_refuses_manager_by_name() {
-        let err = resolve_email_invite("ada@example.com", Some("manager".into()), None).expect_err("manager");
-        assert!(format!("{err}").contains("has to be a link"), "{err}");
+    fn email_invite_policy_takes_manager_within_the_manager_day() {
+        let manager = || Some("manager".to_string());
+
+        // Omitted: the seven-day default would be a 400, so it becomes a day.
+        let p = resolve_email_invite("ada@example.com", manager(), None, false).expect("manager");
+        assert_eq!(p.role, "manager");
+        assert_eq!(p.expires_in_secs, MANAGER_INVITE_MAX_SECS);
+
+        // Wider but still a legal email lifetime: clamped, as a link is.
+        let p = resolve_email_invite("ada@example.com", manager(), Some(EMAIL_INVITE_MAX_SECS), false).expect("clamped");
+        assert_eq!(p.expires_in_secs, MANAGER_INVITE_MAX_SECS);
+
+        // Shorter is kept as asked.
+        let p = resolve_email_invite("ada@example.com", manager(), Some(2 * 3600), false).expect("short");
+        assert_eq!(p.expires_in_secs, 2 * 3600);
+
+        // The email window still applies first: no clamp rescues "Never expires".
+        assert!(resolve_email_invite("ada@example.com", manager(), Some(100 * 365 * 24 * 3600), false).is_err());
+        assert!(resolve_email_invite("ada@example.com", manager(), Some(EMAIL_INVITE_MIN_SECS - 1), false).is_err());
+
+        // The cap is the manager's alone.
+        let p = resolve_email_invite("ada@example.com", Some("writer".into()), Some(EMAIL_INVITE_MAX_SECS), false).expect("writer");
+        assert_eq!(p.expires_in_secs, EMAIL_INVITE_MAX_SECS);
+    }
+
+    #[test]
+    fn email_invite_policy_refuses_manager_on_a_folder() {
+        let err = resolve_email_invite("ada@example.com", Some("manager".into()), None, true).expect_err("folder manager");
+        assert!(matches!(err, AppError::Validation(_)), "{err}");
+        assert!(resolve_email_invite("ada@example.com", Some("reader".into()), None, true).is_ok());
+        assert!(resolve_email_invite("ada@example.com", Some("writer".into()), None, true).is_ok());
+    }
+
+    #[test]
+    fn email_invite_policy_refuses_an_unknown_role_by_name() {
+        let err = resolve_email_invite("ada@example.com", Some("owner".into()), None, false).expect_err("unknown");
+        assert!(format!("{err}").contains("Unknown drive role: owner"), "{err}");
     }
 
     #[test]
     fn email_invite_policy_refuses_out_of_window_lifetimes() {
-        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MIN_SECS - 1)).is_err());
-        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS + 1)).is_err());
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MIN_SECS - 1), false).is_err());
+        assert!(resolve_email_invite("ada@example.com", None, Some(EMAIL_INVITE_MAX_SECS + 1), false).is_err());
         // The link dialog's "Never expires" preset must not slip through.
-        assert!(resolve_email_invite("ada@example.com", None, Some(100 * 365 * 24 * 3600)).is_err());
+        assert!(resolve_email_invite("ada@example.com", None, Some(100 * 365 * 24 * 3600), false).is_err());
     }
 
     #[test]
@@ -4093,14 +4299,14 @@ mod tests {
             "ada@.com",
             "a@b.c,d@e.f g",
         ] {
-            assert!(resolve_email_invite(bad, None, None).is_err(), "{bad:?} must be refused");
+            assert!(resolve_email_invite(bad, None, None, false).is_err(), "{bad:?} must be refused");
         }
     }
 
     #[test]
     fn email_invite_policy_refuses_two_addresses_in_one_field() {
         for bad in ["ada@example.com,bob@example.com", "ada@b@example.com"] {
-            assert!(resolve_email_invite(bad, None, None).is_err(), "{bad:?} must be refused");
+            assert!(resolve_email_invite(bad, None, None, false).is_err(), "{bad:?} must be refused");
         }
     }
 
@@ -4363,6 +4569,7 @@ mod tests {
             role: "writer".into(),
             created_at: "t".into(),
             can_write: true,
+            member_count: Some(3),
             frozen: false,
             frozen_until: None,
         };
@@ -4376,8 +4583,37 @@ mod tests {
                 "role": "writer",
                 "createdAt": "t",
                 "canWrite": true,
+                "memberCount": 3,
             })
         );
+    }
+
+    /// Each held grant carries its own folder's count; an omitted count (0,
+    /// or a server without the field) never reaches the FE as a number.
+    #[test]
+    fn held_folder_grants_carry_their_own_member_count() {
+        // A role-less grant sits between the counted ones: the role fill the
+        // listing goes through must leave each count on its own grant.
+        let body = serde_json::json!({
+            "memberships": [{"owner_ss58":"5O","folder_hash":"h","display_label":"d","role":"writer","grant_blob":"B","created_at":"t","member_count":9}],
+            "folder_grants": [
+                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"a","role":"writer","grant_blob":"B","created_at":"t","member_count":4},
+                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"b","grant_blob":"B","created_at":"t"},
+                {"owner_ss58":"5O","folder_hash":"h","display_label":"d","path_prefix":"c","role":"reader","grant_blob":"B","created_at":"t","member_count":1}
+            ]
+        })
+        .to_string();
+        let body = crate::shared_drives::folder_roles::default_missing_grant_roles(&body);
+        let resp: DriveMembershipsResponse = serde_json::from_str(&body).expect("listing parses");
+
+        let grants = my_folder_grants(resp.folder_grants, true);
+        let counts: Vec<_> = grants.iter().map(|g| (g.path_prefix.as_str(), g.member_count)).collect();
+        assert_eq!(counts, [("a", Some(4)), ("b", None), ("c", Some(1))], "never the drive's 9");
+        assert!(grants[0].can_write, "the projection keeps the write decision");
+        assert_eq!(grants[1].role, "reader", "a role-less grant still reads as reader");
+
+        let wire = serde_json::to_value(&grants[1]).expect("serialize");
+        assert!(wire.get("memberCount").is_none(), "absent stays absent on the IPC");
     }
 
     #[test]
@@ -4397,12 +4633,67 @@ mod tests {
     }
 
     #[test]
-    fn rate_limited_message_rounds_up() {
-        assert!(rate_limited_message(Some(61)).contains("2 minutes"));
-        assert!(rate_limited_message(Some(60)).contains("1 minute."));
-        assert!(rate_limited_message(Some(3601)).contains("2 hours"));
-        assert!(rate_limited_message(Some(5)).contains("5 seconds"));
-        assert!(rate_limited_message(None).contains("later"));
+    fn format_retry_wait_rounds_up_into_hours_and_minutes() {
+        for (secs, want) in [
+            (0, "less than a minute"),
+            (59, "less than a minute"),
+            (60, "1 minute"),
+            (61, "2 minutes"),
+            (3599, "1h"),
+            (3600, "1h"),
+            (3660, "1h 1m"),
+            (18_600, "5h 10m"),
+            (86_340, "23h 59m"),
+            (86_400, "24h"),
+            (90_061, "25h 2m"),
+            (172_800, "48h"),
+            (172_801, "2d 1h"),
+            (183_600, "2d 3h"),
+            (259_200, "3d"),
+        ] {
+            assert_eq!(format_retry_wait(secs), want, "{secs}s");
+        }
+    }
+
+    #[test]
+    fn rate_limited_message_keeps_the_server_reason() {
+        for (server, plain) in RATE_LIMIT_REASONS {
+            assert_eq!(rate_limit_reason(server), *plain);
+            assert_eq!(rate_limit_reason(&format!("  {}. ", server.to_uppercase())), *plain);
+        }
+        assert_eq!(
+            rate_limit_reason("This address was already invited to this drive recently"),
+            "This address was invited to this drive a few minutes ago."
+        );
+        assert_eq!(
+            rate_limit_reason("You have sent too many invitations to this address in the last day"),
+            "You've sent too many invites to this address today."
+        );
+        assert_eq!(
+            rate_limit_reason("Too many invitations sent in the last hour"),
+            "You've sent too many invites in the last hour."
+        );
+        assert_eq!(
+            rate_limit_reason("Too many invitations sent in the last day"),
+            "You've sent too many invites today."
+        );
+        assert_eq!(
+            rate_limit_reason("This drive has sent too many invitations in the last day"),
+            "This drive has sent too many invites today."
+        );
+        assert_eq!(rate_limit_reason(""), RATE_LIMITED_GENERIC);
+        assert_eq!(rate_limit_reason("slow down"), RATE_LIMITED_GENERIC);
+
+        assert_eq!(
+            rate_limited_message("You have sent too many invitations to this address in the last day", Some(86_400)),
+            "You've sent too many invites to this address today. Try again in 24h."
+        );
+        assert_eq!(
+            rate_limited_message("Too many invitations sent in the last day", Some(86_340)),
+            "You've sent too many invites today. Try again in 23h 59m."
+        );
+        assert_eq!(rate_limited_message("", None), "Too many invites sent recently. Try again later.");
+        assert!(!rate_limited_message("x", Some(90_061)).contains('\u{2014}'));
     }
 
     #[test]
@@ -4419,6 +4710,22 @@ mod tests {
         assert!(matches!(
             classify_email_invite_error(StatusCode::BAD_GATEWAY, None, r#"{"error":"mail_send_failed","message":"x"}"#),
             AppError::Validation(_)
+        ));
+        // A server from before mailed Manager invites: nothing was sent, and
+        // the words say what to do instead of echoing the raw refusal.
+        match classify_email_invite_error(
+            StatusCode::BAD_REQUEST,
+            None,
+            // Byte for byte what hcfs main sent before #521.
+            r#"{"error":"bad_request","message":"manager invites must be sent as a link, not by email; invite as a writer and change the role after they join"}"#,
+        ) {
+            AppError::Validation(msg) => assert!(msg.contains("Send a Manager link"), "{msg}"),
+            other => panic!("old-server manager refusal must be worded, got {other:?}"),
+        }
+        // Any other 400 keeps the shared-drive mapping.
+        assert!(matches!(
+            classify_email_invite_error(StatusCode::BAD_REQUEST, None, r#"{"error":"bad_request","message":"something else"}"#),
+            AppError::Hcfs(_)
         ));
         // Everything else keeps the shared-drive mapping.
         assert!(matches!(

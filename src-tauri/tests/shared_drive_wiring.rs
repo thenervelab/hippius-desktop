@@ -267,13 +267,21 @@ fn the_owner_or_manager_rule_lives_in_one_place() {
     assert!(fn_body(&auto, "pub(crate) fn seal_targets(").contains("manages_drive("));
 }
 
-/// Email invitations are Viewer or Editor: the server refuses `manager` by
-/// email. A Manager link is minted with the server's caps applied first.
+/// Manager invites stay inside the server's caps on both routes. By email
+/// (hcfs #521) a whole-drive Manager invitation is clamped to one day and a
+/// folder one is refused, the folder decided by the request's `path_prefix`.
+/// A Manager link is minted with the server's caps applied first.
 #[test]
-fn manager_invites_are_links_within_the_server_caps() {
+fn manager_invites_stay_within_the_server_caps() {
     let src = shared_drive_commands_src();
-    let email = fn_body(&src, "pub(crate) fn resolve_email_invite(");
-    assert!(email.contains("\"manager\" =>"), "manager by email is refused by name");
+    let email = fn_body(&src, "pub fn resolve_email_invite(");
+    assert!(email.contains("MANAGER_INVITE_MAX_SECS"), "a mailed Manager invite is clamped to a day");
+    assert!(email.contains("resolve_folder_role("), "a folder invite is Viewer or Editor only");
+    let send = fn_body(&src, "pub async fn email_drive_invite(");
+    assert!(
+        send.contains("resolve_email_invite(&email, role, expires_in_secs, path_prefix.is_some())"),
+        "the folder check keys on the folder actually sent"
+    );
     let funnel = fn_body(&src, "async fn mint_invite_link(");
     let caps = funnel.find("apply_manager_invite_caps(").expect("manager caps applied");
     let request = funnel.find("http_create_invite(").expect("then minted");

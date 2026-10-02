@@ -638,6 +638,7 @@ fn main() {
             get_tray_menu_data,
             // Tray popover panel (replaces the native tray menu)
             toggle_tray_panel,
+            crate::tray::status_menu::tray_menu_attached,
             check_for_update,
             note_update_prompted,
             install_update,
@@ -722,6 +723,10 @@ fn main() {
 
     let builder = setup(builder);
     let builder = on_window_event(builder);
+    // Every tray event, alongside the page's `action` callback (which still
+    // owns the left click): logs clicks, and on macOS keeps the context menu
+    // off the status item so a left click reaches the app at all.
+    let builder = builder.on_tray_icon_event(crate::tray::status_menu::on_tray_icon_event);
 
     // E2E only: register the in-process WebDriver automation server so the
     // WebdriverIO smoke suite (`e2e/`) can drive a real macOS WKWebView build.

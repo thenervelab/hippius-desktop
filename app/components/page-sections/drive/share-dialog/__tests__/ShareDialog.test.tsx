@@ -29,13 +29,16 @@ import { BILLING_ROUTE } from "@/app/lib/routes";
 // parallel run the default one second is not always enough to find a row.
 configure({ asyncUtilTimeout: 3000 });
 
-const flags = vi.hoisted(() => ({ sharedDrives: true, folderRoles: false }));
+const flags = vi.hoisted(() => ({ sharedDrives: true, folderRoles: false, managerByEmail: false }));
 vi.mock("@/app/lib/featureFlags", () => ({
   get SHARED_DRIVES_ENABLED() {
     return flags.sharedDrives;
   },
   get FOLDER_ROLES_ENABLED() {
     return flags.folderRoles;
+  },
+  get MANAGER_EMAIL_INVITES_ENABLED() {
+    return flags.managerByEmail;
   },
 }));
 
@@ -90,7 +93,8 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
 
 const INVALID = "Enter one email address, like name@example.com.";
 const EMAIL_HINT = "They get their own invite, just for them.";
-const MANAGER_HINT = "To add a Manager, invite them as an Editor, then change their role below.";
+const MANAGER_HINT = "To add a Manager, invite them as an Editor, then change their role once they join.";
+const MANAGER_NOTE = /^Works once and expires within 24 hours, so they need to join by then\./;
 const UPGRADE_TITLE = "Sharing is available on Plus, Max and Scale plans.";
 const WEEK = 7 * 24 * 60 * 60;
 
@@ -190,6 +194,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   flags.sharedDrives = true;
   flags.folderRoles = false;
+  flags.managerByEmail = false;
   plan.included = true;
   listMyDriveMembershipsMock.mockResolvedValue([]);
   emailInvitesAvailableMock.mockResolvedValue(true);
@@ -475,31 +480,91 @@ describe("By email", () => {
     expect(opts).not.toHaveProperty("expiresInSecs");
   });
 
-  it("is one field and one line at rest; the role, Send and the Manager tip appear once there is text", async () => {
+  it("is one field and one line at rest; the role and Send appear once there is text", async () => {
     renderDialog();
     expect(screen.getByLabelText("Email address")).toBeInTheDocument();
     expect(screen.getByText(EMAIL_HINT)).toBeInTheDocument();
     expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send invite" })).not.toBeInTheDocument();
-    expect(screen.queryByText(MANAGER_HINT)).not.toBeInTheDocument();
     await typeEmail("a");
     expect(screen.getByLabelText("Invite role")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send invite" })).toBeInTheDocument();
+    // The Manager note is for a Manager only; Editor is the default.
+    expect(screen.queryByText(MANAGER_NOTE)).not.toBeInTheDocument();
     expect(screen.getByText(MANAGER_HINT)).toBeInTheDocument();
     await typeEmail("");
+    expect(screen.queryByText(MANAGER_HINT)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Invite role")).not.toBeInTheDocument();
     expect(screen.getByText(EMAIL_HINT)).toBeInTheDocument();
   });
 
-  it("offers Viewer and Editor only, and says how to add a Manager", async () => {
+  it("offers Viewer and Editor only for a drive while Manager by email is off, and says how to add a Manager", async () => {
     renderDialog();
     await typeEmail("ada@example.com");
     fireEvent.click(screen.getByLabelText("Invite role"));
     expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("option", { name: "Manager" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /^Manager/ })).not.toBeInTheDocument();
     expect(screen.getByText(MANAGER_HINT)).toBeInTheDocument();
+  });
+
+  it("still offers Manager on a link while Manager by email is off", () => {
+    renderDialog();
+    showTab("By link");
+    fireEvent.click(screen.getByLabelText("Link access"));
+    expect(screen.getByRole("option", { name: /^Manager/ })).toBeInTheDocument();
+  });
+
+  it("still lets a member be made a Manager while Manager by email is off", async () => {
+    listShareAccessMock.mockResolvedValue(
+      access({ members: [{ memberSs58: ANN, memberName: "Ann", role: "writer", isYou: false }] }),
+    );
+    changeDriveMemberRoleMock.mockResolvedValue(undefined);
+    renderDialog();
+    await screen.findByText("Ann");
+    choose("Role for Ann", "Manager");
+    await waitFor(() =>
+      expect(changeDriveMemberRoleMock).toHaveBeenCalledWith("team-docs", ANN, "manager", undefined),
+    );
+  });
+
+  it("offers Viewer, Editor and Manager for a drive while Manager by email is on", async () => {
+    flags.managerByEmail = true;
+    renderDialog();
+    await typeEmail("ada@example.com");
+    fireEvent.click(screen.getByLabelText("Invite role"));
+    expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
+    expect(screen.getByRole("option", { name: /^Manager/ })).toBeInTheDocument();
+    expect(screen.queryByText(/To add a Manager/)).not.toBeInTheDocument();
     expect(screen.getByText(EMAIL_HINT)).toBeInTheDocument();
+  });
+
+  it("emails a Manager invite, says it works once within 24 hours, and leaves the expiry to Rust", async () => {
+    flags.managerByEmail = true;
+    emailDriveInviteMock.mockResolvedValue({ inviteId: "i1", presealed: true });
+    renderDialog();
+    await typeEmail("ada@example.com");
+    choose("Invite role", "Manager");
+    expect(screen.getByText(MANAGER_NOTE)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    await waitFor(() =>
+      expect(emailDriveInviteMock).toHaveBeenCalledWith("team-docs", "ada@example.com", {
+        role: "manager",
+        target: undefined,
+      }),
+    );
+  });
+
+  it("drops the Manager note when the role goes back to Editor", async () => {
+    flags.managerByEmail = true;
+    renderDialog();
+    await typeEmail("ada@example.com");
+    choose("Invite role", "Manager");
+    expect(screen.getByText(MANAGER_NOTE)).toBeInTheDocument();
+    choose("Invite role", "Editor");
+    expect(screen.queryByText(MANAGER_NOTE)).not.toBeInTheDocument();
   });
 
   it("checks the address with Rust and says what is wrong once the field is left", async () => {
@@ -544,8 +609,8 @@ describe("By email", () => {
     ],
     [
       "rate limited (429), with the wait",
-      notReady("RATE_LIMITED", "Too many invitations sent recently. Try again in 3 minutes."),
-      "Too many invitations sent recently. Try again in 3 minutes.",
+      notReady("RATE_LIMITED", "You've sent too many invites to this address today. Try again in 24h."),
+      "You've sent too many invites to this address today. Try again in 24h.",
     ],
     [
       "the send failed (502)",
@@ -875,9 +940,11 @@ describe("a folder target", () => {
     flags.folderRoles = true;
     emailDriveInviteMock.mockResolvedValue({ inviteId: "i1" });
     renderDialog(folderTarget());
-    // No Manager hint for a folder: Manager is not a folder role.
-    expect(screen.queryByText(/To add a Manager/)).not.toBeInTheDocument();
     await typeEmail("ada@example.com");
+    // No Manager by email on a folder: Manager is not a folder role.
+    fireEvent.click(screen.getByLabelText("Invite role"));
+    expect(screen.queryByRole("option", { name: /^Manager/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByText("Viewer").at(-1)!);
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
     await waitFor(() =>
       expect(emailDriveInviteMock).toHaveBeenCalledWith("team-docs", "ada@example.com", {

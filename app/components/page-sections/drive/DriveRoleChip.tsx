@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { cva } from "class-variance-authority";
 
 import {
   driveRoleDescription,
@@ -50,6 +51,21 @@ const ROLE_TONES: Record<DriveRole, string> = {
   ),
 };
 
+/**
+ * The pill every chip on a shared row is drawn with: the role chip here and
+ * `FolderGrantChip` beside it, so the two sit on one line at one height.
+ * `neutral` is the Viewer tone, for a chip that states a shape rather than a
+ * power.
+ */
+export const driveChipVariants = cva(
+  "inline-flex h-[20px] shrink-0 items-center rounded-full border px-1.5 text-[10px] font-semibold leading-none",
+  {
+    variants: {
+      tone: { ...ROLE_TONES, neutral: ROLE_TONES.reader },
+    },
+  },
+);
+
 export default function DriveRoleChip({
   role,
   className,
@@ -64,8 +80,8 @@ export default function DriveRoleChip({
       // reads.
       title={driveRoleDescription(role)}
       className={cn(
-        "inline-flex h-[20px] shrink-0 items-center rounded-full border px-1.5 text-[10px] font-semibold uppercase leading-none tracking-[0.04em]",
-        ROLE_TONES[role],
+        driveChipVariants({ tone: role }),
+        "uppercase tracking-[0.04em]",
         className,
       )}
     >

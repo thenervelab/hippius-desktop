@@ -199,6 +199,24 @@ pub(crate) fn link_status(invite: &DriveInviteInfo, now: DateTime<Utc>) -> LinkS
     LinkStatus::Active
 }
 
+/// Whether an invite can still bring someone in, which is exactly what
+/// Manage access lists as open: an emailed invitation still waiting (the
+/// panel's "Pending" rows), or a link whose status is [`LinkStatus::Active`].
+///
+/// A folder's "Shared" mark keys on this too (`fold_folder_sharing`), so the
+/// mark is drawn exactly when the panel it opens has a person, a pending
+/// invitation or a working link to show. An email invitation the recipient
+/// already accepted, or a link that has expired, been revoked or used up, is
+/// history: once the last person is removed, a mark held up by it pointed at
+/// a panel with nobody in it.
+pub(crate) fn invite_is_open(invite: &DriveInviteInfo, now: DateTime<Utc>) -> bool {
+    if invite.email_status.is_some() {
+        invite.valid && !invite.revoked
+    } else {
+        link_status(invite, now) == LinkStatus::Active
+    }
+}
+
 fn panel_link(invite: DriveInviteInfo, account_id: &str, now: DateTime<Utc>) -> AccessPanelLink {
     let status = link_status(&invite, now);
     let left = seconds_until(&invite.expires_at, now);
@@ -309,7 +327,7 @@ fn split_invites(
             continue;
         }
         if invite.email_status.is_some() {
-            if invite.valid && !invite.revoked {
+            if invite_is_open(&invite, now) {
                 let expires_in_secs = seconds_until(&invite.expires_at, now);
                 let invite = DriveInviteInfo {
                     role: drive_role_from_wire(&invite.role),
