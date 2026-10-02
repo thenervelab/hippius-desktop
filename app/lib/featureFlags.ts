@@ -198,8 +198,10 @@ export const REFERRALS_COMING_SOON = true;
  * Settings card. The platform half is Rust's (`capture_support`): Linux
  * reports unsupported until its portal path lands, whatever this says.
  *
- * Staging only while it is new: it opens windows over every app on screen and
- * asks for a macOS permission, so it gets an internal build before beta.
+ * On in beta and staging, off in production until it has had a beta
+ * release: it opens windows over every app on screen and asks for a macOS
+ * permission. Windows and Linux stay staging only on top of this
+ * (`capture::rollout`, until their hardware checklists pass).
  * Design: `docs/plans/2026-09-22-screen-capture.md`.
  */
-export const SCREEN_CAPTURE_ENABLED = enabledFrom("staging");
+export const SCREEN_CAPTURE_ENABLED = enabledFrom("beta");

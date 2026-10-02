@@ -21,9 +21,10 @@ Screenshots and (on macOS) recordings of an area, a window or a whole display,
 filed in `<drive>/Captures`, with a public share link copied unless
 `CaptureOptions.copyLink` is off. Design and
 phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
-`SCREEN_CAPTURE_ENABLED = enabledFrom("staging")`, and behind Rust's
-`capture_support` for the platform: **screenshots on macOS, Windows and
-Linux** (Linux on staging only); **recording on macOS 13+** when
+`SCREEN_CAPTURE_ENABLED = enabledFrom("beta")` (beta and staging, not
+production), and behind Rust's `capture_support` for the platform:
+**screenshots on macOS, Windows and Linux** (Windows and Linux on staging
+only); **recording on macOS 13+** when
 `HippiusCapture` is built, and on Windows 10 2004+ and Linux (X11 and
 Wayland) in debug and staging builds only (`capture::rollout`, until each
 platform's checklist passes).

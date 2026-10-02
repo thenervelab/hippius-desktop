@@ -309,7 +309,7 @@ disabled with the package to install, not a vanished button.
 
 ## Rollout gating
 
-`SCREEN_CAPTURE_ENABLED = enabledFrom("staging")` stays the one frontend kill
+`SCREEN_CAPTURE_ENABLED = enabledFrom("beta")` stays the one frontend kill
 switch for the whole feature. Per-platform readiness is Rust's, inside
 `capture_support` and `capture_start`, so a lane never shows a half-ready
 platform:
