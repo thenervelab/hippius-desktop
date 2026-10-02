@@ -74,7 +74,9 @@ describe("SharePicker", () => {
     const { findByRole } = render(
       <SharePicker kind="screenshot" firstTab="screen" barDisplayId={1} onChoose={onChoose} onClose={vi.fn()} />,
     );
-    await findByRole("option", { name: /Built-in Display/ });
+    // The bar's screen is picked in an update after the list renders; Return
+    // before that shares nothing, which a loaded CI runner hit.
+    expect(await findByRole("option", { name: /Built-in Display/ })).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(window, { key: "Enter" });
     expect(onChoose).toHaveBeenCalledWith({ tab: "screen", id: 1 });
   });

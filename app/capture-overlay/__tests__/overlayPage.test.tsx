@@ -399,6 +399,9 @@ describe("skipping the countdown", () => {
   it("takes the capture at once on Return while counting", async () => {
     setup({ countdownSecs: 3 });
     await screen.findByRole("toolbar", { name: "Capture" });
+    // Return counts down only once the area has loaded, which lands after
+    // the toolbar; on a loaded runner it had not yet.
+    await screen.findByText("400 × 300");
     vi.useFakeTimers();
     fireEvent.keyDown(window, { key: "Enter" });
     expect(screen.getByText("Capturing in 3")).toBeInTheDocument();
@@ -418,6 +421,9 @@ describe("skipping the countdown", () => {
   it("takes the capture at once when the number is clicked", async () => {
     setup({ countdownSecs: 5 });
     await screen.findByRole("toolbar", { name: "Capture" });
+    // Return counts down only once the area has loaded, which lands after
+    // the toolbar; on a loaded runner it had not yet.
+    await screen.findByText("400 × 300");
     vi.useFakeTimers();
     fireEvent.keyDown(window, { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: "Capture now" }));

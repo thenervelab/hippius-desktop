@@ -309,7 +309,7 @@ mod tests {
     /// either side would quietly leave every card without a picture.
     #[test]
     fn the_helper_speaks_the_same_poster_flag_and_line() {
-        let main = include_str!("../../../macos/HippiusCapture/Sources/main.swift");
+        let main = include_str!("../../../macos/HippiusCapture/Sources/HippiusCapture.swift");
         let poster = include_str!("../../../macos/HippiusCapture/Sources/Poster.swift");
         assert!(main.contains("arguments.contains(\"--poster\")"));
         assert!(poster.contains("\"frames\": frames.map { [\"time\": $0.0, \"jpeg\": $0.1] }"));

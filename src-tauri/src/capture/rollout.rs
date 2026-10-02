@@ -59,11 +59,12 @@ pub const fn floor(platform: Platform, feature: Feature) -> Option<ReleaseChanne
     match (platform, feature) {
         // macOS ships wherever the frontend switch does.
         (MacOs, Screenshots | Recording) => Some(ReleaseChannel::Production),
-        // Windows screenshots: beta once Phase 1's hardware checklist passes.
-        // Windows recording: production only once the installer is signed.
-        (Windows, Screenshots | Recording) => Some(ReleaseChannel::Staging),
-        (LinuxX11 | LinuxWayland, Screenshots | Recording) => Some(ReleaseChannel::Staging),
-        (LinuxWayland, ShortcutPortal) => Some(ReleaseChannel::Staging),
+        // Windows and Linux ship to beta testers ahead of their hardware
+        // checklists; production waits for those, and Windows recording also
+        // for a signed installer.
+        (Windows, Screenshots | Recording) => Some(ReleaseChannel::Beta),
+        (LinuxX11 | LinuxWayland, Screenshots | Recording) => Some(ReleaseChannel::Beta),
+        (LinuxWayland, ShortcutPortal) => Some(ReleaseChannel::Beta),
         (MacOs | Windows | LinuxX11, ShortcutPortal) => None,
     }
 }
@@ -160,14 +161,14 @@ mod tests {
     }
 
     /// Today's lanes: macOS everywhere the frontend switch is; Windows and
-    /// Linux on staging only.
+    /// Linux in staging and beta, not production.
     #[test]
-    fn today_only_macos_leaves_staging() {
+    fn today_windows_and_linux_reach_beta_not_production() {
         for feature in [Feature::Screenshots, Feature::Recording] {
             assert!(enabled(ReleaseChannel::Production, Platform::MacOs, feature));
             for platform in [Platform::Windows, Platform::LinuxX11, Platform::LinuxWayland] {
                 assert!(enabled(ReleaseChannel::Staging, platform, feature), "{platform:?} {feature:?}");
-                assert!(!enabled(ReleaseChannel::Beta, platform, feature), "{platform:?} {feature:?}");
+                assert!(enabled(ReleaseChannel::Beta, platform, feature), "{platform:?} {feature:?}");
                 assert!(!enabled(ReleaseChannel::Production, platform, feature), "{platform:?} {feature:?}");
             }
         }

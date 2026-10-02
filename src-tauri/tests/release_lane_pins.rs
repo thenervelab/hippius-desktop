@@ -888,16 +888,32 @@ fn every_linux_build_has_gstreamer_and_the_deb_recommends_its_plugins() {
     for package in DEV {
         assert!(setup.contains(package), "rust-ci-setup must install {package}");
     }
+    // The release lanes install from one script, which CI also runs on the
+    // same ubuntu-22.04 image (`release-deps-linux`). On that image
+    // libgstreamer1.0-dev needs libunwind-dev, which clashes with the
+    // preinstalled libunwind-14-dev unless it is asked for by name first.
+    let script = repo_file("../scripts/install-linux-release-deps.sh");
+    for package in DEV {
+        assert!(script.contains(package), "the Linux release script must install {package}");
+    }
+    let unwind = script
+        .find("install -y libunwind-dev")
+        .expect("the script installs libunwind-dev by name");
+    assert!(script[unwind..].contains(DEV[0]), "libunwind-dev must be installed before GStreamer");
     for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
         let text = repo_file(&format!("../.github/workflows/{lane}"));
-        let linux_installs: Vec<&str> = text.lines().filter(|l| l.contains("libwebkit2gtk-4.1-dev")).collect();
-        assert!(!linux_installs.is_empty(), "{lane} has a Linux leg");
-        for line in linux_installs {
-            for package in DEV {
-                assert!(line.contains(package), "{lane}'s Linux leg must install {package}: {line}");
-            }
-        }
+        assert!(
+            text.contains("bash scripts/install-linux-release-deps.sh"),
+            "{lane}'s Linux leg must use the shared script"
+        );
+        assert!(!text.contains("libwebkit2gtk-4.1-dev"), "{lane} must not keep its own package list");
     }
+    assert!(
+        workflow_jobs("ci.yml")
+            .get("release-deps-linux")
+            .is_some_and(|job| job.script.contains("bash scripts/install-linux-release-deps.sh")),
+        "CI must install the release packages on the release image"
+    );
     let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
     let deb = &config["bundle"]["linux"]["deb"];
     let recommends: Vec<&str> = deb["recommends"]

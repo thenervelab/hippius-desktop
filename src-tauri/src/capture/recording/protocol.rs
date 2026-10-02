@@ -2,7 +2,7 @@
 //! and whatever records.
 //!
 //! On macOS the other end is the Swift helper
-//! (`macos/HippiusCapture/Sources/main.swift`); on Windows and Linux it is
+//! (`macos/HippiusCapture/Sources/HippiusCapture.swift`); on Windows and Linux it is
 //! the app's own executable started with `--capture-recorder`
 //! ([`crate::capture::recorder_child`]). Both ends of the Rust side read and
 //! write the types here, so the app and its child cannot drift apart, and the
