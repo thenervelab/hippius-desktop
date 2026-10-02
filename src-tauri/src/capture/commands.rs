@@ -419,6 +419,30 @@ fn show_phase_in_tray(app: &AppHandle, event: PhaseEvent) {
     }
 }
 
+/// The main window put a new menu, often on a new icon, on the tray
+/// (`tray::status_menu::tray_menu_attached`): while a recording runs, its
+/// time, its mark (Windows, Linux) and its menu (Linux) go back on, since
+/// the new icon or the page's menu just replaced them
+/// ([`tray_status::text_to_restore`]). Called from a synchronous command,
+/// so on the main thread, where the posted writes of [`show_phase_in_tray`]
+/// also run; the phase lock is held only to read the phase.
+pub fn restore_recording_in_tray(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let Some(text) = tray_status::text_to_restore(state.capture.current()) else {
+        return;
+    };
+    let mut last = lock(&state.capture.tray_last);
+    let glyph = tray_status::tray_glyph_of(&text);
+    tracing::info!("tray: new icon or menu during a recording, its marks go back on");
+    write_tray_text(app, &text);
+    #[cfg(target_os = "linux")]
+    write_tray_menu(app, super::tray_recording_menu::menu_write(tray_status::TrayGlyph::None, glyph));
+    if tray_status::TRAY_ICON_MARKS_RECORDING {
+        write_tray_glyph(app, tray_status::icon_write(tray_status::TrayGlyph::None, glyph));
+    }
+    *last = Some(text);
+}
+
 /// Whether `seq` is newer than any phase the tray has shown, recording it
 /// if so. A rebroadcast carries a new `seq`, so it is written again.
 fn newest_for_tray(shown: &AtomicU64, seq: u64) -> bool {

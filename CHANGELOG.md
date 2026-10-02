@@ -33,6 +33,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   name, and clicking takes it; for the entire screen, click the display you
   want. Press Space to switch between picking a window and dragging an area.
 
+- **The menu bar popover shows your balance in dollars and who you are signed
+  in as.** It reads "Balance $0.36" like the rest of the app instead of a
+  credit count, and an account signed in with Google, Apple or GitHub shows
+  its email (or GitHub handle) with the account address underneath, in place
+  of the block number.
+
+- **A folder shared with you on its own is marked as one.** In Shared with me
+  and when you open it, it carries a "Folder in a drive" badge so it no longer
+  looks like a whole shared drive, and its row reads "Shared by" the owner
+  instead of leading with the drive's name.
+
 - **Share by email or by link from one place.** The Share dialog now opens
   with two tabs at the top, By email and By link, instead of separate
   sections above and below the people list. It remembers the tab you used
@@ -202,13 +213,24 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **The capture card's buttons stay on one line.** Show in folder and Copy
   link sit side by side, and Show in Finder and Revoke link are in the More
   menu.
-- **Clicking the Hippius icon in the menu bar always opens its menu**, even
-  after the app reloaded in the background.
 - **Screenshot and Record are on Overview too**, in the Recent Files toolbar
   beside Folder and File, where they sit on the Drive page.
 - **Settings says when the capture shortcut is not working**, and when
   another copy of Hippius is holding it.
 
+- **Clicking the Hippius icon in the menu bar opens the popover again**, on
+  newer macOS versions and after the app reloaded in the background. A click
+  used to show only the small Open Drive / Quit menu; that menu now opens
+  with a right click.
+
+- **A folder stops showing as shared once nobody has access.** After you
+  remove the last person from a folder you shared by email, its "Shared" and
+  "Manage access" marks go away. A folder with an invitation still waiting or
+  a share link that still works keeps them.
+
+- **A rate limited email invite says which limit you hit and the wait in
+  hours and minutes**, such as "You've sent too many invites to this address
+  today. Try again in 24h."
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.
 
@@ -404,6 +426,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   that, named the way your version of macOS names it.
 - **The capture bar's hints, the camera's controls and the countdown sit on a
   dark backing**, so they stay readable over a light screen.
+
+- **Invite a Manager by email.** The By email tab now offers Manager for a
+  whole drive. The invite works once and expires after 24 hours, so the
+  person needs to join within a day.
+
 - **Shared with Me is always on the Drive page, with Share a drive.** When
   nothing is shared with you yet, it explains what shared drives are for and
   links to the guide. Share a drive lets you pick one of your drives and opens

@@ -23,6 +23,7 @@ type TrayNewOpts = {
 
 const mocks = vi.hoisted(() => {
   const trayNewCalls: TrayNewOpts[] = [];
+  const trayCloseCalls: number[] = [];
   const setIconCalls: string[] = [];
   const invokeCmds: string[] = [];
   const invokeCalls: { cmd: string; args: unknown }[] = [];
@@ -100,6 +101,7 @@ const mocks = vi.hoisted(() => {
       setIconCalls.push(p);
     }
     async close() {
+      trayCloseCalls.push(Date.now());
       MockTrayIcon.current = null;
     }
     async setMenu(m: { items?: { text: string }[] }) {
@@ -113,6 +115,7 @@ const mocks = vi.hoisted(() => {
     MockMenu,
     MockTrayIcon,
     trayNewCalls,
+    trayCloseCalls,
     setIconCalls,
     invokeCmds,
     invokeCalls,
@@ -178,16 +181,20 @@ vi.mock("@/app/lib/tray/trayWindowActions", () => ({
   }),
 }));
 
-async function mountTray(isAuth = true, opts: { failSetIconOnce?: boolean; existingTray?: boolean } = {}) {
+async function mountTray(
+  isAuth = true,
+  opts: { failSetIconOnce?: boolean; existingTray?: boolean } = {},
+) {
   vi.resetModules();
   mocks.trayNewCalls.length = 0;
+  mocks.trayCloseCalls.length = 0;
   mocks.setIconCalls.length = 0;
   mocks.invokeCmds.length = 0;
   mocks.invokeCalls.length = 0;
   mocks.setMenuCalls.length = 0;
   mocks.windowActions.length = 0;
   mocks.listenedEvents.length = 0;
-  // A page reloaded under a live icon finds it already registered.
+  // `existingTray`: the page reloaded under an icon the previous page made.
   mocks.MockTrayIcon.current = opts.existingTray ? new mocks.MockTrayIcon() : null;
   mocks.MockTrayIcon.failSetIconOnce = opts.failSetIconOnce ?? false;
 
@@ -317,6 +324,11 @@ describe("useTrayInit: after a recording's mark", () => {
     const texts = (mocks.setMenuCalls[0].items ?? []).map((i) => i.text);
     expect(texts[0]).toBe("Open Hippius");
     expect(texts).toContain("Quit Hippius");
+    // Reported like every attach, so a recording started meanwhile gets its
+    // own menu back from Rust.
+    await waitFor(() =>
+      expect(mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length).toBe(2),
+    );
   });
 });
 
@@ -373,15 +385,6 @@ describe("useTrayInit — tray click", () => {
     expect(mocks.listenedEvents).not.toContain("capture_state_changed");
     expect(mocks.windowActions).not.toContain("openApp");
   });
-
-  it("gives an icon that outlived a reload a working context menu again", async () => {
-    await mountTray(true, { existingTray: true });
-    await waitFor(() => expect(mocks.setMenuCalls.length).toBe(1));
-    expect(mocks.trayNewCalls.length).toBe(0);
-    const texts = (mocks.setMenuCalls[0].items ?? []).map((i) => i.text);
-    expect(texts).toContain("Quit Hippius");
-    expect(signedInReports()).toEqual([{ signedIn: true }]);
-  });
 });
 
 describe("useTrayInit: the context menu is handed to Rust", () => {
@@ -390,7 +393,8 @@ describe("useTrayInit: the context menu is handed to Rust", () => {
   });
 
   /** How many times the page told Rust it attached a menu. */
-  const menuReports = () => mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length;
+  const menuReports = () =>
+    mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length;
 
   // On macOS a status item that owns a menu opens it on every click, so a
   // left click never reached Rust and the popover never opened. Rust takes
@@ -407,11 +411,28 @@ describe("useTrayInit: the context menu is handed to Rust", () => {
     await waitFor(() => expect(mocks.trayNewCalls.length).toBeGreaterThanOrEqual(2));
     await waitFor(() => expect(menuReports()).toBe(mocks.trayNewCalls.length));
   });
+});
 
-  it("reports the menu re-attached to an icon that outlived a reload", async () => {
+describe("useTrayInit: a reload under a live icon", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The old page's menu items called back into a page that is gone, and the
+  // icon's look (sync icon, Rust's recording marks) is unknown to this one:
+  // the icon is replaced, and the new one reported so Rust takes its menu off
+  // the macOS status item and puts a running recording's marks back on it.
+  it("replaces the icon with a fresh one and reports it", async () => {
     await mountTray(true, { existingTray: true });
-    await waitFor(() => expect(mocks.setMenuCalls.length).toBe(1));
-    await waitFor(() => expect(menuReports()).toBe(1));
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
+    expect(mocks.trayCloseCalls.length).toBe(1);
+    expect(mocks.trayNewCalls[0].action).toBeUndefined();
+    const texts = (mocks.trayNewCalls[0].menu?.items ?? []).map((i) => i.text);
+    expect(texts).toContain("Quit Hippius");
+    await waitFor(() =>
+      expect(mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length).toBe(1),
+    );
+    expect(signedInReports()).toEqual([{ signedIn: true }]);
   });
 });
 

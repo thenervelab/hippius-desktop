@@ -28,6 +28,8 @@ import ArrowRight from "@/app/components/ui/icons/ArrowRight";
 import Notification from "@/app/components/ui/icons/Notification";
 import { MessagesSquare } from "lucide-react";
 import BoxSimple from "@/app/components/ui/icons/BoxSimple";
+import MiddleTruncate from "@/app/components/ui/MiddleTruncate";
+import { formatBalanceUsd } from "@/app/lib/utils/formatBalanceUsd";
 
 // Same identicon the sidebar/ProfileCard uses; client-only (no SSR).
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
@@ -114,7 +116,7 @@ export default function TrayPanelPage() {
         className={`tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] ${cardSurface} font-geist text-black dark:text-white`}
       >
         <Header
-          credits={menu?.credits ?? null}
+          balance={menu?.balance ?? null}
           unreadCount={unreadCount}
           chatUnread={chatUnread}
         />
@@ -188,6 +190,7 @@ export default function TrayPanelPage() {
 
         <Footer
           address={menu?.substrateAddress ?? null}
+          accountLabel={menu?.accountLabel ?? null}
           blockNumber={blockNumber}
           isConnected={isConnected}
         />
@@ -196,7 +199,7 @@ export default function TrayPanelPage() {
   );
 }
 
-/** Top bar: brand mark (left) and a single pill holding credits + a divider +
+/** Top bar: brand mark (left) and a single pill holding the balance + a divider +
  *  the notification bell (right) — matching the Figma header. The bell mirrors
  *  the top-bar bell: it shows the live unread count and, on click, focuses the
  *  main window and opens its existing notifications dropdown. While chat has
@@ -204,11 +207,12 @@ export default function TrayPanelPage() {
  *  sits before the bell and opens the main window's chat page; it is absent at
  *  zero so a user without chat sees the header unchanged. */
 function Header({
-  credits,
+  balance,
   unreadCount,
   chatUnread,
 }: {
-  credits: number | null;
+  /** The billing API's exact decimal string; dollars, one credit = $1. */
+  balance: string | null;
   unreadCount: number;
   chatUnread: number;
 }) {
@@ -224,12 +228,16 @@ function Header({
       <div className="flex items-center gap-3 rounded-xl bg-[rgba(0,0,0,0.06)] py-1.5 pl-4 pr-2 dark:bg-[rgba(255,255,255,0.06)]">
         <div className="flex flex-col text-left">
           <span className="font-mono text-[10px] font-medium leading-[18px] tracking-[-0.2px] text-[#1F51BE] dark:text-primary-brand-dark">
-            CREDITS
+            Balance
           </span>
-          <span className="truncate font-mono text-[12px] font-medium uppercase leading-5 tracking-[-0.24px] text-black dark:text-white">
-            {credits === null
-              ? "—"
-              : credits.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          {/* Dollars via the Billing page's own formatter, so the popover and
+              Billing quote the same cent, with a "." decimal like the file
+              sizes below; `toLocaleString` gave "0,36" on a French locale. */}
+          <span
+            data-testid="tray-balance"
+            className="truncate font-mono text-[12px] font-medium leading-5 tracking-[-0.24px] text-black dark:text-white"
+          >
+            {balance === null ? "—" : formatBalanceUsd(balance)}
           </span>
         </div>
         <div className="h-6 w-px shrink-0 rounded-2xl bg-[#606060] opacity-40" />
@@ -575,15 +583,22 @@ function StatusLabel({
 
 /** Bottom bar: a single rounded box (Figma tokens — 8px gap, 16px radius,
  *  6%-opacity fill) inset 16px from the card edges, holding the account chip
- *  (identicon + short
- *  address + live chain block) on the left and the official `Button` CTA on the
- *  right. The identicon, address and block typography all match ProfileCard. */
+ *  on the left and the official `Button` CTA on the right.
+ *
+ *  The chip names the account the way the sidebar's ProfileCard does: an
+ *  OAuth account leads with how it signs in (`accountLabel`, resolved in
+ *  Rust: email, or `@handle` for GitHub) with its SS58 underneath in small
+ *  type, because a Drive user knows themselves by their email and has no use
+ *  for a block height. An access-key account has no such identity, so it
+ *  keeps the short address over the live chain block. */
 function Footer({
   address,
+  accountLabel,
   blockNumber,
   isConnected,
 }: {
   address: string | null;
+  accountLabel: string | null;
   blockNumber: number | null;
   isConnected: boolean;
 }) {
@@ -620,7 +635,7 @@ function Footer({
           onClick={handleCopyAddress}
           title="Copy address"
           aria-label="Copy address"
-          className="flex min-w-0 items-center gap-2.5 rounded-xl transition-colors hover:opacity-80"
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl text-left transition-colors hover:opacity-80"
         >
           <span className="size-8 shrink-0 overflow-hidden rounded-full">
             <Avatar
@@ -630,13 +645,29 @@ function Footer({
               variant="pixel"
             />
           </span>
-          <div className="flex min-w-0 flex-col items-start gap-0.5">
-            <span className="truncate font-inter text-[14px] font-medium leading-none tracking-[-0.4px] text-black dark:text-white">
-              {shortenAddress(address)}
-            </span>
+          <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+            {accountLabel ? (
+              <MiddleTruncate
+                text={accountLabel}
+                className="font-inter text-[14px] font-medium leading-none tracking-[-0.4px] text-black dark:text-white"
+              />
+            ) : (
+              <span className="truncate font-inter text-[14px] font-medium leading-none tracking-[-0.4px] text-black dark:text-white">
+                {shortenAddress(address)}
+              </span>
+            )}
             {copied ? (
               <span className="font-geist text-[10px] font-medium leading-[14px] tracking-[-0.2px] text-[#04C870]">
                 Copied!
+              </span>
+            ) : accountLabel && address ? (
+              <span className="flex w-full min-w-0 items-center gap-1">
+                <BoxSimple className="size-[13px] shrink-0 text-black/60 dark:text-white/60" />
+                <MiddleTruncate
+                  text={address}
+                  kind="address"
+                  className="font-geist text-[10px] font-medium leading-[14px] tracking-[-0.2px] text-primary-50 dark:text-primary-brand-dark"
+                />
               </span>
             ) : (
               <span className="flex items-center gap-1">

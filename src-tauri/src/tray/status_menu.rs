@@ -1,14 +1,14 @@
 //! macOS: the tray's right-click menu is kept OFF the status item.
 //!
-//! On macOS 27 a status item that owns a menu (`NSStatusItem.menu`) opens
-//! that menu itself on ANY click, left or right, before the `tray-icon`
-//! crate's click view (`TaoTrayTarget`, laid over the button) receives the
-//! mouse down. So no `TrayIconEvent::Click` ever reached the app, the left
-//! click showed the small context menu instead of the popover, and the
-//! popover never opened. `showMenuOnLeftClick: false` cannot help: it only
-//! decides what the click view does once it gets the event. Hover events
-//! (enter/move/leave) still arrive, because they come from the view's
-//! tracking area.
+//! On newer macOS (seen on macOS 27) a status item that owns a menu
+//! (`NSStatusItem.menu`) opens that menu itself on ANY click, left or right,
+//! before the `tray-icon` crate's click view (`TaoTrayTarget`, laid over the
+//! button) receives the mouse down. So no `TrayIconEvent::Click` ever
+//! reached the app, the left click showed the small context menu instead of
+//! the popover, and the popover never opened. `showMenuOnLeftClick: false`
+//! cannot help: it only decides what the click view does once it gets the
+//! event. Hover events (enter/move/leave) still arrive, because they come
+//! from the view's tracking area.
 //!
 //! The menu itself is still made by the main window (`useTraySync.ts`,
 //! whose item callbacks and enabled states live there) and attached with the
@@ -21,7 +21,10 @@
 //! - [`on_tray_event`]: a pointer entering or moving over the icon detaches
 //!   whatever menu is there too (a hover always comes before a click), so a
 //!   page that forgot to report, or a call that failed, cannot bring the
-//!   dead left click back.
+//!   dead left click back. It is called from the app's ONE tray listener
+//!   (`tray::panel::on_tray_icon_event`, registered once in `main.rs`),
+//!   before the left-click route: a second registration would handle every
+//!   click twice.
 //!
 //! Windows and Linux are untouched: Windows shows the menu on a right click
 //! from its own message loop, and Linux opens it on any click on purpose
@@ -74,14 +77,17 @@ pub fn on_tray_event(app: &AppHandle, event: &TrayIconEvent) {
     }
 }
 
-/// The main window attached a (new) context menu to the icon: take it off
-/// the status item now so the next left click reaches the app. A no-op off
-/// macOS.
+/// The main window attached a (new) context menu to the icon, often with a
+/// whole new icon (a reload rebuilds it): take the menu off the status item
+/// now so the next left click reaches the app (macOS only), and put a
+/// running recording's marks back, which the new icon or menu just replaced
+/// (`capture::commands::restore_recording_in_tray`, every OS).
 #[tauri::command]
 pub fn tray_menu_attached(app: AppHandle) {
     if imp::detach(&app) {
         tracing::info!("tray: context menu taken off the status item");
     }
+    crate::capture::commands::restore_recording_in_tray(&app);
 }
 
 #[cfg(target_os = "macos")]

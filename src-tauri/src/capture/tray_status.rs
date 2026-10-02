@@ -243,6 +243,18 @@ pub fn tray_needs_write(last: Option<&TrayText>, next: &TrayText) -> bool {
     }
 }
 
+/// What a NEW tray icon must be given again for `phase`, or `None` when it
+/// needs nothing. The main window rebuilds the icon on a reload (its menu
+/// items died with the old page) and after an icon it could not update; the
+/// new icon has no title, mark or recording menu, and the time is rewritten
+/// only when it changes, so a paused recording would otherwise stay
+/// unmarked until it resumed. A new icon is already idle, so only a running
+/// or paused recording has anything to restore.
+#[must_use]
+pub fn text_to_restore(phase: CapturePhase) -> Option<TrayText> {
+    recording_running(phase).then(|| tray_text_for(phase))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +303,21 @@ mod tests {
     fn a_running_or_paused_recording_shows_its_time() {
         assert_eq!(tray_title_for(RECORDING).as_deref(), Some("◼ 00:42"));
         assert_eq!(tray_title_for(PAUSED).as_deref(), Some("❚❚ 02:05"));
+    }
+
+    /// A rebuilt icon gets a recording's time and mark back, paused too
+    /// (whose time never ticks to rewrite it); otherwise nothing is written.
+    #[test]
+    fn a_new_icon_gets_a_running_recordings_marks_back() {
+        let text = text_to_restore(PAUSED).expect("a paused recording is restored");
+        assert_eq!(text, tray_text_for(PAUSED));
+        assert_eq!(tray_glyph_of(&text), TrayGlyph::Paused);
+        assert_eq!(icon_write(TrayGlyph::None, tray_glyph_of(&text)), IconWrite::Mark(TrayGlyph::Paused));
+        let text = text_to_restore(RECORDING).expect("a recording is restored");
+        assert_eq!(tray_glyph_of(&text), TrayGlyph::Recording);
+        for phase in not_recording() {
+            assert_eq!(text_to_restore(phase), None, "{phase:?}");
+        }
     }
 
     #[test]

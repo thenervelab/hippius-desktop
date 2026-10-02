@@ -708,8 +708,14 @@ fn the_tray_click_reaches_rust_whatever_the_webview_does() {
     );
     assert!(!hook.contains("\"toggle_tray_panel\""), "the webview must not open the popover itself");
     assert!(hook.contains("\"tray_set_signed_in\""), "the webview reports sign-in to Rust");
-    // A tray that survives a reload gets a live context menu again.
-    assert!(hook.contains("existingTray.setMenu("), "a reload must re-attach the context menu");
+    // A tray that survives a reload is replaced by a fresh one, whose menu
+    // items call into the live page; Rust puts a running recording's marks
+    // back on it when told of the new menu.
+    assert!(hook.contains("existingTray.close()"), "a reload must rebuild the icon");
+    assert!(
+        fn_body(&read("src/tray/status_menu.rs"), "pub fn tray_menu_attached(").contains("restore_recording_in_tray("),
+        "a rebuilt icon gets a running recording's marks back"
+    );
 }
 
 /// Every phase used to rewrite the status item; now only a change does.

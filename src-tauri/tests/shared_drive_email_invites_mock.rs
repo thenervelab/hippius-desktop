@@ -17,7 +17,7 @@ use tokio::net::TcpListener;
 
 use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::shared_drives::commands::{
-    EmailInviteBody, SealKeyPut, http_email_invite, http_list_invites, http_put_account_invite_key, http_put_sealed_key,
+    EmailInviteBody, SealKeyPut, http_email_invite, http_list_invites, http_put_account_invite_key, http_put_sealed_key, resolve_email_invite,
 };
 
 const BEARER: &str = "test-bearer-token";
@@ -71,6 +71,64 @@ async fn email_mint_sends_the_fields_and_returns_the_id() {
     assert_eq!(sent["owner_ss58"], "5Owner", "a manager names the owner");
     assert!(sent.get("max_uses").is_none(), "a mailed invite is single use; no max_uses");
     assert!(sent.get("path_prefix").is_none(), "no folder unless asked");
+}
+
+/// A Manager invitation (hcfs #521), resolved by the same policy the command
+/// uses and sent by a delegated Manager: role `manager`, a lifetime of one
+/// day rather than the seven-day default the server would refuse, the owner
+/// named, and no `max_uses` (the server makes it single use).
+#[tokio::test]
+async fn a_manager_email_mint_is_sent_within_the_manager_day() {
+    let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let rec = seen.clone();
+    let base = serve(Router::new().route(
+        "/v1/drive-invites/email",
+        post(move |Json(b): Json<serde_json::Value>| async move {
+            rec.lock().unwrap().push(b);
+            Json(serde_json::json!({ "invite_id": "mgr1" }))
+        }),
+    ))
+    .await;
+
+    let policy = resolve_email_invite("ada@example.com", Some("manager".into()), None, false).expect("manager policy");
+    let body = EmailInviteBody {
+        folder_hash: HASH,
+        email: &policy.email,
+        role: &policy.role,
+        expires_in_secs: policy.expires_in_secs,
+        owner_ss58: Some("5Owner"),
+        path_prefix: None,
+    };
+    let minted = http_email_invite(&reqwest::Client::new(), &base, BEARER, &body).await.expect("mint");
+    assert_eq!(minted.invite_id, "mgr1");
+
+    let sent = seen.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(sent["role"], "manager");
+    assert_eq!(sent["expires_in_secs"], 24 * 3600, "over a day is a 400 for a Manager");
+    assert_eq!(sent["owner_ss58"], "5Owner");
+    assert!(sent.get("max_uses").is_none(), "the server fixes a mailed invite at one use");
+    assert!(sent.get("path_prefix").is_none(), "a Manager invite is whole-drive");
+}
+
+/// A server from before mailed Manager invites refuses with a plain 400 and
+/// sends nothing; the error says to send a link rather than echo the refusal.
+#[tokio::test]
+async fn an_old_server_refusing_a_manager_email_says_to_send_a_link() {
+    let err = failing(
+        StatusCode::BAD_REQUEST,
+        // Byte for byte what hcfs main sent before #521.
+        serde_json::json!({
+            "error": "bad_request",
+            "message": "manager invites must be sent as a link, not by email; \
+                        invite as a writer and change the role after they join",
+        }),
+        None,
+    )
+    .await;
+    match err {
+        AppError::Validation(msg) => assert!(msg.contains("Send a Manager link"), "{msg}"),
+        other => panic!("expected a worded refusal, got {other:?}"),
+    }
 }
 
 /// The mint names the key to pre-seal to, and echoes a folder invite's
@@ -152,19 +210,27 @@ async fn rate_limit_says_how_long_to_wait() {
     )
     .await;
     match err {
-        AppError::NotReady(NotReadyKind::RateLimited { message }) => assert!(message.contains("3 minutes"), "{message}"),
+        AppError::NotReady(NotReadyKind::RateLimited { message }) => {
+            assert_eq!(message, "Too many invites sent recently. Try again in 3 minutes.");
+        }
         other => panic!("expected RateLimited, got {other:?}"),
     }
 
-    // The header is the fallback when the body carries no figure.
+    // The header is the fallback when the body carries no figure, and the
+    // server's reason says which limit was hit.
     let err = failing(
         StatusCode::TOO_MANY_REQUESTS,
-        serde_json::json!({"error": "rate_limited", "message": "slow down"}),
-        Some("7200"),
+        serde_json::json!({
+            "error": "rate_limited",
+            "message": "You have sent too many invitations to this address in the last day",
+        }),
+        Some("86400"),
     )
     .await;
     match err {
-        AppError::NotReady(NotReadyKind::RateLimited { message }) => assert!(message.contains("2 hours"), "{message}"),
+        AppError::NotReady(NotReadyKind::RateLimited { message }) => {
+            assert_eq!(message, "You've sent too many invites to this address today. Try again in 24h.");
+        }
         other => panic!("expected RateLimited, got {other:?}"),
     }
 }

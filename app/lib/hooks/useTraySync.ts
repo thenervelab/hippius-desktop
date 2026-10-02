@@ -259,8 +259,10 @@ async function reportSignedIn(signedIn: boolean) {
  * with a `menu`, or `setMenu`). On macOS a status item that owns a menu
  * opens it on every click, so the left click never reached the app and the
  * popover never opened; Rust takes the menu off the status item, keeps it
- * and opens it itself on a right click (`tray::status_menu`). A no-op
- * elsewhere.
+ * and opens it itself on a right click (`tray::status_menu`). On every OS,
+ * while a recording runs, Rust also puts the recording's marks back (its
+ * time, its dot, and on Linux its menu), which a new icon or this page's
+ * menu has just replaced.
  */
 async function reportMenuAttached() {
   try {
@@ -327,39 +329,41 @@ export function useTrayInit(isAuthenticated: boolean) {
         completedIconPath,
       });
 
+      // The page reloaded under a live icon (dev reload, the error screen's
+      // navigation). Its menu items call back into the page that made them,
+      // which is gone, and this page cannot know what the icon shows (a sync
+      // icon, a recording's mark). Close it and build a fresh one below;
+      // Rust puts a running recording's marks back when told of the new menu
+      // (`reportMenuAttached`).
       const existingTray = await TrayIcon.getById(TRAY_ID);
-
-      if (!existingTray) {
-        // macOS/Windows: left-click → the popover, decided and opened by Rust
-        // (no `action` here: a callback of this page dies with a reload);
-        // right-click → the small native context menu (Open Files / Open VM /
-        // Quit). `showMenuOnLeftClick: false` keeps the left click on the
-        // popover. Linux: the icon fires no left-click event, so the menu must
-        // show on left-click (`showMenuOnLeftClick: isLinuxPlatform`) and it
-        // includes an "Open Hippius" entry (added by `buildTrayContextMenu`) as
-        // the only way to reach the app there.
-        const contextMenu = await buildTrayContextMenu();
-        await TrayIcon.new({
-          id: TRAY_ID,
-          icon: defaultIconPath!,
-          iconAsTemplate: false,
-          tooltip: "Hippius Cloud",
-          menu: contextMenu,
-          showMenuOnLeftClick: isLinuxPlatform,
-        });
-        await reportMenuAttached();
-        trayIconState = "default";
-      } else {
-        // The page reloaded under a live icon. Its context menu's items call
-        // back into the page that made them, which is gone: attach a fresh
-        // menu so right-click works again.
+      if (existingTray) {
         try {
-          await existingTray.setMenu(await buildTrayContextMenu());
-          await reportMenuAttached();
+          await existingTray.close();
         } catch (e) {
-          logTrayAction("Failed to re-attach the tray menu", e);
+          logTrayAction("Failed to close the tray left by a reload", e);
         }
       }
+
+      // macOS/Windows: left-click → the popover, decided and opened by Rust
+      // (no `action` here: a callback of this page dies with a reload);
+      // right-click → the small native context menu (Open Files / Open VM /
+      // Quit). `showMenuOnLeftClick: false` keeps the left click on the
+      // popover, and on macOS it is not enough: see `reportMenuAttached`.
+      // Linux: the icon fires no left-click event, so the menu must show on
+      // left-click (`showMenuOnLeftClick: isLinuxPlatform`) and it includes
+      // an "Open Hippius" entry (added by `buildTrayContextMenu`) as the only
+      // way to reach the app there.
+      const contextMenu = await buildTrayContextMenu();
+      await TrayIcon.new({
+        id: TRAY_ID,
+        icon: defaultIconPath!,
+        iconAsTemplate: false,
+        tooltip: "Hippius Cloud",
+        menu: contextMenu,
+        showMenuOnLeftClick: isLinuxPlatform,
+      });
+      await reportMenuAttached();
+      trayIconState = "default";
 
       // Watch sync snapshots (drives the icon) and login status (enables/
       // disables the context-menu items) after the tray exists.
@@ -381,7 +385,9 @@ export function useTrayInit(isAuthenticated: boolean) {
 async function reattachTrayMenu() {
   try {
     const tray = await TrayIcon.getById(TRAY_ID);
-    await tray?.setMenu(await buildTrayContextMenu());
+    if (!tray) return;
+    await tray.setMenu(await buildTrayContextMenu());
+    await reportMenuAttached();
   } catch (e) {
     logTrayAction("Failed to re-attach the tray menu", e);
   }
