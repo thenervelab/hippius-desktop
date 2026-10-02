@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Screenshots and screen recording on Windows and Linux, in beta.** The
+  same capture tools as on a Mac, for beta testers first, before they reach
+  everyone.
+
 - **The link icon beside a shared file takes you straight to its link.**
   Shared Links scrolls to that file's row and highlights it, the way Show in
   folder points out a file in Drive, so it is easy to find among many links.
