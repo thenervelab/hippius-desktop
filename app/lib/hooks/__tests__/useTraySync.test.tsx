@@ -26,8 +26,12 @@ const mocks = vi.hoisted(() => {
   const trayCloseCalls: number[] = [];
   const setIconCalls: string[] = [];
   const invokeCmds: string[] = [];
+  const invokeCalls: { cmd: string; args: unknown }[] = [];
+  const setMenuCalls: { items?: { text: string }[] }[] = [];
   const windowActions: string[] = [];
+  const listenedEvents: string[] = [];
   let snapshotListener: ((e: { payload: unknown }) => void) | null = null;
+  let releasedListener: ((e: { payload: unknown }) => void) | null = null;
 
   // A syncing snapshot — only the fields `deriveTrayIconState` reads matter.
   const SYNCING_SNAPSHOT = {
@@ -100,6 +104,9 @@ const mocks = vi.hoisted(() => {
       trayCloseCalls.push(Date.now());
       MockTrayIcon.current = null;
     }
+    async setMenu(m: { items?: { text: string }[] }) {
+      setMenuCalls.push(m);
+    }
   }
 
   return {
@@ -111,12 +118,19 @@ const mocks = vi.hoisted(() => {
     trayCloseCalls,
     setIconCalls,
     invokeCmds,
+    invokeCalls,
+    setMenuCalls,
     windowActions,
+    listenedEvents,
     SYNCING_SNAPSHOT,
     setSnapshotListener: (h: (e: { payload: unknown }) => void) => {
       snapshotListener = h;
     },
     getSnapshotListener: () => snapshotListener,
+    setReleasedListener: (h: (e: { payload: unknown }) => void) => {
+      releasedListener = h;
+    },
+    getReleasedListener: () => releasedListener,
   };
 });
 
@@ -133,8 +147,9 @@ vi.mock("@tauri-apps/api/path", () => ({
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async (cmd: string) => {
+  invoke: vi.fn(async (cmd: string, args?: unknown) => {
     mocks.invokeCmds.push(cmd);
+    mocks.invokeCalls.push({ cmd, args });
     if (cmd === "get_tray_menu_data") {
       return { loggedIn: true, credits: 5, substrateAddress: "addr" };
     }
@@ -144,8 +159,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (_event: string, handler: (e: { payload: unknown }) => void) => {
-    mocks.setSnapshotListener(handler);
+  listen: vi.fn(async (event: string, handler: (e: { payload: unknown }) => void) => {
+    mocks.listenedEvents.push(event);
+    if (event === "sync_progress_snapshot") mocks.setSnapshotListener(handler);
+    if (event === "capture_tray_icon_released") mocks.setReleasedListener(handler);
     return () => {
       /* noop unlisten */
     };
@@ -173,7 +190,10 @@ async function mountTray(
   mocks.trayCloseCalls.length = 0;
   mocks.setIconCalls.length = 0;
   mocks.invokeCmds.length = 0;
+  mocks.invokeCalls.length = 0;
+  mocks.setMenuCalls.length = 0;
   mocks.windowActions.length = 0;
+  mocks.listenedEvents.length = 0;
   // `existingTray`: the page reloaded under an icon the previous page made.
   mocks.MockTrayIcon.current = opts.existingTray ? new mocks.MockTrayIcon() : null;
   mocks.MockTrayIcon.failSetIconOnce = opts.failSetIconOnce ?? false;
@@ -189,21 +209,9 @@ async function mountTray(
   });
 }
 
-/** Wait for the tray to be created and return the captured `action` closure. */
-async function trayAction(): Promise<(e: unknown) => void | Promise<void>> {
-  await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
-  const action = mocks.trayNewCalls[0].action;
-  if (!action) throw new Error("tray action not attached");
-  return action;
-}
-
-function leftClick() {
-  return {
-    type: "Click",
-    button: "Left",
-    buttonState: "Up",
-    rect: { position: { x: 1, y: 2 }, size: { width: 3, height: 4 } },
-  };
+/** What the page told Rust about sign-in, in order. */
+function signedInReports(): unknown[] {
+  return mocks.invokeCalls.filter((c) => c.cmd === "tray_set_signed_in").map((c) => c.args);
 }
 
 /**
@@ -283,6 +291,47 @@ describe("useTrayInit — tray creation", () => {
   });
 });
 
+describe("useTrayInit: after a recording's mark", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Windows: Rust draws a recording dot on the icon and puts the plain icon
+  // back when the recording ends. Only this page knows a sync was running,
+  // so it paints its own icon again, even though it asked for that one
+  // before the recording.
+  it("puts its own sync icon back when Rust releases the icon", async () => {
+    await mountTray();
+    await waitFor(() => expect(mocks.setIconCalls.some((p) => p.includes("Syncing"))).toBe(true));
+    await waitFor(() => expect(mocks.getReleasedListener()).toBeTruthy());
+    const before = mocks.setIconCalls.length;
+    mocks.getReleasedListener()!({ payload: null });
+    await waitFor(() => expect(mocks.setIconCalls.length).toBe(before + 1));
+    expect(mocks.setIconCalls[mocks.setIconCalls.length - 1]).toContain("Syncing");
+    // macOS and Windows keep their menu through a recording.
+    expect(mocks.setMenuCalls.length).toBe(0);
+  });
+
+  // Linux: Rust put the recording's own menu (Stop, Pause, Show) on the icon,
+  // since AppIndicator sends no click; at the end this page's menu comes back.
+  it("puts its own menu back on Linux when Rust releases the icon", async () => {
+    setUserAgent("Mozilla/5.0 (X11; Linux x86_64) webkit2gtk");
+    await mountTray();
+    await waitFor(() => expect(mocks.getReleasedListener()).toBeTruthy());
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
+    mocks.getReleasedListener()!({ payload: null });
+    await waitFor(() => expect(mocks.setMenuCalls.length).toBe(1));
+    const texts = (mocks.setMenuCalls[0].items ?? []).map((i) => i.text);
+    expect(texts[0]).toBe("Open Hippius");
+    expect(texts).toContain("Quit Hippius");
+    // Reported like every attach, so a recording started meanwhile gets its
+    // own menu back from Rust.
+    await waitFor(() =>
+      expect(mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length).toBe(2),
+    );
+  });
+});
+
 describe("useTrayInit — icon update resilience", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -309,27 +358,31 @@ describe("useTrayInit — tray click", () => {
     vi.clearAllMocks();
   });
 
-  it("toggles the popover on an authenticated left-click", async () => {
+  // The popover stopped opening: the click went to a callback this page gave
+  // the icon, and a reload of the page left that callback dead. Rust receives
+  // the click itself; the page only says who is signed in.
+  it("gives the icon no click callback of its own", async () => {
     await mountTray(true);
-    const action = await trayAction();
-    await action(leftClick());
-    expect(mocks.invokeCmds).toContain("toggle_tray_panel");
-    expect(mocks.windowActions).not.toContain("openApp");
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
+    expect(mocks.trayNewCalls[0].action).toBeUndefined();
   });
 
-  it("reveals the main window on a left-click while signed out", async () => {
-    await mountTray(false);
-    const action = await trayAction();
-    await action(leftClick());
-    expect(mocks.windowActions).toContain("openApp");
-    expect(mocks.invokeCmds).not.toContain("toggle_tray_panel");
+  it("reports sign-in to Rust, and again when it changes", async () => {
+    const hook = await mountTray(true);
+    await waitFor(() => expect(signedInReports()).toEqual([{ signedIn: true }]));
+    hook.rerender({ isAuth: false });
+    await waitFor(() => expect(signedInReports()).toEqual([{ signedIn: true }, { signedIn: false }]));
   });
 
-  it("ignores non-left clicks", async () => {
+  // Rust owns the recording's part in the tray (title and click): the
+  // webview's copy of the phase once went stale and left the time stuck.
+  it("never opens the popover or reads the capture phase itself", async () => {
     await mountTray(true);
-    const action = await trayAction();
-    await action({ ...leftClick(), button: "Right" });
+    await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
     expect(mocks.invokeCmds).not.toContain("toggle_tray_panel");
+    expect(mocks.invokeCmds).not.toContain("capture_stop");
+    expect(mocks.invokeCmds).not.toContain("capture_state");
+    expect(mocks.listenedEvents).not.toContain("capture_state_changed");
     expect(mocks.windowActions).not.toContain("openApp");
   });
 });
@@ -343,10 +396,10 @@ describe("useTrayInit: the context menu is handed to Rust", () => {
   const menuReports = () =>
     mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length;
 
-  // On newer macOS a status item that owns a menu opens it on every click, so
-  // a left click never reached `handleTrayClick` and the popover never
-  // opened. Rust takes the menu off the status item, but only once told it
-  // is there: every attach must be reported.
+  // On macOS a status item that owns a menu opens it on every click, so a
+  // left click never reached Rust and the popover never opened. Rust takes
+  // the menu off the status item, but only once told it is there: every
+  // attach must be reported.
   it("reports the menu the new icon carries", async () => {
     await mountTray(true);
     await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
@@ -365,19 +418,21 @@ describe("useTrayInit: a reload under a live icon", () => {
     vi.clearAllMocks();
   });
 
-  // The old page's `action` callback died with it, so keeping that icon
-  // would leave a left click that never opens the popover.
-  it("replaces the icon so the left click reaches this page", async () => {
+  // The old page's menu items called back into a page that is gone, and the
+  // icon's look (sync icon, Rust's recording marks) is unknown to this one:
+  // the icon is replaced, and the new one reported so Rust takes its menu off
+  // the macOS status item and puts a running recording's marks back on it.
+  it("replaces the icon with a fresh one and reports it", async () => {
     await mountTray(true, { existingTray: true });
     await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
     expect(mocks.trayCloseCalls.length).toBe(1);
-
-    const action = await trayAction();
-    await action(leftClick());
-    expect(mocks.invokeCmds).toContain("toggle_tray_panel");
+    expect(mocks.trayNewCalls[0].action).toBeUndefined();
+    const texts = (mocks.trayNewCalls[0].menu?.items ?? []).map((i) => i.text);
+    expect(texts).toContain("Quit Hippius");
     await waitFor(() =>
       expect(mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length).toBe(1),
     );
+    expect(signedInReports()).toEqual([{ signedIn: true }]);
   });
 });
 

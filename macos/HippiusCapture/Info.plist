@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Linked INTO the HippiusCapture binary as its __TEXT,__info_plist section
+  (Package.swift passes -sectcreate), because a command-line tool has no
+  bundle to carry an Info.plist. codesign seals it with the binary.
+
+  NSCameraUseContinuityCameraDeviceType is the reason it exists: without it
+  AVFoundation does not treat an iPhone as a Continuity Camera for this
+  process, and the helper's `--list-cameras` is what the capture bar's camera
+  menu shows. CFBundleIdentifier matches the identifier embed-capture-helper.sh
+  signs with. Pinned by src-tauri/tests/capture_wiring.rs.
+-->
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>hippius.com.HippiusCapture</string>
+    <key>CFBundleName</key>
+    <string>HippiusCapture</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>NSCameraUseContinuityCameraDeviceType</key>
+    <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Hippius needs camera access to show your camera in screen recordings.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Hippius needs microphone access to include your voice in screen recordings.</string>
+</dict>
+</plist>

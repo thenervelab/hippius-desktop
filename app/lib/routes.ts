@@ -25,8 +25,14 @@ export const BILLING_ROUTE = "/settings?section=billing";
  * only on the server — the two open through different paths on the Drive
  * page, and guessing from the label alone is the H-077 mistake.
  */
-export function driveFolderRoute(label: string, remote: boolean): string {
+export function driveFolderRoute(label: string, remote: boolean, subfolder?: string, openFile?: string): string {
   const params = new URLSearchParams({ openLabel: label });
   if (remote) params.set("openRemote", "1");
+  // Into the drive, e.g. a capture's "Show in folder" → Captures.
+  if (subfolder) params.set("openSubfolder", subfolder);
+  // The file to point out once that folder is listed ("Show in folder" from
+  // a capture's card or the sync queue): its row is paged to, scrolled into
+  // view and highlighted.
+  if (openFile) params.set("openFile", openFile);
   return `/files?${params.toString()}`;
 }

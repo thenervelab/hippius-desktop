@@ -7,13 +7,14 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). No flag uses it right now; bring the import
-// back when one does.
+// staging, never production). Screen capture uses it (staging only).
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
 // per-branch value either conflicts on every promotion or rides into
 // production through a hunk nobody read.
+
+import { enabledFrom } from "@/app/lib/buildChannel";
 
 /**
  * Switch the home-page Credit Usage chart and the Total Credit Used
@@ -189,3 +190,18 @@ export const REFERRALS_FEATURE_ENABLED = false;
  * `false` when the program goes live.
  */
 export const REFERRALS_COMING_SOON = true;
+
+/**
+ * Screen capture: screenshots and (on macOS) recordings of an area, a window
+ * or a whole screen, filed in the user's drive with a share link copied.
+ * Hides the Drive header's Capture menu, the tray's capture actions and the
+ * Settings card. The platform half is Rust's (`capture_support`): Linux
+ * reports unsupported until its portal path lands, whatever this says.
+ *
+ * On in beta and staging, off in production until it has had a beta
+ * release: it opens windows over every app on screen and asks for a macOS
+ * permission. Windows and Linux stay staging only on top of this
+ * (`capture::rollout`, until their hardware checklists pass).
+ * Design: `docs/plans/2026-09-22-screen-capture.md`.
+ */
+export const SCREEN_CAPTURE_ENABLED = enabledFrom("beta");

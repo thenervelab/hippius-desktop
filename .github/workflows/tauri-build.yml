@@ -203,7 +203,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -285,6 +285,15 @@ jobs:
       - name: Install macOS packaging tools
         if: matrix.platform == 'macos-latest'
         run: brew install xcodegen create-dmg
+
+      # The screen-recording helper, built universal BEFORE the long Tauri build
+      # so a Swift error fails the job in seconds rather than after it.
+      # finalize-macos-release.sh embeds and signs it (Contents/MacOS); a
+      # release app without it hides every Record action and says nothing.
+      # Pinned by tests/release_lane_pins.rs.
+      - name: Build the screen-recording helper
+        if: matrix.platform == 'macos-latest'
+        run: bash macos/build-capture-helper.sh --universal
 
       # Apple code signing (macOS only). The CERT goes to GITHUB_ENV so
       # tauri-action imports the .p12 and SIGNS the app. Notarization is

@@ -22,6 +22,10 @@
 // always carry a real filename.
 
 import type { FolderShareSummary, ShareSummary } from "@/app/lib/tauri/shares";
+import {
+  fileShareRowId,
+  folderShareRowId,
+} from "@/app/lib/utils/sharesPageLink";
 
 const CONSOLE_ORIGIN_LABEL = "Created from the console";
 
@@ -56,8 +60,8 @@ export type ActiveShareRow =
  *  across the kind prefix, and a foreign folder row has no token at all. */
 export function activeShareRowId(row: ActiveShareRow): string {
   return row.kind === "file"
-    ? `file:${row.file.shareToken}`
-    : `folder:${row.folder.tokenHash}`;
+    ? fileShareRowId(row.file.shareToken)
+    : folderShareRowId(row.folder.tokenHash);
 }
 
 /**

@@ -55,6 +55,7 @@ pnpm dev                        # Next.js dev server (localhost:3000)
 pnpm tauri:dev                  # Full desktop dev (frontend + Rust backend)
 pnpm build                      # Production frontend build (static export to out/)
 pnpm tauri:build                # Full desktop production build
+pnpm build:mac-local            # macOS: installable DMG WITH the recording helper (tauri:build has none)
 pnpm lint                       # ESLint
 pnpm test                       # Vitest
 

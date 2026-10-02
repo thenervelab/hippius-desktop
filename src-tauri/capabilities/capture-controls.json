@@ -1,0 +1,12 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "capture-controls",
+    "description": "Least-privilege capability for the floating recording control bar (label capture-controls). It only listens for capture_state_changed and calls capture_pause / capture_resume / capture_stop / capture_cancel / capture_restart (plus capture_controls_context and, while it counts down after the desktop's dialog, capture_skip_countdown), and is dragged by its body (data-tauri-drag-region). core permissions only: it floats over every app.",
+    "windows": ["capture-controls"],
+    "permissions": [
+        "core:default",
+        "core:event:allow-listen",
+        "core:event:allow-unlisten",
+        "core:window:allow-start-dragging"
+    ]
+}

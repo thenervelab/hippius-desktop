@@ -9,12 +9,21 @@ name: ci
 #   - `rust-macos` (macOS): the SLOW lane (~15-20 min), gated to release-bound
 #     merges (PRs into staging/beta/main + pushes to them). Covers the macOS-only
 #     code (security-scoped bookmarks, App Translocation, apple-native keychain).
-#   - `rust-windows` (windows): a `cargo check` compile lane, gated to
-#     staging/beta/main like rust-macos. It exists because ONLY the release (publish)
-#     workflow ever built on Windows, so Windows-specific breakage (e.g. a
-#     `#[cfg(unix)]` module referenced unconditionally in `generate_handler!`)
-#     surfaced at release time instead of at PR time. This lane catches that
-#     class before a release.
+#   - `rust-windows` (windows): clippy (deny warnings) and the capture unit
+#     tests, gated to staging/beta/main like rust-macos, plus ANY PR that touches
+#     `src-tauri/src/capture/**` (screen capture carries the most `cfg(windows)`
+#     code, and no other lane compiles it). It exists because ONLY the release
+#     (publish) workflow ever built on Windows, so Windows-specific breakage
+#     (e.g. a `#[cfg(unix)]` module referenced unconditionally in
+#     `generate_handler!`) surfaced at release time instead of at PR time.
+#
+# Screen capture also gets two RUNTIME jobs, `capture-runtime-windows` and
+# `capture-runtime-linux`: the built app binary run as the recorder child on
+# a real Windows and a real Linux (Xvfb + a PulseAudio null sink), recording
+# through the real encoders and read back. PR-only, path-gated to what can
+# change the child (`changes.outputs.capture_runtime`), and never required:
+# they depend on what a hosted runner happens to offer (a desktop, Media
+# Foundation), and report a missing one as a warning.
 #
 # All THREE long-lived branches cut releases — `staging` (tauri-staging.yml),
 # `beta` (tauri-beta.yml) and `main` (tauri-build.yml) — so the macOS and Windows
@@ -55,6 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
+      capture: ${{ steps.diff.outputs.capture }}
+      capture_runtime: ${{ steps.diff.outputs.capture_runtime }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -71,8 +82,30 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
-            echo "rust=true" >> "$GITHUB_OUTPUT"
+            # The capture runtime jobs are PR evidence only (see their
+            # comment); a push already ran them on its PR.
+            {
+              echo "rust=true"
+              echo "capture=true"
+              echo "capture_runtime=false"
+            } >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # Screen capture is where most `cfg(windows)` code lives; a PR that
+          # touches it gets the Windows lane whatever its base.
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^src-tauri/src/capture/'; then
+            echo "capture=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "capture=false" >> "$GITHUB_OUTPUT"
+          fi
+          # The capture runtime jobs run the built recorder child, so they
+          # follow what can change it: capture's code, the entry point that
+          # branches into the child, the dependency graph, the runtime test,
+          # its script, and this pipeline and its setup action.
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(src-tauri/src/capture/|src-tauri/src/(main|cli)\.rs$|src-tauri/Cargo\.(toml|lock)$|src-tauri/tests/capture_recorder_runtime\.rs$|scripts/capture-runtime-check\.sh$|\.github/workflows/ci\.yml$|\.github/actions/rust-ci-setup/)'; then
+            echo "capture_runtime=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "capture_runtime=false" >> "$GITHUB_OUTPUT"
           fi
           # Anything under src-tauri/ (the crate), .github/ (this pipeline and
           # its composite actions), or scripts/ (steps the jobs shell out to)
@@ -116,6 +149,29 @@ jobs:
           SQLX_OFFLINE: "true"
         run: cargo test
 
+      # Linux X11 screenshots against a real X server: the displays RandR
+      # lists and a grab of the root window (capture::linux_x11). Xvfb has
+      # RandR; the test is #[ignore]d so a plain `cargo test` stays hermetic.
+      - name: X11 capture under Xvfb
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb
+          xvfb-run -a cargo test --lib capture::linux_x11 -- --ignored
+
+      # Linux recording's real writer: the recorder child's GStreamer
+      # pipeline fed the synthetic source with a pause, read back (5 s, one
+      # H.264 and one AAC track), and a writer killed with SIGKILL whose
+      # fragments must still play (capture::recorder_child::linux::self_test).
+      - name: Linux recorder against GStreamer
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          sudo apt-get install -y --no-install-recommends gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+          cargo test --lib capture::recorder_child::linux -- --ignored --test-threads=1
+
   rust-macos:
     # The macOS lane is the slow one (up to ~50 min cold), so run it only on
     # PROMOTION PRs (into beta/main) and on pushes to the three lane branches.
@@ -156,15 +212,18 @@ jobs:
     # Windows compile lane. Only the publish (release) workflow builds on Windows,
     # so a Windows-only compile break (a `#[cfg(unix)]` module referenced
     # unconditionally in `generate_handler!`) failed at release time, not PR time.
-    # A fast `cargo check` (lib + bins — what actually ships, no test crates) here
-    # catches it. Gated to promotion PRs and lane pushes like rust-macos so
-    # ordinary feature PRs stay quick. The shared rust-ci-setup composite is
+    # Clippy with -D warnings over every target (the test code's `cfg(windows)`
+    # arms included) and the capture unit tests catch it. Gated to promotion PRs
+    # and lane pushes like rust-macos so ordinary feature PRs stay quick, except
+    # a PR touching `src-tauri/src/capture/**`, which runs here on any base
+    # (`changes.outputs.capture`): capture carries the most Windows-only code. The shared rust-ci-setup composite is
     # Linux/macOS-oriented (ssh-agent, apt), so this job mirrors the PROVEN
     # Windows setup from tauri-build.yml: an ~/.ssh/config IdentityFile (no
     # ssh-agent) + git-CLI fetch for the private hcfs dep.
     needs: changes
     if: >-
       (github.event_name == 'pull_request' && (github.base_ref == 'beta' || github.base_ref == 'main') && needs.changes.outputs.rust == 'true') ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.capture == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
@@ -246,12 +305,259 @@ jobs:
           mkdir -p src-tauri
           printf '%s\n' "$TAURI_ENV_FILE" > src-tauri/.env
 
-      - name: Cargo check (Windows)
+      - name: Clippy (Windows, deny warnings)
         working-directory: src-tauri
         shell: bash
         env:
           SQLX_OFFLINE: "true"
-        run: cargo check
+        run: cargo clippy --all-targets -- -D warnings
+
+      # The capture unit tests: the recorder protocol and child loop, the
+      # rollout table, sizing and timeline, shortcut refusals. Windows-only
+      # arms (the OS build floor, the Windows shortcut list) run nowhere else.
+      - name: Capture tests (Windows)
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --lib "capture::"
+
+  capture-runtime-windows:
+    # Screen capture's Windows code RUN on a real Windows, not just compiled:
+    # the built app binary as the recorder child (`--capture-recorder`) with
+    # each of its modes, the self-test through the real Media Foundation
+    # writer, a WGC recording of the runner's desktop with a pause, read back
+    # with ffprobe and the child's own `--poster`, and an xcap screenshot
+    # (src-tauri/tests/capture_recorder_runtime.rs, run by
+    # scripts/capture-runtime-check.sh).
+    #
+    # PR-only and path-gated (`changes.outputs.capture_runtime`): it costs a
+    # Windows build, and only capture, the child's entry point, the
+    # dependency graph or this pipeline can change what it proves. NOT a
+    # required check, and must not become one: a hosted runner's desktop and
+    # Media Foundation are outside this repo's control, and a skipped job
+    # must never hang an unrelated PR. A runner limit (no Media Foundation
+    # encoders, no interactive desktop) is a workflow WARNING, not a failure;
+    # anything the job installs being missing is a failure.
+    #
+    # Setup mirrors rust-windows (the IdentityFile SSH config, the git CLI,
+    # the pinned toolchain, the shared cache) but never SAVES the cache: this
+    # job builds only part of the crate, and the cache is shared per OS.
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.capture_runtime == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+
+      - name: Force Cargo to use the git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          printf '[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+
+      - name: Install the pinned toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' src-tauri/rust-toolchain.toml)
+          echo "pinned channel: ${channel:-<none, using default>}"
+          if [[ -n "$channel" ]]; then
+            rustup toolchain install "$channel" --no-self-update
+          fi
+
+      - name: Rust cache (restore only)
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './src-tauri -> target'
+          shared-key: "ci"
+          save-if: "false"
+
+      - name: Placeholder frontend dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          printf '<!doctype html><title>ci</title>' > out/index.html
+
+      - name: Create src-tauri/.env
+        shell: bash
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri
+          printf '%s\n' "$TAURI_ENV_FILE" > src-tauri/.env
+
+      # Windows Server ships Media Foundation's H.264 and AAC encoders only
+      # with the Server Media Foundation feature. Report what this runner has
+      # and add the feature when it is missing; if adding it needs a reboot
+      # (a hosted runner cannot), the recording checks report "Media
+      # Foundation unavailable" as a warning. `--probe` is the final word:
+      # the tests ask it, not this step.
+      - name: Media Foundation and desktop session
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $os = Get-CimInstance Win32_OperatingSystem
+          Write-Output "Windows: $($os.Caption) build $($os.BuildNumber)"
+          Write-Output "session id: $([System.Diagnostics.Process]::GetCurrentProcess().SessionId), interactive: $([Environment]::UserInteractive)"
+          if (Get-Process explorer -ErrorAction SilentlyContinue) { Write-Output 'explorer.exe is running (a desktop shell)' } else { Write-Output '::warning title=No desktop shell::explorer.exe is not running; WGC may have no desktop to capture' }
+          $mf = $null
+          try { $mf = Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction Stop } catch { Write-Output "Get-WindowsFeature unavailable (not Windows Server?): $_" }
+          if ($null -eq $mf) {
+            Write-Output 'Server-Media-Foundation: not applicable'
+          } elseif ($mf.Installed) {
+            Write-Output 'Server-Media-Foundation: installed'
+          } else {
+            Write-Output 'Server-Media-Foundation: missing, installing'
+            try {
+              $result = Install-WindowsFeature -Name Server-Media-Foundation -ErrorAction Stop
+              Write-Output "install: success=$($result.Success) restart=$($result.RestartNeeded)"
+              if ("$($result.RestartNeeded)" -eq 'Yes') {
+                Write-Output '::warning title=Media Foundation needs a reboot::Server-Media-Foundation was installed but needs a restart a hosted runner cannot do; the encoder checks will report it'
+              }
+            } catch {
+              Write-Output "::warning title=Media Foundation unavailable::Install-WindowsFeature Server-Media-Foundation failed: $_"
+            }
+          }
+
+      # ffprobe reads the recording's tracks back independently of the
+      # Media Foundation reader the app uses.
+      - name: Install ffprobe
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ffprobe >/dev/null; then
+            choco install ffmpeg -y --no-progress
+          fi
+          ffprobe -version | head -1
+
+      - name: Build the app binary and the runtime test
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --test capture_recorder_runtime --no-run
+
+      - name: Capture runtime checks (Windows)
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+          HIPPIUS_CAPTURE_RUNTIME_REQUIRE: "1"
+          CAPTURE_RUNTIME_MIN_TESTS: "8"
+        run: bash scripts/capture-runtime-check.sh
+
+  capture-runtime-linux:
+    # Screen capture's Linux code RUN, not just compiled, on an X11 session
+    # (Xvfb) with a PulseAudio null sink as the sound: the built app binary
+    # as the recorder child with each of its modes, the self-test through
+    # the real GStreamer writer, a 3 s `ximagesrc` recording of the Xvfb
+    # display with the microphone and system audio (both the null sink's
+    # monitor) and a pause, validated with ffprobe (one H.264 track, one AAC
+    # track, about 3 s) and the child's own `--poster`, the meter printing
+    # levels, and an X11 screenshot (src-tauri/tests/capture_recorder_runtime.rs,
+    # run by scripts/capture-runtime-check.sh). rust-linux keeps running the
+    # unit-level ignored tests (the killed-writer file, the RandR listing).
+    #
+    # Wayland (the ScreenCast portal and PipeWire) cannot run headless with a
+    # portal backend that answers without a person, so it stays manual: the
+    # plan's Linux checklist.
+    #
+    # Same gating and the same "never required, never saves the cache" rules
+    # as capture-runtime-windows.
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.capture_runtime == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Rust CI setup
+        uses: ./.github/actions/rust-ci-setup
+        with:
+          deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+          tauri-env: ${{ secrets.TAURI_ENV_FILE }}
+          linux-deps: "true"
+          save-cache: "false"
+
+      - name: Install GStreamer plugins, Xvfb, PulseAudio and ffprobe
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-pipewire \
+            gstreamer1.0-pulseaudio gstreamer1.0-tools \
+            xvfb xauth pulseaudio pulseaudio-utils ffmpeg
+
+      - name: Build the app binary and the runtime test
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --test capture_recorder_runtime --no-run
+
+      # A null sink is the default output, and its monitor the default input:
+      # the recorder's microphone (`pulsesrc`, default source) and system
+      # audio (`@DEFAULT_MONITOR@`) both open, and the meter has a source. A
+      # quiet tone plays into the sink so the track is not silence.
+      - name: Start PulseAudio with a null sink
+        run: |
+          set -euo pipefail
+          if [[ -z "${XDG_RUNTIME_DIR:-}" || ! -w "${XDG_RUNTIME_DIR:-/nonexistent}" ]]; then
+            XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
+            mkdir -p "$XDG_RUNTIME_DIR"
+            chmod 700 "$XDG_RUNTIME_DIR"
+            echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          fi
+          export XDG_RUNTIME_DIR
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=ci_null sink_properties=device.description=CI-null
+          pactl set-default-sink ci_null
+          pactl set-default-source ci_null.monitor
+          pactl info | grep -E 'Server Name|Default Sink|Default Source'
+          nohup gst-launch-1.0 -q audiotestsrc is-live=true volume=0.2 ! audioconvert ! audioresample ! pulsesink > "$RUNNER_TEMP/tone.log" 2>&1 &
+          sleep 1
+          for element in ximagesrc pulsesrc x264enc avenc_aac mp4mux avdec_h264; do
+            gst-inspect-1.0 "$element" > /dev/null || { echo "::error::GStreamer element $element is missing"; exit 1; }
+          done
+
+      - name: Capture runtime checks (Linux, X11 under Xvfb)
+        env:
+          SQLX_OFFLINE: "true"
+          HIPPIUS_CAPTURE_RUNTIME_REQUIRE: "1"
+          HIPPIUS_CAPTURE_RUNTIME_AUDIO: "1"
+          CAPTURE_RUNTIME_MIN_TESTS: "8"
+        run: xvfb-run -a -s "-screen 0 1280x720x24" bash scripts/capture-runtime-check.sh
 
   windows-shell-ext:
     # Compile + test the standalone IExplorerCommand COM DLL crate

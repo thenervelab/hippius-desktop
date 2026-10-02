@@ -33,6 +33,7 @@ import NameCell from "./NameCell";
 import UploaderCell from "./UploaderCell";
 import { PreviewTrigger } from "@/app/components/page-sections/drive/file-preview";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
+import { sharesPageHref } from "@/app/lib/utils/sharesPageLink";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
@@ -519,7 +520,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
             mainReqHash={childFile.mainReqHash}
             syncStatus={childFile.syncStatus}
             parentSubFolderPath={folderRelativePath}
-            onManageShare={() => router.push("/shares")}
+            onManageShare={(ids) => router.push(sharesPageHref(ids))}
           />
         );
 

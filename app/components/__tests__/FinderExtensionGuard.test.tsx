@@ -342,8 +342,8 @@ describe("FinderExtensionGuard", () => {
   // bug being fixed, so the wiring is pinned rather than assumed. Source-text
   // pin (the repo's `tests/*_wiring.rs` idiom): rendering AppShell here would
   // mean standing up its whole provider tree.
-  it("is mounted in AppShell", () => {
-    const shell = readFileSync(join(process.cwd(), "app", "components", "AppShell.tsx"), "utf8");
+  it("is mounted in the main window's app shell", () => {
+    const shell = readFileSync(join(process.cwd(), "app", "components", "FullAppShell.tsx"), "utf8");
     expect(shell).toContain("<FinderExtensionGuard />");
   });
 });
