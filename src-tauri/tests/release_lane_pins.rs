@@ -976,9 +976,81 @@ fn only_staging_builds_an_rpm_and_it_recommends_fedoras_plugins() {
 #[test]
 fn the_linux_lane_runs_the_recorder_against_real_gstreamer() {
     let jobs = workflow_jobs("ci.yml");
-    let linux = jobs.get("rust-linux").expect("ci.yml has a rust-linux job");
+    let linux = jobs.get("rust-linux-test").expect("ci.yml has a rust-linux-test job");
     assert!(linux.script.contains("gstreamer1.0-plugins-ugly") && linux.script.contains("gstreamer1.0-libav"));
     assert!(linux.script.contains("cargo test --lib capture::recorder_child::linux -- --ignored"));
+}
+
+/// Each Rust lane runs clippy and the tests as two parallel jobs, and the
+/// lane's own name (`rust-linux`, `rust-macos`) is what branch rules
+/// require. That job must wait for both halves and run even when one fails
+/// (`!cancelled()`): a required check that is SKIPPED counts as passed, so
+/// without it a failing clippy or test half would merge green.
+#[test]
+fn each_required_rust_lane_waits_for_its_clippy_and_test_halves() {
+    let jobs = workflow_jobs("ci.yml");
+    let ci = repo_file("../.github/workflows/ci.yml");
+    let document: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    for lane in ["rust-linux", "rust-macos"] {
+        let clippy = format!("{lane}-clippy");
+        let test = format!("{lane}-test");
+        let gate = jobs.get(lane).unwrap_or_else(|| panic!("ci.yml has a {lane} job"));
+        assert!(
+            gate.needs.contains(&clippy) && gate.needs.contains(&test) && gate.needs.iter().any(|n| n == "changes"),
+            "{lane} waits for the changes gate, {clippy} and {test}"
+        );
+        assert_eq!(
+            document["jobs"][lane]["if"].as_str(),
+            Some("${{ !cancelled() }}"),
+            "{lane} must run when a half fails"
+        );
+        assert!(gate.script.contains("exit 1"), "{lane} fails when a half did not pass");
+        assert!(
+            jobs.get(&clippy)
+                .unwrap_or_else(|| panic!("ci.yml has a {clippy} job"))
+                .script
+                .contains("cargo clippy --all-targets -- -D warnings"),
+            "{clippy} runs clippy over every target with warnings denied"
+        );
+        let test_job = jobs.get(&test).unwrap_or_else(|| panic!("ci.yml has a {test} job"));
+        assert!(
+            test_job.script.lines().any(|line| line.trim() == "cargo test"),
+            "{test} runs the whole test suite"
+        );
+        assert_eq!(
+            document["jobs"][clippy.as_str()]["if"],
+            document["jobs"][test.as_str()]["if"],
+            "{clippy} and {test} run on exactly the same events"
+        );
+    }
+}
+
+/// Rust caches are saved only by a push to a lane branch. A PR's cache is
+/// readable by that PR alone, yet it counts against the repo's 10 GB cap and
+/// evicted the lanes' caches, which left every later PR cold.
+#[test]
+fn rust_caches_are_saved_only_from_lane_pushes() {
+    const LANE_PUSH: &str =
+        "github.event_name == 'push' && (github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/main')";
+    let setup = repo_file("../.github/actions/rust-ci-setup/action.yml");
+    assert!(
+        setup.contains(&format!("save-if: ${{{{ inputs.save-cache == 'true' && {LANE_PUSH} }}}}")),
+        "rust-ci-setup saves only from a lane push"
+    );
+    let ci = repo_file("../.github/workflows/ci.yml");
+    let document: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    for (name, body) in document["jobs"].as_mapping().expect("ci.yml jobs") {
+        for step in body["steps"].as_sequence().into_iter().flatten() {
+            if !step["uses"].as_str().is_some_and(|uses| uses.starts_with("swatinem/rust-cache@")) {
+                continue;
+            }
+            let save_if = step["with"]["save-if"].as_str().unwrap_or_default();
+            assert!(
+                save_if == "false" || save_if == format!("${{{{ {LANE_PUSH} }}}}"),
+                "{name:?}'s rust-cache must save only from a lane push, or never: {save_if:?}"
+            );
+        }
+    }
 }
 
 /// The capture runtime jobs run the BUILT recorder child on real Windows and

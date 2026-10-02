@@ -9,6 +9,9 @@ name: ci
 #   - `rust-macos` (macOS): the SLOW lane (~15-20 min), gated to release-bound
 #     merges (PRs into staging/beta/main + pushes to them). Covers the macOS-only
 #     code (security-scoped bookmarks, App Translocation, apple-native keychain).
+#   Both run clippy and the tests as two parallel jobs (`rust-linux-clippy` +
+#   `rust-linux-test`, `rust-macos-clippy` + `rust-macos-test`); the
+#   `rust-linux` and `rust-macos` jobs only collect their results.
 #   - `rust-windows` (windows): clippy (deny warnings) and the capture unit
 #     tests, gated to staging/beta/main like rust-macos, plus ANY PR that touches
 #     `src-tauri/src/capture/**` (screen capture carries the most `cfg(windows)`
@@ -33,9 +36,13 @@ name: ci
 # neither lane — and neither could be made a required check without hanging
 # every such PR on a job that never starts.
 #
-# Branch protection requires `rust-linux` + `rust-macos` + `frontend` on
-# staging/main. `rust-windows` is a NON-required lane; make it required once it
-# has run green on a staging PR (branch-protection is an admin change).
+# Branch rules require `rust-linux` + `rust-macos` + `frontend` on main and
+# `rust-linux` + `frontend` on beta; staging requires none. `rust-windows` is a
+# NON-required lane; make it required once it has run green on a staging PR
+# (branch rules are an admin change).
+#
+# Rust caches are SAVED only by pushes to staging, beta and main, never by a
+# PR (see rust-ci-setup); PRs restore their base branch's cache.
 on:
   pull_request:
   push:
@@ -51,6 +58,13 @@ concurrency:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # Line tables only, not full debug info, for every CI build (the test
+  # profile inherits dev; Cargo.toml has no profile of its own, so local
+  # builds keep full debug info). Backtraces keep file:line; the target dir,
+  # the links and the saved caches shrink. Workflow-wide on purpose:
+  # rust-cache hashes CARGO_* variables into its key, so every job that
+  # shares a cache must see the same value.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   # Which areas does this PR actually touch? Pure path gate for the Rust jobs
@@ -161,7 +175,16 @@ jobs:
       - name: Build the screen-recording helper
         run: bash macos/build-capture-helper.sh --universal
 
-  rust-linux:
+  # Each Rust lane is split in two jobs that run side by side, clippy and the
+  # tests, so the lane takes max(clippy, tests) instead of their sum (the
+  # 0.6.6 release run spent 30 min in macOS clippy, then 52 min in macOS
+  # tests). The two halves keep separate caches (`cache-key`): clippy builds
+  # dependencies as metadata only and the tests build them in full, so one
+  # shared entry would hold whichever half finished first and leave the other
+  # cold. `rust-linux` and `rust-macos` below are the names branch protection
+  # requires; each waits for its two halves and passes only when both passed
+  # (or both were skipped by the path gate).
+  rust-linux-clippy:
     needs: changes
     # Skipped when the PR touches no Rust-relevant path (frontend-only PRs).
     # Pushes always run.
@@ -181,12 +204,30 @@ jobs:
           deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
           tauri-env: ${{ secrets.TAURI_ENV_FILE }}
           linux-deps: "true"
+          cache-key: ci-clippy
 
       - name: Clippy (deny warnings)
         working-directory: src-tauri
         env:
           SQLX_OFFLINE: "true"
         run: cargo clippy --all-targets -- -D warnings
+
+  rust-linux-test:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Rust CI setup
+        uses: ./.github/actions/rust-ci-setup
+        with:
+          deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+          tauri-env: ${{ secrets.TAURI_ENV_FILE }}
+          linux-deps: "true"
 
       - name: Tests
         working-directory: src-tauri
@@ -217,16 +258,70 @@ jobs:
           sudo apt-get install -y --no-install-recommends gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
           cargo test --lib capture::recorder_child::linux -- --ignored --test-threads=1
 
-  rust-macos:
-    # The macOS lane is the slow one (up to ~50 min cold), so run it only on
-    # PROMOTION PRs (into beta/main) and on pushes to the three lane branches.
-    # Ordinary feature PRs target staging and rely on `rust-linux`; the push to
-    # staging after merge is the macOS backstop, and it lands before anything
-    # can promote toward users. It exists to cover the macOS-only code the
-    # Linux lane compiles out. Like rust-windows, it also runs for any PR that
-    # touches `src-tauri/src/capture/**` (`changes.outputs.capture`): capture
-    # carries the most macOS-only code, and a macOS failure found only on the
-    # promotion PR holds the whole release back.
+  # The required `rust-linux` check: both Linux halves, as one status.
+  # `!cancelled()` so a failed half fails this job instead of skipping it (a
+  # skipped required check counts as passed). A failed path gate fails it too.
+  rust-linux:
+    needs: [changes, rust-linux-clippy, rust-linux-test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Both Linux halves passed
+        env:
+          GATE: ${{ needs.changes.result }}
+          CLIPPY: ${{ needs.rust-linux-clippy.result }}
+          TESTS: ${{ needs.rust-linux-test.result }}
+        run: |
+          set -euo pipefail
+          echo "changes: $GATE, clippy: $CLIPPY, tests: $TESTS"
+          if [[ "$GATE" != "success" ]]; then
+            echo "::error::the changes gate did not succeed ($GATE)"
+            exit 1
+          fi
+          for result in "$CLIPPY" "$TESTS"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::a half of this lane did not pass ($result)"
+              exit 1
+            fi
+          done
+
+  # The macOS lane is the slow one (up to ~50 min cold), so its halves run
+  # only on PROMOTION PRs (into beta/main) and on pushes to the three lane
+  # branches. Ordinary feature PRs target staging and rely on the Linux lane;
+  # the push to staging after merge is the macOS backstop, and it lands before
+  # anything can promote toward users. It exists to cover the macOS-only code
+  # the Linux lane compiles out. Like rust-windows, they also run for any PR
+  # that touches `src-tauri/src/capture/**` (`changes.outputs.capture`):
+  # capture carries the most macOS-only code, and a macOS failure found only
+  # on the promotion PR holds the whole release back.
+  rust-macos-clippy:
+    needs: changes
+    if: >-
+      (github.event_name == 'pull_request' && (github.base_ref == 'beta' || github.base_ref == 'main') && needs.changes.outputs.rust == 'true') ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.capture == 'true') ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Rust CI setup
+        uses: ./.github/actions/rust-ci-setup
+        with:
+          deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+          tauri-env: ${{ secrets.TAURI_ENV_FILE }}
+          cache-key: ci-clippy
+
+      - name: Clippy (deny warnings)
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo clippy --all-targets -- -D warnings
+
+  rust-macos-test:
     needs: changes
     if: >-
       (github.event_name == 'pull_request' && (github.base_ref == 'beta' || github.base_ref == 'main') && needs.changes.outputs.rust == 'true') ||
@@ -245,17 +340,39 @@ jobs:
           deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
           tauri-env: ${{ secrets.TAURI_ENV_FILE }}
 
-      - name: Clippy (deny warnings)
-        working-directory: src-tauri
-        env:
-          SQLX_OFFLINE: "true"
-        run: cargo clippy --all-targets -- -D warnings
-
       - name: Tests
         working-directory: src-tauri
         env:
           SQLX_OFFLINE: "true"
         run: cargo test
+
+  # The required `rust-macos` check: both macOS halves, as one status. Runs
+  # on a Linux runner (it only reads results); passes when both halves were
+  # skipped, as the lane did before the split on PRs it does not gate.
+  rust-macos:
+    needs: [changes, rust-macos-clippy, rust-macos-test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Both macOS halves passed
+        env:
+          GATE: ${{ needs.changes.result }}
+          CLIPPY: ${{ needs.rust-macos-clippy.result }}
+          TESTS: ${{ needs.rust-macos-test.result }}
+        run: |
+          set -euo pipefail
+          echo "changes: $GATE, clippy: $CLIPPY, tests: $TESTS"
+          if [[ "$GATE" != "success" ]]; then
+            echo "::error::the changes gate did not succeed ($GATE)"
+            exit 1
+          fi
+          for result in "$CLIPPY" "$TESTS"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::a half of this lane did not pass ($result)"
+              exit 1
+            fi
+          done
 
   rust-windows:
     # Windows compile lane. Only the publish (release) workflow builds on Windows,
@@ -335,6 +452,9 @@ jobs:
           # which is how promotion PRs kept hitting cold ~50 min builds.
           shared-key: "ci"
           cache-on-failure: "true"
+          # Same rule as rust-ci-setup: save only from a push to a lane
+          # branch; PRs restore their base branch's cache and never save.
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/main') }}
 
       # tauri-build requires the frontendDist dir (../out) to exist; the check
       # never serves the frontend, so a placeholder satisfies the build script.
@@ -632,6 +752,8 @@ jobs:
         with:
           workspaces: './windows/HippiusShell -> target'
           cache-on-failure: "true"
+          # Same rule as rust-ci-setup: save only from a push to a lane branch.
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/main') }}
 
       - name: Build + test the shell extension
         working-directory: windows/HippiusShell

@@ -21,9 +21,18 @@ inputs:
       Save the Rust cache when the job ends. 'false' for jobs that build only
       part of the crate (the capture runtime jobs): the cache is shared per OS
       (shared-key "ci"), so a partial build saved first would leave the full
-      lanes a cold cache.
+      lanes a cold cache. Even when 'true', the cache is saved only from a
+      push to staging, beta or main.
     required: false
     default: "true"
+  cache-key:
+    description: >-
+      The rust-cache shared key. "ci" for the jobs that build the crate in
+      full (the tests); "ci-clippy" for the clippy halves, which build their
+      dependencies as metadata only, so the two never overwrite each other's
+      entry.
+    required: false
+    default: "ci"
 
 runs:
   using: composite
@@ -147,15 +156,21 @@ runs:
       uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         workspaces: './src-tauri -> target'
-        # One cache family per OS instead of one per job: the repo cache is
+        # Per-OS cache families keyed by `cache-key` ("ci" for full builds,
+        # "ci-clippy" for clippy) instead of one per job: the repo cache is
         # capped at 10 GB, and separate per-job families evicted each other,
         # which is how promotion PRs kept hitting cold ~50 min builds.
-        shared-key: "ci"
+        shared-key: ${{ inputs.cache-key }}
         # Save the cache even when the job fails/preempts, so a cold cancelled
         # run doesn't force the next one to recompile the whole graph from
         # scratch — the difference between a ~20-min and a ~3-min retry.
         cache-on-failure: "true"
-        save-if: ${{ inputs.save-cache == 'true' }}
+        # Save only from pushes to the three lane branches. A PR's cache is
+        # scoped to its own merge ref, which no other PR can read, yet it
+        # counts against the repo's 10 GB cap and evicted the lanes' caches.
+        # PRs still RESTORE: GitHub lets them read their base branch's cache
+        # (and the default branch's).
+        save-if: ${{ inputs.save-cache == 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/main') }}
 
     # tauri-build requires the frontendDist dir (../out) to exist; the Rust
     # suite never serves the frontend, so a placeholder satisfies the build.
