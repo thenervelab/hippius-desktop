@@ -140,7 +140,7 @@ folder under the Hippius name, never follows a symlink, and says
 `PORTAL_MISSING` / `PORTAL_FAILED` in Rust's words. The frontend branches
 only on Rust's `selection` (one "Take a screenshot…" item, no capture bar)
 and `shortcut.supported` / `unavailableMessage` (no keycaps, Settings shows
-the line). The `rust-linux` CI job runs
+the line). The `rust-linux-test` CI job runs
 the X server test under Xvfb. Pinned by `capture_wiring.rs`.
 
 **Phase 4 (Linux recording) is in code, not yet run on Linux.** The child
@@ -179,7 +179,7 @@ pill counts once the dialog is answered), Record resolved by
 child's exact `PICKER_CANCELLED` refusal, which `fail_capture` ends quietly.
 The restore token (`screencast_token.rs`, device-wide) is sent only for a
 whole screen on a one-display machine: a restored session skips the dialog.
-CI's `rust-linux` runs the ignored real-writer tests
+CI's `rust-linux-test` runs the ignored real-writer tests
 (`capture::recorder_child::linux -- --ignored`). Cross-check from a Mac with
 the fake `.pc` files: `cargo check` and `cargo clippy --lib --tests` for
 `x86_64-unknown-linux-gnu` work; `-- -D warnings` rebuilds the build script
