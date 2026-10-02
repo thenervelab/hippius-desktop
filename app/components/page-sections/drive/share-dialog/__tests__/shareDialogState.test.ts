@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  addPeopleGate,
   couldNotChangeAccess,
+  driveFullCopy,
   describeLinkLifetime,
   describeLinkUses,
   emailInviteNote,
@@ -8,6 +10,7 @@ import {
   generalAccessNote,
   linkHint,
   noticeForError,
+  peopleCount,
   peopleHaveAccess,
   pendingInviteMeta,
   sharingGate,
@@ -175,5 +178,86 @@ describe("sharingGate", () => {
   it("never gates a drive this account does not own on its own plan", () => {
     expect(gate(false, false)).toBe("allowed");
     expect(gate(undefined, false)).toBe("allowed");
+  });
+});
+
+describe("addPeopleGate", () => {
+  const gate = (over: Partial<Parameters<typeof addPeopleGate>[0]> = {}) =>
+    addPeopleGate({ canManage: true, sharing: "allowed", access: "ready", full: false, ...over });
+
+  it("offers the controls while there is room", () => {
+    expect(gate()).toBe("allowed");
+  });
+
+  it("warns once Rust says the drive is full", () => {
+    expect(gate({ full: true })).toBe("full");
+  });
+
+  // The plan card answers first: a plan without sharing is not a full drive.
+  it("lets the plan gate speak before the room", () => {
+    expect(gate({ sharing: "upgrade", full: true })).toBe("upgrade");
+    expect(gate({ sharing: "loading", full: true })).toBe("loading");
+  });
+
+  it("offers nothing to someone who cannot add people", () => {
+    expect(gate({ canManage: false, full: true })).toBe("none");
+  });
+
+  // Room is unknown until the list is in, and a failed list knows nothing:
+  // the server still refuses a join past the limit.
+  it("keeps the controls while room is unknown", () => {
+    expect(gate({ access: "loading", full: true })).toBe("allowed");
+    expect(gate({ access: "error" })).toBe("allowed");
+    expect(gate({ access: "unavailable" })).toBe("allowed");
+  });
+});
+
+describe("driveFullCopy", () => {
+  it("tells the owner their plan's number and to upgrade", () => {
+    expect(driveFullCopy({ ownerIsYou: true, memberLimit: 8 })).toEqual({
+      title: "This drive is full.",
+      body: "Your plan allows 8 people. Upgrade your plan to add more.",
+      action: "Upgrade plan",
+    });
+  });
+
+  it("tells a Manager to ask the owner, with no upgrade", () => {
+    expect(driveFullCopy({ ownerIsYou: false, memberLimit: 20 })).toEqual({
+      title: "This drive is full.",
+      body: "The owner\u2019s plan allows 20 people. Remove someone, or ask the owner to upgrade their plan.",
+      action: null,
+    });
+  });
+
+  it("still reads without a number", () => {
+    expect(driveFullCopy({ ownerIsYou: true, memberLimit: null }).body).toBe(
+      "It has as many people as your plan allows. Upgrade your plan to add more.",
+    );
+  });
+
+  it("never talks about seats", () => {
+    for (const ownerIsYou of [true, false]) {
+      for (const memberLimit of [1, 3, null]) {
+        const copy = driveFullCopy({ ownerIsYou, memberLimit });
+        expect(`${copy.title} ${copy.body} ${copy.action ?? ""}`).not.toMatch(/seat/i);
+      }
+    }
+  });
+});
+
+describe("noticeForError on a full drive", () => {
+  it("routes DRIVE_FULL by its subkind, never its words", () => {
+    expect(noticeForError(notReady("DRIVE_FULL", "anything"))).toEqual({ kind: "driveFull" });
+    expect(noticeForError({ kind: "Other", message: "This drive is full." })).toEqual({
+      kind: "error",
+      message: "This drive is full.",
+    });
+  });
+});
+
+describe("peopleCount", () => {
+  it("counts one person and many people", () => {
+    expect(peopleCount(1)).toBe("1 person");
+    expect(peopleCount(3)).toBe("3 people");
   });
 });

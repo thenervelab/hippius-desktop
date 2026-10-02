@@ -55,6 +55,7 @@ export function GeneralAccessSection({
   onCreated,
   onUpgrade,
   onNotEntitled,
+  onDriveFull,
 }: {
   label: string;
   /** Present for a folder: the link then goes through the folder command. */
@@ -70,6 +71,8 @@ export function GeneralAccessSection({
    * dialog swaps every add-people control for its upgrade card.
    */
   onNotEntitled?: () => void;
+  /** Rust refused because the drive is full: the dialog reads room again. */
+  onDriveFull?: () => void;
 }) {
   const folder = pathPrefix !== null;
   // `writer` is what every drive link before the picker minted; a folder
@@ -111,12 +114,13 @@ export function GeneralAccessSection({
       } catch (err) {
         const next = noticeForError(err);
         if (next.kind === "notEntitled") onNotEntitled?.();
+        if (next.kind === "driveFull") onDriveFull?.();
         setNotice(next);
       } finally {
         setRunning(false);
       }
     },
-    [running, folder, label, pathPrefix, ttlSecs, target, onCreated, onNotEntitled],
+    [running, folder, label, pathPrefix, ttlSecs, target, onCreated, onNotEntitled, onDriveFull],
   );
 
   const mintAsViewer = useCallback(() => {

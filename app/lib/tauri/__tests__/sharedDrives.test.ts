@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 import {
   createDriveInvite,
   createFolderInvite,
+  isDriveFull,
   isEmailInvitesUnavailable,
   isFolderEditorInvitesUnavailable,
   isFolderEmailInvitesUnavailable,
@@ -97,6 +98,7 @@ describe("the folder coming-soon refusals", () => {
       FOLDER_EDITOR_INVITES_UNAVAILABLE: isFolderEditorInvitesUnavailable,
       FOLDER_EMAIL_INVITES_UNAVAILABLE: isFolderEmailInvitesUnavailable,
       EMAIL_INVITES_UNAVAILABLE: isEmailInvitesUnavailable,
+      DRIVE_FULL: isDriveFull,
     };
     for (const [subkind, matches] of Object.entries(matchers)) {
       for (const other of Object.keys(matchers)) {

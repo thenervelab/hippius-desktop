@@ -24,6 +24,11 @@
 //! So a code this build knows is decided here, and anything it cannot read
 //! (a code it has never heard of, an empty code, a subscription that could
 //! not be loaded) is left to the server.
+//!
+//! How many people one shared drive may hold on each of those plans also
+//! lives here ([`people_per_drive`]): the plans page shows it, and the Share
+//! dialog warns an owner whose drive is full before an invite goes out
+//! (`shared_drives::capacity`).
 
 use crate::billing::storage_overview::PlanInfo;
 
@@ -47,12 +52,37 @@ pub fn plan_code_allows_sharing(code: Option<&str>) -> bool {
     SHARING_PLAN_CODES.contains(&code.as_str())
 }
 
+/// People one shared drive may hold on each plan that includes sharing, by
+/// plan code: Plus (`duo`) 3, Max 8, Scale 20. The owner is not counted.
+///
+/// The same table hcfs-server checks an invite accept against. The app reads
+/// it to say how many people a plan includes (the plans page) and, when the
+/// server cannot tell it a drive's own limit, how many people the owner's
+/// drive holds before the Share dialog warns that it is full.
+const PEOPLE_PER_DRIVE: [(&str, u32); 3] = [("duo", 3), ("max", 8), ("scale", 20)];
+
+/// How many people a plan lets one shared drive hold, or `None` for a plan
+/// without sharing, an empty code, or a code this build does not know.
+/// `None` is "not stated", never "unlimited" and never zero: callers show
+/// nothing rather than a number they cannot vouch for.
+pub fn people_per_drive(code: &str) -> Option<u32> {
+    let code = code.trim().to_ascii_lowercase();
+    PEOPLE_PER_DRIVE.iter().find(|(listed, _)| *listed == code).map(|(_, people)| *people)
+}
+
 /// The drive-rail subscription's plan code, when it names an active plan.
 fn active_drive_plan_code(sub: &serde_json::Value) -> Option<&str> {
     if !sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false) {
         return None;
     }
     sub.get("plan").and_then(serde_json::Value::as_str)
+}
+
+/// The plan code that decides sharing for this account, from what the
+/// overview managed to read: the resolved plan's, else an active drive
+/// subscription's. `None` when neither names one.
+pub fn sharing_plan_code<'a>(plan: Option<&'a PlanInfo>, drive_sub: Option<&'a serde_json::Value>) -> Option<&'a str> {
+    plan.map(|p| p.code.as_str()).or_else(|| drive_sub.and_then(active_drive_plan_code))
 }
 
 /// Decide `canShareDrives` from what the overview managed to read.
@@ -172,5 +202,40 @@ mod tests {
         assert!(resolve_can_share_drives(None, Some(&plus), true));
         let starter = json!({ "active": true, "plan": "solo" });
         assert!(!resolve_can_share_drives(None, Some(&starter), true));
+    }
+
+    #[test]
+    fn each_sharing_plan_includes_its_people() {
+        assert_eq!(people_per_drive("duo"), Some(3), "Plus");
+        assert_eq!(people_per_drive("max"), Some(8));
+        assert_eq!(people_per_drive("scale"), Some(20));
+        assert_eq!(people_per_drive(" MAX "), Some(8), "casing and padding do not matter");
+    }
+
+    /// A plan without sharing, or one this build does not know, states no
+    /// number: never zero people and never unlimited.
+    #[test]
+    fn plans_without_sharing_state_no_people_count() {
+        for code in ["free", "solo", "", "team", "Plus"] {
+            assert_eq!(people_per_drive(code), None, "{code:?}");
+        }
+    }
+
+    /// Every plan that includes sharing has a people count, so a new sharing
+    /// plan cannot ship with no limit to show.
+    #[test]
+    fn every_sharing_plan_has_a_people_count() {
+        for code in SHARING_PLAN_CODES {
+            assert!(people_per_drive(code).is_some(), "{code} has no people count");
+        }
+    }
+
+    #[test]
+    fn the_sharing_plan_code_prefers_the_resolved_plan() {
+        let sub = json!({ "active": true, "plan": "scale" });
+        assert_eq!(sharing_plan_code(Some(&plan("duo")), Some(&sub)), Some("duo"));
+        assert_eq!(sharing_plan_code(None, Some(&sub)), Some("scale"));
+        assert_eq!(sharing_plan_code(None, Some(&json!({ "active": false, "plan": "max" }))), None);
+        assert_eq!(sharing_plan_code(None, None), None);
     }
 }

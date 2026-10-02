@@ -7,9 +7,11 @@
 //! the top-bar chip, which reads the top-up subscription. Nothing here
 //! touches that chip.
 //!
-//! Every command forwards the API's JSON as-is. The shapes are owned by the
-//! frontend's `drive-plans.ts`, the same file the console uses, so the two
-//! clients cannot drift on what a plan or a subscription looks like.
+//! Every command forwards the API's JSON as-is, except that the catalogue
+//! gains `included_people` per sharing plan ([`with_included_people`]). The
+//! shapes are owned by the frontend's `drive-plans.ts`, the same file the
+//! console uses, so the two clients cannot drift on what a plan or a
+//! subscription looks like.
 
 use crate::api::client::{ApiClient, ApiError};
 use crate::app_state::{AppState, SessionAccount};
@@ -25,9 +27,44 @@ fn client(state: &tauri::State<'_, AppState>) -> Result<ApiClient, AppError> {
 }
 
 /// The plan catalogue. Public, and it changes about as often as pricing does.
+///
+/// Forwarded as the API sends it, with one field added per plan:
+/// `included_people`, how many people one shared drive on that plan may hold
+/// (see [`with_included_people`]).
 #[tauri::command]
 pub async fn get_drive_plans(state: tauri::State<'_, AppState>, account_id: SessionAccount) -> Result<Value, AppError> {
-    Ok(client(&state)?.get::<Value>(PLANS, &account_id).await?)
+    let mut plans = client(&state)?.get::<Value>(PLANS, &account_id).await?;
+    with_included_people(&mut plans);
+    Ok(plans)
+}
+
+/// Add `included_people` to each plan that includes sharing, from
+/// [`crate::billing::sharing_entitlement::people_per_drive`], so the plans
+/// page can say how many people a plan includes without a copy of the
+/// table in TypeScript. The catalogue does not report it. A field the API
+/// already sends is left alone, so the catalogue wins once it carries one.
+/// Takes the list bare or wrapped in `results`, like every reader of it.
+pub(crate) fn with_included_people(plans: &mut Value) {
+    let list = match plans {
+        Value::Array(list) => list,
+        Value::Object(map) => match map.get_mut("results") {
+            Some(Value::Array(list)) => list,
+            _ => return,
+        },
+        _ => return,
+    };
+    for plan in list.iter_mut().filter_map(Value::as_object_mut) {
+        if plan.contains_key("included_people") {
+            continue;
+        }
+        let people = plan
+            .get("code")
+            .and_then(Value::as_str)
+            .and_then(crate::billing::sharing_entitlement::people_per_drive);
+        if let Some(people) = people {
+            plan.insert("included_people".into(), json!(people));
+        }
+    }
 }
 
 /// The account's drive subscription, or `{ "active": false }` when there is
@@ -112,5 +149,49 @@ pub async fn get_drive_subscription_history(state: tauri::State<'_, AppState>, a
         Ok(v) => Ok(v),
         Err(ApiError::Http { status: 404, .. }) => Ok(json!({ "results": [] })),
         Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_sharing_plan_says_how_many_people_it_includes() {
+        let mut plans = json!([
+            { "code": "free" }, { "code": "solo" }, { "code": "duo" }, { "code": "max" }, { "code": "scale" }
+        ]);
+        with_included_people(&mut plans);
+        let people: Vec<Option<u64>> = plans
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.get("included_people").and_then(Value::as_u64))
+            .collect();
+        assert_eq!(people, vec![None, None, Some(3), Some(8), Some(20)]);
+    }
+
+    #[test]
+    fn a_wrapped_list_is_decorated_too() {
+        let mut plans = json!({ "results": [{ "code": "max" }] });
+        with_included_people(&mut plans);
+        assert_eq!(plans["results"][0]["included_people"], 8);
+    }
+
+    /// Once the catalogue reports the number itself, it is the one shown.
+    #[test]
+    fn the_catalogues_own_number_wins() {
+        let mut plans = json!([{ "code": "duo", "included_people": 4 }]);
+        with_included_people(&mut plans);
+        assert_eq!(plans[0]["included_people"], 4);
+    }
+
+    #[test]
+    fn an_unexpected_shape_is_passed_through_untouched() {
+        for body in [json!(null), json!("plans"), json!({ "detail": "x" }), json!([1, "duo"])] {
+            let mut plans = body.clone();
+            with_included_people(&mut plans);
+            assert_eq!(plans, body);
+        }
     }
 }

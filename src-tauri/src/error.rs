@@ -200,6 +200,12 @@ pub enum NotReadyKind {
     /// The server refused to MAIL a folder invite (`400` "folder invites
     /// cannot be mailed yet; mint a link instead"). The link works.
     FolderEmailInvitesUnavailable,
+    /// The shared drive already holds as many people as its owner's plan
+    /// allows (`shared_drives::capacity`), so an invite that would bring
+    /// someone new is refused BEFORE it is sent: the server would only turn
+    /// the person away when they try to join. The FE shows the "This drive
+    /// is full" warning, with the plan's number from `ShareAccess.capacity`.
+    DriveFull,
 }
 
 impl NotReadyKind {
@@ -231,6 +237,7 @@ impl NotReadyKind {
             Self::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
             Self::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
             Self::FolderEmailInvitesUnavailable => "FOLDER_EMAIL_INVITES_UNAVAILABLE",
+            Self::DriveFull => "DRIVE_FULL",
         }
     }
 }
@@ -304,6 +311,9 @@ impl std::fmt::Display for NotReadyKind {
                     f,
                     "Email invites for a single folder are coming soon. For now, copy the invite link and send it yourself."
                 )
+            }
+            Self::DriveFull => {
+                write!(f, "This drive is full. Remove someone, or upgrade the plan, to add more people.")
             }
         }
     }
@@ -765,6 +775,7 @@ mod tests {
                 NotReadyKind::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEmailInvitesUnavailable => "FOLDER_EMAIL_INVITES_UNAVAILABLE",
+                NotReadyKind::DriveFull => "DRIVE_FULL",
             }
         }
         for kind in [
@@ -791,6 +802,7 @@ mod tests {
             NotReadyKind::FolderInvitesUnavailable,
             NotReadyKind::FolderEditorInvitesUnavailable,
             NotReadyKind::FolderEmailInvitesUnavailable,
+            NotReadyKind::DriveFull,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");
