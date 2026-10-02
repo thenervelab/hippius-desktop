@@ -182,6 +182,15 @@ pub enum NotReadyKind {
     /// generic auth error. Distinct from [`Self::SharedDrivesUnavailable`]
     /// (feature off, bare 404): here the feature is on and the routes exist.
     SharedDrivesNotEntitled,
+    /// The OS has not granted this app permission to capture the screen
+    /// (macOS Screen Recording). Raised by `capture::commands::capture_start`
+    /// so the FE can show the explainer — open System Settings, then relaunch —
+    /// instead of taking a capture that silently comes back black.
+    ScreenRecordingPermission,
+    /// A capture was started before the user chose which drive captures go
+    /// to. Raised by `capture::commands::capture_start` so the FE opens the
+    /// destination picker and retries, rather than guessing a drive.
+    CaptureDestinationUnset,
     /// The server cannot send drive invitations by email (`503
     /// email_invites_unavailable`: no mail service configured). The FE keeps
     /// the "Invite by email" option and says, inline, that email invites are
@@ -227,6 +236,8 @@ impl NotReadyKind {
             Self::VpnNotConnected => "VPN_NOT_CONNECTED",
             Self::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
             Self::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
+            Self::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
+            Self::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
             Self::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
             Self::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
             Self::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
@@ -304,6 +315,12 @@ impl std::fmt::Display for NotReadyKind {
                     f,
                     "Email invites for a single folder are coming soon. For now, copy the invite link and send it yourself."
                 )
+            }
+            Self::ScreenRecordingPermission => {
+                write!(f, "Hippius needs permission to record your screen before it can take a capture.")
+            }
+            Self::CaptureDestinationUnset => {
+                write!(f, "Choose where your captures should be saved first.")
             }
         }
     }
@@ -761,6 +778,8 @@ mod tests {
                 NotReadyKind::VpnNotConnected => "VPN_NOT_CONNECTED",
                 NotReadyKind::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
                 NotReadyKind::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
+                NotReadyKind::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
+                NotReadyKind::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
                 NotReadyKind::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
@@ -787,6 +806,8 @@ mod tests {
             NotReadyKind::VpnNotConnected,
             NotReadyKind::SharedDrivesUnavailable,
             NotReadyKind::SharedDrivesNotEntitled,
+            NotReadyKind::ScreenRecordingPermission,
+            NotReadyKind::CaptureDestinationUnset,
             NotReadyKind::EmailInvitesUnavailable,
             NotReadyKind::FolderInvitesUnavailable,
             NotReadyKind::FolderEditorInvitesUnavailable,

@@ -1,7 +1,7 @@
 {
   "name": "hippius",
   "private": true,
-  "version": "0.6.6-beta.1",
+  "version": "0.6.7-beta.1",
   "type": "module",
   "scripts": {
     "dev": "next dev",
@@ -15,7 +15,8 @@
     "finder:dev": "bash macos/dev-finder.sh",
     "tauri:static": "rm -rf out && next build && tauri dev --config '{\"build\":{\"beforeDevCommand\":\"npx -y serve out -l 3000 -s\"}}'",
     "tauri:static:nobuild": "test -f out/index.html && tauri dev --config '{\"build\":{\"beforeDevCommand\":\"npx -y serve out -l 3000 -s\"}}' || echo 'No static build found in out/. Run `pnpm tauri:static` first.'",
-    "tauri:build": "node scripts/dev-env.mjs --soft && next build && tauri build",
+    "tauri:build": "node scripts/dev-env.mjs --soft && next build && tauri build && node scripts/capture-helper-notice.mjs",
+    "build:mac-local": "bash scripts/build-mac-local.sh",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "e2e:build:fe": "NEXT_PUBLIC_E2E=1 next build",

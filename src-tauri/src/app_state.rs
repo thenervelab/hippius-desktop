@@ -39,6 +39,8 @@ pub struct AppState {
     pub oauth: OAuthState,
     /// Team chat: pending OIDC sign-in flows and the HTTP client they use.
     pub chat: crate::chat::ChatState,
+    /// Screen capture: the one live capture session, if any.
+    pub capture: crate::capture::commands::CaptureState,
     pub migration: MigrationState,
     /// Tracks the disk-copy + encryption window for user-initiated
     /// uploads. Drives the top-of-page processing banner. See
@@ -147,6 +149,16 @@ pub struct AppState {
     /// panel, then fires the toggle, which would see it hidden and re-show it.
     /// `0` means "never hidden by blur". See `tray::panel` for the cooldown.
     pub tray_panel_hidden_at: AtomicU64,
+    /// Unix-millis timestamp of the last time the tray panel was shown. A
+    /// blur arriving within `tray::panel::SHOW_SETTLE_MS` of it is the
+    /// activation settling (another of the app's windows, such as a capture
+    /// card, briefly taking the keyboard back), not a click outside, so the
+    /// panel keeps focus instead of hiding. `0` = never shown.
+    pub tray_panel_shown_at: AtomicU64,
+    /// Whether the app on screen is signed in, as the main window's auth
+    /// context says (`tray::panel::tray_set_signed_in`). Decides whether a
+    /// tray click opens the popover or the main window's sign-in screen.
+    pub tray_signed_in: std::sync::atomic::AtomicBool,
     /// Set by `cancel_account_recovery` to request that an in-flight
     /// `recover_account_files` pull stop after the current file. The recover
     /// command resets it to `false` at entry and checks it each iteration,
@@ -317,6 +329,7 @@ impl AppState {
             block_sub: BlockSubscriptionState::new(),
             oauth: OAuthState::new(),
             chat: crate::chat::ChatState::new(),
+            capture: crate::capture::commands::CaptureState::default(),
             migration: MigrationState::new(),
             upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
@@ -330,6 +343,8 @@ impl AppState {
             remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
+            tray_panel_shown_at: AtomicU64::new(0),
+            tray_signed_in: std::sync::atomic::AtomicBool::new(false),
             recovery_cancel: std::sync::atomic::AtomicBool::new(false),
             recovery_in_progress: std::sync::atomic::AtomicBool::new(false),
             recovery_bound: std::sync::Mutex::new(std::collections::HashSet::new()),

@@ -1186,23 +1186,17 @@ async fn browse_remote_page(
     }
 }
 
-#[tauri::command]
-// The IPC surface stays flat: the FE sends the sort as two scalars, the same
-// shape the console puts on the query string.
-#[allow(clippy::too_many_arguments)]
-pub async fn list_remote_folder_grouped(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-    label: String,
-    subfolder: String,
-    offset: u32,
-    limit: Option<u32>,
-    sort_by: Option<String>,
-    sort_order: Option<String>,
+/// The drive and the path a remote level is browsed at: shared by the
+/// listing and by [`locate_remote_folder_entry`], so the two always ask the
+/// server about the same folder.
+async fn resolve_browse_target(
+    state: &AppState,
+    account_id: &str,
+    label: &str,
+    subfolder: &str,
     owner_ss58: Option<String>,
     folder_hash: Option<String>,
-) -> Result<RemoteGroupedPage> {
-    let account_id = state.require_session_account(&account_id)?;
+) -> Result<(DriveIdentity, String)> {
     let pool = state.pool()?;
     // A drive shared with this account that is NOT synced here has no local
     // row to resolve, so the caller names its wire identity directly. The
@@ -1221,11 +1215,32 @@ pub async fn list_remote_folder_grouped(
         }
         // Lenient resolver: the label usually names a server-only drive with
         // no local row (that is the whole point of browsable remote folders).
-        (None, None) => resolve_drive_identity_or_own(pool, &account_id, &label).await?,
+        (None, None) => resolve_drive_identity_or_own(pool, account_id, label).await?,
     };
     // A folder grant is browsed rooted at its folder: the view's path is
     // relative to it, and nothing above it can be asked for.
-    let rooted = crate::sync::identity::rooted_path(&label, &subfolder);
+    let rooted = crate::sync::identity::rooted_path(label, subfolder);
+    Ok((identity, rooted))
+}
+
+#[tauri::command]
+// The IPC surface stays flat: the FE sends the sort as two scalars, the same
+// shape the console puts on the query string.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_remote_folder_grouped(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    subfolder: String,
+    offset: u32,
+    limit: Option<u32>,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<RemoteGroupedPage> {
+    let account_id = state.require_session_account(&account_id)?;
+    let (identity, rooted) = resolve_browse_target(state.inner(), &account_id, &label, &subfolder, owner_ss58, folder_hash).await?;
     let path = rooted.as_str();
 
     // The FE picks the page size (scroll-driven lazy loading wants small
@@ -1258,6 +1273,80 @@ pub async fn list_remote_folder_grouped(
         has_more,
         total_count,
     })
+}
+
+/// How far [`locate_remote_folder_entry`] walks before giving up: a file
+/// past this many pages is left where the reader can page to it, rather than
+/// spending a request per page on a camera roll.
+const LOCATE_MAX_PAGES: u32 = 50;
+
+/// Whether a listed entry is the file `name`: exact, in one Unicode form
+/// (macOS hands out decomposed names), never trimmed. Folders never match.
+fn is_named_file(entry: &super::files::FileEntry, name: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    !entry.is_folder && entry.name.nfc().eq(name.nfc())
+}
+
+/// The 1-based page of a level that lists the file `name`, walking the pages
+/// exactly as the Drive page asks for them (`offset = (page - 1) * size`,
+/// same size, same sort), so the answer is the page the reader will see it
+/// on. `None` when it is not listed within `max_pages`.
+async fn find_page_holding<F, Fut>(name: &str, page_size: u32, max_pages: u32, mut fetch: F) -> Result<Option<u32>>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<(Vec<super::files::FileEntry>, bool)>>,
+{
+    let page_size = page_size.max(1);
+    for page in 1..=max_pages {
+        let (entries, has_more) = fetch((page - 1).saturating_mul(page_size)).await?;
+        if entries.iter().any(|e| is_named_file(e, name)) {
+            return Ok(Some(page));
+        }
+        if !has_more || entries.is_empty() {
+            break;
+        }
+    }
+    Ok(None)
+}
+
+/// Which page of a REMOTE level lists the file `name`, for "Show in folder"
+/// (a capture's card, the sync queue): the Drive page holds one server page
+/// at a time, so it cannot find a file on another page by itself. `page_size`
+/// and the sort are the ones on screen. `None` when it is not listed (yet):
+/// a file uploaded moments ago may not be, and the page asks again.
+///
+/// # Errors
+///
+/// The same as [`list_remote_folder_grouped`].
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // the listing's own surface, plus the name
+pub async fn locate_remote_folder_entry(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    subfolder: String,
+    name: String,
+    page_size: u32,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<Option<u32>> {
+    let account_id = state.require_session_account(&account_id)?;
+    let (identity, rooted) = resolve_browse_target(state.inner(), &account_id, &label, &subfolder, owner_ss58, folder_hash).await?;
+    let limit = effective_browse_limit(Some(page_size));
+    let state = state.inner();
+    let (account_id, identity, rooted) = (&account_id, &identity, &rooted);
+    let (sort_by, sort_order) = (sort_by.as_deref(), sort_order.as_deref());
+    find_page_holding(&name, page_size, LOCATE_MAX_PAGES, |offset| async move {
+        let page = browse_remote_page(state, account_id, identity, rooted, offset, limit, sort_by, sort_order).await?;
+        let has_more = page.has_more;
+        let (mut folders, mut files) = (Vec::new(), Vec::new());
+        append_browse_page(&mut folders, &mut files, page.folders, page.files);
+        folders.append(&mut files);
+        Ok((folders, has_more))
+    })
+    .await
 }
 
 /// What one folder holds, over its whole subtree.
@@ -2345,5 +2434,104 @@ mod tests {
             matches!(err, AppError::Hcfs(_)),
             "expected Hcfs(recover master mnemonic) error, got {err:?}"
         );
+    }
+
+    /// One level as the server pages it: `names` in order, a trailing `/`
+    /// marking a folder.
+    fn level(names: &[&str]) -> Vec<super::super::files::FileEntry> {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        for n in names {
+            if let Some(folder) = n.strip_suffix('/') {
+                append_browse_page(
+                    &mut folders,
+                    &mut files,
+                    vec![BrowseFolderRow {
+                        name: folder.to_string(),
+                        file_count: 0,
+                        total_bytes: 0,
+                        created_at: None,
+                    }],
+                    vec![],
+                );
+            } else {
+                append_browse_page(&mut folders, &mut files, vec![], vec![browse_file(Some(n), None, 1, 1, 1)]);
+            }
+        }
+        folders.append(&mut files);
+        folders
+    }
+
+    /// Serves the level `names` the way `/browse` does, counting requests.
+    fn serve<'a>(
+        names: &'a [String],
+        size: u32,
+        asked: &'a std::cell::Cell<u32>,
+    ) -> impl FnMut(u32) -> std::future::Ready<Result<(Vec<super::super::files::FileEntry>, bool)>> + 'a {
+        move |offset| {
+            asked.set(asked.get() + 1);
+            let start = (offset as usize).min(names.len());
+            let end = (start + size as usize).min(names.len());
+            let page: Vec<&str> = names[start..end].iter().map(String::as_str).collect();
+            std::future::ready(Ok((level(&page), end < names.len())))
+        }
+    }
+
+    fn numbered(n: usize, name: impl Fn(usize) -> String) -> Vec<String> {
+        (0..n).map(name).collect()
+    }
+
+    #[tokio::test]
+    async fn the_page_holding_a_file_is_the_one_the_reader_will_see_it_on() {
+        let names = numbered(45, |i| format!("Screen Recording {i:02}.mp4"));
+        let asked = std::cell::Cell::new(0);
+        assert_eq!(
+            find_page_holding("Screen Recording 00.mp4", 20, 50, serve(&names, 20, &asked))
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            find_page_holding("Screen Recording 20.mp4", 20, 50, serve(&names, 20, &asked))
+                .await
+                .unwrap(),
+            Some(2)
+        );
+        asked.set(0);
+        assert_eq!(
+            find_page_holding("Screen Recording 44.mp4", 20, 50, serve(&names, 20, &asked))
+                .await
+                .unwrap(),
+            Some(3)
+        );
+        assert_eq!(asked.get(), 3, "stops at the page that lists it");
+    }
+
+    #[tokio::test]
+    async fn a_file_not_listed_yet_is_none_after_the_last_page() {
+        let names = numbered(3, |i| format!("{i}.png"));
+        let asked = std::cell::Cell::new(0);
+        assert_eq!(find_page_holding("new.png", 2, 50, serve(&names, 2, &asked)).await.unwrap(), None);
+        assert_eq!(asked.get(), 2, "stops when the server says there is no more");
+    }
+
+    #[tokio::test]
+    async fn the_walk_is_bounded() {
+        let names = numbered(100, |i| format!("{i}.png"));
+        let asked = std::cell::Cell::new(0);
+        assert_eq!(find_page_holding("99.png", 10, 3, serve(&names, 10, &asked)).await.unwrap(), None);
+        assert_eq!(asked.get(), 3);
+    }
+
+    /// Names compare in NFC, exactly, and a folder of the same name is not
+    /// the file.
+    #[test]
+    fn a_name_matches_in_one_unicode_form_and_only_a_file() {
+        let decomposed = "Cafe\u{301}.png";
+        let entries = level(&[decomposed, "Notes/", "Notes ", "Screen.png"]);
+        assert!(is_named_file(&entries[1], "Café.png"), "NFD listed, NFC asked");
+        assert!(!entries.iter().any(|e| is_named_file(e, "Notes")), "a folder is never the file");
+        assert!(is_named_file(&entries[2], "Notes "), "never trimmed");
+        assert!(!is_named_file(&entries[3], "screen.png"), "exact case");
     }
 }

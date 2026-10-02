@@ -3,26 +3,28 @@
 //! On newer macOS (seen on macOS 27) a status item that owns a menu
 //! (`NSStatusItem.menu`) opens that menu itself on ANY click, left or right,
 //! before the `tray-icon` crate's click view (`TaoTrayTarget`, laid over the
-//! button) receives the mouse down. So no `TrayIconEvent::Click` ever reached
-//! the app, the page's `action` callback never ran, a left click showed the
-//! small context menu instead of the popover, and the popover never opened.
-//! `showMenuOnLeftClick: false` cannot help: it only decides what the click
-//! view does once it gets the event. Hover events (enter/move/leave) still
-//! arrive, because they come from the view's tracking area.
+//! button) receives the mouse down. So no `TrayIconEvent::Click` ever
+//! reached the app, the left click showed the small context menu instead of
+//! the popover, and the popover never opened. `showMenuOnLeftClick: false`
+//! cannot help: it only decides what the click view does once it gets the
+//! event. Hover events (enter/move/leave) still arrive, because they come
+//! from the view's tracking area.
 //!
 //! The menu itself is still made by the main window (`useTraySync.ts`,
 //! whose item callbacks and enabled states live there) and attached with the
-//! icon, and the left click is still handled there (`handleTrayClick`). Rust
-//! only takes the menu off the status item, keeps it (retained), and opens it
+//! icon. Rust takes it off the status item, keeps it (retained), and opens it
 //! on a right click with the same `performClick` the crate itself uses, then
 //! takes it off again:
 //!
-//! - [`tray_menu_attached`]: the page calls it after every `TrayIcon.new`, so
-//!   the menu is detached the moment it is attached;
-//! - [`on_tray_icon_event`]: a pointer entering or moving over the icon
-//!   detaches whatever menu is there too (a hover always comes before a
-//!   click), so a page that forgot to report, or a call that failed, cannot
-//!   bring the dead left click back.
+//! - [`tray_menu_attached`]: the page calls it after every `TrayIcon.new` or
+//!   `setMenu`, so the menu is detached the moment it is attached;
+//! - [`on_tray_event`]: a pointer entering or moving over the icon detaches
+//!   whatever menu is there too (a hover always comes before a click), so a
+//!   page that forgot to report, or a call that failed, cannot bring the
+//!   dead left click back. It is called from the app's ONE tray listener
+//!   (`tray::panel::on_tray_icon_event`, registered once in `main.rs`),
+//!   before the left-click route: a second registration would handle every
+//!   click twice.
 //!
 //! Windows and Linux are untouched: Windows shows the menu on a right click
 //! from its own message loop, and Linux opens it on any click on purpose
@@ -30,10 +32,6 @@
 
 use tauri::AppHandle;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
-
-/// The id the main window gives the Hippius tray icon (`TRAY_ID` in
-/// `useTraySync.ts`).
-pub const TRAY_ID: &str = "hippius-tray";
 
 /// What a tray event asks of the status item's menu. Pure, so the rule is
 /// unit-tested without an app.
@@ -61,24 +59,11 @@ pub fn step_for(event: &TrayIconEvent) -> MenuStep {
     }
 }
 
-/// Rust's listener for every tray event (`Builder::on_tray_icon_event` in
-/// `main.rs`), on the main thread. It runs alongside the page's `action`
-/// callback, which still owns the left click. Logs each click so a click
-/// that did nothing still leaves a line in the log, then applies
-/// [`step_for`] on macOS.
-pub fn on_tray_icon_event(app: &AppHandle, event: TrayIconEvent) {
-    if event.id().as_ref() != TRAY_ID {
-        return;
-    }
-    if let TrayIconEvent::Click {
-        button,
-        button_state: MouseButtonState::Up,
-        ..
-    } = &event
-    {
-        tracing::info!("tray: {button:?} click");
-    }
-    match step_for(&event) {
+/// Apply [`step_for`] to the Hippius icon. Called from the tray listener
+/// (`tray::panel::on_tray_icon_event`) for every event of that icon, on the
+/// main thread.
+pub fn on_tray_event(app: &AppHandle, event: &TrayIconEvent) {
+    match step_for(event) {
         MenuStep::Detach => {
             if imp::detach(app) {
                 tracing::info!("tray: context menu taken off the status item on hover");
@@ -92,14 +77,17 @@ pub fn on_tray_icon_event(app: &AppHandle, event: TrayIconEvent) {
     }
 }
 
-/// The main window attached a (new) context menu to the icon: take it off
-/// the status item now so the next left click reaches the app. A no-op off
-/// macOS.
+/// The main window attached a (new) context menu to the icon, often with a
+/// whole new icon (a reload rebuilds it): take the menu off the status item
+/// now so the next left click reaches the app (macOS only), and put a
+/// running recording's marks back, which the new icon or menu just replaced
+/// (`capture::commands::restore_recording_in_tray`, every OS).
 #[tauri::command]
 pub fn tray_menu_attached(app: AppHandle) {
     if imp::detach(&app) {
         tracing::info!("tray: context menu taken off the status item");
     }
+    crate::capture::commands::restore_recording_in_tray(&app);
 }
 
 #[cfg(target_os = "macos")]
@@ -110,7 +98,7 @@ mod imp {
     use objc::{msg_send, sel, sel_impl};
     use tauri::AppHandle;
 
-    use super::TRAY_ID;
+    use crate::capture::tray_status::TRAY_ID;
 
     /// The menu taken off the status item, retained (as an address, so the
     /// static is `Send`), `0` when none. Only touched on the main thread,
@@ -209,7 +197,7 @@ mod tests {
 
     fn click(button: MouseButton, button_state: MouseButtonState) -> TrayIconEvent {
         TrayIconEvent::Click {
-            id: TrayIconId::new(TRAY_ID),
+            id: TrayIconId::new("hippius-tray"),
             position: PhysicalPosition::new(0.0, 0.0),
             rect: Rect::default(),
             button,
@@ -232,7 +220,7 @@ mod tests {
     /// arrive while a menu sits on the status item: that is when it comes off.
     #[test]
     fn a_hover_takes_the_menu_off_the_status_item() {
-        let id = TrayIconId::new(TRAY_ID);
+        let id = TrayIconId::new("hippius-tray");
         let position = PhysicalPosition::new(0.0, 0.0);
         let rect = Rect::default();
         assert_eq!(

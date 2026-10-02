@@ -11,9 +11,14 @@
 # invalidates Tauri's signature/notarization/DMG. This script therefore re-owns
 # the tail of the pipeline: embed → re-sign → notarize → DMG → updater artifact.
 #
-# Order is load-bearing (inside-out, then seal): the extension is signed first
-# and the outer app last (embed-finder-extension.sh), then notarization staples
-# the sealed app, then the DMG and updater tarball are built FROM the stapled app.
+# The screen-recording helper (Contents/MacOS/HippiusCapture) is embedded here
+# too, for the same reason: it needs its own entitlements, and a release app
+# looks for it only inside the bundle.
+#
+# Order is load-bearing (inside-out, then seal): the helper and the extension
+# are signed first and the outer app last (embed-finder-extension.sh), then
+# notarization staples the sealed app, then the DMG and updater tarball are
+# built FROM the stapled app.
 #
 # Usage: finalize-macos-release.sh <Hippius.app> <output-dir>
 # Required env:
@@ -43,13 +48,19 @@ notarize() {
     --wait
 }
 
-echo "==> [1/5] Build the universal Finder extension"
+echo "==> [1/6] Build the universal Finder extension"
 APPEX="$("${script_dir}/build-finder-appex.sh")"
 
-echo "==> [2/5] Embed + inside-out re-sign into ${APP_PATH}"
+# Before the extension step: that one re-signs the app last, which seals the
+# helper into Contents/MacOS. Embedding it afterwards would break the seal.
+echo "==> [2/6] Build, embed + sign the universal screen-recording helper"
+HELPER="$("${script_dir}/build-capture-helper.sh" --universal)"
+"${script_dir}/embed-capture-helper.sh" "${APP_PATH}" "${HELPER}"
+
+echo "==> [3/6] Embed + inside-out re-sign into ${APP_PATH}"
 "${script_dir}/embed-finder-extension.sh" "${APP_PATH}" "${APPEX}"
 
-echo "==> [3/5] Notarize + staple the app"
+echo "==> [4/6] Notarize + staple the app"
 # notarytool takes an archive, not a bare .app; a ditto zip preserves the
 # signature and symlinks. The staple is applied to the .app itself so Gatekeeper
 # accepts it once copied out of the DMG.
@@ -59,7 +70,7 @@ notarize "${app_zip}"
 xcrun stapler staple "${APP_PATH}"
 rm -f "${app_zip}"
 
-echo "==> [4/5] Regenerate + sign the updater tarball from the stapled app"
+echo "==> [5/6] Regenerate + sign the updater tarball from the stapled app"
 # The updater serves a gzipped .app; it MUST be rebuilt from the embedded app or
 # auto-updates would strip the extension. The .sig is a minisign signature the
 # updater verifies against the pubkey in tauri.conf.json.
@@ -77,7 +88,7 @@ else
   echo "WARN: TAURI_SIGNING_PRIVATE_KEY unset — updater .sig NOT produced." >&2
 fi
 
-echo "==> [5/5] Build, sign, notarize + staple the DMG"
+echo "==> [6/6] Build, sign, notarize + staple the DMG"
 # create-dmg gives the standard drag-to-Applications layout users expect.
 dmg="${OUT_DIR}/Hippius_universal.dmg"
 rm -f "${dmg}"

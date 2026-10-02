@@ -264,6 +264,14 @@ jobs:
       - name: Install macOS packaging tools
         run: brew install xcodegen create-dmg minisign
 
+      # The screen-recording helper, built universal BEFORE the long Tauri build
+      # so a Swift error fails the job in seconds rather than after it.
+      # finalize-macos-release.sh embeds and signs it (Contents/MacOS); a
+      # release app without it hides every Record action and says nothing.
+      # Pinned by tests/release_lane_pins.rs.
+      - name: Build the screen-recording helper
+        run: bash macos/build-capture-helper.sh --universal
+
       # Apple code signing. The sandbox exceptions the Finder extension needs are honoured
       # only to code signed by Team V28B5X732P, so a real Developer ID cert is
       # required (the preview build was previously ad-hoc/unsigned). The CERT
@@ -322,7 +330,7 @@ jobs:
             # the cert present and only the notary key lapsed the build IS
             # signed. Claiming otherwise here would be a warning testers learn
             # to distrust.
-            echo "::error title=No Finder extension in this build::App Store Connect API key not set - skipping notarization and the Finder extension embed. 'Share with Hippius' will not exist in the published DMG. Do not use this build to test Finder integration."
+            echo "::error title=No Finder extension or recording in this build::App Store Connect API key not set - skipping notarization, the Finder extension embed and the screen-recording helper embed. 'Share with Hippius' and screen recording will not exist in the published DMG. Do not use this build to test Finder integration or recording."
           fi
 
       - name: Build & publish
@@ -349,11 +357,11 @@ jobs:
           # wins the name. The RELIABLE signal is the ::error:: annotation
           # above, which is per-run and cannot be raced. Do not weaken that one
           # on the assumption this suffix will be visible.
-          releaseName: "[STAGING] ${{ steps.release_notes.outputs.title }}${{ steps.apple.outputs.finder_embed == 'no' && ' - NO FINDER EXTENSION' || '' }}"
+          releaseName: "[STAGING] ${{ steps.release_notes.outputs.title }}${{ steps.apple.outputs.finder_embed == 'no' && ' - NO FINDER EXTENSION OR RECORDING' || '' }}"
           releaseBody: |
             **Staging Build**
             ${{ steps.apple.outputs.finder_embed == 'no' && '
-            > **This build has NO Finder extension and is unsigned.** It was built without the App Store Connect key, so `HippiusFinder.appex` is not embedded and "Share with Hippius" will not appear on right-click. Use a production build to test Finder integration.
+            > **This build has NO Finder extension, NO screen recording, and is unsigned.** It was built without the App Store Connect key, so neither `HippiusFinder.appex` nor the `HippiusCapture` recording helper is embedded: "Share with Hippius" will not appear on right-click and Capture offers screenshots only. Use a production build to test Finder integration or recording.
             ' || '' }}
             ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
@@ -497,9 +505,7 @@ jobs:
           chmod 600 ~/.ssh/config
 
       - name: Linux deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        run: bash scripts/install-linux-release-deps.sh
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -533,7 +539,7 @@ jobs:
         env:
           NODE_ENV: production
 
-      - name: Build & publish (deb)
+      - name: Build & publish (deb, rpm)
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -553,7 +559,10 @@ jobs:
           prerelease: true
           makeLatest: false
           overwrite: true
-          args: '--bundles deb'
+          # Staging also builds an .rpm so Fedora can be tested from an
+          # artifact (the capture plan's Linux checklist); beta and
+          # production ship the .deb only, and no updater manifest names it.
+          args: '--bundles deb,rpm'
 
   # Windows preview: the app installer (NSIS) + a separate, self-signed shell
   # extension bundle testers register manually (register-preview.ps1). The

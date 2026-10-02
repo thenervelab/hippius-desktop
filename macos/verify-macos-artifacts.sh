@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Open the finalized macOS artifacts and assert they are what the release claims
-# to ship: Finder extension embedded, notarized, stapled, and signed with the key
+# to ship: Finder extension and screen-recording helper embedded, notarized, stapled, and signed with the key
 # installed builds verify against.
 #
 # WHY THIS EXISTS. Every failure below is SILENT at build time.
@@ -128,6 +128,46 @@ check_finder_extension() {
   fi
 }
 
+# The screen-recording helper. Without it the app hides every Record action and
+# lists no cameras or microphones, and nothing anywhere says why.
+check_capture_helper() {
+  local app="$1" label="$2"
+  local helper="${app}/Contents/MacOS/HippiusCapture"
+
+  if [[ ! -x "${helper}" ]]; then
+    fail "${label}: no Contents/MacOS/HippiusCapture, so this build has NO screen recording"
+    return
+  fi
+  ok "${label}: screen-recording helper embedded"
+
+  check_universal "${helper}" "the recording helper" "${label}"
+
+  local details app_details team app_team
+  details="$(codesign -dvv "${helper}" 2>&1 || true)"
+  app_details="$(codesign -dvv "${app}" 2>&1 || true)"
+  team="$(sed -n 's/^TeamIdentifier=//p' <<<"${details}")"
+  app_team="$(sed -n 's/^TeamIdentifier=//p' <<<"${app_details}")"
+  if [[ -z "${team}" || "${team}" == "not set" || "${team}" != "${app_team}" ]]; then
+    fail "${label}: the recording helper is signed by team '${team}', the app by '${app_team}'"
+  elif [[ "${details}" != *"(runtime)"* ]]; then
+    fail "${label}: the recording helper is not signed with the hardened runtime; notarization rejects it"
+  elif [[ "${details}" != *"Timestamp="* ]]; then
+    fail "${label}: the recording helper has no secure timestamp; notarization rejects it"
+  else
+    ok "${label}: recording helper signed by ${team}, hardened runtime, timestamped"
+  fi
+
+  # Under the hardened runtime the helper is the process that opens the
+  # microphone; without this key signed builds record a silent mic track.
+  local entitlements
+  entitlements="$(codesign -d --entitlements :- "${helper}" 2>/dev/null | tr -d '\000')"
+  if [[ "${entitlements}" != *"com.apple.security.device.audio-input"* ]]; then
+    fail "${label}: the recording helper lacks com.apple.security.device.audio-input; the microphone would record silence"
+  else
+    ok "${label}: recording helper may use the microphone"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # The checks that apply to any .app, wherever it came from — the updater's
 # tarball and the DMG's copy must both pass, because users get one of each and
@@ -141,6 +181,7 @@ check_app_bundle() {
   # Reporting only the first fault would describe a smaller problem than the
   # one in front of us.
   check_finder_extension "${app}" "${label}"
+  check_capture_helper "${app}" "${label}"
 
   # The host binary, not only the extension. Tauri is told to build
   # `--target universal-apple-darwin`, but nothing downstream re-checks it, and

@@ -109,6 +109,7 @@ const PageHeader: FC<PageHeaderProps> = ({
         </p>
       </div>
 
+      <div className="flex flex-wrap items-center justify-end gap-3">
       {rightSlot ? (
         <div className="flex items-center justify-end">{rightSlot}</div>
       ) : showPlanCard ? (
@@ -225,6 +226,7 @@ const PageHeader: FC<PageHeaderProps> = ({
         )}
       </div>
       ) : null}
+      </div>
     </div>
   );
 };

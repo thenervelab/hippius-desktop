@@ -1,0 +1,9 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "capture-area",
+    "description": "Least-privilege capability for Wayland's area selection (label capture-area): one full-screen window showing the picture of the monitor the user chose in the desktop's screen-sharing dialog, to draw the area to record on. It only draws and reports, through the app-defined capture_area_context / capture_area_choose / capture_cancel commands, which are not capability-gated. It deliberately EXCLUDES opener, fs, dialog, process, deep-link, updater and the asset protocol: none of which it uses.",
+    "windows": ["capture-area"],
+    "permissions": [
+        "core:default"
+    ]
+}

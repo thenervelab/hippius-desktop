@@ -136,6 +136,11 @@ const buttonVariants = cva(
           "border border-grey-dark-100 bg-[#fefefe] text-grey-10 rounded-md shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16),0px_1px_0px_0px_white] hover:bg-grey-light-900 dark:border-black-300 dark:bg-black-500 dark:text-grey-light-100 dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-black-300",
         destructive: "bg-[#fc7d73] hover:bg-[#fb695e] rounded-md",
         ghost: "bg-transparent",
+        // The tray popover's quiet control: the same 6% fill as its search
+        // pill (explicit rgba, since `bg-black/x` renders nothing with this
+        // theme's black scale), no corner dots, and a visible keyboard ring.
+        subtle:
+          "bg-[#0000000F] text-grey-10 rounded-[12px] hover:bg-[#00000014] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50 dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/10 dark:focus-visible:ring-primary-brand-dark",
       },
       size: {
         default: "font-medium text-lg tracking-[-0.36px] px-4",
@@ -212,7 +217,7 @@ const Button = React.forwardRef<
     ref,
   ) => {
     const classes = cn(buttonVariants({ variant, size, className }));
-    const showDots = variant !== "ghost";
+    const showDots = variant !== "ghost" && variant !== "subtle";
 
     const decorations = (
       <>

@@ -301,7 +301,7 @@ fn bytes_to_os_string(bytes: Vec<u8>) -> Result<OsString, ProtocolError> {
 #[cfg(windows)]
 fn bytes_to_os_string(bytes: Vec<u8>) -> Result<OsString, ProtocolError> {
     use std::os::windows::ffi::OsStringExt;
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(ProtocolError::BadEncoding);
     }
     let units: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
