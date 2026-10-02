@@ -5,7 +5,7 @@
 // here the hooks are mocked per repo idiom.
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import SharedLinkBadge from "../SharedLinkBadge";
@@ -86,5 +86,44 @@ describe("SharedLinkBadge", () => {
     expect(getSharesForMock).toHaveBeenCalledWith("Drive", "doc.pdf");
     // The folder hook is mounted (hooks are unconditional) but disabled.
     expect(useFolderShareBadgeMock).toHaveBeenCalledWith(null, undefined, false);
+  });
+
+  it("hands its file's share row ids to Manage, for the shares page to highlight", () => {
+    getSharesForMock.mockReturnValue([
+      { shareToken: "t1", expiresAt: null, isPrivate: false },
+      { shareToken: "t2", expiresAt: null, isPrivate: true },
+    ]);
+    const onManageShare = vi.fn();
+
+    render(
+      <SharedLinkBadge label="Drive" actualName="doc.pdf" onManageShare={onManageShare} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /manage share link/i }));
+
+    expect(onManageShare).toHaveBeenCalledWith(["file:t1", "file:t2"]);
+  });
+
+  it("hands a folder's live share and any legacy archive link to Manage", () => {
+    useFolderShareBadgeMock.mockReturnValue([LIVE_FOLDER_ROW]);
+    getSharesForMock.mockReturnValue([
+      { shareToken: "zip", expiresAt: null, isPrivate: false },
+    ]);
+    const onManageShare = vi.fn();
+
+    render(
+      <SharedLinkBadge
+        label="Drive"
+        actualName="Photos"
+        isFolder
+        folderRelativePath="Trips/Photos"
+        onManageShare={onManageShare}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /manage share link/i }));
+
+    expect(onManageShare).toHaveBeenCalledWith([
+      `folder:${LIVE_FOLDER_ROW.tokenHash}`,
+      "file:zip",
+    ]);
   });
 });

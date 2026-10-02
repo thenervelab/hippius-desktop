@@ -85,6 +85,7 @@ import {
 } from "@/lib/utils/getTileTypeFromExtension";
 import { PreviewTrigger } from "@/app/components/page-sections/drive/file-preview";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
+import { sharesPageHref } from "@/app/lib/utils/sharesPageLink";
 import { Icons } from "@/app/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/drive/shared/FileViewUtils";
@@ -1522,7 +1523,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 source={file.source}
                 mainReqHash={file.mainReqHash}
                 syncStatus={file.syncStatus}
-                onManageShare={() => router.push("/shares")}
+                onManageShare={(ids) => router.push(sharesPageHref(ids))}
               />
             );
 

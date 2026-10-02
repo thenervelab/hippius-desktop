@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The link icon beside a shared file takes you straight to its link.**
+  Shared Links scrolls to that file's row and highlights it, the way Show in
+  folder points out a file in Drive, so it is easy to find among many links.
+
 - **Screenshot and Record from the menu bar.** Click the Hippius icon, then
   Screenshot or Record under the search field, and the capture starts on any
   screen, with the share link copied when it is done. The arrow beside each
