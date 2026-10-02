@@ -1,6 +1,13 @@
 import "@testing-library/jest-dom";
 import { afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
+
+// How long `findBy*` and `waitFor` wait before failing. Testing Library's
+// 1 s default is what a test needs on a laptop, not on a shared CI runner
+// running every file with coverage, where a different async test missed it
+// on each run. A passing test returns as soon as its condition holds, so a
+// longer ceiling only slows down a test that is failing anyway.
+configure({ asyncUtilTimeout: 5000 });
 
 // React Testing Library does not auto-unmount between tests under Vitest, so a
 // tree mounted by one test can leak its DOM nodes and event listeners into the

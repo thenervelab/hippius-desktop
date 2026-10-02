@@ -1,5 +1,5 @@
 //! Pause cuts time out of a recording: the same rule as the Swift helper's
-//! `place` (`macos/HippiusCapture/Sources/main.swift`), as a pure function of
+//! `place` (`macos/HippiusCapture/Sources/HippiusCapture.swift`), as a pure function of
 //! sample times and pause intervals.
 //!
 //! Times are in the capture clock's own ticks (microseconds here; QPC units

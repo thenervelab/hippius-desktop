@@ -23,11 +23,11 @@ filed in `<drive>/Captures`, with a public share link copied unless
 phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
 `SCREEN_CAPTURE_ENABLED = enabledFrom("beta")` (beta and staging, not
 production), and behind Rust's `capture_support` for the platform:
-**screenshots on macOS, Windows and Linux** (Windows and Linux on staging
-only); **recording on macOS 13+** when
-`HippiusCapture` is built, and on Windows 10 2004+ and Linux (X11 and
-Wayland) in debug and staging builds only (`capture::rollout`, until each
-platform's checklist passes).
+**screenshots on macOS, Windows and Linux**; **recording on macOS 13+**
+when `HippiusCapture` is built, and on Windows 10 2004+ and Linux (X11 and
+Wayland). Windows and Linux are on in debug, staging and beta builds and off
+in production (`capture::rollout`, until each platform's hardware checklist
+passes, and for Windows recording a signed installer).
 
 **Windows and Linux parity plan:** `docs/plans/2026-10-01-capture-windows-linux.md`.
 Read it before touching a non-macOS capture path. Its load-bearing decisions:
@@ -51,7 +51,7 @@ second window, tray and single-instance handler would start; pinned by
 `capture_wiring.rs`. It serves the protocol with `timeline.rs` (the Swift
 `place` rule: drop samples inside a pause, move later ones back by every
 finished pause, by start time for audio), `sizing.rs` (`alignToPixels`,
-`capped`, `videoBitRate`, pinned against `main.swift`'s literals) and a
+`capped`, `videoBitRate`, pinned against `HippiusCapture.swift`'s literals) and a
 `synthetic` test pattern through a text stand-in writer; a real `start` is
 refused with `UnsupportedPlatform`'s line where no platform recorder has
 landed (Linux; Windows has one, below).
@@ -838,7 +838,7 @@ Pinned by `permission_flow::tests`, `CapturePermissionDialog.test.tsx` and
 pane; the relaunch is recorded before the restart; the reset runs `tccutil`
 before asking).
 
-## The recording helper (`macos/HippiusCapture/Sources/main.swift`)
+## The recording helper (`macos/HippiusCapture/Sources/HippiusCapture.swift`)
 
 **Protocol.** One JSON object per line each way. Every command carries an
 `id` the reply echoes; `wait_for` skips a reply with another id (a late

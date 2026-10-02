@@ -1,6 +1,6 @@
 //! How big a recording is and how many bits it gets: the Swift helper's
 //! `alignToPixels`, `capped` and `videoBitRate`
-//! (`macos/HippiusCapture/Sources/main.swift`), with the same numbers, so a
+//! (`macos/HippiusCapture/Sources/HippiusCapture.swift`), with the same numbers, so a
 //! recording made on Windows or Linux matches one made on a Mac. Pinned
 //! against the Swift constants by the tests below.
 
@@ -93,20 +93,20 @@ pub fn video_bit_rate(width: u32, height: u32) -> u32 {
 mod tests {
     use super::*;
 
-    const SWIFT: &str = include_str!("../../../../macos/HippiusCapture/Sources/main.swift");
+    const SWIFT: &str = include_str!("../../../../macos/HippiusCapture/Sources/HippiusCapture.swift");
 
     /// If the Swift helper's numbers change, these must change with them, or
     /// a Windows recording and a Mac recording of the same screen differ.
     #[test]
     fn the_numbers_are_the_swift_helpers() {
-        assert!(SWIFT.contains("let maxLongEdge = 3840"), "main.swift's maxLongEdge changed");
+        assert!(SWIFT.contains("let maxLongEdge = 3840"), "HippiusCapture.swift's maxLongEdge changed");
         assert!(
             SWIFT.contains("let bps = 14_000_000 * ratio.squareRoot()"),
-            "main.swift's 1080p rate changed"
+            "HippiusCapture.swift's 1080p rate changed"
         );
         assert!(
             SWIFT.contains("return Int(min(28_000_000, max(2_000_000, bps)))"),
-            "main.swift's rate bounds changed"
+            "HippiusCapture.swift's rate bounds changed"
         );
         assert!(SWIFT.contains("let ratio = Double(width * height) / (1920.0 * 1080.0)"));
         assert!(SWIFT.contains("return (max(2, Int(Double(width) * k) & ~1), max(2, Int(Double(height) * k) & ~1))"));

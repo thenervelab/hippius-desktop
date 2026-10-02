@@ -7,7 +7,7 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). Screen capture uses it (staging only).
+// staging, never production). Screen capture uses it (beta and staging).
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
@@ -200,8 +200,9 @@ export const REFERRALS_COMING_SOON = true;
  *
  * On in beta and staging, off in production until it has had a beta
  * release: it opens windows over every app on screen and asks for a macOS
- * permission. Windows and Linux stay staging only on top of this
- * (`capture::rollout`, until their hardware checklists pass).
+ * permission. Windows and Linux follow the same lanes, beta and staging
+ * (`capture::rollout`, which keeps them out of production until their
+ * hardware checklists pass).
  * Design: `docs/plans/2026-09-22-screen-capture.md`.
  */
 export const SCREEN_CAPTURE_ENABLED = enabledFrom("beta");

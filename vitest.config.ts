@@ -8,6 +8,9 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
+    // Above the 5 s `asyncUtilTimeout` in vitest.setup.ts, so a slow
+    // findBy/waitFor fails with its own message instead of a bare timeout.
+    testTimeout: 15000,
     coverage: {
       // NO global threshold on purpose: most .tsx files are presentational and
       // their risky logic lives in Rust, so a global floor would only pressure

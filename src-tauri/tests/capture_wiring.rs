@@ -367,7 +367,7 @@ fn the_app_and_the_helper_opt_in_to_continuity_camera() {
 #[test]
 fn the_device_watcher_is_a_mode_the_helper_knows_and_ends_with_the_bar() {
     let watch = read("src/capture/device_watch.rs");
-    let helper = read("../macos/HippiusCapture/Sources/main.swift");
+    let helper = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
     assert!(watch.contains("\"--watch-devices\""), "device_watch.rs starts the helper's watch mode");
     assert!(
         helper.contains("arguments.contains(\"--watch-devices\")"),
@@ -790,7 +790,7 @@ fn the_bubble_is_filmed_with_a_window_recording() {
 
     let protocol = read("src/capture/recording/protocol.rs");
     assert!(protocol.contains("pub camera_window_id: Option<u32>"));
-    let swift = read("../macos/HippiusCapture/Sources/main.swift");
+    let swift = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
     assert!(swift.contains(r#"intU32(obj["cameraWindowId"])"#), "the helper reads the camera window");
     assert!(
         swift.contains("SCContentFilter(display: screen, including: [window, camera])"),
@@ -802,7 +802,7 @@ fn the_bubble_is_filmed_with_a_window_recording() {
 /// track: a separate microphone track went unheard. One track, mixed.
 #[test]
 fn a_recording_has_one_audio_track() {
-    let swift = read("../macos/HippiusCapture/Sources/main.swift");
+    let swift = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
     assert_eq!(
         swift.matches("AVAssetWriterInput(mediaType: .audio").count(),
         1,
@@ -932,7 +932,7 @@ fn the_mic_meter_lets_go_before_the_recorder_starts() {
         start.matches("meter_may_run(").count() >= 2 && start.contains("stop_if(generation)"),
         "a meter started while the phase moved must re-check and stop itself"
     );
-    let helper = read("../macos/HippiusCapture/Sources/main.swift");
+    let helper = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
     assert!(
         helper.contains("\"--meter\"") && helper.contains("runMeter("),
         "the helper must serve --meter"
@@ -1042,27 +1042,28 @@ fn only_the_camera_and_overlay_webviews_may_open_devices() {
 }
 
 /// The Windows recorder is the app's own executable started without a
-/// console window, and Windows recording stays on staging until its
-/// hardware checklist passes.
+/// console window, and Windows recording ships to staging and beta, not to
+/// production until its hardware checklist passes and the installer is signed.
 #[test]
-fn windows_records_in_its_own_child_and_stays_on_staging() {
+fn windows_records_in_its_own_child_and_stays_out_of_production() {
     let windows = read("src/capture/recording/windows.rs");
     assert!(fn_body(&windows, "pub fn helper_command(").contains("own_recorder_command()"));
     assert!(fn_body(&windows, "pub fn helper_command(").contains("CREATE_NO_WINDOW"));
     use tauri_project_lib::capture::rollout::{Feature, Platform, enabled};
     use tauri_project_lib::release_channel::ReleaseChannel;
     assert!(enabled(ReleaseChannel::Staging, Platform::Windows, Feature::Recording));
+    assert!(enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording));
     assert!(
-        !enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording),
-        "Windows recording leaves staging only once its hardware checklist passes"
+        !enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording),
+        "Windows recording reaches production only once its hardware checklist passes"
     );
 }
 
 /// Linux records in the app's own child, waits for the user in the
-/// desktop's screen-sharing dialog, and stays on staging until its
-/// checklist passes on real sessions.
+/// desktop's screen-sharing dialog, and ships to staging and beta, not to
+/// production until its checklist passes on real sessions.
 #[test]
-fn linux_records_in_its_own_child_and_stays_on_staging() {
+fn linux_records_in_its_own_child_and_stays_out_of_production() {
     let linux = read("src/capture/recording/linux.rs");
     assert!(fn_body(&linux, "pub fn helper_command(").contains("own_recorder_command()"));
     assert!(fn_body(&linux, "pub fn start(").contains("helper::start_within("));
@@ -1071,9 +1072,10 @@ fn linux_records_in_its_own_child_and_stays_on_staging() {
     use tauri_project_lib::release_channel::ReleaseChannel;
     for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
         assert!(enabled(ReleaseChannel::Staging, platform, Feature::Recording));
+        assert!(enabled(ReleaseChannel::Beta, platform, Feature::Recording));
         assert!(
-            !enabled(ReleaseChannel::Beta, platform, Feature::Recording),
-            "{platform:?} recording leaves staging only once its Linux checklist passes"
+            !enabled(ReleaseChannel::Production, platform, Feature::Recording),
+            "{platform:?} recording reaches production only once its Linux checklist passes"
         );
     }
 }
@@ -1352,4 +1354,18 @@ fn the_recording_pill_has_no_rectangular_shadow() {
         .next()
         .unwrap();
     assert!(pill.contains("shadow-[0_2px_6px"), "a shadow reaching at most 8px: {pill}");
+}
+
+/// The helper's entry point is `@main` in `HippiusCapture.swift`. A file
+/// named `main.swift` is top-level code by definition, and newer Swift
+/// refuses `@main` beside it; the release's helper build failed that way.
+#[test]
+fn the_recording_helper_has_no_main_swift() {
+    assert!(
+        !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../macos/HippiusCapture/Sources/main.swift")
+            .exists(),
+        "macos/HippiusCapture/Sources/main.swift is back; keep @main in HippiusCapture.swift"
+    );
+    assert!(read("../macos/HippiusCapture/Sources/HippiusCapture.swift").contains("@main"));
 }
