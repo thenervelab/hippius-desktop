@@ -156,6 +156,19 @@ export const SHARED_DRIVES_ENABLED = true;
 export const FOLDER_ROLES_ENABLED = true;
 
 /**
+ * Manager in the Share dialog's By email role picker. When `false`, an
+ * emailed invite to a whole drive offers Viewer and Editor only, and the
+ * field says to invite an Editor and change their role once they join.
+ *
+ * Off because an emailed Manager invite currently times out on the server,
+ * so the person never gets it. Turn it back on once the server sends them
+ * reliably. Nothing else changes with the flag: a Manager invite LINK and
+ * changing an existing member to Manager keep working as before, and the
+ * Rust side still accepts a Manager email (`resolve_email_invite`).
+ */
+export const MANAGER_EMAIL_INVITES_ENABLED = false;
+
+/**
  * API token settings. When `false`, the surface is fully invisible: the
  * "API Token" item is filtered out of the settings sidebar
  * (`filterSettingsNavItems`) and the section does not render even if the

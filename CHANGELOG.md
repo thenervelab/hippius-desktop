@@ -17,6 +17,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The menu bar popover shows your balance in dollars and who you are signed
+  in as.** It reads "Balance $0.36" like the rest of the app instead of a
+  credit count, and an account signed in with Google, Apple or GitHub shows
+  its email (or GitHub handle) with the account address underneath, in place
+  of the block number.
+
+- **A folder shared with you on its own is marked as one.** In Shared with me
+  and when you open it, it carries a "Folder in a drive" badge so it no longer
+  looks like a whole shared drive, and its row reads "Shared by" the owner
+  instead of leading with the drive's name.
+
 - **Share by email or by link from one place.** The Share dialog now opens
   with two tabs at the top, By email and By link, instead of separate
   sections above and below the people list. It remembers the tab you used
@@ -89,6 +100,18 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Clicking the Hippius icon in the menu bar opens the popover again on newer
+  macOS versions.** A click used to show only the small Open Drive / Quit
+  menu; that menu now opens with a right click.
+
+- **A folder stops showing as shared once nobody has access.** After you
+  remove the last person from a folder you shared by email, its "Shared" and
+  "Manage access" marks go away. A folder with an invitation still waiting or
+  a share link that still works keeps them.
+
+- **A rate limited email invite says which limit you hit and the wait in
+  hours and minutes**, such as "You've sent too many invites to this address
+  today. Try again in 24h."
 - **An email invite sent from a locked app always goes out after you
   unlock.** Unlocking very quickly could leave the invite unsent.
 
@@ -137,6 +160,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   remain the last line of defence.
 
 ### Added
+
+- **Invite a Manager by email.** The By email tab now offers Manager for a
+  whole drive. The invite works once and expires after 24 hours, so the
+  person needs to join within a day.
 
 - **Shared with Me is always on the Drive page, with Share a drive.** When
   nothing is shared with you yet, it explains what shared drives are for and

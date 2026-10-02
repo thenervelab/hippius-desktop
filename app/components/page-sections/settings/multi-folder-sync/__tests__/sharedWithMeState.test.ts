@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  folderGrantMemberCountTitle,
   folderGrantRowView,
   getMembershipRowAction,
   getSharedWithMeView,
@@ -89,19 +90,28 @@ describe("shared folders (folder roles)", () => {
     expect(getSharedWithMeView(false, { kind: "ready", memberships: [] }, 3)).toBe("hidden");
   });
 
-  it("names the folder by its own name and keeps the drive and path", () => {
+  // The drive's name is left out on purpose: the owner shared a folder, not
+  // the drive (console parity).
+  it("names the folder by its own name and keeps the path, not the drive", () => {
     const view = folderGrantRowView({
       ownerSs58: "5Owner",
       folderHash: "abc",
       pathPrefix: "/Clients/ACME/",
-      displayLabel: "Team",
     });
     expect(view).toEqual({
       key: "5Owner:abc:Clients/ACME",
       folderName: "ACME",
-      driveName: "Team",
       path: "Clients/ACME",
     });
+  });
+
+  it("names the owner apart on a folder's member count, since the count leaves them out", () => {
+    expect(folderGrantMemberCountTitle(1)).toBe(
+      "Only you and the drive's owner have access to this folder",
+    );
+    expect(folderGrantMemberCountTitle(3)).toBe(
+      "3 people have access to this folder, you included, plus the drive's owner",
+    );
   });
 });
 

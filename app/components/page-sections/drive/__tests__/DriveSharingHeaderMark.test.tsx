@@ -11,6 +11,7 @@ import { Provider, createStore } from "jotai";
 
 const listMyDriveMembershipsMock = vi.hoisted(() => vi.fn());
 const listOwnedDriveSharingMock = vi.hoisted(() => vi.fn());
+const listMyFolderGrantsMock = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const actual = await importOriginal<
     typeof import("@/app/lib/tauri/sharedDrives")
@@ -19,6 +20,7 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     ...actual,
     listMyDriveMemberships: () => listMyDriveMembershipsMock(),
     listOwnedDriveSharing: (...a: unknown[]) => listOwnedDriveSharingMock(...a),
+    listMyFolderGrants: () => listMyFolderGrantsMock(),
   };
 });
 
@@ -35,6 +37,7 @@ vi.mock("@/app/lib/featureFlags", () => ({
 
 import DriveSharingHeaderMark from "../DriveSharingHeaderMark";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { makeFolderGrantLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
 
 const MEMBERSHIP = {
   ownerSs58: "5Owner",
@@ -67,6 +70,8 @@ beforeEach(() => {
   flagState.on = true;
   listMyDriveMembershipsMock.mockResolvedValue([]);
   listOwnedDriveSharingMock.mockResolvedValue([]);
+  listMyFolderGrantsMock.mockResolvedValue([]);
+  folderRolesFlag.on = false;
 });
 
 describe("the drive header's sharing mark", () => {
@@ -210,5 +215,29 @@ describe("the drive header's sharing mark", () => {
     flagState.on = false;
     renderMark();
     expect(screen.queryByText(/Shared/)).not.toBeInTheDocument();
+  });
+
+  // A folder shared on its own is described as the "Shared with me" row
+  // described it: a folder in somebody's drive, with the role held on it,
+  // and never as an own drive of this account.
+  it("marks a folder shared on its own as a folder in a drive, with its role", async () => {
+    folderRolesFlag.on = true;
+    listMyFolderGrantsMock.mockResolvedValue([
+      {
+        ownerSs58: "5Owner",
+        folderHash: "abc",
+        displayLabel: "team-docs",
+        pathPrefix: "Clients/ACME",
+        role: "writer",
+        createdAt: "",
+      },
+    ]);
+    renderMark(
+      makeFolderGrantLabel({ ownerSs58: "5Owner", folderHash: "abc", pathPrefix: "Clients/ACME" }),
+    );
+    expect(screen.getByText("Folder in a drive")).toBeInTheDocument();
+    expect(await screen.findByText("Editor")).toBeInTheDocument();
+    expect(screen.queryByText(/Shared/)).not.toBeInTheDocument();
+    expect(listOwnedDriveSharingMock).not.toHaveBeenCalled();
   });
 });

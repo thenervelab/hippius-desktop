@@ -21,20 +21,27 @@ import {
   type DriveTarget,
   type InviteEmailCheck,
 } from "@/app/lib/tauri/sharedDrives";
-import { driveRoleDescription, driveRoleLabel } from "@/app/lib/shared-drives/roles";
+import {
+  driveRoleDescription,
+  driveRoleLabel,
+  type DriveRole,
+} from "@/app/lib/shared-drives/roles";
+import { MANAGER_EMAIL_INVITES_ENABLED } from "@/app/lib/featureFlags";
 import { UserPlus } from "lucide-react";
-import { COMING_SOON_COPY, EMAIL_INVITE_ROLES } from "../shareDriveModalState";
+import { COMING_SOON_COPY, emailInviteRolesFor } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
 import { SectionNoticeView } from "./SectionNoticeView";
-import { noticeForError, type SectionNotice } from "./shareDialogState";
+import { emailInviteNote, noticeForError, type SectionNotice } from "./shareDialogState";
 import { useUnlockThenResume } from "./useUnlockThenResume";
-
-type EmailRole = (typeof EMAIL_INVITE_ROLES)[number];
 
 /** Under the email field, on drives and folders alike. */
 export const EMAIL_INVITE_HINT = "They get their own invite, just for them.";
-/** Added to the hint for a drive while an address is being typed. */
-export const EMAIL_MANAGER_HINT = "To add a Manager, invite them as an Editor, then change their role below.";
+/**
+ * Added for a drive while an address is being typed and Manager is not
+ * offered by email (`MANAGER_EMAIL_INVITES_ENABLED` off).
+ */
+export const EMAIL_MANAGER_HINT =
+  "To add a Manager, invite them as an Editor, then change their role once they join.";
 
 const NOT_CHECKED: InviteEmailCheck = { valid: false };
 
@@ -68,7 +75,7 @@ export function InvitePeopleSection({
   const folder = pathPrefix !== null;
   // A drive keeps the Editor default every earlier build sent; a folder
   // starts at Viewer, since Editor on one folder may still be coming soon.
-  const [role, setRole] = useState<EmailRole>(folder ? "reader" : "writer");
+  const [role, setRole] = useState<DriveRole>(folder ? "reader" : "writer");
   const [email, setEmail] = useState("");
   const [check, setCheck] = useState<InviteEmailCheck>(NOT_CHECKED);
   // Say what is wrong with the address only once somebody has left the field
@@ -116,10 +123,10 @@ export function InvitePeopleSection({
   }, []);
 
   const unlockThenResume = useUnlockThenResume();
-  const sendRef = useRef<(asRole: EmailRole, afterUnlock?: boolean) => Promise<void>>(async () => {});
+  const sendRef = useRef<(asRole: DriveRole, afterUnlock?: boolean) => Promise<void>>(async () => {});
 
   const send = useCallback(
-    async (asRole: EmailRole, afterUnlock = false) => {
+    async (asRole: DriveRole, afterUnlock = false) => {
       setShowCheck(true);
       if (inFlight.current) return;
       // Enter can beat the as-you-type answer; ask once more before refusing.
@@ -183,6 +190,7 @@ export function InvitePeopleSection({
   const composing = email.trim().length > 0;
   const blocked = sending || !check.valid || mailKnownOff;
   const invalidMessage = showCheck && !check.valid ? check.message : undefined;
+  const roleNote = emailInviteNote({ folder, role });
 
   return (
     <div className="@container">
@@ -221,10 +229,10 @@ export function InvitePeopleSection({
               ariaLabel="Invite role"
               value={role}
               onValueChange={(value) => {
-                setRole(value as EmailRole);
+                setRole(value as DriveRole);
                 setNotice((n) => (n?.kind === "folderEditor" ? null : n));
               }}
-              options={EMAIL_INVITE_ROLES.map((r) => ({
+              options={emailInviteRolesFor(folder, MANAGER_EMAIL_INVITES_ENABLED).map((r) => ({
                 label: driveRoleLabel(r),
                 value: r,
                 description: driveRoleDescription(r),
@@ -252,11 +260,15 @@ export function InvitePeopleSection({
         </p>
       ) : null}
 
-      {/* What an emailed invite is, at rest too; how to add a Manager (a
-          drive role only) once there is someone to invite. */}
+      {/* What an emailed invite is, at rest too; with Manager picked, that
+          it works once and has to be taken up within 24 hours. While Manager
+          is not offered by email, how to add one on a drive instead. */}
       <div className="mt-2 flex flex-col gap-1">
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_INVITE_HINT}</p>
-        {composing && !folder ? (
+        {composing && roleNote ? (
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">{roleNote}</p>
+        ) : null}
+        {composing && !folder && !MANAGER_EMAIL_INVITES_ENABLED ? (
           <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_MANAGER_HINT}</p>
         ) : null}
       </div>

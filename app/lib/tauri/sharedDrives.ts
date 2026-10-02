@@ -709,7 +709,11 @@ export async function emailDriveInvite(
   label: string,
   email: string,
   opts?: {
-    role?: Exclude<DriveRole, "manager">;
+    /**
+     * Manager on a whole drive only: Rust refuses it on a folder and holds
+     * it to the server's single use, 24-hour cap.
+     */
+    role?: DriveRole;
     expiresInSecs?: number;
     target?: DriveTarget;
     /**
@@ -853,6 +857,11 @@ export interface MyFolderGrantInfo {
    * an Editor grant, writer grants on at the server, and not frozen.
    */
   canWrite: boolean;
+  /**
+   * People holding a grant on exactly this folder, this account included.
+   * Omit / undefined means unknown — never draw "0 members" from absence.
+   */
+  memberCount?: number;
   frozen?: boolean;
   frozenUntil?: string;
 }

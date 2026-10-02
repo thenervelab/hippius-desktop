@@ -144,6 +144,17 @@ export function generalAccessNote(params: {
 }
 
 /**
+ * The extra line under the By email field while a Manager is picked, or null.
+ * A mailed Manager invite is single use and expires within 24 hours, and
+ * opening it does not extend it (HCFS #521), so the words say they have to
+ * join by then. A folder never offers Manager.
+ */
+export function emailInviteNote(params: { folder: boolean; role: DriveRole }): string | null {
+  if (params.folder || params.role !== "manager") return null;
+  return "Works once and expires within 24 hours, so they need to join by then. Managers can invite and remove people.";
+}
+
+/**
  * "expires in 7 days", "expires in 5 hours", "expired", or null for an
  * unreadable date. Same words as Manage access (`timeLeft`), lower case
  * because it follows the stage on the row.

@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
@@ -127,6 +127,7 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
     };
 
     if win.is_visible().unwrap_or(false) {
+        info!("tray panel: visible, click hides it");
         hide_window(&win)?;
         return Ok(());
     }
@@ -137,6 +138,7 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
     // immediately re-opening.
     let hidden_at = state.tray_panel_hidden_at.load(Ordering::Relaxed);
     if hidden_at != 0 && now_ms().saturating_sub(hidden_at) < REOPEN_COOLDOWN_MS {
+        info!("tray panel: hidden by this click's blur, stays hidden");
         return Ok(());
     }
 
@@ -159,6 +161,7 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
 
     let (x, y) = geometry::compute_panel_position(icon, panel_w, panel_h, work_area, gap, margin);
 
+    info!("tray panel: show at ({x}, {y}) on work area {work_area:?} x{scale}");
     win.set_position(PhysicalPosition::new(x, y))
         .map_err(|e| AppError::Other(format!("failed to position tray panel: {e}")))?;
     win.show().map_err(|e| AppError::Other(format!("failed to show tray panel: {e}")))?;
@@ -218,6 +221,7 @@ pub fn on_panel_blur(app: &AppHandle) {
         return;
     };
     if win.is_visible().unwrap_or(false) {
+        info!("tray panel: blur, hidden");
         if let Err(e) = win.hide() {
             warn!("failed to hide tray panel on blur: {e}");
             return;
