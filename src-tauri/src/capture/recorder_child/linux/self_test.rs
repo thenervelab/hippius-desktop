@@ -5,9 +5,13 @@
 //! It records 3 s, pauses 1 s, records 2 s more and stops, through the same
 //! [`Pipeline`] and timeline as a real recording, then demuxes the file with
 //! GStreamer and checks: about 5 s long (the pause cut out), one H.264 video
-//! stream and one AAC audio stream, an even picture size. It runs on the
-//! clock, so it takes about six seconds. A second (ignored) test kills a
-//! writer mid-recording and checks the fragments it left still play.
+//! stream and one AAC audio stream, an even picture size. The take is timed
+//! by the samples' own timestamps, never by the wall clock: an unoptimised
+//! test build on a CI runner cannot convert and encode in real time, so the
+//! source falls behind the clock and a wall-clock take came out short. It
+//! takes about six seconds where the machine keeps up, longer where it does
+//! not. A second (ignored) test kills a writer mid-recording and checks the
+//! fragments it left still play.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -78,7 +82,8 @@ pub fn run() -> Report {
 }
 
 /// 3 s, a 1 s pause, 2 s, through the real writer; `None` = until killed.
-/// Answers the H.264 encoder used.
+/// Every point (pause, resume, stop) is a sample time, so the take is the
+/// same length however fast the machine is. Answers the H.264 encoder used.
 fn record(path: &Path, length: Option<Duration>) -> Result<&'static str, String> {
     super::init()?;
     let candidates = linux_plan::candidates(super::installed);
@@ -86,23 +91,29 @@ fn record(path: &Path, length: Option<Duration>) -> Result<&'static str, String>
     let used = encoder.video_encoder;
     let mut pipeline = Pipeline::new(encoder, &[Source::Microphone]);
     let clock = Clock::start();
+    let origin = clock.now();
     let mut source = Synthetic::new(clock);
     let mut timeline = Timeline::new();
-    let started = Instant::now();
     let (mut paused, mut resumed) = (false, false);
     let mut picture = Vec::new();
     let mut nv12 = Vec::new();
-    while length.is_none_or(|l| started.elapsed() < l) {
-        let elapsed = started.elapsed();
-        if length.is_some() && !paused && elapsed >= Duration::from_secs(3) {
-            timeline.pause(clock.now());
+    loop {
+        let sample = source.next_sample();
+        let (Sample::Video { time, .. } | Sample::Audio { time, .. }) = &sample;
+        let time = *time;
+        let at = Duration::from_micros(time.saturating_sub(origin));
+        if length.is_some_and(|l| at >= l) {
+            break;
+        }
+        if length.is_some() && !paused && at >= Duration::from_secs(3) {
+            timeline.pause(time);
             paused = true;
         }
-        if paused && !resumed && elapsed >= Duration::from_secs(4) {
-            timeline.resume(clock.now());
+        if paused && !resumed && at >= Duration::from_secs(4) {
+            timeline.resume(time);
             resumed = true;
         }
-        match source.next_sample() {
+        match sample {
             Sample::Video { time, bar_x } => {
                 let Some(placed) = timeline.place(time) else { continue };
                 draw(&mut picture, bar_x);
@@ -126,9 +137,14 @@ fn record(path: &Path, length: Option<Duration>) -> Result<&'static str, String>
             }
         }
     }
-    let end = timeline.end_time(clock.now(), pipeline.last_video());
+    let stop = length.map_or_else(|| clock.now(), |l| origin + micros(l));
+    let end = timeline.end_time(stop, pipeline.last_video());
     pipeline.finish(end)?;
     Ok(used)
+}
+
+fn micros(d: Duration) -> u64 {
+    u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
 }
 
 /// The synthetic source's moving bar, in BGRA.

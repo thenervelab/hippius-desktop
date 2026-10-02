@@ -618,12 +618,15 @@ mod tests {
         assert!(shareable_on(&window(1, 5, "Safari", "Away", (-5000, -5000, 800, 600)), OWN, &screens()).is_none());
     }
 
-    /// A window mostly off the edge counts by what is still visible.
+    /// A window mostly off the edge counts by what is still visible. The
+    /// frame is points on macOS and physical pixels elsewhere (halved on
+    /// these 2x displays), so both cases hold in either space: 50 visible is
+    /// under the minimum even as points, 200 is over it even halved.
     #[test]
     fn only_the_visible_part_counts_towards_the_minimum() {
         let d = screens();
         assert!(shareable_on(&window(1, 5, "Safari", "Edge", (-750, 0, 800, 600)), OWN, &d).is_none());
-        assert!(shareable_on(&window(1, 5, "Safari", "Edge", (-700, 0, 800, 600)), OWN, &d).is_some());
+        assert!(shareable_on(&window(1, 5, "Safari", "Edge", (-600, 0, 800, 600)), OWN, &d).is_some());
     }
 
     #[test]

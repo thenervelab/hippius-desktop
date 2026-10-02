@@ -6,15 +6,17 @@
 //! same [`Pipeline`] and timeline as a real recording, then opens the file
 //! with `IMFSourceReader` and checks: about 5 s long (the pause cut out),
 //! one H.264 video stream and one AAC audio stream, an even picture size.
-//! It runs on the clock, so it takes about six seconds.
+//! The take is timed by the samples' own timestamps, so it is the same
+//! length however fast the runner is: about six seconds where it keeps up.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 use windows::Win32::Media::MediaFoundation::{
-    IMFSourceReader, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_PD_DURATION, MF_SOURCE_READER_MEDIASOURCE, MFAudioFormat_AAC,
-    MFCreateSourceReaderFromURL, MFMediaType_Audio, MFMediaType_Video, MFVideoFormat_H264,
+    IMFSample, IMFSourceReader, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_PD_DURATION, MF_SOURCE_READER_ALL_STREAMS,
+    MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE, MF_SOURCE_READERF_ENDOFSTREAM,
+    MFAudioFormat_AAC, MFCreateSourceReaderFromURL, MFMediaType_Audio, MFMediaType_Video, MFVideoFormat_H264,
 };
 use windows::core::{HSTRING, PCWSTR};
 
@@ -35,7 +37,11 @@ const HEIGHT: u32 = 360;
 #[serde(rename_all = "camelCase")]
 pub struct Report {
     pub ok: bool,
+    /// How long the file plays: where its last video or audio sample ends.
     pub duration_secs: f64,
+    /// What the file's header says (`MF_PD_DURATION`), which Windows'
+    /// players and the poster reader show; checked against the samples.
+    pub header_duration_secs: f64,
     pub video: bool,
     pub audio: bool,
     pub width: u32,
@@ -54,6 +60,7 @@ pub fn run() -> Report {
         Err(e) => Report {
             ok: false,
             duration_secs: 0.0,
+            header_duration_secs: 0.0,
             video: false,
             audio: false,
             width: 0,
@@ -63,6 +70,12 @@ pub fn run() -> Report {
     };
     if (report.duration_secs - 5.0).abs() > 0.3 {
         report.problems.push(format!("{:.2} s long, expected 5 s", report.duration_secs));
+    }
+    if (report.header_duration_secs - report.duration_secs).abs() > 0.3 {
+        report.problems.push(format!(
+            "the header says {:.2} s but the samples run {:.2} s",
+            report.header_duration_secs, report.duration_secs
+        ));
     }
     if !report.video {
         report.problems.push("no H.264 video stream".into());
@@ -82,25 +95,35 @@ pub fn run() -> Report {
 fn record(path: &Path) -> Result<(), String> {
     let writer = MfWriter::create(path, WIDTH, HEIGHT, true)?;
     let mut pipeline = Pipeline::new(writer, &[Source::Microphone]);
+    // Timed by the samples' own timestamps, never the wall clock: an
+    // unoptimised test build on a CI runner cannot convert and encode in
+    // real time, so the source falls behind the clock and a wall-clock take
+    // came out short.
     let clock = Clock::start();
+    let origin = clock.now();
     let mut source = Synthetic::new(clock);
     let mut timeline = Timeline::new();
-    let started = Instant::now();
     let mut paused = false;
     let mut resumed = false;
     let mut picture = Vec::new();
     let mut nv12 = Vec::new();
-    while started.elapsed() < Duration::from_secs(6) {
-        let elapsed = started.elapsed();
-        if !paused && elapsed >= Duration::from_secs(3) {
-            timeline.pause(clock.now());
+    loop {
+        let sample = source.next_sample();
+        let (Sample::Video { time, .. } | Sample::Audio { time, .. }) = &sample;
+        let time = *time;
+        let at = Duration::from_micros(time.saturating_sub(origin));
+        if at >= Duration::from_secs(6) {
+            break;
+        }
+        if !paused && at >= Duration::from_secs(3) {
+            timeline.pause(time);
             paused = true;
         }
-        if paused && !resumed && elapsed >= Duration::from_secs(4) {
-            timeline.resume(clock.now());
+        if paused && !resumed && at >= Duration::from_secs(4) {
+            timeline.resume(time);
             resumed = true;
         }
-        match source.next_sample() {
+        match sample {
             Sample::Video { time, bar_x } => {
                 let Some(placed) = timeline.place(time) else {
                     continue;
@@ -128,7 +151,7 @@ fn record(path: &Path) -> Result<(), String> {
             }
         }
     }
-    let end = timeline.end_time(clock.now(), pipeline.last_video());
+    let end = timeline.end_time(origin + 6_000_000, pipeline.last_video());
     pipeline.finish(end)
 }
 
@@ -151,6 +174,7 @@ fn read_back(path: &Path) -> Report {
     let mut report = Report {
         ok: false,
         duration_secs: 0.0,
+        header_duration_secs: 0.0,
         video: false,
         audio: false,
         width: 0,
@@ -175,7 +199,7 @@ fn read_back(path: &Path) -> Report {
         {
             #[allow(clippy::cast_precision_loss)]
             let secs = hns as f64 / 10_000_000.0;
-            report.duration_secs = secs;
+            report.header_duration_secs = secs;
         }
         let mut index = 0u32;
         while let Ok(media_type) = reader.GetNativeMediaType(index, 0) {
@@ -198,8 +222,54 @@ fn read_back(path: &Path) -> Report {
             }
             index += 1;
         }
+        #[allow(clippy::cast_precision_loss)]
+        let content = samples_end(&reader) as f64 / 10_000_000.0;
+        report.duration_secs = content;
     }
     report
+}
+
+/// Where the file's last sample ends (100 ns units), over its first video
+/// and first audio track: what actually plays, read sample by sample in
+/// their stored (compressed) form, so nothing is decoded. The header's
+/// duration is a separate claim; Linux's self-test measures the same way.
+///
+/// # Safety
+/// `reader` is a live source reader on this thread, with MF started.
+unsafe fn samples_end(reader: &IMFSourceReader) -> i64 {
+    #[allow(clippy::cast_sign_loss)]
+    let tracks = [MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32];
+    let mut end = 0i64;
+    for track in tracks {
+        // One track at a time, so the reader never queues the other's samples.
+        // SAFETY: the caller's contract.
+        unsafe {
+            #[allow(clippy::cast_sign_loss)]
+            let _ = reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false);
+            if reader.SetStreamSelection(track, true).is_err() {
+                continue;
+            }
+            loop {
+                let mut flags = 0u32;
+                let mut stamp = 0i64;
+                let mut sample: Option<IMFSample> = None;
+                if reader
+                    .ReadSample(track, 0, None, Some(&raw mut flags), Some(&raw mut stamp), Some(&raw mut sample))
+                    .is_err()
+                {
+                    break;
+                }
+                if let Some(sample) = sample {
+                    end = end.max(stamp + sample.GetSampleDuration().unwrap_or(0));
+                }
+                #[allow(clippy::cast_sign_loss)]
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    break;
+                }
+            }
+        }
+    }
+    end
 }
 
 #[cfg(test)]
