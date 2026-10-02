@@ -282,6 +282,7 @@ mod tests {
         assert_eq!(file_uri_to_path("file:///tmp/a.png?x=1"), Some(PathBuf::from("/tmp/a.png")));
     }
 
+    #[cfg(unix)]
     fn png_at(path: &Path, w: u32, h: u32) {
         let img = image::RgbaImage::from_pixel(w, h, image::Rgba([10, 20, 30, 255]));
         crate::capture::screenshot::save_png(&img, path).unwrap();
@@ -289,6 +290,9 @@ mod tests {
 
     /// The desktop's copy is MOVED: after a capture there is one file, the
     /// one in the capture folder, under Hippius's name.
+    // The portal is Linux only, and its answer is a `file://` URI of a Unix
+    // path; a Windows path makes no such URI.
+    #[cfg(unix)]
     #[test]
     fn the_portals_file_is_moved_not_copied() {
         let pictures = tempfile::tempdir().unwrap();
@@ -306,6 +310,9 @@ mod tests {
         assert_eq!(image.map(|i| (i.width(), i.height())), Some((40, 20)));
     }
 
+    // The portal is Linux only, and its answer is a `file://` URI of a Unix
+    // path; a Windows path makes no such URI.
+    #[cfg(unix)]
     #[test]
     fn a_jpeg_from_the_portal_is_saved_as_png_and_the_original_removed() {
         let pictures = tempfile::tempdir().unwrap();

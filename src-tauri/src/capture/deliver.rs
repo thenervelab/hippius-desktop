@@ -341,7 +341,10 @@ fn place_in_folder_with(
 
     // Another volume: a hidden staging copy the engine never lists or uploads.
     let staging = dir.join(format!(".hippius-incoming-capture-{}.part", uuid::Uuid::new_v4().simple()));
-    let copied = copy(file, &staging).and_then(|_| std::fs::File::open(&staging)?.sync_all());
+    // Opened for writing: Windows refuses to flush a read-only handle
+    // (FlushFileBuffers needs write access), so `File::open` failed here
+    // with "Access is denied" on every cross-volume capture.
+    let copied = copy(file, &staging).and_then(|_| std::fs::OpenOptions::new().write(true).open(&staging)?.sync_all());
     if let Err(e) = copied {
         let _ = std::fs::remove_file(&staging);
         return Err(e.into());

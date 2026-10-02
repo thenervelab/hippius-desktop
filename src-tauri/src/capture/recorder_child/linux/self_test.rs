@@ -270,8 +270,8 @@ mod tests {
         assert!(report.ok, "{report:?}");
     }
 
-    /// A writer killed with SIGKILL after 6 s (no Stop, no chance to finish)
-    /// leaves fragments that play at least 4 s: what a crashed recorder or
+    /// A writer killed with SIGKILL once it has 4 s on disk (no Stop, no
+    /// chance to finish) leaves fragments that still play at least 4 s: what a crashed recorder or
     /// a killed app leaves the user. The test binary runs itself as that
     /// writer.
     #[test]
@@ -295,7 +295,14 @@ mod tests {
             .env(KILLED_WRITER, &path)
             .spawn()
             .unwrap();
-        std::thread::sleep(Duration::from_secs(6));
+        // Kill it once 4 s already read back, not after a fixed time: a slow
+        // runner spends seconds on GStreamer's start-up and an unoptimised
+        // encoder before the first fragment lands. A writer whose file never
+        // plays while it runs still fails, at the deadline.
+        let deadline = Instant::now() + Duration::from_mins(1);
+        while Instant::now() < deadline && read_back(&path).duration_secs < 4.0 {
+            std::thread::sleep(Duration::from_millis(500));
+        }
         child.kill().unwrap();
         let _ = child.wait();
         let report = read_back(&path);

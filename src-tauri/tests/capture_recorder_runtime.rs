@@ -469,6 +469,10 @@ mod modes {
 mod recording {
     use super::*;
 
+    /// The longest a 3 s take with its 1 s pause cut may read: under the
+    /// 4 s a kept pause gives, over the 3 s plus a runner's round trips.
+    const PAUSE_CUT_CEILING: f64 = 3.8;
+
     #[test]
     #[ignore = "runs the built recorder child: scripts/capture-runtime-check.sh"]
     fn the_self_test_records_through_the_real_writer() {
@@ -560,9 +564,14 @@ mod recording {
                     assert!(audio.is_empty(), "no sound was asked for: {probe}");
                 }
                 let duration: f64 = probe["format"]["duration"].as_str().and_then(|d| d.parse().ok()).unwrap_or(0.0);
-                // 1.5 s + 1.5 s recorded, the 1 s pause cut out: a file
-                // near 4 s means the pause was kept.
-                assert!((2.4..=3.6).contains(&duration), "{duration:.2} s long, expected about 3 s: {probe}");
+                // 1.5 s + 1.5 s recorded, the 1 s pause cut out: a file of
+                // 4 s or more means the pause was kept. The ceiling leaves
+                // room for a hosted runner's command round trips, which add
+                // up to half a second to the 3 s asked for.
+                assert!(
+                    (2.4..=PAUSE_CUT_CEILING).contains(&duration),
+                    "{duration:.2} s long, expected about 3 s: {probe}"
+                );
             }
             None => missing("ffprobe is not installed, so the recording's tracks were not checked"),
         }
@@ -574,7 +583,10 @@ mod recording {
         let frames = line["frames"].as_array().cloned().unwrap_or_default();
         assert!(!frames.is_empty(), "no still read from the recording: {line}; stderr: {}", poster.stderr);
         let poster_duration = line["duration"].as_f64().unwrap_or(0.0);
-        assert!((2.4..=3.6).contains(&poster_duration), "the poster reader says {poster_duration:.2} s");
+        assert!(
+            (2.4..=PAUSE_CUT_CEILING).contains(&poster_duration),
+            "the poster reader says {poster_duration:.2} s"
+        );
         for frame in &frames {
             use base64::Engine as _;
             let jpeg = base64::engine::general_purpose::STANDARD
