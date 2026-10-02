@@ -21,6 +21,13 @@
 // `shared_drives_not_entitled` from any command does the same. While the
 // plan loads, a skeleton stands where the box goes.
 //
+// A drive already holding as many people as its owner's plan allows (Rust's
+// `capacity.full`) gets a "This drive is full" warning above the box, before
+// an invite goes out: the server only refuses when the invited person tries
+// to join, which is the first the owner used to hear of it. The box stays,
+// since an email to someone already on the drive takes no new place; Rust
+// refuses any other invite on the send (`DRIVE_FULL`), before any unlock.
+//
 // Invite and link are separate controls with separate commands: a typed
 // address can never turn a link into an email invite, or the reverse. The
 // dialog stays open after each, so several people can be invited in one go;
@@ -52,11 +59,11 @@ import { InvitePeopleSection } from "./InvitePeopleSection";
 import { PeopleWithAccessSection } from "./PeopleWithAccessSection";
 import { GeneralAccessSection } from "./GeneralAccessSection";
 import { InlineNotice } from "./InlineNotice";
-import { NotEntitledNotice, SharingActionsSkeleton } from "./SectionNoticeView";
+import { DriveFullNotice, NotEntitledNotice, SharingActionsSkeleton } from "./SectionNoticeView";
 import { ShareTabs } from "./ShareTabs";
 import { COMING_SOON_COPY } from "../shareDriveModalState";
 import { useShareAccess } from "./useShareAccess";
-import { peopleHaveAccess, sharingGate } from "./shareDialogState";
+import { addPeopleGate, peopleHaveAccess, sharingGate } from "./shareDialogState";
 import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 
 const DIVIDER = <hr className="my-5 border-grey-80 dark:border-white/10" />;
@@ -125,7 +132,13 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
     owner: !membership,
     refusedByServer,
   });
-  const gate = canManage ? planGate : "none";
+  const capacity = access.state.kind === "ready" ? access.state.access.capacity : null;
+  const gate = addPeopleGate({
+    canManage,
+    sharing: planGate,
+    access: access.state.kind,
+    full: capacity?.full ?? false,
+  });
 
   // Every change reports here: the drive list's badge and an open Links tab
   // pick it up without a reopen, and the people list reloads in place.
@@ -205,8 +218,16 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
             <SharingActionsSkeleton />
             {DIVIDER}
           </>
-        ) : gate === "allowed" ? (
+        ) : gate === "allowed" || gate === "full" ? (
           <>
+            {gate === "full" ? (
+              <DriveFullNotice
+                ownerIsYou={access.state.kind === "ready" && access.state.access.ownerIsYou}
+                memberLimit={capacity?.memberLimit ?? null}
+                onUpgrade={upgrade}
+                className="mb-4"
+              />
+            ) : null}
             <ShareTabs
               email={
                 emailOffered ? (
@@ -217,6 +238,7 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
                     onSent={onSent}
                     onUpgrade={upgrade}
                     onNotEntitled={onNotEntitled}
+                    onDriveFull={reload}
                   />
                 ) : (
                   // A folder without folder collaboration is shared by link
@@ -233,6 +255,7 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
                   onCreated={onChanged}
                   onUpgrade={upgrade}
                   onNotEntitled={onNotEntitled}
+                  onDriveFull={reload}
                 />
               }
             />
@@ -249,7 +272,9 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
           retry={retry}
           onChanged={onChanged}
           onManage={manage}
-          canAddAccess={gate === "allowed"}
+          // Approving an invitation already sent stays offered on a full
+          // drive: the person joins once there is room again.
+          canAddAccess={gate === "allowed" || gate === "full"}
           onNotEntitled={onNotEntitled}
         />
 

@@ -71,6 +71,12 @@ export interface DrivePlan {
   /** Effective per-month credits when billed annually, not the annual total. */
   price_credits_annual: number;
   is_free: boolean;
+  /**
+   * People one shared drive on this plan may hold, the owner not counted.
+   * Added by the desktop's Rust (`with_included_people`) from the same
+   * table the server enforces; absent on plans without sharing.
+   */
+  included_people?: number;
 }
 
 export interface DriveSubscription {
@@ -136,6 +142,12 @@ export const SHARED_DRIVE_PLAN_CODES: ReadonlySet<DrivePlanCode> = new Set([
 export function planAllowsSharedDrives(code: string | undefined): boolean {
   return SHARED_DRIVE_PLAN_CODES.has(code as DrivePlanCode);
 }
+
+/**
+ * The plan the plans page marks "Most popular". A merchandising choice, not
+ * a rule anything depends on.
+ */
+export const MOST_POPULAR_PLAN_CODE: DrivePlanCode = "duo";
 
 /** Plans that come with a shared team drive, for the plan card perk list. */
 export function hasSharedTeamDrive(plan: DrivePlan): boolean {

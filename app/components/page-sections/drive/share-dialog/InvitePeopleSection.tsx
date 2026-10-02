@@ -52,6 +52,7 @@ export function InvitePeopleSection({
   onSent,
   onUpgrade,
   onNotEntitled,
+  onDriveFull,
 }: {
   label: string;
   /** Present for a folder; the folder rides on the email request. */
@@ -64,6 +65,8 @@ export function InvitePeopleSection({
    * dialog swaps every add-people control for its upgrade card.
    */
   onNotEntitled?: () => void;
+  /** Rust refused because the drive is full: the dialog reads room again. */
+  onDriveFull?: () => void;
 }) {
   const folder = pathPrefix !== null;
   // A drive keeps the Editor default every earlier build sent; a folder
@@ -158,6 +161,7 @@ export function InvitePeopleSection({
         }
         const next = noticeForError(err);
         if (next.kind === "notEntitled") onNotEntitled?.();
+        if (next.kind === "driveFull") onDriveFull?.();
         if (next.kind === "comingSoon" && next.text === COMING_SOON_COPY.email) {
           setMailKnownOff(true);
         }
@@ -167,7 +171,7 @@ export function InvitePeopleSection({
         setSending(false);
       }
     },
-    [check, email, label, target, folder, pathPrefix, onSent, onNotEntitled, unlockThenResume],
+    [check, email, label, target, folder, pathPrefix, onSent, onNotEntitled, onDriveFull, unlockThenResume],
   );
   useEffect(() => {
     sendRef.current = send;

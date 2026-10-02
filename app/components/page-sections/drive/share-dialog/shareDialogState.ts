@@ -4,6 +4,7 @@
 // and these only choose which of those answers to show where.
 
 import {
+  isDriveFull,
   isEmailInvitesUnavailable,
   isFolderEditorInvitesUnavailable,
   isFolderEmailInvitesUnavailable,
@@ -32,6 +33,11 @@ export type SectionNotice =
   | { kind: "folderEditor" }
   /** The owner's plan does not include sharing: the upgrade prompt. */
   | { kind: "notEntitled" }
+  /**
+   * Rust refused the invite because the drive is full (`DRIVE_FULL`).
+   * Nothing was sent; the dialog's warning above says why and what to do.
+   */
+  | { kind: "driveFull" }
   /** Anything Rust worded for the user: rate limit, failed send, bad input. */
   | { kind: "error"; message: string };
 
@@ -64,6 +70,75 @@ export function sharingGate(params: {
   return params.planAllows ? "allowed" : "upgrade";
 }
 
+/**
+ * What the Share dialog puts where the add-people controls go:
+ *
+ * - `none`: this account cannot add people here (a Viewer or an Editor).
+ * - `loading`: the plan is not known yet.
+ * - `upgrade`: the plan does not include sharing.
+ * - `full`: the drive already holds as many people as the owner's plan
+ *   allows (Rust's `capacity.full`). The warning goes above the controls,
+ *   which stay: an email to someone already on the drive takes no new
+ *   place, and Rust refuses anything else on the send (`DRIVE_FULL`)
+ *   before any unlock.
+ * - `allowed`: offer them.
+ *
+ * Room is known once the people list has loaded. Until then, and when it
+ * failed, the controls stay up: the list arrives with the dialog's first
+ * paint in practice, and holding every invite behind it would slow every
+ * share for the rare full drive. The server still refuses a join past the
+ * limit, so a drive the app could not size behaves as it always did.
+ */
+export type AddPeopleGate = "none" | SharingGate | "full";
+
+export function addPeopleGate(params: {
+  canManage: boolean;
+  sharing: SharingGate;
+  access: "loading" | "ready" | "unavailable" | "error";
+  full: boolean;
+}): AddPeopleGate {
+  if (!params.canManage) return "none";
+  if (params.sharing !== "allowed") return params.sharing;
+  return params.access === "ready" && params.full ? "full" : "allowed";
+}
+
+/** "1 person", "8 people". */
+export function peopleCount(count: number): string {
+  return count === 1 ? "1 person" : `${count} people`;
+}
+
+/**
+ * The words for a full drive. The limit is the OWNER's plan, so the owner is
+ * told to upgrade (with the way to the plans) and a Manager to ask the
+ * owner, in the same words the person turned away at the door reads.
+ */
+export function driveFullCopy(params: {
+  ownerIsYou: boolean;
+  memberLimit: number | null;
+}): { title: string; body: string; action: string | null } {
+  const title = "This drive is full.";
+  const limit = params.memberLimit;
+  if (params.ownerIsYou) {
+    const allows =
+      limit === null
+        ? "It has as many people as your plan allows."
+        : `Your plan allows ${peopleCount(limit)}.`;
+    return { title, body: `${allows} Upgrade your plan to add more.`, action: "Upgrade plan" };
+  }
+  const allows =
+    limit === null
+      ? "It has as many people as the owner\u2019s plan allows."
+      : `The owner\u2019s plan allows ${peopleCount(limit)}.`;
+  return {
+    title,
+    body: `${allows} Remove someone, or ask the owner to upgrade their plan.`,
+    action: null,
+  };
+}
+
+/** Under the control that tried, when Rust refused it as full. */
+export const DRIVE_FULL_NOT_SENT = "Nothing was sent. This drive is full.";
+
 /** Copy for a server that has shared drives switched off. */
 export const SHARED_DRIVES_UNAVAILABLE_COPY =
   "Shared drives aren't available on your server yet.";
@@ -88,6 +163,7 @@ export function noticeForError(err: unknown): SectionNotice {
     return { kind: "comingSoon", text: SHARED_DRIVES_UNAVAILABLE_COPY };
   }
   if (isSharedDrivesNotEntitled(err)) return { kind: "notEntitled" };
+  if (isDriveFull(err)) return { kind: "driveFull" };
   return { kind: "error", message: errorMessage(err) };
 }
 

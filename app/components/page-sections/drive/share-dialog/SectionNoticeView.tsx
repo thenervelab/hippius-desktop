@@ -10,7 +10,7 @@ import { Button, Skeleton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { COMING_SOON_COPY } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
-import type { SectionNotice } from "./shareDialogState";
+import { DRIVE_FULL_NOT_SENT, driveFullCopy, type SectionNotice } from "./shareDialogState";
 
 const actionClass = "h-[30px] rounded-[6px] px-3 text-xs font-medium";
 
@@ -77,6 +77,65 @@ export function NotEntitledNotice({
 }
 
 /**
+ * Sits above the add-people controls when the drive already holds as many
+ * people as its owner's plan allows (Rust's `capacity.full`), so the owner
+ * hears it before sending an invite rather than from the person who could
+ * not join. A warning, not an error: nothing failed. The owner gets
+ * the way to the plans; a Manager cannot change the owner's plan, so the
+ * words send them to the owner and there is no button.
+ */
+export function DriveFullNotice({
+  ownerIsYou,
+  memberLimit,
+  onUpgrade,
+  className,
+}: {
+  ownerIsYou: boolean;
+  memberLimit: number | null;
+  onUpgrade: () => void;
+  className?: string;
+}) {
+  const copy = driveFullCopy({ ownerIsYou, memberLimit });
+  return (
+    <div className={cn("@container", className)}>
+      <div
+        role="status"
+        aria-label={copy.title}
+        className="flex flex-col gap-3 rounded-lg border border-warning-50/40 bg-warning-50/10 p-3.5 @md:flex-row @md:items-center dark:border-warning-50/35 dark:bg-warning-50/[0.12]"
+      >
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span
+            aria-hidden
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-warning-50/15 text-warning-50 dark:bg-warning-50/20"
+          >
+            <Users className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="break-words text-[13px] font-medium leading-5 text-grey-10 dark:text-white">
+              {copy.title}
+            </p>
+            <p className="mt-0.5 break-words text-xs leading-5 text-grey-40 dark:text-grey-dark-600">
+              {copy.body}
+            </p>
+          </div>
+        </div>
+        {copy.action ? (
+          <Button
+            type="button"
+            variant="primary"
+            size="auto"
+            onClick={onUpgrade}
+            className="h-[34px] w-full shrink-0 whitespace-nowrap rounded-[8px] px-4 text-[13px] font-medium @md:w-auto"
+          >
+            {copy.action}
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Stands where the add-people controls go while the plan is still loading,
  * so a Free or Starter account never sees them flash before the card, and a
  * paying account never sees the card flash before them.
@@ -128,6 +187,12 @@ export function SectionNoticeView({
       );
     case "notEntitled":
       return <NotEntitledNotice onUpgrade={onUpgrade} className={className} />;
+    case "driveFull":
+      return (
+        <InlineNotice tone="info" className={className}>
+          {DRIVE_FULL_NOT_SENT}
+        </InlineNotice>
+      );
     case "error":
       return (
         <InlineNotice tone="error" className={className}>

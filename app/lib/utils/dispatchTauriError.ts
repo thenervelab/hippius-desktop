@@ -28,7 +28,8 @@ export type NotReadyKind =
   | "EMAIL_INVITES_UNAVAILABLE"
   | "FOLDER_INVITES_UNAVAILABLE"
   | "FOLDER_EDITOR_INVITES_UNAVAILABLE"
-  | "FOLDER_EMAIL_INVITES_UNAVAILABLE";
+  | "FOLDER_EMAIL_INVITES_UNAVAILABLE"
+  | "DRIVE_FULL";
 
 /**
  * Shape of an `AppError` returned by Tauri commands. The `kind` field

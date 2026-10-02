@@ -54,6 +54,33 @@ owner's plan. The folder-row "Share drive" menu item is deliberately NOT plan-ga
 (discoverability). Pinned by the `sharing_entitlement` unit tests, `ShareDialog.test.tsx`,
 `ShareDrivePanel.test.tsx` and `useSharedDrivesInPlan.test.ts`.
 
+### A full drive is warned about before the invite
+
+One drive holds at most as many people as its OWNER's plan includes (`duo` 3, `max` 8,
+`scale` 20; `sharing_entitlement::people_per_drive`, the server's table). The server checks
+it only on ACCEPT (403 `drive_member_limit_reached`, worded for the invitee by the console's
+invite page), so the decision "is this drive full" lives in `shared_drives/capacity.rs` and
+rides on `list_share_access` as `ShareAccess.capacity` (`{memberLimit, people, full}`). Its
+source is the server's `GET /v1/drives/{hash}/seats` (owner, or a Manager with `?owner=`);
+without it, distinct people in the member listing (members + folder holders, owner never,
+pending invites never, as the server counts) against this account's own plan, on an own
+drive only. Unknown is never full (a Manager on a server without the route is never
+blocked), and a limit of 0 is the plan gate's business, not "full". Every invite sender
+(`mint_invite_link`, `email_drive_invite`) calls `capacity::refuse_if_drive_full` BEFORE the
+drive key or `require_session_key`, so a full drive refuses with `NotReady(DriveFull)`
+(`DRIVE_FULL`) before any unlock; an email to an address already on the drive (member or
+folder holder, case-insensitive) takes no new place and goes through
+(`invite_refused_as_full`). FE: `addPeopleGate` turns `full` into `DriveFullNotice` ABOVE the
+tabbed box, which stays (owner: "Your plan allows N people. Upgrade your plan to add more." +
+Upgrade plan to `BILLING_ROUTE`; a Manager: "The owner's plan allows N people. Remove
+someone, or ask the owner to upgrade their plan.", no button); a `DRIVE_FULL` refusal reads
+"Nothing was sent. This drive is full." inline and reloads the list. Paid extra seats are not
+sold: no sharing copy mentions seats. The plans page reads `included_people` ("Shared drive
+for up to N people"), which `get_drive_plans` adds per plan from the same table. Pinned by the `capacity` and `sharing_entitlement` unit tests,
+`drive_plans` tests, `every_invite_sender_refuses_a_full_drive_before_the_key`
+(`tests/shared_drive_wiring.rs`), `ShareDialog.test.tsx` ("a full drive") and
+`DrivePlanCard.test.tsx`.
+
 ### DriveIdentity resolver — the local label is decoupled from the wire identity
 
 `sync::identity::resolve_drive_identity(pool, account_id, label)` is the single label→wire funnel:

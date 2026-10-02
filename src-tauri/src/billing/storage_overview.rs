@@ -783,6 +783,41 @@ pub async fn get_storage_overview(
 ///
 /// [`AppError::Auth`] when nobody is signed in.
 pub(crate) async fn fetch_can_share_drives(state: &crate::app_state::AppState) -> Result<bool, AppError> {
+    let reads = fetch_sharing_plan_reads(state).await?;
+    Ok(crate::billing::sharing_entitlement::resolve_can_share_drives(
+        reads.plan.as_ref(),
+        reads.drive_sub_read.then_some(&reads.drive_sub),
+        reads.legacy_read,
+    ))
+}
+
+/// How many people one shared drive of this account may hold, from its plan
+/// ([`crate::billing::sharing_entitlement::people_per_drive`]), or `None`
+/// when the plan could not be read or states no number.
+///
+/// The Share dialog's fallback for a server that cannot report a drive's own
+/// limit. Reads the plan the same way [`fetch_can_share_drives`] does, so the
+/// plan that decides whether this account may share is the plan that decides
+/// how many people it may share with.
+pub(crate) async fn fetch_people_per_drive(state: &crate::app_state::AppState) -> Option<u32> {
+    let reads = fetch_sharing_plan_reads(state)
+        .await
+        .inspect_err(|e| tracing::debug!(error = %e, "could not read the plan for the people per drive"))
+        .ok()?;
+    let code = crate::billing::sharing_entitlement::sharing_plan_code(reads.plan.as_ref(), reads.drive_sub_read.then_some(&reads.drive_sub))?;
+    crate::billing::sharing_entitlement::people_per_drive(code)
+}
+
+/// The three subscription answers the sharing rules read, with whether each
+/// read succeeded recorded BEFORE the soft defaults erase the difference.
+struct SharingPlanReads {
+    plan: Option<PlanInfo>,
+    drive_sub: serde_json::Value,
+    drive_sub_read: bool,
+    legacy_read: bool,
+}
+
+async fn fetch_sharing_plan_reads(state: &crate::app_state::AppState) -> Result<SharingPlanReads, AppError> {
     let account_id = state.current_session_account()?;
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let (drive_sub_result, drive_plans_result, active_result) = tokio::join!(
@@ -796,11 +831,12 @@ pub(crate) async fn fetch_can_share_drives(state: &crate::app_state::AppState) -
     let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
     let active = active_result.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
     let plan = plan_from_drive_subscription(&drive_sub, &drive_plans).or_else(|| plan_from_subscription(&active));
-    Ok(crate::billing::sharing_entitlement::resolve_can_share_drives(
-        plan.as_ref(),
-        drive_sub_read.then_some(&drive_sub),
+    Ok(SharingPlanReads {
+        plan,
+        drive_sub,
+        drive_sub_read,
         legacy_read,
-    ))
+    })
 }
 
 #[cfg(test)]

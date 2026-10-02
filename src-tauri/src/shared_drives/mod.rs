@@ -10,6 +10,7 @@
 
 pub mod access_panel;
 pub mod auto_seal;
+pub mod capacity;
 pub mod commands;
 pub mod folder_grant_path;
 pub mod folder_roles;

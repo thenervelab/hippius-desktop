@@ -1267,6 +1267,10 @@ async fn mint_invite_link(
         }
     };
 
+    // A full drive refuses before the key is read, so it never asks for a
+    // password for an invite that could not bring anyone in.
+    super::capacity::refuse_if_drive_full(state, &ctx, &identity, None).await?;
+
     // Fragment key material. Whole-drive invites carry folder-mnemonic
     // ENTROPY; folder invites carry the DERIVED file key (`seed[..32]`).
     // Mixing them up would hand a grant holder the wrong kind of key.
@@ -1387,6 +1391,10 @@ pub struct ShareAccess {
     /// People with whole-drive access, so a folder dialog can say that they
     /// can open the folder too.
     pub drive_member_count: usize,
+    /// Whether the drive has room for one more person
+    /// ([`super::capacity`]). The dialog warns before an invite goes out
+    /// when it is `full`, instead of the invitee finding out on joining.
+    pub capacity: super::capacity::DriveCapacity,
 }
 
 #[derive(Debug, Serialize)]
@@ -1499,6 +1507,9 @@ pub(crate) fn fold_share_access(
         folder_holders,
         pending_invites,
         drive_member_count,
+        // Decided by the caller, which knows what the server and the plan
+        // said; unknown (never full) until it does.
+        capacity: super::capacity::DriveCapacity::default(),
     }
 }
 
@@ -1527,9 +1538,10 @@ pub async fn list_share_access(
     let http = state.api_client.clone();
     let owner = member_owner(&identity);
 
-    let (listing, invites) = tokio::join!(
+    let (listing, invites, seats) = tokio::join!(
         http_list_members(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
         http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
+        super::capacity::http_drive_seats(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, owner),
     );
     let listing = listing?;
     let mut invites = invites.unwrap_or_else(|e| {
@@ -1538,13 +1550,23 @@ pub async fn list_share_access(
     });
     invites.iter_mut().for_each(normalize_invite_fields);
 
-    Ok(fold_share_access(
-        &ctx.account_id,
-        &identity.wire_ss58,
-        folder.as_deref(),
-        listing,
-        invites,
-    ))
+    // How full the drive is: the server's own count and limit when it gives
+    // them, else the listing against this account's plan on a drive it owns.
+    // A Viewer or an Editor is refused the seats route and adds nobody, so
+    // their unknown answer changes nothing.
+    let seats = seats
+        .inspect_err(|e| debug!(label = %label, error = %e, "Share dialog: drive seats unavailable; counting from the listing"))
+        .ok();
+    let fallback_limit = if seats.is_none() && !identity.is_member {
+        crate::billing::storage_overview::fetch_people_per_drive(&state).await
+    } else {
+        None
+    };
+    let capacity = super::capacity::resolve_capacity(seats, super::capacity::count_people(&listing, &identity.wire_ss58), fallback_limit);
+
+    let mut access = fold_share_access(&ctx.account_id, &identity.wire_ss58, folder.as_deref(), listing, invites);
+    access.capacity = capacity;
+    Ok(access)
 }
 
 /// Everything the Manage access panel shows for a drive, or for one folder of
@@ -2511,9 +2533,14 @@ pub async fn email_drive_invite(
         None => None,
     };
 
+    // A full drive refuses an address that is not on it yet, before any
+    // unlock: the invite could not bring them in.
+    super::capacity::refuse_if_drive_full(&state, &ctx, &identity, Some(&policy.email)).await?;
+
     // Locked: nothing is sent, and the frontend unlocks and sends again.
     // Checked last before the mint, so a refusal that needs no key (a bad
-    // folder, a server without folder invites) never asks for a password.
+    // folder, a server without folder invites, a full drive) never asks for
+    // a password.
     require_session_key(&state)?;
 
     let minted = http_email_invite(
@@ -4532,6 +4559,8 @@ mod tests {
                 }],
                 "pendingInvites": [],
                 "driveMemberCount": 2,
+                // Unknown until `list_share_access` sets it: never full.
+                "capacity": { "memberLimit": null, "people": 0, "full": false },
             })
         );
         let drive = fold_share_access("5Owner", "5Owner", None, access_listing(), Vec::new());
