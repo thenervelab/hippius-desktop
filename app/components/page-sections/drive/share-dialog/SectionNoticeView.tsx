@@ -5,7 +5,7 @@
 // subkinds; the words for the "coming soon" ones are pinned to Rust's.
 
 import React from "react";
-import { Users } from "lucide-react";
+import { TriangleAlert, Users } from "lucide-react";
 import { Button, Skeleton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { COMING_SOON_COPY } from "../shareDriveModalState";
@@ -77,45 +77,46 @@ export function NotEntitledNotice({
 }
 
 /**
- * Sits above the add-people controls when the drive already holds as many
- * people as its owner's plan allows (Rust's `capacity.full`), so the owner
- * hears it before sending an invite rather than from the person who could
- * not join. A warning, not an error: nothing failed. The owner gets
- * the way to the plans; a Manager cannot change the owner's plan, so the
- * words send them to the owner and there is no button.
+ * First thing in the tab box when the drive already holds as many people as
+ * its owner's plan allows (Rust's `capacity.full`), so the owner hears it
+ * before sending an invite rather than from the person who could not join.
+ * A warning in amber, not an error: nothing failed. The owner gets the way
+ * to the plans; a Manager cannot change the owner's plan, so there is no
+ * button. The button sits beside the words from 640px up, full width under
+ * them on phones.
  */
 export function DriveFullNotice({
   ownerIsYou,
   memberLimit,
+  people,
   onUpgrade,
   className,
 }: {
   ownerIsYou: boolean;
   memberLimit: number | null;
+  people: number;
   onUpgrade: () => void;
   className?: string;
 }) {
-  const copy = driveFullCopy({ ownerIsYou, memberLimit });
+  const copy = driveFullCopy({ ownerIsYou, memberLimit, people });
   return (
-    <div className={cn("@container", className)}>
+    <div className={className}>
       <div
         role="status"
         aria-label={copy.title}
-        className="flex flex-col gap-3 rounded-lg border border-warning-50/40 bg-warning-50/10 p-3.5 @md:flex-row @md:items-center dark:border-warning-50/35 dark:bg-warning-50/[0.12]"
+        className="flex flex-col gap-3 rounded-lg border border-warning-50/50 bg-warning-50/10 p-3 sm:flex-row sm:items-center dark:border-warning-50/40 dark:bg-warning-50/[0.12]"
       >
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <span
-            aria-hidden
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-warning-50/15 text-warning-50 dark:bg-warning-50/20"
-          >
-            <Users className="size-4" />
-          </span>
+        <div className="flex min-w-0 flex-1 items-start gap-2.5">
+          <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-warning-40 dark:text-warning-50" />
           <div className="min-w-0">
-            <p className="break-words text-[13px] font-medium leading-5 text-grey-10 dark:text-white">
+            <p className="break-words text-[13px] font-semibold leading-5 text-grey-10 dark:text-white">
               {copy.title}
             </p>
-            <p className="mt-0.5 break-words text-xs leading-5 text-grey-40 dark:text-grey-dark-600">
+            <p className="mt-0.5 break-words text-xs leading-5 text-grey-30 dark:text-grey-dark-700">
               {copy.body}
+            </p>
+            <p className="mt-0.5 break-words text-xs leading-5 text-grey-40 dark:text-grey-dark-600">
+              {copy.linksNote}
             </p>
           </div>
         </div>
@@ -125,7 +126,7 @@ export function DriveFullNotice({
             variant="primary"
             size="auto"
             onClick={onUpgrade}
-            className="h-[34px] w-full shrink-0 whitespace-nowrap rounded-[8px] px-4 text-[13px] font-medium @md:w-auto"
+            className="h-[34px] w-full shrink-0 whitespace-nowrap rounded-[8px] px-4 text-[13px] font-medium sm:w-auto"
           >
             {copy.action}
           </Button>
@@ -189,7 +190,7 @@ export function SectionNoticeView({
       return <NotEntitledNotice onUpgrade={onUpgrade} className={className} />;
     case "driveFull":
       return (
-        <InlineNotice tone="info" className={className}>
+        <InlineNotice tone="error" className={className}>
           {DRIVE_FULL_NOT_SENT}
         </InlineNotice>
       );

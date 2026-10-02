@@ -19,10 +19,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **You hear that a shared drive is full before you invite someone, not after.**
   When a drive already has as many people as your plan allows, the Share dialog
-  says so ("Your plan allows 8 people") and offers to upgrade, instead of the
-  person you invited finding out when they try to join. The Subscription Plans
-  page now shows how many people each plan includes (Plus 3, Max 8, Scale 20),
-  and marks Plus as the most popular.
+  says so ("8 of 8 people, plus you") and offers to upgrade, and it won't send
+  an invite that could not get anyone in, instead of the person you invited
+  finding out when they try to join. The Subscription Plans page now shows how
+  many people you can share a drive with on each plan (Plus 3, Max 8, Scale
+  20), and marks Plus as the most popular.
 
 - **The menu bar popover shows your balance in dollars and who you are signed
   in as.** It reads "Balance $0.36" like the rest of the app instead of a

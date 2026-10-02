@@ -221,6 +221,11 @@ export interface ShareAccess {
   driveMemberCount: number;
   /** Whether the drive has room for one more person, decided in Rust. */
   capacity: DriveCapacity;
+  /**
+   * Everyone already on the drive by address, trimmed and lowercased by
+   * Rust. On a full drive an email to one of them takes no new place.
+   */
+  emailsWithAccess: string[];
 }
 
 /**

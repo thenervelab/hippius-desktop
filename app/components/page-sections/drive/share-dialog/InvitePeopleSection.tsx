@@ -30,7 +30,7 @@ import { UserPlus } from "lucide-react";
 import { COMING_SOON_COPY, emailInviteRolesFor } from "../shareDriveModalState";
 import { InlineNotice } from "./InlineNotice";
 import { SectionNoticeView } from "./SectionNoticeView";
-import { emailInviteNote, noticeForError, type SectionNotice } from "./shareDialogState";
+import { emailInviteNote, isOnDrive, noticeForError, type SectionNotice } from "./shareDialogState";
 import { useUnlockThenResume } from "./useUnlockThenResume";
 
 /** Under the email field, on drives and folders alike. */
@@ -45,6 +45,8 @@ const NOT_CHECKED: InviteEmailCheck = { valid: false };
  */
 export const MAY_NEED_APPROVING = "They may need approving when they open it.";
 
+const NO_EMAILS: readonly string[] = [];
+
 export function InvitePeopleSection({
   label,
   pathPrefix,
@@ -53,6 +55,8 @@ export function InvitePeopleSection({
   onUpgrade,
   onNotEntitled,
   onDriveFull,
+  full = false,
+  emailsWithAccess = NO_EMAILS,
 }: {
   label: string;
   /** Present for a folder; the folder rides on the email request. */
@@ -67,6 +71,10 @@ export function InvitePeopleSection({
   onNotEntitled?: () => void;
   /** Rust refused because the drive is full: the dialog reads room again. */
   onDriveFull?: () => void;
+  /** The drive is full (Rust's `capacity.full`): only someone already on it can be sent to. */
+  full?: boolean;
+  /** Addresses already on the drive, from Rust. */
+  emailsWithAccess?: readonly string[];
 }) {
   const folder = pathPrefix !== null;
   // A drive keeps the Editor default every earlier build sent; a folder
@@ -133,6 +141,8 @@ export function InvitePeopleSection({
         if (!verdict.valid) return;
       }
       const address = email.trim();
+      // Enter on a full drive: nothing for someone new (Send is disabled too).
+      if (full && !isOnDrive(emailsWithAccess, address)) return;
       inFlight.current = true;
       setSending(true);
       setNotice(null);
@@ -171,7 +181,7 @@ export function InvitePeopleSection({
         setSending(false);
       }
     },
-    [check, email, label, target, folder, pathPrefix, onSent, onNotEntitled, onDriveFull, unlockThenResume],
+    [check, email, label, target, folder, pathPrefix, onSent, onNotEntitled, onDriveFull, unlockThenResume, full, emailsWithAccess],
   );
   useEffect(() => {
     sendRef.current = send;
@@ -185,7 +195,10 @@ export function InvitePeopleSection({
   const mailOff = mailKnownOff && notice === null;
   // Composing once the field holds anything; clearing it folds the row away.
   const composing = email.trim().length > 0;
-  const blocked = sending || !check.valid || mailKnownOff;
+  // A full drive has no place for someone new: Send and the role wait for
+  // an address already on it, which takes none.
+  const noPlace = full && !isOnDrive(emailsWithAccess, email);
+  const blocked = sending || !check.valid || mailKnownOff || noPlace;
   const invalidMessage = showCheck && !check.valid ? check.message : undefined;
   const roleNote = emailInviteNote({ folder, role });
 
@@ -236,6 +249,7 @@ export function InvitePeopleSection({
               }))}
               size="compact"
               minimal
+              disabled={noPlace}
               className="w-[96px] shrink-0"
             />
             <Button
@@ -259,8 +273,8 @@ export function InvitePeopleSection({
 
       {/* What an emailed invite is, at rest too; with Manager picked, that
           it works once and has to be taken up within 24 hours. */}
-      <div className="mt-2 flex flex-col gap-1">
-        <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_INVITE_HINT}</p>
+      <div className="mt-2 flex flex-col gap-1 empty:hidden">
+        {full ? null : <p className="text-xs text-grey-50 dark:text-grey-dark-600">{EMAIL_INVITE_HINT}</p>}
         {composing && roleNote ? (
           <p className="text-xs text-grey-50 dark:text-grey-dark-600">{roleNote}</p>
         ) : null}

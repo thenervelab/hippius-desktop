@@ -3,6 +3,7 @@ import {
   addPeopleGate,
   couldNotChangeAccess,
   driveFullCopy,
+  isOnDrive,
   describeLinkLifetime,
   describeLinkUses,
   emailInviteNote,
@@ -213,35 +214,64 @@ describe("addPeopleGate", () => {
 });
 
 describe("driveFullCopy", () => {
-  it("tells the owner their plan's number and to upgrade", () => {
-    expect(driveFullCopy({ ownerIsYou: true, memberLimit: 8 })).toEqual({
-      title: "This drive is full.",
-      body: "Your plan allows 8 people. Upgrade your plan to add more.",
+  const LINKS = "Links you've already shared won't let anyone new in until there's room.";
+
+  it("gives the owner the count, plus them, and the way to upgrade", () => {
+    expect(driveFullCopy({ ownerIsYou: true, memberLimit: 8, people: 8 })).toEqual({
+      title: "This drive is full",
+      body: "8 of 8 people, plus you. Upgrade your plan to add more.",
+      linksNote: LINKS,
       action: "Upgrade plan",
     });
   });
 
-  it("tells a Manager to ask the owner, with no upgrade", () => {
-    expect(driveFullCopy({ ownerIsYou: false, memberLimit: 20 })).toEqual({
-      title: "This drive is full.",
-      body: "The owner\u2019s plan allows 20 people. Remove someone, or ask the owner to upgrade their plan.",
+  it("gives a Manager the count, plus the owner, and no upgrade", () => {
+    expect(driveFullCopy({ ownerIsYou: false, memberLimit: 20, people: 20 })).toEqual({
+      title: "This drive is full",
+      body: "20 of 20 people, plus the owner. Remove someone, or ask the owner to upgrade their plan.",
+      linksNote: LINKS,
       action: null,
     });
   });
 
-  it("still reads without a number", () => {
-    expect(driveFullCopy({ ownerIsYou: true, memberLimit: null }).body).toBe(
-      "It has as many people as your plan allows. Upgrade your plan to add more.",
+  it("says a count over the limit as it is", () => {
+    expect(driveFullCopy({ ownerIsYou: true, memberLimit: 3, people: 5 }).body).toBe(
+      "5 of 3 people, plus you. Upgrade your plan to add more.",
+    );
+  });
+
+  it("keeps plain sentences, not 0 of 0, for a plan without shared drives", () => {
+    expect(driveFullCopy({ ownerIsYou: true, memberLimit: 0, people: 0 }).body).toBe(
+      "Your plan does not allow new people on shared drives. Upgrade your plan to add more.",
+    );
+    const manager = driveFullCopy({ ownerIsYou: false, memberLimit: 0, people: 2 });
+    expect(manager.body).not.toMatch(/0 of 0/);
+    expect(manager.action).toBeNull();
+  });
+
+  it("still reads without a limit", () => {
+    expect(driveFullCopy({ ownerIsYou: true, memberLimit: null, people: 1 }).body).toBe(
+      "1 person, plus you. Upgrade your plan to add more.",
     );
   });
 
   it("never talks about seats", () => {
     for (const ownerIsYou of [true, false]) {
       for (const memberLimit of [1, 3, null]) {
-        const copy = driveFullCopy({ ownerIsYou, memberLimit });
-        expect(`${copy.title} ${copy.body} ${copy.action ?? ""}`).not.toMatch(/seat/i);
+        const copy = driveFullCopy({ ownerIsYou, memberLimit, people: 3 });
+        expect(`${copy.title} ${copy.body} ${copy.linksNote} ${copy.action ?? ""}`).not.toMatch(/seat/i);
       }
     }
+  });
+});
+
+describe("isOnDrive", () => {
+  it("matches a typed address against the list Rust sent, trimmed and in any case", () => {
+    const on = ["ann@example.com"];
+    expect(isOnDrive(on, " Ann@Example.COM ")).toBe(true);
+    expect(isOnDrive(on, "bo@example.com")).toBe(false);
+    expect(isOnDrive(on, "   ")).toBe(false);
+    expect(isOnDrive([], "ann@example.com")).toBe(false);
   });
 });
 

@@ -148,7 +148,7 @@ describe("DrivePlanCard people per drive", () => {
     ["scale", "Scale", 20],
   ] as const)("says how many people a %s drive holds", (code, name, people) => {
     renderCard(plan({ code, name, included_people: people }));
-    expect(screen.getByText(`Shared drive for up to ${people} people`)).toBeTruthy();
+    expect(screen.getByText(`Share a drive with up to ${people} people`)).toBeTruthy();
     expect(screen.queryByText("Shared team drive")).toBeNull();
   });
 
@@ -159,11 +159,11 @@ describe("DrivePlanCard people per drive", () => {
 
   it("states no people on a plan without sharing, even if a number arrives", () => {
     renderCard(plan({ code: "solo", name: "Starter", included_people: 3 }));
-    expect(screen.queryByText(/Shared drive for/)).toBeNull();
+    expect(screen.queryByText(/Share a drive with/)).toBeNull();
   });
 
   it("words one person and nonsense numbers", () => {
-    expect(sharedDriveLine(1)).toBe("Shared drive for up to 1 person");
+    expect(sharedDriveLine(1)).toBe("Share a drive with up to 1 person");
     expect(sharedDriveLine(0)).toBe("Shared team drive");
     expect(sharedDriveLine(undefined)).toBe("Shared team drive");
   });

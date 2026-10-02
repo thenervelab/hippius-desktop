@@ -94,6 +94,25 @@ pub fn resolve_capacity(seats: Option<DriveSeats>, listed_people: u32, fallback_
     }
 }
 
+/// The addresses of everyone already on the drive (members and folder
+/// holders), trimmed and lowercased, once each. An emailed invite to one of
+/// them takes no new place, so a full drive still lets it through: the send
+/// check uses this list, and the Share dialog gets the same list
+/// (`ShareAccess.emails_with_access`) to keep Send enabled for them.
+pub fn emails_with_access(listing: &DriveMembersResponse) -> Vec<String> {
+    let mut emails: Vec<String> = listing
+        .members
+        .iter()
+        .filter_map(|m| m.member_email.as_deref())
+        .chain(listing.folder_grants.iter().filter_map(|g| g.member_email.as_deref()))
+        .map(|e| e.trim().to_lowercase())
+        .filter(|e| !e.is_empty())
+        .collect();
+    emails.sort();
+    emails.dedup();
+    emails
+}
+
 /// Whether an invite has to be refused because the drive is full. An
 /// emailed invite to someone who already has access (a member, or a folder
 /// holder being given more) takes no new place on the server, so it is not
@@ -147,21 +166,13 @@ pub(crate) async fn refuse_if_drive_full(
         }
         (None, None) => return Ok(()),
     };
-    let emails = listing
-        .iter()
-        .flat_map(|l| {
-            l.members
-                .iter()
-                .filter_map(|m| m.member_email.as_deref())
-                .chain(l.folder_grants.iter().filter_map(|g| g.member_email.as_deref()))
-        })
-        .collect::<Vec<_>>();
+    let emails = listing.as_ref().map(emails_with_access).unwrap_or_default();
     // Without the listing an address cannot be matched to someone already
     // on the drive, so an emailed invite is let through rather than guessed.
     if invitee_email.is_some() && listing.is_none() {
         return Ok(());
     }
-    if invite_refused_as_full(capacity, invitee_email, emails) {
+    if invite_refused_as_full(capacity, invitee_email, emails.iter().map(String::as_str)) {
         tracing::info!(
             folder_hash = %identity.wire_folder_hash,
             people = capacity.people,
@@ -336,6 +347,15 @@ mod tests {
         assert!(!invite_refused_as_full(full(), Some(" ADA@example.com "), on_drive));
         assert!(!invite_refused_as_full(full(), Some("bea@example.com"), on_drive));
         assert!(invite_refused_as_full(full(), Some("cy@example.com"), on_drive));
+    }
+
+    #[test]
+    fn emails_with_access_are_normalised_and_listed_once() {
+        let mut l = listing(&["5Ada", "5Bea"], &[("5Ada", "Clients"), ("5Cy", "Plans")]);
+        l.members[0].member_email = Some(" Ada@Example.com ".into());
+        l.folder_grants[0].member_email = Some("ada@example.com".into());
+        l.folder_grants[1].member_email = Some("cy@example.com".into());
+        assert_eq!(emails_with_access(&l), vec!["ada@example.com", "cy@example.com"]);
     }
 
     #[test]

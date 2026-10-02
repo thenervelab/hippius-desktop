@@ -70,13 +70,21 @@ blocked), and a limit of 0 is the plan gate's business, not "full". Every invite
 drive key or `require_session_key`, so a full drive refuses with `NotReady(DriveFull)`
 (`DRIVE_FULL`) before any unlock; an email to an address already on the drive (member or
 folder holder, case-insensitive) takes no new place and goes through
-(`invite_refused_as_full`). FE: `addPeopleGate` turns `full` into `DriveFullNotice` ABOVE the
-tabbed box, which stays (owner: "Your plan allows N people. Upgrade your plan to add more." +
-Upgrade plan to `BILLING_ROUTE`; a Manager: "The owner's plan allows N people. Remove
-someone, or ask the owner to upgrade their plan.", no button); a `DRIVE_FULL` refusal reads
-"Nothing was sent. This drive is full." inline and reloads the list. Paid extra seats are not
-sold: no sharing copy mentions seats. The plans page reads `included_people` ("Shared drive
-for up to N people"), which `get_drive_plans` adds per plan from the same table. Pinned by the `capacity` and `sharing_entitlement` unit tests,
+(`invite_refused_as_full`, over `capacity::emails_with_access`, which also rides on
+`ShareAccess.emailsWithAccess`). FE: `addPeopleGate` turns `full` into `DriveFullNotice`
+(amber warning, triangle icon) first in the tab box (`ShareTabs`' `notice` slot, under the
+tabs, above either form). Wording lives in `driveFullCopy`: title "This drive is full", then
+"P of N people, plus you. Upgrade your plan to add more." (owner, filled Upgrade plan to
+`BILLING_ROUTE`, beside the words from 640px up, full width under them on phones) or "P of N people, plus
+the owner. Remove someone, or ask the owner to upgrade their plan." (Manager, no button),
+then "Links you've already shared won't let anyone new in until there's room." P can pass N
+after a downgrade and is said as it is; a limit of 0 gets plain sentences, never "0 of 0".
+The By link helper stays under the disabled button. While full, Create link is disabled, and Send and
+the role select are disabled unless `isOnDrive` matches the typed address; the "They get
+their own invite" hint is hidden. A `DRIVE_FULL` refusal (the backstop) reads "Nothing was
+sent. This drive is full." in RED inline and reloads the list. Paid extra seats are not
+sold: no sharing copy mentions seats. The plans page reads `included_people` ("Share a drive
+with up to N people"), which `get_drive_plans` adds per plan from the same table. Pinned by the `capacity` and `sharing_entitlement` unit tests,
 `drive_plans` tests, `every_invite_sender_refuses_a_full_drive_before_the_key`
 (`tests/shared_drive_wiring.rs`), `ShareDialog.test.tsx` ("a full drive") and
 `DrivePlanCard.test.tsx`.

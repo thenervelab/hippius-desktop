@@ -22,11 +22,12 @@
 // plan loads, a skeleton stands where the box goes.
 //
 // A drive already holding as many people as its owner's plan allows (Rust's
-// `capacity.full`) gets a "This drive is full" warning above the box, before
-// an invite goes out: the server only refuses when the invited person tries
-// to join, which is the first the owner used to hear of it. The box stays,
-// since an email to someone already on the drive takes no new place; Rust
-// refuses any other invite on the send (`DRIVE_FULL`), before any unlock.
+// `capacity.full`) gets a "This drive is full" warning first in the tab box,
+// before an invite goes out: the server only refuses when the invited person
+// tries to join, which is the first the owner used to hear of it. Create
+// link is disabled, and Send too unless the address is someone already on
+// the drive (no new place); Rust refuses anything else on the send
+// (`DRIVE_FULL`), before any unlock.
 //
 // Invite and link are separate controls with separate commands: a typed
 // address can never turn a link into an email invite, or the reverse. The
@@ -65,6 +66,8 @@ import { COMING_SOON_COPY } from "../shareDriveModalState";
 import { useShareAccess } from "./useShareAccess";
 import { addPeopleGate, peopleHaveAccess, sharingGate } from "./shareDialogState";
 import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
+
+const NO_EMAILS: readonly string[] = [];
 
 const DIVIDER = <hr className="my-5 border-grey-80 dark:border-white/10" />;
 
@@ -133,6 +136,7 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
     refusedByServer,
   });
   const capacity = access.state.kind === "ready" ? access.state.access.capacity : null;
+  const emailsWithAccess = access.state.kind === "ready" ? access.state.access.emailsWithAccess : NO_EMAILS;
   const gate = addPeopleGate({
     canManage,
     sharing: planGate,
@@ -220,15 +224,17 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
           </>
         ) : gate === "allowed" || gate === "full" ? (
           <>
-            {gate === "full" ? (
-              <DriveFullNotice
-                ownerIsYou={access.state.kind === "ready" && access.state.access.ownerIsYou}
-                memberLimit={capacity?.memberLimit ?? null}
-                onUpgrade={upgrade}
-                className="mb-4"
-              />
-            ) : null}
             <ShareTabs
+              notice={
+                gate === "full" ? (
+                  <DriveFullNotice
+                    ownerIsYou={access.state.kind === "ready" && access.state.access.ownerIsYou}
+                    memberLimit={capacity?.memberLimit ?? null}
+                    people={capacity?.people ?? 0}
+                    onUpgrade={upgrade}
+                  />
+                ) : null
+              }
               email={
                 emailOffered ? (
                   <InvitePeopleSection
@@ -239,6 +245,8 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
                     onUpgrade={upgrade}
                     onNotEntitled={onNotEntitled}
                     onDriveFull={reload}
+                    full={gate === "full"}
+                    emailsWithAccess={emailsWithAccess}
                   />
                 ) : (
                   // A folder without folder collaboration is shared by link
@@ -256,6 +264,7 @@ function ShareDialogBody({ target, close }: { target: ShareDriveModalTarget; clo
                   onUpgrade={upgrade}
                   onNotEntitled={onNotEntitled}
                   onDriveFull={reload}
+                  full={gate === "full"}
                 />
               }
             />

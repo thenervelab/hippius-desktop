@@ -77,10 +77,11 @@ export function sharingGate(params: {
  * - `loading`: the plan is not known yet.
  * - `upgrade`: the plan does not include sharing.
  * - `full`: the drive already holds as many people as the owner's plan
- *   allows (Rust's `capacity.full`). The warning goes above the controls,
- *   which stay: an email to someone already on the drive takes no new
- *   place, and Rust refuses anything else on the send (`DRIVE_FULL`)
- *   before any unlock.
+ *   allows (Rust's `capacity.full`). The warning goes first in the tab box
+ *   and the controls stay, disabled: Create link always, Send and the role
+ *   unless the address is someone already on the drive (no new place).
+ *   Rust refuses anything else on the send (`DRIVE_FULL`) before any
+ *   unlock.
  * - `allowed`: offer them.
  *
  * Room is known once the people list has loaded. Until then, and when it
@@ -107,36 +108,64 @@ export function peopleCount(count: number): string {
   return count === 1 ? "1 person" : `${count} people`;
 }
 
+/** The line every full-drive warning ends with. */
+export const DRIVE_FULL_LINKS_NOTE =
+  "Links you've already shared won't let anyone new in until there's room.";
+
 /**
- * The words for a full drive. The limit is the OWNER's plan, so the owner is
- * told to upgrade (with the way to the plans) and a Manager to ask the
- * owner, in the same words the person turned away at the door reads.
+ * The words for a full drive: a title, the count against the limit, and
+ * what to do. People never include the owner, so the count says "plus you"
+ * to the owner and "plus the owner" to a Manager. After a downgrade the
+ * count can pass the limit ("10 of 8 people"), which is said as it is. The
+ * limit is the OWNER's plan: the owner is told to upgrade (with the way to
+ * the plans), a Manager to remove someone or ask the owner.
  */
 export function driveFullCopy(params: {
   ownerIsYou: boolean;
   memberLimit: number | null;
-}): { title: string; body: string; action: string | null } {
-  const title = "This drive is full.";
+  people: number;
+}): { title: string; body: string; linksNote: string; action: string | null } {
+  const title = "This drive is full";
   const limit = params.memberLimit;
-  if (params.ownerIsYou) {
-    const allows =
-      limit === null
-        ? "It has as many people as your plan allows."
-        : `Your plan allows ${peopleCount(limit)}.`;
-    return { title, body: `${allows} Upgrade your plan to add more.`, action: "Upgrade plan" };
+  // A plan with no shared drives at all: there is no count to give.
+  if (limit === 0) {
+    return {
+      title,
+      body: params.ownerIsYou
+        ? "Your plan does not allow new people on shared drives. Upgrade your plan to add more."
+        : "The drive owner\u2019s plan does not allow new people on shared drives. Ask the owner to upgrade their plan.",
+      linksNote: DRIVE_FULL_LINKS_NOTE,
+      action: params.ownerIsYou ? "Upgrade plan" : null,
+    };
   }
-  const allows =
+  const plus = params.ownerIsYou ? "plus you" : "plus the owner";
+  const count =
     limit === null
-      ? "It has as many people as the owner\u2019s plan allows."
-      : `The owner\u2019s plan allows ${peopleCount(limit)}.`;
+      ? `${peopleCount(params.people)}, ${plus}.`
+      : `${params.people} of ${peopleCount(limit)}, ${plus}.`;
+  const next = params.ownerIsYou
+    ? "Upgrade your plan to add more."
+    : "Remove someone, or ask the owner to upgrade their plan.";
   return {
     title,
-    body: `${allows} Remove someone, or ask the owner to upgrade their plan.`,
-    action: null,
+    body: `${count} ${next}`,
+    linksNote: DRIVE_FULL_LINKS_NOTE,
+    action: params.ownerIsYou ? "Upgrade plan" : null,
   };
 }
 
-/** Under the control that tried, when Rust refused it as full. */
+/**
+ * Whether a typed address belongs to someone already on the drive, against
+ * the list Rust sent (already trimmed and lowercased there). On a full drive
+ * only such an invite can still be sent: it takes no new place. Rust makes
+ * the same check again on the send.
+ */
+export function isOnDrive(emailsWithAccess: readonly string[], typed: string): boolean {
+  const email = typed.trim().toLowerCase();
+  return email.length > 0 && emailsWithAccess.includes(email);
+}
+
+/** Under the control that tried, when Rust refused it as full (red). */
 export const DRIVE_FULL_NOT_SENT = "Nothing was sent. This drive is full.";
 
 /** Copy for a server that has shared drives switched off. */

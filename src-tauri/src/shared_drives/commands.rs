@@ -1395,6 +1395,10 @@ pub struct ShareAccess {
     /// ([`super::capacity`]). The dialog warns before an invite goes out
     /// when it is `full`, instead of the invitee finding out on joining.
     pub capacity: super::capacity::DriveCapacity,
+    /// Everyone already on the drive by address, trimmed and lowercased
+    /// ([`super::capacity::emails_with_access`]). On a full drive the dialog
+    /// keeps Send enabled only for one of these: they take no new place.
+    pub emails_with_access: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1510,6 +1514,7 @@ pub(crate) fn fold_share_access(
         // Decided by the caller, which knows what the server and the plan
         // said; unknown (never full) until it does.
         capacity: super::capacity::DriveCapacity::default(),
+        emails_with_access: Vec::new(),
     }
 }
 
@@ -1564,8 +1569,11 @@ pub async fn list_share_access(
     };
     let capacity = super::capacity::resolve_capacity(seats, super::capacity::count_people(&listing, &identity.wire_ss58), fallback_limit);
 
+    let emails_with_access = super::capacity::emails_with_access(&listing);
+
     let mut access = fold_share_access(&ctx.account_id, &identity.wire_ss58, folder.as_deref(), listing, invites);
     access.capacity = capacity;
+    access.emails_with_access = emails_with_access;
     Ok(access)
 }
 
@@ -4561,6 +4569,7 @@ mod tests {
                 "driveMemberCount": 2,
                 // Unknown until `list_share_access` sets it: never full.
                 "capacity": { "memberLimit": null, "people": 0, "full": false },
+                "emailsWithAccess": [],
             })
         );
         let drive = fold_share_access("5Owner", "5Owner", None, access_listing(), Vec::new());

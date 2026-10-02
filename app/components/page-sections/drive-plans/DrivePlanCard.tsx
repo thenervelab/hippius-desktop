@@ -220,12 +220,12 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
 };
 
 /**
- * The shared drive perk, with the people a drive holds when known: "Shared
- * drive for up to 8 people". The owner is not one of them.
+ * The shared drive perk, with the people a drive holds when known: "Share a
+ * drive with up to 8 people". The owner is not one of them.
  */
 export function sharedDriveLine(includedPeople: number | undefined): string {
   if (!includedPeople || includedPeople <= 0) return "Shared team drive";
-  return `Shared drive for up to ${includedPeople} ${includedPeople === 1 ? "person" : "people"}`;
+  return `Share a drive with up to ${includedPeople} ${includedPeople === 1 ? "person" : "people"}`;
 }
 
 export default DrivePlanCard;
