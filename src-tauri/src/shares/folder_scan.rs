@@ -316,8 +316,6 @@ fn shown(path: &str) -> String {
         .collect()
 }
 
-/// "about": the cap is on ciphertext, so the largest file that fits is a
-/// little under the cap, and the cap is binary gigabytes quoted as "GB".
 /// The refusal for a folder past the file cap or the folder cap. One
 /// sentence for both, naming both: the client's `TooManyItems` does not
 /// say which cap it hit, and the same limit must never read two ways
@@ -341,6 +339,10 @@ pub(crate) fn empty_folder_names_too_long() -> AppError {
     )
 }
 
+/// The refusal for one file past the per-file cap, naming the file.
+///
+/// "about": the cap is on ciphertext, so the largest file that fits is a
+/// little under the cap, and the cap is binary gigabytes quoted as "GB".
 pub(crate) fn too_large(relative_path: &str, max_ciphertext: u64) -> AppError {
     const GIB: u64 = 1024 * 1024 * 1024;
     AppError::Validation(format!(
