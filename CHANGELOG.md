@@ -328,8 +328,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   drives.** Hippius uploads a copy of the folder for the link, and the copy
   counts toward your storage until the link expires or you revoke it, when
   it is removed. The folder's size is shown before you confirm when it can
-  be measured quickly. A link holds up to 50,000 files and folders, each
-  file up to about 5 GB. Shared Links marks such a link "Uploaded copy",
+  be measured quickly. A link holds up to 50,000 files, each up to about
+  5 GB. Shared Links marks such a link "Uploaded copy",
   since later changes to the folder are not in it.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
