@@ -330,7 +330,7 @@ fn shown(path: &str) -> String {
 
 /// "about": the cap is on ciphertext, so the largest file that fits is a
 /// little under the cap, and the cap is binary gigabytes quoted as "GB".
-fn too_large(relative_path: &str, max_ciphertext: u64) -> AppError {
+pub(crate) fn too_large(relative_path: &str, max_ciphertext: u64) -> AppError {
     const GIB: u64 = 1024 * 1024 * 1024;
     AppError::Validation(format!(
         "\u{201c}{}\u{201d} is too large to share: one file in a shared folder can be at most \

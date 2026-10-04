@@ -229,11 +229,11 @@ fn map_item_refusal(e: FolderShareError) -> AppError {
             "\u{201c}{relative_path}\u{201d} has a name a link can't hold (a special character, or too \
                  long). Rename it, then share again."
         )),
-        FolderShareError::FileTooLarge { relative_path, size: _ } => AppError::Validation(format!(
-            "\u{201c}{relative_path}\u{201d} is too large to share: it is larger than the {} GB a folder link \
-             allows per file.",
-            MAX_UPLOAD_FOLDER_SHARE_FILE_CIPHERTEXT >> 30
-        )),
+        // The scan refuses the same file first in practice; this is the
+        // client's backstop (a file that grew after the scan), worded alike.
+        FolderShareError::FileTooLarge { relative_path, size: _ } => {
+            crate::shares::folder_scan::too_large(&relative_path, MAX_UPLOAD_FOLDER_SHARE_FILE_CIPHERTEXT)
+        }
         FolderShareError::PathCollision { relative_path } => AppError::Validation(format!(
             "Two items in this folder are both named \u{201c}{relative_path}\u{201d}. Rename one, then share again."
         )),
@@ -353,7 +353,9 @@ mod tests {
             size: 6 << 30,
         });
         assert!(message.contains(&named("video/raw.mov")) && message.contains("too large"), "{message}");
-        assert!(message.contains("5 GB a folder link allows per file"), "states the limit: {message}");
+        // Word for word what the scan says when it refuses the same file
+        // first, so one limit never reads two ways.
+        assert!(message.contains("one file in a shared folder can be at most about 5 GB."), "{message}");
     }
 
     #[test]
