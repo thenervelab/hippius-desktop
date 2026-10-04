@@ -214,18 +214,18 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
     );
     // Target the main window only — `FinderShareListener` runs there, and the
     // borderless `tray-panel` webview must never drive the share modal.
-    let _ = app.emit_to(
-        "main",
-        "finder:share-choosing",
-        &FinderShareChoosing {
-            id: id.clone(),
-            name,
-            size_bytes: facts.size_bytes,
-            modified_secs_ago: facts.modified_secs_ago,
-            is_folder: facts.is_folder,
-            is_folder_copy: facts.is_folder_copy,
-        },
-    );
+    let choosing = FinderShareChoosing {
+        id: id.clone(),
+        name,
+        size_bytes: facts.size_bytes,
+        modified_secs_ago: facts.modified_secs_ago,
+        is_folder: facts.is_folder,
+        is_folder_copy: facts.is_folder_copy,
+    };
+    if let Err(error) = app.emit_to("main", "finder:share-choosing", &choosing) {
+        warn!(request_id = %id, %error, "finder bridge: could not open the chooser");
+        return;
+    }
 
     // Sized after the chooser is up. This task is the click's own (the
     // socket loop spawns one per click), so the wait blocks nothing else.
@@ -242,7 +242,9 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
         refused = folder_facts.refusal.is_some(),
         "finder bridge: outside folder measured for the chooser",
     );
-    let _ = app.emit_to("main", "finder:share-facts", &folder_facts);
+    if let Err(error) = app.emit_to("main", "finder:share-facts", &folder_facts) {
+        warn!(request_id = %id, %error, "finder bridge: could not bring the folder facts to the chooser");
+    }
 }
 
 /// Mint a share for a previously-parked path using the visibility the user chose
@@ -960,6 +962,9 @@ mod tests {
             measure_at < body.find("\"finder:share-facts\"").expect("handle emits the facts"),
             "the facts are emitted from the latest-click check"
         );
+        // A dropped emit leaves the chooser closed, or measuring forever,
+        // with nothing in the support bundle to say why.
+        assert!(!body.contains("let _ = app.emit_to("), "handle must log a failed emit, not discard it");
         assert!(
             !body.contains("mint_confirmed("),
             "handle must NOT mint — minting is deferred to the confirm command"
