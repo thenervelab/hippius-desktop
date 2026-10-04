@@ -3,13 +3,16 @@
 
 use super::dir_stats::dir_stats_recursive;
 use super::pathops::{ensure_within, is_engine_hidden_name, is_internal_hidden_name, rel_has_engine_hidden_component};
-use super::synced_state::synced_paths_and_excludes_for_label;
+use super::synced_state::{shared_sync_state_for_label, synced_paths_and_excludes_for_label};
 use crate::auth::account_key::account_key;
 use crate::error::Result;
+use hcfs_client::engine::runner::SyncRunner;
 use hcfs_client::engine::types::SyncedFileInfo;
+use hcfs_client::sync::SyncState;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::warn;
 
 type PreloadedSynced = (Option<HashMap<String, SyncedFileInfo>>, Vec<String>);
@@ -104,16 +107,24 @@ fn disk_row_status<'a>(
     }
 }
 
-/// Whether a file on disk is a leftover hcfs's post-sync sweep owns, which
-/// the listing hides until that sweep removes it.
+/// Whether a file on disk may be a leftover hcfs's post-sync sweep owns,
+/// which the listing hides until that sweep removes it.
 ///
 /// Mirrors the sweep (`cleanup_failed_downloads_recursive` in hcfs
-/// `engine/manager.rs`): a root-level `downloaded_<64 hex file id>` (the
-/// only place hcfs writes that name; anywhere else it is a user's, and so
-/// is anything that is not a full file id, like `downloaded_2024`) and a
-/// 0-byte `file_<hex>` stub at any depth, each only when untracked. The
-/// sweep's "tracked" reads hcfs's whole state; the listing has the synced
-/// map, so a file it records is tracked here.
+/// `engine/manager.rs`), which considers two shapes, each only when
+/// untracked:
+///
+/// - a root-level `downloaded_<64 hex file id>`. hcfs no longer writes that
+///   name; an older client saved a download it could not place there. Only
+///   the root, and only a full file id: anywhere else, or `downloaded_2024`,
+///   the file is a user's. The sweep also keeps one whose id its state
+///   knows (`knows_downloaded_as`), the verified copy of a real file; this
+///   predicate cannot see that, so the caller asks [`DownloadedAsLookup`]
+///   before hiding one.
+/// - a 0-byte `file_<hex>` stub, at any depth.
+///
+/// The sweep's "tracked" reads hcfs's whole state; this reads the synced
+/// map, so a path it records is tracked here.
 ///
 /// Hides, never deletes. The listing used to delete both on sight, which
 /// lost a user's tracked empty `file_<hex>` file. With no synced map
@@ -129,6 +140,63 @@ fn is_untracked_engine_artifact(
     let is_candidate = (at_root && hcfs_client::engine::classify::is_failed_download_artifact(name).is_some())
         || (len == 0 && hcfs_client::engine::classify::is_encrypted_name_stub(name).is_some());
     is_candidate && !synced_set.is_some_and(|synced| synced.contains_key(relative_path))
+}
+
+/// Answers hcfs's `knows_downloaded_as` for root `downloaded_<id>` files:
+/// whether the drive's state knows the id, which makes the file the
+/// verified copy of a real file rather than a leftover.
+///
+/// The state is read only when the first such file is met, so a listing
+/// with none pays nothing. The synced map is consulted first: each of its
+/// rows is in the state's synced tree, so a hit there needs no state read.
+/// When the state cannot be read (drive not loaded, or a cycle holds it)
+/// the id counts as unknown and the file stays hidden, as before.
+struct DownloadedAsLookup<'a> {
+    /// The runner the drive's state is read through.
+    sync: &'a SyncRunner,
+    /// The drive; `None` lists a folder outside any drive.
+    label: Option<&'a str>,
+    /// The listing's synced map.
+    synced: Option<&'a HashMap<String, SyncedFileInfo>>,
+    /// The drive's state, read when first needed.
+    state: StateRead,
+}
+
+/// Whether [`DownloadedAsLookup`] has read the drive's state yet.
+enum StateRead {
+    /// Not needed so far.
+    NotRead,
+    /// Read once; `None` when the drive's state could not be read.
+    Read(Option<Arc<SyncState>>),
+}
+
+impl DownloadedAsLookup<'_> {
+    async fn knows(&mut self, hex_id: &str) -> bool {
+        let mut id = [0u8; 32];
+        if hex::decode_to_slice(hex_id, &mut id).is_err() {
+            return false;
+        }
+        if self.synced.is_some_and(|synced| synced.values().any(|info| info.path_hash == id)) {
+            return true;
+        }
+        if matches!(self.state, StateRead::NotRead) {
+            let loaded = match self.label {
+                Some(label) => shared_sync_state_for_label(self.sync, label).await,
+                None => None,
+            };
+            self.state = StateRead::Read(loaded);
+        }
+        match &self.state {
+            StateRead::Read(Some(state)) => state_knows_file_id(state, &id),
+            StateRead::Read(None) | StateRead::NotRead => false,
+        }
+    }
+}
+
+/// hcfs's `TrackedFiles::knows`: the id is in any of the state's three
+/// trees.
+fn state_knows_file_id(state: &SyncState, id: &[u8; 32]) -> bool {
+    state.local.files.contains_key(id) || state.remote.files.contains_key(id) || state.synced.files.contains_key(id)
 }
 
 async fn list_sync_folder_inner_with(
@@ -178,6 +246,13 @@ async fn list_sync_folder_inner_with(
     };
     let exclude_rules = super::exclude_match::rules_from_patterns(&excluded_patterns);
 
+    let mut downloaded_as = DownloadedAsLookup {
+        sync: &state.sync,
+        label: label.as_deref(),
+        synced: synced_set.as_ref(),
+        state: StateRead::NotRead,
+    };
+
     let mut entries = Vec::new();
     // A read_dir failure is an I/O fault → Io (#[from]).
     let mut dir = tokio::fs::read_dir(&target).await?;
@@ -208,15 +283,24 @@ async fn list_sync_folder_inner_with(
         };
 
         let at_root = subfolder.as_deref().is_none_or(str::is_empty);
+        let mut legacy_copy = false;
         if !is_folder && is_untracked_engine_artifact(&name, &relative_path, at_root, meta.len(), synced_set.as_ref()) {
-            continue;
+            match hcfs_client::engine::classify::is_failed_download_artifact(&name).filter(|_| at_root) {
+                Some(hex_id) if downloaded_as.knows(hex_id).await => legacy_copy = true,
+                _ => continue,
+            }
         }
 
         // Folders don't have server-side entries — their children do.
         // Match engine globs (`*.bin` → foo.bin and dir/foo.bin), not exact
         // path equality — that left glob-excluded files Pending on Drive.
         let is_excluded = super::exclude_match::path_is_excluded(&exclude_rules, &relative_path, is_folder);
-        let (sync_status, info) = disk_row_status(is_hidden_file, is_excluded, is_folder, synced_set.as_ref(), &relative_path);
+        let (mut sync_status, info) = disk_row_status(is_hidden_file, is_excluded, is_folder, synced_set.as_ref(), &relative_path);
+        // hcfs keeps a legacy copy out of every plan while it is on disk, so
+        // "pending" would promise an upload that never comes: no badge.
+        if legacy_copy && sync_status == "pending" {
+            sync_status = "unknown";
+        }
 
         // Folder row numbers are billed: dir_stats omits excluded children
         // (H-110) even though H-045 keeps those files as visible rows.
@@ -906,6 +990,32 @@ mod tests {
         let mut names = vec![huge9.as_str(), "file2", "file1", "file10", huge8.as_str()];
         names.sort_by(|a, b| macos_name_cmp(a, b));
         assert_eq!(names, vec!["file1", "file2", "file10", huge8.as_str(), huge9.as_str()]);
+    }
+
+    /// Mirrors hcfs's `TrackedFiles::knows`: an id in any one of the three
+    /// trees is known. A legacy copy whose id is only on the server (its
+    /// local entry dropped, its synced base forgotten on load) still counts.
+    #[test]
+    fn a_file_id_in_any_tree_is_known() {
+        use hcfs_client::drive::FileMetadata;
+
+        let meta = |byte: u8| FileMetadata {
+            path_hash: [byte; 32],
+            salted_hash: [0; 32],
+            size_bytes: 0,
+            revision_seq: 0,
+            revision_id: [0; 32],
+            encryption_nonce: [0; 24],
+        };
+        let mut state = SyncState::default();
+        state.local.files.insert([1; 32], meta(1));
+        state.remote.files.insert([2; 32], meta(2));
+        state.synced.files.insert([3; 32], meta(3));
+
+        for byte in 1..=3 {
+            assert!(state_knows_file_id(&state, &[byte; 32]), "tree {byte}");
+        }
+        assert!(!state_knows_file_id(&state, &[4; 32]));
     }
 
     #[test]

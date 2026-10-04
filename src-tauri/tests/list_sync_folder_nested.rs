@@ -771,3 +771,34 @@ async fn without_a_synced_map_a_stub_is_hidden_but_never_deleted() {
     assert!(!entry_names(&listing.files).contains(&stub), "hidden");
     assert!(tmp.path().join(stub).exists(), "a listing must not delete {stub}");
 }
+
+/// An older client saved a download it could not place as
+/// `downloaded_<hex of the file id>` at the drive root, and hcfs's sweep
+/// keeps such a file when its state knows that id (`knows_downloaded_as`):
+/// it is the verified copy of a real file, not a leftover. The listing
+/// mirrors that and shows it, with no sync badge: hcfs keeps the copy out
+/// of every plan while it is on disk, so it is neither pending nor synced.
+#[tokio::test]
+async fn a_legacy_copy_of_a_known_file_is_listed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let known = format!("downloaded_{}", "05".repeat(32));
+    let unknown = format!("downloaded_{}", "06".repeat(32));
+    for name in [known.as_str(), unknown.as_str()] {
+        write_file(tmp.path(), name);
+    }
+
+    let state = make_state(make_pool().await);
+    let mut map: HashMap<String, SyncedFileInfo> = HashMap::new();
+    map.insert("photo.jpg".to_string(), fake_info(5));
+    state.sync.update_synced_paths_cache(LABEL, map);
+
+    let path: String = tmp.path().to_string_lossy().into();
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    let names = entry_names(&root.files);
+    assert!(names.contains(&known.as_str()), "the state knows its id: {names:?}");
+    assert_status(&root.files, &known, "unknown");
+    assert!(!names.contains(&unknown.as_str()), "nothing knows this one: {names:?}");
+}

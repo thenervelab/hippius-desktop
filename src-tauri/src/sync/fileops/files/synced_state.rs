@@ -112,6 +112,20 @@ pub(super) async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label
     }
 }
 
+/// The drive's sync state as hcfs last saved it, or `None` when the drive is
+/// not loaded or a sync cycle holds its lock.
+///
+/// `try_lock` for the same reason as [`synced_paths_for_label`]: a listing
+/// must not wait out a sync cycle. `shared_sync_state` serves hcfs's own
+/// cached copy, so right after a cycle this costs one `stat`.
+pub(super) async fn shared_sync_state_for_label(sync: &SyncRunner, label: &str) -> Option<std::sync::Arc<hcfs_client::sync::SyncState>> {
+    let DriveArcOutcome::Acquired(arc) = acquire_drive_arc(sync, label) else {
+        return None;
+    };
+    let manager = arc.try_lock().ok()?;
+    manager.shared_sync_state().await.ok()
+}
+
 /// Maximum time `synced_paths_and_excludes_for_label` is willing to
 /// wait for a drive's first reconcile to settle before reading the
 /// cache. Sized to comfortably cover the production retry schedule
