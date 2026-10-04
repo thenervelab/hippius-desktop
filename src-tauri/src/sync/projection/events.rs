@@ -53,6 +53,21 @@ pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
 /// returned. Without this event a folder the user just deleted keeps rendering
 /// as a `pending` row until some unrelated refresh. Payload: [`LabelPayload`].
 pub const FOLDER_ENTITIES_CHANGED: &str = "hcfs_folder_entities_changed";
+/// A drive's mass-delete hold began or changed (side, count, empty root).
+/// Payload: [`MassDeleteHoldPayload`]. Emitted only on a change, never on
+/// hcfs's per-cycle repeat; see `sync::mass_delete_hold`.
+pub const MASS_DELETE_HELD: &str = "hcfs_mass_delete_held";
+/// Gated companion to [`MASS_DELETE_HELD`]: once per episode, carrying the
+/// persisted notification's text ([`MassDeleteNotifyPayload`]).
+pub const MASS_DELETE_HELD_NOTIFY: &str = "hcfs_mass_delete_held_notify";
+/// A side's hold ended: a cycle completed without it (removed, restored, or
+/// the files came back). Payload: [`MassDeleteSidePayload`].
+pub const MASS_DELETE_CLEARED: &str = "hcfs_mass_delete_cleared";
+/// A cycle applied a requested restore. Payload: [`MassDeleteRestoredPayload`].
+pub const MASS_DELETE_RESTORED: &str = "hcfs_mass_delete_restored";
+/// A cycle refused a requested restore; the hold stands. Emitted once per
+/// reason per episode. Payload: [`MassDeleteRestoreRefusedPayload`].
+pub const MASS_DELETE_RESTORE_REFUSED: &str = "hcfs_mass_delete_restore_refused";
 /// Emitted when the backend detects credentials are invalid and re-login is needed.
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
 /// Emitted when `AuthInfo` has been fully populated post-login (mnemonic
@@ -180,6 +195,76 @@ pub use hcfs_client::engine::SHARED_DRIVE_REVOKED_MARKER;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The large-delete prompt reads these keys; a rename silently blanks the
+    /// banner (there is no codegen across the IPC boundary).
+    #[test]
+    fn mass_delete_payloads_pin_their_wire_keys() {
+        use hcfs_client::sync::{MassDeleteSide, RestoreRefusal};
+
+        let hold = MassDeleteHoldPayload {
+            label: "photos".into(),
+            side: MassDeleteSide::Server.as_str(),
+            state: crate::sync::mass_delete_hold::HoldPhase::Restoring.as_str(),
+            count: 150,
+            synced_count: 200,
+            empty_root: true,
+            can_restore: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&hold).unwrap(),
+            serde_json::json!({
+                "label": "photos", "side": "server", "state": "restoring", "count": 150,
+                "syncedCount": 200, "emptyRoot": true, "canRestore": false
+            })
+        );
+
+        let notify = MassDeleteNotifyPayload {
+            label: "photos".into(),
+            side: "local",
+            description: "text".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&notify).unwrap(),
+            serde_json::json!({ "label": "photos", "side": "local", "description": "text" })
+        );
+
+        let cleared = MassDeleteSidePayload {
+            label: "photos".into(),
+            side: "local",
+        };
+        assert_eq!(
+            serde_json::to_value(&cleared).unwrap(),
+            serde_json::json!({ "label": "photos", "side": "local" })
+        );
+
+        let restored = MassDeleteRestoredPayload {
+            label: "photos".into(),
+            side: "server",
+            restored: 1,
+            pending: 2,
+            skipped: 3,
+        };
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::json!({ "label": "photos", "side": "server", "restored": 1, "pending": 2, "skipped": 3 })
+        );
+
+        let refused = MassDeleteRestoreRefusedPayload::new("photos".into(), MassDeleteSide::Server, RestoreRefusal::InsufficientSpace { needed: 42 });
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap(),
+            serde_json::json!({ "label": "photos", "side": "server", "reason": "insufficient_space", "neededBytes": 42 })
+        );
+    }
+
+    #[test]
+    fn mass_delete_event_names_are_pinned() {
+        assert_eq!(MASS_DELETE_HELD, "hcfs_mass_delete_held");
+        assert_eq!(MASS_DELETE_HELD_NOTIFY, "hcfs_mass_delete_held_notify");
+        assert_eq!(MASS_DELETE_CLEARED, "hcfs_mass_delete_cleared");
+        assert_eq!(MASS_DELETE_RESTORED, "hcfs_mass_delete_restored");
+        assert_eq!(MASS_DELETE_RESTORE_REFUSED, "hcfs_mass_delete_restore_refused");
+    }
 
     /// Catches upstream string drift when bumping the `hcfs-client` git rev.
     #[test]
@@ -999,6 +1084,112 @@ use serde::Serialize;
 #[derive(Serialize, Clone)]
 pub struct LabelPayload {
     pub label: String,
+}
+
+/// A drive's mass-delete hold, for the [`MASS_DELETE_HELD`] event and for
+/// `get_mass_delete_holds` hydration (one shape, so the banner reads both).
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteHoldPayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` (files missing here) or `"local"` (missing from Hippius).
+    pub side: &'static str,
+    /// `"held"` (waiting for the user) or `"restoring"`.
+    pub state: &'static str,
+    /// Files the hold covers: the count the commands must be called with.
+    pub count: usize,
+    /// The synced baseline the count was measured against.
+    pub synced_count: usize,
+    /// The drive folder has no visible entries (server side only).
+    pub empty_root: bool,
+    /// False for a local-side hold on a shared drive this account is a
+    /// member of: hcfs refuses that restore, so the prompt hides it.
+    pub can_restore: bool,
+}
+
+impl From<&crate::sync::mass_delete_hold::LabeledHold> for MassDeleteHoldPayload {
+    fn from(hold: &crate::sync::mass_delete_hold::LabeledHold) -> Self {
+        Self {
+            label: hold.label.clone(),
+            side: hold.side.as_str(),
+            state: hold.entry.phase.as_str(),
+            count: hold.entry.count,
+            synced_count: hold.entry.synced_count,
+            empty_root: hold.entry.empty_root,
+            can_restore: hold.can_restore,
+        }
+    }
+}
+
+/// [`MASS_DELETE_HELD_NOTIFY`]: the text of the episode's one notification.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteNotifyPayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` or `"local"`.
+    pub side: &'static str,
+    /// The notification body, written by Rust.
+    pub description: String,
+}
+
+/// [`MASS_DELETE_CLEARED`]: which side's hold ended.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteSidePayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` or `"local"`.
+    pub side: &'static str,
+}
+
+/// [`MASS_DELETE_RESTORED`]: what a cycle put back.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteRestoredPayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` or `"local"`.
+    pub side: &'static str,
+    /// Files back and in sync.
+    pub restored: usize,
+    /// Files whose transfer started but did not finish; later cycles go on.
+    pub pending: usize,
+    /// Files that no longer looked deleted, left to ordinary sync.
+    pub skipped: usize,
+}
+
+/// [`MASS_DELETE_RESTORE_REFUSED`]: why a restore did not run.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteRestoreRefusedPayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` or `"local"`.
+    pub side: &'static str,
+    /// hcfs's stable reason name (`"insufficient_space"`).
+    pub reason: &'static str,
+    /// Bytes the restore needs, for an `insufficient_space` refusal.
+    pub needed_bytes: Option<u64>,
+}
+
+impl MassDeleteRestoreRefusedPayload {
+    /// Build from hcfs's refusal. `RestoreRefusal` is `#[non_exhaustive]`:
+    /// a future reason still carries its name, just no byte count.
+    #[must_use]
+    pub fn new(label: String, side: hcfs_client::sync::MassDeleteSide, refusal: hcfs_client::sync::RestoreRefusal) -> Self {
+        let needed_bytes = match refusal {
+            hcfs_client::sync::RestoreRefusal::InsufficientSpace { needed } => Some(needed),
+            _ => None,
+        };
+        Self {
+            label,
+            side: side.as_str(),
+            reason: refusal.as_str(),
+            needed_bytes,
+        }
+    }
 }
 
 /// Payload for `DRIVE_STATUS_CHANGED`. Carries the full drive entry

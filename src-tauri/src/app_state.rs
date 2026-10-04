@@ -105,6 +105,13 @@ pub struct AppState {
     /// the most common flow in the product. See
     /// `crate::sync::folder_restore_notify`.
     pub folder_restore_notify: std::sync::Arc<crate::sync::folder_restore_notify::FolderRestoreNotifyState>,
+    /// Per-label held mass deletes for the large-delete prompt: change-only
+    /// emits, one notification per episode, the hold the restore/confirm
+    /// commands validate against, and the empty-folder restores the folder
+    /// job owes. Armed at init (seeded from hcfs's held record), driven by
+    /// the bridge's hold/restore/cycle events, cleared on drive removal,
+    /// logout and `SyncReset`. See `crate::sync::mass_delete_hold`.
+    pub mass_delete_holds: std::sync::Arc<crate::sync::mass_delete_hold::MassDeleteHoldState>,
     /// Edge-triggered owner of the OS "prevent idle system sleep" assertion
     /// held while any sync session still has non-terminal files, so macOS/
     /// Windows can't idle-sleep mid-transfer of a large folder. Display sleep
@@ -351,6 +358,7 @@ impl AppState {
             revoked_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             root_not_mounted_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             folder_restore_notify: std::sync::Arc::new(crate::sync::folder_restore_notify::FolderRestoreNotifyState::new()),
+            mass_delete_holds: std::sync::Arc::new(crate::sync::mass_delete_hold::MassDeleteHoldState::new()),
             keep_awake: std::sync::Arc::new(crate::power::SyncKeepAwake::new_native()),
             chunk_reclaim: tokio::sync::OnceCell::new(),
             folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),

@@ -1338,6 +1338,21 @@ pub(crate) async fn initialize_sync_inner(
         crate::sync::folder_restore_notify::FolderRestoreNotifyState::baseline_exists(&folder_dir),
     );
 
+    // Arm the large-delete prompt's state with what hcfs recorded on disk, so
+    // a hold from an earlier run shows before the first cycle (and is not
+    // notified again). An unreadable record only seeds nothing here: the
+    // first cycle rewrites it and re-reports the hold, and the folder job
+    // reads it itself and fails closed. See `sync::mass_delete_hold`.
+    let seed = crate::sync::mass_delete_hold::read_recorded_holds(PathBuf::from(&cfg.sync_path), folder_dir.clone())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(label = %label, error = %e, "Could not read held mass deletes at init; the first cycle reports them");
+            Vec::new()
+        });
+    app_state
+        .mass_delete_holds
+        .arm(&label, is_member, std::path::Path::new(&cfg.sync_path), &seed);
+
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
 
@@ -1692,6 +1707,8 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     app_state.preparing.clear_all();
     // Cached remote listings hold the signed-out account's file rows.
     app_state.remote_listing_cache.clear_all();
+    // Held mass deletes belong to the signed-out account's drives.
+    app_state.mass_delete_holds.clear_all();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
@@ -1817,6 +1834,9 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         // init. Hygiene rather than correctness — but without it the map keeps
         // an entry per label ever initialized in this process.
         app_state.folder_restore_notify.clear(&label);
+        // The drive is gone, and with it any hold the prompt was showing.
+        // The FE drops the banner on `DRIVE_REMOVED`.
+        app_state.mass_delete_holds.clear(&label);
 
         // Delete the DB row so the drive isn't resurrected on app restart, and
         // drop the intent-manifest rows for this drive so the snapshot overlay

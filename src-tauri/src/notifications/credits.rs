@@ -439,6 +439,12 @@ pub enum SyncNotificationOutcome {
     /// the usual cause is deleting the folder from the web console, which the
     /// desktop then silently undoes.
     FolderRestored,
+    /// hcfs held back a large delete on one side of a drive and is waiting
+    /// for the user to restore the files or remove them
+    /// (`hcfs_mass_delete_held_notify`, once per episode). Title: "Delete
+    /// Paused". Not an error (nothing failed and nothing was deleted) and
+    /// not a success (the drive is waiting on the user).
+    MassDeleteHeld,
 }
 
 impl SyncNotificationOutcome {
@@ -447,6 +453,7 @@ impl SyncNotificationOutcome {
             Self::Success => "Sync Complete",
             Self::Error => "Sync Failed",
             Self::FolderRestored => "Folder Restored",
+            Self::MassDeleteHeld => "Delete Paused",
         }
     }
 
@@ -459,7 +466,7 @@ impl SyncNotificationOutcome {
     fn list_title(self, files: &SyncFileSummary<'_>) -> String {
         match self {
             Self::Success => success_list_title(files),
-            Self::Error | Self::FolderRestored => self.title().to_string(),
+            Self::Error | Self::FolderRestored | Self::MassDeleteHeld => self.title().to_string(),
         }
     }
 
@@ -468,6 +475,7 @@ impl SyncNotificationOutcome {
             Self::Success => "FileSyncComplete",
             Self::Error => "FileSyncError",
             Self::FolderRestored => "FileSyncFolderRestored",
+            Self::MassDeleteHeld => "FileSyncMassDeleteHeld",
         }
     }
 }
@@ -839,6 +847,7 @@ mod tests {
             ("success", "Sync Complete", "FileSyncComplete"),
             ("error", "Sync Failed", "FileSyncError"),
             ("folder_restored", "Folder Restored", "FileSyncFolderRestored"),
+            ("mass_delete_held", "Delete Paused", "FileSyncMassDeleteHeld"),
         ];
 
         for (wire, title, prefix) in cases {

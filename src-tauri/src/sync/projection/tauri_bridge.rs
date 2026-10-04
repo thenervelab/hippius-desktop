@@ -500,69 +500,24 @@ fn handle_folder_recovered(app: &AppHandle, label: String) {
     let _ = app.emit(events::FOLDER_RECOVERED, events::LabelPayload { label });
 }
 
-/// What a mass-delete log line reported last, per drive label, side and
-/// event (`"held"` / `"refused"`; keyed apart because a refused restore's
-/// cycle also re-reports the hold, and sharing a slot would make each look
-/// changed every cycle).
-/// hcfs re-emits `MassDeleteHeld` (and a kept `MassDeleteRestoreRefused`)
-/// every cycle while the hold stands; logging each one would crowd the
-/// support bundle, so a line is written only when the reported state
-/// changes. Stop-gap until the hold is tracked on `AppState` and surfaced
-/// to the user (the large-delete prompt), which replaces this.
+/// Handle the engine's mass-delete events (see `sync::mass_delete_hold`).
 ///
-/// The side is keyed by its `as_str` name: `MassDeleteSide` does not derive
-/// `Hash`.
-type MassDeleteLogKey = (String, &'static str, &'static str);
+/// hcfs re-reports a standing hold, and a kept refusal, on every cycle; the
+/// state absorbs the repeats, so the UI events and the log lines below fire
+/// only when something changed, and the notification once per episode.
+/// A restore is reported once by the cycle that applies it.
+fn handle_mass_delete_event(app: &AppHandle, event: SyncEvent) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let holds = &app_state.mass_delete_holds;
 
-static MASS_DELETE_LOGGED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<MassDeleteLogKey, String>>> =
-    std::sync::LazyLock::new(Default::default);
-
-/// Records `state` as the last one logged for `(label, side, event)` and
-/// reports whether it differs from the previous one, i.e. whether to log it.
-fn mass_delete_state_changed(label: &str, side: hcfs_client::sync::MassDeleteSide, event: &'static str, state: String) -> bool {
-    // A poisoned map only loses dedup state; logging a line twice is harmless.
-    let mut logged = MASS_DELETE_LOGGED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let previous = logged.insert((label.to_string(), side.as_str(), event), state.clone());
-    previous.as_deref() != Some(state.as_str())
-}
-
-/// Forgets what was logged for `(label, side)`, so the next hold on that
-/// side is logged even if it reports the same count as the last one.
-fn mass_delete_state_forget(label: &str, side: hcfs_client::sync::MassDeleteSide) {
-    let mut logged = MASS_DELETE_LOGGED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    logged.retain(|(l, s, _), _| !(l == label && *s == side.as_str()));
-}
-
-/// Logs a mass-delete event once per change of what it reports.
-///
-/// - Held: hcfs held one side's deletes because they would remove most of
-///   the drive; nothing on that side was deleted and the rest of the cycle
-///   synced. Re-reported every cycle while it stands.
-/// - Restored: emitted once, by the cycle that applied a restore. The hold
-///   on that side is over, so a later one is logged afresh. Putting back
-///   the empty folders held alongside comes with the large-delete prompt.
-/// - Refused: a kept restore request is refused again every cycle until it
-///   fits, so it shares the held event's once-per-change logging.
-///
-/// Any other event, or an unchanged state, is ignored.
-fn log_mass_delete_event(event: &SyncEvent) {
-    // The guards record what they report: an unchanged state falls through
-    // to the do-nothing arm, so it is not logged again.
     match event {
         SyncEvent::MassDeleteHeld {
             label,
             side,
             count,
             synced_count,
-        } if mass_delete_state_changed(label, *side, "held", format!("{count}/{synced_count}")) => {
-            tracing::warn!(
-                label = %label,
-                side = side.as_str(),
-                count,
-                synced_count,
-                "hcfs held a mass delete; nothing on that side was deleted"
-            );
-        }
+        } => handle_mass_delete_held(app, label, side, count, synced_count),
         SyncEvent::MassDeleteRestored {
             label,
             side,
@@ -570,25 +525,98 @@ fn log_mass_delete_event(event: &SyncEvent) {
             pending,
             skipped,
         } => {
-            mass_delete_state_forget(label, *side);
-            tracing::info!(
-                label = %label,
-                side = side.as_str(),
+            holds.record_restored(&label, side, restored, restored + pending + skipped);
+            tracing::info!(label = %label, side = side.as_str(), restored, pending, skipped, "hcfs restored a held mass delete");
+            let payload = events::MassDeleteRestoredPayload {
+                label,
+                side: side.as_str(),
                 restored,
                 pending,
                 skipped,
-                "hcfs restored a held mass delete"
-            );
+            };
+            let _ = app.emit(events::MASS_DELETE_RESTORED, payload);
         }
-        SyncEvent::MassDeleteRestoreRefused { label, side, reason } if mass_delete_state_changed(label, *side, "refused", format!("{reason:?}")) => {
+        SyncEvent::MassDeleteRestoreRefused { label, side, reason } => {
+            if !holds.record_refused(&label, side, reason.as_str()) {
+                return;
+            }
             tracing::warn!(
                 label = %label,
                 side = side.as_str(),
                 reason = reason.as_str(),
                 "hcfs refused to restore a held mass delete; the deletes stay held"
             );
+            let _ = app.emit(
+                events::MASS_DELETE_RESTORE_REFUSED,
+                events::MassDeleteRestoreRefusedPayload::new(label, side, reason),
+            );
         }
         _ => {}
+    }
+}
+
+/// Record a `MassDeleteHeld` and, when it changed, log it and tell the UI;
+/// the first one of an episode also raises the persisted notification.
+///
+/// The empty-root check reads the drive folder's first entries on every
+/// report (one `read_dir`, stopping at the first visible entry): the advice
+/// it drives must follow the disk, which can come back mid-hold.
+fn handle_mass_delete_held(app: &AppHandle, label: String, side: hcfs_client::sync::MassDeleteSide, count: usize, synced_count: usize) {
+    use crate::sync::mass_delete_hold::{HeldChange, HoldEntry, HoldPhase, LabeledHold, held_notification_text, root_looks_empty};
+    use tauri::Manager;
+
+    let app_state = app.state::<crate::app_state::AppState>();
+    let holds = &app_state.mass_delete_holds;
+    let empty_root = side == hcfs_client::sync::MassDeleteSide::Server && holds.sync_root(&label).is_some_and(|root| root_looks_empty(&root));
+    let HeldChange::Changed { notify } = holds.record_held(&label, side, count, synced_count, empty_root) else {
+        return;
+    };
+
+    tracing::warn!(
+        label = %label,
+        side = side.as_str(),
+        count,
+        synced_count,
+        empty_root,
+        "hcfs held a mass delete; nothing on that side was deleted"
+    );
+    let can_restore = holds.can_restore(&label, side);
+    let hold = LabeledHold {
+        label,
+        side,
+        entry: HoldEntry {
+            phase: HoldPhase::Held,
+            count,
+            synced_count,
+            empty_root,
+        },
+        can_restore,
+    };
+    let _ = app.emit(events::MASS_DELETE_HELD, events::MassDeleteHoldPayload::from(&hold));
+
+    if notify {
+        let payload = events::MassDeleteNotifyPayload {
+            label: hold.label.clone(),
+            side: side.as_str(),
+            description: held_notification_text(&hold.label, side, hold.entry, hold.can_restore),
+        };
+        let _ = app.emit(events::MASS_DELETE_HELD_NOTIFY, payload);
+    }
+}
+
+/// A cycle completed for `label`: every side it did not report is no longer
+/// held. Tells the UI once per cleared side.
+fn finish_mass_delete_cycle(app: &AppHandle, label: &str) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    for side in app_state.mass_delete_holds.finish_cycle(label) {
+        tracing::info!(label = %label, side = side.as_str(), "mass delete hold cleared");
+        let payload = events::MassDeleteSidePayload {
+            label: label.to_string(),
+            side: side.as_str(),
+        };
+        let _ = app.emit(events::MASS_DELETE_CLEARED, payload);
     }
 }
 
@@ -722,6 +750,12 @@ fn handle_sync_started(app: &AppHandle, mut payload: events::SyncStartedPayload)
         // before the user sees it.
         app_state.credits_exhausted.clear(&payload.label);
 
+        // Every side is unseen until this cycle re-reports it; the
+        // completion then clears what it did not (`finish_mass_delete_cycle`).
+        // Not a clear: the hold stands across cycles and is emitted only
+        // when it changes.
+        app_state.mass_delete_holds.begin_cycle(&payload.label);
+
         // ARM (don't mark) the preparing override. Marking here would
         // paint the red "Preparing sync…" widget/tray state across the
         // scan + remote-fetch window of every cycle — including
@@ -823,6 +857,9 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     // account's drives, and a label reused by the new account must be re-armed
     // from that account's own baseline at init, never inherited.
     app_state.folder_restore_notify.clear_all();
+    // And the mass-delete holds: they are the previous account's drives,
+    // and a new account's are seeded from its own records at init.
+    app_state.mass_delete_holds.clear_all();
     // Wipe every folder-entity-sync throttle stamp: a previous account's
     // last-run times must not gate the new account's first sync after a switch.
     app_state.folder_entity_sync.clear_all();
@@ -1131,6 +1168,11 @@ impl SyncEventHandler for TauriSyncBridge {
                 conflicts_skipped,
                 files_failed,
             } => {
+                // Engine cycles only: the reviewed-conflict path shares
+                // `handle_sync_completed` but not the engine's hold events,
+                // so ending the hold bookkeeping there would clear a hold
+                // that cycle never re-reported.
+                finish_mass_delete_cycle(&app, &label);
                 // Single source of truth for the completion transition: the
                 // cleanup (preparing-clear, banner-clear, failure-counter
                 // recompute) and the per-file detail collection live in
@@ -1242,11 +1284,10 @@ impl SyncEventHandler for TauriSyncBridge {
                 let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);
             }
             SyncEvent::FolderRecovered { label } => handle_folder_recovered(&app, label),
-            // A held mass delete and what became of a restore. Logged only,
-            // once per change: surfacing and answering the hold comes with
-            // the large-delete prompt, so until then the hold stands.
+            // A held mass delete and what became of a restore: surfaced to the
+            // large-delete prompt once per change (see `sync::mass_delete_hold`).
             event @ (SyncEvent::MassDeleteHeld { .. } | SyncEvent::MassDeleteRestored { .. } | SyncEvent::MassDeleteRestoreRefused { .. }) => {
-                log_mass_delete_event(&event);
+                handle_mass_delete_event(&app, event);
             }
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
@@ -2297,32 +2338,5 @@ mod tests {
         // Teardown tail (SyncStopped) re-arms the label.
         assert!(latch.clear("team-drive"));
         assert!(latch.record_failure("team-drive", REVOKED_NOTIFY_THRESHOLD));
-    }
-
-    /// hcfs re-reports a standing hold every cycle; the bridge logs it once
-    /// per change. Held and refused are tracked apart because a refused
-    /// restore's cycle reports both, and a restore re-arms the side so the
-    /// next hold logs even with the same count. Labels are unique to this
-    /// test: the map is process-global.
-    #[test]
-    fn mass_delete_logging_fires_once_per_change() {
-        use hcfs_client::sync::MassDeleteSide::{Local, Server};
-
-        let label = "mass-delete-log-test";
-        let held = || "150/200".to_string();
-
-        assert!(mass_delete_state_changed(label, Server, "held", held()));
-        assert!(!mass_delete_state_changed(label, Server, "held", held()), "same hold, next cycle");
-        assert!(mass_delete_state_changed(label, Local, "held", held()), "sides are apart");
-
-        assert!(mass_delete_state_changed(label, Server, "refused", "space".to_string()));
-        assert!(!mass_delete_state_changed(label, Server, "held", held()), "refusal did not reset hold");
-        assert!(!mass_delete_state_changed(label, Server, "refused", "space".to_string()));
-
-        assert!(mass_delete_state_changed(label, Server, "held", "151/200".to_string()), "count changed");
-
-        mass_delete_state_forget(label, Server);
-        assert!(mass_delete_state_changed(label, Server, "held", "151/200".to_string()), "restore re-arms");
-        assert!(!mass_delete_state_changed(label, Local, "held", held()), "other side untouched");
     }
 }
