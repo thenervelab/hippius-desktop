@@ -136,6 +136,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   a disk that isn't plugged in, Hippius says so once and changes nothing,
   instead of reporting a sync failure on every retry.
 
+- **A folder link made from a copy no longer claims to share your whole
+  drive.** Shared Links marks it "Uploaded copy" and no drive folder shows it
+  as shared, since it holds a copy of the files rather than your drive.
+
 - **The menu bar popover opens under its icon again, recording or not.** It
   no longer does nothing while a recording runs, vanishes the moment it
   opens, or hides behind a capture's preview card.
