@@ -72,7 +72,9 @@ use tauri_project_lib::shares::commands::{
     revoke_folder_share_inner, update_folder_share_expiry_inner,
 };
 use tauri_project_lib::shares::origin::folder_origin;
-use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, SHARE_CANCELLED, UPLOAD_FOLDER_SHARES_UNAVAILABLE, share_outside_folder};
+use tauri_project_lib::shares::outside_folder::{
+    CANCELLED_BUT_LINK_LIVE, OutsideFolderShare, SHARE_CANCELLED, UPLOAD_FOLDER_SHARES_UNAVAILABLE, share_outside_folder,
+};
 
 /// One shared `$HOME` for every test in this binary that touches config dirs
 /// (the master-mnemonic seal lives under `~/.hippius`). Same discipline as
@@ -142,6 +144,8 @@ struct MockOptions {
     list: serde_json::Value,
     /// Tokens whose DELETE/PATCH answers the server's bodiless 404.
     missing_tokens: Vec<String>,
+    /// Tokens whose DELETE answers 500: a revoke that did not happen.
+    unrevokable_tokens: Vec<String>,
     /// `expires_at` echoed by a successful PATCH — the response carries
     /// nothing else (no token echo).
     patch_expires_at: serde_json::Value,
@@ -162,6 +166,7 @@ impl Default for MockOptions {
             },
             list: json!([]),
             missing_tokens: Vec::new(),
+            unrevokable_tokens: Vec::new(),
             patch_expires_at: json!(null),
             memberships: json!({ "memberships": [] }),
             cancel_on_capabilities: None,
@@ -192,6 +197,7 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
     let revoke_recorder = recorded.revoked_tokens.clone();
     let patch_recorder = recorded.patch_bodies.clone();
     let delete_missing = opts.missing_tokens.clone();
+    let delete_failing = opts.unrevokable_tokens.clone();
     let patch_missing = opts.missing_tokens.clone();
     let patch_expires = opts.patch_expires_at.clone();
     let memberships_body = opts.memberships.clone();
@@ -255,6 +261,9 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
                 if delete_missing.contains(&token) {
                     // Bodiless, like the server's collapsed 404.
                     return StatusCode::NOT_FOUND.into_response();
+                }
+                if delete_failing.contains(&token) {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "internal", "message": "boom"}))).into_response();
                 }
                 StatusCode::NO_CONTENT.into_response()
             })
@@ -1294,6 +1303,8 @@ struct UploadMock {
     /// Fired while the owner wrap is answered: the modal's Cancel landing
     /// after the client has handed back a finished link.
     cancel_on_wrap: Option<CancellationToken>,
+    /// The finished link's revoke answers 500.
+    revoke_fails: bool,
 }
 
 impl Default for UploadMock {
@@ -1307,6 +1318,7 @@ impl Default for UploadMock {
             open_refusal: None,
             cancel_on_seal: None,
             cancel_on_wrap: None,
+            revoke_fails: false,
         }
     }
 }
@@ -1560,6 +1572,7 @@ async fn upload_harness_listing(
         capabilities: serde_json::from_str(caps).expect("caps json"),
         list,
         cancel_on_capabilities: mock.cancel_on_capabilities.clone(),
+        unrevokable_tokens: if mock.revoke_fails { vec![UPLOAD_TOKEN.to_string()] } else { Vec::new() },
         ..MockOptions::default()
     };
     let router = share_router(options, recorded.clone())
@@ -1919,6 +1932,36 @@ async fn a_cancel_during_the_owner_wrap_revokes_the_finished_link() {
     );
     let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
     assert_eq!(keystore.get(UPLOAD_TOKEN).unwrap(), None, "the cancelled link's key is forgotten");
+}
+
+/// A late cancel whose revoke fails must not read as a plain cancel: the
+/// link is still live, and the user has to be told where to remove it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_cancel_whose_revoke_fails_says_the_link_is_still_live() {
+    let account = "5UploadWrapCancelRevokeFailsAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_wrap: Some(cancel.clone()),
+        revoke_fails: true,
+        ..UploadMock::default()
+    };
+    let (state, _rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert_eq!(
+        *recorded.revoked_tokens.lock().unwrap(),
+        vec![UPLOAD_TOKEN.to_string()],
+        "the revoke was tried"
+    );
+    assert!(
+        matches!(&err, AppError::Validation(m) if m == CANCELLED_BUT_LINK_LIVE),
+        "a failed revoke is not reported as a plain cancel: {err:?}"
+    );
 }
 
 /// The modal's Cancel while the share is still preparing (capability probe,

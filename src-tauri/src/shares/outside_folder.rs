@@ -36,6 +36,11 @@ pub const UPLOAD_FOLDER_SHARES_UNAVAILABLE: &str = "Sharing folders from outside
 /// cancel so the modal treats both alike.
 pub const SHARE_CANCELLED: &str = "Share cancelled.";
 
+/// What a cancel reports when the link was already finished and revoking
+/// it failed. Not [`SHARE_CANCELLED`]: the link is still live, so the user
+/// is told it exists and where to remove it.
+pub const CANCELLED_BUT_LINK_LIVE: &str = "Cancelled, but the link could not be removed. Revoke it from Shared Links.";
+
 /// One outside-folder share, bundled so the entry point stays within five
 /// parameters.
 pub struct OutsideFolderShare<'a> {
@@ -155,19 +160,24 @@ async fn before_open<T>(cancel: &CancellationToken, step: impl Future<Output = R
 }
 
 /// Tear down a finished link whose share was cancelled, and return the
-/// cancel to report. Best effort: a failed revoke is logged, and the link
-/// then lives until it expires, revocable from the shares page by its hash.
+/// cancel to report. A failed revoke reports [`CANCELLED_BUT_LINK_LIVE`]
+/// rather than a plain cancel: the link then lives until it expires, and
+/// the user must know to revoke it from the shares page (by its hash).
 /// The key is forgotten either way, so this device never offers to copy a
 /// link the user cancelled.
 async fn revoke_cancelled(state: &AppState, account_id: &str, share_token: &str, keystore: &SqliteShareKeystore) -> AppError {
     info!("uploaded-copy share cancelled after the link was sealed; revoking it");
-    if let Err(error) = crate::shares::commands::revoke_folder_share_inner(state, account_id, share_token).await {
-        warn!(%error, "uploaded-copy share: revoking a cancelled link failed; it stays live until it expires");
-    }
+    let revoked = crate::shares::commands::revoke_folder_share_inner(state, account_id, share_token).await;
     if let Err(error) = keystore.forget(share_token) {
         warn!(%error, "uploaded-copy share: forgetting a cancelled link's key failed");
     }
-    AppError::Validation(SHARE_CANCELLED.into())
+    match revoked {
+        Ok(()) => AppError::Validation(SHARE_CANCELLED.into()),
+        Err(error) => {
+            warn!(%error, "uploaded-copy share: revoking a cancelled link failed; it stays live until it expires");
+            AppError::Validation(CANCELLED_BUT_LINK_LIVE.into())
+        }
+    }
 }
 
 /// Capability gate. It is this path's own authority: the Finder menu shows
