@@ -26,8 +26,9 @@
 //! - Path-prefix validation refusing `..` and friends before any request.
 //! - The uploaded-copy (outside-folder) share: open → files → chunks → seal,
 //!   ciphertext under the fragment key, an owner wrap sealed exactly like a
-//!   drive folder link's, and a Finder Cancel mid-upload aborting the
-//!   half-built link through the real Finder mint path.
+//!   drive folder link's, a Finder Cancel mid-upload aborting the
+//!   half-built link through the real Finder mint path, the quota gate
+//!   before any upload, and the capability refusal before any work.
 
 use axum::{
     Json, Router,
@@ -51,13 +52,13 @@ use hcfs_client::client::share::{ShareKeystore, SharePhase, ShareProgress, Share
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::account_key::account_key;
 use tauri_project_lib::auth::state::AuthCapabilities;
-use tauri_project_lib::error::AppError;
+use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::finder_bridge::dispatch::{FinderMint, mint_confirmed};
 use tauri_project_lib::shares::SqliteShareKeystore;
 use tauri_project_lib::shares::commands::{
     ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_inner, update_folder_share_expiry_inner,
 };
-use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, SHARE_CANCELLED, share_outside_folder};
+use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, SHARE_CANCELLED, UPLOAD_FOLDER_SHARES_UNAVAILABLE, share_outside_folder};
 
 /// One shared `$HOME` for every test in this binary that touches config dirs
 /// (the master-mnemonic seal lives under `~/.hippius`). Same discipline as
@@ -1578,4 +1579,54 @@ async fn a_finder_cancel_mid_upload_aborts_the_half_built_link() {
         "the open link is aborted on the server"
     );
     assert_eq!(*rec.seals.lock().unwrap(), 0, "a cancelled link is never sealed");
+}
+
+/// Over the plan: refused at the pre-flight with the copy's REAL size, and
+/// nothing is opened, so no half-built link and no billing hold. The modal
+/// opens the plans dialog on this kind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_quota_refusal_stops_the_share_before_any_upload() {
+    let account = "5UploadQuotaAcct";
+    let mock = UploadMock {
+        can_upload: json!({ "result": false, "error": "drive_quota_exceeded" }),
+        ..UploadMock::default()
+    };
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("over quota");
+
+    assert!(matches!(err, AppError::NotReady(NotReadyKind::StorageLimitReached)), "{err:?}");
+    assert_eq!(
+        *rec.can_upload_sizes.lock().unwrap(),
+        vec![5 + 9 * 1024 * 1024],
+        "gated on the copy's bytes"
+    );
+    assert!(rec.opens.lock().unwrap().is_empty(), "nothing opened");
+    assert!(rec.files.lock().unwrap().is_empty(), "no file declared");
+    assert!(rec.chunks.lock().unwrap().is_empty(), "no chunk sent");
+}
+
+/// A server that predates uploaded copies: refused with the "isn't
+/// available yet" wording before the quota is asked or anything opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_without_uploaded_copies_refuses_before_any_work() {
+    let account = "5UploadCapsAcct";
+    let caps = r#"{"shares":true,"folder_shares":true}"#;
+    let (state, rec, recorded, _db) = upload_harness(account, caps, UploadMock::default()).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("capability missing");
+
+    assert!(
+        matches!(&err, AppError::Validation(m) if m == UPLOAD_FOLDER_SHARES_UNAVAILABLE),
+        "{err:?}"
+    );
+    assert_eq!(*recorded.capability_hits.lock().unwrap(), 1);
+    assert!(rec.can_upload_sizes.lock().unwrap().is_empty(), "no quota pre-flight");
+    assert!(rec.opens.lock().unwrap().is_empty(), "no open");
 }

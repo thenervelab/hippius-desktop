@@ -14,7 +14,8 @@
 use std::path::Path;
 
 use hcfs_client::client::folder_share::{FolderShareError, UploadFolderShareOptions};
-use hcfs_client::client::share::{ShareKeystore, ShareProgressFn, ShareTtl};
+use hcfs_client::client::share::{ShareError, ShareKeystore, ShareProgressFn, ShareTtl};
+use hcfs_shared::shares::MAX_UPLOAD_FOLDER_SHARE_FILE_CIPHERTEXT;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -53,7 +54,8 @@ pub struct OutsideFolderShare<'a> {
 /// Upload `request.folder` as a copy and return its folder link.
 ///
 /// The order is the point. The capability probe comes first, so an older
-/// server refuses before the disk is walked. The scan comes before the gate,
+/// server refuses before the disk is walked; a folder with no name to share
+/// it under refuses before the walk too. The scan comes before the gate,
 /// because the gate needs the real bytes. The gate comes before any upload
 /// request, so an account over its plan uploads nothing. The owner wrap
 /// comes last, because only a sealed link has a secret worth wrapping.
@@ -61,17 +63,17 @@ pub struct OutsideFolderShare<'a> {
 /// # Errors
 ///
 /// [`AppError::Validation`] for the capability refusal, every scan refusal,
-/// every refusal a person can act on, and a cancel;
-/// `NotReady(StorageLimitReached)` from the quota gate or the server's own
-/// 402; [`AppError::Hcfs`] for transport and other server failures.
+/// every refusal a person can act on, a dropped connection, a full disk,
+/// and a cancel; `NotReady(StorageLimitReached)` from the quota gate or the
+/// server's own 402; [`AppError::Hcfs`] for other server failures.
 pub async fn share_outside_folder(state: &AppState, account_id: &str, request: OutsideFolderShare<'_>) -> Result<ShareLink> {
     require_upload_folder_shares_supported(state, account_id).await?;
+    let display_name = folder_display_name(request.folder)?;
     let scan = scan_off_main_thread(request.folder).await?;
     // The server bills the copy against the Drive quota, so the gate asks
     // about the bytes the copy will hold, same as a file share.
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, scan.total_bytes).await?;
 
-    let display_name = folder_display_name(request.folder)?;
     // One line per share, never per file: the support bundle caps each log.
     info!(
         folder = %display_name,
@@ -102,8 +104,14 @@ pub async fn share_outside_folder(state: &AppState, account_id: &str, request: O
     // The client does not push the owner wrap; without it the console's
     // Copy works on this device only. Same call, same inputs as a drive
     // folder link, so the console opens both the same way.
-    if let Ok(Some(secret)) = keystore.get(&created.share_token) {
-        super::owner_wrap::push_folder_for_account(state, account_id, &[(created.share_token.clone(), secret)]).await;
+    // The link works either way, so a missing secret only costs the wrap
+    // and is logged rather than failing a share that already exists.
+    match keystore.get(&created.share_token) {
+        Ok(Some(secret)) => {
+            super::owner_wrap::push_folder_for_account(state, account_id, &[(created.share_token.clone(), secret)]).await;
+        }
+        Ok(None) => warn!("uploaded-copy share: no keystore secret to wrap; Copy works on this device only"),
+        Err(error) => warn!(%error, "uploaded-copy share: keystore read failed; owner wrap not pushed"),
     }
 
     Ok(ShareLink {
@@ -130,7 +138,14 @@ async fn scan_off_main_thread(folder: &Path) -> Result<FolderScan> {
     let folder = folder.to_path_buf();
     tokio::task::spawn_blocking(move || scan_folder(&folder))
         .await
-        .map_err(|e| AppError::Other(format!("Could not read that folder: {e}")))?
+        .map_err(|e| scan_task_failed(&e))?
+}
+
+/// The scan task panicked or was cancelled at shutdown. The modal shows the
+/// message verbatim, so the `JoinError` goes to the log, not the user.
+fn scan_task_failed(e: &tokio::task::JoinError) -> AppError {
+    warn!(error = %e, "uploaded-copy share: the folder scan task failed");
+    AppError::Validation("Hippius couldn't read that folder. Try again.".into())
 }
 
 /// The recipient page's title: the folder's own name.
@@ -152,6 +167,10 @@ fn map_upload_folder_share_error(e: FolderShareError) -> AppError {
     match e {
         FolderShareError::Server { status, message: _ } => map_upload_server_status(status),
         FolderShareError::Cancelled => AppError::Validation(SHARE_CANCELLED.into()),
+        // The client already retried; the half-built link was aborted.
+        FolderShareError::Network(_) => {
+            AppError::Validation("The connection to Hippius dropped while the folder was uploading. Share it again.".into())
+        }
         FolderShareError::NotFound => {
             AppError::Validation("The link expired or was removed while the folder was uploading. Share the folder again.".into())
         }
@@ -184,17 +203,17 @@ fn map_folder_refusal(e: FolderShareError) -> AppError {
 /// user's to fix.
 fn map_item_refusal(e: FolderShareError) -> AppError {
     match e {
-        FolderShareError::InvalidPath { relative_path, reason } => {
-            // The validator's reason is engineer wording; it goes to the log.
-            warn!(%reason, "uploaded-copy share refused a name");
-            AppError::Validation(format!(
-                "\u{201c}{relative_path}\u{201d} has a name a link can't hold (a special character, or too \
+        // The validator's reason is engineer wording; the caller's warn
+        // already logged it as part of the error's Display.
+        FolderShareError::InvalidPath { relative_path, reason: _ } => AppError::Validation(format!(
+            "\u{201c}{relative_path}\u{201d} has a name a link can't hold (a special character, or too \
                  long). Rename it, then share again."
-            ))
-        }
-        FolderShareError::FileTooLarge { relative_path, size: _ } => {
-            AppError::Validation(format!("\u{201c}{relative_path}\u{201d} is too large to share in a folder link."))
-        }
+        )),
+        FolderShareError::FileTooLarge { relative_path, size: _ } => AppError::Validation(format!(
+            "\u{201c}{relative_path}\u{201d} is too large to share: it is larger than the {} GB a folder link \
+             allows per file.",
+            MAX_UPLOAD_FOLDER_SHARE_FILE_CIPHERTEXT >> 30
+        )),
         FolderShareError::PathCollision { relative_path } => AppError::Validation(format!(
             "Two items in this folder are both named \u{201c}{relative_path}\u{201d}. Rename one, then share again."
         )),
@@ -202,6 +221,15 @@ fn map_item_refusal(e: FolderShareError) -> AppError {
             "\u{201c}{relative_path}\u{201d} changed while the folder was being shared, so the link was \
              cancelled. If something is still copying into the folder, wait for it to finish, then share again."
         )),
+        // Staging the encrypted copy in the temp dir failed: almost always a
+        // full disk. The detail is in the caller's warn.
+        FolderShareError::Share(ShareError::Io(_)) => AppError::Validation(
+            "Hippius couldn't prepare the folder's files for upload. Make sure your disk has free space, then \
+             share again."
+                .into(),
+        ),
+        // Display omits the io::Error (it is the `#[source]`), so it is
+        // logged here.
         FolderShareError::SourceUnreadable { relative_path, source } => {
             warn!(error = %source, "uploaded-copy share could not read a file");
             AppError::Validation(format!(
@@ -217,11 +245,13 @@ fn map_item_refusal(e: FolderShareError) -> AppError {
 
 /// A server status the client passed through unmapped. 402 is the server's
 /// own quota gate (raced past ours, or the hold's re-check), so it opens the
-/// same plans dialog; 502/503 mean billing could not be reached.
+/// same plans dialog. 502/503 usually mean billing could not be reached,
+/// but the client hands over no structured code to tell that from a proxy
+/// failure, so the copy stays neutral.
 fn map_upload_server_status(status: u16) -> AppError {
     match status {
         402 => AppError::NotReady(NotReadyKind::StorageLimitReached),
-        502 | 503 => AppError::Validation("Hippius couldn't check your storage plan just now. Try again in a few minutes.".into()),
+        502 | 503 => AppError::Validation("Hippius couldn't finish the share just now. Try again in a few minutes.".into()),
         401 | 403 => AppError::Auth(format!("uploaded-copy folder share rejected (status {status})")),
         _ => AppError::Hcfs(format!("create_upload_folder_share failed (status {status})")),
     }
@@ -303,6 +333,7 @@ mod tests {
             size: 6 << 30,
         });
         assert!(message.contains(&named("video/raw.mov")) && message.contains("too large"), "{message}");
+        assert!(message.contains("5 GB a folder link allows per file"), "states the limit: {message}");
     }
 
     #[test]
@@ -349,7 +380,43 @@ mod tests {
                 status,
                 message: "billing_unavailable".into(),
             });
-            assert!(message.contains("Try again in a few minutes"), "{status}: {message}");
+            assert_eq!(
+                message, "Hippius couldn't finish the share just now. Try again in a few minutes.",
+                "{status}"
+            );
+        }
+    }
+
+    /// The modal shows every error's message verbatim, so a dropped
+    /// connection must not surface reqwest's engineer wording.
+    #[test]
+    fn a_dropped_connection_says_share_again() {
+        let message = validation(FolderShareError::Network("connection reset by peer".into()));
+        assert_eq!(
+            message,
+            "The connection to Hippius dropped while the folder was uploading. Share it again."
+        );
+    }
+
+    /// Staging the encrypted copy on local disk failed (full disk, the temp
+    /// dir gone). The user can free space; the engineer detail is logged.
+    #[test]
+    fn a_staging_failure_points_at_disk_space() {
+        let e = FolderShareError::Share(hcfs_client::client::share::ShareError::Io("No space left on device".into()));
+        let message = validation(e);
+        assert!(message.contains("couldn't prepare the folder's files"), "{message}");
+        assert!(message.contains("free space"), "{message}");
+        assert!(!message.contains("No space left"), "{message}");
+    }
+
+    /// A scan task that died (panicked) is a plain sentence, not a
+    /// `JoinError` dump.
+    #[tokio::test]
+    async fn a_failed_scan_task_reads_as_plain_copy() {
+        let join_error = tokio::spawn(async { panic!("scan panicked") }).await.expect_err("panicked");
+        match scan_task_failed(&join_error) {
+            AppError::Validation(message) => assert_eq!(message, "Hippius couldn't read that folder. Try again."),
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 
@@ -366,7 +433,6 @@ mod tests {
                 status: 500,
                 message: String::new(),
             },
-            FolderShareError::Network("connection reset".into()),
             FolderShareError::MissingFolderHash,
         ] {
             let mapped = map_upload_folder_share_error(e);
@@ -398,6 +464,7 @@ mod tests {
         let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("funnel must call {needle}"));
         let order = [
             at("require_upload_folder_shares_supported("),
+            at("folder_display_name("),
             at("scan_off_main_thread("),
             at("require_eligible(state, account_id, InsufficientCreditsAction::Sharing, scan.total_bytes)"),
             at(".create_upload_folder_share("),
