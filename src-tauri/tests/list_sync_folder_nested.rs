@@ -665,3 +665,68 @@ async fn hidden_dotfiles_are_listed_as_hidden_not_pending() {
         "overlay must not resurrect a hidden rel-path as pending"
     );
 }
+
+/// Opening a folder used to DELETE any `downloaded_<64 hex>` file in it.
+/// hcfs writes that name only at the drive root (its fallback name for a
+/// download whose path it cannot resolve) and its post-sync sweep owns the
+/// untracked ones there; anywhere else the name is a user's. So the listing
+/// deletes nothing, hides only an untracked root one, and lists the rest,
+/// including a user's `downloaded_2024`.
+#[tokio::test]
+async fn listing_never_deletes_downloaded_files_and_hides_only_an_untracked_root_temp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = |byte: &str| format!("downloaded_{}", byte.repeat(32));
+    let root_temp = id("ab");
+    let root_tracked = id("cd");
+    let nested = format!("sub/{}", id("ef"));
+    for rel in [
+        root_temp.as_str(),
+        root_tracked.as_str(),
+        nested.as_str(),
+        "sub/downloaded_2024",
+        "downloaded_2024",
+    ] {
+        write_file(tmp.path(), rel);
+    }
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &tmp.path().to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool);
+    seed_cache(&state, &[root_tracked.as_str()]);
+
+    let path: String = tmp.path().to_string_lossy().into();
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path.clone(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+    let sub = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, Some("sub".into()), Some(LABEL.into()))
+        .await
+        .expect("sub listing");
+
+    let root_names = entry_names(&root.files);
+    assert!(
+        !root_names.contains(&root_temp.as_str()),
+        "an untracked root temp is hidden: {root_names:?}"
+    );
+    assert!(
+        root_names.contains(&root_tracked.as_str()),
+        "a tracked one is a synced file: {root_names:?}"
+    );
+    assert!(root_names.contains(&"downloaded_2024"));
+
+    let sub_names = entry_names(&sub.files);
+    assert!(
+        sub_names.contains(&id("ef").as_str()),
+        "below the root the name is a user's: {sub_names:?}"
+    );
+    assert!(sub_names.contains(&"downloaded_2024"));
+
+    for rel in [
+        root_temp.as_str(),
+        root_tracked.as_str(),
+        nested.as_str(),
+        "sub/downloaded_2024",
+        "downloaded_2024",
+    ] {
+        assert!(tmp.path().join(rel).exists(), "a listing must not delete {rel}");
+    }
+}

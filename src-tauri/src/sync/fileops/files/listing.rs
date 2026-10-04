@@ -173,17 +173,23 @@ async fn list_sync_folder_inner_with(
             continue;
         }
 
-        // Remove and skip failed download artifacts (`downloaded_<hex>`) and
+        // Never delete `downloaded_<64 hex file id>`: hcfs writes that name
+        // only at the drive root (its fallback for a download whose path it
+        // cannot resolve) and its post-sync sweep owns the untracked ones
+        // there, keeping any it tracks as a real file. Anywhere else the name
+        // is a user's, and so is anything not a full file id
+        // (`downloaded_2024`). The listing used to delete every match on
+        // sight, user files included; now it only hides an untracked root
+        // one until the sweep runs.
+        //
         // 0-byte encrypted-name stubs (`file_<hex>`) left by decryption
-        // failures. Deleting on sight closes the gap between sync cycles
-        // where post-sync cleanup hasn't run yet.
+        // failures are still removed here, closing the gap until the next
+        // post-sync cleanup.
         if !is_folder {
-            if hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some() {
-                let path = entry.path();
-                info!(artifact = %name, "Removing failed download artifact on list");
-                if let Err(e) = tokio::fs::remove_file(&path).await {
-                    warn!(artifact = %name, error = %e, "Failed to remove failed-download artifact on list — it will be retried on the next listing");
-                }
+            if subfolder.as_deref().is_none_or(str::is_empty)
+                && hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some()
+                && !synced_set.as_ref().is_some_and(|synced| synced.contains_key(&name))
+            {
                 continue;
             }
             if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some() && meta.len() == 0 {

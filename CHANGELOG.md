@@ -124,6 +124,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Files whose names start with 'downloaded_' are no longer removed when you
+  open their folder.**
+
 - **The menu bar popover opens under its icon again, recording or not.** It
   no longer does nothing while a recording runs, vanishes the moment it
   opens, or hides behind a capture's preview card.
