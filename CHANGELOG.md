@@ -127,6 +127,15 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Files whose names start with 'downloaded_' are no longer removed when you
   open their folder.**
 
+- **A file that can't sync now says why, and stays marked until it's fixed.**
+  If two files' names differ only in capital letters, a file can't be read, or
+  your disk is too full to download it, Hippius names the file and tells you
+  what to do, instead of a vague "Sync failed. Please try again."
+
+- **A disconnected disk is called what it is.** When your Hippius folder is on
+  a disk that isn't plugged in, Hippius says so once and changes nothing,
+  instead of reporting a sync failure on every retry.
+
 - **The menu bar popover opens under its icon again, recording or not.** It
   no longer does nothing while a recording runs, vanishes the moment it
   opens, or hides behind a capture's preview card.
