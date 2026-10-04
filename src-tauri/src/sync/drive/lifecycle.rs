@@ -1750,7 +1750,7 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
 }
 
 /// Tear down a drive: cancel any in-flight sync, drop it from the in-memory
-/// map, delete its `sync_paths` row, clear its intent rows, and wipe its
+/// map, delete its `sync_paths` row, clear its intent and saved-failure rows, and wipe its
 /// on-disk sync baseline — in that drain-then-wipe order. `explicit_account`
 /// scopes the DB delete and baseline wipe: pass `Some` when the caller knows
 /// the owning account, `None` to fall back to the current session account.
@@ -1854,7 +1854,15 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
             if let Err(e) = crate::sync::folder_entries_backfill::clear_folder_entries_for_drive(pool, &owner, &label).await {
                 warn!("Failed to clear folder_entries_local for drive '{}': {e}", label);
             }
+
+            // Refusals outlive clean cycles and dismissals are restored at
+            // init, so both would come back on a drive re-added under this
+            // label.
+            if let Err(e) = crate::sync::failure_repo::clear_failures_for_drive(pool, &owner, &label).await {
+                warn!("Failed to clear saved failures for drive '{}': {e}", label);
+            }
         }
+        app_state.file_failures.clear_all_for_label(&label);
 
         // Tell the FE to drop this drive's entry from its per-drive
         // status map — INSIDE the locked region so emission order

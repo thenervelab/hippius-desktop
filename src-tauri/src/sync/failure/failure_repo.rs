@@ -224,6 +224,21 @@ pub async fn clear_retryable_failures_for_label(pool: &SqlitePool, owner: &str, 
     Ok(())
 }
 
+/// Delete every persisted failure of a drive, refusals and dismissal stamps
+/// included. For drive removal only: nothing of the removed drive's failures
+/// may carry over to a drive added later under the same label.
+///
+/// # Errors
+/// Returns [`crate::error::AppError::Db`] if the database write fails.
+pub async fn clear_failures_for_drive(pool: &SqlitePool, owner: &str, label: &str) -> Result<()> {
+    sqlx::query("DELETE FROM sync_file_failures WHERE owner = ? AND label = ?")
+        .bind(owner)
+        .bind(label)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Settle a drive's persisted failures after a sync cycle with no failures.
 ///
 /// Every retryable row goes (see [`clear_retryable_failures_for_label`]). A
@@ -628,6 +643,30 @@ mod tests {
         clear_failure(&pool, "o", "d", "Beach.JPG").await.unwrap();
 
         assert!(get_failure(&pool, "o", "d", "Beach.JPG").await.unwrap().is_none());
+    }
+
+    /// A removed drive leaves nothing behind: refusals (which outlive clean
+    /// cycles and retries) and dismissal stamps would otherwise come back
+    /// when a drive with the same label is added again.
+    #[tokio::test]
+    async fn removing_a_drive_clears_all_its_rows() {
+        let pool = test_pool().await;
+        upsert_failure(&pool, "o", "d", "Beach.JPG", "Beach.JPG", &refused("collides"), 1)
+            .await
+            .unwrap();
+        upsert_failure(&pool, "o", "d", "flaky.bin", "flaky.bin", &FileFailureKindPayload::Network, 1)
+            .await
+            .unwrap();
+        mark_dismissed(&pool, "o", "d", &["flaky.bin".to_string()], 2).await.unwrap();
+        upsert_failure(&pool, "o", "kept", "x", "x", &refused("r"), 1).await.unwrap();
+        upsert_failure(&pool, "other", "d", "x", "x", &refused("r"), 1).await.unwrap();
+
+        clear_failures_for_drive(&pool, "o", "d").await.unwrap();
+
+        assert!(list_failures_for_label(&pool, "o", "d").await.unwrap().is_empty());
+        assert!(list_dismissed_paths(&pool, "o", "d").await.unwrap().is_empty());
+        assert_eq!(list_failures_for_label(&pool, "o", "kept").await.unwrap().len(), 1, "other drive");
+        assert_eq!(list_failures_for_label(&pool, "other", "d").await.unwrap().len(), 1, "other account");
     }
 
     #[tokio::test]

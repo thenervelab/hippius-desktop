@@ -195,3 +195,15 @@ fn the_bridge_records_each_failure_kind_for_the_dialog() {
         "the kind must reach the dialog"
     );
 }
+
+/// Removing a drive drops its saved failures, refusals and dismissal stamps
+/// included, in the account-scoped teardown `remove_sync_path` delegates to,
+/// and forgets its in-memory counters. A re-added drive with the same label
+/// would otherwise show old refusals and keep old dismissals.
+#[test]
+fn removing_a_drive_clears_its_failures() {
+    let lifecycle = read_src("src/sync/drive/lifecycle.rs");
+    let body = slice_between(&lifecycle, "pub(crate) async fn remove_drive_for_account", "\n}\n");
+    assert!(body.contains("clear_failures_for_drive("), "the drive's rows must go");
+    assert!(body.contains("file_failures.clear_all_for_label("), "its counters and dismissals too");
+}
