@@ -106,8 +106,9 @@ export interface FinderShareChoosing {
   id: string;
   name: string;
   /**
-   * Size of the clicked file when it was right-clicked. `null` for a folder
-   * (nothing is uploaded at mint time) or an unreadable stat.
+   * Size of the clicked file when it was right-clicked, or the bytes an
+   * outside folder's copy will upload. `null` for an in-drive folder, an
+   * outside folder that could not be measured in time, or an unreadable stat.
    *
    * Shown in the chooser. A file that has not finished downloading is
    * indistinguishable from a smaller file at every level below this one, so
@@ -117,6 +118,12 @@ export interface FinderShareChoosing {
   sizeBytes: number | null;
   /** Seconds since the file was last modified; `null` when unreadable. */
   modifiedSecsAgo: number | null;
+  /**
+   * The clicked folder is outside every drive, so confirming uploads a COPY
+   * of it (removed when the link ends) instead of minting a live link.
+   * Decided in Rust; the chooser only says so.
+   */
+  isFolderCopy: boolean;
 }
 
 /** Phase of an in-flight share creation. */

@@ -320,6 +320,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   the files once you confirm how many; Decide later keeps them safe until you
   choose, and opening the notification brings the banner back.
 
+- **Share any folder from Finder as a link, even one outside your Hippius
+  drives.** Hippius uploads a copy for the link, shows its size before you
+  confirm, and removes the copy when the link expires or you revoke it.
+
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a
   window or a screen, or pick one from the live previews. On Wayland

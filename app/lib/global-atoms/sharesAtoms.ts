@@ -130,10 +130,15 @@ export type FinderShareState = {
   kind: "choosing";
   id: string;
   name: string;
-  /** Size of the clicked file; `null` for a folder or an unreadable stat. */
+  /**
+   * Size of the clicked file or of an outside folder's copy; `null` for an
+   * in-drive folder or when it could not be measured.
+   */
   sizeBytes: number | null;
   /** Seconds since the file was last modified; `null` when unreadable. */
   modifiedSecsAgo: number | null;
+  /** Outside folder: the share uploads a copy. */
+  isFolderCopy: boolean;
 };
 
 export const finderShareAtom = atom<FinderShareState | null>(null);

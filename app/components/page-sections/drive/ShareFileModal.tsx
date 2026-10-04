@@ -138,8 +138,9 @@ export default function ShareFileModal() {
   // one can be checked by eye, and Finder is merely where that bit us first
   // (a half-downloaded zip minted a truncated link on 2026-08-31).
   //
-  // A folder reports no size in either flow: nothing is uploaded when a folder
-  // share is minted, so a byte count next to it would describe nothing.
+  // An in-drive folder reports no size: nothing is uploaded when its live link
+  // is minted. A Finder folder outside every drive does carry one, because
+  // its copy is uploaded.
   const sourceSizeBytes = target?.file.isFolder
     ? null
     : finderShare?.kind === "choosing"
@@ -149,6 +150,10 @@ export default function ShareFileModal() {
   // path, and the in-app listing carries no equivalent.
   const sourceModifiedSecsAgo =
     finderShare?.kind === "choosing" ? finderShare.modifiedSecsAgo : null;
+  // Rust decided whether this Finder folder is uploaded as a copy; the
+  // chooser must not show the live-link notice for one.
+  const isFolderCopy =
+    finderShare?.kind === "choosing" && finderShare.isFolderCopy;
 
   const close = useCallback(() => {
     // Release a still-parked Finder request (chooser open, or the user bailed).
@@ -343,6 +348,7 @@ export default function ShareFileModal() {
         <ChoosingBody
           filename={filename}
           isFolder={target?.file.isFolder ?? false}
+          isFolderCopy={isFolderCopy}
           sizeBytes={sourceSizeBytes}
           modifiedSecsAgo={sourceModifiedSecsAgo}
           onConfirm={onConfirmChoice}
@@ -411,6 +417,7 @@ const PASSWORD_MIN_LEN = 8;
 function ChoosingBody({
   filename,
   isFolder,
+  isFolderCopy,
   sizeBytes,
   modifiedSecsAgo,
   onConfirm,
@@ -418,6 +425,8 @@ function ChoosingBody({
 }: {
   filename: string;
   isFolder: boolean;
+  /** The share uploads a copy of an outside folder. */
+  isFolderCopy: boolean;
   /** Source size, when known. `null` renders nothing rather than "0 B". */
   sizeBytes: number | null;
   /** Seconds since last modification, when known. */
@@ -468,7 +477,7 @@ function ChoosingBody({
         />
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">
           {visibility === "public"
-            ? "Anyone with the link can view and download this file."
+            ? `Anyone with the link can view and download this ${isFolder || isFolderCopy ? "folder" : "file"}.`
             : "The link can't be opened without this password. Send it separately — it can't be recovered or changed later."}
         </p>
 
@@ -532,6 +541,7 @@ function ChoosingBody({
           )}
 
         {isFolder && <FolderShareNotice />}
+        {isFolderCopy && <FolderCopyNotice />}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -584,6 +594,22 @@ function FolderShareNotice() {
     <p className="mt-3 text-xs text-grey-50 dark:text-grey-dark-600">
       Recipients can browse the folder and download files; the link always
       shows the current contents.
+    </p>
+  );
+}
+
+/**
+ * What the user agrees to when they share a folder from outside their
+ * drives: an uploaded COPY, frozen at share time and deleted with the link.
+ * The opposite promise to `FolderShareNotice`, so the two never render
+ * together.
+ */
+function FolderCopyNotice() {
+  return (
+    <p className="mt-3 text-xs text-grey-50 dark:text-grey-dark-600">
+      Hippius uploads a copy of this folder for the link. Changes you make to
+      the folder later won&apos;t reach it, and the copy is removed when the
+      link expires or you revoke it.
     </p>
   );
 }

@@ -17,6 +17,7 @@ import type { ReactNode } from "react";
 import { Channel } from "@tauri-apps/api/core";
 
 import ShareFileModal from "../ShareFileModal";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import {
   finderShareAtom,
   shareModalFileAtom,
@@ -76,8 +77,11 @@ function withProvider(
 // Seeds the Finder-driven atom in the `choosing` state — the same signal
 // `FinderShareListener` delivers when it maps the backend's
 // `finder:share-choosing` event. The modal then opens its public/private picker.
-function withFinderState(node: ReactNode, share: FinderShareState) {
-  const store = createStore();
+function withFinderState(
+  node: ReactNode,
+  share: FinderShareState,
+  store = createStore(),
+) {
   store.set(finderShareAtom, share);
   return <Provider store={store}>{node}</Provider>;
 }
@@ -92,6 +96,16 @@ const CHOOSING: FinderShareState = {
   name: "big-movie.mov",
   sizeBytes: null,
   modifiedSecsAgo: null,
+  isFolderCopy: false,
+};
+
+// A Finder folder outside every drive: Rust measured the copy it will upload
+// and flagged that confirming uploads a copy rather than minting a live link.
+const FOLDER_COPY: FinderShareState = {
+  ...CHOOSING,
+  name: "T2-KD",
+  sizeBytes: 6_765_321,
+  isFolderCopy: true,
 };
 
 /**
@@ -536,6 +550,73 @@ describe("ShareFileModal", () => {
     // Still dismissible — the error body offers a Close action (the dialog's own
     // "X" also matches, so assert at least one Close affordance).
     expect(screen.getAllByRole("button", { name: /close/i }).length).toBeGreaterThan(0);
+  });
+
+  it("tells the user an outside folder is uploaded as a copy, with its size", () => {
+    render(withFinderState(<ShareFileModal />, FOLDER_COPY));
+    expect(screen.getByText(/uploads a copy of this folder/i)).toBeInTheDocument();
+    expect(screen.getByText(/copy is removed when the link expires/i)).toBeInTheDocument();
+    expect(screen.getByText("6.77 MB")).toBeInTheDocument();
+    expect(screen.getByText(/view and download this folder/i)).toBeInTheDocument();
+    // A copy is NOT a live link — that notice would be false here.
+    expect(screen.queryByText(/always shows the current contents/i)).not.toBeInTheDocument();
+  });
+
+  it("does not show the copy notice for a file", () => {
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+    expect(screen.queryByText(/uploads a copy of this folder/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/view and download this file/i)).toBeInTheDocument();
+  });
+
+  it("streams a folder copy's upload into the determinate bar", async () => {
+    invokeMock.mockReturnValueOnce(new Promise(() => {}));
+    render(withFinderState(<ShareFileModal />, FOLDER_COPY));
+    confirmChooser();
+
+    expect(await screen.findByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+    const args = invokeMock.mock.calls[0][1] as {
+      onProgress: {
+        onmessage:
+          | ((m: { phase: string; bytesDone: number; bytesTotal: number }) => void)
+          | null;
+      };
+    };
+    act(() => {
+      args.onProgress.onmessage?.({ phase: "uploading", bytesDone: 25, bytesTotal: 100 });
+    });
+
+    expect(await screen.findByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+    expect(screen.getByText("T2-KD")).toBeInTheDocument();
+  });
+
+  // Over the plan, Rust refuses with NotReady(StorageLimitReached), either
+  // from the pre-flight or the server's own 402 mid-upload. The way out is a
+  // bigger plan, so the plans dialog opens instead of an inline error.
+  it("opens the plans dialog when a Finder share hits the storage limit", async () => {
+    invokeMock.mockRejectedValueOnce({
+      kind: "NotReady",
+      subkind: "STORAGE_LIMIT_REACHED",
+      message: "Storage limit reached",
+    });
+    const store = createStore();
+    render(withFinderState(<ShareFileModal />, FOLDER_COPY, store));
+
+    confirmChooser();
+
+    await waitFor(() => expect(store.get(insufficientCreditsDialogOpenAtom)).toBe("sharing"));
+    expect(store.get(finderShareAtom)).toBeNull();
+    expect(screen.queryByText(/couldn.?t create share link/i)).not.toBeInTheDocument();
+  });
+
+  it("shows Rust's sentence verbatim when a folder copy is refused", async () => {
+    const message =
+      "\u201ca.mov\u201d changed while the folder was being shared, so the link was cancelled.";
+    invokeMock.mockRejectedValueOnce({ kind: "Validation", message });
+    render(withFinderState(<ShareFileModal />, FOLDER_COPY));
+
+    confirmChooser();
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
   });
 
   it("calls hcfs_revoke_share when the user revokes from the done state", async () => {
