@@ -1145,7 +1145,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // BEFORE any upload starts; whichever fires first runs it exactly once
         // and the other awaits that result. See `crate::sync::chunk_reclaim`.
         //
-        // MUST sit after `manage`: `state::<crate::app_state::AppState>()` panics if a Tokio
+        // MUST sit after `manage`: `state::<AppState>()` panics if a Tokio
         // worker wins the race with setup (H-005). `try_state` is not a
         // substitute — a `None` skip reopens the paused-drive hole this
         // trigger exists to close. Pinned by
