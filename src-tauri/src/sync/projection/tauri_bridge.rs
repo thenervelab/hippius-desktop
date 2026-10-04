@@ -951,6 +951,11 @@ fn handle_file_failed(app: &AppHandle, ev: FileFailedEvent) {
     {
         use tauri::Manager;
         let app_state = app.state::<crate::app_state::AppState>();
+        // The Sync Issues dialog decides Retry by kind; the progress rows it
+        // is built from carry only text.
+        app_state
+            .file_failures
+            .note_kind(&label, &path, crate::sync::failure_repo::persisted_kind(&kind_payload));
         if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
             let label = label.clone();
             let path = path.clone();

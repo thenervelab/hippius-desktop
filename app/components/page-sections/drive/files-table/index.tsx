@@ -109,9 +109,8 @@ import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 import UploaderCell from "./UploaderCell";
 
 import { toast } from "sonner";
-import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { Refresh } from "@/components/ui/icons";
+import { failedRowMenuItem } from "./failedRowMenu";
 import { entryKey } from "../highlightEntry";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -1054,32 +1053,24 @@ const FilesTable: FC<FilesTableProps> = memo(
                   disabled: itemDeleting,
                 },
               ]),
-          ...(!file.isFolder && file.syncStatus === "failed" && file.label
-            ? [
-                {
-                  icon: <Refresh className="size-4" />,
-                  itemTitle: "Retry sync",
-                  onItemClick: () => {
-                    const relativePath = resolveRelativePath(
-                      parentSubFolderPath ?? normalizedSubfolderPath,
-                      file.actualFileName || file.name,
-                    );
-                    void invoke("retry_file_failure", {
-                      label: file.label,
-                      path: relativePath,
-                    })
-                      .then(() => {
-                        void queryClient.invalidateQueries({
-                          queryKey: ["drive-failures", file.label],
-                        });
-                        toast.success("Retrying sync…");
-                      })
-                      .catch((e) => toast.error(`Retry failed: ${e}`));
-                  },
-                  disabled: itemDeleting,
-                },
-              ]
-            : []),
+          // A refused file offers Dismiss, an undecryptable one nothing: the
+          // action follows the saved failure's kind (`failedRowAction`).
+          ...(() => {
+            if (file.isFolder || file.syncStatus !== "failed" || !file.label) {
+              return [];
+            }
+            const item = failedRowMenuItem({
+              label: file.label,
+              relativePath: resolveRelativePath(
+                parentSubFolderPath ?? normalizedSubfolderPath,
+                file.actualFileName || file.name,
+              ),
+              queryClient,
+              polkadotAddress,
+              disabled: itemDeleting,
+            });
+            return item ? [item] : [];
+          })(),
           ...(!file.isFolder && isPreviewableFileName(file.name) && canPreview
             ? [
                 {

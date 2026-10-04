@@ -1,5 +1,6 @@
 import { atom } from "jotai";
 import type { StagedChanges } from "@/lib/types/syncTypes";
+import type { FileFailureKind } from "@/app/lib/types/fileFailure";
 
 // Per-drive pending conflicts detected during auto-sync, keyed by drive label.
 // The multi-drive engine emits conflict-review events per drive (each carries a
@@ -76,6 +77,9 @@ export interface FailedFileInfo {
   fileName: string;
   error: string | null;
   failureCount: number;
+  /** The failure's kind when hcfs named it; decides whether Retry is
+   *  offered. Absent for a file whose failure event was not seen. */
+  kind?: FileFailureKind | null;
 }
 
 /** Files that have repeatedly failed to sync (null when no failures at threshold). */

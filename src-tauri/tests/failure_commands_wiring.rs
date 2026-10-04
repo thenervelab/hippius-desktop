@@ -162,3 +162,36 @@ fn dialog_actions_drop_the_durable_row() {
         assert!(body.contains("clear_durable_failure("), "{name} must clear the persisted failure row");
     }
 }
+
+/// A refused file cannot be retried (hcfs reports a refusal once per
+/// revision), so the Drive row offers Dismiss instead: an IPC that drops the
+/// saved row and the in-memory counters and does NOT sync or touch the
+/// exclude file. Registered so the frontend can reach it.
+#[test]
+fn dismissing_a_failure_drops_the_row_without_syncing() {
+    let src = source();
+    let body = slice_between(&src, "pub async fn clear_file_failure", "\n}\n");
+    assert!(body.contains("clear_file_failure_inner("), "the command delegates to the testable inner");
+    let inner = slice_between(&src, "pub async fn clear_file_failure_inner", "\n}\n");
+    assert!(inner.contains("clear_durable_failure("), "the saved row must go");
+    assert!(inner.contains(".clear_failure("), "the in-memory counters must go");
+    for forbidden in ["trigger_sync", "exclusion", "exclude_path"] {
+        assert!(!inner.contains(forbidden), "dismiss must not {forbidden}");
+    }
+
+    let main = read_src("src/main.rs");
+    assert!(main.contains("failure_commands::clear_file_failure,"), "the IPC must be registered");
+}
+
+/// The Sync Issues dialog decides Retry by the failure's KIND: a refusal's
+/// text is hcfs's own and cannot be matched. The bridge records the kind
+/// where it is known, the FileFailed event.
+#[test]
+fn the_bridge_records_each_failure_kind_for_the_dialog() {
+    let bridge = read_src("src/sync/projection/tauri_bridge.rs");
+    let body = slice_between(&bridge, "fn handle_file_failed(", "\n}\n");
+    assert!(
+        body.contains("file_failures") && body.contains(".note_kind("),
+        "the kind must reach the dialog"
+    );
+}

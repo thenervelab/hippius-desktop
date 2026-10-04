@@ -133,6 +133,12 @@ fn kind_columns(kind: &FileFailureKindPayload) -> KindColumns {
     }
 }
 
+/// The persisted (and wire) tag of a failure kind, e.g. `"refused"`.
+#[must_use]
+pub fn persisted_kind(kind: &FileFailureKindPayload) -> &'static str {
+    kind_columns(kind).kind
+}
+
 /// Record (or bump) a persisted failure for a file. Returns the new
 /// `failure_count` after the upsert (1 on the first failure).
 ///

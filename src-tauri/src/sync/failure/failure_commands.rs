@@ -235,6 +235,32 @@ pub async fn retry_file_failure(label: String, path: String, state: tauri::State
     Ok(())
 }
 
+/// Dismiss a file's saved failure without syncing it: drops its
+/// `sync_file_failures` row and its in-memory counters, and nothing else.
+///
+/// The Drive row's action for a refused file. A retry cannot help one: hcfs
+/// reports a refusal once per revision, so retrying would clear the row and
+/// the next cycle would refuse the file again in silence. Dismiss says the
+/// user has seen it. If the file changes and hcfs refuses it again, the new
+/// report brings the row back.
+///
+/// # Errors
+/// Returns an error if the database write fails.
+#[tauri::command]
+pub async fn clear_file_failure(label: String, relative_path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
+    clear_file_failure_inner(&state, &label, &relative_path).await
+}
+
+/// [`clear_file_failure`] without the Tauri `State` wrapper, for tests.
+///
+/// # Errors
+/// Returns an error if the database write fails.
+pub async fn clear_file_failure_inner(state: &AppState, label: &str, relative_path: &str) -> Result<()> {
+    clear_durable_failure(state, label, relative_path).await?;
+    state.file_failures.clear_failure(label, relative_path);
+    Ok(())
+}
+
 /// Retry every failed file on a drive — e.g. after a credit top-up fixes a
 /// batch of `InsufficientBalance` failures at once. Clears the drive's
 /// durable retryable failures and its in-memory counters, removes the
@@ -298,4 +324,50 @@ pub async fn cleanup_session_skips(state: &crate::app_state::AppState) {
         }
     }
     state.file_failures.reset();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::projection::events::FileFailureKindPayload;
+
+    const ACCOUNT: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+
+    async fn state_with_failures() -> AppState {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // The production DDL, so the test cannot drift from the real table.
+        crate::utils::schema::ensure_table_schema(&pool).await.unwrap();
+        let state = AppState::new();
+        state.set_pool(pool);
+        state
+            .set_active_account(ACCOUNT, crate::auth::state::AuthCapabilities::default())
+            .unwrap();
+        state
+    }
+
+    /// Dismiss drops the one file's saved row and its in-memory counters,
+    /// leaving the drive's other rows alone.
+    #[tokio::test]
+    async fn dismissing_drops_that_files_row_and_counters_only() {
+        let state = state_with_failures().await;
+        let owner = crate::auth::account_key::account_key(ACCOUNT);
+        let pool = state.pool().unwrap().clone();
+        let refused = FileFailureKindPayload::Refused {
+            reason: "collides".to_string(),
+        };
+        for path in ["Beach.JPG", "locked.pdf"] {
+            crate::sync::failure_repo::upsert_failure(&pool, &owner, "d", path, path, &refused, 1)
+                .await
+                .unwrap();
+            state.file_failures.record_failure("d", path, None);
+        }
+
+        clear_file_failure_inner(&state, "d", "Beach.JPG").await.unwrap();
+
+        let left = crate::sync::failure_repo::list_failures_for_label(&pool, &owner, "d").await.unwrap();
+        let paths: Vec<&str> = left.iter().map(|r| r.relative_path.as_str()).collect();
+        assert_eq!(paths, vec!["locked.pdf"]);
+        assert_eq!(state.file_failures.record_failure("d", "Beach.JPG", None), 1, "counter reset");
+        assert_eq!(state.file_failures.record_failure("d", "locked.pdf", None), 2, "untouched");
+    }
 }

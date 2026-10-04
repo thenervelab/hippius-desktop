@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  failedRowAction,
   failureMessage,
+  isRetryableFailedFile,
   isRetryableFailure,
+  UNDECRYPTABLE_MESSAGE,
 } from "@/app/lib/utils/failureMessage";
 import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 
@@ -153,5 +156,33 @@ describe("isRetryableFailure", () => {
     for (const kind of ["network", "serverError", "insufficientBalance", "other"]) {
       expect(isRetryableFailure(kind)).toBe(true);
     }
+  });
+});
+
+describe("failedRowAction", () => {
+  it("offers Dismiss, not Retry, for a refusal", () => {
+    expect(failedRowAction({ ...base, kind: "refused" })).toBe("dismiss");
+  });
+
+  it("offers nothing for an undecryptable file", () => {
+    expect(failedRowAction({ ...base, kind: "undecryptable" })).toBeNull();
+  });
+
+  it("offers Retry for a retryable kind, and for a live failure with no saved row", () => {
+    expect(failedRowAction({ ...base, kind: "network" })).toBe("retry");
+    expect(failedRowAction(null)).toBe("retry");
+  });
+});
+
+describe("isRetryableFailedFile", () => {
+  it("decides by kind, so a refusal's own text is never read as retryable", () => {
+    const refusal = "Not synced: could not be read (Permission denied)";
+    expect(isRetryableFailedFile({ kind: "refused", error: refusal })).toBe(false);
+    expect(isRetryableFailedFile({ kind: "network", error: UNDECRYPTABLE_MESSAGE })).toBe(true);
+  });
+
+  it("falls back to the authored undecryptable copy when no kind is known", () => {
+    expect(isRetryableFailedFile({ error: UNDECRYPTABLE_MESSAGE })).toBe(false);
+    expect(isRetryableFailedFile({ kind: null, error: "Server error (500)." })).toBe(true);
   });
 });

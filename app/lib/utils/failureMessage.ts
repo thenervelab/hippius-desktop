@@ -1,4 +1,4 @@
-import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
+import type { FileFailureKind, FileFailureRecord } from "@/app/lib/types/fileFailure";
 
 /**
  * Copy for a ciphertext this device's key cannot open.
@@ -129,17 +129,34 @@ export function isRetryableFailure(kind: FileFailureRecord["kind"]): boolean {
 }
 
 /**
- * Whether an authored failure reason describes something a retry can fix.
+ * Whether a Sync Issues dialog entry describes something a retry can fix.
  *
- * The reason-string sibling of {@link isRetryableFailure}, for surfaces that
- * receive `FailedFileInfo` (which carries `error` text but no typed `kind`).
- * Matching authored copy — never server text — is the same approach Rust
- * takes in `is_gone_reason` / `is_transient_reason`.
- *
- * Plumbing the typed kind through the `hcfs_failed_files` payload would be
- * better and is a separate change; until then this keeps the modal from
- * offering a button that cannot work.
+ * Decides by `kind` (Rust names it from hcfs's typed failure) whenever it is
+ * known: a refusal's `error` is hcfs's own text and cannot be matched. Only an
+ * entry with no kind falls back to the authored undecryptable copy, the one
+ * non-retryable reason whose wording this app controls.
  */
-export function isRetryableReason(reason: string | null): boolean {
-  return reason?.trim() !== UNDECRYPTABLE_MESSAGE;
+export function isRetryableFailedFile(file: {
+  kind?: FileFailureKind | null;
+  error: string | null;
+}): boolean {
+  if (file.kind) return isRetryableFailure(file.kind);
+  return file.error?.trim() !== UNDECRYPTABLE_MESSAGE;
+}
+
+/**
+ * The action a failed Drive row offers for its saved failure.
+ *
+ * - `retry` for a kind a retry can fix, and for a row with no saved failure
+ *   (a live failure from this cycle, not yet persisted).
+ * - `dismiss` for a refusal: retrying cannot change hcfs's verdict, so the
+ *   user can only acknowledge it (or fix the file, which clears it).
+ * - `null` for an undecryptable file: neither works, and the copy says what
+ *   does.
+ */
+export function failedRowAction(
+  failure: Pick<FileFailureRecord, "kind"> | null | undefined,
+): "retry" | "dismiss" | null {
+  if (!failure || isRetryableFailure(failure.kind)) return "retry";
+  return failure.kind === "refused" ? "dismiss" : null;
 }

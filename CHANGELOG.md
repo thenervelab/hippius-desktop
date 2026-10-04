@@ -131,7 +131,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **A file that can't sync now says why, and stays marked until it's fixed.**
   If two files' names differ only in capital letters, a file can't be read, or
   your disk is too full to download it, Hippius names the file and tells you
-  what to do, instead of a vague "Sync failed. Please try again."
+  what to do, instead of a vague "Sync failed. Please try again." Such a file
+  offers Dismiss rather than a Retry that could not help.
 
 - **A disconnected disk is called what it is.** When your Hippius folder is on
   a disk that isn't plugged in, Hippius says so once and changes nothing,
