@@ -26,7 +26,7 @@ use crate::shares::SqliteShareKeystore;
 use crate::shares::capabilities::fetch_capabilities;
 use crate::shares::client::build_account_client;
 use crate::shares::commands::{ShareChoice, ShareLink, console_base_url};
-use crate::shares::folder_scan::{FolderScan, scan_until_dropped};
+use crate::shares::folder_scan::{FolderScan, ScanLimits, empty_folder_names_too_long, scan_until_dropped, too_many_items};
 
 /// Refusal on a server without uploaded-copy folder links. The mock-server
 /// suite asserts it verbatim.
@@ -230,16 +230,11 @@ fn map_upload_folder_share_error(e: FolderShareError) -> AppError {
 fn map_folder_refusal(e: FolderShareError) -> AppError {
     match e {
         FolderShareError::EmptyFolder => AppError::Validation("This folder has no files to share.".into()),
-        // Counts files AND folders, so the copy must not say "files".
-        FolderShareError::TooManyItems { count, max } => AppError::Validation(format!(
-            "This folder holds {count} items (files and folders), and a link can hold at most {max}. \
-             Share a smaller folder."
-        )),
-        FolderShareError::DirListTooLarge { bytes: _, max: _ } => AppError::Validation(
-            "This folder's empty subfolders have names too long to share together. Remove or shorten \
-             some of them, then share again."
-                .into(),
-        ),
+        // The scan refuses both in practice; these are the client's
+        // backstop, worded exactly alike. `TooManyItems` counts files OR
+        // folders without saying which, so the sentence names both caps.
+        FolderShareError::TooManyItems { count: _, max: _ } => too_many_items(&ScanLimits::SHARED_FOLDER),
+        FolderShareError::DirListTooLarge { bytes: _, max: _ } => empty_folder_names_too_long(),
         other => map_item_refusal(other),
     }
 }
@@ -345,11 +340,12 @@ mod tests {
 
     #[test]
     fn too_many_items_counts_files_and_folders() {
+        // Worded exactly as the scan's own refusal, which usually comes
+        // first: the client cannot say which cap it hit, so both name both.
         let message = validation(FolderShareError::TooManyItems { count: 50_001, max: 50_000 });
-        assert!(
-            message.contains("50001 items (files and folders)") && message.contains("at most 50000"),
-            "{message}"
-        );
+        let scan = too_many_items(&ScanLimits::SHARED_FOLDER);
+        assert!(matches!(&scan, AppError::Validation(m) if *m == message), "{message} vs {scan:?}");
+        assert!(message.contains("at most 50,000 files and 50,000 folders"), "{message}");
     }
 
     #[test]
@@ -358,7 +354,8 @@ mod tests {
             bytes: 300_000,
             max: 262_144,
         });
-        assert!(message.contains("empty subfolders"), "{message}");
+        let scan = empty_folder_names_too_long();
+        assert!(matches!(&scan, AppError::Validation(m) if *m == message), "{message} vs {scan:?}");
     }
 
     #[test]

@@ -207,11 +207,7 @@ impl<'l> Walk<'l> {
             return Err(too_large(&relative_path, self.limits.file_ciphertext));
         }
         if self.scan.file_count >= self.limits.files {
-            return Err(AppError::Validation(format!(
-                "This folder has more than {}, more than one link can hold. Share a smaller \
-                 folder.",
-                counted(self.limits.files, "file", "files")
-            )));
+            return Err(too_many_items(self.limits));
         }
         self.scan.file_count += 1;
         self.scan.total_bytes = self.scan.total_bytes.saturating_add(size);
@@ -225,11 +221,7 @@ impl<'l> Walk<'l> {
     fn enter_dir(&mut self, relative_path: &str) -> Result<()> {
         check_path(relative_path)?;
         if self.dir_count >= self.limits.dirs {
-            return Err(AppError::Validation(format!(
-                "This folder has more than {} inside it (counting every folder within \
-                 a folder), more than one link can hold. Share a smaller folder.",
-                counted(self.limits.dirs, "folder", "folders")
-            )));
+            return Err(too_many_items(self.limits));
         }
         self.dir_count += 1;
         Ok(())
@@ -241,11 +233,7 @@ impl<'l> Walk<'l> {
         let bytes = upload_folder_share_dirs_bytes([normalized.as_str()]);
         self.dirs_bytes = self.dirs_bytes.saturating_add(bytes);
         if self.dirs_bytes > self.limits.dirs_bytes_budget {
-            return Err(AppError::Validation(
-                "This folder has too many empty folders with long names to share as one link. \
-                 Remove some of the empty folders, or share a smaller folder."
-                    .into(),
-            ));
+            return Err(empty_folder_names_too_long());
         }
         self.scan.entries.push(UploadFolderEntry::Dir { relative_path });
         Ok(())
@@ -330,6 +318,29 @@ fn shown(path: &str) -> String {
 
 /// "about": the cap is on ciphertext, so the largest file that fits is a
 /// little under the cap, and the cap is binary gigabytes quoted as "GB".
+/// The refusal for a folder past the file cap or the folder cap. One
+/// sentence for both, naming both: the client's `TooManyItems` does not
+/// say which cap it hit, and the same limit must never read two ways
+/// depending on whether the scan or the client caught it.
+pub(crate) fn too_many_items(limits: &ScanLimits) -> AppError {
+    AppError::Validation(format!(
+        "This folder holds more than one link can: at most {} and {} inside it, counting every \
+         folder within a folder. Share a smaller folder.",
+        counted(limits.files, "file", "files"),
+        counted(limits.dirs, "folder", "folders")
+    ))
+}
+
+/// The refusal for empty folders whose names, sent together in the open
+/// request, exceed its budget. Shared with the client's `DirListTooLarge`.
+pub(crate) fn empty_folder_names_too_long() -> AppError {
+    AppError::Validation(
+        "This folder has too many empty folders with long names to share as one link. Remove \
+         some of the empty folders, or share a smaller folder."
+            .into(),
+    )
+}
+
 pub(crate) fn too_large(relative_path: &str, max_ciphertext: u64) -> AppError {
     const GIB: u64 = 1024 * 1024 * 1024;
     AppError::Validation(format!(
@@ -571,7 +582,8 @@ mod tests {
         let past = ScanLimits { files: 1, ..limits() };
         let err = scan_folder_with(&root, &past, &RUN).expect_err("one past");
         let message = validation(&err);
-        assert!(message.contains("more than 1 file,"), "{message}");
+        assert_eq!(message, validation(&too_many_items(&past)), "one wording for the item caps");
+        assert!(message.contains("at most 1 file and 50,000 folders"), "{message}");
     }
 
     /// A limit of one reads "1 folder", not "1 folders".
@@ -581,7 +593,7 @@ mod tests {
         let past = ScanLimits { dirs: 1, ..limits() };
         let err = scan_folder_with(&root, &past, &RUN).expect_err("past the cap");
         let message = validation(&err);
-        assert!(message.contains("more than 1 folder inside"), "{message}");
+        assert!(message.contains("and 1 folder inside"), "{message}");
     }
 
     /// The real cap is 5 GiB of ciphertext, a little under 5 GiB of file,
@@ -604,8 +616,8 @@ mod tests {
         let past = ScanLimits { dirs: 2, ..limits() };
         let err = scan_folder_with(&root, &past, &RUN).expect_err("one past");
         let message = validation(&err);
-        assert!(message.contains("more than 2 folders"), "{message}");
-        assert!(!message.contains("file"), "a folder limit must not say files: {message}");
+        assert_eq!(message, validation(&too_many_items(&past)), "one wording for the item caps");
+        assert!(message.contains("and 2 folders inside it"), "{message}");
     }
 
     /// The walk's directory count is exactly hcfs-shared's closure of what
@@ -699,7 +711,7 @@ mod tests {
             ..limits()
         };
         let err = scan_folder_with(&root, &under, &RUN).expect_err("one byte over");
-        assert!(validation(&err).contains("empty folders"), "{err:?}");
+        assert_eq!(validation(&err), validation(&empty_folder_names_too_long()), "{err:?}");
     }
 
     /// Names the link cannot hold are refused before anything uploads, each
