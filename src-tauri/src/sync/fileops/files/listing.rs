@@ -3,6 +3,7 @@
 
 use super::dir_stats::dir_stats_recursive;
 use super::pathops::{ensure_within, is_engine_hidden_name, is_internal_hidden_name, rel_has_engine_hidden_component};
+use super::refused_rows::RefusedRows;
 use super::synced_state::{shared_sync_state_for_label, synced_paths_and_excludes_for_label};
 use crate::auth::account_key::account_key;
 use crate::error::Result;
@@ -15,7 +16,32 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::warn;
 
-type PreloadedSynced = (Option<HashMap<String, SyncedFileInfo>>, Vec<String>);
+/// What a listing reads about its drive before walking the folder. Loaded
+/// once per listing, so the grouped listing's server overlay reuses what the
+/// disk walk read.
+struct DriveView {
+    /// The drive's synced map; `None` when the drive is not available.
+    synced: Option<HashMap<String, SyncedFileInfo>>,
+    /// The drive's exclude patterns.
+    excludes: Vec<String>,
+    /// The drive's saved refusals.
+    refused: RefusedRows,
+}
+
+impl DriveView {
+    /// Loads the synced map and exclude patterns in a single drives-map
+    /// lock and a single per-drive lock (two acquisitions serialized
+    /// listings behind any in-flight sync holding the outer lock), then
+    /// the saved refusals.
+    async fn load(state: &crate::app_state::AppState, label: Option<&str>) -> Self {
+        let (synced, excludes) = match label {
+            Some(l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
+            None => (None, Vec::new()),
+        };
+        let refused = RefusedRows::load(state, label).await;
+        Self { synced, excludes, refused }
+    }
+}
 
 #[derive(Serialize)]
 pub struct FileEntry {
@@ -23,7 +49,9 @@ pub struct FileEntry {
     pub is_folder: bool,
     pub size: u64,
     pub modified: Option<u64>,
-    /// Sync status: "synced", "pending", "excluded", "hidden", or "unknown"
+    /// Sync status: "synced", "pending", "excluded", "hidden", "unknown", or
+    /// "failed" (the drive has a saved refusal for the file; the reason is
+    /// that row's, read by the FE through `get_drive_failures`)
     pub sync_status: String,
     /// Hex-encoded path_hash from the synced state (empty if not synced yet).
     /// File id, not the content hash — that is [`Self::arion_cid`].
@@ -79,7 +107,8 @@ async fn list_sync_folder_inner(
     subfolder: Option<String>,
     label: Option<String>,
 ) -> Result<Vec<FileEntry>> {
-    list_sync_folder_inner_with(state, sync_path, subfolder, label, None).await
+    let view = DriveView::load(state, label.as_deref()).await;
+    list_sync_folder_inner_with(state, sync_path, subfolder, label, &view).await
 }
 
 fn disk_row_status<'a>(
@@ -204,7 +233,7 @@ async fn list_sync_folder_inner_with(
     sync_path: String,
     subfolder: Option<String>,
     label: Option<String>,
-    preloaded: Option<PreloadedSynced>,
+    view: &DriveView,
 ) -> Result<Vec<FileEntry>> {
     let base = PathBuf::from(&sync_path);
     let target = match subfolder {
@@ -228,28 +257,14 @@ async fn list_sync_folder_inner_with(
             .map_err(|e| crate::error::AppError::Other(format!("ensure_within task panicked: {e}")))??;
     }
 
-    // Load synced paths AND exclusion patterns in a single drives-map
-    // lock + single per-drive lock. Previously these were two separate
-    // acquisitions (synced_paths_for_label, then a `.lock().await` on
-    // the same outer mutex for excludes) which serialized listings
-    // behind any in-flight sync that held the outer lock.
-    //
-    // `preloaded` lets `list_sync_folder_grouped_inner` load the map once
-    // and reuse it for the server-only overlay instead of a second
-    // `synced_paths_for_label` call.
-    let (synced_set, excluded_patterns) = match preloaded {
-        Some(pair) => pair,
-        None => match label {
-            Some(ref l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
-            None => (None, Vec::new()),
-        },
-    };
-    let exclude_rules = super::exclude_match::rules_from_patterns(&excluded_patterns);
+    let synced_set = view.synced.as_ref();
+    let excluded_patterns = &view.excludes;
+    let exclude_rules = super::exclude_match::rules_from_patterns(excluded_patterns);
 
     let mut downloaded_as = DownloadedAsLookup {
         sync: &state.sync,
         label: label.as_deref(),
-        synced: synced_set.as_ref(),
+        synced: synced_set,
         state: StateRead::NotRead,
     };
 
@@ -284,7 +299,7 @@ async fn list_sync_folder_inner_with(
 
         let at_root = subfolder.as_deref().is_none_or(str::is_empty);
         let mut legacy_copy = false;
-        if !is_folder && is_untracked_engine_artifact(&name, &relative_path, at_root, meta.len(), synced_set.as_ref()) {
+        if !is_folder && is_untracked_engine_artifact(&name, &relative_path, at_root, meta.len(), synced_set) {
             match hcfs_client::engine::classify::is_failed_download_artifact(&name).filter(|_| at_root) {
                 Some(hex_id) if downloaded_as.knows(hex_id).await => legacy_copy = true,
                 _ => continue,
@@ -295,11 +310,14 @@ async fn list_sync_folder_inner_with(
         // Match engine globs (`*.bin` → foo.bin and dir/foo.bin), not exact
         // path equality — that left glob-excluded files Pending on Drive.
         let is_excluded = super::exclude_match::path_is_excluded(&exclude_rules, &relative_path, is_folder);
-        let (mut sync_status, info) = disk_row_status(is_hidden_file, is_excluded, is_folder, synced_set.as_ref(), &relative_path);
+        let (mut sync_status, info) = disk_row_status(is_hidden_file, is_excluded, is_folder, synced_set, &relative_path);
         // hcfs keeps a legacy copy out of every plan while it is on disk, so
         // "pending" would promise an upload that never comes: no badge.
         if legacy_copy && sync_status == "pending" {
             sync_status = "unknown";
+        }
+        if !is_folder {
+            sync_status = view.refused.status_for(&relative_path, sync_status);
         }
 
         // Folder row numbers are billed: dir_stats omits excluded children
@@ -317,7 +335,7 @@ async fn list_sync_folder_inner_with(
         } else {
             let excludes = super::dir_stats::DirStatsExcludes {
                 root: &base,
-                patterns: &excluded_patterns,
+                patterns: excluded_patterns,
             };
             dir_stats_recursive(&target.join(&name), Some(&excludes)).await
         };
@@ -503,20 +521,11 @@ pub async fn list_sync_folder_grouped_inner(
     // inner helper keeps the exclude/sync-status/file-count logic in one
     // place; a missing subfolder returns `Vec::new()` from there and we
     // overlay server entries below.
-    // One map load for both the on-disk listing and the server-only overlay.
-    let (synced_set, excluded_patterns) = match &label {
-        Some(l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
-        None => (None, Vec::new()),
-    };
-    let exclude_rules = super::exclude_match::rules_from_patterns(&excluded_patterns);
-    let disk_entries = list_sync_folder_inner_with(
-        state,
-        sync_path.clone(),
-        subfolder.clone(),
-        label.clone(),
-        Some((synced_set.clone(), excluded_patterns)),
-    )
-    .await?;
+    // One drive read for both the on-disk listing and the server-only overlay.
+    let view = DriveView::load(state, label.as_deref()).await;
+    let exclude_rules = super::exclude_match::rules_from_patterns(&view.excludes);
+    let disk_entries = list_sync_folder_inner_with(state, sync_path.clone(), subfolder.clone(), label.clone(), &view).await?;
+    let synced_set = &view.synced;
 
     // 3. Build the overlay. Normalise the subfolder prefix to always end in
     // `/` so `rel.starts_with(prefix)` doesn't match a sibling whose name
@@ -570,7 +579,10 @@ pub async fn list_sync_folder_grouped_inner(
                             is_folder: false,
                             size: 0,
                             modified: None,
-                            sync_status: if file_excluded { "excluded".to_string() } else { "pending".to_string() },
+                            sync_status: view
+                                .refused
+                                .status_for(rel, if file_excluded { "excluded" } else { "pending" })
+                                .to_string(),
                             arion_hash: info.path_hash_hex(),
                             arion_cid: info.arion_cid.to_string(),
                             file_count: 0,

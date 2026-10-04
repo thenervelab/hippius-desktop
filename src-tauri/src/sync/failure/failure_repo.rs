@@ -247,6 +247,21 @@ pub async fn clear_after_clean_cycle(pool: &SqlitePool, owner: &str, label: &str
     Ok(())
 }
 
+/// The relative paths a drive has a saved refusal for. The listing reads
+/// these to keep a refused file's row failed after hcfs's one report.
+///
+/// # Errors
+/// Returns [`crate::error::AppError::Db`] if the database read fails.
+pub async fn list_refused_paths(pool: &SqlitePool, owner: &str, label: &str) -> Result<std::collections::HashSet<String>> {
+    let paths: Vec<String> = sqlx::query_scalar("SELECT relative_path FROM sync_file_failures WHERE owner = ? AND label = ? AND kind = ?")
+        .bind(owner)
+        .bind(label)
+        .bind(REFUSED_KIND)
+        .fetch_all(pool)
+        .await?;
+    Ok(paths.into_iter().collect())
+}
+
 /// Remember that the user dismissed these files from the Sync Issues dialog.
 ///
 /// Stamps `dismissed_at` on the existing rows only: a file with no failure

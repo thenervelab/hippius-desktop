@@ -34,6 +34,8 @@ use sqlx::sqlite::SqlitePool;
 
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::state::AuthCapabilities;
+use tauri_project_lib::sync::events::FileFailureKindPayload;
+use tauri_project_lib::sync::failure_repo;
 use tauri_project_lib::sync::files::{FileEntry, list_sync_folder_grouped_inner};
 
 const ACCOUNT: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -78,7 +80,42 @@ async fn make_pool() -> SqlitePool {
     .execute(&pool)
     .await
     .expect("create folder_entries_local");
+    // Mirror the production `sync_file_failures` schema (utils/schema.rs):
+    // the listing reads the drive's refusals from it.
+    sqlx::query(
+        "CREATE TABLE sync_file_failures (
+            owner          TEXT    NOT NULL,
+            label          TEXT    NOT NULL,
+            relative_path  TEXT    NOT NULL,
+            file_name      TEXT    NOT NULL,
+            kind           TEXT    NOT NULL,
+            message        TEXT,
+            http_status    INTEGER,
+            balance_cents  INTEGER,
+            required_cents INTEGER,
+            failure_count  INTEGER NOT NULL DEFAULT 1,
+            last_failed_at INTEGER NOT NULL,
+            dismissed_at   INTEGER,
+            PRIMARY KEY (owner, label, relative_path)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create sync_file_failures");
     pool
+}
+
+/// Persist a failure row through the production upsert, as the bridge does
+/// when hcfs reports a file failure.
+async fn insert_failure(pool: &SqlitePool, label: &str, rel: &str, kind: &FileFailureKindPayload) {
+    let name = rel.rsplit('/').next().expect("rsplit yields at least one item");
+    failure_repo::upsert_failure(pool, &account_owner(ACCOUNT), label, rel, name, kind, 1)
+        .await
+        .expect("insert failure");
+}
+
+fn refused(reason: &str) -> FileFailureKindPayload {
+    FileFailureKindPayload::Refused { reason: reason.to_string() }
 }
 
 /// Insert a `folder_entries_local` cache row for the default account/label.
@@ -801,4 +838,38 @@ async fn a_legacy_copy_of_a_known_file_is_listed() {
     assert!(names.contains(&known.as_str()), "the state knows its id: {names:?}");
     assert_status(&root.files, &known, "unknown");
     assert!(!names.contains(&unknown.as_str()), "nothing knows this one: {names:?}");
+}
+
+/// hcfs reports a refusal once per revision, so the live progress that paints
+/// a row "failed" is gone after that cycle while the file is still not
+/// syncing. The saved refusal row is what keeps the row visibly failed, at
+/// any depth; the reason itself is read from the row by the FE. Other kinds
+/// and other drives' refusals do not mark anything.
+#[tokio::test]
+async fn a_saved_refusal_keeps_its_row_failed() {
+    let tmp = tempfile::tempdir().unwrap();
+    for rel in ["Beach.JPG", "ok.txt", "flaky.bin", "sub/locked.pdf"] {
+        write_file(tmp.path(), rel);
+    }
+
+    let pool = make_pool().await;
+    insert_failure(&pool, LABEL, "Beach.JPG", &refused("collides with beach.jpg")).await;
+    insert_failure(&pool, LABEL, "sub/locked.pdf", &refused("unreadable")).await;
+    insert_failure(&pool, LABEL, "flaky.bin", &FileFailureKindPayload::Network).await;
+    insert_failure(&pool, "other-drive", "ok.txt", &refused("elsewhere")).await;
+    let state = make_state(pool);
+    seed_cache(&state, &["ok.txt", "flaky.bin", "Beach.JPG"]);
+
+    let path: String = tmp.path().to_string_lossy().into();
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path.clone(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+    let sub = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, Some("sub".into()), Some(LABEL.into()))
+        .await
+        .expect("sub listing");
+
+    assert_status(&root.files, "Beach.JPG", "failed");
+    assert_status(&root.files, "ok.txt", "synced");
+    assert_status(&root.files, "flaky.bin", "synced");
+    assert_status(&sub.files, "locked.pdf", "failed");
 }

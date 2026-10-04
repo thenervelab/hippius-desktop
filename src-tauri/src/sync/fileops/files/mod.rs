@@ -27,6 +27,7 @@ mod listing;
 mod new_folder;
 pub(super) mod pathops;
 mod recent;
+mod refused_rows;
 mod rename;
 mod resolve;
 mod synced_state;
