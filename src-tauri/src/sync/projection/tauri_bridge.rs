@@ -664,7 +664,9 @@ fn handle_shared_drive_revoked(app: &AppHandle, payload: events::SyncErrorPayloa
 /// rewrites `error` to [`events::ROOT_NOT_MOUNTED_MESSAGE`] with
 /// [`events::SyncErrorKind::RootNotMounted`], and lets one
 /// `SYNC_FAILED_NOTIFY` through per episode (the `root_not_mounted_notify`
-/// latch, re-armed when the drive completes a cycle or stops). hcfs repeats
+/// latch, re-armed when a cycle reaches its plan, which hcfs builds only
+/// after the mount check passed, when the drive completes a cycle or stops;
+/// never on `SyncStarted`, which hcfs emits before the check). hcfs repeats
 /// the refusal every backoff cycle until the disk is back, so without the
 /// latch an unplugged disk would fill the bell. `SYNC_ERROR` still fires
 /// every cycle for its live consumers. A reviewed sync
