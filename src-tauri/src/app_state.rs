@@ -303,13 +303,13 @@ pub struct AppState {
     #[cfg(any(unix, windows))]
     pending_finder_shares: Mutex<HashMap<String, crate::finder_bridge::dispatch::PendingFinderShare>>,
     /// Cancellation handles for Finder shares that are currently minting. A
-    /// confirmed share can upload a large outside file or a zipped folder for
-    /// many seconds; without this, clicking Cancel only closed the modal while
-    /// the upload ran to completion and minted a link with no UI trace (illu
-    /// review L2). `hcfs_finder_confirm_share` registers a token here and runs
-    /// the mint inside a `tokio::select!` against it, so `cancel_finder_share`
-    /// signalling the token drops the mint future and aborts the in-flight
-    /// upload. Keyed by the same random request id as `pending_finder_shares`.
+    /// confirmed share can upload a large outside file or folder for many
+    /// seconds; without this, clicking Cancel only closed the modal while the
+    /// upload ran to completion and minted a link with no UI trace.
+    /// `hcfs_finder_confirm_share` registers a token here and hands it to the
+    /// mint, so `cancel_finder_share` either drops the mint (single-request
+    /// shares) or tells an outside-folder upload to abort itself on the
+    /// server. Keyed by the same random request id as `pending_finder_shares`.
     #[cfg(any(unix, windows))]
     finder_share_cancels: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
 }

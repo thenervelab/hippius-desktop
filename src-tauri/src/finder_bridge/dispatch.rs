@@ -11,10 +11,11 @@
 //!
 //! Minting reuses the existing engine ([`super::resolve`] +
 //! `crate::shares::commands`): an in-drive file shares by `(label,
-//! relative_path)`, an outside file by raw bytes, and an in-drive folder mints
-//! a live browsable link (one metadata POST — an outside folder has no drive
-//! to browse and is refused). A password-protected choice additionally wraps
-//! the key under a random password (`#p=`).
+//! relative_path)`, an outside file by raw bytes, an in-drive folder mints
+//! a live browsable link (one metadata POST), and an outside folder uploads a
+//! copy of its files under the link's own key (`shares::outside_folder`). A
+//! password-protected choice additionally wraps the key under a random
+//! password (`#p=`).
 //!
 //! ## Security: socket peer trust (accepted risk)
 //! The App Group socket ([`super::socket`]) is reachable by any local process
@@ -29,6 +30,7 @@
 use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Emitter, Manager};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::app_state::AppState;
@@ -37,6 +39,7 @@ use crate::error::{AppError, Result};
 use crate::finder_bridge::protocol::ClientMessage;
 use crate::finder_bridge::resolve::{ShareTarget, resolve_share_target};
 use crate::shares::commands::{ShareChoice, ShareLink};
+use crate::shares::outside_folder::{OutsideFolderShare, SHARE_CANCELLED};
 use hcfs_client::client::share::{ShareProgressFn, ShareTtl};
 
 /// A "Share with Hippius" click parked in [`crate::app_state::AppState`] while
@@ -49,6 +52,21 @@ pub struct PendingFinderShare {
     pub path: PathBuf,
     /// The clicked file/folder's display name, shown in the chooser modal.
     pub name: String,
+}
+
+/// What the user confirmed in the chooser plus the handles that run the
+/// mint: the progress sink and the modal's cancel token. Bundled so the mint
+/// path stays within five parameters.
+pub struct FinderMint {
+    /// The expiry the user picked.
+    pub ttl: ShareTtl,
+    /// Anyone-with-the-link or password-protected.
+    pub choice: ShareChoice,
+    /// Encrypt/upload/finalize updates for the modal's bar.
+    pub progress: Option<ShareProgressFn>,
+    /// The modal's Cancel. Dropped-on-fire for single-request mints, handed
+    /// into the upload for an outside folder (see [`share_for_path`]).
+    pub cancel: CancellationToken,
 }
 
 /// Payload for `finder:share-choosing`, emitted the instant a share is
@@ -65,8 +83,10 @@ struct FinderShareChoosing {
     id: String,
     /// The clicked file/folder's display name, shown while choosing / minting.
     name: String,
-    /// Size of the clicked file at the moment it was right-clicked. `None`
-    /// for a directory (a folder share moves no bytes) and for an
+    /// Size of the clicked file at the moment it was right-clicked, or the
+    /// bytes an outside folder's copy would upload. `None` for an in-drive
+    /// folder (its link moves no bytes), for an outside folder whose size
+    /// could not be measured within `FOLDER_SIZE_BUDGET`, and for an
     /// unreadable stat.
     ///
     /// The chooser shows this. It is the cheapest defence there is against
@@ -84,6 +104,11 @@ struct FinderShareChoosing {
     /// still-downloading file as of one the user just saved on purpose, so
     /// the chooser cautions and lets them proceed.
     modified_secs_ago: Option<u64>,
+    /// The clicked path is a folder outside every drive, so confirming
+    /// UPLOADS A COPY of it (removed when the link ends) rather than minting
+    /// a live link. Rust decides this; the chooser only says so, because the
+    /// live-link notice would be false for a copy.
+    is_folder_copy: bool,
 }
 
 /// Size (files only) and mtime age of the clicked path, for the chooser.
@@ -91,7 +116,8 @@ struct FinderShareChoosing {
 /// Every field is best-effort: a failed stat degrades the chooser to what it
 /// showed before rather than failing a share the user asked for. A directory
 /// reports no size — `len()` on one is filesystem bookkeeping, not the number
-/// a person expects to see next to a folder.
+/// a person expects to see next to a folder. A folder's size comes from
+/// [`outside_folder_size`], and only for an outside folder.
 fn source_stat(path: &Path) -> (Option<u64>, Option<u64>) {
     let Ok(meta) = std::fs::metadata(path) else {
         return (None, None);
@@ -127,16 +153,16 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
     // Bring the app forward so the chooser modal is visible immediately (the
     // modal lives in the main window).
     reveal_main_window(&app);
-    // Stat once, here, so the chooser can show what it is about to share. The
-    // size is logged too: the 2026-08-31 truncated shares were diagnosed from
-    // exactly this number appearing as 4194304 in one log line and 6765321 in
-    // the next, for the same path.
-    let (size_bytes, modified_secs_ago) = source_stat(&clicked);
+    // Gathered once, before the chooser opens, so it can show what it is
+    // about to share. The size is logged too: truncated shares of
+    // half-downloaded files were diagnosed from exactly this number.
+    let facts = chooser_facts(app.state::<AppState>().inner(), &clicked).await;
     info!(
         request_id = %id,
         path = %clicked.display(),
-        size_bytes = ?size_bytes,
-        modified_secs_ago = ?modified_secs_ago,
+        size_bytes = ?facts.size_bytes,
+        modified_secs_ago = ?facts.modified_secs_ago,
+        is_folder_copy = facts.is_folder_copy,
         "finder bridge: share requested; opening chooser",
     );
     // Target the main window only — `FinderShareListener` runs there, and the
@@ -147,8 +173,9 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
         &FinderShareChoosing {
             id,
             name,
-            size_bytes,
-            modified_secs_ago,
+            size_bytes: facts.size_bytes,
+            modified_secs_ago: facts.modified_secs_ago,
+            is_folder_copy: facts.is_folder_copy,
         },
     );
 }
@@ -157,23 +184,26 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
 /// in the app. Public → a `#k=` link with no password; private → the same mint
 /// wrapped under a freshly generated random password into a `#p=` link.
 ///
-/// `progress`, when `Some`, streams encrypt→upload→finalize updates to the
-/// modal's bar (see [`share_for_path`]).
+/// `mint.progress`, when `Some`, streams encrypt→upload→finalize updates to
+/// the modal's bar; `mint.cancel` is the modal's Cancel (see
+/// [`share_for_path`]).
 ///
 /// The password (when the user chose a private share) is applied during the
 /// mint itself, so there is no window in which an unintended public link
 /// exists. The previous flow minted a public share and wrapped it afterwards,
 /// which needed a compensating revoke whenever the wrap failed — that whole
 /// branch is gone.
-pub(super) async fn mint_confirmed(
-    state: &AppState,
-    clicked: &Path,
-    ttl: ShareTtl,
-    choice: ShareChoice,
-    progress: Option<ShareProgressFn>,
-) -> Result<ShareLink> {
-    let is_private = matches!(choice, ShareChoice::Private { .. });
-    let link = share_for_path(state, clicked, ttl, choice, progress).await?;
+///
+/// Public (not `pub(super)`) so the mock-server suite can drive a cancel
+/// through the same path the confirm command takes.
+///
+/// # Errors
+///
+/// Whatever the chosen mint refuses with, plus a `Validation` carrying
+/// [`SHARE_CANCELLED`] when the modal's Cancel fired.
+pub async fn mint_confirmed(state: &AppState, clicked: &Path, mint: FinderMint) -> Result<ShareLink> {
+    let is_private = matches!(mint.choice, ShareChoice::Private { .. });
+    let link = share_for_path(state, clicked, mint).await?;
     info!(
         share_token = %link.share_token,
         path = %clicked.display(),
@@ -205,18 +235,11 @@ fn display_name(path: &Path) -> String {
         .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
 }
 
-/// Mint a PUBLIC share for `clicked`, resolving its shape (in-drive file /
-/// outside file / folder-as-zip) against the account's drive roots. `progress`,
-/// when `Some`, is hcfs-client's encrypt→upload→finalize callback, forwarded so
-/// the confirm modal can render a determinate bar during the (possibly slow)
-/// upload of a big file or a zipped folder.
-async fn share_for_path(
-    state: &AppState,
-    clicked: &Path,
-    ttl: ShareTtl,
-    choice: ShareChoice,
-    progress: Option<ShareProgressFn>,
-) -> Result<ShareLink> {
+/// Mint a share for `clicked` by its shape: an in-drive file or folder, an
+/// outside file, or an outside folder (uploaded as a copy). `mint.progress`,
+/// when `Some`, is hcfs-client's encrypt→upload→finalize callback, forwarded
+/// so the confirm modal can render a determinate bar during a slow upload.
+async fn share_for_path(state: &AppState, clicked: &Path, mint: FinderMint) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
 
     // Resolve file-vs-dir BEFORE the in-drive check so an in-drive folder
@@ -224,31 +247,131 @@ async fn share_for_path(
     // directories.
     let metadata = tokio::fs::metadata(clicked).await?;
     let roots = crate::sync::paths::list_drive_roots(state.pool()?, &account_id).await?;
+    let FinderMint {
+        ttl,
+        choice,
+        progress,
+        cancel,
+    } = mint;
+
     if metadata.is_dir() {
-        // An in-drive folder mints a live browsable link — one metadata POST,
-        // so the mint ignores `progress` (there is nothing to stream) and the
-        // gates all live inside `create_folder_share_inner`. Resolving against
-        // `clicked` (canonical, from Finder) keeps a non-canonical spelling
-        // from ever reaching the mint. An OUTSIDE folder has no drive whose
-        // server state a recipient could browse; the zip fallback that used to
-        // cover it is gone, so refuse with a message the modal can show.
+        // Resolving against `clicked` (canonical, from Finder) keeps a
+        // non-canonical spelling from ever reaching either mint.
         return match resolve_share_target(clicked, &roots) {
+            // A live browsable link: one metadata POST, nothing to stream,
+            // and every gate lives inside `create_folder_share_inner`.
             ShareTarget::InDrive { label, relative_path } => {
-                crate::shares::commands::create_folder_share_inner(state, &account_id, &label, &relative_path, ttl, choice).await
+                let mint = crate::shares::commands::create_folder_share_inner(state, &account_id, &label, &relative_path, ttl, choice);
+                until_cancelled(&cancel, mint).await
             }
-            ShareTarget::Outside => Err(AppError::Validation(
-                "Only folders inside a synced Hippius drive can be shared as a link.".into(),
-            )),
+            // No drive a recipient could browse, so the files are uploaded
+            // as a copy under the link's own key. The token goes INTO the
+            // upload so the client can abort the half-built link on the
+            // server; racing it here would drop the future before that
+            // abort is sent.
+            ShareTarget::Outside => {
+                let request = OutsideFolderShare {
+                    folder: clicked,
+                    ttl,
+                    choice,
+                    progress,
+                    cancel,
+                };
+                crate::shares::outside_folder::share_outside_folder(state, &account_id, request).await
+            }
         };
     }
 
     match resolve_share_target(clicked, &roots) {
         // In-drive file: mint by (label, relative_path) and record a reshare origin.
         ShareTarget::InDrive { label, relative_path } => {
-            crate::shares::commands::share_synced_file(state, &account_id, &label, &relative_path, ttl, choice, progress).await
+            let mint = crate::shares::commands::share_synced_file(state, &account_id, &label, &relative_path, ttl, choice, progress);
+            until_cancelled(&cancel, mint).await
         }
         // Outside file: "upload & share" by streaming its bytes; no origin row.
-        ShareTarget::Outside => crate::shares::commands::share_external_file(state, &account_id, clicked, ttl, choice, progress).await,
+        ShareTarget::Outside => {
+            let mint = crate::shares::commands::share_external_file(state, &account_id, clicked, ttl, choice, progress);
+            until_cancelled(&cancel, mint).await
+        }
+    }
+}
+
+/// Run a mint that has no cancel hook of its own, dropping it when the
+/// modal's Cancel fires. Dropping aborts its in-flight request; whatever a
+/// dropped file upload leaves behind is collected by the server's share
+/// reaper.
+async fn until_cancelled(cancel: &CancellationToken, mint: impl std::future::Future<Output = Result<ShareLink>>) -> Result<ShareLink> {
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(AppError::Validation(SHARE_CANCELLED.into())),
+        minted = mint => minted,
+    }
+}
+
+/// How long the chooser waits for an outside folder's size before opening
+/// without one. The modal must appear promptly after a right-click.
+const FOLDER_SIZE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What the chooser shows about the clicked path.
+struct ChooserFacts {
+    /// Bytes the share would move, when known.
+    size_bytes: Option<u64>,
+    /// Seconds since the clicked path was last modified, when known.
+    modified_secs_ago: Option<u64>,
+    /// Confirming uploads a copy of an outside folder.
+    is_folder_copy: bool,
+}
+
+/// Gather the chooser's facts. Only an outside folder is sized: it is the
+/// only folder share that uploads (and bills) bytes.
+async fn chooser_facts(state: &AppState, clicked: &Path) -> ChooserFacts {
+    let (size_bytes, modified_secs_ago) = source_stat(clicked);
+    let is_folder_copy = clicked.is_dir() && is_outside_every_drive(state, clicked).await;
+    let size_bytes = if is_folder_copy {
+        outside_folder_size(clicked).await
+    } else {
+        size_bytes
+    };
+    ChooserFacts {
+        size_bytes,
+        modified_secs_ago,
+        is_folder_copy,
+    }
+}
+
+/// Whether `clicked` resolves to no registered drive. Any failure reads as
+/// "inside": the chooser then shows what it showed before, and the confirm
+/// path resolves the target again with real errors.
+async fn is_outside_every_drive(state: &AppState, clicked: &Path) -> bool {
+    let Ok(account_id) = state.current_account_id() else {
+        return false;
+    };
+    let Ok(pool) = state.pool() else {
+        return false;
+    };
+    match crate::sync::paths::list_drive_roots(pool, &account_id).await {
+        Ok(roots) => matches!(resolve_share_target(clicked, &roots), ShareTarget::Outside),
+        Err(error) => {
+            warn!(%error, "finder bridge: could not list drive roots for the chooser");
+            false
+        }
+    }
+}
+
+/// Bytes an outside folder's copy would upload. It is the same scan the
+/// share runs, so the number shown is the number billed.
+///
+/// Bounded twice: the scan refuses past the link's file and directory caps,
+/// and the chooser stops waiting after [`FOLDER_SIZE_BUDGET`] (a scan still
+/// running then finishes on the blocking pool, still capped). A refusal
+/// (empty, too many items) reads as "no size" here; the confirm reports it
+/// with its message.
+async fn outside_folder_size(folder: &Path) -> Option<u64> {
+    let folder = folder.to_path_buf();
+    let scan = tokio::task::spawn_blocking(move || crate::shares::folder_scan::scan_folder(&folder));
+    match tokio::time::timeout(FOLDER_SIZE_BUDGET, scan).await {
+        Ok(Ok(Ok(scan))) => Some(scan.total_bytes),
+        _ => None,
     }
 }
 
@@ -308,10 +431,14 @@ mod tests {
             name: "a.txt".into(),
             size_bytes: Some(6_765_321),
             modified_secs_ago: Some(3),
+            is_folder_copy: true,
         })
         .expect("serialize");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
-        let expected: BTreeSet<String> = ["id", "name", "sizeBytes", "modifiedSecsAgo"].into_iter().map(String::from).collect();
+        let expected: BTreeSet<String> = ["id", "name", "sizeBytes", "modifiedSecsAgo", "isFolderCopy"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         assert_eq!(
             keys, expected,
             "finder:share-choosing wire keys drifted (FE FinderShareListener reads these)"
@@ -320,6 +447,7 @@ mod tests {
         assert_eq!(json["name"], "a.txt");
         assert_eq!(json["sizeBytes"], 6_765_321u64);
         assert_eq!(json["modifiedSecsAgo"], 3u64);
+        assert_eq!(json["isFolderCopy"], true);
     }
 
     /// An unreadable stat must degrade to nulls, not drop the keys — the FE
@@ -332,6 +460,7 @@ mod tests {
             name: "gone.txt".into(),
             size_bytes: None,
             modified_secs_ago: None,
+            is_folder_copy: false,
         })
         .expect("serialize");
         assert!(json.get("sizeBytes").is_some_and(serde_json::Value::is_null));
@@ -365,6 +494,29 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (size, _age) = source_stat(dir.path());
         assert_eq!(size, None);
+    }
+
+    /// The chooser's number for an outside folder is the scan's total — the
+    /// bytes the copy uploads and the gate bills — not a directory `len()`,
+    /// and not counting the hidden files the share skips.
+    #[tokio::test]
+    async fn an_outside_folder_is_sized_by_the_share_scan() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("T2-KD");
+        std::fs::create_dir_all(root.join("sub")).expect("dirs");
+        std::fs::write(root.join("a.txt"), vec![0u8; 2_048]).expect("a");
+        std::fs::write(root.join("sub/b.txt"), vec![0u8; 1_000]).expect("b");
+        std::fs::write(root.join(".DS_Store"), vec![0u8; 9_999]).expect("hidden, not billed");
+
+        assert_eq!(outside_folder_size(&root).await, Some(3_048));
+    }
+
+    /// A folder the share would refuse shows no size rather than "0 B". The
+    /// confirm, not the chooser, explains the refusal.
+    #[tokio::test]
+    async fn a_folder_the_share_would_refuse_has_no_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(outside_folder_size(dir.path()).await, None);
     }
 
     #[test]

@@ -52,22 +52,24 @@ pub async fn hcfs_finder_confirm_share(
             .take_finder_share(&request_id)
             .ok_or_else(|| AppError::NotFound("This share request has expired. Right-click the file and choose Share with Hippius again.".into()))?;
         let progress = crate::shares::commands::share_progress_forwarder(on_progress);
-        // Register a cancel handle and run the mint inside a `select!` against it,
-        // so a `hcfs_finder_cancel_share` (the modal's Cancel button) DROPS the
-        // mint future and aborts its in-flight upload rather than letting a large
-        // outside-file / folder-zip upload run to completion unseen (illu L2). The
-        // guard removes the handle when this scope ends — on success, error,
-        // cancel, OR the command future being dropped (window closed mid-upload).
+        // Register a cancel handle and hand it to the mint. Most mints are
+        // dropped when it fires (`dispatch::until_cancelled`); an outside
+        // folder's upload takes it cooperatively so it can abort the
+        // half-built link on the server. The guard removes the handle when
+        // this scope ends — on success, error, cancel, OR the command future
+        // being dropped (window closed mid-upload).
         let cancel = state.register_finder_mint(&request_id);
         let _guard = FinderMintGuard {
             state: state.inner(),
             request_id: &request_id,
         };
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(AppError::Validation("Share cancelled.".into())),
-            minted = crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, ttl, choice, Some(progress)) => minted,
-        }
+        let mint = crate::finder_bridge::dispatch::FinderMint {
+            ttl,
+            choice,
+            progress: Some(progress),
+            cancel,
+        };
+        crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, mint).await
     }
     #[cfg(not(any(unix, windows)))]
     {

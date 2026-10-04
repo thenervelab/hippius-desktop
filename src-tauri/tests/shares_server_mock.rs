@@ -25,8 +25,9 @@
 //!   body and consumes the token-less `{expires_at}` response.
 //! - Path-prefix validation refusing `..` and friends before any request.
 //! - The uploaded-copy (outside-folder) share: open → files → chunks → seal,
-//!   ciphertext under the fragment key, and an owner wrap sealed exactly
-//!   like a drive folder link's.
+//!   ciphertext under the fragment key, an owner wrap sealed exactly like a
+//!   drive folder link's, and a Finder Cancel mid-upload aborting the
+//!   half-built link through the real Finder mint path.
 
 use axum::{
     Json, Router,
@@ -39,7 +40,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::json;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -51,11 +52,12 @@ use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::account_key::account_key;
 use tauri_project_lib::auth::state::AuthCapabilities;
 use tauri_project_lib::error::AppError;
+use tauri_project_lib::finder_bridge::dispatch::{FinderMint, mint_confirmed};
 use tauri_project_lib::shares::SqliteShareKeystore;
 use tauri_project_lib::shares::commands::{
     ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_inner, update_folder_share_expiry_inner,
 };
-use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, share_outside_folder};
+use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, SHARE_CANCELLED, share_outside_folder};
 
 /// One shared `$HOME` for every test in this binary that touches config dirs
 /// (the master-mnemonic seal lives under `~/.hippius`). Same discipline as
@@ -1218,11 +1220,20 @@ struct ChunkPut {
     body: Vec<u8>,
 }
 
+/// Something the user does while the first chunk is in flight.
+#[derive(Clone)]
+enum OnFirstChunk {
+    Nothing,
+    /// The modal's Cancel.
+    Cancel(CancellationToken),
+}
+
 #[derive(Clone)]
 struct UploadMock {
     /// Body of `POST /can_upload` (hcfs-server's quota pre-flight).
     can_upload: serde_json::Value,
     seal_expires_at: Option<&'static str>,
+    on_first_chunk: OnFirstChunk,
 }
 
 impl Default for UploadMock {
@@ -1230,6 +1241,7 @@ impl Default for UploadMock {
         Self {
             can_upload: json!({ "result": true, "error": null }),
             seal_expires_at: Some("2026-10-09T00:00:00+00:00"),
+            on_first_chunk: OnFirstChunk::Nothing,
         }
     }
 }
@@ -1278,7 +1290,7 @@ fn upload_lifecycle_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
 }
 
 /// Per-file init, chunk and complete, plus the folder owner-wrap PUT.
-fn upload_file_routes(rec: &UploadRecorded) -> Router {
+fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
     let (files, chunks, completes, wraps) = (
         rec.files.clone(),
         rec.chunks.clone(),
@@ -1286,6 +1298,8 @@ fn upload_file_routes(rec: &UploadRecorded) -> Router {
         rec.folder_wraps.clone(),
     );
     let next_id = Arc::new(AtomicI64::new(1));
+    let fired = Arc::new(AtomicBool::new(false));
+    let hook = mock.on_first_chunk.clone();
     Router::new()
         .route(
             "/v1/folder-shares/uploads/{token_hash}/files",
@@ -1303,6 +1317,12 @@ fn upload_file_routes(rec: &UploadRecorded) -> Router {
                         index: n,
                         body: body.to_vec(),
                     });
+                    if !fired.swap(true, Ordering::SeqCst) {
+                        match &hook {
+                            OnFirstChunk::Nothing => {}
+                            OnFirstChunk::Cancel(token) => token.cancel(),
+                        }
+                    }
                     StatusCode::NO_CONTENT.into_response()
                 },
             )
@@ -1343,7 +1363,7 @@ async fn upload_harness(account: &str, caps: &str, mock: UploadMock) -> (AppStat
     };
     let router = share_router(options, recorded.clone())
         .merge(upload_lifecycle_routes(&mock, &uploads))
-        .merge(upload_file_routes(&uploads));
+        .merge(upload_file_routes(&mock, &uploads));
     let base = serve(router).await;
     seed_account(&pool, account, &base).await;
     (make_state(pool, account), uploads, recorded, dir)
@@ -1524,4 +1544,38 @@ async fn an_uploaded_copy_is_wrapped_exactly_like_a_drive_folder_link() {
         assert_eq!(Some(secret), keystore.get(&link.share_token).unwrap());
         assert!(open_folder_wrap(entry, OWNER_SS58).is_none(), "bound to the owner address");
     }
+}
+
+/// The modal's Cancel during a Finder share of an outside folder, through
+/// the real Finder mint path: the token reaches the upload, so the client
+/// sends the abort for the half-built link before reporting the cancel. A
+/// mint raced against the token instead would be dropped mid-request and
+/// send no abort, leaving the link to the server's idle reaper.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_finder_cancel_mid_upload_aborts_the_half_built_link() {
+    let account = "5UploadCancelAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        on_first_chunk: OnFirstChunk::Cancel(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+    let mint = FinderMint {
+        ttl: ShareTtl::Days7,
+        choice: ShareChoice::Public,
+        progress: None,
+        cancel,
+    };
+
+    let err = mint_confirmed(&state, &root, mint).await.expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(rec.opens.lock().unwrap().len(), 1, "the link was opened before the cancel");
+    assert_eq!(
+        *rec.aborts.lock().unwrap(),
+        vec![folder_share_token_hash(UPLOAD_TOKEN)],
+        "the open link is aborted on the server"
+    );
+    assert_eq!(*rec.seals.lock().unwrap(), 0, "a cancelled link is never sealed");
 }
