@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useSetAtom } from "jotai";
 import { finderShareAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import type { FinderShareChoosing } from "@/app/lib/tauri/shares";
+import type { FinderShareChoosing, FinderShareFacts } from "@/app/lib/tauri/shares";
 import { registerTauriListeners } from "@/lib/utils/tauriListeners";
 
 /**
@@ -18,7 +18,11 @@ import { registerTauriListeners } from "@/lib/utils/tauriListeners";
  * running → done/error lifecycle, so a Finder share and an in-app share present
  * identically.
  *
- * This event only ever fires on macOS once a click has been dispatched, so the
+ * An outside folder's chooser opens before Rust has scanned the folder; its
+ * size, or the share's refusal of it, follows in `finder:share-facts`, which
+ * updates the open chooser only when it is still for the same request.
+ *
+ * These events only ever fire on macOS once a click has been dispatched, so the
  * listener is safe to mount unconditionally on every platform — elsewhere it
  * simply never receives one.
  */
@@ -46,7 +50,23 @@ export default function FinderShareListener() {
             // copy flag is Rust saying it could not tell, and stays `null`.
             isFolder: isFolder ?? false,
             isFolderCopy: isFolderCopy === undefined ? false : isFolderCopy,
+            // A copy sent without a size is being measured; its facts follow.
+            sizePending: isFolderCopy === true && sizeBytes == null,
+            refusal: null,
           });
+        },
+      ],
+      [
+        "finder:share-facts",
+        (event) => {
+          const { id, sizeBytes, refusal } = event.payload as FinderShareFacts;
+          // Facts for a chooser that was replaced or closed are dropped:
+          // they describe another folder than the one on screen.
+          setFinderShare((prev) =>
+            prev?.kind === "choosing" && prev.id === id
+              ? { ...prev, sizeBytes, refusal, sizePending: false }
+              : prev,
+          );
         },
       ],
     ]);

@@ -98,6 +98,8 @@ const CHOOSING: FinderShareState = {
   modifiedSecsAgo: null,
   isFolder: false,
   isFolderCopy: false,
+  sizePending: false,
+  refusal: null,
 };
 
 // A Finder folder outside every drive: Rust measured the copy it will upload
@@ -594,6 +596,41 @@ describe("ShareFileModal", () => {
 
     expect(await screen.findByText(/creating share link/i)).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("shows a folder copy's size once Rust has measured it", () => {
+    const store = createStore();
+    render(
+      withFinderState(
+        <ShareFileModal />,
+        { ...FOLDER_COPY, sizeBytes: null, sizePending: true },
+        store,
+      ),
+    );
+    expect(screen.getByText(/measuring/i)).toBeInTheDocument();
+
+    act(() => {
+      store.set(finderShareAtom, { ...FOLDER_COPY, sizeBytes: 6_765_321, sizePending: false });
+    });
+
+    expect(screen.getByText("6.77 MB")).toBeInTheDocument();
+    expect(screen.queryByText(/measuring/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create share link/i })).toBeEnabled();
+  });
+
+  it("shows the share's refusal before confirming, and blocks the confirm", () => {
+    const message = "This folder has no files to share.";
+    render(
+      withFinderState(<ShareFileModal />, {
+        ...FOLDER_COPY,
+        sizeBytes: null,
+        refusal: { kind: "Validation", message },
+      }),
+    );
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create share link/i })).toBeDisabled();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("promises neither a live link nor a copy when the placement is unknown", () => {

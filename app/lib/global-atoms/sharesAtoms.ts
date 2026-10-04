@@ -6,7 +6,7 @@
 
 import { atom } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import type { ServerCapabilities } from "@/app/lib/tauri/shares";
+import type { ServerCapabilities, ShareRefusal } from "@/app/lib/tauri/shares";
 
 /**
  * Cached server capabilities. Populated once after login by
@@ -144,6 +144,13 @@ export type FinderShareState = {
    * tell, in which case the chooser promises neither a copy nor a live link.
    */
   isFolderCopy: boolean | null;
+  /** A folder copy's size is still being measured by Rust. */
+  sizePending: boolean;
+  /**
+   * Rust's refusal of this folder, known before the user confirms. The
+   * chooser shows it and does not let the share start.
+   */
+  refusal: ShareRefusal | null;
 };
 
 export const finderShareAtom = atom<FinderShareState | null>(null);

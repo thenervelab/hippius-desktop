@@ -163,6 +163,12 @@ export default function ShareFileModal() {
   // nothing either way.
   const folderKind = folderKindOf(target?.file.isFolder ?? false, finderShare);
   const isLiveFolder = folderKind === "live";
+  // Finder folder copies only: Rust measures the folder after the chooser
+  // opens, and may find the share would refuse it.
+  const sizePending =
+    finderShare?.kind === "choosing" && finderShare.sizePending;
+  const refusal =
+    finderShare?.kind === "choosing" ? (finderShare.refusal?.message ?? null) : null;
 
   const close = useCallback(() => {
     // Release a still-parked Finder request (chooser open, or the user bailed).
@@ -375,6 +381,8 @@ export default function ShareFileModal() {
           filename={filename}
           folderKind={folderKind}
           sizeBytes={sourceSizeBytes}
+          sizePending={sizePending}
+          refusal={refusal}
           modifiedSecsAgo={sourceModifiedSecsAgo}
           onConfirm={onConfirmChoice}
           onCancel={close}
@@ -464,6 +472,8 @@ function ChoosingBody({
   filename,
   folderKind,
   sizeBytes,
+  sizePending,
+  refusal,
   modifiedSecsAgo,
   onConfirm,
   onCancel,
@@ -473,6 +483,13 @@ function ChoosingBody({
   folderKind: FolderKind | null;
   /** Source size, when known. `null` renders nothing rather than "0 B". */
   sizeBytes: number | null;
+  /** The size is still being measured (a Finder folder copy). */
+  sizePending: boolean;
+  /**
+   * Rust's sentence for why this share would be refused, shown verbatim;
+   * the confirm stays disabled, since it would fail with the same words.
+   */
+  refusal: string | null;
   /** Seconds since last modification, when known. */
   modifiedSecsAgo: number | null;
   onConfirm: (choice: ShareChoice) => void;
@@ -574,7 +591,18 @@ function ChoosingBody({
               {formatBytes(sizeBytes)}
             </span>
           )}
+          {sizeBytes === null && sizePending && (
+            <span className="ml-2 whitespace-nowrap text-grey-40 dark:text-grey-dark-600">
+              Measuring…
+            </span>
+          )}
         </p>
+
+        {refusal !== null && (
+          <p role="alert" className="mt-2 text-xs text-red-500">
+            {refusal}
+          </p>
+        )}
 
         {modifiedSecsAgo !== null &&
           modifiedSecsAgo < RECENTLY_MODIFIED_SECS && (
@@ -593,7 +621,7 @@ function ChoosingBody({
           type="button"
           variant="primary"
           size="auto"
-          disabled={passwordTooShort}
+          disabled={passwordTooShort || refusal !== null}
           onClick={() =>
             onConfirm({
               ttl,

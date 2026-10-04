@@ -243,12 +243,13 @@ fn the_finder_confirm_hands_the_cancel_token_to_the_mint() {
 }
 
 /// The chooser's size and the share's scan both go through the stoppable
-/// scan, so a closed chooser or a cancelled share stops its walk instead of
-/// leaving up to 50,000 stats running on the blocking pool for nobody.
+/// scan, so a chooser scan past its budget or a cancelled share stops its
+/// walk instead of leaving up to 50,000 stats running on the blocking pool
+/// for nobody.
 #[test]
 fn every_outside_folder_walk_stops_when_dropped() {
     let dispatch = include_str!("../src/finder_bridge/dispatch.rs");
-    assert!(fn_body(dispatch, "async fn outside_folder_size").contains("scan_until_dropped("));
+    assert!(fn_body(dispatch, "async fn outside_folder_facts").contains("scan_until_dropped("));
     let funnel = include_str!("../src/shares/outside_folder.rs");
     assert!(fn_body(funnel, "async fn scan_off_main_thread").contains("scan_until_dropped("));
 }

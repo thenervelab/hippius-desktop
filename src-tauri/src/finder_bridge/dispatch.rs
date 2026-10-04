@@ -83,11 +83,11 @@ struct FinderShareChoosing {
     id: String,
     /// The clicked file/folder's display name, shown while choosing / minting.
     name: String,
-    /// Size of the clicked file at the moment it was right-clicked, or the
-    /// bytes an outside folder's copy would upload. `None` for an in-drive
-    /// folder (its link moves no bytes), for an outside folder whose size
-    /// could not be measured within `FOLDER_SIZE_BUDGET`, and for an
-    /// unreadable stat.
+    /// Size of the clicked file at the moment it was right-clicked. `None`
+    /// for every folder and for an unreadable stat: an in-drive folder's
+    /// link moves no bytes, and an outside folder's copy is measured after
+    /// the chooser opens and arrives in `finder:share-facts`
+    /// ([`FinderShareFacts`]).
     ///
     /// The chooser shows this. It is the cheapest defence there is against
     /// sharing a file that has not finished arriving: on 2026-08-31 two zips
@@ -120,13 +120,33 @@ struct FinderShareChoosing {
     is_folder_copy: Option<bool>,
 }
 
+/// Payload for `finder:share-facts`, the follow-up to `finder:share-choosing`
+/// for a folder that will be uploaded as a copy. Scanning the folder can
+/// take seconds, so the chooser opens first and this brings what the scan
+/// found. Emitted only while `id` is still the latest click, so a replaced
+/// chooser never shows another folder's size.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FinderShareFacts {
+    /// The request this measures, as sent in `finder:share-choosing`.
+    id: String,
+    /// The bytes the copy would upload (and bill); `None` when the scan
+    /// refused the folder or did not finish within [`FOLDER_FACTS_BUDGET`].
+    size_bytes: Option<u64>,
+    /// The share's own refusal of this folder (empty, too many items, a
+    /// name a link cannot hold, ...), serialized as `{kind, message}`. The
+    /// chooser shows the message verbatim and disables Confirm, since the
+    /// confirm would refuse with the same sentence after the user chose.
+    refusal: Option<AppError>,
+}
+
 /// Size (files only) and mtime age of the clicked path, for the chooser.
 ///
 /// Every field is best-effort: a failed stat degrades the chooser to what it
 /// showed before rather than failing a share the user asked for. A directory
 /// reports no size — `len()` on one is filesystem bookkeeping, not the number
 /// a person expects to see next to a folder. A folder's size comes from
-/// [`outside_folder_size`], and only for an outside folder.
+/// [`outside_folder_facts`], and only for an outside folder.
 fn source_stat(path: &Path) -> (Option<u64>, Option<u64>) {
     let Ok(meta) = std::fs::metadata(path) else {
         return (None, None);
@@ -164,11 +184,12 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
     reveal_main_window(&app);
     // Gathered once, before the chooser opens, so it can show what it is
     // about to share. The size is logged too: truncated shares of
-    // half-downloaded files were diagnosed from exactly this number.
+    // half-downloaded files were diagnosed from exactly this number. Only
+    // a stat and a drive-roots query: the chooser must open promptly.
     let facts = chooser_facts(app.state::<AppState>().inner(), &clicked).await;
-    // Measuring a folder takes up to `FOLDER_SIZE_BUDGET`, so a later click
-    // can be ready first. Its chooser must stay; this request is dropped,
-    // since nobody can confirm a chooser that never opened.
+    // A later click can still be ready first. Its chooser must stay; this
+    // request is dropped, since nobody can confirm a chooser that never
+    // opened.
     if !app.state::<AppState>().finder_share_is_latest(&id) {
         app.state::<AppState>().take_finder_share(&id);
         info!(request_id = %id, "finder bridge: a later click superseded this share; chooser not opened");
@@ -189,7 +210,7 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
         "main",
         "finder:share-choosing",
         &FinderShareChoosing {
-            id,
+            id: id.clone(),
             name,
             size_bytes: facts.size_bytes,
             modified_secs_ago: facts.modified_secs_ago,
@@ -197,6 +218,23 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
             is_folder_copy: facts.is_folder_copy,
         },
     );
+
+    // Sized after the chooser is up. This task is the click's own (the
+    // socket loop spawns one per click), so the wait blocks nothing else.
+    if facts.is_folder_copy != Some(true) {
+        return;
+    }
+    let Some(folder_facts) = folder_facts_for_latest(app.state::<AppState>().inner(), &id, &clicked).await else {
+        info!(request_id = %id, "finder bridge: a later click superseded this share; folder facts dropped");
+        return;
+    };
+    info!(
+        request_id = %id,
+        size_bytes = ?folder_facts.size_bytes,
+        refused = folder_facts.refusal.is_some(),
+        "finder bridge: outside folder measured for the chooser",
+    );
+    let _ = app.emit_to("main", "finder:share-facts", &folder_facts);
 }
 
 /// Mint a share for a previously-parked path using the visibility the user chose
@@ -327,9 +365,11 @@ async fn until_cancelled(cancel: &CancellationToken, mint: impl std::future::Fut
     }
 }
 
-/// How long the chooser waits for an outside folder's size before opening
-/// without one. The modal must appear promptly after a right-click.
-const FOLDER_SIZE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long an outside folder's scan may run for the chooser. The chooser is
+/// already open, so this only bounds the walk itself (a slow network volume
+/// would otherwise hold a blocking-pool thread for nobody); past it the
+/// chooser shows no size, and the confirm scans again.
+const FOLDER_FACTS_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// What the chooser shows about the clicked path.
 struct ChooserFacts {
@@ -356,8 +396,8 @@ enum Placement {
     Unknown,
 }
 
-/// Gather the chooser's facts. Only an outside folder is sized: it is the
-/// only folder share that uploads (and bills) bytes.
+/// Gather the facts the chooser opens with: no folder is sized here (see
+/// [`folder_facts_for_latest`] for the one that is).
 async fn chooser_facts(state: &AppState, clicked: &Path) -> ChooserFacts {
     let (size_bytes, modified_secs_ago) = source_stat(clicked);
     let is_folder = clicked.is_dir();
@@ -369,11 +409,6 @@ async fn chooser_facts(state: &AppState, clicked: &Path) -> ChooserFacts {
         }
     } else {
         Some(false)
-    };
-    let size_bytes = if is_folder_copy == Some(true) {
-        outside_folder_size(clicked).await
-    } else {
-        size_bytes
     };
     ChooserFacts {
         size_bytes,
@@ -406,18 +441,38 @@ async fn placement(state: &AppState, clicked: &Path) -> Placement {
     }
 }
 
-/// Bytes an outside folder's copy would upload. It is the same scan the
-/// share runs, so the number shown is the number billed.
+/// Measure an outside folder for request `id`, returning the facts only if
+/// `id` is still the latest click once the scan is done. A newer click has
+/// replaced the chooser by then, and these facts would land on it.
+async fn folder_facts_for_latest(state: &AppState, id: &str, folder: &Path) -> Option<FinderShareFacts> {
+    let (size_bytes, refusal) = outside_folder_facts(folder).await;
+    state.finder_share_is_latest(id).then(|| FinderShareFacts {
+        id: id.to_owned(),
+        size_bytes,
+        refusal,
+    })
+}
+
+/// Bytes an outside folder's copy would upload, or the share's refusal of
+/// the folder. It is the same scan the share runs, so the number shown is
+/// the number billed and the refusal is the one the confirm would give.
 ///
 /// Bounded twice: the scan refuses past the link's file and directory caps,
-/// and the chooser stops waiting after [`FOLDER_SIZE_BUDGET`], which drops
-/// the scan's future and so stops the walk too. A refusal (empty, too many
-/// items) reads as "no size" here; the confirm reports it with its message.
-async fn outside_folder_size(folder: &Path) -> Option<u64> {
+/// and [`FOLDER_FACTS_BUDGET`] drops the scan's future, which stops the
+/// walk too. Past the budget, or if the scan task dies, neither is known.
+async fn outside_folder_facts(folder: &Path) -> (Option<u64>, Option<AppError>) {
     let scan = crate::shares::folder_scan::scan_until_dropped(folder.to_path_buf());
-    match tokio::time::timeout(FOLDER_SIZE_BUDGET, scan).await {
-        Ok(Ok(Ok(scan))) => Some(scan.total_bytes),
-        _ => None,
+    match tokio::time::timeout(FOLDER_FACTS_BUDGET, scan).await {
+        Ok(Ok(Ok(scan))) => (Some(scan.total_bytes), None),
+        Ok(Ok(Err(refusal))) => (None, Some(refusal)),
+        Ok(Err(error)) => {
+            warn!(%error, "finder bridge: the chooser's folder scan task failed");
+            (None, None)
+        }
+        Err(_elapsed) => {
+            info!("finder bridge: the chooser's folder scan ran past its budget; no size shown");
+            (None, None)
+        }
     }
 }
 
@@ -548,6 +603,39 @@ mod tests {
         assert_eq!(size, None);
     }
 
+    /// Wire-shape pin for `finder:share-facts`, the follow-up that brings an
+    /// outside folder's size (or the share's refusal) to the open chooser.
+    /// A drifted key would leave the chooser measuring forever.
+    #[test]
+    fn finder_share_facts_wire_shape() {
+        use std::collections::BTreeSet;
+        let sized = serde_json::to_value(FinderShareFacts {
+            id: "req-1".into(),
+            size_bytes: Some(3_048),
+            refusal: None,
+        })
+        .expect("serialize");
+        let keys: BTreeSet<String> = sized.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = ["id", "sizeBytes", "refusal"].into_iter().map(String::from).collect();
+        assert_eq!(
+            keys, expected,
+            "finder:share-facts wire keys drifted (FE FinderShareListener reads these)"
+        );
+        assert_eq!(sized["id"], "req-1");
+        assert_eq!(sized["sizeBytes"], 3_048u64);
+        assert!(sized["refusal"].is_null(), "no refusal is an explicit null");
+
+        let refused = serde_json::to_value(FinderShareFacts {
+            id: "req-2".into(),
+            size_bytes: None,
+            refusal: Some(AppError::Validation("This folder has no files to share.".into())),
+        })
+        .expect("serialize");
+        assert!(refused["sizeBytes"].is_null());
+        assert_eq!(refused["refusal"]["kind"], "Validation");
+        assert_eq!(refused["refusal"]["message"], "This folder has no files to share.", "verbatim");
+    }
+
     /// The chooser's number for an outside folder is the scan's total — the
     /// bytes the copy uploads and the gate bills — not a directory `len()`,
     /// and not counting the hidden files the share skips.
@@ -560,15 +648,47 @@ mod tests {
         std::fs::write(root.join("sub/b.txt"), vec![0u8; 1_000]).expect("b");
         std::fs::write(root.join(".DS_Store"), vec![0u8; 9_999]).expect("hidden, not billed");
 
-        assert_eq!(outside_folder_size(&root).await, Some(3_048));
+        let (size, refusal) = outside_folder_facts(&root).await;
+        assert_eq!(size, Some(3_048));
+        assert!(refusal.is_none(), "{refusal:?}");
     }
 
-    /// A folder the share would refuse shows no size rather than "0 B". The
-    /// confirm, not the chooser, explains the refusal.
+    /// A folder the share would refuse shows no size rather than "0 B", and
+    /// carries the share's own refusal so the chooser can say it before the
+    /// user confirms.
     #[tokio::test]
-    async fn a_folder_the_share_would_refuse_has_no_size() {
+    async fn a_folder_the_share_would_refuse_carries_the_refusal() {
         let dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(outside_folder_size(dir.path()).await, None);
+        let (size, refusal) = outside_folder_facts(dir.path()).await;
+        assert_eq!(size, None);
+        assert!(
+            matches!(&refusal, Some(AppError::Validation(m)) if m.contains("no files to share")),
+            "{refusal:?}"
+        );
+    }
+
+    /// The facts reach the chooser only while their click is the latest: a
+    /// newer click has replaced the chooser, and the older folder's size
+    /// would otherwise be shown next to the newer name.
+    #[tokio::test]
+    async fn folder_facts_are_dropped_once_a_later_click_replaces_the_chooser() {
+        let tree = drive_and_outside_tree();
+        let state = state_with_drive(&tree.path().join("Drive")).await;
+        let folder = tree.path().join("Outside");
+        let park = |state: &AppState| {
+            state.store_finder_share(PendingFinderShare {
+                path: folder.clone(),
+                name: "Outside".into(),
+            })
+        };
+
+        let first = park(&state);
+        let facts = folder_facts_for_latest(&state, &first, &folder).await.expect("latest");
+        assert_eq!((facts.id.as_str(), facts.size_bytes), (first.as_str(), Some(1_200)));
+
+        let second = park(&state);
+        assert!(folder_facts_for_latest(&state, &first, &folder).await.is_none(), "superseded");
+        assert!(folder_facts_for_latest(&state, &second, &folder).await.is_some());
     }
 
     /// A logged-in state whose only drive is rooted at `drive_root`, on an
@@ -625,9 +745,11 @@ mod tests {
         assert_eq!(facts.size_bytes, None);
     }
 
-    /// A folder outside every drive is uploaded as a copy, sized by the scan.
+    /// A folder outside every drive is uploaded as a copy. The chooser opens
+    /// before it is sized: the scan can take seconds, and its total follows
+    /// in `finder:share-facts`.
     #[tokio::test]
-    async fn the_chooser_treats_an_outside_folder_as_a_sized_copy() {
+    async fn the_chooser_opens_on_an_outside_folder_before_it_is_sized() {
         let tree = drive_and_outside_tree();
         let state = state_with_drive(&tree.path().join("Drive")).await;
 
@@ -635,7 +757,7 @@ mod tests {
 
         assert!(facts.is_folder);
         assert_eq!(facts.is_folder_copy, Some(true));
-        assert_eq!(facts.size_bytes, Some(1_200));
+        assert_eq!(facts.size_bytes, None, "sized later, not before the chooser opens");
     }
 
     /// A file is never a folder copy, wherever it lives; its size is its stat.
@@ -718,6 +840,15 @@ mod tests {
         assert!(
             latest_at < body.find("\"finder:share-choosing\"").expect("emit"),
             "a superseded click is dropped before the emit, or its chooser replaces the newer one"
+        );
+        let measure_at = body.find("folder_facts_for_latest(").expect("handle sizes an outside folder");
+        assert!(
+            body.find("\"finder:share-choosing\"").expect("emit") < measure_at,
+            "the chooser opens before the folder is scanned, not after"
+        );
+        assert!(
+            measure_at < body.find("\"finder:share-facts\"").expect("handle emits the facts"),
+            "the facts are emitted from the latest-click check"
         );
         assert!(
             !body.contains("mint_confirmed("),

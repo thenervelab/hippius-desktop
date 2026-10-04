@@ -106,9 +106,9 @@ export interface FinderShareChoosing {
   id: string;
   name: string;
   /**
-   * Size of the clicked file when it was right-clicked, or the bytes an
-   * outside folder's copy will upload. `null` for an in-drive folder, an
-   * outside folder that could not be measured in time, or an unreadable stat.
+   * Size of the clicked file when it was right-clicked. `null` for every
+   * folder and for an unreadable stat; an outside folder's copy is measured
+   * after the chooser opens and arrives in {@link FinderShareFacts}.
    *
    * Shown in the chooser. A file that has not finished downloading is
    * indistinguishable from a smaller file at every level below this one, so
@@ -131,6 +131,29 @@ export interface FinderShareChoosing {
    * read the drive roots: the chooser then shows neither notice.
    */
   isFolderCopy: boolean | null;
+}
+
+/**
+ * The share's refusal of a folder, as Rust's `AppError` crosses IPC. The
+ * message is a sentence written for the user and is shown verbatim.
+ */
+export interface ShareRefusal {
+  kind: string;
+  message: string;
+}
+
+/**
+ * Payload of `finder:share-facts`, the follow-up to `finder:share-choosing`
+ * for a folder uploaded as a copy: the chooser opens first, and this brings
+ * what Rust's scan of the folder found. Rust emits it only while `id` is the
+ * latest click.
+ */
+export interface FinderShareFacts {
+  id: string;
+  /** Bytes the copy would upload; `null` if refused or not measured in time. */
+  sizeBytes: number | null;
+  /** Why the share would refuse this folder; `null` when it would not. */
+  refusal: ShareRefusal | null;
 }
 
 /** Phase of an in-flight share creation. */
