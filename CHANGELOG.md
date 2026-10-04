@@ -124,6 +124,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Uploading a folder with many subfolders into a drive uploads everything
+  inside it.** Before, only the files at the top of the folder went up. A
+  folder nested too deeply to upload is now named instead of left behind.
+
 - **A file's sync error shows only on that file.** Two files with the same
   name in different folders no longer both show the error of one of them.
 

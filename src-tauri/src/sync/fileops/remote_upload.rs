@@ -621,9 +621,11 @@ struct PlannedUpload {
     size: u64,
 }
 
-/// Depth cap, mirroring the local add walk's defence against symlink
-/// cycles. It bounds the pending-directory stack, not the file count.
-const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = 64;
+/// Most folder levels below the uploaded folder, matching
+/// `hcfs_shared::path_validator`'s depth rule (64). Symlinks are never
+/// followed (`visible_children`), so this is not a cycle guard: it refuses
+/// a tree too deep to address rather than walking it to the end.
+const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = hcfs_shared::path_validator::MAX_DEPTH;
 
 /// Flatten a folder into the files to upload and the wire folder each
 /// belongs in.
@@ -635,25 +637,33 @@ const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = 64;
 /// folder uploaded here and the same folder synced locally produce the
 /// same file set. Children it reports as unreadable or as non-UTF-8 are
 /// skipped too.
-fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
+///
+/// # Errors
+///
+/// [`AppError::Validation`] naming the first folder more than
+/// [`REMOTE_FOLDER_WALK_MAX_DEPTH`] levels below `root`. Refused rather
+/// than skipped: a silently partial upload is what this used to do.
+fn plan_folder_upload(root: &Path, wire_parent: &str) -> Result<Vec<PlannedUpload>> {
     let Some(folder_name) = root.file_name().and_then(|n| n.to_str()) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let base = wire_relative_path(wire_parent, folder_name);
 
     let mut planned = Vec::new();
-    let mut stack = vec![(root.to_path_buf(), base)];
-    while let Some((dir, parent)) = stack.pop() {
-        if stack.len() > REMOTE_FOLDER_WALK_MAX_DEPTH {
-            break;
-        }
+    // Each entry carries its own depth below `root`: the stack's length is
+    // how many folders are waiting, which a wide folder makes large.
+    let mut stack = vec![(root.to_path_buf(), base, 0_usize)];
+    while let Some((dir, parent, depth)) = stack.pop() {
         // An unreadable subfolder is skipped here (the other files still
         // upload and the result lists per-file failures); a share instead
         // treats it as fatal.
         let Ok(children) = visible_children(&dir) else { continue };
         for child in children {
             match child.kind {
-                VisibleKind::Dir => stack.push((child.path, wire_relative_path(&parent, &child.name))),
+                VisibleKind::Dir if depth >= REMOTE_FOLDER_WALK_MAX_DEPTH => {
+                    return Err(too_deep(root, folder_name, &child.path));
+                }
+                VisibleKind::Dir => stack.push((child.path, wire_relative_path(&parent, &child.name), depth + 1)),
                 VisibleKind::File { size } => planned.push(PlannedUpload {
                     source: child.path,
                     parent: parent.clone(),
@@ -666,7 +676,18 @@ fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
             }
         }
     }
-    planned
+    Ok(planned)
+}
+
+/// The refusal for a folder past the depth cap, named from the uploaded
+/// folder down so the user can find it.
+fn too_deep(root: &Path, folder_name: &str, dir: &Path) -> AppError {
+    let inside = dir.strip_prefix(root).unwrap_or(dir);
+    AppError::Validation(format!(
+        "\u{201c}{}\u{201d} is more than {REMOTE_FOLDER_WALK_MAX_DEPTH} folders deep inside the \
+         folder you are uploading. Upload a folder closer to it, or move it higher up.",
+        Path::new(folder_name).join(inside).display()
+    ))
 }
 
 /// Upload a whole folder into a drive this device does not sync.
@@ -706,7 +727,7 @@ pub async fn upload_folder_to_remote_folder(
         move || plan_folder_upload(&root, &parent)
     })
     .await
-    .map_err(|e| AppError::Other(format!("Could not read that folder: {e}")))?;
+    .map_err(|e| AppError::Other(format!("Could not read that folder: {e}")))??;
 
     if planned.is_empty() {
         return Err(AppError::Validation("That folder has no files to upload.".into()));
@@ -836,6 +857,7 @@ mod tests {
         std::fs::write(root.join("2024").join("b.jpg"), b"b").expect("nested file");
 
         let mut planned: Vec<String> = plan_folder_upload(&root, "")
+            .expect("plan")
             .into_iter()
             .map(|p| wire_relative_path(&p.parent, p.source.file_name().unwrap().to_str().unwrap()))
             .collect();
@@ -854,7 +876,7 @@ mod tests {
         std::fs::write(root.join("a.jpg"), b"abc").expect("root file");
         std::fs::write(root.join("2024").join("b.jpg"), vec![0u8; 1_000]).expect("nested file");
 
-        let mut sizes: Vec<u64> = plan_folder_upload(&root, "").iter().map(|p| p.size).collect();
+        let mut sizes: Vec<u64> = plan_folder_upload(&root, "").expect("plan").iter().map(|p| p.size).collect();
         sizes.sort_unstable();
         assert_eq!(sizes, vec![3, 1_000]);
     }
@@ -867,7 +889,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("dir");
         std::fs::write(root.join("a.jpg"), b"a").expect("file");
 
-        let planned = plan_folder_upload(&root, "Archive/2023");
+        let planned = plan_folder_upload(&root, "Archive/2023").expect("plan");
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].parent, "Archive/2023/Photos");
     }
@@ -883,7 +905,7 @@ mod tests {
         std::fs::write(root.join(".git").join("config"), b"x").expect("file in hidden dir");
         std::fs::write(root.join("a.jpg"), b"a").expect("visible file");
 
-        let planned = plan_folder_upload(&root, "");
+        let planned = plan_folder_upload(&root, "").expect("plan");
         assert_eq!(planned.len(), 1, "only the visible file is uploaded");
         assert_eq!(planned[0].source.file_name().unwrap(), "a.jpg");
     }
@@ -900,9 +922,49 @@ mod tests {
         std::os::unix::fs::symlink(root.join("a.jpg"), root.join("link.jpg")).expect("file link");
         std::os::unix::fs::symlink(&root, root.join("loop")).expect("dir link");
 
-        let planned = plan_folder_upload(&root, "");
+        let planned = plan_folder_upload(&root, "").expect("plan");
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].source.file_name().unwrap(), "a.jpg");
+    }
+
+    /// A wide folder is not a deep one: more subfolders than the depth cap,
+    /// side by side, all upload. The cap used to be checked against the
+    /// count of folders waiting to be walked, so this uploaded only the
+    /// files at the top.
+    #[test]
+    fn a_folder_upload_with_many_subfolders_plans_every_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        for i in 0..70 {
+            let sub = root.join(format!("sub-{i:02}"));
+            std::fs::create_dir_all(&sub).expect("subfolder");
+            std::fs::write(sub.join("a.jpg"), b"a").expect("file");
+        }
+
+        let planned = plan_folder_upload(&root, "").expect("plan");
+        assert_eq!(planned.len(), 70);
+    }
+
+    /// A folder 64 levels below the uploaded one is walked; one more level
+    /// is refused, naming the folder, rather than silently left behind.
+    #[test]
+    fn a_folder_upload_refuses_a_tree_past_the_depth_cap_naming_it() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Deep");
+        let at_cap = root.join(vec!["d"; REMOTE_FOLDER_WALK_MAX_DEPTH].join("/"));
+        std::fs::create_dir_all(&at_cap).expect("64 levels");
+        std::fs::write(at_cap.join("a.txt"), b"a").expect("deepest file");
+        let planned = plan_folder_upload(&root, "").expect("64 levels is allowed");
+        assert_eq!(planned.len(), 1);
+
+        std::fs::create_dir_all(at_cap.join("too-deep")).expect("65th level");
+        let err = plan_folder_upload(&root, "").err().expect("65 levels is refused");
+        let AppError::Validation(message) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(message.contains("/d/too-deep\u{201d}"), "{message}");
+        assert!(message.starts_with("\u{201c}Deep/d/"), "{message}");
+        assert!(message.contains("more than 64 folders deep"), "{message}");
     }
 
     /// Unlike a share, a drive upload carries on past what it cannot read:
@@ -922,7 +984,7 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o400)).expect("chmod");
         // Root ignores permissions; the case is unobservable there.
         let examinable_anyway = std::fs::symlink_metadata(locked.join("b.jpg")).is_ok();
-        let planned = plan_folder_upload(&root, "");
+        let planned = plan_folder_upload(&root, "").expect("plan");
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("restore");
         if examinable_anyway {
             return;
