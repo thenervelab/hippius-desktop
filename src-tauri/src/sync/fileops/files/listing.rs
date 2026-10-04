@@ -148,7 +148,7 @@ fn disk_row_status<'a>(
 ///   the root, and only a full file id: anywhere else, or `downloaded_2024`,
 ///   the file is a user's. The sweep also keeps one whose id its state
 ///   knows (`knows_downloaded_as`), the verified copy of a real file; this
-///   predicate cannot see that, so the caller asks [`DownloadedAsLookup`]
+///   predicate cannot see that, so the caller asks [`DriveStateLookup`]
 ///   before hiding one.
 /// - a 0-byte `file_<hex>` stub, at any depth.
 ///
@@ -171,16 +171,15 @@ fn is_untracked_engine_artifact(
     is_candidate && !synced_set.is_some_and(|synced| synced.contains_key(relative_path))
 }
 
-/// Answers hcfs's `knows_downloaded_as` for root `downloaded_<id>` files:
-/// whether the drive's state knows the id, which makes the file the
-/// verified copy of a real file rather than a leftover.
+/// The drive's hcfs state for one listing, read only when first needed, so
+/// a listing that never asks pays nothing. Asked by a root
+/// `downloaded_<id>` file ([`Self::knows_downloaded_as`]) and by a saved
+/// refusal whose file is missing from disk
+/// ([`RefusedRows::forget_vanished`]).
 ///
-/// The state is read only when the first such file is met, so a listing
-/// with none pays nothing. The synced map is consulted first: each of its
-/// rows is in the state's synced tree, so a hit there needs no state read.
 /// When the state cannot be read (drive not loaded, or a cycle holds it)
-/// the id counts as unknown and the file stays hidden, as before.
-struct DownloadedAsLookup<'a> {
+/// every answer is "unknown", which both callers treat conservatively.
+struct DriveStateLookup<'a> {
     /// The runner the drive's state is read through.
     sync: &'a SyncRunner,
     /// The drive; `None` lists a folder outside any drive.
@@ -191,7 +190,7 @@ struct DownloadedAsLookup<'a> {
     state: StateRead,
 }
 
-/// Whether [`DownloadedAsLookup`] has read the drive's state yet.
+/// Whether [`DriveStateLookup`] has read the drive's state yet.
 enum StateRead {
     /// Not needed so far.
     NotRead,
@@ -199,15 +198,9 @@ enum StateRead {
     Read(Option<Arc<SyncState>>),
 }
 
-impl DownloadedAsLookup<'_> {
-    async fn knows(&mut self, hex_id: &str) -> bool {
-        let mut id = [0u8; 32];
-        if hex::decode_to_slice(hex_id, &mut id).is_err() {
-            return false;
-        }
-        if self.synced.is_some_and(|synced| synced.values().any(|info| info.path_hash == id)) {
-            return true;
-        }
+impl DriveStateLookup<'_> {
+    /// The drive's state, read on the first call; `None` when unreadable.
+    async fn state(&mut self) -> Option<&SyncState> {
         if matches!(self.state, StateRead::NotRead) {
             let loaded = match self.label {
                 Some(label) => shared_sync_state_for_label(self.sync, label).await,
@@ -216,9 +209,26 @@ impl DownloadedAsLookup<'_> {
             self.state = StateRead::Read(loaded);
         }
         match &self.state {
-            StateRead::Read(Some(state)) => state_knows_file_id(state, &id),
-            StateRead::Read(None) | StateRead::NotRead => false,
+            StateRead::Read(Some(state)) => Some(state),
+            StateRead::Read(None) | StateRead::NotRead => None,
         }
+    }
+
+    /// hcfs's `knows_downloaded_as`: whether the drive's state knows the
+    /// file id a root `downloaded_<id>` names, which makes the file the
+    /// verified copy of a real file rather than a leftover. The synced map
+    /// is consulted first: each of its rows is in the state's synced tree,
+    /// so a hit there needs no state read. Unknown reads as `false`, so the
+    /// file stays hidden.
+    async fn knows_downloaded_as(&mut self, hex_id: &str) -> bool {
+        let mut id = [0u8; 32];
+        if hex::decode_to_slice(hex_id, &mut id).is_err() {
+            return false;
+        }
+        if self.synced.is_some_and(|synced| synced.values().any(|info| info.path_hash == id)) {
+            return true;
+        }
+        self.state().await.is_some_and(|state| state_knows_file_id(state, &id))
     }
 }
 
@@ -261,7 +271,7 @@ async fn list_sync_folder_inner_with(
     let excluded_patterns = &view.excludes;
     let exclude_rules = super::exclude_match::rules_from_patterns(excluded_patterns);
 
-    let mut downloaded_as = DownloadedAsLookup {
+    let mut drive_state = DriveStateLookup {
         sync: &state.sync,
         label: label.as_deref(),
         synced: synced_set,
@@ -269,6 +279,8 @@ async fn list_sync_folder_inner_with(
     };
 
     let mut entries = Vec::new();
+    // Every name the level holds, listed or not, for the refusal sweep below.
+    let mut on_disk: HashSet<String> = HashSet::new();
     // A read_dir failure is an I/O fault → Io (#[from]).
     let mut dir = tokio::fs::read_dir(&target).await?;
 
@@ -282,6 +294,7 @@ async fn list_sync_folder_inner_with(
             continue;
         }
         let name = os_name.to_string_lossy().to_string();
+        on_disk.insert(name.clone());
 
         let meta = entry.metadata().await?;
         let is_folder = meta.is_dir();
@@ -301,7 +314,7 @@ async fn list_sync_folder_inner_with(
         let mut legacy_copy = false;
         if !is_folder && is_untracked_engine_artifact(&name, &relative_path, at_root, meta.len(), synced_set) {
             match hcfs_client::engine::classify::is_failed_download_artifact(&name).filter(|_| at_root) {
-                Some(hex_id) if downloaded_as.knows(hex_id).await => legacy_copy = true,
+                Some(hex_id) if drive_state.knows_downloaded_as(hex_id).await => legacy_copy = true,
                 _ => continue,
             }
         }
@@ -361,7 +374,31 @@ async fn list_sync_folder_inner_with(
         });
     }
 
+    forget_vanished_refusals(view, &level_prefix(subfolder.as_deref()), &on_disk, &mut drive_state).await;
     Ok(entries)
+}
+
+/// The drive-relative prefix of a listing level: `""` at the root, else the
+/// subfolder with one trailing `/`, so `starts_with` cannot match a sibling
+/// that shares the name's prefix (`docs` vs `docs2/x`).
+fn level_prefix(subfolder: Option<&str>) -> String {
+    match subfolder {
+        Some("") | None => String::new(),
+        Some(sub) => format!("{}/", sub.trim_end_matches('/')),
+    }
+}
+
+/// Drops this level's saved refusals whose file left both disk and server:
+/// such a file can never clear by syncing. Run by the listing pass because
+/// it already holds the level's names (`on_disk`); the drive's state is read
+/// only when such a row exists.
+async fn forget_vanished_refusals(view: &DriveView, prefix: &str, on_disk: &HashSet<String>, drive_state: &mut DriveStateLookup<'_>) {
+    let missing = view.refused.missing_at_level(prefix, on_disk);
+    if missing.is_empty() {
+        return;
+    }
+    let state = drive_state.state().await;
+    view.refused.forget_vanished(missing, view.synced.as_ref(), state).await;
 }
 
 /// Response for [`list_sync_folder_grouped`].
@@ -530,10 +567,7 @@ pub async fn list_sync_folder_grouped_inner(
     // 3. Build the overlay. Normalise the subfolder prefix to always end in
     // `/` so `rel.starts_with(prefix)` doesn't match a sibling whose name
     // happens to share a prefix (e.g. subfolder="docs" and rel="docs2/x").
-    let prefix = match subfolder.as_deref() {
-        Some("") | None => String::new(),
-        Some(s) => format!("{}/", s.trim_end_matches('/')),
-    };
+    let prefix = level_prefix(subfolder.as_deref());
     let mut seen_names: std::collections::HashSet<String> = disk_entries.iter().map(|e| e.name.clone()).collect();
     let mut server_only_files: Vec<FileEntry> = Vec::new();
     // (file_count, first-info) for each server-only folder at this level.

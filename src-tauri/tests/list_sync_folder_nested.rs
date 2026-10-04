@@ -873,3 +873,30 @@ async fn a_saved_refusal_keeps_its_row_failed() {
     assert_status(&root.files, "flaky.bin", "synced");
     assert_status(&sub.files, "locked.pdf", "failed");
 }
+
+/// A listing drops a refusal only when it knows the file is gone from the
+/// server too. With no drive state to ask (drive not loaded), a row whose
+/// file is not on disk stays: it may be a download hcfs refused for space.
+#[tokio::test]
+async fn a_refusal_for_a_missing_file_stays_when_the_server_side_is_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_file(tmp.path(), "here.txt");
+
+    let pool = make_pool().await;
+    insert_failure(&pool, LABEL, "here.txt", &refused("unreadable")).await;
+    insert_failure(&pool, LABEL, "big.mov", &refused("no room")).await;
+    let state = make_state(pool.clone());
+    seed_cache(&state, &[]);
+
+    let path: String = tmp.path().to_string_lossy().into();
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    assert_status(&root.files, "here.txt", "failed");
+    let left = failure_repo::list_refused_paths(&pool, &account_owner(ACCOUNT), LABEL)
+        .await
+        .expect("read refusals");
+    assert!(left.contains("big.mov"), "kept: {left:?}");
+    assert!(left.contains("here.txt"), "kept: {left:?}");
+}
