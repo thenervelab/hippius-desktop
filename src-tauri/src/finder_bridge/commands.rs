@@ -56,8 +56,14 @@ pub async fn hcfs_finder_confirm_share(
         // dropped when it fires (`dispatch::until_cancelled`); an outside
         // folder's upload takes it cooperatively so it can abort the
         // half-built link on the server. The guard removes the handle when
-        // this scope ends — on success, error, cancel, OR the command future
-        // being dropped (window closed mid-upload).
+        // this scope ends — on success, error or cancel.
+        //
+        // Closing the window does NOT end it. Tauri 2 runs an async command
+        // as a detached task (`InvokeResolver::respond_async` spawns it on
+        // `tauri::async_runtime`), so the mint runs to completion and its
+        // reply goes to a webview that is gone; on macOS the main window is
+        // only hidden anyway. The future is dropped only when the runtime
+        // shuts down at process exit, which the guard also covers.
         let cancel = state.register_finder_mint(&request_id);
         let _guard = FinderMintGuard {
             state: state.inner(),
@@ -84,7 +90,7 @@ pub async fn hcfs_finder_confirm_share(
 /// RAII teardown for an in-flight Finder mint: drops the cancel handle registered
 /// by [`hcfs_finder_confirm_share`] when the mint scope ends — whether it
 /// completes, errors, is cancelled, or the whole command future is dropped
-/// (window closed mid-upload). Paired begin/end teardown via `Drop` is the
+/// (only at process exit: Tauri detaches async commands from the webview). Paired begin/end teardown via `Drop` is the
 /// cancellation-safe way to run cleanup on every exit path (RfR ch. 8
 /// §Cancellation; axiom `rust_quality_71_drop_order`).
 #[cfg(any(unix, windows))]

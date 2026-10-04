@@ -458,9 +458,10 @@ impl AppState {
     }
 
     /// Register an in-flight mint for `id`, returning a fresh
-    /// [`tokio_util::sync::CancellationToken`] the confirm command selects on.
-    /// Signalling this token (via [`AppState::cancel_finder_share`]) drops the
-    /// mint future and aborts its upload.
+    /// [`tokio_util::sync::CancellationToken`] the confirm command hands to the
+    /// mint. Signalling it (via [`AppState::cancel_finder_share`]) drops a
+    /// single-request mint (`dispatch::until_cancelled`) and makes an
+    /// outside-folder upload abort its half-built link on the server.
     #[cfg(any(unix, windows))]
     pub fn register_finder_mint(&self, id: &str) -> tokio_util::sync::CancellationToken {
         let token = tokio_util::sync::CancellationToken::new();
@@ -472,8 +473,8 @@ impl AppState {
     }
 
     /// Drop the in-flight cancel handle for `id`. Called when the mint ends
-    /// (success, error, cancel, or the command future being dropped), so the
-    /// registry never retains a completed mint's token.
+    /// (success, error, cancel, or the command future being dropped at
+    /// process exit), so the registry never retains a completed mint's token.
     #[cfg(any(unix, windows))]
     pub fn finish_finder_mint(&self, id: &str) {
         self.finder_share_cancels
@@ -786,14 +787,14 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn cancel_signals_an_in_flight_mint_token() {
-        // The confirm command registers a token and selects on it; cancel must
-        // fire that token so the mint future is dropped and its upload aborted.
+        // The confirm command registers a token and hands it to the mint;
+        // cancel must fire that token so the mint stops and its upload aborts.
         let state = AppState::new();
         let token = state.register_finder_mint("abc");
         assert!(!token.is_cancelled());
         state.cancel_finder_share("abc");
         assert!(token.is_cancelled(), "cancel must signal the in-flight mint token");
-        // finish is idempotent cleanup after the mint's select! unwinds.
+        // finish is idempotent cleanup once the mint returns.
         state.finish_finder_mint("abc");
         // A second cancel after finish is a harmless no-op (token gone).
         state.cancel_finder_share("abc");
