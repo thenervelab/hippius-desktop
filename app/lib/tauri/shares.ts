@@ -267,6 +267,12 @@ export async function listShares(): Promise<ShareSummary[]> {
 }
 
 /**
+ * Where a folder link's contents come from. Rust chooses the key (from the
+ * server's listing), so the FE never decides this itself.
+ */
+export type FolderShareOrigin = "drive" | "uploadedCopy";
+
+/**
  * One row of the owner's folder-share listing.
  *
  * The server returns `tokenHash` (blake3 hex of the plaintext token) only —
@@ -286,7 +292,7 @@ export async function listShares(): Promise<ShareSummary[]> {
 export interface FolderShareSummary {
   tokenHash: string;
   folderHash: string;
-  /** `""` means the share covers the whole drive. */
+  /** `""` means the share covers the whole drive (on a drive row). */
   pathPrefix: string;
   displayName: string;
   /** RFC 3339 timestamp. */
@@ -313,6 +319,13 @@ export interface FolderShareSummary {
    * coincides with `shareUrl` being `null`.
    */
   isPrivate: boolean | null;
+  /**
+   * `"uploadedCopy"` for a folder shared from outside every drive: its files
+   * were uploaded for the link, so it has no drive identity (`folderHash`
+   * and `pathPrefix` are `""`), never badges a drive folder, and does not
+   * follow later changes to the folder.
+   */
+  source: FolderShareOrigin;
 }
 
 /**

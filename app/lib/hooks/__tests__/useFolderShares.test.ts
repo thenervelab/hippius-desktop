@@ -30,6 +30,7 @@ const row = (over: Partial<FolderShareSummary> = {}): FolderShareSummary => ({
   shareToken: "tok-1",
   shareUrl: "https://console.hippius.com/shared-folder/tok-1#k=K",
   isPrivate: false,
+  source: "drive",
   ...over,
 });
 
@@ -68,6 +69,26 @@ describe("buildFolderShareIndex / selectFolderSharesFor", () => {
     const index = buildFolderShareIndex([row({ pathPrefix: "" })]);
 
     expect(selectFolderSharesFor(index, "37a8eec1ce19687d", "", NOW)).toHaveLength(1);
+    expect(selectFolderSharesFor(index, "37a8eec1ce19687d", "Trips/Photos", NOW)).toEqual([]);
+  });
+
+  it("never indexes an uploaded copy: it is no drive folder", () => {
+    const index = buildFolderShareIndex([
+      row({ source: "uploadedCopy", folderHash: "", pathPrefix: "" }),
+    ]);
+
+    expect(index.size).toBe(0);
+  });
+
+  it("never indexes a row that names no drive folder", () => {
+    expect(buildFolderShareIndex([row({ folderHash: "", pathPrefix: "" })]).size).toBe(0);
+  });
+
+  // Defence in depth: even a copy that somehow carried a drive identity
+  // must not badge that folder, because its contents are a snapshot.
+  it("does not badge a drive folder from an uploaded copy carrying its identity", () => {
+    const index = buildFolderShareIndex([row({ source: "uploadedCopy" })]);
+
     expect(selectFolderSharesFor(index, "37a8eec1ce19687d", "Trips/Photos", NOW)).toEqual([]);
   });
 
