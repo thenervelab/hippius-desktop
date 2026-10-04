@@ -839,11 +839,6 @@ fn main() {
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        // `app_handle` is consumed only by the macOS-gated `Reopen` arm below;
-        // on other platforms borrow-and-discard it so the unused-binding lint
-        // stays quiet without an `#[allow]`.
-        #[cfg(not(target_os = "macos"))]
-        let _ = &app_handle;
         match event {
             // macOS dock icon click with no visible windows. Mirrors the
             // tray's "Open Hippius" action.
@@ -868,19 +863,25 @@ fn main() {
             // Quitting mid-share: tell every running Finder mint to stop and
             // hold the exit briefly, so an outside-folder upload can abort
             // its half-built link on the server instead of being cut off.
-            // The exit requested after the grace is not held again.
+            // The decision (and why every request in the grace is held)
+            // lives in `AppState::on_exit_requested`.
             #[cfg(any(unix, windows))]
             tauri::RunEvent::ExitRequested { api, code, .. } => {
-                if !app_handle.state::<crate::app_state::AppState>().cancel_finder_mints_for_exit() {
+                use crate::app_state::{AppState, ExitDecision};
+
+                let ExitDecision::Hold { start_grace } = app_handle.state::<AppState>().on_exit_requested(code) else {
+                    return;
+                };
+                api.prevent_exit();
+                if !start_grace {
                     return;
                 }
-                api.prevent_exit();
                 info!("exit held for running Finder shares to cancel");
                 let app = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    app.state::<crate::app_state::AppState>()
-                        .wait_for_finder_mints(FINDER_SHARE_EXIT_GRACE)
-                        .await;
+                    let state = app.state::<AppState>();
+                    state.wait_for_finder_mints(FINDER_SHARE_EXIT_GRACE).await;
+                    state.release_exit_grace();
                     app.exit(code.unwrap_or(0));
                 });
             }

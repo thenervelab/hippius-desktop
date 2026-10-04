@@ -27,6 +27,50 @@ use std::sync::{Arc, Mutex, OnceLock, atomic::AtomicU64};
 /// handlers access it through `tauri::State<'_, AppState>`; background
 /// tasks use `app.state::<AppState>()`. All sub-states use interior
 /// mutability so `&AppState` suffices everywhere.
+/// What the run loop does with one exit request; see
+/// [`AppState::on_exit_requested`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitDecision {
+    /// Let the exit happen.
+    Pass,
+    /// Call `prevent_exit`. `start_grace` is true for exactly one request:
+    /// the one whose caller spawns the wait and exits after it.
+    Hold { start_grace: bool },
+}
+
+/// Where quitting stands with respect to running Finder shares.
+#[cfg(any(unix, windows))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ExitGrace {
+    /// Not quitting, or quitting with nothing to wait for.
+    #[default]
+    Idle,
+    /// Running shares were cancelled; every exit request is held until the
+    /// grace ends.
+    Holding,
+    /// The grace ended; exit requests pass.
+    Released,
+}
+
+/// Running Finder mints and the quit grace, under one lock.
+#[cfg(any(unix, windows))]
+#[derive(Debug, Default)]
+struct FinderMints {
+    /// Cancel handle of each running mint, by request id.
+    cancels: HashMap<String, tokio_util::sync::CancellationToken>,
+    /// See [`ExitGrace`].
+    exit: ExitGrace,
+}
+
+#[cfg(any(unix, windows))]
+impl FinderMints {
+    fn cancel_all(&self) {
+        for token in self.cancels.values() {
+            token.cancel();
+        }
+    }
+}
+
 pub struct AppState {
     db: OnceLock<SqlitePool>,
     pub auth: Mutex<AuthInfo>,
@@ -310,13 +354,10 @@ pub struct AppState {
     /// mint, so `cancel_finder_share` either drops the mint (single-request
     /// shares) or tells an outside-folder upload to abort itself on the
     /// server. Keyed by the same random request id as `pending_finder_shares`.
+    /// The quit grace lives under the same lock, so a share cannot register
+    /// between the exit's decision and its cancel sweep.
     #[cfg(any(unix, windows))]
-    finder_share_cancels: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
-    /// Set once app exit has cancelled the running Finder mints, so the exit
-    /// the grace period requests afterwards is let through instead of held
-    /// again.
-    #[cfg(any(unix, windows))]
-    finder_exit_grace_started: std::sync::atomic::AtomicBool,
+    finder_mints: Mutex<FinderMints>,
     /// Id of the most recent Finder click. The chooser measures a folder
     /// for up to two seconds before it opens, so an earlier click can finish
     /// measuring after a later one; only the latest may open the chooser.
@@ -415,9 +456,7 @@ impl AppState {
             #[cfg(any(unix, windows))]
             pending_finder_shares: Mutex::new(HashMap::new()),
             #[cfg(any(unix, windows))]
-            finder_share_cancels: Mutex::new(HashMap::new()),
-            #[cfg(any(unix, windows))]
-            finder_exit_grace_started: std::sync::atomic::AtomicBool::new(false),
+            finder_mints: Mutex::new(FinderMints::default()),
             #[cfg(any(unix, windows))]
             latest_finder_share: Mutex::new(None),
         }
@@ -488,13 +527,19 @@ impl AppState {
     /// mint. Signalling it (via [`AppState::cancel_finder_share`]) drops a
     /// single-request mint (`dispatch::until_cancelled`) and makes an
     /// outside-folder upload abort its half-built link on the server.
+    ///
+    /// Once quitting has begun the token comes back already cancelled and is
+    /// not registered: the share stops at once instead of making the quit
+    /// grace wait its full length for an upload nobody will see finish.
     #[cfg(any(unix, windows))]
     pub fn register_finder_mint(&self, id: &str) -> tokio_util::sync::CancellationToken {
         let token = tokio_util::sync::CancellationToken::new();
-        self.finder_share_cancels
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.to_string(), token.clone());
+        let mut mints = self.lock_finder_mints();
+        if mints.exit == ExitGrace::Idle {
+            mints.cancels.insert(id.to_string(), token.clone());
+        } else {
+            token.cancel();
+        }
         token
     }
 
@@ -503,10 +548,7 @@ impl AppState {
     /// process exit), so the registry never retains a completed mint's token.
     #[cfg(any(unix, windows))]
     pub fn finish_finder_mint(&self, id: &str) {
-        self.finder_share_cancels
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(id);
+        self.lock_finder_mints().cancels.remove(id);
     }
 
     /// Cancel a Finder share by id, covering BOTH lifecycle stages: remove any
@@ -519,34 +561,53 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id);
-        if let Some(token) = self
-            .finder_share_cancels
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(id)
-        {
+        if let Some(token) = self.lock_finder_mints().cancels.get(id) {
             token.cancel();
         }
     }
 
-    /// Cancel every running Finder mint because the app is exiting.
+    /// Decide what to do with an exit request while Finder shares may be
+    /// running, cancelling every running mint the first time.
     ///
-    /// Returns `true` the first time it finds mints running: the caller holds
-    /// the exit for [`AppState::wait_for_finder_mints`], so an outside-folder
-    /// upload can send the abort for its half-built link rather than be cut
-    /// off and left to the server's idle reaper. Returns `false` when nothing
-    /// is running and on every later call, so the exit the grace itself
-    /// requests is never held a second time.
+    /// The first request that finds mints running starts the grace: the
+    /// caller holds the exit, waits in [`AppState::wait_for_finder_mints`] so
+    /// an outside-folder upload can send the abort for its half-built link,
+    /// then calls [`AppState::release_exit_grace`] and exits. Every request
+    /// during the grace is held too: on Linux and Windows one window close
+    /// requests the exit twice (`app.exit(0)`, then the last window going
+    /// away), and letting the second through would cut the grace short.
+    ///
+    /// A restart (`tauri::RESTART_EXIT_CODE`, the updater's relaunch) always
+    /// passes: Tauri ignores `prevent_exit` for it. Its mints are still told
+    /// to stop, which costs nothing.
     #[cfg(any(unix, windows))]
-    pub fn cancel_finder_mints_for_exit(&self) -> bool {
-        let cancels = self.finder_share_cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cancels.is_empty() || self.finder_exit_grace_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            return false;
+    pub fn on_exit_requested(&self, code: Option<i32>) -> ExitDecision {
+        let mut mints = self.lock_finder_mints();
+        if code == Some(tauri::RESTART_EXIT_CODE) {
+            mints.cancel_all();
+            return ExitDecision::Pass;
         }
-        for token in cancels.values() {
-            token.cancel();
+        match mints.exit {
+            ExitGrace::Released => ExitDecision::Pass,
+            ExitGrace::Holding => ExitDecision::Hold { start_grace: false },
+            ExitGrace::Idle if mints.cancels.is_empty() => ExitDecision::Pass,
+            ExitGrace::Idle => {
+                mints.cancel_all();
+                mints.exit = ExitGrace::Holding;
+                ExitDecision::Hold { start_grace: true }
+            }
         }
-        true
+    }
+
+    /// End the quit grace, so the exit the grace task requests next passes.
+    #[cfg(any(unix, windows))]
+    pub fn release_exit_grace(&self) {
+        self.lock_finder_mints().exit = ExitGrace::Released;
+    }
+
+    #[cfg(any(unix, windows))]
+    fn lock_finder_mints(&self) -> std::sync::MutexGuard<'_, FinderMints> {
+        self.finder_mints.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Wait until every Finder mint has finished (each removes its handle
@@ -558,12 +619,7 @@ impl AppState {
     pub async fn wait_for_finder_mints(&self, grace: std::time::Duration) {
         const POLL: std::time::Duration = std::time::Duration::from_millis(50);
         let drained = async {
-            while !self
-                .finder_share_cancels
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_empty()
-            {
+            while !self.lock_finder_mints().cancels.is_empty() {
                 tokio::time::sleep(POLL).await;
             }
         };
@@ -892,20 +948,83 @@ mod tests {
 
     /// Quitting mid-upload cancels every running Finder mint, so an
     /// outside-folder upload aborts its link instead of being cut off and
-    /// left to the server's idle reaper. Only the first exit holds; the exit
-    /// the grace itself requests must go through.
+    /// left to the server's idle reaper. Nothing running: nothing to hold.
     #[cfg(any(unix, windows))]
     #[test]
-    fn exit_cancels_every_running_finder_mint_once() {
+    fn exit_cancels_every_running_finder_mint_and_holds() {
         let state = AppState::new();
-        assert!(!state.cancel_finder_mints_for_exit(), "nothing running, nothing to wait for");
+        assert_eq!(
+            state.on_exit_requested(Some(0)),
+            ExitDecision::Pass,
+            "nothing running, nothing to wait for"
+        );
 
         let a = state.register_finder_mint("a");
         let b = state.register_finder_mint("b");
-        assert!(state.cancel_finder_mints_for_exit(), "running mints hold the exit");
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Hold { start_grace: true });
         assert!(a.is_cancelled() && b.is_cancelled(), "every mint is told to stop");
+    }
 
-        assert!(!state.cancel_finder_mints_for_exit(), "the follow-up exit is not held again");
+    /// On Linux and Windows one window close requests the exit twice
+    /// (`app.exit(0)`, then the last window going away with no code). Both
+    /// must be held while the grace runs, and only one grace may start.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn every_exit_request_during_the_grace_is_held() {
+        let state = AppState::new();
+        let _token = state.register_finder_mint("a");
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Hold { start_grace: true });
+
+        assert_eq!(state.on_exit_requested(None), ExitDecision::Hold { start_grace: false });
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Hold { start_grace: false });
+    }
+
+    /// The exit the grace itself requests goes through, as does every later
+    /// one, even with a mint still registered (it is the stuck one the grace
+    /// timed out on).
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn the_exit_after_the_grace_passes() {
+        let state = AppState::new();
+        let _token = state.register_finder_mint("stuck");
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Hold { start_grace: true });
+
+        state.release_exit_grace();
+
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Pass);
+        assert_eq!(state.on_exit_requested(None), ExitDecision::Pass);
+    }
+
+    /// Tauri ignores `prevent_exit` on a restart (the updater's relaunch), so
+    /// holding it would only log a hold that never happens. The mints are
+    /// still told to stop.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_restart_is_never_held() {
+        let state = AppState::new();
+        let token = state.register_finder_mint("a");
+
+        assert_eq!(state.on_exit_requested(Some(tauri::RESTART_EXIT_CODE)), ExitDecision::Pass);
+        assert!(token.is_cancelled());
+    }
+
+    /// A share confirmed while quitting would make the grace wait its full
+    /// length for an upload nobody will see finish: it starts cancelled and
+    /// is not waited for.
+    #[cfg(any(unix, windows))]
+    #[tokio::test(start_paused = true)]
+    async fn a_share_started_during_the_grace_is_refused() {
+        let state = AppState::new();
+        let _running = state.register_finder_mint("running");
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Hold { start_grace: true });
+        state.finish_finder_mint("running");
+
+        let late = state.register_finder_mint("late");
+
+        assert!(late.is_cancelled(), "a share started while quitting starts cancelled");
+        let started = tokio::time::Instant::now();
+        state.wait_for_finder_mints(std::time::Duration::from_secs(3)).await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "the late share is not waited for");
     }
 
     /// The grace ends as soon as the cancelled mints have finished.

@@ -241,3 +241,14 @@ fn the_finder_confirm_hands_the_cancel_token_to_the_mint() {
     assert!(!body.contains("tokio::select!"), "the confirm must not race the mint against Cancel");
     assert!(body.contains("FinderMint {"), "the confirm must pass the token inside FinderMint");
 }
+
+/// The chooser's size and the share's scan both go through the stoppable
+/// scan, so a closed chooser or a cancelled share stops its walk instead of
+/// leaving up to 50,000 stats running on the blocking pool for nobody.
+#[test]
+fn every_outside_folder_walk_stops_when_dropped() {
+    let dispatch = include_str!("../src/finder_bridge/dispatch.rs");
+    assert!(fn_body(dispatch, "async fn outside_folder_size").contains("scan_until_dropped("));
+    let funnel = include_str!("../src/shares/outside_folder.rs");
+    assert!(fn_body(funnel, "async fn scan_off_main_thread").contains("scan_until_dropped("));
+}

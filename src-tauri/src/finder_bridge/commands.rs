@@ -90,9 +90,10 @@ pub async fn hcfs_finder_confirm_share(
 /// RAII teardown for an in-flight Finder mint: drops the cancel handle registered
 /// by [`hcfs_finder_confirm_share`] when the mint scope ends — whether it
 /// completes, errors, is cancelled, or the whole command future is dropped
-/// (only at process exit: Tauri detaches async commands from the webview). Paired begin/end teardown via `Drop` is the
-/// cancellation-safe way to run cleanup on every exit path (RfR ch. 8
-/// §Cancellation; axiom `rust_quality_71_drop_order`).
+/// (only at process exit: Tauri detaches async commands from the webview).
+/// Paired begin/end teardown via `Drop` is the cancellation-safe way to run
+/// cleanup on every exit path (RfR ch. 8 §Cancellation; axiom
+/// `rust_quality_71_drop_order`).
 #[cfg(any(unix, windows))]
 struct FinderMintGuard<'a> {
     state: &'a AppState,
