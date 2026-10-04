@@ -519,6 +519,83 @@ mod tests {
         assert_eq!(outside_folder_size(dir.path()).await, None);
     }
 
+    /// A logged-in state whose only drive is rooted at `drive_root`, on an
+    /// in-memory database holding just the columns `list_drive_roots` reads.
+    async fn state_with_drive(drive_root: &Path) -> AppState {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory db");
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("sync_paths");
+        let account = "5ChooserAcct";
+        sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, ?, 'docs')")
+            .bind(crate::auth::account_key::account_key(account))
+            .bind(drive_root.to_string_lossy().into_owned())
+            .execute(&pool)
+            .await
+            .expect("drive row");
+
+        let state = AppState::new();
+        state.set_pool(pool);
+        state
+            .set_active_account(account, crate::auth::state::AuthCapabilities::default())
+            .expect("account");
+        state
+    }
+
+    /// A tree with a drive (holding a folder) beside an outside folder and
+    /// an outside file, each with known bytes.
+    fn drive_and_outside_tree() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("Drive/Photos")).expect("drive folder");
+        std::fs::write(dir.path().join("Drive/Photos/p.jpg"), vec![0u8; 500]).expect("p");
+        std::fs::create_dir_all(dir.path().join("Outside")).expect("outside folder");
+        std::fs::write(dir.path().join("Outside/a.txt"), vec![0u8; 1_200]).expect("a");
+        std::fs::write(dir.path().join("loose.zip"), vec![0u8; 7_000]).expect("file");
+        dir
+    }
+
+    /// An in-drive folder mints a live link: no copy, and no size (nothing
+    /// is uploaded).
+    #[tokio::test]
+    async fn the_chooser_treats_an_in_drive_folder_as_a_live_link() {
+        let tree = drive_and_outside_tree();
+        let state = state_with_drive(&tree.path().join("Drive")).await;
+
+        let facts = chooser_facts(&state, &tree.path().join("Drive/Photos")).await;
+
+        assert!(!facts.is_folder_copy);
+        assert_eq!(facts.size_bytes, None);
+    }
+
+    /// A folder outside every drive is uploaded as a copy, sized by the scan.
+    #[tokio::test]
+    async fn the_chooser_treats_an_outside_folder_as_a_sized_copy() {
+        let tree = drive_and_outside_tree();
+        let state = state_with_drive(&tree.path().join("Drive")).await;
+
+        let facts = chooser_facts(&state, &tree.path().join("Outside")).await;
+
+        assert!(facts.is_folder_copy);
+        assert_eq!(facts.size_bytes, Some(1_200));
+    }
+
+    /// A file is never a folder copy, wherever it lives; its size is its stat.
+    #[tokio::test]
+    async fn the_chooser_sizes_a_file_by_its_stat() {
+        let tree = drive_and_outside_tree();
+        let state = state_with_drive(&tree.path().join("Drive")).await;
+
+        let facts = chooser_facts(&state, &tree.path().join("loose.zip")).await;
+
+        assert!(!facts.is_folder_copy);
+        assert_eq!(facts.size_bytes, Some(7_000));
+    }
+
     #[test]
     fn source_stat_degrades_to_none_on_an_unreadable_path() {
         let (size, age) = source_stat(Path::new("/definitely/not/a/real/path.zip"));
