@@ -21,14 +21,9 @@ use sqlx::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, atomic::AtomicU64};
 
-/// The single top-level state container for the entire Tauri backend.
-///
-/// Registered once at startup via `app.manage(AppState::new())`. Command
-/// handlers access it through `tauri::State<'_, AppState>`; background
-/// tasks use `app.state::<AppState>()`. All sub-states use interior
-/// mutability so `&AppState` suffices everywhere.
 /// What the run loop does with one exit request; see
 /// [`AppState::on_exit_requested`].
+#[cfg(any(unix, windows))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitDecision {
     /// Let the exit happen.
@@ -42,13 +37,14 @@ pub enum ExitDecision {
 #[cfg(any(unix, windows))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum ExitGrace {
-    /// Not quitting, or quitting with nothing to wait for.
+    /// Not quitting.
     #[default]
     Idle,
     /// Running shares were cancelled; every exit request is held until the
     /// grace ends.
     Holding,
-    /// The grace ended; exit requests pass.
+    /// Quitting with nothing (left) to wait for: exit requests pass, and a
+    /// share confirmed now starts cancelled.
     Released,
 }
 
@@ -71,6 +67,12 @@ impl FinderMints {
     }
 }
 
+/// The single top-level state container for the entire Tauri backend.
+///
+/// Registered once at startup via `app.manage(AppState::new())`. Command
+/// handlers access it through `tauri::State<'_, AppState>`; background
+/// tasks use `app.state::<AppState>()`. All sub-states use interior
+/// mutability so `&AppState` suffices everywhere.
 pub struct AppState {
     db: OnceLock<SqlitePool>,
     pub auth: Mutex<AuthInfo>,
@@ -570,27 +572,35 @@ impl AppState {
     /// running, cancelling every running mint the first time.
     ///
     /// The first request that finds mints running starts the grace: the
-    /// caller holds the exit, waits in [`AppState::wait_for_finder_mints`] so
-    /// an outside-folder upload can send the abort for its half-built link,
-    /// then calls [`AppState::release_exit_grace`] and exits. Every request
-    /// during the grace is held too: on Linux and Windows one window close
-    /// requests the exit twice (`app.exit(0)`, then the last window going
-    /// away), and letting the second through would cut the grace short.
+    /// caller holds the exit, runs [`AppState::finish_exit_grace`] so an
+    /// outside-folder upload can send the abort for its half-built link,
+    /// then exits. Every request during the grace is held too: on Linux and
+    /// Windows one window close requests the exit twice (`app.exit(0)`,
+    /// then the last window going away), and letting the second through
+    /// would cut the grace short.
+    ///
+    /// A request that passes with nothing running releases the exit at
+    /// once, so a share confirmed in the moment before the process goes
+    /// starts cancelled instead of uploading with nobody to cancel it.
     ///
     /// A restart (`tauri::RESTART_EXIT_CODE`, the updater's relaunch) always
-    /// passes: Tauri ignores `prevent_exit` for it. Its mints are still told
-    /// to stop, which costs nothing.
+    /// passes and releases: Tauri ignores `prevent_exit` for it. Its mints
+    /// are still told to stop, which costs nothing.
     #[cfg(any(unix, windows))]
     pub fn on_exit_requested(&self, code: Option<i32>) -> ExitDecision {
         let mut mints = self.lock_finder_mints();
         if code == Some(tauri::RESTART_EXIT_CODE) {
             mints.cancel_all();
+            mints.exit = ExitGrace::Released;
             return ExitDecision::Pass;
         }
         match mints.exit {
             ExitGrace::Released => ExitDecision::Pass,
             ExitGrace::Holding => ExitDecision::Hold { start_grace: false },
-            ExitGrace::Idle if mints.cancels.is_empty() => ExitDecision::Pass,
+            ExitGrace::Idle if mints.cancels.is_empty() => {
+                mints.exit = ExitGrace::Released;
+                ExitDecision::Pass
+            }
             ExitGrace::Idle => {
                 mints.cancel_all();
                 mints.exit = ExitGrace::Holding;
@@ -599,9 +609,41 @@ impl AppState {
         }
     }
 
-    /// End the quit grace, so the exit the grace task requests next passes.
+    /// Run the quit grace [`AppState::on_exit_requested`] started: wait up
+    /// to `grace` for the cancelled mints to finish, then release the exit.
+    ///
+    /// The release is unconditional. A mint that never finishes must not
+    /// keep the state at `Holding`, or the exit the caller requests next
+    /// would be held again and the app would never quit.
     #[cfg(any(unix, windows))]
-    pub fn release_exit_grace(&self) {
+    pub async fn finish_exit_grace(&self, grace: std::time::Duration) {
+        self.wait_for_finder_mints(grace).await;
+        self.release_exit_grace();
+    }
+
+    /// The process is going away (`RunEvent::Exit`): cancel every running
+    /// Finder mint and say whether the caller should wait briefly for them.
+    ///
+    /// macOS Cmd+Q, Dock Quit and logout reach this without any
+    /// `ExitRequested` (tao's `applicationWillTerminate` goes straight to
+    /// the loop's end), so this is the only chance those quits get to let
+    /// an outside-folder upload abort its link. Returns `false` once the
+    /// exit is `Released`, so a quit that already waited out the
+    /// `ExitRequested` grace, or passed with nothing running, does not wait
+    /// again.
+    #[cfg(any(unix, windows))]
+    pub fn on_final_exit(&self) -> bool {
+        let mut mints = self.lock_finder_mints();
+        let already_released = mints.exit == ExitGrace::Released;
+        mints.exit = ExitGrace::Released;
+        mints.cancel_all();
+        !already_released && !mints.cancels.is_empty()
+    }
+
+    /// End the quit grace: exit requests pass from now on, and a share
+    /// confirmed from now on starts cancelled.
+    #[cfg(any(unix, windows))]
+    fn release_exit_grace(&self) {
         self.lock_finder_mints().exit = ExitGrace::Released;
     }
 
@@ -952,13 +994,14 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn exit_cancels_every_running_finder_mint_and_holds() {
-        let state = AppState::new();
+        let idle = AppState::new();
         assert_eq!(
-            state.on_exit_requested(Some(0)),
+            idle.on_exit_requested(Some(0)),
             ExitDecision::Pass,
             "nothing running, nothing to wait for"
         );
 
+        let state = AppState::new();
         let a = state.register_finder_mint("a");
         let b = state.register_finder_mint("b");
         assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Hold { start_grace: true });
@@ -993,6 +1036,77 @@ mod tests {
 
         assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Pass);
         assert_eq!(state.on_exit_requested(None), ExitDecision::Pass);
+    }
+
+    /// An exit that passes with nothing running still ends Finder sharing
+    /// for the process: a share confirmed in the last moment before the
+    /// process goes would otherwise start an upload nobody cancels.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_share_confirmed_after_an_unheld_exit_starts_cancelled() {
+        let state = AppState::new();
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Pass);
+
+        assert!(state.register_finder_mint("late").is_cancelled());
+    }
+
+    /// Same for a restart, which is never held.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_share_confirmed_after_a_restart_starts_cancelled() {
+        let state = AppState::new();
+        assert_eq!(state.on_exit_requested(Some(tauri::RESTART_EXIT_CODE)), ExitDecision::Pass);
+
+        assert!(state.register_finder_mint("late").is_cancelled());
+    }
+
+    /// The grace always ends in `Released`, even when a mint never
+    /// finishes: otherwise the exit the grace requests would be held again
+    /// and the app would never quit.
+    #[cfg(any(unix, windows))]
+    #[tokio::test(start_paused = true)]
+    async fn the_grace_releases_the_exit_even_when_a_mint_never_finishes() {
+        let state = AppState::new();
+        let _stuck = state.register_finder_mint("stuck");
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Hold { start_grace: true });
+
+        let started = tokio::time::Instant::now();
+        state.finish_exit_grace(std::time::Duration::from_secs(3)).await;
+
+        assert_eq!(started.elapsed().as_secs(), 3, "bounded by the grace");
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Pass);
+        assert!(state.register_finder_mint("late").is_cancelled());
+    }
+
+    /// macOS Cmd+Q, Dock Quit and logout skip `ExitRequested` and reach
+    /// `RunEvent::Exit` directly. That path cancels every running mint and
+    /// asks for the short wait only when something was running and no
+    /// grace has already been waited out.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn the_final_exit_cancels_running_mints_and_waits_only_once() {
+        let idle = AppState::new();
+        assert!(!idle.on_final_exit(), "nothing running, nothing to wait for");
+        assert!(idle.register_finder_mint("late").is_cancelled());
+
+        let busy = AppState::new();
+        let running = busy.register_finder_mint("a");
+        assert!(busy.on_final_exit(), "a running mint gets its short wait");
+        assert!(running.is_cancelled());
+        assert!(!busy.on_final_exit(), "a second call does not wait again");
+    }
+
+    /// After the `ExitRequested` grace has run, the final exit does not wait
+    /// a second time for the mint the grace already timed out on.
+    #[cfg(any(unix, windows))]
+    #[tokio::test(start_paused = true)]
+    async fn the_final_exit_after_the_grace_does_not_wait_again() {
+        let state = AppState::new();
+        let _stuck = state.register_finder_mint("stuck");
+        assert_eq!(state.on_exit_requested(Some(0)), ExitDecision::Hold { start_grace: true });
+        state.finish_exit_grace(std::time::Duration::from_secs(3)).await;
+
+        assert!(!state.on_final_exit());
     }
 
     /// Tauri ignores `prevent_exit` on a restart (the updater's relaunch), so

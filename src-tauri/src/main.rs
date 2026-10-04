@@ -860,11 +860,19 @@ fn main() {
                 }
             }
 
-            // Quitting mid-share: tell every running Finder mint to stop and
-            // hold the exit briefly, so an outside-folder upload can abort
-            // its half-built link on the server instead of being cut off.
-            // The decision (and why every request in the grace is held)
-            // lives in `AppState::on_exit_requested`.
+            // Quitting mid-share: every running Finder mint is told to stop,
+            // and the quit waits briefly so an outside-folder upload can
+            // abort its half-built link on the server instead of being cut
+            // off. Which quit waits how long:
+            // - the tray's Quit, any `app.exit`, and on Linux and Windows a
+            //   main-window close raise `ExitRequested`: the exit is held for up to
+            //   FINDER_SHARE_EXIT_GRACE (decision and the double-request
+            //   reasoning in `AppState::on_exit_requested`);
+            // - macOS Cmd+Q, Dock Quit and logout raise no `ExitRequested`
+            //   (tao's `applicationWillTerminate` ends the loop directly), so
+            //   `Exit` cancels and blocks for up to FINDER_SHARE_FINAL_WAIT;
+            // - a restart is never held (Tauri ignores `prevent_exit` for it)
+            //   and gets no wait.
             #[cfg(any(unix, windows))]
             tauri::RunEvent::ExitRequested { api, code, .. } => {
                 use crate::app_state::{AppState, ExitDecision};
@@ -879,11 +887,21 @@ fn main() {
                 info!("exit held for running Finder shares to cancel");
                 let app = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    let state = app.state::<AppState>();
-                    state.wait_for_finder_mints(FINDER_SHARE_EXIT_GRACE).await;
-                    state.release_exit_grace();
+                    app.state::<AppState>().finish_exit_grace(FINDER_SHARE_EXIT_GRACE).await;
                     app.exit(code.unwrap_or(0));
                 });
+            }
+
+            #[cfg(any(unix, windows))]
+            tauri::RunEvent::Exit => {
+                let state = app_handle.state::<crate::app_state::AppState>();
+                if state.on_final_exit() {
+                    info!("waiting briefly for cancelled Finder shares before exit");
+                    // Blocking the main thread is the point: the process ends
+                    // when this returns. The mints run on the async runtime's
+                    // workers, so they keep making progress meanwhile.
+                    tauri::async_runtime::block_on(state.wait_for_finder_mints(FINDER_SHARE_FINAL_WAIT));
+                }
             }
 
             _ => {}
@@ -896,6 +914,12 @@ fn main() {
 /// regardless.
 #[cfg(any(unix, windows))]
 const FINDER_SHARE_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long the final `Exit` blocks for the same aborts on a quit that
+/// raised no `ExitRequested` (macOS Cmd+Q). Shorter than the grace: it
+/// blocks the main thread while the OS is already terminating the app.
+#[cfg(any(unix, windows))]
+const FINDER_SHARE_FINAL_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 // ---------------------------------------------------------------------------
 // App setup (was setup.rs)

@@ -53,7 +53,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::json;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -1238,6 +1238,9 @@ const UPLOAD_TOKEN: &str = "UploadCopyToken_0123456789abcdefghijklmnopq";
 #[derive(Clone, Default)]
 struct UploadRecorded {
     opens: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Every declared file: the body as sent plus the `file_id` the mock
+    /// answered with, both written under one lock so a lookup by path
+    /// finds the id that file's chunks were sent under.
     files: Arc<Mutex<Vec<serde_json::Value>>>,
     chunks: Arc<Mutex<Vec<ChunkPut>>>,
     file_completes: Arc<Mutex<Vec<i64>>>,
@@ -1266,8 +1269,6 @@ enum OnFirstChunk {
     Nothing,
     /// The modal's Cancel.
     Cancel(CancellationToken),
-    /// A still-downloading file grows before its own upload starts.
-    Grow(std::path::PathBuf),
     /// The link was reaped or revoked: the chunk answers 404.
     Gone,
 }
@@ -1278,6 +1279,10 @@ struct UploadMock {
     can_upload: serde_json::Value,
     seal_expires_at: Option<&'static str>,
     on_first_chunk: OnFirstChunk,
+    /// A still-downloading file that grows while the first declare is
+    /// answered: before any file can finish, so strictly between the scan
+    /// and the upload of a file that starts only after another finished.
+    grow_on_first_declare: Option<std::path::PathBuf>,
     /// See [`MockOptions::cancel_on_capabilities`].
     cancel_on_capabilities: Option<CancellationToken>,
     /// A refused open: its status and JSON body. `None` mints the link.
@@ -1290,6 +1295,7 @@ impl Default for UploadMock {
             can_upload: json!({ "result": true, "error": null }),
             seal_expires_at: Some("2026-10-09T00:00:00+00:00"),
             on_first_chunk: OnFirstChunk::Nothing,
+            grow_on_first_declare: None,
             cancel_on_capabilities: None,
             open_refusal: None,
         }
@@ -1353,39 +1359,46 @@ fn upload_lifecycle_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
         )
 }
 
-/// Per-file init, chunk and complete, plus the folder owner-wrap PUT.
+/// Per-file declare, chunk and complete, plus the folder owner-wrap PUT.
+/// Each answers and refuses as `docs/public/api/folder-shares.md` in hcfs
+/// says the server does, so a client that sends an out-of-range chunk or
+/// completes a file early fails here as it would live.
 fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
-    let (files, chunks, completes, wraps) = (
-        rec.files.clone(),
-        rec.chunks.clone(),
-        rec.file_completes.clone(),
-        rec.folder_wraps.clone(),
-    );
-    let next_id = Arc::new(AtomicI64::new(1));
+    let (files, chunks, wraps) = (rec.files.clone(), rec.chunks.clone(), rec.folder_wraps.clone());
+    let (chunk_files, complete_files, complete_chunks, completes) =
+        (rec.files.clone(), rec.files.clone(), rec.chunks.clone(), rec.file_completes.clone());
+    let grow_pending = Arc::new(Mutex::new(mock.grow_on_first_declare.clone()));
     let fired = Arc::new(AtomicBool::new(false));
     let hook = mock.on_first_chunk.clone();
     Router::new()
         .route(
             "/v1/folder-shares/uploads/{token_hash}/files",
             post(move |Path(_): Path<String>, Json(body): Json<serde_json::Value>| async move {
-                files.lock().unwrap().push(body);
-                Json(json!({ "file_id": next_id.fetch_add(1, Ordering::SeqCst) })).into_response()
+                // Every declare takes this lock, so none is answered before
+                // the grow has landed.
+                if let Some(path) = grow_pending.lock().unwrap().take() {
+                    grow(&path);
+                }
+                let file_id = declare_file(&files, body);
+                (StatusCode::CREATED, Json(json!({ "file_id": file_id }))).into_response()
             }),
         )
         .route(
             "/v1/folder-shares/uploads/{token_hash}/files/{file_id}/chunks/{n}",
             put(
                 move |Path((_, file_id, n)): Path<(String, i64, u32)>, body: axum::body::Bytes| async move {
-                    chunks.lock().unwrap().push(ChunkPut {
+                    let chunk = ChunkPut {
                         file_id,
                         index: n,
                         body: body.to_vec(),
-                    });
+                    };
+                    if let Err(status) = store_chunk(&chunk_files, &chunks, chunk) {
+                        return status.into_response();
+                    }
                     if !fired.swap(true, Ordering::SeqCst) {
                         match &hook {
                             OnFirstChunk::Nothing => {}
                             OnFirstChunk::Cancel(token) => token.cancel(),
-                            OnFirstChunk::Grow(path) => grow(path),
                             OnFirstChunk::Gone => return StatusCode::NOT_FOUND.into_response(),
                         }
                     }
@@ -1398,6 +1411,12 @@ fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
         .route(
             "/v1/folder-shares/uploads/{token_hash}/files/{file_id}/complete",
             post(move |Path((_, file_id)): Path<(String, i64)>| async move {
+                let Some(declared) = declared_file(&complete_files, file_id) else {
+                    return StatusCode::NOT_FOUND.into_response();
+                };
+                if !declared.is_complete(&complete_chunks.lock().unwrap()) {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
                 completes.lock().unwrap().push(file_id);
                 StatusCode::NO_CONTENT.into_response()
             }),
@@ -1413,6 +1432,80 @@ fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
                 StatusCode::NO_CONTENT.into_response()
             }),
         )
+}
+
+/// The server's largest chunk body.
+const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
+/// What a declare fixed for one file.
+struct DeclaredFile {
+    file_id: i64,
+    total_chunks: u32,
+    ciphertext_size: u64,
+}
+
+impl DeclaredFile {
+    /// Every chunk `0..total_chunks` stored, adding up to `ciphertext_size`.
+    fn is_complete(&self, chunks: &[ChunkPut]) -> bool {
+        let mine: Vec<&ChunkPut> = chunks.iter().filter(|c| c.file_id == self.file_id).collect();
+        let indices: std::collections::BTreeSet<u32> = mine.iter().map(|c| c.index).collect();
+        let bytes: u64 = mine.iter().map(|c| c.body.len() as u64).sum();
+        indices.len() == self.total_chunks as usize && bytes == self.ciphertext_size
+    }
+}
+
+/// Record a declare and return its id. A resend of a path with the same
+/// sizes gets the first id back, as on the server.
+fn declare_file(files: &Mutex<Vec<serde_json::Value>>, mut body: serde_json::Value) -> i64 {
+    let mut files = files.lock().unwrap();
+    let same = |f: &&serde_json::Value| {
+        ["relative_path", "plaintext_size", "ciphertext_size", "total_chunks"]
+            .iter()
+            .all(|key| f[key] == body[key])
+    };
+    if let Some(earlier) = files.iter().find(same) {
+        return earlier["file_id"].as_i64().expect("recorded id");
+    }
+    let file_id = i64::try_from(files.len()).expect("few files") + 1;
+    body["file_id"] = json!(file_id);
+    files.push(body);
+    file_id
+}
+
+fn declared_file(files: &Mutex<Vec<serde_json::Value>>, file_id: i64) -> Option<DeclaredFile> {
+    let files = files.lock().unwrap();
+    let body = files.iter().find(|f| f["file_id"] == file_id)?;
+    Some(DeclaredFile {
+        file_id,
+        total_chunks: u32::try_from(body["total_chunks"].as_u64().expect("total_chunks")).expect("u32"),
+        ciphertext_size: body["ciphertext_size"].as_u64().expect("ciphertext_size"),
+    })
+}
+
+/// Store one chunk, refusing it as the server would: an unknown file is
+/// 404; an empty body, an index at or past `total_chunks`, or bytes past
+/// `ciphertext_size` are 400; a body over 8 MiB is 413. A resend of an
+/// index replaces it, so each index is stored once.
+fn store_chunk(files: &Mutex<Vec<serde_json::Value>>, chunks: &Mutex<Vec<ChunkPut>>, chunk: ChunkPut) -> Result<(), StatusCode> {
+    let declared = declared_file(files, chunk.file_id).ok_or(StatusCode::NOT_FOUND)?;
+    if chunk.body.len() > MAX_CHUNK_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    if chunk.body.is_empty() || chunk.index >= declared.total_chunks {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut chunks = chunks.lock().unwrap();
+    let others: u64 = chunks
+        .iter()
+        .filter(|c| c.file_id == chunk.file_id && c.index != chunk.index)
+        .map(|c| c.body.len() as u64)
+        .sum();
+    if others + chunk.body.len() as u64 > declared.ciphertext_size {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    chunks.retain(|c| !(c.file_id == chunk.file_id && c.index == chunk.index));
+    chunks.push(chunk);
+    Ok(())
 }
 
 /// Append to `path` as a writer still busy with it would.
@@ -1542,8 +1635,9 @@ async fn outside_folder_share_uploads_every_file_then_seals() {
     // by chunk, and each file declared exactly the chunks it sent.
     let (_, key) = link.share_url.split_once("#k=").expect("#k= link");
     let key: [u8; 32] = URL_SAFE_NO_PAD.decode(key).expect("b64").try_into().expect("32 bytes");
-    let ids: Vec<i64> = rec.file_completes.lock().unwrap().clone();
-    for (file, id) in files.iter().zip(ids.iter().copied().collect::<std::collections::BTreeSet<_>>()) {
+    for file in &files {
+        let id = file["file_id"].as_i64().expect("declared id");
+        assert!(rec.file_completes.lock().unwrap().contains(&id), "{file}");
         let sent = rec.chunks.lock().unwrap().iter().filter(|chunk| chunk.file_id == id).count() as u64;
         assert_eq!(sent, file["total_chunks"].as_u64().unwrap(), "{file}");
         let ciphertext = uploaded_ciphertext(&rec, id);
@@ -1818,9 +1912,10 @@ async fn a_server_without_uploaded_copies_refuses_before_any_work() {
 
 /// `Downloads-in-progress/` with four finished files and one still being
 /// written (`movie.part`, last in name order). The client uploads four files
-/// at once, so `movie.part` starts only after one of the others has sent all
-/// its chunks: growing it on the first chunk lands strictly between the scan
-/// and its own upload.
+/// at once, so `movie.part` starts only after one of the others has been
+/// declared, sent and completed. Growing it while the first declare is
+/// answered, under a lock every declare takes, lands strictly between the
+/// scan and its own upload.
 fn folder_with_a_growing_file() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let root = dir.path().join("Downloads-in-progress");
@@ -1841,7 +1936,7 @@ async fn a_file_that_changes_mid_upload_fails_the_share_naming_it() {
     let account = "5UploadGrowAcct";
     let (_tree, root, growing) = folder_with_a_growing_file();
     let mock = UploadMock {
-        on_first_chunk: OnFirstChunk::Grow(growing),
+        grow_on_first_declare: Some(growing),
         ..UploadMock::default()
     };
     let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
@@ -2024,14 +2119,14 @@ async fn a_password_upload_link_round_trips_through_its_blob_and_owner_wrap() {
     let key = hcfs_client::client::share::unwrap_share_key(password, &blob).expect("the password opens the blob");
     assert!(!link.share_url.contains(&URL_SAFE_NO_PAD.encode(key)), "no raw key in a password link");
 
-    let a_txt = rec
+    let a_id = rec
         .files
         .lock()
         .unwrap()
         .iter()
-        .position(|f| f["relative_path"] == "a.txt")
+        .find(|f| f["relative_path"] == "a.txt")
+        .and_then(|f| f["file_id"].as_i64())
         .expect("a.txt declared");
-    let a_id = i64::try_from(a_txt).expect("small index") + 1;
     let mut plaintext = Vec::new();
     hcfs_client::crypto::decrypt_stream(
         &mut std::io::Cursor::new(uploaded_ciphertext(&rec, a_id)),
