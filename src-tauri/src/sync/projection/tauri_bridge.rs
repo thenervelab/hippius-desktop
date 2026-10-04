@@ -244,6 +244,9 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     // tears it down), so re-arm it for a genuine later revocation (e.g. the
     // member was re-invited, re-synced, then revoked again).
     app_state.revoked_notify.clear(&payload.label);
+    // A completed cycle means the drive folder's disk is mounted again, so
+    // a later unplug is a new episode that notifies.
+    app_state.root_not_mounted_notify.clear(&payload.label);
 
     // Update per-file failure counters from the finalized session.
     update_failure_counts(app, &payload.label);
@@ -325,6 +328,13 @@ pub(crate) enum FailureNotify {
 /// definitive, not flaky.
 const REVOKED_NOTIFY_THRESHOLD: u32 = 1;
 
+/// Threshold handed to the `root_not_mounted_notify` latch: once per label
+/// per episode, like [`REVOKED_NOTIFY_THRESHOLD`]. hcfs re-reports the
+/// refusal on every backoff cycle until the disk is back, and the first
+/// report is already definitive (hcfs checked the mount, not the network),
+/// so the flaky-endpoint 3-strike gate would only delay the one message.
+const ROOT_NOT_MOUNTED_NOTIFY_THRESHOLD: u32 = 1;
+
 /// How [`handle_sync_error`] must route a `SyncError` payload, decided from
 /// the error string alone. Extracted as a pure function so the routing —
 /// exact-equality marker matching, cancel first — is unit-testable without a
@@ -336,6 +346,10 @@ pub(crate) enum SyncErrorDisposition {
     /// Member drive's access revoked (or owner deleted the drive): terminal
     /// teardown + one notification, never the flaky-endpoint counter.
     SharedDriveRevoked,
+    /// The drive folder's disk is not mounted: hcfs refused the cycle before
+    /// planning. Its own copy and one notification per episode; not
+    /// terminal (the drive syncs again once the disk is back).
+    RootNotMounted,
     /// Everything else: the generic gated error path.
     RealError,
 }
@@ -350,6 +364,8 @@ pub(crate) fn classify_sync_error(error: &str) -> SyncErrorDisposition {
         SyncErrorDisposition::SilencedCancel
     } else if error == events::SHARED_DRIVE_REVOKED_MARKER {
         SyncErrorDisposition::SharedDriveRevoked
+    } else if events::is_root_not_mounted_error(error) {
+        SyncErrorDisposition::RootNotMounted
     } else {
         SyncErrorDisposition::RealError
     }
@@ -401,6 +417,12 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         //     must not also fire for the same event.
         SyncErrorDisposition::SharedDriveRevoked => {
             handle_shared_drive_revoked(app, payload);
+            return;
+        }
+        // 1c. An unmounted drive folder is neither flaky nor terminal: own
+        //     copy, own once-per-episode latch, never the 3-strike counter.
+        SyncErrorDisposition::RootNotMounted => {
+            handle_root_not_mounted(app, payload, notify);
             return;
         }
         SyncErrorDisposition::RealError => {}
@@ -624,6 +646,47 @@ fn handle_shared_drive_revoked(app: &AppHandle, payload: events::SyncErrorPayloa
     let _ = app.emit(events::SYNC_ERROR, payload);
 }
 
+/// Handle a cycle hcfs refused because the drive folder's disk is not
+/// mounted (`SyncError::RootNotMounted`): nothing was planned, so nothing
+/// was uploaded, downloaded or deleted.
+///
+/// Runs the generic arm's defensive clears and keep-awake re-evaluation,
+/// rewrites `error` to [`events::ROOT_NOT_MOUNTED_MESSAGE`] with
+/// [`events::SyncErrorKind::RootNotMounted`], and lets one
+/// `SYNC_FAILED_NOTIFY` through per episode (the `root_not_mounted_notify`
+/// latch, re-armed when the drive completes a cycle or stops). hcfs repeats
+/// the refusal every backoff cycle until the disk is back, so without the
+/// latch an unplugged disk would fill the bell. `SYNC_ERROR` still fires
+/// every cycle for its live consumers. A reviewed sync
+/// ([`FailureNotify::Always`]) always notifies, as on the generic arm.
+fn handle_root_not_mounted(app: &AppHandle, mut payload: events::SyncErrorPayload, notify: FailureNotify) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    {
+        let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
+        app_state.preparing.clear(&payload.label);
+        app_state.credits_exhausted.clear(&payload.label);
+    }
+    reevaluate_keep_awake(&app_state, "drive folder not mounted");
+
+    payload.error = events::ROOT_NOT_MOUNTED_MESSAGE.to_string();
+    payload.kind = events::SyncErrorKind::RootNotMounted;
+
+    let should_notify = match notify {
+        FailureNotify::Always => true,
+        FailureNotify::Gated => app_state
+            .root_not_mounted_notify
+            .record_failure(&payload.label, ROOT_NOT_MOUNTED_NOTIFY_THRESHOLD),
+    };
+    if should_notify {
+        tracing::warn!(label = %payload.label, "drive folder is not mounted; hcfs refused the cycle");
+        let _ = app.emit(events::SYNC_FAILED_NOTIFY, payload.clone());
+    }
+    let _ = app.emit(events::SYNC_ERROR, payload);
+}
+
 /// Handle `SyncEvent::SyncStarted`: bump the session epoch, reset the per-label
 /// 402 counter, ARM the preparing override's scan-window grace, cap the file
 /// lists, and forward `SYNC_STARTED`.
@@ -695,6 +758,9 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
     // re-init (resume / next launch), which is a fresh episode that must
     // notify again rather than being suppressed by a spent latch.
     app_state.revoked_notify.clear(&label);
+    // A resumed or re-added drive whose disk is still missing is a new
+    // episode the user should hear about.
+    app_state.root_not_mounted_notify.clear(&label);
     // Drop this drive's folder-entity-sync throttle stamp so a resume / re-add
     // syncs immediately instead of being gated by the prior episode's last-run
     // time.
@@ -740,6 +806,8 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     // And for the revocation latch — a previous account's revoked drive
     // must not swallow a different account's first revocation edge.
     app_state.revoked_notify.clear_all();
+    // And for the unmounted-disk latch, keyed by labels a new account reuses.
+    app_state.root_not_mounted_notify.clear_all();
     // And for the folder-restore gate — its armed flags describe the previous
     // account's drives, and a label reused by the new account must be re-armed
     // from that account's own baseline at init, never inherited.
@@ -1084,6 +1152,9 @@ impl SyncEventHandler for TauriSyncBridge {
                         error,
                         retry_in_secs,
                         consecutive_failures,
+                        // `handle_sync_error` sets the specific kind once it
+                        // has classified the error string.
+                        kind: events::SyncErrorKind::Generic,
                     },
                     // Auto-retry loop: rate-limit notifications per label.
                     FailureNotify::Gated,
@@ -2150,6 +2221,35 @@ mod tests {
             SyncErrorDisposition::SharedDriveRevoked
         );
         assert_eq!(classify_sync_error("Rate limited, retry after 30s"), SyncErrorDisposition::RealError);
+    }
+
+    /// hcfs refuses the whole cycle when the drive folder's volume is not
+    /// mounted. Its Display leaves the path out, so every drive's refusal
+    /// reads the same and one exact comparison recognises it; a wrapped
+    /// variant still falls through to the generic path.
+    #[test]
+    fn classify_sync_error_routes_an_unmounted_root_to_its_own_path() {
+        use hcfs_client::sync::SyncError;
+
+        for path in ["/Volumes/Photos/Hippius", "/Users/me/Hippius"] {
+            let error = SyncError::RootNotMounted { path: path.to_string() }.to_string();
+            assert_eq!(classify_sync_error(&error), SyncErrorDisposition::RootNotMounted, "{path}");
+        }
+
+        let wrapped = format!("Sync failed: {}", SyncError::RootNotMounted { path: String::new() });
+        assert_eq!(classify_sync_error(&wrapped), SyncErrorDisposition::RealError);
+    }
+
+    /// An unmounted root is re-reported every backoff cycle until the disk
+    /// comes back; the latch lets one notification through per episode and
+    /// a completed cycle (the disk is back) re-arms it.
+    #[test]
+    fn root_not_mounted_latch_fires_once_per_episode() {
+        let latch = crate::sync::error_notify::ErrorNotifyState::new();
+        assert!(latch.record_failure("photos", ROOT_NOT_MOUNTED_NOTIFY_THRESHOLD));
+        assert!(!latch.record_failure("photos", ROOT_NOT_MOUNTED_NOTIFY_THRESHOLD));
+        assert!(latch.clear("photos"));
+        assert!(latch.record_failure("photos", ROOT_NOT_MOUNTED_NOTIFY_THRESHOLD));
     }
 
     /// Marker matching is exact equality, never substring: a wrapped or

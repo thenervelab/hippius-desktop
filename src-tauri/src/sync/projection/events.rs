@@ -667,6 +667,22 @@ mod tests {
         assert!(!lower.contains("retry") && !lower.contains("try again"), "{REFUSED_FALLBACK_REASON}");
     }
 
+    /// The FE tells an unmounted drive from a generic failure by `kind`,
+    /// never by matching the copy.
+    #[test]
+    fn sync_error_kind_wire_strings_are_pinned() {
+        assert_eq!(serde_json::to_value(SyncErrorKind::Generic).unwrap(), "generic");
+        assert_eq!(serde_json::to_value(SyncErrorKind::RootNotMounted).unwrap(), "rootNotMounted");
+    }
+
+    #[test]
+    fn root_not_mounted_copy_says_reconnect_and_nothing_synced() {
+        assert_eq!(
+            ROOT_NOT_MOUNTED_MESSAGE,
+            "Your Hippius folder looks disconnected. Reconnect the disk; nothing was synced."
+        );
+    }
+
     #[test]
     fn display_reason_other_uses_message_or_falls_back_when_blank() {
         let with_msg = FileFailureKindPayload::Other {
@@ -852,9 +868,10 @@ mod tests {
                 label: "d".to_string(),
                 error: "e".to_string(),
                 retry_in_secs: 0,
-                consecutive_failures: 0
+                consecutive_failures: 0,
+                kind: SyncErrorKind::Generic,
             }),
-            expect_keys(&["label", "error", "retry_in_secs", "consecutive_failures"]),
+            expect_keys(&["label", "error", "retry_in_secs", "consecutive_failures", "kind"]),
             "SyncErrorPayload"
         );
         assert_eq!(
@@ -1058,9 +1075,44 @@ impl SyncCompletedPayload {
 #[derive(Serialize, Clone)]
 pub struct SyncErrorPayload {
     pub label: String,
+    /// User-facing reason. For [`SyncErrorKind::RootNotMounted`] this is
+    /// [`ROOT_NOT_MOUNTED_MESSAGE`], not hcfs's own text.
     pub error: String,
     pub retry_in_secs: u64,
     pub consecutive_failures: i64,
+    /// What kind of failure this is, for the FE to branch on instead of
+    /// matching `error`.
+    pub kind: SyncErrorKind,
+}
+
+/// The structured kind of a cycle-level sync failure ([`SyncErrorPayload`]).
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncErrorKind {
+    /// Any failure without a dedicated surface; `error` says what failed.
+    Generic,
+    /// The drive folder's disk or share is not mounted, so hcfs refused the
+    /// whole cycle before planning: nothing was uploaded, downloaded or
+    /// deleted. Resolves itself once the disk is back.
+    RootNotMounted,
+}
+
+/// User copy for a cycle hcfs refused because the drive folder's volume is
+/// not mounted (`SyncError::RootNotMounted`). hcfs's own text ("not the
+/// volume it was …") describes the mechanism; this says what to do and that
+/// nothing was touched, which is what a user with an unplugged disk needs.
+pub const ROOT_NOT_MOUNTED_MESSAGE: &str = "Your Hippius folder looks disconnected. Reconnect the disk; nothing was synced.";
+
+/// Whether a cycle error string is hcfs's `SyncError::RootNotMounted`.
+///
+/// Exact equality with the upstream Display, built from the upstream type so
+/// it cannot drift. hcfs keeps the path out of that message (its engine
+/// classifies errors by substring, and a folder named `Backup401` must not
+/// read as an auth failure), so every drive's refusal reads the same; an hcfs
+/// change that interpolated the path would fail
+/// `classify_sync_error_routes_an_unmounted_root_to_its_own_path`.
+pub fn is_root_not_mounted_error(error: &str) -> bool {
+    error == hcfs_client::sync::SyncError::RootNotMounted { path: String::new() }.to_string()
 }
 
 /// Emitted when conflicts need user review.

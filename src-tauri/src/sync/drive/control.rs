@@ -97,6 +97,7 @@ fn fail_drive_unavailable(app: &AppHandle, label: &str) -> crate::error::AppErro
             error: "Drive not initialized or not unlocked".to_string(),
             retry_in_secs: 0,
             consecutive_failures: 0,
+            kind: crate::sync::events::SyncErrorKind::Generic,
         },
         // User-initiated reviewed sync: a real failure always notifies.
         crate::sync::tauri_bridge::FailureNotify::Always,
@@ -258,6 +259,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
                     error: e.clone(),
                     retry_in_secs: 0,
                     consecutive_failures: 0,
+                    kind: crate::sync::events::SyncErrorKind::Generic,
                 },
                 // User-initiated reviewed sync: a real failure always notifies
                 // (not the auto-loop's per-label rate-limited path).

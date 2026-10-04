@@ -231,6 +231,25 @@ describe("useFilesNotification — failure path", () => {
     expect((calls[0]?.[1] as { fileCount?: number }).fileCount).toBeUndefined();
   });
 
+  it("does not call an unplugged disk a failed sync", async () => {
+    // Rust tags hcfs's RootNotMounted refusal with its own kind and copy:
+    // nothing failed, the disk is just not there, and the copy says so.
+    mount(true);
+    await flushRegistration();
+    const copy = "Your Hippius folder looks disconnected. Reconnect the disk; nothing was synced.";
+    await act(async () => {
+      await tauri.emitEvent("hcfs_sync_failed_notify", {
+        label: "photos",
+        error: copy,
+        kind: "rootNotMounted",
+      });
+    });
+    expect(syncNotificationCalls()[0]?.[1]).toMatchObject({
+      outcome: "error",
+      description: `Folder "photos": ${copy}`,
+    });
+  });
+
   it("falls back to the 'default' label when the failure payload omits it", async () => {
     mount(true);
     await flushRegistration();

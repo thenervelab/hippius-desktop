@@ -612,11 +612,21 @@ fn sort_completed_tail_by_recency(snapshot: &mut SyncSnapshot) {
 /// `error` rows, so it has to run AFTER whichever author set `status_variant`
 /// and BEFORE `cap_snapshot_files` truncates the rows it reads.
 pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot, preparing: &crate::sync::preparing::PreparingState) {
+    rewrite_root_not_mounted_error(snapshot);
     fixup_stalled_completion(snapshot);
     fixup_gone_only_failures(snapshot);
     apply_preparing_override(snapshot, preparing);
     sort_completed_tail_by_recency(snapshot);
     cap_snapshot_files(snapshot);
+}
+
+/// The widget renders `last_error` verbatim, and hcfs's text for an
+/// unmounted drive folder ("not the volume it was …") reads like an internal
+/// fault. Swap in the same user copy the `SYNC_ERROR` payload carries.
+fn rewrite_root_not_mounted_error(snapshot: &mut SyncSnapshot) {
+    if snapshot.last_error.as_deref().is_some_and(crate::sync::events::is_root_not_mounted_error) {
+        snapshot.last_error = Some(crate::sync::events::ROOT_NOT_MOUNTED_MESSAGE.to_string());
+    }
 }
 
 /// Surface a "preparing" widget state when any drive is between
@@ -990,6 +1000,25 @@ mod tests {
         fixup_gone_only_failures(&mut snap);
 
         assert_eq!(snap.status_variant, "error", "an unexplained failure count is not a success");
+    }
+
+    /// The widget renders `last_error` verbatim, and for an unmounted drive
+    /// hcfs's text ("not the volume it was…") reads like an internal fault.
+    /// The emit funnel swaps in the user copy; any other error is untouched.
+    #[test]
+    fn prepare_snapshot_for_emit_rewrites_an_unmounted_root_error() {
+        use hcfs_client::sync::SyncError;
+
+        let preparing = crate::sync::preparing::PreparingState::new();
+        let mut snap = base_snapshot();
+        snap.last_error = Some(SyncError::RootNotMounted { path: "/Volumes/X".into() }.to_string());
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+        assert_eq!(snap.last_error.as_deref(), Some(crate::sync::events::ROOT_NOT_MOUNTED_MESSAGE));
+
+        let mut other = base_snapshot();
+        other.last_error = Some("Server returned 500".to_string());
+        prepare_snapshot_for_emit(&mut other, &preparing);
+        assert_eq!(other.last_error.as_deref(), Some("Server returned 500"));
     }
 
     /// The carve-out only ever DOWNGRADES an error verdict — it must not turn

@@ -87,6 +87,13 @@ pub struct AppState {
     /// notify again), on the `SyncCompleted` recovery edge, and globally on
     /// `SyncReset`.
     pub revoked_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
+    /// Per-label once-per-episode latch for the "Hippius folder looks
+    /// disconnected" notification (`SyncError::RootNotMounted`). hcfs refuses
+    /// every cycle until the disk is back, so only the first refusal of an
+    /// episode notifies. Separate from `error_notify` so an unplugged disk
+    /// never feeds the flaky-endpoint counter. Cleared on `SyncCompleted`
+    /// (the disk is back), `SyncStopped`, and globally on `SyncReset`.
+    pub root_not_mounted_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
     /// Per-label gate for the "Folder Restored" notification raised when the
     /// engine finds an own drive's folder missing from the server, re-registers
     /// it, and discards the local baseline (so the whole drive re-uploads).
@@ -336,6 +343,7 @@ impl AppState {
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             revoked_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
+            root_not_mounted_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             folder_restore_notify: std::sync::Arc::new(crate::sync::folder_restore_notify::FolderRestoreNotifyState::new()),
             keep_awake: std::sync::Arc::new(crate::power::SyncKeepAwake::new_native()),
             chunk_reclaim: tokio::sync::OnceCell::new(),
