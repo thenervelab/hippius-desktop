@@ -137,6 +137,9 @@ struct MockOptions {
     patch_expires_at: serde_json::Value,
     /// Body of `GET /v1/drive-memberships`: the member-mint role gate.
     memberships: serde_json::Value,
+    /// Fired when `GET /v1/capabilities` is served: the modal's Cancel
+    /// arriving while a share is still preparing.
+    cancel_on_capabilities: Option<CancellationToken>,
 }
 
 impl Default for MockOptions {
@@ -151,6 +154,7 @@ impl Default for MockOptions {
             missing_tokens: Vec::new(),
             patch_expires_at: json!(null),
             memberships: json!({ "memberships": [] }),
+            cancel_on_capabilities: None,
         }
     }
 }
@@ -181,6 +185,7 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
     let patch_missing = opts.missing_tokens.clone();
     let patch_expires = opts.patch_expires_at.clone();
     let memberships_body = opts.memberships.clone();
+    let caps_cancel = opts.cancel_on_capabilities.clone();
 
     Router::new()
         .route(
@@ -196,6 +201,9 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
             "/v1/capabilities",
             get(move || async move {
                 *caps_hits.lock().unwrap() += 1;
+                if let Some(cancel) = &caps_cancel {
+                    cancel.cancel();
+                }
                 Json(caps_body).into_response()
             }),
         )
@@ -1253,6 +1261,8 @@ struct UploadMock {
     can_upload: serde_json::Value,
     seal_expires_at: Option<&'static str>,
     on_first_chunk: OnFirstChunk,
+    /// See [`MockOptions::cancel_on_capabilities`].
+    cancel_on_capabilities: Option<CancellationToken>,
 }
 
 impl Default for UploadMock {
@@ -1261,6 +1271,7 @@ impl Default for UploadMock {
             can_upload: json!({ "result": true, "error": null }),
             seal_expires_at: Some("2026-10-09T00:00:00+00:00"),
             on_first_chunk: OnFirstChunk::Nothing,
+            cancel_on_capabilities: None,
         }
     }
 }
@@ -1389,6 +1400,7 @@ async fn upload_harness_listing(
     let options = MockOptions {
         capabilities: serde_json::from_str(caps).expect("caps json"),
         list,
+        cancel_on_capabilities: mock.cancel_on_capabilities.clone(),
         ..MockOptions::default()
     };
     let router = share_router(options, recorded.clone())
@@ -1676,6 +1688,32 @@ async fn a_finder_cancel_mid_upload_aborts_the_half_built_link() {
         "the open link is aborted on the server"
     );
     assert_eq!(*rec.seals.lock().unwrap(), 0, "a cancelled link is never sealed");
+}
+
+/// The modal's Cancel while the share is still preparing (capability probe,
+/// scan, quota pre-flight, client build): nothing exists on the server yet,
+/// so the share stops at the next step with no quota request and no open,
+/// instead of running on to upload a copy nobody is waiting for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_before_the_upload_opens_stops_the_share() {
+    let account = "5UploadEarlyCancelAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_capabilities: Some(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(*recorded.capability_hits.lock().unwrap(), 1);
+    assert!(rec.can_upload_sizes.lock().unwrap().is_empty(), "no quota pre-flight");
+    assert!(rec.opens.lock().unwrap().is_empty(), "no open");
+    assert!(rec.aborts.lock().unwrap().is_empty(), "nothing to abort");
 }
 
 /// Over the plan: refused at the pre-flight with the copy's REAL size, and

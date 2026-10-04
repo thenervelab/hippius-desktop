@@ -60,6 +60,11 @@ pub struct OutsideFolderShare<'a> {
 /// request, so an account over its plan uploads nothing. The owner wrap
 /// comes last, because only a sealed link has a secret worth wrapping.
 ///
+/// Cancel is honoured at every step. Before the upload opens, nothing exists
+/// on the server, so each preparing step is simply abandoned when the token
+/// fires ([`before_open`]); from the open on, the token goes into the upload,
+/// which aborts the half-built link itself.
+///
 /// # Errors
 ///
 /// [`AppError::Validation`] for the capability refusal, every scan refusal,
@@ -67,12 +72,17 @@ pub struct OutsideFolderShare<'a> {
 /// and a cancel; `NotReady(StorageLimitReached)` from the quota gate or the
 /// server's own 402; [`AppError::Hcfs`] for other server failures.
 pub async fn share_outside_folder(state: &AppState, account_id: &str, request: OutsideFolderShare<'_>) -> Result<ShareLink> {
-    require_upload_folder_shares_supported(state, account_id).await?;
+    let cancel = &request.cancel;
+    before_open(cancel, require_upload_folder_shares_supported(state, account_id)).await?;
     let display_name = folder_display_name(request.folder)?;
-    let scan = scan_off_main_thread(request.folder).await?;
+    let scan = before_open(cancel, scan_off_main_thread(request.folder)).await?;
     // The server bills the copy against the Drive quota, so the gate asks
     // about the bytes the copy will hold, same as a file share.
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, scan.total_bytes).await?;
+    before_open(
+        cancel,
+        require_eligible(state, account_id, InsufficientCreditsAction::Sharing, scan.total_bytes),
+    )
+    .await?;
 
     // One line per share, never per file: the support bundle caps each log.
     info!(
@@ -84,7 +94,7 @@ pub async fn share_outside_folder(state: &AppState, account_id: &str, request: O
     );
 
     let pool = state.pool()?;
-    let client = build_account_client(pool, account_id).await?;
+    let client = before_open(cancel, build_account_client(pool, account_id)).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
     let console_base = console_base_url();
     let options = UploadFolderShareOptions {
@@ -120,6 +130,19 @@ pub async fn share_outside_folder(state: &AppState, account_id: &str, request: O
         expires_at: created.expires_at.map(|e| e.to_rfc3339()),
         password: request.choice.into_password(),
     })
+}
+
+/// Run one step that precedes the upload's open, abandoning it when the
+/// modal's Cancel fires. Dropping such a step is safe: none of them leaves
+/// anything on the server (the quota pre-flight is a question, not a hold).
+/// The upload itself must never go through here; it takes the token so it
+/// can abort the link it opened.
+async fn before_open<T>(cancel: &CancellationToken, step: impl Future<Output = Result<T>>) -> Result<T> {
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(AppError::Validation(SHARE_CANCELLED.into())),
+        done = step => done,
+    }
 }
 
 /// Capability gate. It is this path's own authority: the Finder menu shows
