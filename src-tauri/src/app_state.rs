@@ -360,9 +360,10 @@ pub struct AppState {
     /// between the exit's decision and its cancel sweep.
     #[cfg(any(unix, windows))]
     finder_mints: Mutex<FinderMints>,
-    /// Id of the most recent Finder click. The chooser measures a folder
-    /// for up to two seconds before it opens, so an earlier click can finish
-    /// measuring after a later one; only the latest may open the chooser.
+    /// Id of the most recent Finder click. Resolving where a click sits can
+    /// finish after a later click does, and an outside folder is sized
+    /// after its chooser opens; only the latest click may open the chooser
+    /// or bring it a size, and storing a newer one stops the older scan.
     #[cfg(any(unix, windows))]
     latest_finder_share: Mutex<Option<String>>,
 }
@@ -493,11 +494,18 @@ impl AppState {
         use rand::RngExt;
         use rand::distr::Alphanumeric;
         let id: String = rand::rng().sample_iter(&Alphanumeric).take(22).map(char::from).collect();
-        self.pending_finder_shares
+        let superseded = self
+            .latest_finder_share
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.clone(), req);
-        *self.latest_finder_share.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id.clone());
+            .replace(id.clone());
+        let mut pending = self.pending_finder_shares.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The older click's chooser is replaced, so nobody will see what
+        // its folder scan finds. It stays parked: only its scan stops.
+        if let Some(older) = superseded.and_then(|older| pending.get(&older)) {
+            older.scan_stop.cancel();
+        }
+        pending.insert(id.clone(), req);
         id
     }
 
@@ -515,13 +523,19 @@ impl AppState {
     /// Take (remove) a pending Finder share request by id. Single-use: a second
     /// confirm for the same id yields `None`. Returns the OWNED request so the
     /// guard drops before the caller's mint `.await` — no lock spans the await
-    /// (axiom 74).
+    /// (axiom 74). Stops the request's chooser scan: the share scans the
+    /// folder again itself.
     #[cfg(any(unix, windows))]
     pub fn take_finder_share(&self, id: &str) -> Option<crate::finder_bridge::dispatch::PendingFinderShare> {
-        self.pending_finder_shares
+        let taken = self
+            .pending_finder_shares
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(id)
+            .remove(id);
+        if let Some(request) = &taken {
+            request.scan_stop.cancel();
+        }
+        taken
     }
 
     /// Register an in-flight mint for `id`, returning a fresh
@@ -554,15 +568,12 @@ impl AppState {
     }
 
     /// Cancel a Finder share by id, covering BOTH lifecycle stages: remove any
-    /// still-parked request (so a mint that hasn't started never will) AND signal
-    /// any in-flight mint's token (so an upload already running is aborted).
-    /// Idempotent — an unknown id is a no-op.
+    /// still-parked request (so a mint that hasn't started never will, and its
+    /// chooser scan stops) AND signal any in-flight mint's token (so an upload
+    /// already running is aborted). Idempotent — an unknown id is a no-op.
     #[cfg(any(unix, windows))]
     pub fn cancel_finder_share(&self, id: &str) {
-        self.pending_finder_shares
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(id);
+        self.take_finder_share(id);
         if let Some(token) = self.lock_finder_mints().cancels.get(id) {
             token.cancel();
         }
@@ -923,6 +934,7 @@ mod tests {
         let id = state.store_finder_share(PendingFinderShare {
             path: PathBuf::from("/Users/me/Hippius/report.pdf"),
             name: "report.pdf".into(),
+            scan_stop: tokio_util::sync::CancellationToken::new(),
         });
         // First take returns the parked request…
         let taken = state.take_finder_share(&id).expect("first take yields the request");
@@ -946,6 +958,7 @@ mod tests {
         let mk = |name: &str| PendingFinderShare {
             path: PathBuf::from(format!("/x/{name}")),
             name: name.into(),
+            scan_stop: tokio_util::sync::CancellationToken::new(),
         };
         let a = state.store_finder_share(mk("a"));
         assert!(state.finder_share_is_latest(&a));
@@ -966,6 +979,7 @@ mod tests {
         let mk = || PendingFinderShare {
             path: PathBuf::from("/x"),
             name: "x".into(),
+            scan_stop: tokio_util::sync::CancellationToken::new(),
         };
         let a = state.store_finder_share(mk());
         let b = state.store_finder_share(mk());
@@ -1186,6 +1200,7 @@ mod tests {
         let id = state.store_finder_share(PendingFinderShare {
             path: PathBuf::from("/Users/me/Hippius/a.txt"),
             name: "a.txt".into(),
+            scan_stop: tokio_util::sync::CancellationToken::new(),
         });
         state.cancel_finder_share(&id);
         assert!(state.take_finder_share(&id).is_none(), "cancel must drop the parked request");

@@ -52,6 +52,12 @@ pub struct PendingFinderShare {
     pub path: PathBuf,
     /// The clicked file/folder's display name, shown in the chooser modal.
     pub name: String,
+    /// Stops the chooser's scan of an outside folder. Fired when this
+    /// request can no longer use the size: a newer click replaced its
+    /// chooser, the confirm took it (the share scans again), or the chooser
+    /// was closed. Without it the walk ran up to [`FOLDER_FACTS_BUDGET`]
+    /// for nobody, and repeated clicks stacked walks on the blocking pool.
+    pub scan_stop: CancellationToken,
 }
 
 /// What the user confirmed in the chooser plus the handles that run the
@@ -175,9 +181,11 @@ pub async fn handle(app: AppHandle, message: ClientMessage) {
 /// confirms.
 async fn handle_share(app: AppHandle, clicked: PathBuf) {
     let name = display_name(&clicked);
+    let scan_stop = CancellationToken::new();
     let id = app.state::<AppState>().store_finder_share(PendingFinderShare {
         path: clicked.clone(),
         name: name.clone(),
+        scan_stop: scan_stop.clone(),
     });
     // Bring the app forward so the chooser modal is visible immediately (the
     // modal lives in the main window).
@@ -224,8 +232,8 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
     if facts.is_folder_copy != Some(true) {
         return;
     }
-    let Some(folder_facts) = folder_facts_for_latest(app.state::<AppState>().inner(), &id, &clicked).await else {
-        info!(request_id = %id, "finder bridge: a later click superseded this share; folder facts dropped");
+    let Some(folder_facts) = folder_facts_for_latest(app.state::<AppState>().inner(), &id, &clicked, &scan_stop).await else {
+        info!(request_id = %id, "finder bridge: folder facts dropped; the request was replaced, confirmed or cancelled");
         return;
     };
     info!(
@@ -443,9 +451,11 @@ async fn placement(state: &AppState, clicked: &Path) -> Placement {
 
 /// Measure an outside folder for request `id`, returning the facts only if
 /// `id` is still the latest click once the scan is done. A newer click has
-/// replaced the chooser by then, and these facts would land on it.
-async fn folder_facts_for_latest(state: &AppState, id: &str, folder: &Path) -> Option<FinderShareFacts> {
-    let (size_bytes, refusal) = outside_folder_facts(folder).await;
+/// replaced the chooser by then, and these facts would land on it. `stop`
+/// is the request's [`PendingFinderShare::scan_stop`]; once it fires there
+/// is nobody to show the facts to, so nothing comes back.
+async fn folder_facts_for_latest(state: &AppState, id: &str, folder: &Path, stop: &CancellationToken) -> Option<FinderShareFacts> {
+    let (size_bytes, refusal) = outside_folder_facts(folder, stop).await?;
     state.finder_share_is_latest(id).then(|| FinderShareFacts {
         id: id.to_owned(),
         size_bytes,
@@ -460,9 +470,32 @@ async fn folder_facts_for_latest(state: &AppState, id: &str, folder: &Path) -> O
 /// Bounded twice: the scan refuses past the link's file and directory caps,
 /// and [`FOLDER_FACTS_BUDGET`] drops the scan's future, which stops the
 /// walk too. Past the budget, or if the scan task dies, neither is known.
-async fn outside_folder_facts(folder: &Path) -> (Option<u64>, Option<AppError>) {
+/// `None` when `stop` fired first (see [`facts_until_stopped`]).
+async fn outside_folder_facts(folder: &Path, stop: &CancellationToken) -> Option<(Option<u64>, Option<AppError>)> {
     let scan = crate::shares::folder_scan::scan_until_dropped(folder.to_path_buf());
-    match tokio::time::timeout(FOLDER_FACTS_BUDGET, scan).await {
+    facts_until_stopped(scan, stop).await
+}
+
+/// What [`crate::shares::folder_scan::scan_until_dropped`] resolves to.
+type ScanOutcome = std::result::Result<Result<crate::shares::folder_scan::FolderScan>, tokio::task::JoinError>;
+
+/// Run the chooser's `scan` within [`FOLDER_FACTS_BUDGET`] unless `stop`
+/// fires first. A fired `stop` drops `scan`, and dropping the real scan
+/// raises its walk's stop flag, so the blocking walk ends within one
+/// directory instead of running out the budget for a chooser nobody sees.
+async fn facts_until_stopped(
+    scan: impl std::future::Future<Output = ScanOutcome>,
+    stop: &CancellationToken,
+) -> Option<(Option<u64>, Option<AppError>)> {
+    let budgeted = tokio::select! {
+        biased;
+        () = stop.cancelled() => {
+            info!("finder bridge: the chooser's folder scan stopped; its request is gone");
+            return None;
+        }
+        budgeted = tokio::time::timeout(FOLDER_FACTS_BUDGET, scan) => budgeted,
+    };
+    Some(match budgeted {
         Ok(Ok(Ok(scan))) => (Some(scan.total_bytes), None),
         Ok(Ok(Err(refusal))) => (None, Some(refusal)),
         Ok(Err(error)) => {
@@ -473,7 +506,7 @@ async fn outside_folder_facts(folder: &Path) -> (Option<u64>, Option<AppError>) 
             info!("finder bridge: the chooser's folder scan ran past its budget; no size shown");
             (None, None)
         }
-    }
+    })
 }
 
 /// Register the account's configured drive roots with the bridge so the Finder
@@ -502,6 +535,9 @@ pub async fn register_drive_roots(app: &AppHandle, account_id: &str) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
 
     #[test]
     fn display_name_uses_the_file_basename() {
@@ -648,7 +684,7 @@ mod tests {
         std::fs::write(root.join("sub/b.txt"), vec![0u8; 1_000]).expect("b");
         std::fs::write(root.join(".DS_Store"), vec![0u8; 9_999]).expect("hidden, not billed");
 
-        let (size, refusal) = outside_folder_facts(&root).await;
+        let (size, refusal) = outside_folder_facts(&root, &CancellationToken::new()).await.expect("not stopped");
         assert_eq!(size, Some(3_048));
         assert!(refusal.is_none(), "{refusal:?}");
     }
@@ -659,7 +695,7 @@ mod tests {
     #[tokio::test]
     async fn a_folder_the_share_would_refuse_carries_the_refusal() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (size, refusal) = outside_folder_facts(dir.path()).await;
+        let (size, refusal) = outside_folder_facts(dir.path(), &CancellationToken::new()).await.expect("not stopped");
         assert_eq!(size, None);
         assert!(
             matches!(&refusal, Some(AppError::Validation(m)) if m.contains("no files to share")),
@@ -676,19 +712,93 @@ mod tests {
         let state = state_with_drive(&tree.path().join("Drive")).await;
         let folder = tree.path().join("Outside");
         let park = |state: &AppState| {
-            state.store_finder_share(PendingFinderShare {
+            let scan_stop = CancellationToken::new();
+            let id = state.store_finder_share(PendingFinderShare {
                 path: folder.clone(),
                 name: "Outside".into(),
-            })
+                scan_stop: scan_stop.clone(),
+            });
+            (id, scan_stop)
         };
 
-        let first = park(&state);
-        let facts = folder_facts_for_latest(&state, &first, &folder).await.expect("latest");
+        let (first, first_stop) = park(&state);
+        let facts = folder_facts_for_latest(&state, &first, &folder, &first_stop).await.expect("latest");
         assert_eq!((facts.id.as_str(), facts.size_bytes), (first.as_str(), Some(1_200)));
 
-        let second = park(&state);
-        assert!(folder_facts_for_latest(&state, &first, &folder).await.is_none(), "superseded");
-        assert!(folder_facts_for_latest(&state, &second, &folder).await.is_some());
+        let (second, second_stop) = park(&state);
+        assert!(
+            folder_facts_for_latest(&state, &first, &folder, &first_stop).await.is_none(),
+            "superseded"
+        );
+        assert!(folder_facts_for_latest(&state, &second, &folder, &second_stop).await.is_some());
+    }
+
+    /// A scan that never finishes on its own, standing in for the walk of
+    /// a huge or slow folder. `dropped` goes up exactly when the future is
+    /// dropped, as `StopOnDrop` raises the real walk's stop flag.
+    fn endless_scan(dropped: &Arc<AtomicBool>) -> impl std::future::Future<Output = ScanOutcome> {
+        struct FlagOnDrop(Arc<AtomicBool>);
+
+        impl Drop for FlagOnDrop {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let guard = FlagOnDrop(Arc::clone(dropped));
+        async move {
+            let _guard = guard;
+            std::future::pending().await
+        }
+    }
+
+    /// A request that stops mid-scan (a newer click, the confirm, or the
+    /// chooser closing) drops the scan at once, which stops the walk,
+    /// instead of letting it run out its 30 s budget for nobody.
+    #[tokio::test]
+    async fn a_stopped_request_drops_its_folder_scan_at_once() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let stop = CancellationToken::new();
+        let facts = facts_until_stopped(endless_scan(&dropped), &stop);
+        let fire = async {
+            tokio::task::yield_now().await;
+            stop.cancel();
+        };
+
+        let (facts, ()) = tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(facts, fire) })
+            .await
+            .expect("the scan stops well inside its 30 s budget");
+
+        assert!(facts.is_none(), "a stopped request has no facts to show");
+        assert!(dropped.load(Ordering::SeqCst), "the scan future is dropped, which stops the walk");
+    }
+
+    /// Each way a click stops being able to use its chooser's size fires
+    /// its scan stop: a newer click, the confirm taking it, a cancel.
+    #[test]
+    fn a_newer_click_a_confirm_or_a_cancel_stops_the_chooser_scan() {
+        let state = AppState::new();
+        let park = |state: &AppState| {
+            let scan_stop = CancellationToken::new();
+            let id = state.store_finder_share(PendingFinderShare {
+                path: PathBuf::from("/x/Outside"),
+                name: "Outside".into(),
+                scan_stop: scan_stop.clone(),
+            });
+            (id, scan_stop)
+        };
+
+        let (_superseded, superseded_stop) = park(&state);
+        let (taken, taken_stop) = park(&state);
+        assert!(superseded_stop.is_cancelled(), "a newer click stops the older scan");
+        assert!(!taken_stop.is_cancelled(), "the latest click keeps scanning");
+
+        state.take_finder_share(&taken);
+        assert!(taken_stop.is_cancelled(), "the confirm scans again, so the chooser's scan stops");
+
+        let (cancelled, cancelled_stop) = park(&state);
+        state.cancel_finder_share(&cancelled);
+        assert!(cancelled_stop.is_cancelled(), "a closed chooser stops its scan");
     }
 
     /// A logged-in state whose only drive is rooted at `drive_root`, on an
