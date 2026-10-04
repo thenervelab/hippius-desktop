@@ -28,10 +28,6 @@
 //! the client's raw-spelling comparison here would be a second copy that has
 //! to stay byte-identical to it.
 
-// The share funnel that calls the scan lands with the next change; `expect`
-// rather than `allow`, so the attribute fails the build once it is unneeded.
-#![cfg_attr(not(test), expect(dead_code, reason = "called by the outside-folder share funnel"))]
-
 use std::path::{Path, PathBuf};
 
 use hcfs_client::client::folder_share::UploadFolderEntry;
