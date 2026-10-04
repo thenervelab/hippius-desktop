@@ -865,10 +865,36 @@ fn main() {
                 }
             }
 
+            // Quitting mid-share: tell every running Finder mint to stop and
+            // hold the exit briefly, so an outside-folder upload can abort
+            // its half-built link on the server instead of being cut off.
+            // The exit requested after the grace is not held again.
+            #[cfg(any(unix, windows))]
+            tauri::RunEvent::ExitRequested { api, code, .. } => {
+                if !app_handle.state::<crate::app_state::AppState>().cancel_finder_mints_for_exit() {
+                    return;
+                }
+                api.prevent_exit();
+                info!("exit held for running Finder shares to cancel");
+                let app = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    app.state::<crate::app_state::AppState>()
+                        .wait_for_finder_mints(FINDER_SHARE_EXIT_GRACE)
+                        .await;
+                    app.exit(code.unwrap_or(0));
+                });
+            }
+
             _ => {}
         }
     });
 }
+
+/// How long quitting waits for cancelled Finder shares to abort. Short: the
+/// abort is one request, and the server reaps an idle link within the hour
+/// regardless.
+#[cfg(any(unix, windows))]
+const FINDER_SHARE_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 // ---------------------------------------------------------------------------
 // App setup (was setup.rs)
@@ -1092,7 +1118,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // BEFORE any upload starts; whichever fires first runs it exactly once
         // and the other awaits that result. See `crate::sync::chunk_reclaim`.
         //
-        // MUST sit after `manage`: `state::<AppState>()` panics if a Tokio
+        // MUST sit after `manage`: `state::<crate::app_state::AppState>()` panics if a Tokio
         // worker wins the race with setup (H-005). `try_state` is not a
         // substitute — a `None` skip reopens the paused-drive hole this
         // trigger exists to close. Pinned by
