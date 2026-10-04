@@ -27,8 +27,8 @@ only summarizes it for the desktop.
 
 - **Listing rows send `""`, never `null`, for `folder_hash` / `path_prefix` of an
   upload row.** Shipped desktop and console clients deserialize them as required
-  strings; one `null` row would empty their whole folder-share list. Part 2's
-  request for `null` is superseded; its parser accepts both.
+  strings; one `null` row would empty their whole folder-share list. The new
+  desktop parser accepts both (`an_upload_row_with_null_drive_identity_still_parses`).
 - **Wire value of `source` is `"drive"` | `"upload"`**, absent = drive. The
   desktop maps it to its own FE enum (`"drive"` | `"uploadedCopy"`); the console
   reads the wire value directly.
@@ -36,18 +36,23 @@ only summarizes it for the desktop.
   the client pushes the owner wrap after seal through the existing
   `PUT /v1/folder-shares/owner-wraps` (desktop: `owner_wrap::push_folder_for_account`).
 - **Quota is held once, at open, for the declared total bytes**, so a quota
-  refusal arrives before any file uploads. Part 3 must map that open-time
-  refusal to `NotReady(StorageLimitReached)` (plans dialog), which closes Part 3's
-  open risk about mid-upload quota errors showing a generic message.
+  refusal arrives before any file uploads. Part 3 maps it (`Server { status: 402 }`)
+  to `NotReady(StorageLimitReached)` (plans dialog), as it does its own
+  `require_eligible` pre-flight refusal.
 - **Blob responses for upload links are `application/octet-stream`.** The
   console's public proxy re-encodes text types and would corrupt ciphertext.
 - **Cancel is cooperative for the upload path only**: the cancel token goes into
   `create_upload_folder_share` so it can `DELETE` the half-built link; other
   Finder mints keep the drop-on-cancel behaviour (`dispatch::until_cancelled`).
-- **Error variants Part 3 matches by name:** `FolderShareError::SourceChanged {
-  relative_path }` and `FolderShareError::Cancelled`; the rest fall through to
-  `AppError::Hcfs`. The desktop scan enforces the 50,000-entry and 5 GiB-per-file
-  limits itself, so `TooManyItems` / `FileTooLarge` / `EmptyFolder` are backstops.
+- **Part 3 maps every user-actionable `FolderShareError` variant by name**, never by
+  message text (`outside_folder.rs::map_upload_folder_share_error`): `Cancelled`,
+  `NotFound`, `Network`, `TooManyUploadsInProgress`, `EmptyFolder`, `TooManyItems`,
+  `DirListTooLarge`, `InvalidPath`, `FileTooLarge`, `PathCollision`, `SourceChanged`,
+  `SourceUnreadable`, `Share(Io)`, and `Server` by status (402 plans dialog, 502/503
+  try later, 401/403 auth). Anything else, including variants a later client adds
+  (the enum is `#[non_exhaustive]`), falls through to `AppError::Hcfs`. The desktop
+  scan enforces the item, per-file and empty-folder limits itself with the same
+  sentences, so the client's refusals of those are backstops.
 
 
 # Part 3 — hippius-desktop
@@ -1026,6 +1031,11 @@ order is pinned so no refactor can upload before the gates.
 ---
 
 ### Task 4: Route Finder outside folders to the funnel; chooser shows size and "copy"
+
+> **Superseded in part:** the chooser now opens first and the folder is sized after,
+> through `finder:share-facts {id, sizeBytes, refusal}` (30 s stoppable scan,
+> `FOLDER_FACTS_BUDGET`); `FOLDER_SIZE_BUDGET` and `outside_folder_size` below no
+> longer exist.
 
 **Files:**
 - Modify: `src-tauri/src/finder_bridge/dispatch.rs` (doc comment lines 12–17; struct
