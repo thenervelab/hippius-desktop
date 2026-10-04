@@ -111,9 +111,6 @@ fn the_undecryptable_copy_promises_no_retry_in_either_language() {
     );
 }
 
-/// A kind the Rust side can emit but the FE union does not name falls through
-/// to the FE's `default` branch and reads as the generic line — which is how
-/// the `Decryption` bump regressed in the first place.
 /// The refusal fallback is the one refusal copy authored on both sides (the
 /// real reason is hcfs's own text), and like the undecryptable copy it must
 /// not promise a retry: hcfs reports a refusal once per revision.
@@ -130,6 +127,9 @@ fn the_refusal_fallback_matches_and_promises_no_retry() {
     );
 }
 
+/// A kind the Rust side can emit but the FE union does not name falls through
+/// to the FE's `default` branch and reads as the generic line — which is how
+/// the `Decryption` bump regressed in the first place.
 #[test]
 fn the_undecryptable_kind_is_named_in_the_frontend_union() {
     assert!(
