@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 import {
   finderShareAtom,
   shareModalFileAtom,
+  type FinderShareState,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
   cancelFinderShare,
@@ -155,18 +156,13 @@ export default function ShareFileModal() {
   // path, and the in-app listing carries no equivalent.
   const sourceModifiedSecsAgo =
     finderShare?.kind === "choosing" ? finderShare.modifiedSecsAgo : null;
-  // Rust decided whether this Finder folder is uploaded as a copy; the
-  // chooser must not show the live-link notice for one.
-  const isFolderCopy =
-    finderShare?.kind === "choosing" && finderShare.isFolderCopy;
-  // A folder that gets a LIVE link: one in a drive, from either entry point.
-  // It shares the live-link notice and the minting spinner; a folder copy
-  // gets neither (it is a snapshot, and its upload has real progress).
-  const isLiveFolder =
-    (target?.file.isFolder ?? false) ||
-    (finderShare?.kind === "choosing" &&
-      finderShare.isFolder &&
-      !finderShare.isFolderCopy);
+  // What kind of folder share this is, as Rust decided it; `null` for a
+  // file. A live link (in a drive, from either entry point) gets the
+  // live-link notice and the minting spinner; a copy gets neither (it is a
+  // snapshot, and its upload has real progress); an unknown one promises
+  // nothing either way.
+  const folderKind = folderKindOf(target?.file.isFolder ?? false, finderShare);
+  const isLiveFolder = folderKind === "live";
 
   const close = useCallback(() => {
     // Release a still-parked Finder request (chooser open, or the user bailed).
@@ -377,8 +373,7 @@ export default function ShareFileModal() {
       {state.kind === "choosing" && (
         <ChoosingBody
           filename={filename}
-          isFolder={isLiveFolder}
-          isFolderCopy={isFolderCopy}
+          folderKind={folderKind}
           sizeBytes={sourceSizeBytes}
           modifiedSecsAgo={sourceModifiedSecsAgo}
           onConfirm={onConfirmChoice}
@@ -422,6 +417,27 @@ export default function ShareFileModal() {
   );
 }
 
+/**
+ * A folder share's kind: a live link to a folder in a drive, an uploaded
+ * copy of a folder outside every drive, or unknown (Rust could not read the
+ * drive roots, so the chooser promises neither).
+ */
+type FolderKind = "live" | "copy" | "unknown";
+
+/**
+ * The folder kind of the open share, `null` for a file. An in-app folder is
+ * always in a drive; a Finder folder carries Rust's decision.
+ */
+function folderKindOf(
+  inAppFolder: boolean,
+  finderShare: FinderShareState | null,
+): FolderKind | null {
+  if (inAppFolder) return "live";
+  if (finderShare?.kind !== "choosing" || !finderShare.isFolder) return null;
+  if (finderShare.isFolderCopy === null) return "unknown";
+  return finderShare.isFolderCopy ? "copy" : "live";
+}
+
 /** Expiry choices offered in the chooser, in the order they are shown. */
 const TTL_OPTIONS: ReadonlyArray<{ label: string; value: ShareTtl }> = [
   { label: "24 hours", value: "24h" },
@@ -446,18 +462,15 @@ const PASSWORD_MIN_LEN = 8;
  */
 function ChoosingBody({
   filename,
-  isFolder,
-  isFolderCopy,
+  folderKind,
   sizeBytes,
   modifiedSecsAgo,
   onConfirm,
   onCancel,
 }: {
   filename: string;
-  /** A folder that gets a live link (in a drive, never a copy). */
-  isFolder: boolean;
-  /** The share uploads a copy of an outside folder. */
-  isFolderCopy: boolean;
+  /** The folder share's kind, or `null` for a file. */
+  folderKind: FolderKind | null;
   /** Source size, when known. `null` renders nothing rather than "0 B". */
   sizeBytes: number | null;
   /** Seconds since last modification, when known. */
@@ -508,7 +521,7 @@ function ChoosingBody({
         />
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">
           {visibility === "public"
-            ? `Anyone with the link can view and download this ${isFolder || isFolderCopy ? "folder" : "file"}.`
+            ? `Anyone with the link can view and download this ${folderKind !== null ? "folder" : "file"}.`
             : "The link can't be opened without this password. Send it separately — it can't be recovered or changed later."}
         </p>
 
@@ -571,8 +584,8 @@ function ChoosingBody({
             </p>
           )}
 
-        {isFolder && <FolderShareNotice />}
-        {isFolderCopy && <FolderCopyNotice />}
+        {folderKind === "live" && <FolderShareNotice />}
+        {folderKind === "copy" && <FolderCopyNotice />}
       </div>
 
       <div className="flex flex-col gap-3">

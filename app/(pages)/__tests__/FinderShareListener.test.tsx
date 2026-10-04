@@ -68,6 +68,32 @@ describe("FinderShareListener", () => {
     });
   });
 
+  // Rust could not read the drive roots, so it cannot say whether the
+  // folder is in a drive. The explicit `null` must survive into the atom:
+  // collapsing it to `false` would promise a live link for what may be a
+  // copy.
+  it("keeps an unknown folder placement unknown", async () => {
+    const { store } = renderWithStore();
+    await waitFor(() => expect(listenHandlers.has("finder:share-choosing")).toBe(true));
+
+    listenHandlers.get("finder:share-choosing")!({
+      payload: {
+        id: "req-44",
+        name: "Somewhere",
+        sizeBytes: null,
+        modifiedSecsAgo: 9,
+        isFolder: true,
+        isFolderCopy: null,
+      },
+    });
+
+    expect(store.get(finderShareAtom)).toMatchObject({
+      id: "req-44",
+      isFolder: true,
+      isFolderCopy: null,
+    });
+  });
+
   // An older backend emits only `{id, name}`. The chooser must still open —
   // degraded to no size, exactly what it showed before — rather than seeding
   // `undefined` into the atom and rendering "undefined B".

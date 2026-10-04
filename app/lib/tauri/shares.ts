@@ -127,9 +127,10 @@ export interface FinderShareChoosing {
   /**
    * The clicked folder is outside every drive, so confirming uploads a COPY
    * of it (removed when the link ends) instead of minting a live link.
-   * Decided in Rust; the chooser only says so.
+   * Decided in Rust; the chooser only says so. `null` when Rust could not
+   * read the drive roots: the chooser then shows neither notice.
    */
-  isFolderCopy: boolean;
+  isFolderCopy: boolean | null;
 }
 
 /** Phase of an in-flight share creation. */

@@ -117,6 +117,15 @@ const FINDER_DRIVE_FOLDER: FinderShareState = {
   isFolder: true,
 };
 
+// A Finder folder whose placement Rust could not tell (drive roots
+// unreadable): it may be a live link or a copy, so neither is promised.
+const FINDER_UNKNOWN_FOLDER: FinderShareState = {
+  ...CHOOSING,
+  name: "Somewhere",
+  isFolder: true,
+  isFolderCopy: null,
+};
+
 /**
  * Accept the chooser's defaults (public, 24h) and start the mint.
  *
@@ -585,6 +594,13 @@ describe("ShareFileModal", () => {
 
     expect(await screen.findByText(/creating share link/i)).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("promises neither a live link nor a copy when the placement is unknown", () => {
+    render(withFinderState(<ShareFileModal />, FINDER_UNKNOWN_FOLDER));
+    expect(screen.getByText(/view and download this folder/i)).toBeInTheDocument();
+    expect(screen.queryByText(/always shows the current contents/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/uploads a copy of this folder/i)).not.toBeInTheDocument();
   });
 
   it("does not show the copy notice for a file", () => {

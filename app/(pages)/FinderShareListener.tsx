@@ -42,9 +42,10 @@ export default function FinderShareListener() {
             sizeBytes: sizeBytes ?? null,
             modifiedSecsAgo: modifiedSecsAgo ?? null,
             // An older backend says neither, and reads as a file share,
-            // which is what the chooser showed before.
+            // which is what the chooser showed before. An explicit `null`
+            // copy flag is Rust saying it could not tell, and stays `null`.
             isFolder: isFolder ?? false,
-            isFolderCopy: isFolderCopy ?? false,
+            isFolderCopy: isFolderCopy === undefined ? false : isFolderCopy,
           });
         },
       ],

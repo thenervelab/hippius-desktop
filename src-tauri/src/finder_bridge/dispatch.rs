@@ -113,7 +113,11 @@ struct FinderShareChoosing {
     /// UPLOADS A COPY of it (removed when the link ends) rather than minting
     /// a live link. Rust decides this; the chooser only says so, because the
     /// live-link notice would be false for a copy.
-    is_folder_copy: bool,
+    ///
+    /// `None` when the drive roots could not be read, so nobody knows which
+    /// it is: the chooser then shows neither notice, since either promise
+    /// could be false. The confirm resolves the target again.
+    is_folder_copy: Option<bool>,
 }
 
 /// Size (files only) and mtime age of the clicked path, for the chooser.
@@ -176,7 +180,7 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
         size_bytes = ?facts.size_bytes,
         modified_secs_ago = ?facts.modified_secs_ago,
         is_folder = facts.is_folder,
-        is_folder_copy = facts.is_folder_copy,
+        is_folder_copy = ?facts.is_folder_copy,
         "finder bridge: share requested; opening chooser",
     );
     // Target the main window only — `FinderShareListener` runs there, and the
@@ -335,8 +339,21 @@ struct ChooserFacts {
     modified_secs_ago: Option<u64>,
     /// The clicked path is a folder, in a drive or not.
     is_folder: bool,
-    /// Confirming uploads a copy of an outside folder.
-    is_folder_copy: bool,
+    /// Confirming uploads a copy of an outside folder; `None` when that
+    /// could not be told (see [`FinderShareChoosing::is_folder_copy`]).
+    is_folder_copy: Option<bool>,
+}
+
+/// Where the clicked path sits relative to the account's drives, as far as
+/// the chooser can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    /// Under a registered drive root.
+    InDrive,
+    /// Under no registered drive root.
+    Outside,
+    /// The drive roots could not be read.
+    Unknown,
 }
 
 /// Gather the chooser's facts. Only an outside folder is sized: it is the
@@ -344,8 +361,16 @@ struct ChooserFacts {
 async fn chooser_facts(state: &AppState, clicked: &Path) -> ChooserFacts {
     let (size_bytes, modified_secs_ago) = source_stat(clicked);
     let is_folder = clicked.is_dir();
-    let is_folder_copy = is_folder && is_outside_every_drive(state, clicked).await;
-    let size_bytes = if is_folder_copy {
+    let is_folder_copy = if is_folder {
+        match placement(state, clicked).await {
+            Placement::InDrive => Some(false),
+            Placement::Outside => Some(true),
+            Placement::Unknown => None,
+        }
+    } else {
+        Some(false)
+    };
+    let size_bytes = if is_folder_copy == Some(true) {
         outside_folder_size(clicked).await
     } else {
         size_bytes
@@ -358,21 +383,25 @@ async fn chooser_facts(state: &AppState, clicked: &Path) -> ChooserFacts {
     }
 }
 
-/// Whether `clicked` resolves to no registered drive. Any failure reads as
-/// "inside": the chooser then shows what it showed before, and the confirm
-/// path resolves the target again with real errors.
-async fn is_outside_every_drive(state: &AppState, clicked: &Path) -> bool {
+/// Where `clicked` sits among the account's drives. Any failure reads as
+/// [`Placement::Unknown`] rather than either answer: guessing "inside"
+/// would promise a live link for what may be a copy, and the reverse. The
+/// confirm path resolves the target again with real errors.
+async fn placement(state: &AppState, clicked: &Path) -> Placement {
     let Ok(account_id) = state.current_account_id() else {
-        return false;
+        return Placement::Unknown;
     };
     let Ok(pool) = state.pool() else {
-        return false;
+        return Placement::Unknown;
     };
     match crate::sync::paths::list_drive_roots(pool, &account_id).await {
-        Ok(roots) => matches!(resolve_share_target(clicked, &roots), ShareTarget::Outside),
+        Ok(roots) => match resolve_share_target(clicked, &roots) {
+            ShareTarget::InDrive { .. } => Placement::InDrive,
+            ShareTarget::Outside => Placement::Outside,
+        },
         Err(error) => {
             warn!(%error, "finder bridge: could not list drive roots for the chooser");
-            false
+            Placement::Unknown
         }
     }
 }
@@ -449,7 +478,7 @@ mod tests {
             size_bytes: Some(6_765_321),
             modified_secs_ago: Some(3),
             is_folder: true,
-            is_folder_copy: true,
+            is_folder_copy: Some(true),
         })
         .expect("serialize");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
@@ -479,12 +508,15 @@ mod tests {
             name: "gone.txt".into(),
             size_bytes: None,
             modified_secs_ago: None,
-            is_folder: false,
-            is_folder_copy: false,
+            is_folder: true,
+            is_folder_copy: None,
         })
         .expect("serialize");
         assert!(json.get("sizeBytes").is_some_and(serde_json::Value::is_null));
         assert!(json.get("modifiedSecsAgo").is_some_and(serde_json::Value::is_null));
+        // Unknown placement is an explicit null, which the FE tells apart
+        // from an older backend's missing key (read as "not a copy").
+        assert!(json.get("isFolderCopy").is_some_and(serde_json::Value::is_null));
     }
 
     #[test]
@@ -589,7 +621,7 @@ mod tests {
         let facts = chooser_facts(&state, &tree.path().join("Drive/Photos")).await;
 
         assert!(facts.is_folder, "the chooser words it as a folder link");
-        assert!(!facts.is_folder_copy);
+        assert_eq!(facts.is_folder_copy, Some(false));
         assert_eq!(facts.size_bytes, None);
     }
 
@@ -602,7 +634,7 @@ mod tests {
         let facts = chooser_facts(&state, &tree.path().join("Outside")).await;
 
         assert!(facts.is_folder);
-        assert!(facts.is_folder_copy);
+        assert_eq!(facts.is_folder_copy, Some(true));
         assert_eq!(facts.size_bytes, Some(1_200));
     }
 
@@ -615,8 +647,30 @@ mod tests {
         let facts = chooser_facts(&state, &tree.path().join("loose.zip")).await;
 
         assert!(!facts.is_folder);
-        assert!(!facts.is_folder_copy);
+        assert_eq!(facts.is_folder_copy, Some(false));
         assert_eq!(facts.size_bytes, Some(7_000));
+    }
+
+    /// When the drive roots cannot be read, nobody knows whether the
+    /// folder is in a drive. The chooser must then promise neither a live
+    /// link nor an uploaded copy (either could be false), and size nothing:
+    /// the confirm resolves the target again and reports real errors.
+    #[tokio::test]
+    async fn the_chooser_promises_nothing_when_the_drive_roots_are_unreadable() {
+        let tree = drive_and_outside_tree();
+        let state = state_with_drive(&tree.path().join("Drive")).await;
+        sqlx::query("DROP TABLE sync_paths")
+            .execute(state.pool().expect("pool"))
+            .await
+            .expect("drop");
+
+        for folder in ["Drive/Photos", "Outside"] {
+            let facts = chooser_facts(&state, &tree.path().join(folder)).await;
+
+            assert!(facts.is_folder, "{folder} still reads as a folder");
+            assert_eq!(facts.is_folder_copy, None, "{folder}: unknown, neither a copy nor a live link");
+            assert_eq!(facts.size_bytes, None, "{folder}: nothing is sized");
+        }
     }
 
     #[test]

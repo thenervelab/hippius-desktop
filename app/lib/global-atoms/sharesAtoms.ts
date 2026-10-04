@@ -139,8 +139,11 @@ export type FinderShareState = {
   modifiedSecsAgo: number | null;
   /** The clicked path is a folder (in a drive, unless `isFolderCopy`). */
   isFolder: boolean;
-  /** Outside folder: the share uploads a copy. */
-  isFolderCopy: boolean;
+  /**
+   * Outside folder: the share uploads a copy. `null` when Rust could not
+   * tell, in which case the chooser promises neither a copy nor a live link.
+   */
+  isFolderCopy: boolean | null;
 };
 
 export const finderShareAtom = atom<FinderShareState | null>(null);
