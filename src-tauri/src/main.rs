@@ -1010,7 +1010,9 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 /// in `main()`'s builder chain.
 #[expect(
     clippy::too_many_lines,
-    reason = "Linear one-shot startup pipeline — env load, dir hardening (R-17 chmod), deep links, AppState, migrations, tray. Splitting it fragments the strict ordering between the steps without reducing complexity."
+    reason = "Linear one-shot startup pipeline — env load, dir hardening (R-17 chmod), deep links, AppState, \
+              migrations, tray. Splitting it fragments the strict ordering between the steps without reducing \
+              complexity."
 )]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
