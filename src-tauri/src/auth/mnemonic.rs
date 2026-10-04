@@ -12,43 +12,37 @@ use zeroize::Zeroizing;
 
 use crate::error::AppError;
 
-/// How long a generated phrase is. BIP-39 maps 128 bits of entropy to 12
-/// words and 256 bits to 24.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MnemonicLength {
-    /// 12 words, 128 bits of entropy: what every desktop flow mints today.
-    Twelve,
-    /// 24 words, 256 bits of entropy.
-    TwentyFour,
-}
+/// Bytes of entropy in a generated phrase: 128 bits, which BIP-39 encodes
+/// as the 12 words every desktop flow mints.
+const ENTROPY_BYTES: usize = 16;
 
-impl MnemonicLength {
-    /// Bytes of entropy this length encodes.
-    fn entropy_bytes(self) -> usize {
-        match self {
-            Self::Twelve => 16,
-            Self::TwentyFour => 32,
-        }
-    }
-}
+// The `Mnemonic` built in `generate` holds the phrase's words; bip39 wipes
+// them on drop only with its `zeroize` feature, which a version bump or a
+// Cargo.toml edit could drop without any test noticing. Fail the build
+// instead.
+const _: fn() = || {
+    fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    wiped_on_drop::<bip39::Mnemonic>();
+};
 
-/// Generates a new English BIP-39 phrase of `length` from OS entropy.
+/// Generates a new 12-word English BIP-39 phrase from OS entropy.
 ///
-/// The entropy buffer and the returned phrase are wiped on drop.
+/// The entropy buffer, the intermediate `Mnemonic` and the returned phrase
+/// are wiped on drop.
 ///
 /// # Errors
 ///
 /// [`AppError::Crypto`] when the OS random source fails; no phrase is
 /// produced from partial entropy.
-pub fn generate(length: MnemonicLength) -> Result<Zeroizing<String>, AppError> {
-    let mut entropy = Zeroizing::new([0u8; 32]);
-    let entropy = &mut entropy[..length.entropy_bytes()];
+pub fn generate() -> Result<Zeroizing<String>, AppError> {
+    let mut entropy = Zeroizing::new([0u8; ENTROPY_BYTES]);
 
     SysRng
-        .try_fill_bytes(entropy)
+        .try_fill_bytes(entropy.as_mut())
         .map_err(|e| AppError::Crypto(format!("the OS random number generator failed: {e}")))?;
 
-    let mnemonic = bip39::Mnemonic::from_entropy(entropy).map_err(|e| AppError::Crypto(format!("BIP-39 encoding of fresh entropy failed: {e}")))?;
+    let mnemonic =
+        bip39::Mnemonic::from_entropy(entropy.as_ref()).map_err(|e| AppError::Crypto(format!("BIP-39 encoding of fresh entropy failed: {e}")))?;
     Ok(Zeroizing::new(mnemonic.to_string()))
 }
 
@@ -62,27 +56,18 @@ mod tests {
 
     #[test]
     fn twelve_words_encode_128_bits() {
-        let phrase = generate(MnemonicLength::Twelve).unwrap();
+        let phrase = generate().unwrap();
         let mnemonic = parse(&phrase);
 
         assert_eq!(mnemonic.word_count(), 12);
         assert_eq!(mnemonic.to_entropy().len(), 16);
     }
 
-    #[test]
-    fn twenty_four_words_encode_256_bits() {
-        let phrase = generate(MnemonicLength::TwentyFour).unwrap();
-        let mnemonic = parse(&phrase);
-
-        assert_eq!(mnemonic.word_count(), 24);
-        assert_eq!(mnemonic.to_entropy().len(), 32);
-    }
-
     /// Catches a generator that ignores its entropy (a zeroed buffer encodes
     /// "abandon ... about") or reuses it across calls.
     #[test]
     fn every_call_draws_fresh_entropy() {
-        let phrases: std::collections::HashSet<String> = (0..16).map(|_| generate(MnemonicLength::Twelve).unwrap().to_string()).collect();
+        let phrases: std::collections::HashSet<String> = (0..16).map(|_| generate().unwrap().to_string()).collect();
 
         assert_eq!(phrases.len(), 16, "16 draws of 128 bits never collide");
         let zero = bip39::Mnemonic::from_entropy(&[0u8; 16]).unwrap().to_string();

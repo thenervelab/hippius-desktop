@@ -146,7 +146,10 @@ argon2 = "0.5"
 # No `rand` feature: `auth::mnemonic` fills the entropy itself and calls
 # `Mnemonic::from_entropy`, so bip39 never picks the RNG. hcfs-client and
 # subxt-signer keep their own bip39 2.x; phrases cross as strings.
-bip39 = "=3.0.0"
+# `zeroize` wipes a `Mnemonic`'s words on drop. A separate major does not
+# share 2.x's features, so it must be asked for here; `auth::mnemonic`
+# fails to compile without it.
+bip39 = { version = "=3.0.0", features = ["zeroize"] }
 zxcvbn = { version = "3", default-features = false }
 keyring = { version = "3", default-features = false, features = [
     "apple-native",

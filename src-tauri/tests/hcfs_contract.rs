@@ -857,7 +857,7 @@ fn mass_delete_client_surface_is_reachable() {
     use hcfs_client::engine::DriveManager;
     use hcfs_client::sync::{HeldMassDelete, MassDeleteRequestError, MassDeleteRestoreRequest, MassDeleteSide, SyncResult};
 
-    let _ = Drive::with_config_dir::<&std::path::Path, &std::path::Path>;
+    let _: fn(&'static std::path::Path, &'static std::path::Path) -> Drive = Drive::with_config_dir::<&std::path::Path, &std::path::Path>;
     let _: fn(&Drive) -> SyncResult<Vec<HeldMassDelete>> = Drive::held_mass_deletes;
     let _: fn(&Drive, MassDeleteSide, usize) -> SyncResult<MassDeleteRestoreRequest> = Drive::restore_mass_delete;
     let _: fn(&Drive, MassDeleteSide, usize) -> SyncResult<()> = Drive::confirm_mass_delete;

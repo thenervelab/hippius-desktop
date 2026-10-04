@@ -176,7 +176,7 @@ pub fn validate_mnemonic(mnemonic: String) -> bool {
 /// memory wiping on drop, preventing the seed phrase from lingering in heap
 /// memory after use.
 pub fn generate_mnemonic_internal() -> Result<zeroize::Zeroizing<String>, AppError> {
-    crate::auth::mnemonic::generate(crate::auth::mnemonic::MnemonicLength::Twelve)
+    crate::auth::mnemonic::generate()
 }
 
 #[cfg(test)]

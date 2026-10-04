@@ -152,7 +152,7 @@ fn validate_new_password(password: &str) -> Result<(), AppError> {
 /// stored encrypted; nothing in Rust holds onto it.
 #[tauri::command]
 pub fn local_wallet_generate_mnemonic() -> Result<String, AppError> {
-    let mnemonic = crate::auth::mnemonic::generate(crate::auth::mnemonic::MnemonicLength::Twelve)?;
+    let mnemonic = crate::auth::mnemonic::generate()?;
     // The IPC return value is serialized from a plain `String`; the copy
     // the generator held is wiped when `mnemonic` drops here.
     Ok(mnemonic.to_string())
