@@ -1050,3 +1050,41 @@ fn root_not_mounted_message_is_pinned() {
     );
     assert!(!message.contains("Backup401"), "the path stays out of the message");
 }
+
+/// One-off downloads and recovery verify against a row they already hold
+/// (`sync::listing_cache`, the recovery listings) instead of letting hcfs
+/// page the drive's listing per file. Pin the calls and the row fields that
+/// path builds `ExpectedContent` from, so a bump that reshapes them fails
+/// here rather than in a download.
+#[test]
+fn expected_content_download_surface_is_pinned() {
+    use hcfs_client::drive::remote::{ExpectedContent, RemoteFileInfo};
+    use hcfs_shared::network::RemoteFileEntry;
+
+    let _: fn(&RemoteFileInfo) -> Result<ExpectedContent, hcfs_client::sync::SyncError> = ExpectedContent::from_info;
+    let _ = hcfs_client::drive::remote::download_remote_file_expecting::<fn(u64, u64)>;
+
+    let entry = RemoteFileEntry {
+        path_hash: [1; 32],
+        salted_hash: [2; 32],
+        size_bytes: 3,
+        revision_seq: 4,
+        revision_id: [5; 32],
+        ..serde_json::from_value(serde_json::json!({
+            "path_hash": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": 0,
+            "revision_seq": 0,
+            "revision_id": vec![0u8; 32],
+            "created_at": 0,
+            "updated_at": 0,
+        }))
+        .expect("a minimal row parses")
+    };
+    let expected = ExpectedContent {
+        salted_hash: entry.salted_hash,
+        size_bytes: entry.size_bytes,
+        revision_id: entry.revision_id,
+    };
+    assert_eq!(expected.size_bytes, 3);
+}

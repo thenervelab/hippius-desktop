@@ -410,7 +410,9 @@ pub async fn download_remote_file(
         folder_hash: &identity.wire_folder_hash,
         encryption_key: &encryption_key,
     };
-    hcfs_client::drive::remote::download_remote_file(
+    download_with_cached_listing(
+        &state,
+        &label,
         &access,
         &file_id,
         &PathBuf::from(&output_path),
@@ -425,8 +427,7 @@ pub async fn download_remote_file(
             );
         }),
     )
-    .await
-    .map_err(|e| AppError::Hcfs(e.to_string()))?;
+    .await?;
 
     info!(file_id = %file_id, "File downloaded and decrypted successfully");
     Ok(())
@@ -532,7 +533,9 @@ pub async fn cache_remote_file(
         folder_hash: &identity.wire_folder_hash,
         encryption_key: &encryption_key,
     };
-    if let Err(e) = hcfs_client::drive::remote::download_remote_file(
+    if let Err(e) = download_with_cached_listing(
+        &state,
+        &label,
         &access,
         &file_id,
         &part,
@@ -547,7 +550,7 @@ pub async fn cache_remote_file(
         // unlink result is intentionally discarded — a missing/already-gone
         // partial must not mask the real download error.
         let _ = tokio::fs::remove_file(&part).await;
-        return Err(AppError::Hcfs(e.to_string()));
+        return Err(e);
     }
 
     // A rename failure is an I/O fault → `AppError::Io` (typed `#[from]`), which
@@ -723,7 +726,9 @@ pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &
         folder_hash: &identity.wire_folder_hash,
         encryption_key: &encryption_key,
     };
-    hcfs_client::drive::remote::download_remote_file(
+    download_with_cached_listing(
+        state,
+        label,
         &access,
         file_id,
         dest,
@@ -733,7 +738,46 @@ pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &
     .await
     // Discard the downloaded byte count — callers only need success/failure.
     .map(|_bytes| ())
-    .map_err(|e| AppError::Hcfs(e.to_string()))
+}
+
+/// Download, decrypt and verify one remote file against its row in the
+/// drive's cached listing ([`crate::sync::listing_cache`]).
+///
+/// hcfs's plain `download_remote_file` pages the drive's whole listing to
+/// find that row, once per download, so a screen of thumbnails was one full
+/// listing per thumbnail. Every one-off download goes through here instead.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] for a malformed file id, [`AppError::Hcfs`] when
+/// the listing cannot be fetched, the file is not in it, or the download or
+/// its verification fails.
+async fn download_with_cached_listing<F>(
+    state: &AppState,
+    label: &str,
+    access: &hcfs_client::drive::remote::RemoteFileAccess<'_>,
+    file_id: &str,
+    dest: &Path,
+    progress: Option<F>,
+) -> Result<u64>
+where
+    F: Fn(u64, u64) + Send + Sync + Clone + 'static,
+{
+    let path_hash = <[u8; 32]>::try_from(hex::decode(file_id).unwrap_or_default())
+        .map_err(|_| AppError::Validation(format!("{file_id} is not a file id (64 hex characters)")))?;
+
+    let expected = state
+        .remote_listing_cache
+        .expected(label, access.ss58_address, access.folder_hash, path_hash, || {
+            access.client.get_all_files(access.ss58_address, access.folder_hash, None::<fn(u64, u64)>)
+        })
+        .await
+        .map_err(|e| AppError::Hcfs(format!("Failed to fetch remote files: {e}")))?
+        .ok_or_else(|| AppError::Hcfs(format!("file {file_id} is not in the remote folder")))?;
+
+    hcfs_client::drive::remote::download_remote_file_expecting(access, file_id, expected, dest, progress)
+        .await
+        .map_err(|e| AppError::Hcfs(e.to_string()))
 }
 
 /// Decode `src`, scale it to fit within `max_dim` (aspect preserved, never

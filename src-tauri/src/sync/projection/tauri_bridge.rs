@@ -247,6 +247,9 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     // A completed cycle means the drive folder's disk is mounted again, so
     // a later unplug is a new episode that notifies.
     app_state.root_not_mounted_notify.clear(&payload.label);
+    // The cycle may have changed the drive's rows; one-off downloads must
+    // not keep verifying against the listing from before it.
+    app_state.remote_listing_cache.invalidate(&payload.label);
 
     // Update per-file failure counters from the finalized session.
     update_failure_counts(app, &payload.label);
@@ -808,6 +811,8 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     app_state.revoked_notify.clear_all();
     // And for the unmounted-disk latch, keyed by labels a new account reuses.
     app_state.root_not_mounted_notify.clear_all();
+    // Cached listings belong to the previous account's drives.
+    app_state.remote_listing_cache.clear_all();
     // And for the folder-restore gate — its armed flags describe the previous
     // account's drives, and a label reused by the new account must be re-armed
     // from that account's own baseline at init, never inherited.

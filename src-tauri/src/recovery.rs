@@ -1447,7 +1447,12 @@ async fn try_decrypt_one_remote_file(
     let Ok(tmp) = tempfile::NamedTempFile::new() else {
         return RemoteAttempt::Transport;
     };
-    match hcfs_client::drive::remote::download_remote_file(&access, &file.file_id, tmp.path(), Some(|_: u64, _: u64| {})).await {
+    // Verify against the row just listed rather than paging the listing again.
+    let expected = match hcfs_client::drive::remote::ExpectedContent::from_info(file) {
+        Ok(expected) => expected,
+        Err(e) => return remote_attempt_from_err_display(&e),
+    };
+    match hcfs_client::drive::remote::download_remote_file_expecting(&access, &file.file_id, expected, tmp.path(), Some(|_: u64, _: u64| {})).await {
         Ok(_) => RemoteAttempt::Opened,
         Err(e) => remote_attempt_from_err_display(&e),
     }

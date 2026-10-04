@@ -143,6 +143,12 @@ pub struct AppState {
     /// its own smaller gate purely to skip scrolled-past rows before the
     /// IPC is even issued).
     pub remote_media_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Short-lived per-drive remote listing rows that one-off downloads
+    /// (thumbnails, previews, Download) verify against, so a screen of them
+    /// pages the drive's listing once rather than once per file. Invalidated
+    /// per label on `SyncCompleted`, wholesale on `SyncReset`. See
+    /// `crate::sync::listing_cache`.
+    pub remote_listing_cache: std::sync::Arc<crate::sync::listing_cache::RemoteListingCache>,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -349,6 +355,7 @@ impl AppState {
             chunk_reclaim: tokio::sync::OnceCell::new(),
             folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),
             remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
+            remote_listing_cache: std::sync::Arc::default(),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             tray_panel_shown_at: AtomicU64::new(0),
