@@ -44,14 +44,23 @@ pub(crate) enum VisibleKind {
     File {
         size: u64,
     },
+    /// Listed, but its type could not be read (a folder that can be listed
+    /// but not entered, a lost privacy grant). A share must refuse it by
+    /// name; a drive upload skips it, since its files are independent.
+    Unreadable {
+        error: std::io::Error,
+    },
+    /// A file or folder whose name is not valid UTF-8. Wire paths are
+    /// strings, so it has no spelling there; `VisibleEntry::name` carries
+    /// the lossy form for a message. APFS stores only UTF-8, so on macOS
+    /// this never occurs.
+    NotText,
 }
 
 /// One child of a directory that an upload of the tree carries.
 #[derive(Debug)]
 pub(crate) struct VisibleEntry {
-    /// UTF-8 name. Wire paths are strings, so a non-UTF-8 name has no
-    /// representation and is skipped (APFS stores UTF-8, so on macOS this
-    /// never fires).
+    /// UTF-8 name; lossy for [`VisibleKind::NotText`] only.
     pub name: String,
     pub path: PathBuf,
     pub kind: VisibleKind,
@@ -67,31 +76,40 @@ pub(crate) struct VisibleEntry {
 /// - symlinks and special files are skipped: `DirEntry::metadata` does not
 ///   follow links, so a link is neither file nor dir, which also keeps a
 ///   link cycle from ever being walked;
-/// - an entry that vanished between `read_dir` and its stat is skipped.
+/// - an entry that vanished between `read_dir` and its stat (`NotFound`) is
+///   skipped; any other stat failure is reported as
+///   [`VisibleKind::Unreadable`], so a caller that must not lose an item
+///   silently can refuse it by name;
+/// - a non-UTF-8 name is reported as [`VisibleKind::NotText`].
 ///
 /// # Errors
 ///
-/// Only the `read_dir` of `dir` itself. The caller decides whether an
-/// unreadable directory is skippable (drive upload) or fatal (a share must
-/// not silently drop a subfolder).
+/// The `read_dir` of `dir` itself, or an error reading its next entry
+/// (that is the directory failing to list, and no name exists to report).
+/// The caller decides whether an unreadable directory is skippable (drive
+/// upload) or fatal (a share must not silently drop a subfolder).
 pub(crate) fn visible_children(dir: &Path) -> std::io::Result<Vec<VisibleEntry>> {
     let mut children = Vec::new();
-    for entry in std::fs::read_dir(dir)?.flatten() {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
         let name = entry.file_name();
         if is_engine_hidden_name(&name) {
             continue;
         }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Some(name) = name.to_str() else { continue };
-        let kind = if meta.is_dir() {
-            VisibleKind::Dir
-        } else if meta.is_file() {
-            VisibleKind::File { size: meta.len() }
-        } else {
-            continue;
+
+        let kind = match entry.metadata() {
+            Ok(meta) if meta.is_dir() => VisibleKind::Dir,
+            Ok(meta) if meta.is_file() => VisibleKind::File { size: meta.len() },
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => VisibleKind::Unreadable { error },
+        };
+        let (name, kind) = match name.to_str() {
+            Some(name) => (name.to_owned(), kind),
+            None => (name.to_string_lossy().into_owned(), VisibleKind::NotText),
         };
         children.push(VisibleEntry {
-            name: name.to_owned(),
+            name,
             path: entry.path(),
             kind,
         });

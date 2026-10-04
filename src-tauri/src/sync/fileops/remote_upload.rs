@@ -630,10 +630,11 @@ const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = 64;
 ///
 /// Pure apart from reading the directory tree, so the path arithmetic —
 /// the part that decides where a file LANDS on the server — is testable
-/// without a server. Hidden names, symlinks and non-UTF-8 names are skipped
-/// by `pathops::visible_children`, the rule every tree upload shares, so a
+/// without a server. Hidden names and symlinks are skipped by
+/// `pathops::visible_children`, the rule every tree upload shares, so a
 /// folder uploaded here and the same folder synced locally produce the
-/// same file set.
+/// same file set. Children it reports as unreadable or as non-UTF-8 are
+/// skipped too.
 fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
     let Some(folder_name) = root.file_name().and_then(|n| n.to_str()) else {
         return Vec::new();
@@ -658,6 +659,10 @@ fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
                     parent: parent.clone(),
                     size,
                 }),
+                // Skipped as an unreadable folder is: the rest still upload.
+                // A non-UTF-8 name has no wire spelling (and never occurs
+                // on APFS).
+                VisibleKind::Unreadable { .. } | VisibleKind::NotText => {}
             }
         }
     }
@@ -898,6 +903,33 @@ mod tests {
         let planned = plan_folder_upload(&root, "");
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].source.file_name().unwrap(), "a.jpg");
+    }
+
+    /// Unlike a share, a drive upload carries on past what it cannot read:
+    /// the files are independent and the rest still upload. A folder that
+    /// can be listed but not entered leaves its children out, nothing else.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_upload_skips_children_it_cannot_examine() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(root.join("locked/inner")).expect("dirs");
+        std::fs::write(root.join("a.jpg"), b"a").expect("root file");
+        std::fs::write(root.join("locked/b.jpg"), b"b").expect("locked file");
+        let locked = root.join("locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o400)).expect("chmod");
+        // Root ignores permissions; the case is unobservable there.
+        let examinable_anyway = std::fs::symlink_metadata(locked.join("b.jpg")).is_ok();
+        let planned = plan_folder_upload(&root, "");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("restore");
+        if examinable_anyway {
+            return;
+        }
+
+        let names: Vec<_> = planned.iter().map(|p| p.source.file_name().unwrap().to_owned()).collect();
+        assert_eq!(names, vec!["a.jpg"]);
     }
 
     /// An empty ciphertext must not declare a zero-chunk session, which

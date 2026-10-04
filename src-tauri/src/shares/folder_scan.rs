@@ -14,6 +14,12 @@
 //! anyway; doing it here only buys a sentence that names the item to fix,
 //! before the storage gate or any request.
 //!
+//! Nothing visible is left out silently. An item the walk cannot read (a
+//! folder it cannot list, a child it cannot examine) and a name that is not
+//! valid UTF-8 (no spelling in a link's paths; APFS cannot create one) each
+//! refuse the share, naming the item. Only hidden names, symlinks, special
+//! files and an entry deleted mid-scan are skipped.
+//!
 //! Two names that become one path once Unicode-normalized (`é` composed and
 //! decomposed) are NOT checked here. APFS, the volume Finder shares from, is
 //! normalization-insensitive and cannot hold such a pair; on a volume that
@@ -121,6 +127,8 @@ pub(crate) fn scan_folder_with(root: &Path, limits: &ScanLimits) -> Result<Folde
                     walk.enter_dir(&child_relative)?;
                     pending.push((child.path, child_relative));
                 }
+                VisibleKind::Unreadable { error } => return Err(unreadable(&child_relative, &error)),
+                VisibleKind::NotText => return Err(not_text(&child_relative)),
             }
         }
     }
@@ -165,9 +173,9 @@ impl<'l> Walk<'l> {
         }
         if self.scan.file_count >= self.limits.files {
             return Err(AppError::Validation(format!(
-                "This folder has more than {} files, more than one link can hold. Share a smaller \
+                "This folder has more than {}, more than one link can hold. Share a smaller \
                  folder.",
-                grouped(self.limits.files)
+                counted(self.limits.files, "file", "files")
             )));
         }
         self.scan.file_count += 1;
@@ -183,9 +191,9 @@ impl<'l> Walk<'l> {
         check_path(relative_path)?;
         if self.dir_count >= self.limits.dirs {
             return Err(AppError::Validation(format!(
-                "This folder has more than {} folders inside it (counting every folder within \
+                "This folder has more than {} inside it (counting every folder within \
                  a folder), more than one link can hold. Share a smaller folder.",
-                grouped(self.limits.dirs)
+                counted(self.limits.dirs, "folder", "folders")
             )));
         }
         self.dir_count += 1;
@@ -285,29 +293,53 @@ fn shown(path: &str) -> String {
         .collect()
 }
 
+/// "about": the cap is on ciphertext, so the largest file that fits is a
+/// little under the cap, and the cap is binary gigabytes quoted as "GB".
 fn too_large(relative_path: &str, max_ciphertext: u64) -> AppError {
     const GIB: u64 = 1024 * 1024 * 1024;
     AppError::Validation(format!(
         "\u{201c}{}\u{201d} is too large to share: one file in a shared folder can be at most \
-         {} GB.",
+         about {} GB.",
         shown(relative_path),
-        max_ciphertext / GIB
+        max_ciphertext.div_ceil(GIB)
     ))
 }
 
-/// An unreadable directory fails the share rather than being skipped: a
-/// link silently missing a subfolder is worse than an error. On macOS the
-/// usual cause is a privacy prompt the user declined.
+/// An unreadable item fails the share rather than being skipped: a link
+/// silently missing a subfolder is worse than an error. On macOS the usual
+/// cause is a privacy prompt the user declined.
+///
+/// The OS error goes to the log, not the dialog, where it would be
+/// engineer-facing text. Logged here, once: this is a single refusal that
+/// ends the scan, not a per-file event.
 fn unreadable(relative: &str, error: &std::io::Error) -> AppError {
+    tracing::warn!(path = %relative, error = %error, "outside-folder share scan: item unreadable");
     let place = if relative.is_empty() {
         "this folder".to_owned()
     } else {
         format!("\u{201c}{}\u{201d}", shown(relative))
     };
     AppError::Validation(format!(
-        "Hippius can't read {place} ({error}). If macOS asked for access, allow it in System \
-         Settings \u{2192} Privacy & Security \u{2192} Files and Folders, then share again."
+        "Hippius can't read {place}. If macOS asked for access, allow it in System Settings \
+         \u{2192} Privacy & Security \u{2192} Files and Folders, then share again."
     ))
+}
+
+/// A name that is not valid UTF-8 has no spelling in a link's paths, so
+/// it is refused by name rather than left out. `relative` is already the
+/// lossy form.
+fn not_text(relative: &str) -> AppError {
+    AppError::Validation(format!(
+        "\u{201c}{}\u{201d} can't be shared: its name contains characters a shared link cannot \
+         hold. Rename it and share the folder again.",
+        shown(relative)
+    ))
+}
+
+/// `count` followed by `one` or `many`, so a limit of one reads "1 file".
+fn counted(count: usize, one: &str, many: &str) -> String {
+    let noun = if count == 1 { one } else { many };
+    format!("{} {noun}", grouped(count))
 }
 
 /// `50000` as `50,000`, for a limit quoted to the user.
@@ -399,13 +431,37 @@ mod tests {
     }
 
     /// The same tree always declares the same list, whatever order the
-    /// filesystem hands the names back in.
+    /// filesystem hands the names back in: each folder's files in name
+    /// order, then its folders depth first, last name first (the walk is a
+    /// stack). Enough names that `read_dir` order (hash order on APFS and
+    /// ext4) is all but certain to differ from name order, so dropping the
+    /// sort fails this.
     #[test]
-    fn the_entry_order_is_deterministic() {
-        let (_dir, root) = tree();
-        let first = scan_folder(&root).expect("scan");
-        let second = scan_folder(&root).expect("scan");
-        assert_eq!(first.entries, second.entries);
+    fn the_entry_order_is_exact() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("Order");
+        let names = ["m", "c", "x", "a", "q", "f", "z", "b", "k", "t", "e", "w"];
+        for name in names {
+            std::fs::create_dir_all(root.join(format!("dir-{name}"))).expect("dir");
+            std::fs::write(root.join(format!("dir-{name}/{name}.txt")), b"x").expect("nested file");
+            std::fs::write(root.join(format!("{name}.txt")), b"x").expect("file");
+        }
+
+        let scan = scan_folder(&root).expect("scan");
+        let order: Vec<String> = scan
+            .entries
+            .iter()
+            .map(|e| match e {
+                UploadFolderEntry::File { relative_path, .. } => relative_path.clone(),
+                UploadFolderEntry::Dir { relative_path } => format!("{relative_path}/"),
+            })
+            .collect();
+
+        let mut sorted = names;
+        sorted.sort_unstable();
+        let mut expected: Vec<String> = sorted.iter().map(|n| format!("{n}.txt")).collect();
+        expected.extend(sorted.iter().rev().map(|n| format!("dir-{n}/{n}.txt")));
+        assert_eq!(order, expected);
     }
 
     /// A link is neither file nor folder to the walk, so a link to a file is
@@ -448,7 +504,25 @@ mod tests {
         let past = ScanLimits { files: 1, ..limits() };
         let err = scan_folder_with(&root, &past).expect_err("one past");
         let message = validation(&err);
-        assert!(message.contains("more than 1 file"), "{message}");
+        assert!(message.contains("more than 1 file,"), "{message}");
+    }
+
+    /// A limit of one reads "1 folder", not "1 folders".
+    #[test]
+    fn a_folder_cap_of_one_is_singular() {
+        let (_dir, root) = tree();
+        let past = ScanLimits { dirs: 1, ..limits() };
+        let err = scan_folder_with(&root, &past).expect_err("past the cap");
+        let message = validation(&err);
+        assert!(message.contains("more than 1 folder inside"), "{message}");
+    }
+
+    /// The real cap is 5 GiB of ciphertext, a little under 5 GiB of file,
+    /// so the sentence says "about".
+    #[test]
+    fn the_size_cap_is_quoted_as_about_5_gb() {
+        let err = too_large("big.mov", ScanLimits::SHARED_FOLDER.file_ciphertext);
+        assert!(validation(&err).contains("at most about 5 GB."), "{err:?}");
     }
 
     /// Directories are counted with every ancestor (`sub` and `sub/deeper`
@@ -478,6 +552,13 @@ mod tests {
         std::fs::write(root.join("x/top.txt"), b"t").expect("file beside an empty chain");
 
         let scan = scan_folder(&root).expect("scan");
+        // Only the deepest empty folder of a chain is listed, once: `x` and
+        // `x/y` are implied by it (and `x` by `x/top.txt` too).
+        assert_eq!(
+            paths(&scan),
+            vec!["d:empty", "d:sub/side", "d:x/y/z", "f:a.txt", "f:sub/deeper/b.bin", "f:x/top.txt"]
+        );
+
         let mut sent: Vec<&str> = Vec::new();
         for entry in &scan.entries {
             match entry {
@@ -499,6 +580,19 @@ mod tests {
             ..limits()
         };
         assert!(scan_folder_with(&root, &under).is_err());
+    }
+
+    /// A chain of empty folders beside a single file is one `Dir` entry,
+    /// its deepest folder; the folders above it are implied.
+    #[test]
+    fn an_all_empty_chain_is_listed_once_by_its_deepest_folder() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("Chain");
+        std::fs::create_dir_all(root.join("a/b/c")).expect("empty chain");
+        std::fs::write(root.join("only.txt"), b"x").expect("file");
+
+        let scan = scan_folder(&root).expect("scan");
+        assert_eq!(paths(&scan), vec!["d:a/b/c", "f:only.txt"]);
     }
 
     /// The per-file cap is on the ciphertext the drive framing produces,
@@ -642,7 +736,64 @@ mod tests {
         }
 
         let err = result.expect_err("unreadable subfolder");
-        assert!(validation(&err).contains("\u{201c}sub\u{201d}"), "{err:?}");
+        let message = validation(&err);
+        assert!(message.contains("\u{201c}sub\u{201d}"), "{message}");
+        assert!(!message.contains("os error"), "no raw OS text in the dialog: {message}");
+    }
+
+    /// A folder that can be listed but not entered (read without search
+    /// permission) lists its names but cannot stat them. Its children must
+    /// fail the share by name, not vanish and leave the folder looking empty.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_cannot_be_examined_fails_and_is_named() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, root) = tree();
+        let locked = root.join("sub");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o400)).expect("chmod");
+        // Root ignores permissions; the case is unobservable there.
+        let examinable_anyway = std::fs::symlink_metadata(locked.join("deeper")).is_ok();
+        let result = scan_folder(&root);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("restore");
+        if examinable_anyway {
+            return;
+        }
+
+        let err = result.expect_err("a child that cannot be examined");
+        let message = validation(&err);
+        assert!(message.contains("\u{201c}sub/deeper\u{201d}"), "{message}");
+        assert!(!message.contains("os error"), "no raw OS text in the dialog: {message}");
+    }
+
+    /// A name that is not valid UTF-8 has no spelling on the wire. It is
+    /// refused by name (shown lossily) rather than silently left out. APFS
+    /// cannot store such a name, so this only runs where the volume can.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_text_fails_and_is_named() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (_dir, root) = tree();
+        let odd = std::ffi::OsStr::from_bytes(b"bad\xffname.txt");
+        if std::fs::write(root.join(odd), b"x").is_err() {
+            return;
+        }
+
+        let err = scan_folder(&root).expect_err("non-UTF-8 name");
+        let message = validation(&err);
+        assert!(message.contains("\u{201c}bad\u{fffd}name.txt\u{201d}"), "{message}");
+        assert!(message.contains("Rename"), "{message}");
+    }
+
+    /// The refusal for a non-UTF-8 name, checked where the volume cannot
+    /// create one (macOS): it names the item and says what to do.
+    #[test]
+    fn a_name_that_is_not_text_reads_as_a_sentence() {
+        let err = not_text("sub/bad\u{fffd}name.txt");
+        let message = validation(&err);
+        assert!(message.contains("\u{201c}sub/bad\u{fffd}name.txt\u{201d}"), "{message}");
+        assert!(message.contains("Rename"), "{message}");
     }
 
     /// Limits are quoted the way a reader writes them.
