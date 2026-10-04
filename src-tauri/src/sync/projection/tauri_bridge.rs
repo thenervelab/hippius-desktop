@@ -499,6 +499,65 @@ fn mass_delete_state_forget(label: &str, side: hcfs_client::sync::MassDeleteSide
     logged.retain(|(l, s, _), _| !(l == label && *s == side.as_str()));
 }
 
+/// Logs a mass-delete event once per change of what it reports.
+///
+/// - Held: hcfs held one side's deletes because they would remove most of
+///   the drive; nothing on that side was deleted and the rest of the cycle
+///   synced. Re-reported every cycle while it stands.
+/// - Restored: emitted once, by the cycle that applied a restore. The hold
+///   on that side is over, so a later one is logged afresh. Putting back
+///   the empty folders held alongside comes with the large-delete prompt.
+/// - Refused: a kept restore request is refused again every cycle until it
+///   fits, so it shares the held event's once-per-change logging.
+///
+/// Any other event, or an unchanged state, is ignored.
+fn log_mass_delete_event(event: &SyncEvent) {
+    // The guards record what they report: an unchanged state falls through
+    // to the do-nothing arm, so it is not logged again.
+    match event {
+        SyncEvent::MassDeleteHeld {
+            label,
+            side,
+            count,
+            synced_count,
+        } if mass_delete_state_changed(label, *side, "held", format!("{count}/{synced_count}")) => {
+            tracing::warn!(
+                label = %label,
+                side = side.as_str(),
+                count,
+                synced_count,
+                "hcfs held a mass delete; nothing on that side was deleted"
+            );
+        }
+        SyncEvent::MassDeleteRestored {
+            label,
+            side,
+            restored,
+            pending,
+            skipped,
+        } => {
+            mass_delete_state_forget(label, *side);
+            tracing::info!(
+                label = %label,
+                side = side.as_str(),
+                restored,
+                pending,
+                skipped,
+                "hcfs restored a held mass delete"
+            );
+        }
+        SyncEvent::MassDeleteRestoreRefused { label, side, reason } if mass_delete_state_changed(label, *side, "refused", format!("{reason:?}")) => {
+            tracing::warn!(
+                label = %label,
+                side = side.as_str(),
+                reason = reason.as_str(),
+                "hcfs refused to restore a held mass delete; the deletes stay held"
+            );
+        }
+        _ => {}
+    }
+}
+
 /// Handle a `SyncError` carrying [`events::SHARED_DRIVE_REVOKED_MARKER`]:
 /// the server-side listing no longer contains this member drive's folder
 /// (the owner revoked this member or deleted the drive), which is a
@@ -941,7 +1000,12 @@ fn handle_progress_snapshot(app: &AppHandle, mut snapshot: SyncSnapshot) {
 impl SyncEventHandler for TauriSyncBridge {
     #[expect(
         clippy::too_many_lines,
-        reason = "Every non-trivial arm now delegates to a handle_* helper, so what remains is per-variant field-mapping boilerplate: destructure the upstream SyncEvent variant and rebuild its distinct typed Tauri payload before delegating. Keeping that 1:1 Rust-event-to-Tauri-event mapping inline in one match is what makes the correspondence auditable in a single place; a generic conversion layer would only hide it behind macros."
+        reason = "Every non-trivial arm now delegates to a handle_* helper, so what remains is \
+                  per-variant field-mapping boilerplate: destructure the upstream SyncEvent variant and \
+                  rebuild its distinct typed Tauri payload before delegating. Keeping that 1:1 \
+                  Rust-event-to-Tauri-event mapping inline in one match is what makes the correspondence \
+                  auditable in a single place; a generic conversion layer would only hide it behind \
+                  macros."
     )]
     fn on_event(&self, event: SyncEvent) {
         let Some(app) = self.app() else { return };
@@ -1089,60 +1153,11 @@ impl SyncEventHandler for TauriSyncBridge {
                 let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);
             }
             SyncEvent::FolderRecovered { label } => handle_folder_recovered(&app, label),
-            // hcfs held one side's deletes because they would remove most of
-            // the drive; nothing on that side was deleted and the rest of the
-            // cycle synced. Logged only (once per change): surfacing the hold
-            // and answering it (restore / confirm) comes with the
-            // large-delete prompt, so until then the hold stands.
-            SyncEvent::MassDeleteHeld {
-                label,
-                side,
-                count,
-                synced_count,
-            } => {
-                if mass_delete_state_changed(&label, side, "held", format!("{count}/{synced_count}")) {
-                    tracing::warn!(
-                        label = %label,
-                        side = side.as_str(),
-                        count,
-                        synced_count,
-                        "hcfs held a mass delete; nothing on that side was deleted"
-                    );
-                }
-            }
-            // Emitted once, by the cycle that applied a restore. The hold on
-            // that side is over, so a later one is logged afresh. Putting
-            // back the empty folders held alongside comes with the
-            // large-delete prompt.
-            SyncEvent::MassDeleteRestored {
-                label,
-                side,
-                restored,
-                pending,
-                skipped,
-            } => {
-                mass_delete_state_forget(&label, side);
-                tracing::info!(
-                    label = %label,
-                    side = side.as_str(),
-                    restored,
-                    pending,
-                    skipped,
-                    "hcfs restored a held mass delete"
-                );
-            }
-            // A kept request is refused again every cycle until it fits, so
-            // this shares the held arm's once-per-change logging. Telling the
-            // user why comes with the large-delete prompt.
-            SyncEvent::MassDeleteRestoreRefused { label, side, reason } => {
-                if mass_delete_state_changed(&label, side, "refused", format!("{reason:?}")) {
-                    tracing::warn!(
-                        label = %label,
-                        side = side.as_str(),
-                        reason = reason.as_str(),
-                        "hcfs refused to restore a held mass delete; the deletes stay held"
-                    );
-                }
+            // A held mass delete and what became of a restore. Logged only,
+            // once per change: surfacing and answering the hold comes with
+            // the large-delete prompt, so until then the hold stands.
+            event @ (SyncEvent::MassDeleteHeld { .. } | SyncEvent::MassDeleteRestored { .. } | SyncEvent::MassDeleteRestoreRefused { .. }) => {
+                log_mass_delete_event(&event);
             }
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
