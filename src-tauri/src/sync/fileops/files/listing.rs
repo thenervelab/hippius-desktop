@@ -10,7 +10,7 @@ use hcfs_client::engine::types::SyncedFileInfo;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::warn;
 
 type PreloadedSynced = (Option<HashMap<String, SyncedFileInfo>>, Vec<String>);
 
@@ -104,6 +104,33 @@ fn disk_row_status<'a>(
     }
 }
 
+/// Whether a file on disk is a leftover hcfs's post-sync sweep owns, which
+/// the listing hides until that sweep removes it.
+///
+/// Mirrors the sweep (`cleanup_failed_downloads_recursive` in hcfs
+/// `engine/manager.rs`): a root-level `downloaded_<64 hex file id>` (the
+/// only place hcfs writes that name; anywhere else it is a user's, and so
+/// is anything that is not a full file id, like `downloaded_2024`) and a
+/// 0-byte `file_<hex>` stub at any depth, each only when untracked. The
+/// sweep's "tracked" reads hcfs's whole state; the listing has the synced
+/// map, so a file it records is tracked here.
+///
+/// Hides, never deletes. The listing used to delete both on sight, which
+/// lost a user's tracked empty `file_<hex>` file. With no synced map
+/// (paused, logged out, cold) nothing is known to be tracked, so every
+/// candidate is hidden and the sweep, which reads the real state, decides.
+fn is_untracked_engine_artifact(
+    name: &str,
+    relative_path: &str,
+    at_root: bool,
+    len: u64,
+    synced_set: Option<&HashMap<String, SyncedFileInfo>>,
+) -> bool {
+    let is_candidate = (at_root && hcfs_client::engine::classify::is_failed_download_artifact(name).is_some())
+        || (len == 0 && hcfs_client::engine::classify::is_encrypted_name_stub(name).is_some());
+    is_candidate && !synced_set.is_some_and(|synced| synced.contains_key(relative_path))
+}
+
 async fn list_sync_folder_inner_with(
     state: &crate::app_state::AppState,
     sync_path: String,
@@ -173,41 +200,17 @@ async fn list_sync_folder_inner_with(
             continue;
         }
 
-        // Never delete `downloaded_<64 hex file id>`: hcfs writes that name
-        // only at the drive root (its fallback for a download whose path it
-        // cannot resolve) and its post-sync sweep owns the untracked ones
-        // there, keeping any it tracks as a real file. Anywhere else the name
-        // is a user's, and so is anything not a full file id
-        // (`downloaded_2024`). The listing used to delete every match on
-        // sight, user files included; now it only hides an untracked root
-        // one until the sweep runs.
-        //
-        // 0-byte encrypted-name stubs (`file_<hex>`) left by decryption
-        // failures are still removed here, closing the gap until the next
-        // post-sync cleanup.
-        if !is_folder {
-            if subfolder.as_deref().is_none_or(str::is_empty)
-                && hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some()
-                && !synced_set.as_ref().is_some_and(|synced| synced.contains_key(&name))
-            {
-                continue;
-            }
-            if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some() && meta.len() == 0 {
-                let path = entry.path();
-                info!(stub = %name, "Removing 0-byte encrypted-name stub on list");
-                if let Err(e) = tokio::fs::remove_file(&path).await {
-                    warn!(stub = %name, error = %e, "Failed to remove 0-byte stub on list — it will be retried on the next listing");
-                }
-                continue;
-            }
-        }
-
         // Build relative path matching hcfs-client convention:
         // BLAKE3 is computed over relative_path.to_string_lossy()
         let relative_path = match subfolder {
             Some(ref sub) => format!("{sub}/{name}"),
             None => name.clone(),
         };
+
+        let at_root = subfolder.as_deref().is_none_or(str::is_empty);
+        if !is_folder && is_untracked_engine_artifact(&name, &relative_path, at_root, meta.len(), synced_set.as_ref()) {
+            continue;
+        }
 
         // Folders don't have server-side entries — their children do.
         // Match engine globs (`*.bin` → foo.bin and dir/foo.bin), not exact

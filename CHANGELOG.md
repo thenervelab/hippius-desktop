@@ -124,8 +124,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Files whose names start with 'downloaded_' are no longer removed when you
-  open their folder.**
+- **Opening a folder no longer deletes files in it.** Files whose names start
+  with 'downloaded_', and some empty files, were removed when you opened their
+  folder.
 
 - **A file that can't sync now says why, and stays marked until it's fixed.**
   If two files' names differ only in capital letters, a file can't be read, or

@@ -666,14 +666,15 @@ async fn hidden_dotfiles_are_listed_as_hidden_not_pending() {
     );
 }
 
-/// Opening a folder used to DELETE any `downloaded_<64 hex>` file in it.
-/// hcfs writes that name only at the drive root (its fallback name for a
-/// download whose path it cannot resolve) and its post-sync sweep owns the
-/// untracked ones there; anywhere else the name is a user's. So the listing
-/// deletes nothing, hides only an untracked root one, and lists the rest,
-/// including a user's `downloaded_2024`.
+/// Opening a folder used to DELETE any `downloaded_<64 hex>` file and any
+/// 0-byte `file_<hex>` stub in it. hcfs writes the first name only at the
+/// drive root (its fallback name for a download whose path it cannot
+/// resolve), and its post-sync sweep removes either only when its state does
+/// not track it; anywhere else, or tracked, the file is a user's. So the
+/// listing deletes nothing, hides only the untracked leftovers, and lists
+/// the rest, including a user's `downloaded_2024` and a tracked empty stub.
 #[tokio::test]
-async fn listing_never_deletes_downloaded_files_and_hides_only_an_untracked_root_temp() {
+async fn listing_never_deletes_engine_leftovers_and_hides_only_untracked_ones() {
     let tmp = tempfile::tempdir().unwrap();
     let id = |byte: &str| format!("downloaded_{}", byte.repeat(32));
     let root_temp = id("ab");
@@ -689,10 +690,19 @@ async fn listing_never_deletes_downloaded_files_and_hides_only_an_untracked_root
         write_file(tmp.path(), rel);
     }
 
+    // 0-byte `file_<hex>` stubs: hcfs's post-sync sweep removes only the
+    // ones its state does not track, so a tracked one is a real (empty)
+    // file the listing must show and keep.
+    let tracked_stub = "file_0123456789abcdef";
+    let untracked_stub = "file_fedcba9876543210";
+    for stub in [tracked_stub, untracked_stub] {
+        std::fs::write(tmp.path().join(stub), b"").expect("write stub");
+    }
+
     let pool = make_pool().await;
     insert_sync_path(&pool, &tmp.path().to_string_lossy(), Some(1_700_000_000)).await;
     let state = make_state(pool);
-    seed_cache(&state, &[root_tracked.as_str()]);
+    seed_cache(&state, &[root_tracked.as_str(), tracked_stub]);
 
     let path: String = tmp.path().to_string_lossy().into();
     let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path.clone(), None, Some(LABEL.into()))
@@ -712,6 +722,15 @@ async fn listing_never_deletes_downloaded_files_and_hides_only_an_untracked_root
         "a tracked one is a synced file: {root_names:?}"
     );
     assert!(root_names.contains(&"downloaded_2024"));
+    assert!(
+        root_names.contains(&tracked_stub),
+        "a tracked 0-byte stub is a synced file: {root_names:?}"
+    );
+    assert_status(&root.files, tracked_stub, "synced");
+    assert!(
+        !root_names.contains(&untracked_stub),
+        "an untracked 0-byte stub is hidden until hcfs's sweep: {root_names:?}"
+    );
 
     let sub_names = entry_names(&sub.files);
     assert!(
@@ -726,7 +745,29 @@ async fn listing_never_deletes_downloaded_files_and_hides_only_an_untracked_root
         nested.as_str(),
         "sub/downloaded_2024",
         "downloaded_2024",
+        tracked_stub,
+        untracked_stub,
     ] {
         assert!(tmp.path().join(rel).exists(), "a listing must not delete {rel}");
     }
+}
+
+/// With no synced map (drive paused, logged out, still cold) the listing
+/// cannot tell a tracked stub from a leftover, so it hides every 0-byte
+/// `file_<hex>` stub and deletes none: deleting on a guess is how a
+/// user's empty file would be lost.
+#[tokio::test]
+async fn without_a_synced_map_a_stub_is_hidden_but_never_deleted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stub = "file_0123456789abcdef";
+    std::fs::write(tmp.path().join(stub), b"").expect("write stub");
+
+    let state = make_state(make_pool().await);
+    let path: String = tmp.path().to_string_lossy().into();
+    let listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, None, None)
+        .await
+        .expect("listing");
+
+    assert!(!entry_names(&listing.files).contains(&stub), "hidden");
+    assert!(tmp.path().join(stub).exists(), "a listing must not delete {stub}");
 }
