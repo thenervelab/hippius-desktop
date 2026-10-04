@@ -213,7 +213,13 @@ fn the_finder_outside_folder_branch_uploads_a_copy_with_cooperative_cancel() {
         !outside_line.contains("until_cancelled"),
         "the outside-folder upload must take the token, not be raced against it"
     );
-    assert!(body.contains("cancel,"), "the outside-folder request must carry the modal's cancel token");
+    // On the request literal itself: a bare `cancel,` also matches the
+    // `FinderMint` destructuring above it, so a fresh token here would pass.
+    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flat.contains("OutsideFolderShare { folder: clicked, ttl, choice, progress, cancel, }"),
+        "the outside-folder request must carry the modal's cancel token"
+    );
     assert_eq!(
         body.matches("until_cancelled(&cancel,").count(),
         3,
