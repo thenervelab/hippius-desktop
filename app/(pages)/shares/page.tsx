@@ -796,9 +796,9 @@ function ActiveNameCell({ row }: { row: ShareSummary }) {
 
 /**
  * Name cell for a folder-share row: display name on top, the scope line
- * underneath (the shared subtree, "Whole drive", or "Uploaded copy"; see
- * `folderShareScope`). Dead rows keep their name readable; the dead state
- * itself lives in the Expires column.
+ * underneath (the shared subtree, "Whole drive", "Folder link", or "Uploaded
+ * copy"; see `folderShareScope`). Dead rows keep their name readable; the
+ * dead state itself lives in the Expires column.
  */
 function FolderNameCell({ row }: { row: FolderShareSummary }) {
   return (

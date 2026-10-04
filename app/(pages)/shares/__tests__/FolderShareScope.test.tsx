@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
-import FolderShareScope from "../FolderShareScope";
+import FolderShareScope from "@/app/(pages)/shares/FolderShareScope";
 
 describe("FolderShareScope", () => {
   it("labels an uploaded copy and explains it on hover and to screen readers", () => {
