@@ -111,6 +111,25 @@ fn the_prompt_decision_skips_dismissed_files() {
     );
 }
 
+/// hcfs reports a refusal once per revision, so the cycles after one are
+/// clean while the file is still refused. A clean cycle that wiped the
+/// drive's rows wholesale would erase the only record of why it is not
+/// syncing; the bridge must settle through the refusal-aware clear.
+#[test]
+fn a_clean_cycle_keeps_refusals() {
+    let bridge = read_src("src/sync/projection/tauri_bridge.rs");
+    let body = slice_between(&bridge, "fn update_failure_counts", "\n}\n");
+    assert!(body.contains("clear_after_clean_cycle("), "the clean arm must keep refusals");
+    assert!(!body.contains("clear_failures_for_label("), "no label-wide delete on a clean cycle");
+
+    let commands = source();
+    let retry_all = slice_between(&commands, "pub async fn retry_all_failures", "\n}\n");
+    assert!(
+        retry_all.contains("clear_retryable_failures_for_label("),
+        "retry all must not erase a refusal it cannot fix"
+    );
+}
+
 /// A dismissal is durable: written by the IPC the dialog calls, restored into
 /// the in-memory tracker when the drive initializes, and the command is
 /// registered so the frontend can reach it.

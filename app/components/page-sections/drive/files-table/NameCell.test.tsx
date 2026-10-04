@@ -162,6 +162,20 @@ describe("NameCell sync-status badge", () => {
     failureOverride = null;
   });
 
+  it("never offers retry on a file hcfs refused", () => {
+    // A refusal is reported once per revision and only the user can fix it
+    // (rename, unlock, free space). A retry would clear the reason while the
+    // next cycle refuses the file again without saying so.
+    failureOverride = makeFailure("refused");
+    render(<NameCell {...baseProps} syncStatus="failed" />);
+    const badge = screen.getByTestId("sync-status-failed");
+
+    expect(badge).not.toHaveAttribute("role", "button");
+    badge.click();
+    expect(retryMutate).not.toHaveBeenCalled();
+    failureOverride = null;
+  });
+
   it("renders the red 'Failed' pill with the 'Upload failed' label when syncStatus is 'failed'", () => {
     render(<NameCell {...baseProps} syncStatus="failed" />);
 

@@ -40,6 +40,14 @@ pub struct FileFailureRecord {
     pub last_failed_at: i64,
 }
 
+/// Persisted `kind` of a refusal ([`FileFailureKindPayload::Refused`]).
+///
+/// Named because the clean-cycle clear keys on it: hcfs reports a refusal
+/// once per revision, so the cycles after it are clean while the file is
+/// still not synced. Clearing the row there would erase the only record of
+/// why, and nothing would bring it back until the file changed.
+const REFUSED_KIND: &str = "refused";
+
 /// Flattened column values for the kind-specific detail. Centralising this
 /// mapping is the single point where the wire enum and the table layout meet,
 /// so they cannot silently drift apart.
@@ -95,6 +103,15 @@ fn kind_columns(kind: &FileFailureKindPayload) -> KindColumns {
         FileFailureKindPayload::Undecryptable => KindColumns {
             kind: "undecryptable",
             message: None,
+            http_status: None,
+            balance_cents: None,
+            required_cents: None,
+        },
+        // hcfs's own reason names the file and says what to do; the FE
+        // renders this column verbatim for the kind.
+        FileFailureKindPayload::Refused { reason } => KindColumns {
+            kind: REFUSED_KIND,
+            message: Some(reason.clone()),
             http_status: None,
             balance_cents: None,
             required_cents: None,
@@ -181,17 +198,52 @@ pub async fn clear_failure(pool: &SqlitePool, owner: &str, label: &str, relative
     Ok(())
 }
 
-/// Clear every persisted failure for a drive — call on drive removal or a fully
-/// successful sync cycle.
+/// Clear a drive's persisted failures that a later cycle can resolve — the
+/// "retry all" action, and the first step of [`clear_after_clean_cycle`].
+///
+/// Refusals are kept. hcfs reports one once per revision, so a clean cycle
+/// says nothing about whether the refused file now syncs, and a retry cannot
+/// change hcfs's verdict. A refusal row goes only when that file syncs
+/// ([`clear_failure`] for its path) or the user acts on that file.
 ///
 /// # Errors
 /// Returns [`crate::error::AppError::Db`] if the database write fails.
-pub async fn clear_failures_for_label(pool: &SqlitePool, owner: &str, label: &str) -> Result<()> {
-    sqlx::query("DELETE FROM sync_file_failures WHERE owner = ? AND label = ?")
+pub async fn clear_retryable_failures_for_label(pool: &SqlitePool, owner: &str, label: &str) -> Result<()> {
+    sqlx::query("DELETE FROM sync_file_failures WHERE owner = ? AND label = ? AND kind != ?")
         .bind(owner)
         .bind(label)
+        .bind(REFUSED_KIND)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Settle a drive's persisted failures after a sync cycle with no failures.
+///
+/// Every retryable row goes (see [`clear_retryable_failures_for_label`]). A
+/// refusal goes only if its own path synced this cycle (`synced_paths`): the
+/// cycle being clean says nothing about a file hcfs refused earlier, because
+/// hcfs reports a refusal once per revision.
+///
+/// Reads the refused paths first rather than deleting once per synced path:
+/// a clean cycle can complete thousands of files while a drive holds a
+/// handful of refusals, and one DELETE each would be thousands of writes.
+///
+/// # Errors
+/// Returns [`crate::error::AppError::Db`] if a database read or write fails.
+pub async fn clear_after_clean_cycle(pool: &SqlitePool, owner: &str, label: &str, synced_paths: &[String]) -> Result<()> {
+    clear_retryable_failures_for_label(pool, owner, label).await?;
+
+    let refused: Vec<String> = sqlx::query_scalar("SELECT relative_path FROM sync_file_failures WHERE owner = ? AND label = ? AND kind = ?")
+        .bind(owner)
+        .bind(label)
+        .bind(REFUSED_KIND)
+        .fetch_all(pool)
+        .await?;
+    let synced: std::collections::HashSet<&str> = synced_paths.iter().map(String::as_str).collect();
+    for path in refused.iter().filter(|path| synced.contains(path.as_str())) {
+        clear_failure(pool, owner, label, path).await?;
+    }
     Ok(())
 }
 
@@ -360,6 +412,7 @@ mod tests {
             K::ChangedWhileUploading,
             K::Gone,
             K::Undecryptable,
+            K::Refused { reason: "r".to_string() },
             K::Other { message: "x".to_string() },
         ];
         for kind in &all {
@@ -370,6 +423,7 @@ mod tests {
                 | K::ChangedWhileUploading
                 | K::Gone
                 | K::Undecryptable
+                | K::Refused { .. }
                 | K::Other { .. } => {}
             }
         }
@@ -403,6 +457,7 @@ mod tests {
                 "changedWhileUploading",
                 "gone",
                 "undecryptable",
+                "refused",
                 "other"
             ],
             "these exact strings are the `FileFailureKind` union in app/lib/types/fileFailure.ts"
@@ -469,13 +524,89 @@ mod tests {
         assert_eq!(alpha.len(), 2);
         assert_eq!(alpha[0].relative_path, "2", "ordered by last_failed_at DESC");
 
-        clear_failures_for_label(&pool, "o", "alpha").await.unwrap();
+        clear_retryable_failures_for_label(&pool, "o", "alpha").await.unwrap();
         assert!(list_failures_for_label(&pool, "o", "alpha").await.unwrap().is_empty());
         assert_eq!(
             list_failures_for_label(&pool, "o", "beta").await.unwrap().len(),
             1,
             "other drives untouched"
         );
+    }
+
+    fn refused(reason: &str) -> FileFailureKindPayload {
+        FileFailureKindPayload::Refused { reason: reason.to_string() }
+    }
+
+    #[tokio::test]
+    async fn a_refusal_persists_hcfs_reason_as_its_message() {
+        let pool = test_pool().await;
+        let reason = "Not synced: could not be read (Permission denied); left alone until it is readable";
+        upsert_failure(&pool, "o", "d", "locked.pdf", "locked.pdf", &refused(reason), 1)
+            .await
+            .unwrap();
+
+        let rec = get_failure(&pool, "o", "d", "locked.pdf").await.unwrap().expect("row exists");
+        assert_eq!(rec.kind, "refused");
+        assert_eq!(rec.message.as_deref(), Some(reason));
+    }
+
+    /// hcfs reports a refusal once per revision; the cycles after it have no
+    /// failures. The row must survive them or the user loses the only record
+    /// of why the file is not syncing.
+    #[tokio::test]
+    async fn a_clean_cycle_after_a_refusal_keeps_the_refusal_and_drops_the_rest() {
+        let pool = test_pool().await;
+        upsert_failure(&pool, "o", "d", "Beach.JPG", "Beach.JPG", &refused("collides"), 1)
+            .await
+            .unwrap();
+        upsert_failure(&pool, "o", "d", "flaky.bin", "flaky.bin", &FileFailureKindPayload::Network, 1)
+            .await
+            .unwrap();
+        upsert_failure(&pool, "o", "other", "x", "x", &FileFailureKindPayload::Network, 1)
+            .await
+            .unwrap();
+
+        clear_after_clean_cycle(&pool, "o", "d", &["unrelated.txt".to_string()]).await.unwrap();
+
+        let left = list_failures_for_label(&pool, "o", "d").await.unwrap();
+        let paths: Vec<&str> = left.iter().map(|r| r.relative_path.as_str()).collect();
+        assert_eq!(paths, vec!["Beach.JPG"], "only the refusal outlives a clean cycle");
+        assert_eq!(
+            list_failures_for_label(&pool, "o", "other").await.unwrap().len(),
+            1,
+            "other drives untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clean_cycle_that_syncs_the_refused_path_clears_it() {
+        let pool = test_pool().await;
+        upsert_failure(&pool, "o", "d", "Beach.JPG", "Beach.JPG", &refused("collides"), 1)
+            .await
+            .unwrap();
+        upsert_failure(&pool, "o", "d", "locked.pdf", "locked.pdf", &refused("unreadable"), 1)
+            .await
+            .unwrap();
+
+        let synced = vec!["Beach.JPG".to_string(), "unrelated.txt".to_string()];
+        clear_after_clean_cycle(&pool, "o", "d", &synced).await.unwrap();
+
+        assert!(get_failure(&pool, "o", "d", "Beach.JPG").await.unwrap().is_none(), "it synced");
+        assert!(get_failure(&pool, "o", "d", "locked.pdf").await.unwrap().is_some(), "it did not");
+    }
+
+    /// A cycle WITH failures clears per synced path; a refusal is no
+    /// exception, so a refused file that syncs in a failing cycle clears too.
+    #[tokio::test]
+    async fn a_per_path_success_clears_a_refusal() {
+        let pool = test_pool().await;
+        upsert_failure(&pool, "o", "d", "Beach.JPG", "Beach.JPG", &refused("collides"), 1)
+            .await
+            .unwrap();
+
+        clear_failure(&pool, "o", "d", "Beach.JPG").await.unwrap();
+
+        assert!(get_failure(&pool, "o", "d", "Beach.JPG").await.unwrap().is_none());
     }
 
     #[tokio::test]

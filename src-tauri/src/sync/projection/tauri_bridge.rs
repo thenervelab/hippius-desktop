@@ -152,11 +152,13 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
         // All files succeeded for this label -- clear counters.
         failure_state.clear_all_for_label(label);
         // Mirror the clear into the durable store (best-effort, off the
-        // sync thread since this fn is sync and DB writes are async).
+        // sync thread since this fn is sync and DB writes are async). Not a
+        // blanket delete: hcfs reports a refusal once per revision, so the
+        // cycles after one are clean while that file is still refused.
         if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
             let label = label.to_string();
             tauri::async_runtime::spawn(async move {
-                let _ = crate::sync::failure_repo::clear_failures_for_label(&pool, &owner, &label).await;
+                let _ = crate::sync::failure_repo::clear_after_clean_cycle(&pool, &owner, &label, &succeeded_paths).await;
             });
         }
         return;

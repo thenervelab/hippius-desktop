@@ -603,6 +603,70 @@ mod tests {
         assert!(!reason.contains("http"), "leaked URL: {reason}");
     }
 
+    /// hcfs refuses a file it will not sync as things stand (a case/Unicode
+    /// path collision, an unreadable local file, no room on disk for the
+    /// download) and reports the refusal ONCE per revision. Its message
+    /// names the file and says what to do, so it IS the user copy — the
+    /// generic unmapped line would leave the user nothing to act on.
+    #[test]
+    fn upstream_refusals_carry_hcfs_own_reason_to_the_user() {
+        use hcfs_client::engine::events::FileFailureKind;
+        use hcfs_client::sync::SyncError;
+
+        let errors = [
+            SyncError::PathCollision {
+                path: "Photos/Beach.JPG".to_string(),
+            },
+            SyncError::LocalUnreadable("Docs/locked.pdf: Permission denied (os error 13)".to_string()),
+            SyncError::InsufficientDiskSpace {
+                needed: 5 * 1024 * 1024 * 1024,
+                available: 1024 * 1024,
+            },
+        ];
+        for error in errors {
+            let (kind, status) = FileFailureKind::classify(&error);
+            assert_eq!(status, None, "a refusal is local; no HTTP status");
+
+            let payload = FileFailureKindPayload::from(&kind);
+            let wire = serde_json::to_value(&payload).expect("serialize");
+            assert_eq!(wire["kind"], "refused", "{error:?} must reach the FE as a refusal");
+            assert_eq!(wire["reason"], error.to_string(), "hcfs's own message is the reason");
+
+            let reason = payload.display_reason();
+            assert_eq!(reason, error.to_string(), "the widget shows hcfs's own words");
+            assert!(!payload.is_transient(), "a refusal never resolves itself: {reason}");
+            assert!(!is_transient_reason(&reason));
+        }
+    }
+
+    #[test]
+    fn a_refusal_names_the_file_and_the_disk_space_one_says_free_up_space() {
+        use hcfs_client::engine::events::FileFailureKind;
+        use hcfs_client::sync::SyncError;
+
+        let collision = SyncError::PathCollision {
+            path: "Photos/Beach.JPG".to_string(),
+        };
+        let (kind, _) = FileFailureKind::classify(&collision);
+        assert!(FileFailureKindPayload::from(&kind).display_reason().contains("Photos/Beach.JPG"));
+
+        let disk = SyncError::InsufficientDiskSpace {
+            needed: 5 * 1024 * 1024 * 1024,
+            available: 1024 * 1024,
+        };
+        let (kind, _) = FileFailureKind::classify(&disk);
+        let reason = FileFailureKindPayload::from(&kind).display_reason();
+        assert!(reason.to_lowercase().contains("free up space"), "{reason}");
+    }
+
+    #[test]
+    fn a_blank_refusal_reason_falls_back_to_non_retry_copy() {
+        let blank = FileFailureKindPayload::Refused { reason: "  ".to_string() };
+        assert_eq!(blank.display_reason(), REFUSED_FALLBACK_REASON);
+        let lower = REFUSED_FALLBACK_REASON.to_lowercase();
+        assert!(!lower.contains("retry") && !lower.contains("try again"), "{REFUSED_FALLBACK_REASON}");
+    }
+
     #[test]
     fn display_reason_other_uses_message_or_falls_back_when_blank() {
         let with_msg = FileFailureKindPayload::Other {
@@ -1085,6 +1149,7 @@ pub struct FilesFailedRepeatedlyPayload {
 /// {"kind":"serverError","status":500}
 /// {"kind":"network"}
 /// {"kind":"gone"}
+/// {"kind":"refused","reason":"Not synced: could not be read (…)"}
 /// {"kind":"other","message":"unrecognised upload failure"}
 /// ```
 #[derive(Serialize, Clone, Debug)]
@@ -1128,6 +1193,18 @@ pub enum FileFailureKindPayload {
     /// the file after two attempts and stops trying, so a user told to wait
     /// would wait forever. This is the one failure class that needs a person.
     Undecryptable,
+    /// hcfs will not sync this file as things stand and says why: its path
+    /// collides with another on this filesystem, it cannot be read, or there
+    /// is no room on the disk to download it. Mirrors upstream
+    /// `FileFailureKind::Refused`.
+    ///
+    /// Unlike [`Self::Undecryptable`] the fix is the user's own (rename,
+    /// unlock, free space), and `reason` is hcfs's message, which names the
+    /// file and says what to do, so it is shown verbatim. hcfs reports a
+    /// refusal once per revision rather than every cycle, which is why the
+    /// persisted row outlives clean cycles (see
+    /// `failure_repo::clear_retryable_failures_for_label`).
+    Refused { reason: String },
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
     Other { message: String },
@@ -1182,6 +1259,13 @@ const GONE_DISPLAY_REASON: &str = "File disappeared before upload — will retry
 /// retry copy every other reason uses would promise something that will
 /// never happen. Must stay word-identical to the FE's `undecryptable` case.
 const UNDECRYPTABLE_DISPLAY_REASON: &str = "Can't be decrypted on this device — needs to be re-uploaded or removed.";
+
+/// Shown for a refusal whose upstream reason is blank. Never expected (hcfs
+/// always explains a refusal), but a row must not render an empty reason.
+/// Like the undecryptable copy it promises no retry: the next cycle will not
+/// change the outcome. Must stay word-identical to the FE's
+/// `REFUSED_FALLBACK_MESSAGE` (pinned by `tests/failure_copy_parity.rs`).
+const REFUSED_FALLBACK_REASON: &str = "Not synced. This file needs your attention before it can sync.";
 
 /// Whether a snapshot row's authored `error` reason describes a self-resolving
 /// failure (see [`FileFailureKindPayload::is_transient`]).
@@ -1347,6 +1431,14 @@ impl FileFailureKindPayload {
             Self::Network => NETWORK_DISPLAY_REASON.to_string(),
             Self::Gone => GONE_DISPLAY_REASON.to_string(),
             Self::Undecryptable => UNDECRYPTABLE_DISPLAY_REASON.to_string(),
+            Self::Refused { reason } => {
+                let trimmed = reason.trim();
+                if trimmed.is_empty() {
+                    REFUSED_FALLBACK_REASON.to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            }
             // `Other` already carries upstream display text; fall back to a
             // generic line when it's empty/whitespace so the row never shows a
             // blank reason. Network-shaped leftovers (reqwest Display, nested
@@ -1405,6 +1497,9 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // gives it one free retry and then quarantines it, so the honest
             // copy says a person has to act — not "will retry".
             K::Decryption { .. } => Self::Undecryptable,
+            // hcfs's refusal message names the file and the remedy, so it is
+            // carried through as the copy rather than re-phrased here.
+            K::Refused { reason } => Self::Refused { reason: reason.clone() },
             // Carve the mid-upload-modification case out of the upstream
             // catch-all before it reaches `Other` — it is self-resolving and
             // must not be presented as a crypto fault. See

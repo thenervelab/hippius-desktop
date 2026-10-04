@@ -234,6 +234,15 @@ fn each_upstream_variant_translates_to_distinct_wire_shape() {
     let json = serde_json::to_value(&other_payload).expect("serialise");
     assert_eq!(json.get("kind").and_then(|v| v.as_str()), Some("other"));
     assert_eq!(json.get("message").and_then(|v| v.as_str()), Some("unmapped"));
+
+    // `Refused` carries hcfs's reason under `reason`, the key the FE and
+    // the persisted row's `message` column both take it from.
+    let refused = FileFailureKind::Refused {
+        reason: "Not synced: could not be read".into(),
+    };
+    let json = serde_json::to_value(FileFailureKindPayload::from(&refused)).expect("serialise");
+    assert_eq!(json.get("kind").and_then(|v| v.as_str()), Some("refused"));
+    assert_eq!(json.get("reason").and_then(|v| v.as_str()), Some("Not synced: could not be read"));
 }
 
 // ─────────────────────────────────────────────────────────────────────

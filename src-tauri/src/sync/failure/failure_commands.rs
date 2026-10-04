@@ -236,9 +236,13 @@ pub async fn retry_file_failure(label: String, path: String, state: tauri::State
 }
 
 /// Retry every failed file on a drive — e.g. after a credit top-up fixes a
-/// batch of `InsufficientBalance` failures at once. Clears all durable +
-/// in-memory failures for the drive, removes their exclude patterns, and
-/// triggers one sync.
+/// batch of `InsufficientBalance` failures at once. Clears the drive's
+/// durable retryable failures and its in-memory counters, removes the
+/// exclude patterns, and triggers one sync.
+///
+/// Refusals keep their rows: hcfs reports a refusal once per revision, so a
+/// retry would erase the reason while the next cycle refuses the file again
+/// in silence. The FE offers no retry for them either.
 ///
 /// # Errors
 /// Returns an error if the database read/write fails.
@@ -250,7 +254,7 @@ pub async fn retry_all_failures(label: String, state: tauri::State<'_, crate::ap
         let owner = crate::auth::account_key::account_key(&account_id);
         let pool = state.pool()?;
         let recs = crate::sync::failure_repo::list_failures_for_label(pool, &owner, &label).await?;
-        crate::sync::failure_repo::clear_failures_for_label(pool, &owner, &label).await?;
+        crate::sync::failure_repo::clear_retryable_failures_for_label(pool, &owner, &label).await?;
         recs
     } else {
         Vec::new()

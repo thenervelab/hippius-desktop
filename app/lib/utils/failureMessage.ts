@@ -12,6 +12,17 @@ export const UNDECRYPTABLE_MESSAGE =
   "Can't be decrypted on this device — needs to be re-uploaded or removed.";
 
 /**
+ * Copy for a refused row with no reason. Not expected (hcfs always explains a
+ * refusal), but a row must never render blank. Promises no retry: a refusal
+ * stands until the user changes something.
+ *
+ * Must stay word-identical to Rust's `REFUSED_FALLBACK_REASON`. Pinned by
+ * `src-tauri/tests/failure_copy_parity.rs`.
+ */
+export const REFUSED_FALLBACK_MESSAGE =
+  "Not synced. This file needs your attention before it can sync.";
+
+/**
  * HTTP 402 / storage-quota denial (not typed credits `insufficientBalance`).
  * Must stay word-identical to Rust's `QUOTA_DENIED_DISPLAY_REASON`.
  */
@@ -74,6 +85,11 @@ export function failureMessage(rec: FileFailureRecord): string {
       // retry wording every other case uses would promise something that
       // never happens.
       return UNDECRYPTABLE_MESSAGE;
+    case "refused":
+      // hcfs's own refusal message, persisted by Rust: it names the file and
+      // says what to do (rename, make readable, free up space). Rust's
+      // `display_reason` passes the same text through, so both paths agree.
+      return rec.message?.trim() || REFUSED_FALLBACK_MESSAGE;
     case "other":
     default: {
       // `other` carries display text; fall back to a generic line if absent or
@@ -105,7 +121,11 @@ export function failureMessage(rec: FileFailureRecord): string {
  * does, offering the affordance is offering something that cannot work.
  */
 export function isRetryableFailure(kind: FileFailureRecord["kind"]): boolean {
-  return kind !== "undecryptable";
+  // `refused` is the same shape for a different reason: hcfs reports a
+  // refusal once per revision, so a retry would clear the row and the next
+  // cycle would refuse the file again without saying so. Only the user's own
+  // change (rename, unlock, free space) releases it.
+  return kind !== "undecryptable" && kind !== "refused";
 }
 
 /**
