@@ -633,6 +633,21 @@ describe("ShareFileModal", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
+  // Confirm stays disabled on this chooser, so without the way back the
+  // refusal reads as final: the user must learn a fixed folder can be
+  // shared again, and how.
+  it("says the folder can be shared again once the refusal is fixed", () => {
+    render(
+      withFinderState(<ShareFileModal />, {
+        ...FOLDER_COPY,
+        sizeBytes: null,
+        refusal: { kind: "Validation", message: "This folder has no files to share." },
+      }),
+    );
+
+    expect(screen.getByText(/choose share with hippius again/i)).toBeInTheDocument();
+  });
+
   it("promises neither a live link nor a copy when the placement is unknown", () => {
     render(withFinderState(<ShareFileModal />, FINDER_UNKNOWN_FOLDER));
     expect(screen.getByText(/view and download this folder/i)).toBeInTheDocument();

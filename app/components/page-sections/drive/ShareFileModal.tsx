@@ -599,9 +599,17 @@ function ChoosingBody({
         </p>
 
         {refusal !== null && (
-          <p role="alert" className="mt-2 text-xs text-red-500">
-            {refusal}
-          </p>
+          <>
+            <p role="alert" className="mt-2 text-xs text-red-500">
+              {refusal}
+            </p>
+            {/* Confirm stays disabled, and this chooser never re-measures:
+                the way back is a fresh click once the folder is fixed. */}
+            <p className="mt-1 text-xs text-grey-40 dark:text-grey-dark-600">
+              Once that is fixed, right-click the folder in Finder and choose
+              Share with Hippius again.
+            </p>
+          </>
         )}
 
         {modifiedSecsAgo !== null &&
