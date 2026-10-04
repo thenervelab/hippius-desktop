@@ -431,22 +431,8 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         SyncErrorDisposition::RealError => {}
     }
 
-    // 2. Real error: epoch-gated, label-scoped defensive clears so an abort
-    //    mid-encryption (before the first-chunk path raised the banner) can't
-    //    leave a stuck banner / preparing override / 402 counter.
-    {
-        let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
-        app_state.preparing.clear(&payload.label);
-        app_state.credits_exhausted.clear(&payload.label);
-    }
-
-    // Keep-awake: a failed cycle marks its remaining files terminal, so the
-    // fresh snapshot normally releases the sleep assertion here (hcfs-client's
-    // retry starts a NEW cycle whose snapshots re-acquire). Re-evaluating
-    // (not unconditionally releasing) keeps the hold when another drive's
-    // transfers are still in flight.
-    reevaluate_keep_awake(&app_state, "sync error");
+    // 2. Real error: the per-cycle state a failed cycle leaves behind.
+    clear_after_failed_cycle(app, &app_state, &payload.label, "sync error");
 
     // Decide BEFORE emitting whether this failure should surface a persisted
     // "Sync Failed" notification. For the auto-retry loop, `record_failure`
@@ -470,6 +456,27 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         let _ = app.emit(events::SYNC_FAILED_NOTIFY, payload.clone());
     }
     let _ = app.emit(events::SYNC_ERROR, payload);
+}
+
+/// Clears what a cycle that ended in an error leaves behind for `label`,
+/// shared by every `SyncError` arm that is not a cancel or a revocation.
+///
+/// The clears are epoch-gated and label-scoped so an abort mid-encryption
+/// (before the first-chunk path raised the banner) cannot leave a stuck
+/// upload banner, preparing override or 402 counter, while an overlapping
+/// newer cycle keeps its own banner.
+///
+/// Keep-awake: a failed cycle marks its remaining files terminal, so the
+/// fresh snapshot normally releases the sleep assertion here (hcfs-client's
+/// retry starts a NEW cycle whose snapshots re-acquire). Re-evaluating (not
+/// unconditionally releasing) keeps the hold when another drive's transfers
+/// are still in flight.
+fn clear_after_failed_cycle(app: &AppHandle, app_state: &crate::app_state::AppState, label: &str, context: &'static str) {
+    let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+    app_state.upload_processing.clear_if_session_advanced(app, label, epoch);
+    app_state.preparing.clear(label);
+    app_state.credits_exhausted.clear(label);
+    reevaluate_keep_awake(app_state, context);
 }
 
 /// Handle `SyncEvent::FolderRecovered` — the engine found an own drive's
@@ -653,7 +660,7 @@ fn handle_shared_drive_revoked(app: &AppHandle, payload: events::SyncErrorPayloa
 /// mounted (`SyncError::RootNotMounted`): nothing was planned, so nothing
 /// was uploaded, downloaded or deleted.
 ///
-/// Runs the generic arm's defensive clears and keep-awake re-evaluation,
+/// Runs [`clear_after_failed_cycle`] like the generic arm,
 /// rewrites `error` to [`events::ROOT_NOT_MOUNTED_MESSAGE`] with
 /// [`events::SyncErrorKind::RootNotMounted`], and lets one
 /// `SYNC_FAILED_NOTIFY` through per episode (the `root_not_mounted_notify`
@@ -666,13 +673,7 @@ fn handle_root_not_mounted(app: &AppHandle, mut payload: events::SyncErrorPayloa
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
 
-    {
-        let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
-        app_state.preparing.clear(&payload.label);
-        app_state.credits_exhausted.clear(&payload.label);
-    }
-    reevaluate_keep_awake(&app_state, "drive folder not mounted");
+    clear_after_failed_cycle(app, &app_state, &payload.label, "drive folder not mounted");
 
     payload.error = events::ROOT_NOT_MOUNTED_MESSAGE.to_string();
     payload.kind = events::SyncErrorKind::RootNotMounted;

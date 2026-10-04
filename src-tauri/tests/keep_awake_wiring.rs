@@ -56,11 +56,29 @@ fn progress_snapshot_funnel_drives_keep_awake() {
 #[test]
 fn terminal_event_arms_reevaluate_keep_awake() {
     let src = bridge_src();
-    for sig in ["fn handle_sync_stopped(", "fn handle_sync_reset(", "fn handle_sync_error("] {
+    for sig in ["fn handle_sync_stopped(", "fn handle_sync_reset(", "fn clear_after_failed_cycle("] {
         let body = fn_body(&src, sig);
         assert!(
             body.contains("reevaluate_keep_awake"),
             "{sig}..) must re-evaluate keep-awake so the sleep assertion cannot outlive the transfers",
+        );
+    }
+}
+
+/// Every `SyncError` arm that ends a cycle goes through the one shared
+/// clear, so the generic and unmounted-root arms cannot drift apart again.
+#[test]
+fn every_failed_cycle_arm_runs_the_shared_clear() {
+    let src = bridge_src();
+    for sig in ["pub(crate) fn handle_sync_error(", "fn handle_root_not_mounted("] {
+        let body = fn_body(&src, sig);
+        assert!(
+            body.contains("clear_after_failed_cycle("),
+            "{sig}..) must run the shared failed-cycle clear",
+        );
+        assert!(
+            !body.contains("credits_exhausted.clear("),
+            "{sig}..) must not inline its own copy of the clears",
         );
     }
 }
