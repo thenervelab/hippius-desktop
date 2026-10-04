@@ -79,6 +79,7 @@ Every foreign hcfs type that crosses the boundary is pinned next to where it cro
 | `RemoteFileInfo` | `sync/remote.rs` |
 | `SyncEngineHealth` / `ConnectivityStatus` | `sync/status.rs` (a variant rename would HIDE an outage) |
 | `ShareProgress` / `SharePhase` | `shares/commands.rs` |
+| Mass-delete hold (`MassDeleteSide`, `MassDeleteRequestError` kinds, `HoldState`, `RestoreRefusal`, the `RootNotMounted` message the error string is classified by) | `tests/hcfs_contract.rs` |
 
 Desktop-owned FE-facing types are pinned next to where they live in the `sync/files/` split (`UserFileEntry` camelCase incl. the `type`/`fileId` keys in `user_files.rs`; the `GroupedListing` camelCase / `FileEntry` snake_case mixed split in `listing.rs`).
 
