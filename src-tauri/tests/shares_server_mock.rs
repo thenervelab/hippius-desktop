@@ -1279,10 +1279,11 @@ struct UploadMock {
     can_upload: serde_json::Value,
     seal_expires_at: Option<&'static str>,
     on_first_chunk: OnFirstChunk,
-    /// A still-downloading file that grows while the first declare is
-    /// answered: before any file can finish, so strictly between the scan
-    /// and the upload of a file that starts only after another finished.
-    grow_on_first_declare: Option<std::path::PathBuf>,
+    /// A still-downloading file, grown while its OWN declare is answered:
+    /// after the scan and after the client stamped it, before the client
+    /// reads it. Keyed by the declared `relative_path`, so it does not
+    /// depend on how many files the client uploads at once.
+    grow_on_declare: Option<(&'static str, std::path::PathBuf)>,
     /// See [`MockOptions::cancel_on_capabilities`].
     cancel_on_capabilities: Option<CancellationToken>,
     /// A refused open: its status and JSON body. `None` mints the link.
@@ -1301,7 +1302,7 @@ impl Default for UploadMock {
             can_upload: json!({ "result": true, "error": null }),
             seal_expires_at: Some("2026-10-09T00:00:00+00:00"),
             on_first_chunk: OnFirstChunk::Nothing,
-            grow_on_first_declare: None,
+            grow_on_declare: None,
             cancel_on_capabilities: None,
             open_refusal: None,
             cancel_on_seal: None,
@@ -1384,7 +1385,7 @@ fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
     let (files, chunks, wraps) = (rec.files.clone(), rec.chunks.clone(), rec.folder_wraps.clone());
     let (chunk_files, complete_files, complete_chunks, completes) =
         (rec.files.clone(), rec.files.clone(), rec.chunks.clone(), rec.file_completes.clone());
-    let grow_pending = Arc::new(Mutex::new(mock.grow_on_first_declare.clone()));
+    let grow_on_declare = mock.grow_on_declare.clone();
     let fired = Arc::new(AtomicBool::new(false));
     let hook = mock.on_first_chunk.clone();
     let wrap_cancel = mock.cancel_on_wrap.clone();
@@ -1392,10 +1393,10 @@ fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
         .route(
             "/v1/folder-shares/uploads/{token_hash}/files",
             post(move |Path(_): Path<String>, Json(body): Json<serde_json::Value>| async move {
-                // Every declare takes this lock, so none is answered before
-                // the grow has landed.
-                if let Some(path) = grow_pending.lock().unwrap().take() {
-                    grow(&path);
+                if let Some((relative_path, path)) = &grow_on_declare
+                    && body["relative_path"] == *relative_path
+                {
+                    grow(path);
                 }
                 let file_id = declare_file(&files, body);
                 (StatusCode::CREATED, Json(json!({ "file_id": file_id }))).into_response()
@@ -1997,11 +1998,10 @@ async fn a_server_without_uploaded_copies_refuses_before_any_work() {
 }
 
 /// `Downloads-in-progress/` with four finished files and one still being
-/// written (`movie.part`, last in name order). The client uploads four files
-/// at once, so `movie.part` starts only after one of the others has been
-/// declared, sent and completed. Growing it while the first declare is
-/// answered, under a lock every declare takes, lands strictly between the
-/// scan and its own upload.
+/// written (`movie.part`). The test grows `movie.part` while its own declare
+/// is answered: hcfs-client stamps a file before declaring it and re-stamps
+/// it after reading it, so a grow there lands strictly between the two, in
+/// whatever order and with however many files at once the client uploads.
 fn folder_with_a_growing_file() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let root = dir.path().join("Downloads-in-progress");
@@ -2022,7 +2022,7 @@ async fn a_file_that_changes_mid_upload_fails_the_share_naming_it() {
     let account = "5UploadGrowAcct";
     let (_tree, root, growing) = folder_with_a_growing_file();
     let mock = UploadMock {
-        grow_on_first_declare: Some(growing),
+        grow_on_declare: Some(("movie.part", growing)),
         ..UploadMock::default()
     };
     let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
@@ -2041,10 +2041,21 @@ async fn a_file_that_changes_mid_upload_fails_the_share_naming_it() {
         "the open link is aborted"
     );
     assert_eq!(*rec.seals.lock().unwrap(), 0, "a copy with a changed file is never sealed");
-    let declared: Vec<serde_json::Value> = rec.files.lock().unwrap().iter().map(|f| f["relative_path"].clone()).collect();
+    let changed_id = rec
+        .files
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|f| f["relative_path"] == "movie.part")
+        .and_then(|f| f["file_id"].as_i64())
+        .expect("movie.part was declared before it grew");
     assert!(
-        !declared.contains(&json!("movie.part")),
-        "nothing of the changed file was declared: {declared:?}"
+        !rec.chunks.lock().unwrap().iter().any(|chunk| chunk.file_id == changed_id),
+        "not a byte of the changed file was sent"
+    );
+    assert!(
+        !rec.file_completes.lock().unwrap().contains(&changed_id),
+        "the changed file was never completed"
     );
 }
 
