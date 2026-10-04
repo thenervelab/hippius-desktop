@@ -325,12 +325,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   choose, and opening the notification brings the banner back.
 
 - **Share a folder from Finder as a link, even one outside your Hippius
-  drives.** Hippius uploads a copy of the folder for the link, and the copy
-  counts toward your storage until the link expires or you revoke it, when
-  it is removed. The folder's size is shown before you confirm when it can
-  be measured quickly. A link holds up to 50,000 files, each up to about
-  5 GB. Shared Links marks such a link "Uploaded copy",
-  since later changes to the folder are not in it.
+  drives.** Hippius uploads a copy of the folder for the link, leaving out
+  hidden files and symbolic links, as a drive does. The copy counts toward
+  your storage until the link expires or you revoke it, and is then removed.
+  Later changes to the folder are not in the copy, so Shared Links marks the
+  link "Uploaded copy". The share window shows the folder's size when it can
+  measure it quickly. A link holds up to 50,000 files, each up to about 5 GB.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a

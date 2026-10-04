@@ -2,6 +2,8 @@
 paths:
   - "src-tauri/src/shares/**"
   - "src-tauri/src/shared_drives/**"
+  # Routes Finder shares into both folder funnels (in-drive link, uploaded copy).
+  - "src-tauri/src/finder_bridge/dispatch.rs"
   - "src-tauri/src/sync/drive/identity.rs"
   # The four land mines live in sync/, not shares/ — these files must carry
   # the member-drive rules with them.
@@ -470,7 +472,17 @@ Gates: `require_folder_shares_supported` (the IPC's own authority, independent o
 
 Two zip-era guards are deliberately ABSENT: no settlement check (the recipient browses the SERVER's state, so a half-synced local copy cannot corrupt the share) and no billing-eligibility gate (nothing is uploaded).
 
-The file key comes from the canonical `sync::remote::encryption_key_for_label` chain, and the client must be DRIVE-scoped (`sync::remote::build_client`) — the share flow's account-scoped label-less client is refused with `MissingFolderHash` because `create_folder_share` sends the folder hash from the client CONFIG. An OUTSIDE-drive folder from Finder is refused ("Only folders inside a synced Hippius drive…"). The create-path 404 `folder_not_found` slug maps to a "let it finish a sync" `Validation`, discriminated from a bare 404 (feature-off server).
+The file key comes from the canonical `sync::remote::encryption_key_for_label` chain, and the client must be DRIVE-scoped (`sync::remote::build_client`) — the share flow's account-scoped label-less client is refused with `MissingFolderHash` because `create_folder_share` sends the folder hash from the client CONFIG. An OUTSIDE-drive folder from Finder never reaches this funnel; it is uploaded as a copy (next section). The create-path 404 `folder_not_found` slug maps to a "let it finish a sync" `Validation`, discriminated from a bare 404 (feature-off server).
+
+### Outside-drive folder from Finder: an uploaded copy
+
+A folder outside every drive has no server-side records to browse, so `finder_bridge/dispatch.rs::share_for_path` sends it to `shares/outside_folder.rs::share_outside_folder`, which uploads a copy under the link's own key (hcfs `create_upload_folder_share`); the server deletes the copy when the link expires or is revoked.
+
+- **Funnel order:** capability `upload_folder_shares` → display name → `folder_scan` (drive-upload skip rules from `pathops::visible_children`, off the main thread via `scan_until_dropped`) → `require_eligible(Sharing, scan.total_bytes)` → `create_upload_folder_share` → owner wrap. An older server refuses before the disk is walked, and the quota gate needs the scan's real bytes, so an over-quota account uploads nothing. Pinned by `the_funnel_gates_before_it_uploads`.
+- **Cancel is cooperative on this path only.** The modal's token goes INTO the upload so the client can `DELETE` the half-built link; a dropped future sends nothing and leaves the link and its quota hold until the server's ~1 h idle reaper. Steps before the open are abandoned by `before_open` (nothing exists server-side yet). Every other Finder mint is one request and stays dropped by `dispatch::until_cancelled`. Pinned by `the_funnel_hands_the_cancel_token_to_the_upload`, `the_finder_outside_folder_branch_uploads_a_copy_with_cooperative_cancel`, `the_finder_confirm_hands_the_cancel_token_to_the_mint` and `a_finder_cancel_mid_upload_aborts_the_half_built_link`.
+- **The owner wrap is the desktop's job and is sealed like a drive folder link's:** `owner_wrap::push_folder_for_account` with the master mnemonic, the signed-in account (login) address and the row's `token_hash`, because the console opens folder wraps with its session address and the client pushes no wrap. A missing keystore secret is logged, not fatal: the link already exists. Pinned by `an_uploaded_copy_is_wrapped_exactly_like_a_drive_folder_link`.
+- **The chooser gets two Rust-decided flags on `finder:share-choosing`:** `isFolder` (any folder: folder wording) and `isFolderCopy` (outside every drive: the copy notice, the scan's size within a 2 s budget, a progress bar). An in-drive Finder folder (`isFolder && !isFolderCopy`) is worded exactly like an in-app folder link, live-link notice and spinner included, because the copy notice would be false for it. Pinned by `finder_share_choosing_wire_shape`, `the_chooser_treats_an_in_drive_folder_as_a_live_link`, `the_chooser_treats_an_outside_folder_as_a_sized_copy` and `ShareFileModal.test.tsx`.
+- **Quitting mid-share cancels and briefly holds the exit.** `AppState::on_exit_requested` is a three-state grace (`Idle` → `Holding` → `Released`) under the same lock as the running mints: the first exit request with mints running cancels them all and starts a ≤3 s wait, every request while `Holding` is held (Linux and Windows send two per window close), and a share confirmed during the grace starts cancelled. A restart always passes, since Tauri ignores `prevent_exit` for it. Pinned by `every_exit_request_during_the_grace_is_held`, `a_share_started_during_the_grace_is_refused` and the other grace tests in `app_state.rs`.
 
 ### Member mint (hcfs #458)
 
