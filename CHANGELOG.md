@@ -124,6 +124,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Sharing a folder inside a drive from Finder says it shares a folder.**
+  The share window used to describe it as a file and show an upload bar;
+  it now says the link always shows the folder's current contents.
+
 - **Uploading a folder with many subfolders into a drive uploads everything
   inside it.** Before, only the files at the top of the folder went up. A
   folder nested too deeply to upload is now named instead of left behind.
@@ -320,11 +324,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   the files once you confirm how many; Decide later keeps them safe until you
   choose, and opening the notification brings the banner back.
 
-- **Share any folder from Finder as a link, even one outside your Hippius
-  drives.** Hippius uploads a copy for the link, shows its size before you
-  confirm, and removes the copy when the link expires or you revoke it.
-  Shared Links marks such a link "Uploaded copy", since later changes to the
-  folder are not in it.
+- **Share a folder from Finder as a link, even one outside your Hippius
+  drives.** Hippius uploads a copy of the folder for the link, and the copy
+  counts toward your storage until the link expires or you revoke it, when
+  it is removed. The folder's size is shown before you confirm when it can
+  be measured quickly. A link holds up to 50,000 files and folders, each
+  file up to about 5 GB. Shared Links marks such a link "Uploaded copy",
+  since later changes to the folder are not in it.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a
