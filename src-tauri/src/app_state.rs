@@ -317,6 +317,11 @@ pub struct AppState {
     /// again.
     #[cfg(any(unix, windows))]
     finder_exit_grace_started: std::sync::atomic::AtomicBool,
+    /// Id of the most recent Finder click. The chooser measures a folder
+    /// for up to two seconds before it opens, so an earlier click can finish
+    /// measuring after a later one; only the latest may open the chooser.
+    #[cfg(any(unix, windows))]
+    latest_finder_share: Mutex<Option<String>>,
 }
 
 impl Default for AppState {
@@ -413,6 +418,8 @@ impl AppState {
             finder_share_cancels: Mutex::new(HashMap::new()),
             #[cfg(any(unix, windows))]
             finder_exit_grace_started: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(any(unix, windows))]
+            latest_finder_share: Mutex::new(None),
         }
     }
 
@@ -449,7 +456,19 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), req);
+        *self.latest_finder_share.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id.clone());
         id
+    }
+
+    /// Whether `id` is still the most recent Finder click, i.e. may open the
+    /// chooser. A superseded click's chooser would replace the newer one.
+    #[cfg(any(unix, windows))]
+    pub fn finder_share_is_latest(&self, id: &str) -> bool {
+        self.latest_finder_share
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_deref()
+            == Some(id)
     }
 
     /// Take (remove) a pending Finder share request by id. Single-use: a second
@@ -815,6 +834,28 @@ mod tests {
         assert!(state.take_finder_share(&id).is_none(), "second take must be None");
         // An unknown id is also None (no panic, no cross-talk).
         assert!(state.take_finder_share("does-not-exist").is_none());
+    }
+
+    /// Two quick right-clicks: the chooser is opened only for the later
+    /// one, however long the earlier one took to measure.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn only_the_latest_finder_click_opens_the_chooser() {
+        use crate::finder_bridge::dispatch::PendingFinderShare;
+        use std::path::PathBuf;
+
+        let state = AppState::new();
+        let mk = |name: &str| PendingFinderShare {
+            path: PathBuf::from(format!("/x/{name}")),
+            name: name.into(),
+        };
+        let a = state.store_finder_share(mk("a"));
+        assert!(state.finder_share_is_latest(&a));
+
+        let b = state.store_finder_share(mk("b"));
+        assert!(!state.finder_share_is_latest(&a), "a later click supersedes a");
+        assert!(state.finder_share_is_latest(&b));
+        assert!(!state.finder_share_is_latest("unknown"));
     }
 
     #[cfg(any(unix, windows))]

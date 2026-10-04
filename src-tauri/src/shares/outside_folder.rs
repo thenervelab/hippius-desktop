@@ -26,7 +26,7 @@ use crate::shares::SqliteShareKeystore;
 use crate::shares::capabilities::fetch_capabilities;
 use crate::shares::client::build_account_client;
 use crate::shares::commands::{ShareChoice, ShareLink, console_base_url};
-use crate::shares::folder_scan::{FolderScan, scan_folder};
+use crate::shares::folder_scan::{FolderScan, scan_until_dropped};
 
 /// Refusal on a server without uploaded-copy folder links. The mock-server
 /// suite asserts it verbatim.
@@ -155,13 +155,10 @@ async fn require_upload_folder_shares_supported(state: &AppState, account_id: &s
     Ok(())
 }
 
-/// The scan is up to 50,000 stats, so it runs on the blocking pool and never
-/// on the async worker or the main thread.
+/// The scan, off the main thread. A cancel drops this future (see
+/// [`before_open`]), which also stops the walk.
 async fn scan_off_main_thread(folder: &Path) -> Result<FolderScan> {
-    let folder = folder.to_path_buf();
-    tokio::task::spawn_blocking(move || scan_folder(&folder))
-        .await
-        .map_err(|e| scan_task_failed(&e))?
+    scan_until_dropped(folder.to_path_buf()).await.map_err(|e| scan_task_failed(&e))?
 }
 
 /// The scan task panicked or was cancelled at shutdown. The modal shows the

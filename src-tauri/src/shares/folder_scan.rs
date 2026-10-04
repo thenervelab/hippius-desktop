@@ -29,6 +29,8 @@
 //! to stay byte-identical to it.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use hcfs_client::client::folder_share::UploadFolderEntry;
 use hcfs_shared::path_validator::{self, PathValidationError};
@@ -39,6 +41,7 @@ use hcfs_shared::shares::{
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{AppError, Result};
+use crate::shares::outside_folder::SHARE_CANCELLED;
 use crate::sync::files::pathops::{VisibleKind, visible_children};
 
 /// Bounds one scan enforces. A struct so tests can shrink them; production
@@ -79,10 +82,39 @@ pub(crate) struct FolderScan {
     pub total_bytes: u64,
 }
 
-/// Scan `root` with the production limits. Blocking; run it on
-/// `spawn_blocking`.
-pub(crate) fn scan_folder(root: &Path) -> Result<FolderScan> {
-    scan_folder_with(root, &ScanLimits::SHARED_FOLDER)
+/// Scan `root` with the production limits on the blocking pool, stopping
+/// the walk once this future is dropped.
+///
+/// The scan is up to 50,000 stats, so it never runs on an async worker or
+/// the main thread. A blocking task cannot be aborted, so without the stop
+/// flag a share cancelled mid-scan, or a chooser that stopped waiting for a
+/// size, would leave the walk running to the end for nobody, and repeated
+/// clicks would stack such walks on the pool.
+///
+/// # Errors
+///
+/// The outer error is the task failing (a panic, or the runtime shutting
+/// down); the inner one is [`scan_folder`]'s.
+pub(crate) async fn scan_until_dropped(root: PathBuf) -> std::result::Result<Result<FolderScan>, tokio::task::JoinError> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let _stop_on_drop = StopOnDrop(Arc::clone(&stop));
+    tokio::task::spawn_blocking(move || scan_folder(&root, &stop)).await
+}
+
+/// Raises the walk's stop flag when the future awaiting it is dropped (or
+/// completes, when the flag no longer matters).
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Scan `root` with the production limits, giving up once `stop` is set.
+/// Blocking; [`scan_until_dropped`] runs it off the async workers.
+pub(crate) fn scan_folder(root: &Path, stop: &AtomicBool) -> Result<FolderScan> {
+    scan_folder_with(root, &ScanLimits::SHARED_FOLDER, stop)
 }
 
 /// Scan `root` for an uploaded-copy link.
@@ -97,12 +129,19 @@ pub(crate) fn scan_folder(root: &Path) -> Result<FolderScan> {
 /// [`AppError::Validation`], naming the item where there is one, for an
 /// unreadable directory, a name the link cannot hold (or a path too deep or
 /// long), a file over the size cap, too many files, too many directories,
-/// empty-folder names too long to send together, or a folder with no files.
-pub(crate) fn scan_folder_with(root: &Path, limits: &ScanLimits) -> Result<FolderScan> {
+/// empty-folder names too long to send together, or a folder with no files;
+/// [`SHARE_CANCELLED`] once `stop` is set.
+pub(crate) fn scan_folder_with(root: &Path, limits: &ScanLimits, stop: &AtomicBool) -> Result<FolderScan> {
     let mut walk = Walk::new(limits);
     let mut pending = vec![(root.to_path_buf(), String::new())];
 
     while let Some((dir, relative)) = pending.pop() {
+        // Checked per directory: one listing is the unit of work, and a
+        // flat folder's listing is bounded by the file cap anyway.
+        // Relaxed: the flag carries no data, only "stop soon".
+        if stop.load(Ordering::Relaxed) {
+            return Err(AppError::Validation(SHARE_CANCELLED.into()));
+        }
         let mut children = visible_children(&dir).map_err(|e| unreadable(&relative, &e))?;
         if children.is_empty() {
             // The root itself is the link, not an entry of it.
@@ -357,6 +396,9 @@ mod tests {
 
     use super::*;
 
+    /// A stop flag nobody raises.
+    static RUN: AtomicBool = AtomicBool::new(false);
+
     fn limits() -> ScanLimits {
         ScanLimits::SHARED_FOLDER
     }
@@ -393,6 +435,35 @@ mod tests {
         (dir, root)
     }
 
+    /// A scan nobody waits for any more (a cancelled share, a chooser past
+    /// its budget) gives up instead of walking on through the tree.
+    #[test]
+    fn a_stopped_scan_gives_up() {
+        let (_dir, root) = tree();
+        let stop = AtomicBool::new(true);
+
+        let err = scan_folder(&root, &stop).expect_err("stopped");
+
+        assert_eq!(validation(&err), SHARE_CANCELLED);
+    }
+
+    /// Dropping the scan's future is what raises the flag the blocking walk
+    /// reads: the walk itself cannot be dropped.
+    #[test]
+    fn dropping_the_scan_future_raises_the_stop_flag() {
+        let stop = Arc::new(AtomicBool::new(false));
+        drop(StopOnDrop(Arc::clone(&stop)));
+        assert!(stop.load(Ordering::Relaxed));
+    }
+
+    /// The scan finishes when nobody stops it.
+    #[tokio::test]
+    async fn an_unstopped_scan_runs_off_the_async_worker() {
+        let (_dir, root) = tree();
+        let scan = scan_until_dropped(root).await.expect("joined").expect("scan");
+        assert_eq!(scan.total_bytes, 1_005);
+    }
+
     /// Paths are relative to the shared folder (its own name is the link's
     /// display name), files carry their size, and only EMPTY folders are
     /// listed: `sub/` and `sub/deeper/` are implied by `b.bin`. A folder
@@ -406,7 +477,7 @@ mod tests {
         std::fs::create_dir_all(root.join("only-hidden")).expect("dir");
         std::fs::write(root.join("only-hidden/.keep"), b"").expect("hidden child");
 
-        let scan = scan_folder(&root).expect("scan");
+        let scan = scan_folder(&root, &RUN).expect("scan");
         assert_eq!(paths(&scan), vec!["d:empty", "d:only-hidden", "f:a.txt", "f:sub/deeper/b.bin"]);
         assert_eq!(scan.file_count, 2);
         assert_eq!(scan.total_bytes, 1_005);
@@ -443,7 +514,7 @@ mod tests {
             std::fs::write(root.join(format!("{name}.txt")), b"x").expect("file");
         }
 
-        let scan = scan_folder(&root).expect("scan");
+        let scan = scan_folder(&root, &RUN).expect("scan");
         let order: Vec<String> = scan
             .entries
             .iter()
@@ -469,7 +540,7 @@ mod tests {
         std::os::unix::fs::symlink(root.join("a.txt"), root.join("alias.txt")).expect("file link");
         std::os::unix::fs::symlink(&root, root.join("loop")).expect("dir link");
 
-        let scan = scan_folder(&root).expect("scan");
+        let scan = scan_folder(&root, &RUN).expect("scan");
         assert_eq!(paths(&scan), vec!["d:empty", "f:a.txt", "f:sub/deeper/b.bin"]);
     }
 
@@ -480,12 +551,12 @@ mod tests {
         std::fs::create_dir_all(root.join("also-empty")).expect("dirs");
         std::fs::write(root.join(".DS_Store"), b"x").expect("hidden only");
 
-        let err = scan_folder(&root).expect_err("no files");
+        let err = scan_folder(&root, &RUN).expect_err("no files");
         assert!(validation(&err).contains("no files"), "{err:?}");
 
         let bare = dir.path().join("Bare");
         std::fs::create_dir_all(&bare).expect("dir");
-        let err = scan_folder(&bare).expect_err("nothing at all");
+        let err = scan_folder(&bare, &RUN).expect_err("nothing at all");
         assert!(validation(&err).contains("no files"), "{err:?}");
     }
 
@@ -495,10 +566,10 @@ mod tests {
     fn refuses_past_the_file_cap_and_accepts_at_it() {
         let (_dir, root) = tree();
         let at_cap = ScanLimits { files: 2, ..limits() };
-        assert!(scan_folder_with(&root, &at_cap).is_ok(), "exactly at the cap");
+        assert!(scan_folder_with(&root, &at_cap, &RUN).is_ok(), "exactly at the cap");
 
         let past = ScanLimits { files: 1, ..limits() };
-        let err = scan_folder_with(&root, &past).expect_err("one past");
+        let err = scan_folder_with(&root, &past, &RUN).expect_err("one past");
         let message = validation(&err);
         assert!(message.contains("more than 1 file,"), "{message}");
     }
@@ -508,7 +579,7 @@ mod tests {
     fn a_folder_cap_of_one_is_singular() {
         let (_dir, root) = tree();
         let past = ScanLimits { dirs: 1, ..limits() };
-        let err = scan_folder_with(&root, &past).expect_err("past the cap");
+        let err = scan_folder_with(&root, &past, &RUN).expect_err("past the cap");
         let message = validation(&err);
         assert!(message.contains("more than 1 folder inside"), "{message}");
     }
@@ -528,10 +599,10 @@ mod tests {
     fn refuses_past_the_folder_cap_counting_every_ancestor() {
         let (_dir, root) = tree();
         let at_cap = ScanLimits { dirs: 3, ..limits() };
-        assert!(scan_folder_with(&root, &at_cap).is_ok(), "empty, sub, sub/deeper");
+        assert!(scan_folder_with(&root, &at_cap, &RUN).is_ok(), "empty, sub, sub/deeper");
 
         let past = ScanLimits { dirs: 2, ..limits() };
-        let err = scan_folder_with(&root, &past).expect_err("one past");
+        let err = scan_folder_with(&root, &past, &RUN).expect_err("one past");
         let message = validation(&err);
         assert!(message.contains("more than 2 folders"), "{message}");
         assert!(!message.contains("file"), "a folder limit must not say files: {message}");
@@ -547,7 +618,7 @@ mod tests {
         std::fs::create_dir_all(root.join("sub/side")).expect("empty beside a file's parent");
         std::fs::write(root.join("x/top.txt"), b"t").expect("file beside an empty chain");
 
-        let scan = scan_folder(&root).expect("scan");
+        let scan = scan_folder(&root, &RUN).expect("scan");
         // Only the deepest empty folder of a chain is listed, once: `x` and
         // `x/y` are implied by it (and `x` by `x/top.txt` too).
         assert_eq!(
@@ -570,12 +641,12 @@ mod tests {
         assert_eq!(closure, 7, "empty, sub, sub/deeper, sub/side, x, x/y, x/y/z");
 
         let at = ScanLimits { dirs: closure, ..limits() };
-        assert!(scan_folder_with(&root, &at).is_ok());
+        assert!(scan_folder_with(&root, &at, &RUN).is_ok());
         let under = ScanLimits {
             dirs: closure - 1,
             ..limits()
         };
-        assert!(scan_folder_with(&root, &under).is_err());
+        assert!(scan_folder_with(&root, &under, &RUN).is_err());
     }
 
     /// A chain of empty folders beside a single file is one `Dir` entry,
@@ -587,7 +658,7 @@ mod tests {
         std::fs::create_dir_all(root.join("a/b/c")).expect("empty chain");
         std::fs::write(root.join("only.txt"), b"x").expect("file");
 
-        let scan = scan_folder(&root).expect("scan");
+        let scan = scan_folder(&root, &RUN).expect("scan");
         assert_eq!(paths(&scan), vec!["d:a/b/c", "f:only.txt"]);
     }
 
@@ -600,13 +671,13 @@ mod tests {
             file_ciphertext: drive_framed_ciphertext_size(1_000),
             ..limits()
         };
-        assert!(scan_folder_with(&root, &fits).is_ok(), "b.bin's ciphertext is exactly the cap");
+        assert!(scan_folder_with(&root, &fits, &RUN).is_ok(), "b.bin's ciphertext is exactly the cap");
 
         let over = ScanLimits {
             file_ciphertext: drive_framed_ciphertext_size(1_000) - 1,
             ..limits()
         };
-        let err = scan_folder_with(&root, &over).expect_err("one byte over");
+        let err = scan_folder_with(&root, &over, &RUN).expect_err("one byte over");
         assert!(validation(&err).contains("\u{201c}sub/deeper/b.bin\u{201d}"), "{err:?}");
     }
 
@@ -622,12 +693,12 @@ mod tests {
             dirs_bytes_budget: budget,
             ..limits()
         };
-        assert!(scan_folder_with(&root, &at).is_ok());
+        assert!(scan_folder_with(&root, &at, &RUN).is_ok());
         let under = ScanLimits {
             dirs_bytes_budget: budget - 1,
             ..limits()
         };
-        let err = scan_folder_with(&root, &under).expect_err("one byte over");
+        let err = scan_folder_with(&root, &under, &RUN).expect_err("one byte over");
         assert!(validation(&err).contains("empty folders"), "{err:?}");
     }
 
@@ -653,7 +724,7 @@ mod tests {
             std::fs::write(root.join("ok.txt"), b"x").expect("fine file");
             std::fs::write(root.join("in").join(name), b"x").expect("odd name");
 
-            let err = scan_folder(&root).expect_err(name);
+            let err = scan_folder(&root, &RUN).expect_err(name);
             let message = validation(&err);
             assert!(message.contains(&format!("\u{201c}in/{shown}\u{201d}")), "{message}");
             assert!(message.contains(reason), "{message}");
@@ -670,7 +741,7 @@ mod tests {
         std::fs::create_dir_all(root.join("a\\b")).expect("dir");
         std::fs::write(root.join("a\\b/inner.txt"), b"x").expect("file");
 
-        let err = scan_folder(&root).expect_err("backslash folder");
+        let err = scan_folder(&root, &RUN).expect_err("backslash folder");
         assert!(validation(&err).contains("\u{201c}a\\b\u{201d}"), "{err:?}");
     }
 
@@ -684,10 +755,10 @@ mod tests {
         let deepest = root.join(segments.join("/"));
         std::fs::create_dir_all(&deepest).expect("64 levels");
         std::fs::write(root.join("top.txt"), b"x").expect("a file");
-        assert!(scan_folder(&root).is_ok(), "an empty folder 64 levels down");
+        assert!(scan_folder(&root, &RUN).is_ok(), "an empty folder 64 levels down");
 
         std::fs::write(deepest.join("f.txt"), b"x").expect("65th level");
-        let err = scan_folder(&root).expect_err("65 levels");
+        let err = scan_folder(&root, &RUN).expect_err("65 levels");
         let message = validation(&err);
         assert!(message.contains("/d/f.txt\u{201d}"), "{message}");
         assert!(message.contains("64 folders deep"), "{message}");
@@ -709,7 +780,7 @@ mod tests {
             .next()
             .expect("one child");
 
-        let scan = scan_folder(&root).expect("a decomposed name is valid once normalized");
+        let scan = scan_folder(&root, &RUN).expect("a decomposed name is valid once normalized");
         assert_eq!(paths(&scan), vec![format!("d:{on_disk}/empty"), format!("f:{on_disk}/menu.txt")]);
     }
 
@@ -725,7 +796,7 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
         // Root ignores permissions; the case is unobservable there.
         let readable_anyway = std::fs::read_dir(&locked).is_ok();
-        let result = scan_folder(&root);
+        let result = scan_folder(&root, &RUN);
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("restore");
         if readable_anyway {
             return;
@@ -750,7 +821,7 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o400)).expect("chmod");
         // Root ignores permissions; the case is unobservable there.
         let examinable_anyway = std::fs::symlink_metadata(locked.join("deeper")).is_ok();
-        let result = scan_folder(&root);
+        let result = scan_folder(&root, &RUN);
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("restore");
         if examinable_anyway {
             return;
@@ -776,7 +847,7 @@ mod tests {
             return;
         }
 
-        let err = scan_folder(&root).expect_err("non-UTF-8 name");
+        let err = scan_folder(&root, &RUN).expect_err("non-UTF-8 name");
         let message = validation(&err);
         assert!(message.contains("\u{201c}bad\u{fffd}name.txt\u{201d}"), "{message}");
         assert!(message.contains("Rename"), "{message}");

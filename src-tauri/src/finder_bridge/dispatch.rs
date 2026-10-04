@@ -157,6 +157,14 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
     // about to share. The size is logged too: truncated shares of
     // half-downloaded files were diagnosed from exactly this number.
     let facts = chooser_facts(app.state::<AppState>().inner(), &clicked).await;
+    // Measuring a folder takes up to `FOLDER_SIZE_BUDGET`, so a later click
+    // can be ready first. Its chooser must stay; this request is dropped,
+    // since nobody can confirm a chooser that never opened.
+    if !app.state::<AppState>().finder_share_is_latest(&id) {
+        app.state::<AppState>().take_finder_share(&id);
+        info!(request_id = %id, "finder bridge: a later click superseded this share; chooser not opened");
+        return;
+    }
     info!(
         request_id = %id,
         path = %clicked.display(),
@@ -362,13 +370,11 @@ async fn is_outside_every_drive(state: &AppState, clicked: &Path) -> bool {
 /// share runs, so the number shown is the number billed.
 ///
 /// Bounded twice: the scan refuses past the link's file and directory caps,
-/// and the chooser stops waiting after [`FOLDER_SIZE_BUDGET`] (a scan still
-/// running then finishes on the blocking pool, still capped). A refusal
-/// (empty, too many items) reads as "no size" here; the confirm reports it
-/// with its message.
+/// and the chooser stops waiting after [`FOLDER_SIZE_BUDGET`], which drops
+/// the scan's future and so stops the walk too. A refusal (empty, too many
+/// items) reads as "no size" here; the confirm reports it with its message.
 async fn outside_folder_size(folder: &Path) -> Option<u64> {
-    let folder = folder.to_path_buf();
-    let scan = tokio::task::spawn_blocking(move || crate::shares::folder_scan::scan_folder(&folder));
+    let scan = crate::shares::folder_scan::scan_until_dropped(folder.to_path_buf());
     match tokio::time::timeout(FOLDER_SIZE_BUDGET, scan).await {
         Ok(Ok(Ok(scan))) => Some(scan.total_bytes),
         _ => None,
@@ -637,6 +643,11 @@ mod tests {
             "handle must park the request via store_finder_share"
         );
         assert!(body.contains("\"finder:share-choosing\""), "handle must emit finder:share-choosing");
+        let latest_at = body.find("finder_share_is_latest(").expect("handle must drop a superseded click");
+        assert!(
+            latest_at < body.find("\"finder:share-choosing\"").expect("emit"),
+            "a superseded click is dropped before the emit, or its chooser replaces the newer one"
+        );
         assert!(
             !body.contains("mint_confirmed("),
             "handle must NOT mint — minting is deferred to the confirm command"
