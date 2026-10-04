@@ -96,6 +96,7 @@ const CHOOSING: FinderShareState = {
   name: "big-movie.mov",
   sizeBytes: null,
   modifiedSecsAgo: null,
+  isFolder: false,
   isFolderCopy: false,
 };
 
@@ -105,7 +106,15 @@ const FOLDER_COPY: FinderShareState = {
   ...CHOOSING,
   name: "T2-KD",
   sizeBytes: 6_765_321,
+  isFolder: true,
   isFolderCopy: true,
+};
+
+// A Finder folder inside a drive: a live link, minted with one request.
+const FINDER_DRIVE_FOLDER: FinderShareState = {
+  ...CHOOSING,
+  name: "Photos",
+  isFolder: true,
 };
 
 /**
@@ -560,6 +569,22 @@ describe("ShareFileModal", () => {
     expect(screen.getByText(/view and download this folder/i)).toBeInTheDocument();
     // A copy is NOT a live link — that notice would be false here.
     expect(screen.queryByText(/always shows the current contents/i)).not.toBeInTheDocument();
+  });
+
+  it("words a Finder folder in a drive as a live folder link", () => {
+    render(withFinderState(<ShareFileModal />, FINDER_DRIVE_FOLDER));
+    expect(screen.getByText(/view and download this folder/i)).toBeInTheDocument();
+    expect(screen.getByText(/always shows the current contents/i)).toBeInTheDocument();
+    expect(screen.queryByText(/uploads a copy of this folder/i)).not.toBeInTheDocument();
+  });
+
+  it("waits on a spinner, not a progress bar, for a Finder folder in a drive", async () => {
+    invokeMock.mockReturnValueOnce(new Promise(() => {}));
+    render(withFinderState(<ShareFileModal />, FINDER_DRIVE_FOLDER));
+    confirmChooser();
+
+    expect(await screen.findByText(/creating share link/i)).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
   it("does not show the copy notice for a file", () => {

@@ -2,11 +2,11 @@
 //
 // Lifecycle:
 //
-//   `running`  — mint IPC in flight. For a FILE: progress bar + filename
-//                (indeterminate sweep until real progress arrives). For a
-//                FOLDER: a plain spinner — the mint is one metadata POST
-//                with no encrypt/upload phases, so a bar would imply work
-//                that isn't happening.
+//   `running`  — mint IPC in flight. For a FILE or a folder COPY: progress
+//                bar + filename (indeterminate sweep until real progress
+//                arrives). For a FOLDER in a drive: a plain spinner — the
+//                mint is one metadata POST with no encrypt/upload phases, so
+//                a bar would imply work that isn't happening.
 //   `done`     — link is ready. Read-only URL with an inline copy
 //                button, auto-copied to clipboard, Open / Close /
 //                Revoke actions.
@@ -159,6 +159,14 @@ export default function ShareFileModal() {
   // chooser must not show the live-link notice for one.
   const isFolderCopy =
     finderShare?.kind === "choosing" && finderShare.isFolderCopy;
+  // A folder that gets a LIVE link: one in a drive, from either entry point.
+  // It shares the live-link notice and the minting spinner; a folder copy
+  // gets neither (it is a snapshot, and its upload has real progress).
+  const isLiveFolder =
+    (target?.file.isFolder ?? false) ||
+    (finderShare?.kind === "choosing" &&
+      finderShare.isFolder &&
+      !finderShare.isFolderCopy);
 
   const close = useCallback(() => {
     // Release a still-parked Finder request (chooser open, or the user bailed).
@@ -369,7 +377,7 @@ export default function ShareFileModal() {
       {state.kind === "choosing" && (
         <ChoosingBody
           filename={filename}
-          isFolder={target?.file.isFolder ?? false}
+          isFolder={isLiveFolder}
           isFolderCopy={isFolderCopy}
           sizeBytes={sourceSizeBytes}
           modifiedSecsAgo={sourceModifiedSecsAgo}
@@ -379,7 +387,7 @@ export default function ShareFileModal() {
       )}
 
       {state.kind === "running" &&
-        (target?.file.isFolder ? (
+        (isLiveFolder ? (
           <MintingBody filename={filename} onCancel={close} />
         ) : (
           <RunningBody
@@ -446,6 +454,7 @@ function ChoosingBody({
   onCancel,
 }: {
   filename: string;
+  /** A folder that gets a live link (in a drive, never a copy). */
   isFolder: boolean;
   /** The share uploads a copy of an outside folder. */
   isFolderCopy: boolean;

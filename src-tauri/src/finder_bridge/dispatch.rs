@@ -104,6 +104,11 @@ struct FinderShareChoosing {
     /// still-downloading file as of one the user just saved on purpose, so
     /// the chooser cautions and lets them proceed.
     modified_secs_ago: Option<u64>,
+    /// The clicked path is a folder. With `is_folder_copy` false it is in a
+    /// drive and gets a live link, so the chooser words it as a folder, says
+    /// the link shows the current contents, and waits with a spinner: the
+    /// mint is one request with no upload to show progress for.
+    is_folder: bool,
     /// The clicked path is a folder outside every drive, so confirming
     /// UPLOADS A COPY of it (removed when the link ends) rather than minting
     /// a live link. Rust decides this; the chooser only says so, because the
@@ -170,6 +175,7 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
         path = %clicked.display(),
         size_bytes = ?facts.size_bytes,
         modified_secs_ago = ?facts.modified_secs_ago,
+        is_folder = facts.is_folder,
         is_folder_copy = facts.is_folder_copy,
         "finder bridge: share requested; opening chooser",
     );
@@ -183,6 +189,7 @@ async fn handle_share(app: AppHandle, clicked: PathBuf) {
             name,
             size_bytes: facts.size_bytes,
             modified_secs_ago: facts.modified_secs_ago,
+            is_folder: facts.is_folder,
             is_folder_copy: facts.is_folder_copy,
         },
     );
@@ -326,6 +333,8 @@ struct ChooserFacts {
     size_bytes: Option<u64>,
     /// Seconds since the clicked path was last modified, when known.
     modified_secs_ago: Option<u64>,
+    /// The clicked path is a folder, in a drive or not.
+    is_folder: bool,
     /// Confirming uploads a copy of an outside folder.
     is_folder_copy: bool,
 }
@@ -334,7 +343,8 @@ struct ChooserFacts {
 /// only folder share that uploads (and bills) bytes.
 async fn chooser_facts(state: &AppState, clicked: &Path) -> ChooserFacts {
     let (size_bytes, modified_secs_ago) = source_stat(clicked);
-    let is_folder_copy = clicked.is_dir() && is_outside_every_drive(state, clicked).await;
+    let is_folder = clicked.is_dir();
+    let is_folder_copy = is_folder && is_outside_every_drive(state, clicked).await;
     let size_bytes = if is_folder_copy {
         outside_folder_size(clicked).await
     } else {
@@ -343,6 +353,7 @@ async fn chooser_facts(state: &AppState, clicked: &Path) -> ChooserFacts {
     ChooserFacts {
         size_bytes,
         modified_secs_ago,
+        is_folder,
         is_folder_copy,
     }
 }
@@ -437,11 +448,12 @@ mod tests {
             name: "a.txt".into(),
             size_bytes: Some(6_765_321),
             modified_secs_ago: Some(3),
+            is_folder: true,
             is_folder_copy: true,
         })
         .expect("serialize");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
-        let expected: BTreeSet<String> = ["id", "name", "sizeBytes", "modifiedSecsAgo", "isFolderCopy"]
+        let expected: BTreeSet<String> = ["id", "name", "sizeBytes", "modifiedSecsAgo", "isFolder", "isFolderCopy"]
             .into_iter()
             .map(String::from)
             .collect();
@@ -453,6 +465,7 @@ mod tests {
         assert_eq!(json["name"], "a.txt");
         assert_eq!(json["sizeBytes"], 6_765_321u64);
         assert_eq!(json["modifiedSecsAgo"], 3u64);
+        assert_eq!(json["isFolder"], true);
         assert_eq!(json["isFolderCopy"], true);
     }
 
@@ -466,6 +479,7 @@ mod tests {
             name: "gone.txt".into(),
             size_bytes: None,
             modified_secs_ago: None,
+            is_folder: false,
             is_folder_copy: false,
         })
         .expect("serialize");
@@ -574,6 +588,7 @@ mod tests {
 
         let facts = chooser_facts(&state, &tree.path().join("Drive/Photos")).await;
 
+        assert!(facts.is_folder, "the chooser words it as a folder link");
         assert!(!facts.is_folder_copy);
         assert_eq!(facts.size_bytes, None);
     }
@@ -586,6 +601,7 @@ mod tests {
 
         let facts = chooser_facts(&state, &tree.path().join("Outside")).await;
 
+        assert!(facts.is_folder);
         assert!(facts.is_folder_copy);
         assert_eq!(facts.size_bytes, Some(1_200));
     }
@@ -598,6 +614,7 @@ mod tests {
 
         let facts = chooser_facts(&state, &tree.path().join("loose.zip")).await;
 
+        assert!(!facts.is_folder);
         assert!(!facts.is_folder_copy);
         assert_eq!(facts.size_bytes, Some(7_000));
     }

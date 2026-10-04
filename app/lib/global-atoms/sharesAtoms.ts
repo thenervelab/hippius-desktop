@@ -137,6 +137,8 @@ export type FinderShareState = {
   sizeBytes: number | null;
   /** Seconds since the file was last modified; `null` when unreadable. */
   modifiedSecsAgo: number | null;
+  /** The clicked path is a folder (in a drive, unless `isFolderCopy`). */
+  isFolder: boolean;
   /** Outside folder: the share uploads a copy. */
   isFolderCopy: boolean;
 };

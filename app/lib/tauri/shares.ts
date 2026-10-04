@@ -119,6 +119,12 @@ export interface FinderShareChoosing {
   /** Seconds since the file was last modified; `null` when unreadable. */
   modifiedSecsAgo: number | null;
   /**
+   * The clicked path is a folder. Without `isFolderCopy` it is in a drive
+   * and gets a live link: the chooser words it as a folder and the wait is
+   * a spinner, since the mint is one request with nothing to upload.
+   */
+  isFolder: boolean;
+  /**
    * The clicked folder is outside every drive, so confirming uploads a COPY
    * of it (removed when the link ends) instead of minting a live link.
    * Decided in Rust; the chooser only says so.

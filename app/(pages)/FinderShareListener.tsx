@@ -30,7 +30,7 @@ export default function FinderShareListener() {
       [
         "finder:share-choosing",
         (event) => {
-          const { id, name, sizeBytes, modifiedSecsAgo, isFolderCopy } =
+          const { id, name, sizeBytes, modifiedSecsAgo, isFolder, isFolderCopy } =
             event.payload as FinderShareChoosing;
           setFinderShare({
             kind: "choosing",
@@ -41,7 +41,9 @@ export default function FinderShareListener() {
             // showed before. Never invent a 0 — it would read as an empty file.
             sizeBytes: sizeBytes ?? null,
             modifiedSecsAgo: modifiedSecsAgo ?? null,
-            // An older backend never uploads a folder.
+            // An older backend says neither, and reads as a file share,
+            // which is what the chooser showed before.
+            isFolder: isFolder ?? false,
             isFolderCopy: isFolderCopy ?? false,
           });
         },

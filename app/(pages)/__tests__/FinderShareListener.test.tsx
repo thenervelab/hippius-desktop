@@ -52,6 +52,7 @@ describe("FinderShareListener", () => {
         name: "report.pdf",
         sizeBytes: 6_765_321,
         modifiedSecsAgo: 4,
+        isFolder: true,
         isFolderCopy: true,
       },
     });
@@ -62,6 +63,7 @@ describe("FinderShareListener", () => {
       name: "report.pdf",
       sizeBytes: 6_765_321,
       modifiedSecsAgo: 4,
+      isFolder: true,
       isFolderCopy: true,
     });
   });
@@ -83,7 +85,8 @@ describe("FinderShareListener", () => {
       name: "legacy.pdf",
       sizeBytes: null,
       modifiedSecsAgo: null,
-      // An older backend never uploads a folder copy.
+      // An older backend says neither; it reads as a file share, as before.
+      isFolder: false,
       isFolderCopy: false,
     });
   });
