@@ -176,9 +176,7 @@ pub fn validate_mnemonic(mnemonic: String) -> bool {
 /// memory wiping on drop, preventing the seed phrase from lingering in heap
 /// memory after use.
 pub fn generate_mnemonic_internal() -> Result<zeroize::Zeroizing<String>, AppError> {
-    use bip39::{Language, Mnemonic};
-    let mnemonic = Mnemonic::generate_in(Language::English, 12).map_err(|e| AppError::Crypto(format!("Failed to generate mnemonic: {e}")))?;
-    Ok(zeroize::Zeroizing::new(mnemonic.to_string()))
+    crate::auth::mnemonic::generate(crate::auth::mnemonic::MnemonicLength::Twelve)
 }
 
 #[cfg(test)]

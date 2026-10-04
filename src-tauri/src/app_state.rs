@@ -411,9 +411,9 @@ impl AppState {
     /// across an `.await` (axiom 74).
     #[cfg(any(unix, windows))]
     pub fn store_finder_share(&self, req: crate::finder_bridge::dispatch::PendingFinderShare) -> String {
-        use rand::Rng;
-        use rand::distributions::Alphanumeric;
-        let id: String = rand::thread_rng().sample_iter(&Alphanumeric).take(22).map(char::from).collect();
+        use rand::RngExt;
+        use rand::distr::Alphanumeric;
+        let id: String = rand::rng().sample_iter(&Alphanumeric).take(22).map(char::from).collect();
         self.pending_finder_shares
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

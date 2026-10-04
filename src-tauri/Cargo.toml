@@ -128,7 +128,10 @@ tauri-plugin-dialog = "2.6.0"
 # OS notifications for team chat messages (preference-gated in `chat::notify`).
 tauri-plugin-notification = "2"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
-rand = "0.8"
+# Wallet and account mnemonics take their entropy from `rand::rngs::SysRng`
+# (the OS CSPRNG) in `auth::mnemonic`, so this is the newest rand rather
+# than the 0.8 line bip39 2.x still pulls in for hcfs-client/subxt-signer.
+rand = "=0.10.3"
 tauri-plugin-process = "2"
 which = "4.4"
 hostname = "0.4"
@@ -140,7 +143,10 @@ hkdf = "0.12"
 # through the chat stack; `static_secrets` lets the KAT inject its secret.
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 argon2 = "0.5"
-bip39 = { version = "2.2", features = ["rand"] }
+# No `rand` feature: `auth::mnemonic` fills the entropy itself and calls
+# `Mnemonic::from_entropy`, so bip39 never picks the RNG. hcfs-client and
+# subxt-signer keep their own bip39 2.x; phrases cross as strings.
+bip39 = "=3.0.0"
 zxcvbn = { version = "3", default-features = false }
 keyring = { version = "3", default-features = false, features = [
     "apple-native",
