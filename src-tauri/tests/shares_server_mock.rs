@@ -1287,6 +1287,12 @@ struct UploadMock {
     cancel_on_capabilities: Option<CancellationToken>,
     /// A refused open: its status and JSON body. `None` mints the link.
     open_refusal: Option<(StatusCode, serde_json::Value)>,
+    /// Fired while the seal is answered: the modal's Cancel landing after
+    /// the seal was sent, so the link it ends up with is already sealed.
+    cancel_on_seal: Option<CancellationToken>,
+    /// Fired while the owner wrap is answered: the modal's Cancel landing
+    /// after the client has handed back a finished link.
+    cancel_on_wrap: Option<CancellationToken>,
 }
 
 impl Default for UploadMock {
@@ -1298,6 +1304,8 @@ impl Default for UploadMock {
             grow_on_first_declare: None,
             cancel_on_capabilities: None,
             open_refusal: None,
+            cancel_on_seal: None,
+            cancel_on_wrap: None,
         }
     }
 }
@@ -1307,6 +1315,8 @@ fn upload_lifecycle_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
     let (opens, seals, aborts, sizes) = (rec.opens.clone(), rec.seals.clone(), rec.aborts.clone(), rec.can_upload_sizes.clone());
     let (verdict, expires, refusal) = (mock.can_upload.clone(), mock.seal_expires_at, mock.open_refusal.clone());
     let by_hash = rec.by_hash_revokes.clone();
+    let seal_cancel = mock.cancel_on_seal.clone();
+    let sealed = rec.seals.clone();
     Router::new()
         .route(
             "/can_upload",
@@ -1333,6 +1343,9 @@ fn upload_lifecycle_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
             "/v1/folder-shares/uploads/{token_hash}/complete",
             post(move |Path(_): Path<String>| async move {
                 *seals.lock().unwrap() += 1;
+                if let Some(cancel) = &seal_cancel {
+                    cancel.cancel();
+                }
                 Json(json!({ "expires_at": expires })).into_response()
             }),
         )
@@ -1344,6 +1357,10 @@ fn upload_lifecycle_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
             "/v1/folder-shares/uploads/{token_hash}",
             delete(move |Path(token_hash): Path<String>| async move {
                 aborts.lock().unwrap().push(token_hash);
+                // A sealed link can no longer be aborted, only revoked.
+                if *sealed.lock().unwrap() > 0 {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
                 StatusCode::NO_CONTENT.into_response()
             }),
         )
@@ -1370,6 +1387,7 @@ fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
     let grow_pending = Arc::new(Mutex::new(mock.grow_on_first_declare.clone()));
     let fired = Arc::new(AtomicBool::new(false));
     let hook = mock.on_first_chunk.clone();
+    let wrap_cancel = mock.cancel_on_wrap.clone();
     Router::new()
         .route(
             "/v1/folder-shares/uploads/{token_hash}/files",
@@ -1429,6 +1447,9 @@ fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
                 }
                 let entries = body["wraps"].as_array().cloned().expect("wraps array");
                 wraps.lock().unwrap().extend(entries);
+                if let Some(cancel) = &wrap_cancel {
+                    cancel.cancel();
+                }
                 StatusCode::NO_CONTENT.into_response()
             }),
         )
@@ -1832,6 +1853,71 @@ async fn a_finder_cancel_mid_upload_aborts_the_half_built_link() {
         "the open link is aborted on the server"
     );
     assert_eq!(*rec.seals.lock().unwrap(), 0, "a cancelled link is never sealed");
+}
+
+/// The modal's Cancel landing while the seal is in flight: the seal may
+/// commit and cannot be called back, so the share must not end as a live
+/// link the user believes they cancelled. hcfs-client tears this one down
+/// itself (its abort meets a sealed link, so it revokes by hash); the
+/// desktop reports the cancel, keeps no key and pushes no owner wrap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_during_the_seal_revokes_the_sealed_link() {
+    let account = "5UploadSealCancelAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_seal: Some(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(*rec.seals.lock().unwrap(), 1, "the seal was sent");
+    assert_eq!(
+        *rec.by_hash_revokes.lock().unwrap(),
+        vec![folder_share_token_hash(UPLOAD_TOKEN)],
+        "the sealed link is revoked"
+    );
+    assert!(recorded.revoked_tokens.lock().unwrap().is_empty(), "revoked once, not twice");
+    assert!(rec.folder_wraps.lock().unwrap().is_empty(), "no owner wrap for a cancelled link");
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    assert_eq!(keystore.get(UPLOAD_TOKEN).unwrap(), None, "the cancelled link's key is forgotten");
+}
+
+/// The modal's Cancel landing while the owner wrap is pushed, after the
+/// client handed back a finished link: the share still reports the cancel
+/// and revokes that link, rather than returning a link the modal no longer
+/// shows to anyone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_during_the_owner_wrap_revokes_the_finished_link() {
+    let account = "5UploadWrapCancelAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_wrap: Some(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(rec.folder_wraps.lock().unwrap().len(), 1, "the wrap was pushed before the cancel");
+    assert_eq!(
+        *recorded.revoked_tokens.lock().unwrap(),
+        vec![UPLOAD_TOKEN.to_string()],
+        "the finished link is revoked"
+    );
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    assert_eq!(keystore.get(UPLOAD_TOKEN).unwrap(), None, "the cancelled link's key is forgotten");
 }
 
 /// The modal's Cancel while the share is still preparing (capability probe,

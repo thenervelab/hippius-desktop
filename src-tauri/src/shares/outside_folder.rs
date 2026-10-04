@@ -63,7 +63,10 @@ pub struct OutsideFolderShare<'a> {
 /// Cancel is honoured at every step. Before the upload opens, nothing exists
 /// on the server, so each preparing step is simply abandoned when the token
 /// fires ([`before_open`]); from the open on, the token goes into the upload,
-/// which aborts the half-built link itself.
+/// which aborts the half-built link itself. A cancel that lands after the
+/// client handed back a finished link (or while its owner wrap is pushed)
+/// revokes that link ([`revoke_cancelled`]): the modal has stopped waiting,
+/// so nobody would ever see the link it would otherwise return.
 ///
 /// # Errors
 ///
@@ -104,12 +107,15 @@ pub async fn share_outside_folder(state: &AppState, account_id: &str, request: O
         console_base_url: &console_base,
     };
     let created = client
-        .create_upload_folder_share(scan.entries, &options, &keystore, request.progress, request.cancel)
+        .create_upload_folder_share(scan.entries, &options, &keystore, request.progress, request.cancel.clone())
         .await
         .map_err(|e| {
             warn!(error = %e, "create_upload_folder_share failed");
             map_upload_folder_share_error(e)
         })?;
+    if cancel.is_cancelled() {
+        return Err(revoke_cancelled(state, account_id, &created.share_token, &keystore).await);
+    }
 
     // The client does not push the owner wrap; without it the console's
     // Copy works on this device only. Same call, same inputs as a drive
@@ -122,6 +128,9 @@ pub async fn share_outside_folder(state: &AppState, account_id: &str, request: O
         }
         Ok(None) => warn!("uploaded-copy share: no keystore secret to wrap; Copy works on this device only"),
         Err(error) => warn!(%error, "uploaded-copy share: keystore read failed; owner wrap not pushed"),
+    }
+    if cancel.is_cancelled() {
+        return Err(revoke_cancelled(state, account_id, &created.share_token, &keystore).await);
     }
 
     Ok(ShareLink {
@@ -143,6 +152,22 @@ async fn before_open<T>(cancel: &CancellationToken, step: impl Future<Output = R
         () = cancel.cancelled() => Err(AppError::Validation(SHARE_CANCELLED.into())),
         done = step => done,
     }
+}
+
+/// Tear down a finished link whose share was cancelled, and return the
+/// cancel to report. Best effort: a failed revoke is logged, and the link
+/// then lives until it expires, revocable from the shares page by its hash.
+/// The key is forgotten either way, so this device never offers to copy a
+/// link the user cancelled.
+async fn revoke_cancelled(state: &AppState, account_id: &str, share_token: &str, keystore: &SqliteShareKeystore) -> AppError {
+    info!("uploaded-copy share cancelled after the link was sealed; revoking it");
+    if let Err(error) = crate::shares::commands::revoke_folder_share_inner(state, account_id, share_token).await {
+        warn!(%error, "uploaded-copy share: revoking a cancelled link failed; it stays live until it expires");
+    }
+    if let Err(error) = keystore.forget(share_token) {
+        warn!(%error, "uploaded-copy share: forgetting a cancelled link's key failed");
+    }
+    AppError::Validation(SHARE_CANCELLED.into())
 }
 
 /// Capability gate. It is this path's own authority: the Finder menu shows
@@ -495,13 +520,31 @@ mod tests {
         assert!(order.windows(2).all(|w| w[0] < w[1]), "funnel steps out of order: {order:?}");
     }
 
+    /// A cancel that lands after the client returned a sealed link is
+    /// checked before the owner wrap, so a cancelled link never gets one.
+    /// The window is a few instructions wide, too narrow for the mock suite
+    /// to hit on purpose (it covers the cancel during the wrap push), so
+    /// the order is pinned here.
+    #[test]
+    fn a_cancel_after_the_upload_is_checked_before_the_owner_wrap() {
+        let body = funnel_body();
+        let upload = body.find(".create_upload_folder_share(").expect("upload");
+        let wrap = body.find("push_folder_for_account(").expect("wrap");
+        let check = body[upload..].find("cancel.is_cancelled()").expect("a cancel check after the upload") + upload;
+        assert!(check < wrap, "the post-upload cancel check must precede the owner wrap");
+        assert!(body[wrap..].contains("cancel.is_cancelled()"), "and the wrap push is followed by one too");
+    }
+
     /// The modal's Cancel must reach the client, which then aborts the link
     /// on the server. A fresh token here would compile, pass the success
     /// test, and leave every cancelled share uploading until the reaper.
     #[test]
     fn the_funnel_hands_the_cancel_token_to_the_upload() {
         let body = funnel_body();
-        assert!(body.contains("request.progress, request.cancel)"), "the upload must take request.cancel");
+        assert!(
+            body.contains("request.progress, request.cancel.clone())"),
+            "the upload must take request.cancel"
+        );
         assert!(!body.contains("CancellationToken::new()"), "never a fresh token");
         assert!(!body.contains("select!"), "never race the upload; the client must get to abort");
     }
