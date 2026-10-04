@@ -119,6 +119,11 @@ export default function ShareFileModal() {
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
+  // The Finder request whose confirm is in flight, or `null`. A new
+  // right-click replaces the session while that confirm still runs, so its
+  // late result must be dropped (it would replace the new chooser) and the
+  // superseded upload cancelled rather than left running unseen.
+  const runningFinderIdRef = useRef<string | null>(null);
 
   // The Finder flow has no `FormattedUserFile`, so fall back to the name the
   // backend sent with the choosing event for the label shown in every state.
@@ -160,6 +165,8 @@ export default function ShareFileModal() {
     // Idempotent server-side: after a confirm mints it the id is already taken,
     // so closing from done/error is a harmless no-op.
     if (finderShare?.kind === "choosing") void cancelFinderShare(finderShare.id);
+    // Already cancelled just above; the session reset must not repeat it.
+    runningFinderIdRef.current = null;
     setTarget(null);
     setFinderShare(null);
   }, [finderShare, setTarget, setFinderShare]);
@@ -219,16 +226,24 @@ export default function ShareFileModal() {
       if (finderShare?.kind !== "choosing") return;
       const { id } = finderShare;
       lastChoiceRef.current = choice;
+      runningFinderIdRef.current = id;
       setState({ kind: "running" });
       autoCopiedRef.current = false;
+      // Another session took the modal over while this confirm ran.
+      const superseded = () => runningFinderIdRef.current !== id;
       try {
-        const created = await confirmFinderShare(id, choice, (progress) =>
+        const created = await confirmFinderShare(id, choice, (progress) => {
+          if (superseded()) return;
           setState((prev) =>
             prev.kind === "running" ? { kind: "running", progress } : prev,
-          ),
-        );
+          );
+        });
+        if (superseded()) return;
+        runningFinderIdRef.current = null;
         setState({ kind: "done", link: created });
       } catch (err) {
+        if (superseded()) return;
+        runningFinderIdRef.current = null;
         if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
           setFinderShare(null);
           setInsufficient("sharing");
@@ -282,6 +297,13 @@ export default function ShareFileModal() {
   // directly (`FinderShareListener`, a future surface) would bypass it, and
   // the failure mode is showing someone the wrong share link.
   useEffect(() => {
+    // A Finder confirm still running belongs to the session just replaced:
+    // cancel it, and clearing the ref makes its late result a no-op.
+    const running = runningFinderIdRef.current;
+    if (running !== null && sessionKey !== `finder:${running}`) {
+      void cancelFinderShare(running);
+      runningFinderIdRef.current = null;
+    }
     setState({ kind: "choosing" });
     autoCopiedRef.current = false;
     lastChoiceRef.current = null;

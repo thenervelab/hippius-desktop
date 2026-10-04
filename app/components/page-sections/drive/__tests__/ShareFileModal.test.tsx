@@ -619,6 +619,66 @@ describe("ShareFileModal", () => {
     expect(await screen.findByText(message)).toBeInTheDocument();
   });
 
+  describe("a Finder click arriving while another share runs", () => {
+    // Confirm A, let a second right-click (B) replace it, then settle A.
+    // Returns the store plus a settle handle for A's confirm.
+    function startAThenOpenB() {
+      let settleA: { resolve: (v: unknown) => void; reject: (e: unknown) => void } = {
+        resolve: () => undefined,
+        reject: () => undefined,
+      };
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "hcfs_finder_confirm_share"
+          ? new Promise((resolve, reject) => {
+              settleA = { resolve, reject };
+            })
+          : Promise.resolve(undefined),
+      );
+      const store = createStore();
+      render(withFinderState(<ShareFileModal />, FOLDER_COPY, store));
+      confirmChooser();
+      act(() => {
+        store.set(finderShareAtom, { ...CHOOSING, id: "req-2", name: "b.txt" });
+      });
+      return { settle: () => settleA };
+    }
+
+    it("cancels the running share when the new click replaces it", async () => {
+      startAThenOpenB();
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("hcfs_finder_cancel_share", {
+          requestId: "req-1",
+        }),
+      );
+      expect(invokeMock).not.toHaveBeenCalledWith("hcfs_finder_cancel_share", {
+        requestId: "req-2",
+      });
+    });
+
+    it("keeps B on the chooser when A's link lands late", async () => {
+      const { settle } = startAThenOpenB();
+      await act(async () => {
+        settle().resolve({
+          shareToken: "tok-a",
+          shareUrl: "https://console.hippius.com/share/tok-a#k=A",
+          expiresAt: null,
+        });
+      });
+      expect(screen.getByText(/general access/i)).toBeInTheDocument();
+      expect(screen.getByText("b.txt")).toBeInTheDocument();
+      expect(screen.queryByDisplayValue(/tok-a/)).not.toBeInTheDocument();
+    });
+
+    it("keeps B on the chooser when A reports its cancel", async () => {
+      const { settle } = startAThenOpenB();
+      await act(async () => {
+        settle().reject({ kind: "Validation", message: "Share cancelled." });
+      });
+      expect(screen.getByText(/general access/i)).toBeInTheDocument();
+      expect(screen.queryByText(/couldn.?t create share link/i)).not.toBeInTheDocument();
+    });
+  });
+
   it("calls hcfs_revoke_share when the user revokes from the done state", async () => {
     invokeMock
       .mockResolvedValueOnce({
