@@ -1,9 +1,10 @@
 //! Shared, leaf-level path helpers for the files submodules: containment
 //! check (`ensure_within`), sync-relative name derivation
-//! (`derive_relative_name`), recursive copy (`copy_dir_recursive`), and the
-//! engine's hidden-name rule (`is_engine_hidden_name`). Kept in a
+//! (`derive_relative_name`), recursive copy (`copy_dir_recursive`), the
+//! engine's hidden-name rule (`is_engine_hidden_name`), and the child filter
+//! every tree upload shares (`visible_children`, `pub(crate)`). Kept in a
 //! dependency-free leaf so the sibling submodules form a DAG rather than an
-//! `add` <-> `resolve` cycle. All are `pub(super)`, reached via
+//! `add` <-> `resolve` cycle. The rest are `pub(super)`, reached via
 //! `super::pathops::<helper>`.
 
 use crate::error::Result;
@@ -33,6 +34,69 @@ use std::path::{Path, PathBuf};
 // synced locally produce one file set.
 pub(in crate::sync::fileops) fn is_engine_hidden_name(name: &OsStr) -> bool {
     name.to_str().is_some_and(|n| n.starts_with('.'))
+}
+
+/// What a visible directory child is.
+#[derive(Debug)]
+pub(crate) enum VisibleKind {
+    Dir,
+    /// A regular file and its length when it was listed.
+    File {
+        size: u64,
+    },
+}
+
+/// One child of a directory that an upload of the tree carries.
+#[derive(Debug)]
+pub(crate) struct VisibleEntry {
+    /// UTF-8 name. Wire paths are strings, so a non-UTF-8 name has no
+    /// representation and is skipped (APFS stores UTF-8, so on macOS this
+    /// never fires).
+    pub name: String,
+    pub path: PathBuf,
+    pub kind: VisibleKind,
+}
+
+/// The children of `dir` that an upload of the tree carries, in `read_dir`
+/// order.
+///
+/// One definition for every walk that uploads a local tree (a folder upload
+/// into a drive, a folder shared as an uploaded copy), so each holds the
+/// file set the engine would sync:
+/// - dot-names are skipped ([`is_engine_hidden_name`]);
+/// - symlinks and special files are skipped: `DirEntry::metadata` does not
+///   follow links, so a link is neither file nor dir, which also keeps a
+///   link cycle from ever being walked;
+/// - an entry that vanished between `read_dir` and its stat is skipped.
+///
+/// # Errors
+///
+/// Only the `read_dir` of `dir` itself. The caller decides whether an
+/// unreadable directory is skippable (drive upload) or fatal (a share must
+/// not silently drop a subfolder).
+pub(crate) fn visible_children(dir: &Path) -> std::io::Result<Vec<VisibleEntry>> {
+    let mut children = Vec::new();
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let name = entry.file_name();
+        if is_engine_hidden_name(&name) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Some(name) = name.to_str() else { continue };
+        let kind = if meta.is_dir() {
+            VisibleKind::Dir
+        } else if meta.is_file() {
+            VisibleKind::File { size: meta.len() }
+        } else {
+            continue;
+        };
+        children.push(VisibleEntry {
+            name: name.to_owned(),
+            path: entry.path(),
+            kind,
+        });
+    }
+    Ok(children)
 }
 
 /// Engine-owned names that must never appear in Drive: the `.hippius`

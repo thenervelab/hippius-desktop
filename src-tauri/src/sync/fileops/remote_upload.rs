@@ -47,6 +47,7 @@ const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
+use crate::sync::files::pathops::{VisibleKind, visible_children};
 use crate::sync::identity::DriveIdentity;
 
 /// One file's position in a remote upload, as the widget renders it.
@@ -615,6 +616,9 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
 struct PlannedUpload {
     source: std::path::PathBuf,
     parent: String,
+    /// Length when the walk listed it. The gate total and the queued rows
+    /// read this rather than stat every file again on the async runtime.
+    size: u64,
 }
 
 /// Depth cap, mirroring the local add walk's defence against symlink
@@ -626,9 +630,10 @@ const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = 64;
 ///
 /// Pure apart from reading the directory tree, so the path arithmetic —
 /// the part that decides where a file LANDS on the server — is testable
-/// without a server. Hidden names are skipped for the same reason the
-/// engine skips them, so a folder uploaded here and the same folder synced
-/// locally produce the same file set.
+/// without a server. Hidden names, symlinks and non-UTF-8 names are skipped
+/// by `pathops::visible_children`, the rule every tree upload shares, so a
+/// folder uploaded here and the same folder synced locally produce the
+/// same file set.
 fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
     let Some(folder_name) = root.file_name().and_then(|n| n.to_str()) else {
         return Vec::new();
@@ -641,21 +646,18 @@ fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
         if stack.len() > REMOTE_FOLDER_WALK_MAX_DEPTH {
             break;
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if super::files::pathops::is_engine_hidden_name(&name) {
-                continue;
-            }
-            let Ok(meta) = entry.metadata() else { continue };
-            let Some(name) = name.to_str() else { continue };
-            if meta.is_dir() {
-                stack.push((entry.path(), wire_relative_path(&parent, name)));
-            } else if meta.is_file() {
-                planned.push(PlannedUpload {
-                    source: entry.path(),
+        // An unreadable subfolder is skipped here (the other files still
+        // upload and the result lists per-file failures); a share instead
+        // treats it as fatal.
+        let Ok(children) = visible_children(&dir) else { continue };
+        for child in children {
+            match child.kind {
+                VisibleKind::Dir => stack.push((child.path, wire_relative_path(&parent, &child.name))),
+                VisibleKind::File { size } => planned.push(PlannedUpload {
+                    source: child.path,
                     parent: parent.clone(),
-                });
+                    size,
+                }),
             }
         }
     }
@@ -710,7 +712,7 @@ pub async fn upload_folder_to_remote_folder(
     // what the pre-flight asks about.
     let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
 
-    let total_bytes: u64 = planned.iter().filter_map(|p| std::fs::metadata(&p.source).ok()).map(|m| m.len()).sum();
+    let total_bytes: u64 = planned.iter().map(|p| p.size).sum();
     crate::billing::eligibility::require_eligible_for_drive(
         state.inner(),
         &account_id,
@@ -740,7 +742,7 @@ pub async fn upload_folder_to_remote_folder(
             file_name: name.to_string(),
             label: label.clone(),
             bytes_transferred: 0,
-            total_bytes: std::fs::metadata(&item.source).map_or(0, |m| m.len()),
+            total_bytes: item.size,
             status: "pending".into(),
             error: None,
         });
@@ -837,6 +839,21 @@ mod tests {
         assert_eq!(planned, vec!["Photos/2024/b.jpg", "Photos/a.jpg"]);
     }
 
+    /// Each planned file carries the length the walk listed, which is what
+    /// the eligibility gate totals: no second stat per file.
+    #[test]
+    fn a_folder_upload_carries_each_file_size() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(root.join("2024")).expect("nested dir");
+        std::fs::write(root.join("a.jpg"), b"abc").expect("root file");
+        std::fs::write(root.join("2024").join("b.jpg"), vec![0u8; 1_000]).expect("nested file");
+
+        let mut sizes: Vec<u64> = plan_folder_upload(&root, "").iter().map(|p| p.size).collect();
+        sizes.sort_unstable();
+        assert_eq!(sizes, vec![3, 1_000]);
+    }
+
     /// Uploading into a subfolder nests under it rather than replacing it.
     #[test]
     fn a_folder_upload_nests_under_the_parent_it_was_started_from() {
@@ -863,6 +880,23 @@ mod tests {
 
         let planned = plan_folder_upload(&root, "");
         assert_eq!(planned.len(), 1, "only the visible file is uploaded");
+        assert_eq!(planned[0].source.file_name().unwrap(), "a.jpg");
+    }
+
+    /// A symlink is never uploaded: it is neither a file nor a directory to
+    /// the walk, which is also what keeps a link cycle out of it.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_upload_skips_symlinks() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("a.jpg"), b"a").expect("file");
+        std::os::unix::fs::symlink(root.join("a.jpg"), root.join("link.jpg")).expect("file link");
+        std::os::unix::fs::symlink(&root, root.join("loop")).expect("dir link");
+
+        let planned = plan_folder_upload(&root, "");
+        assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].source.file_name().unwrap(), "a.jpg");
     }
 
