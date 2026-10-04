@@ -765,6 +765,9 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
     // A resumed or re-added drive whose disk is still missing is a new
     // episode the user should hear about.
     app_state.root_not_mounted_notify.clear(&label);
+    // A paused or removed drive must not serve a listing from before it
+    // stopped; a resume fetches afresh.
+    app_state.remote_listing_cache.invalidate(&label);
     // Drop this drive's folder-entity-sync throttle stamp so a resume / re-add
     // syncs immediately instead of being gated by the prior episode's last-run
     // time.

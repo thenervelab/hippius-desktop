@@ -1690,6 +1690,8 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     // pattern — both are transient UI-affordance state that must
     // not survive across accounts.
     app_state.preparing.clear_all();
+    // Cached remote listings hold the signed-out account's file rows.
+    app_state.remote_listing_cache.clear_all();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());

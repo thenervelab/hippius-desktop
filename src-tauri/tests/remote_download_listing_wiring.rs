@@ -82,3 +82,21 @@ fn the_cache_is_invalidated_on_sync_completion_and_reset() {
     assert!(fn_body(&bridge, "fn handle_sync_completed(").contains("remote_listing_cache.invalidate("));
     assert!(fn_body(&bridge, "fn handle_sync_reset(").contains("remote_listing_cache.clear_all()"));
 }
+
+/// Logout and a stopped drive end what the cached listings were fetched
+/// for: the rows (file ids, sizes, revisions) of a signed-out account must
+/// not stay in memory, and a paused or removed drive must not serve a
+/// listing from before it stopped.
+#[test]
+fn the_cache_is_dropped_on_logout_and_on_a_stopped_drive() {
+    let lifecycle = src("src/sync/drive/lifecycle.rs");
+    assert!(
+        fn_body(&lifecycle, "pub async fn stop_sync(").contains("remote_listing_cache.clear_all()"),
+        "logout must drop every cached listing"
+    );
+    let bridge = src("src/sync/projection/tauri_bridge.rs");
+    assert!(
+        fn_body(&bridge, "fn handle_sync_stopped(").contains("remote_listing_cache.invalidate("),
+        "a stopped drive must drop its cached listing"
+    );
+}

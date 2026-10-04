@@ -137,21 +137,30 @@ impl RemoteListingCache {
     }
 
     /// Drops every listing held for `label`. Called when a sync of the drive
-    /// completes, since that cycle may have changed its rows.
+    /// completes, since that cycle may have changed its rows, and when the
+    /// drive stops (pause, remove).
     pub fn invalidate(&self, label: &str) {
         self.lock_slots().retain(|key, _| key.label != label);
     }
 
-    /// Drops every listing. Called on account reset, when labels may be
-    /// reused by the next account.
+    /// Drops every listing. Called on logout and account reset: the rows
+    /// belong to the signed-out account, and labels may be reused by the
+    /// next one.
     pub fn clear_all(&self) {
         self.lock_slots().clear();
     }
 
-    /// The drive's slot, created if absent, evicting the least recently used
-    /// drive when the bound is reached.
+    /// The drive's slot, created if absent. First drops every other slot
+    /// unused for the TTL (its listing would be refetched anyway, so keeping
+    /// it only holds a past drive's rows in memory), then evicts the least
+    /// recently used drive when the bound is still reached.
+    ///
+    /// A dropped slot's fetch still in flight completes for the callers
+    /// already waiting on it; a later caller starts a new slot. Slots are
+    /// stamped on each use, so that takes a fetch slower than the TTL.
     fn slot(&self, key: ListingKey) -> Slot {
         let mut slots = self.lock_slots();
+        slots.retain(|held, (used, _)| *held == key || used.elapsed() < self.ttl);
         if !slots.contains_key(&key) && slots.len() >= self.max_drives {
             let oldest = slots.iter().min_by_key(|(_, (used, _))| *used).map(|(key, _)| key.clone());
             if let Some(oldest) = oldest {
@@ -332,6 +341,33 @@ mod tests {
         assert_eq!(server.listings(), 3, "a was used last, so b went");
         lookup(&cache, &server, "b", 1).await;
         assert_eq!(server.listings(), 4);
+    }
+
+    /// A drive the user stopped browsing must not keep its rows until three
+    /// other drives push it out: a slot unused for the TTL serves nothing,
+    /// so the next lookup of any drive drops it.
+    #[tokio::test]
+    async fn a_slot_unused_for_the_ttl_is_dropped_by_the_next_lookup() {
+        let cache = RemoteListingCache::with_limits(Duration::ZERO, MAX_DRIVES);
+        let server = FakeServer::with(&[1]);
+        lookup(&cache, &server, "a", 1).await;
+        lookup(&cache, &server, "b", 1).await;
+
+        lookup(&cache, &server, "c", 1).await;
+
+        let held: Vec<String> = cache.lock_slots().keys().map(|key| key.label.clone()).collect();
+        assert_eq!(held, vec!["c".to_string()]);
+    }
+
+    /// Within the TTL a slot stays, so a drive's listing is still shared.
+    #[tokio::test]
+    async fn a_slot_used_within_the_ttl_stays() {
+        let cache = RemoteListingCache::default();
+        let server = FakeServer::with(&[1]);
+        lookup(&cache, &server, "a", 1).await;
+        lookup(&cache, &server, "b", 1).await;
+
+        assert_eq!(cache.lock_slots().len(), 2);
     }
 
     #[tokio::test]
