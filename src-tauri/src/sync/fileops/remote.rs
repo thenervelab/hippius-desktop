@@ -1644,6 +1644,14 @@ mod tests {
             // fixtures exercise the folder/file grouping, which does not
             // read the uploader.
             uploaded_by: None,
+            // Camera Uploads provenance and capture times (hcfs #524); the
+            // browse mapper does not read them, and a desktop upload sends none.
+            device_id: None,
+            backup_id: None,
+            backup_asset_key: None,
+            backup_hint: None,
+            source_taken_at: None,
+            source_modified_at: None,
         }
     }
 
@@ -2207,13 +2215,30 @@ mod tests {
             arion_hash: Some("Qm123".to_string()),
             created_at: 1_700_000_000,
             updated_at: 1_700_000_005,
+            salted_hash: "ab".repeat(32),
+            revision_seq: 3,
+            revision_id: "cd".repeat(32),
         };
         let json = serde_json::to_value(&info).expect("serialize RemoteFileInfo");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
-        let expected: BTreeSet<String> = ["arion_hash", "created_at", "file_id", "name", "path", "size_bytes", "updated_at"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        // `salted_hash` / `revision_seq` / `revision_id` (hcfs #502) are
+        // additive: the browser ignores them, and they let a download be
+        // verified against this listing row.
+        let expected: BTreeSet<String> = [
+            "arion_hash",
+            "created_at",
+            "file_id",
+            "name",
+            "path",
+            "revision_id",
+            "revision_seq",
+            "salted_hash",
+            "size_bytes",
+            "updated_at",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         assert_eq!(
             keys, expected,
             "RemoteFileInfo wire keys drifted — FE RemoteFolderBrowser reads these snake_case keys"

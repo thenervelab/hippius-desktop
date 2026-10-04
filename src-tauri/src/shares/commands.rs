@@ -2383,6 +2383,8 @@ mod tests {
     // ─── Folder-share listing resolution ───────────────────────────────────
 
     fn mk_folder_row(token_hash: &str, path_prefix: &str) -> FolderShareListItem {
+        use hcfs_client::client::folder_share::FolderShareSource;
+
         FolderShareListItem {
             token_hash: token_hash.to_string(),
             folder_hash: "abcdef0123456789".to_string(),
@@ -2391,6 +2393,9 @@ mod tests {
             // New upstream field (hcfs #457/#458 sealed invite tokens); the
             // listing-resolution tests do not exercise it.
             owner_wrap: None,
+            // A drive folder link: these resolution tests predate uploaded
+            // copies, whose rows the listing labels `Upload`.
+            source: FolderShareSource::Drive,
             created_at: Utc::now(),
             expires_at: None,
             revoked_at: None,

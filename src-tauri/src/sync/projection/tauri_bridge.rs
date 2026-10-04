@@ -466,6 +466,39 @@ fn handle_folder_recovered(app: &AppHandle, label: String) {
     let _ = app.emit(events::FOLDER_RECOVERED, events::LabelPayload { label });
 }
 
+/// What a mass-delete log line reported last, per drive label, side and
+/// event (`"held"` / `"refused"`; keyed apart because a refused restore's
+/// cycle also re-reports the hold, and sharing a slot would make each look
+/// changed every cycle).
+/// hcfs re-emits `MassDeleteHeld` (and a kept `MassDeleteRestoreRefused`)
+/// every cycle while the hold stands; logging each one would crowd the
+/// support bundle, so a line is written only when the reported state
+/// changes. Stop-gap until the hold is tracked on `AppState` and surfaced
+/// to the user (the large-delete prompt), which replaces this.
+///
+/// The side is keyed by its `as_str` name: `MassDeleteSide` does not derive
+/// `Hash`.
+type MassDeleteLogKey = (String, &'static str, &'static str);
+
+static MASS_DELETE_LOGGED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<MassDeleteLogKey, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Records `state` as the last one logged for `(label, side, event)` and
+/// reports whether it differs from the previous one, i.e. whether to log it.
+fn mass_delete_state_changed(label: &str, side: hcfs_client::sync::MassDeleteSide, event: &'static str, state: String) -> bool {
+    // A poisoned map only loses dedup state; logging a line twice is harmless.
+    let mut logged = MASS_DELETE_LOGGED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous = logged.insert((label.to_string(), side.as_str(), event), state.clone());
+    previous.as_deref() != Some(state.as_str())
+}
+
+/// Forgets what was logged for `(label, side)`, so the next hold on that
+/// side is logged even if it reports the same count as the last one.
+fn mass_delete_state_forget(label: &str, side: hcfs_client::sync::MassDeleteSide) {
+    let mut logged = MASS_DELETE_LOGGED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    logged.retain(|(l, s, _), _| !(l == label && *s == side.as_str()));
+}
+
 /// Handle a `SyncError` carrying [`events::SHARED_DRIVE_REVOKED_MARKER`]:
 /// the server-side listing no longer contains this member drive's folder
 /// (the owner revoked this member or deleted the drive), which is a
@@ -1056,6 +1089,61 @@ impl SyncEventHandler for TauriSyncBridge {
                 let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);
             }
             SyncEvent::FolderRecovered { label } => handle_folder_recovered(&app, label),
+            // hcfs held one side's deletes because they would remove most of
+            // the drive; nothing on that side was deleted and the rest of the
+            // cycle synced. Logged only (once per change): surfacing the hold
+            // and answering it (restore / confirm) comes with the
+            // large-delete prompt, so until then the hold stands.
+            SyncEvent::MassDeleteHeld {
+                label,
+                side,
+                count,
+                synced_count,
+            } => {
+                if mass_delete_state_changed(&label, side, "held", format!("{count}/{synced_count}")) {
+                    tracing::warn!(
+                        label = %label,
+                        side = side.as_str(),
+                        count,
+                        synced_count,
+                        "hcfs held a mass delete; nothing on that side was deleted"
+                    );
+                }
+            }
+            // Emitted once, by the cycle that applied a restore. The hold on
+            // that side is over, so a later one is logged afresh. Putting
+            // back the empty folders held alongside comes with the
+            // large-delete prompt.
+            SyncEvent::MassDeleteRestored {
+                label,
+                side,
+                restored,
+                pending,
+                skipped,
+            } => {
+                mass_delete_state_forget(&label, side);
+                tracing::info!(
+                    label = %label,
+                    side = side.as_str(),
+                    restored,
+                    pending,
+                    skipped,
+                    "hcfs restored a held mass delete"
+                );
+            }
+            // A kept request is refused again every cycle until it fits, so
+            // this shares the held arm's once-per-change logging. Telling the
+            // user why comes with the large-delete prompt.
+            SyncEvent::MassDeleteRestoreRefused { label, side, reason } => {
+                if mass_delete_state_changed(&label, side, "refused", format!("{reason:?}")) {
+                    tracing::warn!(
+                        label = %label,
+                        side = side.as_str(),
+                        reason = reason.as_str(),
+                        "hcfs refused to restore a held mass delete; the deletes stay held"
+                    );
+                }
+            }
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }
@@ -2076,5 +2164,32 @@ mod tests {
         // Teardown tail (SyncStopped) re-arms the label.
         assert!(latch.clear("team-drive"));
         assert!(latch.record_failure("team-drive", REVOKED_NOTIFY_THRESHOLD));
+    }
+
+    /// hcfs re-reports a standing hold every cycle; the bridge logs it once
+    /// per change. Held and refused are tracked apart because a refused
+    /// restore's cycle reports both, and a restore re-arms the side so the
+    /// next hold logs even with the same count. Labels are unique to this
+    /// test: the map is process-global.
+    #[test]
+    fn mass_delete_logging_fires_once_per_change() {
+        use hcfs_client::sync::MassDeleteSide::{Local, Server};
+
+        let label = "mass-delete-log-test";
+        let held = || "150/200".to_string();
+
+        assert!(mass_delete_state_changed(label, Server, "held", held()));
+        assert!(!mass_delete_state_changed(label, Server, "held", held()), "same hold, next cycle");
+        assert!(mass_delete_state_changed(label, Local, "held", held()), "sides are apart");
+
+        assert!(mass_delete_state_changed(label, Server, "refused", "space".to_string()));
+        assert!(!mass_delete_state_changed(label, Server, "held", held()), "refusal did not reset hold");
+        assert!(!mass_delete_state_changed(label, Server, "refused", "space".to_string()));
+
+        assert!(mass_delete_state_changed(label, Server, "held", "151/200".to_string()), "count changed");
+
+        mass_delete_state_forget(label, Server);
+        assert!(mass_delete_state_changed(label, Server, "held", "151/200".to_string()), "restore re-arms");
+        assert!(!mass_delete_state_changed(label, Local, "held", held()), "other side untouched");
     }
 }

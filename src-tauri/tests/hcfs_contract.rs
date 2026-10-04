@@ -19,7 +19,7 @@
 
 use base64::Engine;
 use hcfs_client::client::folder_share::{
-    CreatedFolderShare, FolderShareListItem, FolderShareOptions, ShareTtl, build_folder_share_url, build_folder_share_url_for,
+    CreatedFolderShare, FolderShareListItem, FolderShareOptions, FolderShareSource, ShareTtl, build_folder_share_url, build_folder_share_url_for,
     build_folder_share_url_private, folder_share_token_hash,
 };
 use hcfs_client::client::share::{ShareSecret, wrap_share_key};
@@ -824,6 +824,7 @@ fn folder_share_client_surface_is_reachable() {
         created_at,
         expires_at: None,
         revoked_at: Some(created_at),
+        source: FolderShareSource::Drive,
     };
     assert_eq!(item.path_prefix, "", "whole-drive share is the empty prefix");
 

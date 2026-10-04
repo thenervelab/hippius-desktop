@@ -950,9 +950,10 @@ mod tests {
     }
 
     /// The rest of listing's skip set: a hidden directory's children, a
-    /// `downloaded_<hex>` artifact, and a 0-byte `file_<hex>` stub. A non-zero
-    /// stub and a `downloaded_` name that is not all-hex stay counted — listing
-    /// only drops the 0-byte / hex-artifact cases.
+    /// `downloaded_<file id>` artifact, and a 0-byte `file_<hex>` stub. A
+    /// non-zero stub and a `downloaded_` name that is not a full 64-hex file
+    /// id stay counted (`downloaded_deadbeef` is a user's file since hcfs
+    /// #505 tightened the matcher, because listing deletes what it matches).
     #[test]
     fn walk_regular_files_stats_skips_hidden_dirs_artifacts_and_zero_byte_stubs() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -961,14 +962,16 @@ mod tests {
         let hidden_dir = root.join(".git");
         std::fs::create_dir(&hidden_dir).unwrap();
         std::fs::write(hidden_dir.join("objects"), b"blob").unwrap();
-        std::fs::write(root.join("downloaded_deadbeef"), b"artifact").unwrap();
+        let artifact = format!("downloaded_{}", "deadbeef".repeat(8));
+        std::fs::write(root.join(artifact), b"artifact").unwrap();
+        std::fs::write(root.join("downloaded_deadbeef"), b"usr").unwrap();
         std::fs::write(root.join("file_0123456789abcdef"), b"").unwrap();
         std::fs::write(root.join("file_0123456789abcdee"), b"data").unwrap();
         std::fs::write(root.join("downloaded_notes.txt"), b"xy").unwrap();
 
         let walk = walk_regular_files_stats_std(root);
-        assert_eq!(walk.count, 3, "keep.txt + non-zero stub + downloaded_notes.txt");
-        assert_eq!(walk.bytes, 8, "2 + 4 + 2; hidden-dir / artifact / 0-byte stub omitted");
+        assert_eq!(walk.count, 4, "keep.txt + non-zero stub + the two user downloaded_ files");
+        assert_eq!(walk.bytes, 11, "2 + 4 + 3 + 2; hidden-dir / artifact / 0-byte stub omitted");
         assert_eq!(walk.skipped_hidden, 1, ".git is one skipped hidden directory");
     }
 
