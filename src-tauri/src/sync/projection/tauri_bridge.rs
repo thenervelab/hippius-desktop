@@ -1171,7 +1171,8 @@ impl SyncEventHandler for TauriSyncBridge {
                 // Engine cycles only: the reviewed-conflict path shares
                 // `handle_sync_completed` but not the engine's hold events,
                 // so ending the hold bookkeeping there would clear a hold
-                // that cycle never re-reported.
+                // that cycle never re-reported. hcfs may complete one cycle
+                // twice (it skipped conflicts); the state acts on the first.
                 finish_mass_delete_cycle(&app, &label);
                 // Single source of truth for the completion transition: the
                 // cleanup (preparing-clear, banner-clear, failure-counter

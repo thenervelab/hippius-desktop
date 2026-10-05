@@ -9,8 +9,9 @@
 //! while the hold stands. A requested restore is reported once by the cycle
 //! that applies it (`MassDeleteRestored`), or refused on every cycle until it
 //! fits (`MassDeleteRestoreRefused`, followed by the hold again). All of them
-//! arrive before that cycle's `SyncCompleted`; every successful cycle emits
-//! `SyncStarted` first and `SyncCompleted` last, and rewrites hcfs's own held
+//! arrive before that cycle's first `SyncCompleted`; every successful cycle
+//! emits `SyncStarted` first and `SyncCompleted` last (twice when it skipped
+//! conflicts), and rewrites hcfs's own held
 //! record (`mass_delete_held.json`), so "the cycle completed without a hold
 //! for this side" is exactly "the hold is over".
 //!
@@ -35,10 +36,13 @@
 //!
 //! ## Cycle bookkeeping
 //!
-//! [`MassDeleteHoldState::begin_cycle`] (on `SyncStarted`) marks every side
-//! unseen; a hold or restore event marks its side seen;
-//! [`MassDeleteHoldState::finish_cycle`] (on `SyncCompleted`) drops every
-//! side still unseen and reports it as cleared. A `Restoring` side is kept
+//! [`MassDeleteHoldState::begin_cycle`] (on `SyncStarted`) opens the cycle
+//! and marks every side unseen; a hold or restore event marks its side seen;
+//! [`MassDeleteHoldState::finish_cycle`] (on the cycle's first
+//! `SyncCompleted`) closes it, dropping every side still unseen and
+//! reporting it as cleared. A further `SyncCompleted` for the same cycle
+//! (hcfs sends two when a cycle skipped conflicts) finds it closed and
+//! clears nothing. A `Restoring` side is kept
 //! for one cycle, mirroring hcfs, which keeps a restored side in its held
 //! record until the next cycle completes.
 //!
@@ -177,6 +181,10 @@ struct LabelHolds {
     member: bool,
     /// The drive folder (armed at init), for the empty-root check.
     sync_root: Option<PathBuf>,
+    /// A cycle has started and not yet completed. hcfs can complete one
+    /// cycle twice (see [`MassDeleteHoldState::finish_cycle`]); only the
+    /// first completion may clear anything.
+    cycle_open: bool,
     /// Deletes of the server copies (files missing here).
     server: SideSlot,
     /// Deletes of this device's copies (files missing from the server).
@@ -269,10 +277,11 @@ impl MassDeleteHoldState {
 
     /// A cycle started: every side is unseen until an event reports it.
     pub fn begin_cycle(&self, label: &str) {
-        if let Some(holds) = self.lock().get_mut(label) {
-            holds.server.seen = false;
-            holds.local.seen = false;
-        }
+        let mut map = self.lock();
+        let holds = map.entry(label.to_string()).or_default();
+        holds.cycle_open = true;
+        holds.server.seen = false;
+        holds.local.seen = false;
     }
 
     /// Record a `MassDeleteHeld`, reporting whether it changed anything.
@@ -337,11 +346,20 @@ impl MassDeleteHoldState {
 
     /// A cycle completed: drop every side no event reported this cycle and
     /// return those that had a hold (the cleared ones).
+    ///
+    /// Acts once per [`Self::begin_cycle`]. hcfs emits `SyncCompleted` twice
+    /// for a cycle that skipped conflicts (once from the conflict re-stage,
+    /// again from the result dispatch, both after the hold events), and a
+    /// second pass over sides it had just marked unseen would clear a hold
+    /// that still stands. A completion with no cycle open clears nothing.
     pub fn finish_cycle(&self, label: &str) -> Vec<MassDeleteSide> {
         let mut map = self.lock();
         let Some(holds) = map.get_mut(label) else {
             return Vec::new();
         };
+        if !std::mem::replace(&mut holds.cycle_open, false) {
+            return Vec::new();
+        }
 
         let mut cleared = Vec::new();
         for side in SIDES {
@@ -557,6 +575,37 @@ mod tests {
             HeldChange::Changed { notify: true },
             "a hold after a cleared one is a new episode"
         );
+    }
+
+    /// hcfs completes a cycle that skipped conflicts twice: once from the
+    /// conflict re-stage and again from its result dispatch. Only the first
+    /// completion closes the cycle; the second must not read the hold as
+    /// unreported and clear it.
+    #[test]
+    fn a_second_completion_of_one_cycle_keeps_the_hold() {
+        let state = MassDeleteHoldState::new();
+        state.arm(L, false, Path::new("/x"), &[]);
+
+        state.begin_cycle(L);
+        assert_eq!(state.record_held(L, Server, 150, 200, false), HeldChange::Changed { notify: true });
+        assert!(state.finish_cycle(L).is_empty());
+        assert!(state.finish_cycle(L).is_empty(), "the repeated completion clears nothing");
+        assert!(state.entry(L, Server).is_some(), "the hold stands");
+
+        state.begin_cycle(L);
+        assert_eq!(
+            state.record_held(L, Server, 150, 200, false),
+            HeldChange::Unchanged,
+            "the episode was not ended, so it does not notify again"
+        );
+    }
+
+    #[test]
+    fn a_completion_without_a_start_clears_nothing() {
+        let state = MassDeleteHoldState::new();
+        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        assert!(state.finish_cycle(L).is_empty(), "no cycle is open, so nothing went unreported");
+        assert!(state.entry(L, Server).is_some());
     }
 
     #[test]
