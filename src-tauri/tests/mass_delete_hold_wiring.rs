@@ -130,7 +130,33 @@ fn the_prompt_commands_are_registered_and_async() {
     let main = read("src/main.rs");
     let commands = read("src/sync/drive/mass_delete.rs");
     for name in ["restore_mass_delete", "confirm_mass_delete", "get_mass_delete_holds"] {
-        assert!(main.contains(&format!("crate::sync::mass_delete::{name},")), "{name} must be in generate_handler!");
-        assert!(commands.contains(&format!("pub async fn {name}(")), "{name} must be async (off the main thread)");
+        assert!(
+            main.contains(&format!("crate::sync::mass_delete::{name},")),
+            "{name} must be in generate_handler!"
+        );
+        assert!(
+            commands.contains(&format!("pub async fn {name}(")),
+            "{name} must be async (off the main thread)"
+        );
     }
+}
+
+/// The folder job reads the hold, restores owed folders, and only then runs
+/// reconcile and materialize, both gated. Out of order, a restore's
+/// forgotten rows would be missed by the run that should act on them, and an
+/// ungated half would carry out the folder side of a held delete.
+#[test]
+fn the_folder_job_gates_both_halves_and_restores_first() {
+    let src = read("src/sync/migrate/folder_entries_materialize.rs");
+    let body = fn_body(&src, "pub async fn run_folder_entity_sync_for_drive(");
+
+    let gate = body.find("read_folder_hold_gate(").expect("the job reads hcfs's hold record");
+    let restore = body
+        .find("restore_held_folders(")
+        .expect("the job restores the folders of a restored hold");
+    let reconcile = body.find("reconcile_with_on_disk(drive, &on_disk, gate)").expect("reconcile is gated");
+    let materialize = body
+        .find("materialize_with_on_disk(drive, &root, &on_disk, gate)")
+        .expect("materialize is gated");
+    assert!(gate < restore && restore < reconcile && reconcile < materialize);
 }
