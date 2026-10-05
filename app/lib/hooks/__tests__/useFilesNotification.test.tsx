@@ -324,3 +324,34 @@ describe("useFilesNotification — folder restored", () => {
     expect(syncNotificationCalls()).toHaveLength(0);
   });
 });
+
+// One persisted notification per held mass delete. Rust gates the event to
+// once per episode and writes the text; the hook persists it verbatim under
+// its own outcome (Rust titles it "Delete Paused").
+describe("useFilesNotification — mass delete held", () => {
+  it("persists Rust's text under the mass_delete_held outcome", async () => {
+    mount(true);
+    await flushRegistration();
+    const description =
+      'In "Photos", 150 of 200 files are missing from this Mac. Nothing has been deleted from Hippius yet.';
+    await act(async () => {
+      await tauri.emitEvent("hcfs_mass_delete_held_notify", {
+        label: "Photos",
+        side: "server",
+        description,
+      });
+    });
+    const calls = syncNotificationCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toMatchObject({ outcome: "mass_delete_held", description });
+  });
+
+  it("ignores the ungated hold event", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_mass_delete_held", { label: "Photos", side: "server", count: 150 });
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+  });
+});

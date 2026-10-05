@@ -8,6 +8,7 @@ import {
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+import type { MassDeleteNotifyPayload } from "@/app/lib/tauri/massDelete";
 
 /**
  * Aggregation window for the "Sync Complete" notification. The sync
@@ -233,6 +234,20 @@ export function useFilesNotification() {
               description: `Folder "${label}" was missing on the server, so Hippius restored it from this device. Its files are being uploaded again.`,
               fileDetailsJson: "",
               outcome: "folder_restored",
+            });
+            await refreshUnread();
+          }),
+          listen<MassDeleteNotifyPayload>("hcfs_mass_delete_held_notify", async (e) => {
+            if (cancelled || !userAddress) return;
+            // A large delete is being held until the user answers the banner.
+            // Rust gates this event to once per episode (a repeating hold, a
+            // relaunch or a pause and resume do not raise it again) and
+            // writes the text, so the side, counts and advice match the hold.
+            await invoke("create_sync_notification", {
+              userAddress,
+              description: e.payload.description,
+              fileDetailsJson: "",
+              outcome: "mass_delete_held",
             });
             await refreshUnread();
           }),

@@ -309,6 +309,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Large deletes wait for you to decide.** When most of a drive suddenly
+  looks deleted, for example because an external disk was unplugged, Hippius
+  holds the deletes and asks you: Restore files puts them back, empty folders
+  included, or Remove lets the delete go ahead after you confirm the count.
+
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a
   window or a screen, or pick one from the live previews. On Wayland
