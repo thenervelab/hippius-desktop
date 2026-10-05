@@ -50,7 +50,7 @@ use crate::error::Result;
 use crate::sync::config::get_sync_path_for_label;
 use crate::sync::folder_entries_backfill::{build_one_shot_client, is_folder_entries_backfilled, read_cached_dir_set, walk_on_disk_dir_set};
 use crate::sync::folder_entries_reconcile::{FolderHoldGate, FolderJobDrive, ReconcileOutcome, delete_cached_folder_entries, reconcile_with_on_disk};
-use crate::sync::mass_delete_hold::FolderRestores;
+use crate::sync::mass_delete_hold::{FolderRestores, MassDeleteHoldState};
 use crate::sync::mnemonic::folder_hash;
 use sqlx::sqlite::SqlitePool;
 use std::collections::BTreeSet;
@@ -444,8 +444,8 @@ pub(crate) fn folder_rows_to_forget(
 /// restore it applied), then acknowledge them. Runs before
 /// reconcile so both halves see the forgotten rows. A failed server listing
 /// keeps them owed for the next run; a refused restore never set them.
-async fn restore_held_folders(state: &AppState, drive: FolderJobDrive<'_>, on_disk: &BTreeSet<String>) -> Result<()> {
-    let restores = state.mass_delete_holds.folder_restores(drive.label);
+async fn restore_held_folders(holds: &MassDeleteHoldState, drive: FolderJobDrive<'_>, on_disk: &BTreeSet<String>) -> Result<()> {
+    let restores = holds.folder_restores(drive.label);
     if !restores.any() {
         return Ok(());
     }
@@ -455,7 +455,7 @@ async fn restore_held_folders(state: &AppState, drive: FolderJobDrive<'_>, on_di
 
     let sides = restores.sides();
     let forgotten = forget_restored_folder_rows(drive, sides, &server, on_disk).await?;
-    state.mass_delete_holds.ack_folder_restores(drive.label, restores);
+    holds.ack_folder_restores(drive.label, restores);
     info!(label = %drive.label, server = sides.server, local = sides.local, folders = forgotten, "folder-entity sync: restoring the folders of a restored mass delete");
     Ok(())
 }
@@ -583,7 +583,7 @@ pub async fn run_folder_entity_sync_for_drive(state: &AppState, account_id: &str
     if gate.any() {
         debug!(label = %label, ?gate, "folder-entity sync: a mass delete is held; its side's folder changes wait");
     }
-    restore_held_folders(state, drive, &on_disk).await?;
+    restore_held_folders(&state.mass_delete_holds, drive, &on_disk).await?;
 
     // 1. Push local truth up: register new dirs, unregister locally-removed ones,
     //    updating the server + cache. Runs to completion before step 2.
@@ -1337,6 +1337,45 @@ mod hold_tests {
             read_cached_dir_set(&pool, owner, "photos").await.expect("read"),
             set(&["Trips", "Kept", "Other"]),
             "another drive's rows are untouched"
+        );
+    }
+
+    /// The server listing the restore needs fails (here: no session to
+    /// build a client from). Nothing is forgotten and the restore stays
+    /// owed, so the next run puts the folders back.
+    #[tokio::test]
+    async fn a_failed_listing_keeps_the_restore_owed() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+        let owner = "owner-key";
+        crate::sync::folder_entries_backfill::cache_folder_entries(&pool, owner, "docs", &["Trips".to_string()])
+            .await
+            .expect("seed cache");
+
+        let holds = MassDeleteHoldState::new();
+        holds.begin_cycle("docs");
+        holds.record_restored("docs", MassDeleteSide::Server, 5);
+        holds.finish_cycle("docs");
+
+        let drive = FolderJobDrive {
+            pool: &pool,
+            account_id: "acct",
+            owner,
+            label: "docs",
+        };
+        restore_held_folders(&holds, drive, &BTreeSet::new())
+            .await
+            .expect("a failed listing is not an error");
+
+        assert!(holds.folder_restores("docs").sides().server, "still owed for the next run");
+        assert_eq!(
+            read_cached_dir_set(&pool, owner, "docs").await.expect("read"),
+            set(&["Trips"]),
+            "nothing forgotten without the server set"
         );
     }
 
