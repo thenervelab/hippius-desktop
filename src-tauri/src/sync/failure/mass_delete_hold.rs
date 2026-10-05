@@ -33,6 +33,10 @@
 //!   against [`MassDeleteHoldState::entry`]. hcfs's own confirm does not
 //!   compare the count at all, so this check is what stops a stale dialog
 //!   from releasing a hold that has grown since.
+//! - **An answer that did not take.** An accepted answer shows as under way
+//!   in the UI until an event moves it on; when the first cycle after it
+//!   reports the same hold, that hold is shown again
+//!   ([`MassDeleteHoldState::note_answered`]).
 //! - **Folder restores owed.** The engine plans files only; the desktop's
 //!   folder job puts empty folders back itself, once per applied restore
 //!   (see `folder_entries_materialize`). The flag is set by every applied
@@ -198,6 +202,19 @@ impl OwedFolderRestores {
     }
 }
 
+/// Where an answer to a side's hold stands, from the UI's point of view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum AnswerCheck {
+    /// No answer waiting to be checked.
+    #[default]
+    Idle,
+    /// Answered; no cycle has started since.
+    Answered,
+    /// A cycle started after the answer: if it reports the hold, the answer
+    /// was not applied, and the hold is shown again.
+    Due,
+}
+
 /// Per-side bookkeeping. `entry` is what the UI shows; the rest is latch
 /// state that lives exactly as long as the episode (except the folder
 /// restore generations, which outlive it until the folder job acks them).
@@ -220,6 +237,9 @@ struct SideSlot {
     seen: bool,
     /// The refusal reason last emitted in this episode.
     refused: Option<String>,
+    /// Where an answer the user sent stands; see
+    /// [`MassDeleteHoldState::note_answered`].
+    answer: AnswerCheck,
     /// Generation of the latest applied restore (0: none yet). Bumped by
     /// every `MassDeleteRestored`.
     restores_applied: u64,
@@ -251,6 +271,7 @@ impl SideSlot {
         self.notify_pending = false;
         self.settled = false;
         self.refused = None;
+        self.answer = AnswerCheck::Idle;
     }
 
     /// Whether the current entry is the hold `report` describes.
@@ -380,8 +401,13 @@ impl MassDeleteHoldState {
         let mut map = self.lock();
         let holds = map.entry(label.to_string()).or_default();
         holds.cycle_open = true;
-        holds.server.seen = false;
-        holds.local.seen = false;
+        for side in SIDES {
+            let slot = holds.slot_mut(side);
+            slot.seen = false;
+            if slot.answer == AnswerCheck::Answered {
+                slot.answer = AnswerCheck::Due;
+            }
+        }
     }
 
     /// Record a `MassDeleteHeld`, reporting whether it needs settling.
@@ -400,7 +426,13 @@ impl MassDeleteHoldState {
         let mut map = self.lock();
         let slot = map.entry(label.to_string()).or_default().slot_mut(report.side);
         slot.seen = true;
-        if slot.holds(report) && slot.settled {
+        // Only a cycle that started after the answer can tell it was lost;
+        // one already running keeps it waiting.
+        let answer_lost = slot.answer == AnswerCheck::Due;
+        if answer_lost {
+            slot.answer = AnswerCheck::Idle;
+        }
+        if slot.holds(report) && slot.settled && !answer_lost {
             return HeldChange::Unchanged;
         }
 
@@ -468,6 +500,26 @@ impl MassDeleteHoldState {
         };
         emit(&hold, notify);
         true
+    }
+
+    /// Record that the user answered `side`'s hold (restore or remove).
+    ///
+    /// The prompt shows the answer as under way until an event moves it on,
+    /// and hcfs may never send one: a request marker can expire unused, and
+    /// one confirmation marker serves both sides, so a second removal
+    /// overwrites the first. The next cycle then reports the same hold,
+    /// which [`Self::record_held`] would absorb as unchanged. So the first
+    /// cycle that STARTS after the answer (hcfs reads its markers when a
+    /// cycle starts) and still reports the hold shows it again, which drops
+    /// the answer in the UI. A cycle already running when the answer came
+    /// does not count.
+    pub fn note_answered(&self, label: &str, side: MassDeleteSide) {
+        if let Some(holds) = self.lock().get_mut(label) {
+            let slot = holds.slot_mut(side);
+            if slot.entry.is_some() {
+                slot.answer = AnswerCheck::Answered;
+            }
+        }
     }
 
     /// Record a `MassDeleteRestored`: the side is restoring until the next
@@ -1022,6 +1074,77 @@ mod tests {
         state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
         assert!(state.finish_cycle(L).is_empty(), "the old drive's cycle closes nothing");
         assert_eq!(state.entry(L, Server).map(|e| e.count), Some(150));
+    }
+
+    /// The user answered, but hcfs's marker expired before a cycle used it:
+    /// the next cycle reports the very same hold. That report must reach the
+    /// UI again, or the banner says "Restoring…" for good. A cycle already
+    /// running when the answer came read its markers before it, so its
+    /// report does not count.
+    #[test]
+    fn an_answer_the_next_cycle_did_not_apply_re_emits_the_hold() {
+        let state = MassDeleteHoldState::new();
+        state.begin_cycle(L);
+        assert_eq!(report_held(&state, Server, 150), Some(true));
+        state.finish_cycle(L);
+
+        state.begin_cycle(L);
+        state.note_answered(L, Server);
+        assert_eq!(
+            report_held(&state, Server, 150),
+            None,
+            "this cycle started before the answer and never read it"
+        );
+        state.finish_cycle(L);
+
+        state.begin_cycle(L);
+        assert_eq!(
+            report_held(&state, Server, 150),
+            Some(false),
+            "the first cycle after the answer still holds: shown again, not notified again"
+        );
+        state.finish_cycle(L);
+
+        state.begin_cycle(L);
+        assert_eq!(report_held(&state, Server, 150), None, "shown once per answer");
+    }
+
+    /// hcfs keeps one confirmation marker for both sides, so removing one
+    /// side and then the other overwrites the first answer. The side whose
+    /// answer was lost is held again by the next cycle and must be shown
+    /// again; the side whose answer took effect clears.
+    #[test]
+    fn one_marker_for_both_sides_re_emits_the_side_whose_answer_was_lost() {
+        let state = MassDeleteHoldState::new();
+        cycle(&state, |s| {
+            report_held(s, Server, 150);
+            report_held(s, Local, 120);
+        });
+
+        state.note_answered(L, Server);
+        state.note_answered(L, Local);
+        let cleared = cycle(&state, |s| {
+            assert_eq!(report_held(s, Server, 150), Some(false), "the overwritten answer");
+        });
+        assert_eq!(cleared, vec![Local], "the applied answer clears its side");
+    }
+
+    /// An applied restore ends the episode, and the answer with it: a hold
+    /// after the restore is a new one, not a lost answer.
+    #[test]
+    fn an_applied_restore_forgets_the_answer() {
+        let state = MassDeleteHoldState::new();
+        cycle(&state, |s| {
+            report_held(s, Server, 150);
+        });
+        state.note_answered(L, Server);
+        cycle(&state, |s| s.record_restored(L, Server, 150));
+
+        state.begin_cycle(L);
+        assert_eq!(report_held(&state, Server, 150), Some(true), "a new episode");
+        state.finish_cycle(L);
+        state.begin_cycle(L);
+        assert_eq!(report_held(&state, Server, 150), None);
     }
 
     #[test]

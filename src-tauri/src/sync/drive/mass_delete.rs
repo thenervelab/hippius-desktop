@@ -98,6 +98,9 @@ async fn answer_hold(app: &AppHandle, label: &str, side: &str, count: usize, ans
         .await
         .map_err(|e| AppError::Other(format!("mass delete request task failed: {e}")))?
         .map_err(request_error)?;
+    // After the write: a cycle starting between the two would otherwise be
+    // read as having ignored an answer it could not have seen.
+    state.mass_delete_holds.note_answered(label, side);
     info!(label = %label, side = side.as_str(), count, ?answer, "Answered a held mass delete");
 
     // hcfs has no per-drive trigger; a round syncs every drive, which is

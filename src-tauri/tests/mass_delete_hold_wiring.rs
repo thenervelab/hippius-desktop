@@ -179,3 +179,21 @@ fn the_empty_root_check_runs_off_the_event_thread_and_only_on_a_change() {
         "the emit goes through settle_held, which drops a hold that changed or cleared meanwhile"
     );
 }
+
+/// An accepted answer is noted on the hold state once the marker is
+/// written, and before the sync round starts: the cycle that round starts
+/// is the first that can tell whether the answer was applied, and a hold it
+/// still reports must reach the UI again (`note_answered`), or the banner
+/// says "Restoring…" for good. Noted before the write, a cycle starting in
+/// between would re-show a hold whose answer it never read.
+#[test]
+fn an_accepted_answer_is_noted_between_the_write_and_the_sync_round() {
+    let src = read("src/sync/drive/mass_delete.rs");
+    let body = fn_body(&src, "async fn answer_hold(");
+    let write = body.find("write_answer(").expect("the answer is written");
+    let noted = body
+        .find("mass_delete_holds.note_answered(")
+        .expect("the answer is noted on the hold state");
+    let round = body.find("trigger_sync(").expect("a sync round is started");
+    assert!(write < noted && noted < round);
+}
