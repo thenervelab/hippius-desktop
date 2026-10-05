@@ -463,7 +463,13 @@ async fn restore_held_folders(holds: &MassDeleteHoldState, drive: FolderJobDrive
     let sides = restores.sides();
     let forgotten = forget_restored_folder_rows(drive, sides, &server, on_disk).await?;
     holds.ack_folder_restores(drive.label, restores);
-    info!(label = %drive.label, server = sides.server, local = sides.local, folders = forgotten, "folder-entity sync: restoring the folders of a restored mass delete");
+    info!(
+        label = %drive.label,
+        server = sides.server,
+        local = sides.local,
+        folders = forgotten,
+        "folder-entity sync: restoring the folders of a restored mass delete"
+    );
     Ok(())
 }
 

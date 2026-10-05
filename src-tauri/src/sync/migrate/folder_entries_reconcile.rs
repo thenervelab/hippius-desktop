@@ -409,7 +409,11 @@ pub(crate) async fn reconcile_with_on_disk(drive: FolderJobDrive<'_>, on_disk: &
                 // endpoint (folder entities carry no file bytes); a non-zero value
                 // would mean the side-channel guarantee was violated upstream.
                 if result.files_deleted != 0 {
-                    warn!(label = %label, files_deleted = result.files_deleted, "reconcile: unregister reported file deletions — folder-entity endpoint should delete none");
+                    warn!(
+                        label = %label,
+                        files_deleted = result.files_deleted,
+                        "reconcile: unregister reported file deletions — folder-entity endpoint should delete none"
+                    );
                 }
             }
             Err(e) => {
