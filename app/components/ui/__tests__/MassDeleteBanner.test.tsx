@@ -71,17 +71,17 @@ async function click(name: string | RegExp) {
 describe("MassDeleteBanner", () => {
   it("renders nothing without a hold", () => {
     renderBanner();
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("region")).toBeNull();
   });
 
   it("announces a server-side hold with its counts, Restore first", () => {
     renderBanner({ ...SERVER, emptyRoot: true });
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveAccessibleName("150 of 200 files in “Photos” are missing from this Mac");
-    expect(within(alert).getByText("Nothing has been deleted from Hippius yet.")).toBeInTheDocument();
-    expect(within(alert).getByText(/reconnect it/)).toBeInTheDocument();
+    const banner = screen.getByRole("region");
+    expect(banner).toHaveAccessibleName("150 of 200 files in “Photos” are missing from this Mac");
+    expect(within(banner).getByText("Nothing has been deleted from Hippius yet.")).toBeInTheDocument();
+    expect(within(banner).getByText(/reconnect it/)).toBeInTheDocument();
 
-    const buttons = within(alert).getAllByRole("button").map((b) => b.textContent);
+    const buttons = within(banner).getAllByRole("button").map((b) => b.textContent);
     expect(buttons).toEqual(["Restore files", "Remove from Hippius", "Decide later"]);
   });
 
@@ -155,12 +155,12 @@ describe("MassDeleteBanner", () => {
   it("Decide later hides the banner until the hold next changes", async () => {
     const store = renderBanner(SERVER);
     await click("Decide later");
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("region")).toBeNull();
 
     await act(async () => {
       store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 160 }));
     });
-    expect(screen.getByRole("alert")).toHaveAccessibleName(/160 of 200 files/);
+    expect(screen.getByRole("region")).toHaveAccessibleName(/160 of 200 files/);
   });
 
   it("a changed hold shows the new count and asks again", async () => {
@@ -172,7 +172,7 @@ describe("MassDeleteBanner", () => {
     await screen.findByText("Remove 150 files from Hippius?");
     await click("Remove 150 files");
 
-    expect(screen.getByRole("alert")).toHaveAccessibleName(/180 of 200 files/);
+    expect(screen.getByRole("region")).toHaveAccessibleName(/180 of 200 files/);
     expect(screen.getByText(/changed to 180\. Check it and choose again\./)).toBeInTheDocument();
     expect(restoreButton()).toBeInTheDocument();
   });
@@ -187,7 +187,7 @@ describe("MassDeleteBanner", () => {
 
     expect(toast.info).toHaveBeenCalledWith("These files are no longer waiting for a decision.");
     expect(tauri.core.invoke).toHaveBeenCalledWith("get_mass_delete_holds");
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
   });
 
   it("a restore already running is said, and the hold stays", async () => {
@@ -226,8 +226,8 @@ describe("MassDeleteBanner", () => {
 
   it("a member's local-side hold hides Restore and warns on Remove", async () => {
     renderBanner({ ...SERVER, side: "local", canRestore: false });
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveAccessibleName("150 files in “Photos” are missing from Hippius");
+    const banner = screen.getByRole("region");
+    expect(banner).toHaveAccessibleName("150 files in “Photos” are missing from Hippius");
     expect(restoreButton()).toBeNull();
 
     await click("Remove from this Mac");
@@ -267,8 +267,65 @@ describe("MassDeleteBanner", () => {
     );
   });
 
+  // A banner with buttons is a labelled region, not an alert (an alert's
+  // content is read out at once and is not meant to hold controls); what
+  // changes in it is announced by a polite status line that is always there.
+  it("is a labelled region with a polite status line", () => {
+    renderBanner(SERVER);
+    expect(screen.queryByRole("alert")).toBeNull();
+    const banner = screen.getByRole("region", { name: /150 of 200 files/ });
+    const status = within(banner).getByRole("status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("a changed count is announced in the status line", async () => {
+    tauri.onInvoke("restore_mass_delete", () => {
+      throw notReady("MASS_DELETE_HOLD_CHANGED", { held: 180 });
+    });
+    renderBanner(SERVER);
+    await click("Restore files");
+    expect(screen.getByRole("status")).toHaveTextContent(/changed to 180/);
+  });
+
+  // The safe answer is the default: a hold that appears, or asks again with
+  // a new count, puts focus on Restore.
+  it("focuses Restore when a hold appears and when its count changes", async () => {
+    const store = renderBanner(SERVER);
+    expect(restoreButton()).toHaveFocus();
+
+    screen.getByRole("button", { name: "Decide later" }).focus();
+    await act(async () => {
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 170 }));
+    });
+    expect(restoreButton()).toHaveFocus();
+  });
+
+  it("focuses Decide later when this account cannot restore", () => {
+    renderBanner({ ...SERVER, side: "local", canRestore: false });
+    expect(screen.getByRole("button", { name: "Decide later" })).toHaveFocus();
+  });
+
+  // Answering removes the buttons; focus must land on the banner's status
+  // line, not fall back to the page body where a keyboard user is lost.
+  it("moves focus to the status line when an answer removes the buttons", async () => {
+    tauri.onInvoke("restore_mass_delete", () => undefined);
+    renderBanner(SERVER);
+    await click("Restore files");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+  });
+
+  it("moves focus to the status line after confirming Remove", async () => {
+    tauri.onInvoke("confirm_mass_delete", () => undefined);
+    renderBanner(SERVER);
+    await click("Remove from Hippius");
+    await screen.findByText("Remove 150 files from Hippius?");
+    await click("Remove 150 files");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Removing 150 files…"));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+  });
+
   it("shows one banner per drive side", () => {
     renderBanner(SERVER, { ...SERVER, label: "Docs", side: "local" });
-    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    expect(screen.getAllByRole("region")).toHaveLength(2);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -128,11 +128,20 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
   );
 
   const confirm = removeConfirmCopy({ ...hold, count: confirmCount ?? hold.count }, device);
+  const focus = useBannerFocus({
+    holdKey,
+    count: hold.count,
+    canRestore: hold.canRestore,
+    answerable: progress === null,
+    dialogOpen: confirmCount !== null,
+  });
 
   return (
     <>
-      <div
-        role="alert"
+      {/* A labelled region, not role="alert": an alert is read out at once
+          and is not meant to hold controls. Focus on Restore announces the
+          banner when it appears; later changes go through the status line. */}
+      <section
         aria-labelledby={titleId}
         className="relative overflow-hidden rounded-xl border border-warning-50/40 bg-gradient-to-r from-warning-50/[0.14] to-warning-50/[0.04] px-4 py-3.5 mt-2 dark:border-warning-50/35 dark:from-warning-50/[0.16] dark:to-warning-50/[0.05]"
       >
@@ -149,27 +158,34 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
                 {line}
               </p>
             ))}
-            {hold.refusal && (
-              <p className="text-xs font-medium text-grey-10 dark:text-white">
-                {refusalCopy(hold.refusal)}
-              </p>
-            )}
-            {hold.notice && (
-              <p className="text-xs font-medium text-grey-10 dark:text-white">{hold.notice}</p>
-            )}
-          </div>
-          {progress ? (
-            <p
+            <div
+              ref={focus.statusRef}
               role="status"
-              className="flex items-center gap-2 text-sm text-grey-10 dark:text-white"
+              aria-live="polite"
+              tabIndex={-1}
+              className="outline-none focus-visible:ring-2 focus-visible:ring-warning-50 rounded"
             >
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              {progress}
-            </p>
-          ) : (
+              {hold.refusal && (
+                <p className="text-xs font-medium text-grey-10 dark:text-white">
+                  {refusalCopy(hold.refusal)}
+                </p>
+              )}
+              {hold.notice && (
+                <p className="text-xs font-medium text-grey-10 dark:text-white">{hold.notice}</p>
+              )}
+              {progress && (
+                <p className="mt-1 flex items-center gap-2 text-sm text-grey-10 dark:text-white">
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  {progress}
+                </p>
+              )}
+            </div>
+          </div>
+          {progress === null && (
             <div className="flex flex-wrap items-center gap-2">
               {hold.canRestore && (
                 <Button
+                  ref={focus.restoreRef}
                   variant="primary"
                   size="auto"
                   className="h-[30px] rounded-[6px] px-3 font-geist text-[14px]"
@@ -190,6 +206,7 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
                 {copy.removeLabel}
               </Button>
               <Button
+                ref={focus.laterRef}
                 variant="defaultStable"
                 size="auto"
                 className="h-[30px] rounded-[6px] px-3 font-geist text-[14px] !bg-transparent text-grey-10 dark:text-white"
@@ -201,7 +218,7 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       {/* Radix dialog: focus is trapped inside, and Escape, the close button
           and a click outside all cancel; only the Remove button removes. */}
@@ -219,4 +236,50 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
       />
     </>
   );
+}
+
+interface BannerFocusInput {
+  holdKey: string;
+  count: number;
+  canRestore: boolean;
+  /** The answer buttons are shown (no answer or restore in progress). */
+  answerable: boolean;
+  dialogOpen: boolean;
+}
+
+/**
+ * Where keyboard focus goes in a banner.
+ *
+ * - The safe answer is the default: when a hold appears, or asks again with a
+ *   new count, focus goes to Restore (Decide later when this account cannot
+ *   restore). Never while the Remove confirmation is open: its focus trap
+ *   owns focus then.
+ * - When the buttons go away (an answer accepted, Restore refused for a
+ *   member, the confirmation closed over a vanished trigger), focus would
+ *   fall to the page body; it goes to the status line, which says what is
+ *   happening. Checked a tick later, after Radix's own close-time focus
+ *   restore has run, and only when focus is actually lost.
+ */
+function useBannerFocus({ holdKey, count, canRestore, answerable, dialogOpen }: BannerFocusInput) {
+  const restoreRef = useRef<HTMLButtonElement>(null);
+  const laterRef = useRef<HTMLButtonElement>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
+  const dialogOpenRef = useRef(dialogOpen);
+  dialogOpenRef.current = dialogOpen;
+
+  useEffect(() => {
+    if (dialogOpenRef.current) return;
+    (restoreRef.current ?? laterRef.current)?.focus();
+  }, [holdKey, count]);
+
+  useEffect(() => {
+    if (dialogOpen) return;
+    const timer = setTimeout(() => {
+      const active = document.activeElement;
+      if (active === null || active === document.body) statusRef.current?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [answerable, canRestore, dialogOpen]);
+
+  return { restoreRef, laterRef, statusRef };
 }
