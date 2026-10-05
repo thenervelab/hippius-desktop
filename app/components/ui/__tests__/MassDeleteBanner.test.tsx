@@ -127,6 +127,31 @@ describe("MassDeleteBanner", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Removing 150 files…");
   });
 
+  // The confirmation is the user agreeing to one number. A hold that grows
+  // while it is open must not change what they agreed to: the dialog keeps
+  // and sends the count it opened with, and Rust refuses it as changed.
+  it("Remove sends the count the confirmation opened with, not a newer one", async () => {
+    tauri.onInvoke("confirm_mass_delete", () => {
+      throw notReady("MASS_DELETE_HOLD_CHANGED", { held: 180 });
+    });
+    const store = renderBanner(SERVER);
+    await click("Remove from Hippius");
+    await screen.findByText("Remove 150 files from Hippius?");
+
+    await act(async () => {
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 180 }));
+    });
+    expect(screen.getByText("Remove 150 files from Hippius?")).toBeInTheDocument();
+    await click("Remove 150 files");
+
+    expect(tauri.core.invoke).toHaveBeenCalledWith("confirm_mass_delete", {
+      label: "Photos",
+      side: "server",
+      count: 150,
+    });
+    expect(screen.getByText(/changed to 180\. Check it and choose again\./)).toBeInTheDocument();
+  });
+
   it("Decide later hides the banner until the hold next changes", async () => {
     const store = renderBanner(SERVER);
     await click("Decide later");

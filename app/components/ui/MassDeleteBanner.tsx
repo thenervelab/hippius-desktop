@@ -55,7 +55,11 @@ type Answer = "restore" | "remove";
 
 function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDeleteHoldView }) {
   const setHolds = useSetAtom(massDeleteHoldsAtom);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  // The count the Remove confirmation opened with, while it is open. The
+  // dialog shows and sends this snapshot, not the live count: a hold that
+  // grows while it is open must not change the number the user agreed to.
+  // Rust refuses the stale count (HoldChanged), and the banner asks again.
+  const [confirmCount, setConfirmCount] = useState<number | null>(null);
   const [busy, setBusy] = useState<Answer | null>(null);
 
   const device = deviceName(isMacPlatform());
@@ -109,11 +113,11 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
   );
 
   const answer = useCallback(
-    async (kind: Answer) => {
+    async (kind: Answer, count: number) => {
       setBusy(kind);
       try {
         const send = kind === "restore" ? restoreMassDelete : confirmMassDelete;
-        await send(hold.label, hold.side, hold.count);
+        await send(hold.label, hold.side, count);
         patch({ requested: kind, notice: null });
       } catch (err) {
         await handleRefusal(err);
@@ -121,10 +125,10 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
         setBusy(null);
       }
     },
-    [hold.label, hold.side, hold.count, patch, handleRefusal],
+    [hold.label, hold.side, patch, handleRefusal],
   );
 
-  const confirm = removeConfirmCopy(hold, device);
+  const confirm = removeConfirmCopy({ ...hold, count: confirmCount ?? hold.count }, device);
 
   return (
     <>
@@ -170,7 +174,7 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
                   variant="primary"
                   size="auto"
                   className="h-[30px] rounded-[6px] px-3 font-geist text-[14px]"
-                  onClick={() => void answer("restore")}
+                  onClick={() => void answer("restore", hold.count)}
                   loading={busy === "restore"}
                   disabled={busy !== null}
                 >
@@ -181,7 +185,7 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
                 variant="destructive"
                 size="auto"
                 className="h-[30px] rounded-[6px] px-3 font-geist text-[14px] text-white"
-                onClick={() => setConfirmOpen(true)}
+                onClick={() => setConfirmCount(hold.count)}
                 disabled={busy !== null}
               >
                 {copy.removeLabel}
@@ -203,14 +207,16 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
       {/* Radix dialog: focus is trapped inside, and Escape, the close button
           and a click outside all cancel; only the Remove button removes. */}
       <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
+        open={confirmCount !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmCount(null);
+        }}
         title={confirm.title}
         description={confirm.description}
         cancelText="Keep files"
         confirmText={confirm.confirm}
         variant="danger"
-        onConfirm={() => answer("remove")}
+        onConfirm={() => answer("remove", confirmCount ?? hold.count)}
       />
     </>
   );
