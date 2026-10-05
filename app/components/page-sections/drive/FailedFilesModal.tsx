@@ -106,8 +106,9 @@ export default function FailedFilesModal() {
     async (action: Action) => {
       // "Retry all" leaves out files hcfs has quarantined or refused: the
       // command would report success, clear their badges, and the next cycle
-      // would skip them (or refuse them again, unreported). Skip and Exclude still apply to everything —
-      // those are the two escape hatches that DO work for such a file.
+      // would skip them (or refuse them again, unreported). Skip and Exclude
+      // still apply to everything — those are the two escape hatches that DO
+      // work for such a file.
       const all = failedFiles ?? [];
       const targets =
         action === "retry" ? all.filter((f) => isRetryableFailedFile(f)) : all;

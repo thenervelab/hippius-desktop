@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   deviceName,
-  holdCopy,
   progressCopy,
   refusalCopy,
   removeConfirmCopy,
+  removeLabel,
   restoredToastCopy,
 } from "@/app/lib/massDelete/copy";
 import type { MassDeleteHoldView } from "@/app/lib/massDelete/holds";
@@ -17,6 +17,8 @@ const view = (overrides: Partial<MassDeleteHoldView> = {}): MassDeleteHoldView =
   syncedCount: 200,
   emptyRoot: false,
   canRestore: true,
+  title: "150 of 200 files in “Photos” are missing from this Mac",
+  body: ["Nothing has been deleted from Hippius yet."],
   dismissed: false,
   requested: null,
   refusal: null,
@@ -32,31 +34,17 @@ describe("mass delete copy", () => {
     expect(deviceName(false)).toBe("this computer");
   });
 
-  it("server side: missing here, nothing deleted from Hippius", () => {
-    const copy = holdCopy(view(), MAC);
-    expect(copy.title).toBe("150 of 200 files in “Photos” are missing from this Mac");
-    expect(copy.body).toEqual(["Nothing has been deleted from Hippius yet."]);
-    expect(copy.removeLabel).toBe("Remove from Hippius");
+  // The title and lines are Rust's (`hold_text`, unit-tested there); only
+  // the buttons around them are written here.
+  it("names the Remove button by the side whose copies go", () => {
+    expect(removeLabel("server", MAC)).toBe("Remove from Hippius");
+    expect(removeLabel("local", MAC)).toBe("Remove from this Mac");
   });
 
-  it("an empty root adds the reconnect advice", () => {
-    expect(holdCopy(view({ emptyRoot: true }), MAC).body).toContain(
-      "If an external disk or cloud folder is disconnected, reconnect it.",
-    );
-  });
-
-  it("local side: missing from Hippius, with the renamed-elsewhere caveat", () => {
-    const copy = holdCopy(view({ side: "local" }), MAC);
-    expect(copy.title).toBe("150 files in “Photos” are missing from Hippius");
-    expect(copy.body[0]).toBe("Nothing has been deleted from this Mac yet.");
-    expect(copy.body[1]).toMatch(/renamed or moved the folder on another device/);
-    expect(copy.removeLabel).toBe("Remove from this Mac");
-  });
-
-  it("a member's local side says only the owner can put them back", () => {
-    const copy = holdCopy(view({ side: "local", canRestore: false }), MAC);
-    expect(copy.body).toContain("Only the owner of this shared drive can put them back on Hippius.");
-    expect(copy.body.join(" ")).not.toMatch(/restoring uploads/);
+  // Rust groups every count with commas; a German locale writing "1.500"
+  // here would put two spellings of one count on the banner.
+  it("groups counts the way Rust does, whatever the locale", () => {
+    expect(progressCopy(view({ count: 1500, state: "restoring" }))).toBe("Restoring 1,500 files…");
   });
 
   it("the Remove confirmation states the count, and warns a member", () => {

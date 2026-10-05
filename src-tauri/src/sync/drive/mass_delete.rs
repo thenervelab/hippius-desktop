@@ -10,7 +10,9 @@
 //! count against the hold the prompt was shown (`AppState.mass_delete_holds`)
 //! and refuse with the same typed kinds hcfs's own refusals map to, so the
 //! FE handles one set: nothing held, hold changed (with the new count), a
-//! restore under way, a member who cannot restore.
+//! restore under way, a member who cannot restore. A removal is checked
+//! once more against hcfs's own record before its marker is written
+//! ([`write_answer`]).
 //!
 //! Membership is read from `sync_paths` (the authoritative identity), not
 //! from the hold state: a throwaway `Drive` has no client, so hcfs cannot
@@ -29,7 +31,7 @@ use crate::error::{AppError, NotReadyKind, Result};
 use crate::sync::events::MassDeleteHoldPayload;
 use crate::sync::mass_delete_hold::{HoldEntry, HoldPhase};
 use hcfs_client::engine::manager::DriveManager;
-use hcfs_client::sync::{MassDeleteRequestError, MassDeleteSide};
+use hcfs_client::sync::{HeldMassDelete, MassDeleteRequestError, MassDeleteSide};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 use tracing::info;
@@ -153,6 +155,13 @@ pub(crate) fn validate_answer(
 
 /// Write the answer as hcfs's marker for the drive's next cycle, on a
 /// manager built just for this (never initialized, so lock-free).
+///
+/// A removal is checked against hcfs's own record first. hcfs validates a
+/// restore against it, but records a confirmation without looking, and the
+/// desktop's hold state can lag the record by a cycle's events: a removal
+/// for a side the record no longer holds, or holds at a count grown past
+/// what the user was shown, is refused here rather than left to apply to
+/// the next hold.
 pub(crate) fn write_answer(
     sync_root: PathBuf,
     config_dir: PathBuf,
@@ -163,8 +172,41 @@ pub(crate) fn write_answer(
     let manager = DriveManager::new(sync_root, config_dir);
     match answer {
         HoldAnswer::Restore => manager.restore_mass_delete(side, count).map(|_| ()),
-        HoldAnswer::Remove => manager.confirm_mass_delete(side, count),
+        HoldAnswer::Remove => {
+            let recorded = manager
+                .held_mass_deletes()
+                .map_err(|message| MassDeleteRequestError::Failed { message })?;
+            check_recorded_removal(&recorded, side, count)?;
+            manager.confirm_mass_delete(side, count)
+        }
     }
+}
+
+/// Deletes a confirmation covers beyond the count it names, as hcfs allows
+/// (`confirmation_tolerance`, private upstream): five files or 5%,
+/// whichever is larger.
+fn confirmation_tolerance(count: usize) -> usize {
+    (count / 20).max(5)
+}
+
+/// Whether hcfs's record holds `side` at a count a removal of `count` may
+/// release. One-directional, as hcfs's restore check: the danger is
+/// removing files the user never saw, and a hold that shrank removes fewer.
+fn check_recorded_removal(recorded: &[HeldMassDelete], side: MassDeleteSide, count: usize) -> std::result::Result<(), MassDeleteRequestError> {
+    let Some(held) = recorded.iter().find(|h| h.side == side) else {
+        return Err(MassDeleteRequestError::NothingHeld { side });
+    };
+    if HoldPhase::from(held.state) == HoldPhase::Restoring {
+        return Err(MassDeleteRequestError::RestoreInProgress { side });
+    }
+    if held.count > count + confirmation_tolerance(count) {
+        return Err(MassDeleteRequestError::HoldChanged {
+            side,
+            held: held.count,
+            shown: count,
+        });
+    }
+    Ok(())
 }
 
 /// Map hcfs's typed refusal to the `NotReady` subkinds the FE matches on.
@@ -285,9 +327,42 @@ mod tests {
     /// The fixture hcfs writes after a cycle that held `count` server-side
     /// deletes (`mass_delete_held.json`: ids are 64 hex digits each).
     fn write_held_record(config_dir: &std::path::Path, count: usize) {
+        write_record(config_dir, "held", count);
+    }
+
+    /// As [`write_held_record`], in hcfs state `state`.
+    fn write_record(config_dir: &std::path::Path, state: &str, count: usize) {
         let ids: Vec<String> = (0..count).map(|n| format!("{n:064x}")).collect();
-        let record = serde_json::json!([{ "side": "server", "state": "held", "synced_count": 300, "held_at": 1, "ids": ids }]);
+        let record = serde_json::json!([{ "side": "server", "state": state, "synced_count": 300, "held_at": 1, "ids": ids }]);
         std::fs::write(config_dir.join("mass_delete_held.json"), record.to_string()).expect("write held record");
+    }
+
+    /// hcfs's own confirm records whatever it is given. The desktop's hold
+    /// state can lag hcfs's record (a cycle cleared the hold, or grew it,
+    /// and its events are still on the way), so the removal is checked
+    /// against the record itself before the marker is written: nothing
+    /// held there, a restore under way, or a hold grown past the count
+    /// shown writes no confirmation.
+    #[test]
+    fn a_removal_is_checked_against_hcfs_record_before_it_is_written() {
+        let root = tempfile::tempdir().expect("root");
+        let config = tempfile::tempdir().expect("config");
+        let marker = config.path().join("confirm_mass_delete");
+        let remove = |count| write_answer(root.path().into(), config.path().into(), Server, count, HoldAnswer::Remove);
+
+        assert_eq!(remove(150), Err(MassDeleteRequestError::NothingHeld { side: Server }));
+        assert!(!marker.exists(), "nothing held: no confirmation");
+
+        write_record(config.path(), "restoring", 150);
+        assert_eq!(remove(150), Err(MassDeleteRequestError::RestoreInProgress { side: Server }));
+        assert!(!marker.exists(), "a restoring side is not held");
+
+        write_held_record(config.path(), 150);
+        assert!(matches!(remove(100), Err(MassDeleteRequestError::HoldChanged { held: 150, .. })));
+        assert!(!marker.exists(), "a hold that grew past the count shown");
+
+        remove(147).expect("within hcfs's tolerance of the count shown");
+        assert!(marker.exists());
     }
 
     /// End to end against hcfs's real marker files: a restore writes its

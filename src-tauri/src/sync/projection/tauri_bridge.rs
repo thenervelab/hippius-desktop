@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::sync::events;
 use crate::sync::intent::IntentRepo;
+use crate::sync::mass_delete_hold::CycleSource;
 use crate::sync::progress::{SyncSnapshot, cap_file_list, prepare_snapshot_for_emit};
 
 /// Process-wide cursor holding the last-emitted snapshot fingerprint.
@@ -284,7 +285,7 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
             app.clone(),
             account_id,
             payload.label.clone(),
-            crate::sync::folder_entries_materialize::FolderEntitySyncTrigger::PerCycle,
+            crate::sync::folder_entries_materialize::completion_trigger(&app_state.mass_delete_holds, &payload.label),
         );
     }
 
@@ -622,40 +623,50 @@ fn emit_mass_delete_held<R: tauri::Runtime>(app: &AppHandle<R>, hold: &crate::sy
     let _ = app.emit(events::MASS_DELETE_HELD, events::MassDeleteHoldPayload::from(hold));
 
     if let Some(owner) = notify {
-        let payload = events::MassDeleteNotifyPayload {
+        let description = held_notification_text(&hold.label, hold.side, hold.entry, hold.can_restore);
+        let row = HeldRow {
+            owner: owner.to_string(),
             label: hold.label.clone(),
-            side: hold.side.as_str(),
-            description: held_notification_text(&hold.label, hold.side, hold.entry, hold.can_restore),
+            side: hold.side,
+            description,
         };
-        tauri::async_runtime::spawn(save_held_notification(app.clone(), owner.to_string(), hold.side, payload));
+        tauri::async_runtime::spawn(save_held_notification(app.clone(), row));
     }
+}
+
+/// A held-delete notification to save: for whom, which banner it links
+/// back to, and its text.
+struct HeldRow {
+    /// The account whose drive holds the files.
+    owner: String,
+    /// The drive label.
+    label: String,
+    /// The held side.
+    side: hcfs_client::sync::MassDeleteSide,
+    /// The notification text (`held_notification_text`).
+    description: String,
 }
 
 /// Save a held mass delete's notification for `owner` (unless that account
 /// turned Files notifications off), then tell the UI a row was added so the
 /// bell refreshes. Rust saves it, not the UI: it is raised once per
 /// episode, often before the UI has restored the session.
-async fn save_held_notification<R: tauri::Runtime>(
-    app: AppHandle<R>,
-    owner: String,
-    side: hcfs_client::sync::MassDeleteSide,
-    payload: events::MassDeleteNotifyPayload,
-) {
+async fn save_held_notification<R: tauri::Runtime>(app: AppHandle<R>, row: HeldRow) {
     use tauri::Manager;
     let pool = match app.state::<crate::app_state::AppState>().pool() {
         Ok(pool) => pool.clone(),
         Err(e) => {
-            tracing::warn!(label = %payload.label, error = %e, "No database for the held-delete notification");
+            tracing::warn!(label = %row.label, error = %e, "No database for the held-delete notification");
             return;
         }
     };
-    let saved = crate::notifications::credits::create_mass_delete_held_notification(&pool, &owner, &payload.label, side, &payload.description).await;
+    let saved = crate::notifications::credits::create_mass_delete_held_notification(&pool, &row.owner, &row.label, row.side, &row.description).await;
     match saved {
         Ok(Some(_)) => {
-            let _ = app.emit(events::MASS_DELETE_HELD_NOTIFY, payload);
+            let _ = app.emit(events::MASS_DELETE_HELD_NOTIFY, events::LabelPayload { label: row.label });
         }
-        Ok(None) => tracing::debug!(label = %payload.label, "Files notifications are off; held-delete notification not saved"),
-        Err(e) => tracing::warn!(label = %payload.label, error = %e, "Could not save the held-delete notification"),
+        Ok(None) => tracing::debug!(label = %row.label, "Files notifications are off; held-delete notification not saved"),
+        Err(e) => tracing::warn!(label = %row.label, error = %e, "Could not save the held-delete notification"),
     }
 }
 
@@ -694,16 +705,16 @@ pub(crate) fn report_reviewed_mass_deletes<R: tauri::Runtime>(app: &AppHandle<R>
     for hold in &outcome.mass_deletes_held {
         handle_mass_delete_held(app, label.to_string(), hold.side, hold.count, hold.synced_count);
     }
-    finish_mass_delete_cycle(app, label);
+    finish_mass_delete_cycle(app, label, CycleSource::Reviewed);
 }
 
-/// A cycle completed for `label`: every side it did not report is no longer
-/// held. Tells the UI once per cleared side.
-fn finish_mass_delete_cycle<R: tauri::Runtime>(app: &AppHandle<R>, label: &str) {
+/// A cycle `source` opened completed for `label`: every side it did not
+/// report is no longer held. Tells the UI once per cleared side.
+fn finish_mass_delete_cycle<R: tauri::Runtime>(app: &AppHandle<R>, label: &str, source: CycleSource) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
 
-    for side in app_state.mass_delete_holds.finish_cycle(label) {
+    for side in app_state.mass_delete_holds.finish_cycle(label, source) {
         tracing::info!(label = %label, side = side.as_str(), "mass delete hold cleared");
         emit_mass_delete_cleared(app, label, side);
     }
@@ -798,6 +809,10 @@ fn handle_shared_drive_revoked(app: &AppHandle, payload: events::SyncErrorPayloa
 /// latch an unplugged disk would fill the bell. `SYNC_ERROR` still fires
 /// every cycle for its live consumers. A reviewed sync
 /// ([`FailureNotify::Always`]) always notifies, as on the generic arm.
+///
+/// The notification is Rust's ("Drive Disconnected",
+/// [`save_disconnected_notification`]), not the UI's `SYNC_FAILED_NOTIFY`
+/// path, which titles every row "Sync Failed".
 fn handle_root_not_mounted(app: &AppHandle, mut payload: events::SyncErrorPayload, notify: FailureNotify) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
@@ -815,9 +830,108 @@ fn handle_root_not_mounted(app: &AppHandle, mut payload: events::SyncErrorPayloa
     };
     if should_notify {
         tracing::warn!(label = %payload.label, "drive folder is not mounted; hcfs refused the cycle");
-        let _ = app.emit(events::SYNC_FAILED_NOTIFY, payload.clone());
+        if let Ok(owner) = app_state.current_account_id() {
+            tauri::async_runtime::spawn(save_disconnected_notification(app.clone(), owner, payload.label.clone()));
+        }
     }
     let _ = app.emit(events::SYNC_ERROR, payload);
+}
+
+/// Save the "Drive Disconnected" notification for `owner` (unless that
+/// account turned Files notifications off), then tell the UI a row was
+/// added so the bell refreshes. Rust saves it, as it does the held-delete
+/// one: the UI would title it "Sync Failed", and nothing failed.
+async fn save_disconnected_notification(app: AppHandle, owner: String, label: String) {
+    use crate::notifications::credits::{SyncNotificationOutcome, create_files_notification};
+    use tauri::Manager;
+
+    let pool = match app.state::<crate::app_state::AppState>().pool() {
+        Ok(pool) => pool.clone(),
+        Err(e) => {
+            tracing::warn!(label = %label, error = %e, "No database for the drive-disconnected notification");
+            return;
+        }
+    };
+    let description = disconnected_notification_text(&label);
+    match create_files_notification(&pool, &owner, &description, SyncNotificationOutcome::DriveDisconnected).await {
+        Ok(Some(_)) => {
+            let _ = app.emit(events::DRIVE_DISCONNECTED_NOTIFY, events::LabelPayload { label });
+        }
+        Ok(None) => tracing::debug!(label = %label, "Files notifications are off; drive-disconnected notification not saved"),
+        Err(e) => tracing::warn!(label = %label, error = %e, "Could not save the drive-disconnected notification"),
+    }
+}
+
+/// The "Drive Disconnected" notification's text: which folder, and Rust's
+/// copy for it.
+fn disconnected_notification_text(label: &str) -> String {
+    format!("Folder \"{label}\": {}", events::ROOT_NOT_MOUNTED_MESSAGE)
+}
+
+/// Handle the engine's `SyncEvent::SyncCompleted`.
+///
+/// The hold cycle is finished here, not in the shared
+/// [`handle_sync_completed`]: the reviewed-conflict path records its own
+/// results and ends its own cycle (`report_reviewed_mass_deletes`). hcfs
+/// may complete one cycle twice (it skipped conflicts); the state acts on
+/// the first. Everything else in the completion transition (the cleanup,
+/// the per-file detail collection) lives in `handle_sync_completed`, shared
+/// with the reviewed-conflict command so the two paths can't drift;
+/// `files: Vec::new()` is a placeholder it overwrites from session state.
+fn handle_engine_sync_completed(app: &AppHandle, event: SyncEvent) {
+    let SyncEvent::SyncCompleted {
+        label,
+        files_uploaded,
+        files_downloaded,
+        files_deleted_locally,
+        files_deleted_remotely,
+        conflicts_resolved,
+        conflicts_skipped,
+        files_failed,
+    } = event
+    else {
+        // `on_event` routes only this variant here.
+        return;
+    };
+    finish_mass_delete_cycle(app, &label, CycleSource::Engine);
+    let payload = events::SyncCompletedPayload {
+        label,
+        files_uploaded,
+        files_downloaded,
+        files_deleted_locally,
+        files_deleted_remotely,
+        conflicts_resolved,
+        conflicts_skipped,
+        files: Vec::new(),
+    };
+    handle_sync_completed(app, payload, files_failed);
+}
+
+/// Handle the engine's `SyncEvent::SyncError`. Cancel-drop, the defensive
+/// clears and the emits all live in [`handle_sync_error`], shared with the
+/// reviewed-conflict command so the two paths can't drift; the auto-retry
+/// loop rate-limits its notifications per label.
+fn handle_engine_sync_error(app: &AppHandle, event: SyncEvent) {
+    let SyncEvent::SyncError {
+        label,
+        error,
+        retry_in_secs,
+        consecutive_failures,
+    } = event
+    else {
+        // `on_event` routes only this variant here.
+        return;
+    };
+    let payload = events::SyncErrorPayload {
+        label,
+        error,
+        retry_in_secs,
+        consecutive_failures,
+        // `handle_sync_error` sets the specific kind once it has classified
+        // the error string.
+        kind: events::SyncErrorKind::Generic,
+    };
+    handle_sync_error(app, payload, FailureNotify::Gated);
 }
 
 /// Handle `SyncEvent::SyncStarted`: bump the session epoch, reset the per-label
@@ -853,7 +967,7 @@ fn handle_sync_started(app: &AppHandle, mut payload: events::SyncStartedPayload)
         // completion then clears what it did not (`finish_mass_delete_cycle`).
         // Not a clear: the hold stands across cycles and is emitted only
         // when it changes.
-        app_state.mass_delete_holds.begin_cycle(&payload.label);
+        app_state.mass_delete_holds.begin_cycle(&payload.label, CycleSource::Engine);
 
         // ARM (don't mark) the preparing override. Marking here would
         // paint the red "Preparing sync…" widget/tray state across the
@@ -930,7 +1044,7 @@ fn reevaluate_keep_awake(app_state: &crate::app_state::AppState, context: &'stat
 
 /// Handle `SyncEvent::SyncReset`: wipe every per-drive preparing/credits/error
 /// counter on account switch / logout / reset and forward `SYNC_RESET`.
-fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
+fn handle_sync_reset<R: tauri::Runtime>(app: &AppHandle<R>, account_id: String, message: String) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     if app_state.preparing.clear_all() {
@@ -1220,15 +1334,6 @@ fn handle_progress_snapshot(app: &AppHandle, mut snapshot: SyncSnapshot) {
 }
 
 impl SyncEventHandler for TauriSyncBridge {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Every non-trivial arm now delegates to a handle_* helper, so what remains is \
-                  per-variant field-mapping boilerplate: destructure the upstream SyncEvent variant and \
-                  rebuild its distinct typed Tauri payload before delegating. Keeping that 1:1 \
-                  Rust-event-to-Tauri-event mapping inline in one match is what makes the correspondence \
-                  auditable in a single place; a generic conversion layer would only hide it behind \
-                  macros."
-    )]
     fn on_event(&self, event: SyncEvent) {
         let Some(app) = self.app() else { return };
 
@@ -1257,67 +1362,8 @@ impl SyncEventHandler for TauriSyncBridge {
                     remote_delete_files,
                 },
             ),
-            SyncEvent::SyncCompleted {
-                label,
-                files_uploaded,
-                files_downloaded,
-                files_deleted_locally,
-                files_deleted_remotely,
-                conflicts_resolved,
-                conflicts_skipped,
-                files_failed,
-            } => {
-                // Here, not in the shared `handle_sync_completed`: the
-                // reviewed-conflict path records its own results and ends
-                // its own cycle (`report_reviewed_mass_deletes`). hcfs may
-                // complete one cycle twice (it skipped conflicts); the state
-                // acts on the first.
-                finish_mass_delete_cycle(&app, &label);
-                // Single source of truth for the completion transition: the
-                // cleanup (preparing-clear, banner-clear, failure-counter
-                // recompute) and the per-file detail collection live in
-                // `handle_sync_completed`, shared with the reviewed-conflict
-                // command so the two paths can't drift. `files: Vec::new()` is
-                // a placeholder the helper overwrites from session state.
-                handle_sync_completed(
-                    &app,
-                    events::SyncCompletedPayload {
-                        label,
-                        files_uploaded,
-                        files_downloaded,
-                        files_deleted_locally,
-                        files_deleted_remotely,
-                        conflicts_resolved,
-                        conflicts_skipped,
-                        files: Vec::new(),
-                    },
-                    files_failed,
-                );
-            }
-            SyncEvent::SyncError {
-                label,
-                error,
-                retry_in_secs,
-                consecutive_failures,
-            } => {
-                // Cancel-drop + epoch-gated defensive clears + emit all live in
-                // `handle_sync_error`, shared with the reviewed-conflict command
-                // so the two paths can't drift.
-                handle_sync_error(
-                    &app,
-                    events::SyncErrorPayload {
-                        label,
-                        error,
-                        retry_in_secs,
-                        consecutive_failures,
-                        // `handle_sync_error` sets the specific kind once it
-                        // has classified the error string.
-                        kind: events::SyncErrorKind::Generic,
-                    },
-                    // Auto-retry loop: rate-limit notifications per label.
-                    FailureNotify::Gated,
-                );
-            }
+            event @ SyncEvent::SyncCompleted { .. } => handle_engine_sync_completed(&app, event),
+            event @ SyncEvent::SyncError { .. } => handle_engine_sync_error(&app, event),
             SyncEvent::SyncStopped { label } => handle_sync_stopped(&app, label),
             SyncEvent::SyncReset { account_id, message } => handle_sync_reset(&app, account_id, message),
             SyncEvent::PlanReady {
@@ -2456,7 +2502,7 @@ mod tests {
         let handle = app.handle().clone();
         let holds = std::sync::Arc::clone(&handle.state::<crate::app_state::AppState>().mass_delete_holds);
         holds.arm("photos", "5Owner", false, std::path::Path::new("/nonexistent"), &[]);
-        holds.begin_cycle("photos");
+        holds.begin_cycle("photos", CycleSource::Reviewed);
 
         let outcome = SyncOutcome {
             mass_delete_restores: vec![MassDeleteRestore {
@@ -2483,5 +2529,52 @@ mod tests {
             Some((HoldPhase::Held, 120)),
             "the hold is recorded, and survives the cycle's end"
         );
+    }
+
+    // ── Account reset ──────────────────────────────────────────────────
+
+    /// An account switch must not carry the previous account's holds or
+    /// cached listings into the next: labels are reused across accounts.
+    #[tokio::test]
+    async fn an_account_reset_forgets_the_holds_and_the_cached_listings() {
+        use hcfs_client::sync::MassDeleteSide;
+        use std::sync::atomic::AtomicUsize;
+        use tauri::Manager;
+
+        let app = tauri::test::mock_app();
+        app.manage(crate::app_state::AppState::new());
+        let handle = app.handle().clone();
+        let state = handle.state::<crate::app_state::AppState>();
+
+        state
+            .mass_delete_holds
+            .arm("photos", "5Owner", false, std::path::Path::new("/nonexistent"), &[]);
+        state.mass_delete_holds.begin_cycle("photos", CycleSource::Engine);
+        state.mass_delete_holds.record_restored("photos", MassDeleteSide::Server, 3);
+
+        let fetches = AtomicUsize::new(0);
+        let lookup = || {
+            state.remote_listing_cache.expected("photos", "owner", "folder", [1; 32], || async {
+                fetches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, String>(Vec::new())
+            })
+        };
+        lookup().await.expect("listing");
+        lookup().await.expect("listing");
+        assert_eq!(fetches.load(std::sync::atomic::Ordering::SeqCst), 1, "the miss is remembered");
+
+        handle_sync_reset(&handle, "5Next".to_string(), "account switch".to_string());
+
+        assert!(state.mass_delete_holds.all().is_empty(), "no hold survives the reset");
+        assert!(!state.mass_delete_holds.folder_restores("photos").any());
+        lookup().await.expect("listing");
+        assert_eq!(fetches.load(std::sync::atomic::Ordering::SeqCst), 2, "the listing is fetched afresh");
+    }
+
+    #[test]
+    fn the_disconnected_notification_names_the_folder_and_says_what_to_do() {
+        let text = disconnected_notification_text("Photos");
+        assert_eq!(text, format!("Folder \"Photos\": {}", events::ROOT_NOT_MOUNTED_MESSAGE));
+        assert!(!text.contains("Sync failed"), "{text}");
     }
 }

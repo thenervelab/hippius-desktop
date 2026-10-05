@@ -442,9 +442,17 @@ pub enum SyncNotificationOutcome {
     /// hcfs held back a large delete on one side of a drive and is waiting
     /// for the user to restore the files or remove them. Saved by Rust once
     /// per episode ([`create_mass_delete_held_notification`]); the frontend
-    /// never sends it. Title: "Delete Paused". Not an error (nothing failed and nothing was deleted) and
-    /// not a success (the drive is waiting on the user).
+    /// never sends it. Title: "Large Delete Paused". Not an error (nothing
+    /// failed and nothing was deleted) and not a success (the drive is
+    /// waiting on the user).
     MassDeleteHeld,
+    /// The drive folder's disk or share is not mounted, so hcfs refused the
+    /// cycle before planning and nothing synced. Saved by Rust once per
+    /// episode (`sync::tauri_bridge`'s unmounted-root arm); the frontend
+    /// never sends it. Title: "Drive Disconnected". Not "Sync Failed":
+    /// nothing went wrong with the sync, and it resumes once the disk is
+    /// back.
+    DriveDisconnected,
 }
 
 impl SyncNotificationOutcome {
@@ -453,7 +461,8 @@ impl SyncNotificationOutcome {
             Self::Success => "Sync Complete",
             Self::Error => "Sync Failed",
             Self::FolderRestored => "Folder Restored",
-            Self::MassDeleteHeld => "Delete Paused",
+            Self::MassDeleteHeld => "Large Delete Paused",
+            Self::DriveDisconnected => "Drive Disconnected",
         }
     }
 
@@ -466,7 +475,7 @@ impl SyncNotificationOutcome {
     fn list_title(self, files: &SyncFileSummary<'_>) -> String {
         match self {
             Self::Success => success_list_title(files),
-            Self::Error | Self::FolderRestored | Self::MassDeleteHeld => self.title().to_string(),
+            Self::Error | Self::FolderRestored | Self::MassDeleteHeld | Self::DriveDisconnected => self.title().to_string(),
         }
     }
 
@@ -476,6 +485,7 @@ impl SyncNotificationOutcome {
             Self::Error => "FileSyncError",
             Self::FolderRestored => "FileSyncFolderRestored",
             Self::MassDeleteHeld => "FileSyncMassDeleteHeld",
+            Self::DriveDisconnected => "FileSyncDriveDisconnected",
         }
     }
 }
@@ -700,19 +710,43 @@ pub async fn create_sync_notification_inner(
 /// `notifications::crud` seeds it.
 const FILES_CATEGORY: &str = "Files";
 
-/// Save a held mass delete's notification ("Delete Paused") for `owner`,
-/// the account whose drive holds it, unless that account turned Files
-/// notifications off. Returns the new row's id, or `None` when off.
+/// Save a Files notification Rust raises itself (not the UI) for `owner`,
+/// unless that account turned Files notifications off. Returns the new
+/// row's id, or `None` when off.
 ///
-/// Rust raises it once per episode (`sync::mass_delete_hold`), often from
-/// the first cycle after launch, before the UI has restored the session,
-/// so it is saved here rather than by the UI, and under the drive's owner
-/// rather than whoever is signed in when the write lands.
+/// For notifications raised from the sync engine's events, often before
+/// the UI has restored the session: saved under the account the drive
+/// belongs to, never whoever is signed in when the write lands.
 ///
-/// The row links back to its banner (`/files?heldDelete=<side>&drive=<label>`)
-/// so the UI can show a banner the user put off with "Decide later". The
-/// link is set by a second statement: a failure there leaves the row with
-/// the plain `/files` link, which still opens the right page.
+/// # Errors
+///
+/// A database error reading the preference or writing the row.
+pub async fn create_files_notification(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    description: &str,
+    outcome: SyncNotificationOutcome,
+) -> Result<Option<i64>, AppError> {
+    if !files_notifications_enabled(pool, owner).await? {
+        return Ok(None);
+    }
+    let files = SyncFileSummary {
+        details_json: "",
+        file_count: None,
+    };
+    create_sync_notification_inner(pool, owner, description, files, outcome).await.map(Some)
+}
+
+/// Save a held mass delete's notification ("Large Delete Paused") for
+/// `owner`, the account whose drive holds it (see
+/// [`create_files_notification`]).
+///
+/// Rust raises it once per episode (`sync::mass_delete_hold`). The row's
+/// button reads "Review" and links back to its banner
+/// (`/files?heldDelete=<side>&drive=<label>`), so the UI can show a banner
+/// the user put off with "Decide later". The link is set by a second
+/// statement: a failure there leaves the row with the plain `/files` link,
+/// which still opens the right page.
 ///
 /// # Errors
 ///
@@ -724,16 +758,10 @@ pub async fn create_mass_delete_held_notification(
     side: hcfs_client::sync::MassDeleteSide,
     description: &str,
 ) -> Result<Option<i64>, AppError> {
-    if !files_notifications_enabled(pool, owner).await? {
+    let Some(id) = create_files_notification(pool, owner, description, SyncNotificationOutcome::MassDeleteHeld).await? else {
         return Ok(None);
-    }
-
-    let files = SyncFileSummary {
-        details_json: "",
-        file_count: None,
     };
-    let id = create_sync_notification_inner(pool, owner, description, files, SyncNotificationOutcome::MassDeleteHeld).await?;
-    sqlx::query("UPDATE notifications SET link = ? WHERE id = ?")
+    sqlx::query("UPDATE notifications SET link = ?, link_text = 'Review' WHERE id = ?")
         .bind(held_banner_link(label, side))
         .bind(id)
         .execute(pool)
@@ -1360,8 +1388,8 @@ mod tests {
 
     // ── Held mass delete ────────────────────────────────────────────
 
-    async fn held_rows(pool: &sqlx::SqlitePool) -> Vec<(String, String, String, String)> {
-        sqlx::query_as("SELECT user_address, title_text, notification_subtype, link FROM notifications ORDER BY id")
+    async fn held_rows(pool: &sqlx::SqlitePool) -> Vec<(String, String, String, String, String)> {
+        sqlx::query_as("SELECT user_address, title_text, notification_subtype, link, link_text FROM notifications ORDER BY id")
             .fetch_all(pool)
             .await
             .expect("rows")
@@ -1388,9 +1416,10 @@ mod tests {
 
         let rows = held_rows(&pool).await;
         assert_eq!(rows.len(), 1);
-        let (user, title, subtype, link) = &rows[0];
+        let (user, title, subtype, link, link_text) = &rows[0];
         assert_eq!(user, "addrA");
-        assert_eq!(title, "Delete Paused");
+        assert_eq!(title, "Large Delete Paused");
+        assert_eq!(link_text, "Review", "it opens the banner to decide, not a file list");
         assert!(subtype.starts_with("FileSyncMassDeleteHeld-"), "{subtype}");
         assert_eq!(
             link, "/files?heldDelete=server&drive=Photo+%26+Video",
@@ -1459,5 +1488,27 @@ mod tests {
 
         assert_eq!(id, None);
         assert!(held_rows(&pool).await.is_empty());
+    }
+
+    /// An unplugged disk is not a failed sync: Rust saves its own row,
+    /// titled for what happened, under the Files toggle like the others.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_disconnected_drive_is_saved_as_drive_disconnected() {
+        let (_dir, pool) = fresh_pool().await;
+
+        let id = create_files_notification(&pool, "addrA", "Folder \"Photos\": reconnect", SyncNotificationOutcome::DriveDisconnected)
+            .await
+            .expect("save");
+        assert!(id.is_some());
+        let rows = held_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "Drive Disconnected");
+        assert!(rows[0].2.starts_with("FileSyncDriveDisconnected-"), "{}", rows[0].2);
+
+        files_notifications(&pool, "addrB", false).await;
+        let off = create_files_notification(&pool, "addrB", "x", SyncNotificationOutcome::DriveDisconnected)
+            .await
+            .expect("save");
+        assert_eq!(off, None, "the Files toggle is respected");
     }
 }

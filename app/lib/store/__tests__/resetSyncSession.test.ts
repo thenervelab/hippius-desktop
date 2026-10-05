@@ -48,6 +48,8 @@ describe("resetSyncSession", () => {
         syncedCount: 200,
         emptyRoot: false,
         canRestore: true,
+        title: "Rust's title",
+        body: ["Rust's line"],
       })
     );
     appStore.set(syncEngineHealthAtom, {

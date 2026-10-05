@@ -132,6 +132,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   inside it.** Before, only the files at the top of the folder went up. A
   folder nested too deeply to upload is now named instead of left behind.
 
+- **Return takes the capture as soon as the capture bar appears.** Pressing
+  it the moment the bar or the "Choose what to share" list showed up could be
+  ignored.
+
 - **A file's sync error shows only on that file.** Two files with the same
   name in different folders no longer both show the error of one of them.
 
@@ -322,7 +326,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   deletes nothing and asks you first, with a banner and one notification.
   Restore files puts everything back, empty folders included; Remove deletes
   the files once you confirm how many; Decide later keeps them safe until you
-  choose, and opening the notification brings the banner back.
+  choose, and the notification's Review button brings the banner back.
 
 - **Share a folder from Finder as a link, even one outside your Hippius
   drives.** Hippius uploads a copy of the folder for the link, leaving out

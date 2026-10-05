@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@/components/updater/checkForUpdates", () => ({ checkForUpdates: vi.fn() }));
 
-import { heldDeleteFromLink } from "@/app/lib/massDelete/notificationLink";
+import { heldDeleteFromLink, revealHeldDelete } from "@/app/lib/massDelete/notificationLink";
 import { applyHeld, holdKey, updateHold } from "@/app/lib/massDelete/holds";
 import { massDeleteHoldsAtom } from "@/app/lib/store/syncAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
@@ -25,6 +25,8 @@ const hold = (overrides: Partial<MassDeleteHold> = {}): MassDeleteHold => ({
   syncedCount: 200,
   emptyRoot: false,
   canRestore: true,
+  title: "Rust's title",
+  body: ["Rust's line"],
   ...overrides,
 });
 
@@ -78,6 +80,18 @@ describe("held-delete notification link", () => {
     const push = click(LINK);
     expect(push).toHaveBeenCalledWith("/files");
     expect(appStore.get(massDeleteHoldsAtom).size).toBe(0);
+  });
+
+  // Selecting the row in the bell or on the notifications page brings the
+  // banner back too, not only its "Review" button.
+  it("selecting the notification shows its banner again", () => {
+    const key = holdKey("Photo & Video", "server");
+    appStore.set(massDeleteHoldsAtom, updateHold(applyHeld(new Map(), hold()), key, { dismissed: true }));
+
+    expect(revealHeldDelete(LINK)).toBe(true);
+    expect(appStore.get(massDeleteHoldsAtom).get(key)?.dismissed).toBe(false);
+    expect(revealHeldDelete("/files")).toBe(false);
+    expect(revealHeldDelete(undefined)).toBe(false);
   });
 
   it("leaves other in-app links as they were", () => {

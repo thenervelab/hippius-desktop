@@ -65,7 +65,7 @@ fn the_latch_gates_the_notification_and_every_episode_edge_rearms_it() {
     for (sig, call) in [
         ("fn handle_sync_completed(", "root_not_mounted_notify.clear("),
         ("fn handle_sync_stopped(", "root_not_mounted_notify.clear("),
-        ("fn handle_sync_reset(", "root_not_mounted_notify.clear_all()"),
+        ("fn handle_sync_reset<", "root_not_mounted_notify.clear_all()"),
     ] {
         assert!(fn_body(&src, sig).contains(call), "{sig} must re-arm the latch with {call}");
     }
@@ -86,8 +86,12 @@ fn a_plan_after_the_mount_check_rearms_the_latch() {
     let src = callbacks_src();
     let body = fn_body(&src, "fn build_plan_ready_callback<");
     let rearm = body
-        .find("root_not_mounted_notify.clear(")
+        .find("end_root_not_mounted_episode(")
         .expect("the plan-ready callback must re-arm the unmounted-root latch");
+    assert!(
+        fn_body(&src, "fn end_root_not_mounted_episode<").contains("root_not_mounted_notify.clear("),
+        "the helper re-arms the latch"
+    );
     let empty_return = body.find("if total == 0").expect("empty-plan early return");
     assert!(
         rearm < empty_return,

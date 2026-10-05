@@ -557,7 +557,7 @@ fn revoked_latch_clears_ride_the_existing_teardown_edges() {
         "handle_sync_completed must re-arm the revocation latch on the recovery edge"
     );
 
-    let reset = fn_body(&src, "fn handle_sync_reset(");
+    let reset = fn_body(&src, "fn handle_sync_reset<");
     assert!(
         reset.contains("revoked_notify.clear_all()"),
         "handle_sync_reset must wipe the revocation latch across accounts"

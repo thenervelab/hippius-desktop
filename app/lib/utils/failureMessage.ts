@@ -86,9 +86,10 @@ export function failureMessage(rec: FileFailureRecord): string {
       // never happens.
       return UNDECRYPTABLE_MESSAGE;
     case "refused":
-      // hcfs's own refusal message, persisted by Rust: it names the file and
-      // says what to do (rename, make readable, free up space). Rust's
-      // `display_reason` passes the same text through, so both paths agree.
+      // Rust's copy for hcfs's typed refusal (`refusal_copy`), persisted as
+      // the row's message: what happened and what to do (rename, make
+      // readable, free up space). Rust's `display_reason` passes the same
+      // text through, so both paths agree.
       return rec.message?.trim() || REFUSED_FALLBACK_MESSAGE;
     case "other":
     default: {

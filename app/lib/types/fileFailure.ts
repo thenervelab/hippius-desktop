@@ -21,7 +21,7 @@ export type FileFailureKind =
   | "undecryptable"
   /** hcfs will not sync the file as things stand: its path collides with
    *  another, it cannot be read, or the disk has no room for it. `message`
-   *  is hcfs's own reason. Kept across clean cycles and never retryable:
+   *  is Rust's copy for it. Kept across clean cycles and never retryable:
    *  hcfs reports it once per revision and only the user can fix it. */
   | "refused"
   | "other";

@@ -74,13 +74,13 @@ fn one_off_downloads_use_the_cached_listing() {
     }
 }
 
-/// A completed sync may change a drive's rows, and a new account must not
-/// read the previous one's listings.
+/// A completed sync may change a drive's rows. (A new account must not
+/// read the previous one's listings either: the reset is a behavior test,
+/// `an_account_reset_forgets_the_holds_and_the_cached_listings`.)
 #[test]
-fn the_cache_is_invalidated_on_sync_completion_and_reset() {
+fn the_cache_is_invalidated_on_sync_completion() {
     let bridge = src("src/sync/projection/tauri_bridge.rs");
     assert!(fn_body(&bridge, "fn handle_sync_completed(").contains("remote_listing_cache.invalidate("));
-    assert!(fn_body(&bridge, "fn handle_sync_reset(").contains("remote_listing_cache.clear_all()"));
 }
 
 /// Logout and a stopped drive end what the cached listings were fetched

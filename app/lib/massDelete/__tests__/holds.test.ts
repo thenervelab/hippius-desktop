@@ -19,6 +19,8 @@ const hold = (overrides: Partial<MassDeleteHold> = {}): MassDeleteHold => ({
   syncedCount: 200,
   emptyRoot: false,
   canRestore: true,
+  title: "Rust's title",
+  body: ["Rust's line"],
   ...overrides,
 });
 

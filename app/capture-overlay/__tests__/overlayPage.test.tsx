@@ -102,6 +102,26 @@ describe("the capture overlay's keyboard", () => {
     await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 1 }));
   });
 
+  // The key arrives the moment the bar is in the DOM, before React has run
+  // the page's passive effects: a listener bound in a `useEffect` still held
+  // the first render's closure (no context yet) and dropped the Return. A
+  // MutationObserver callback is a microtask, so it runs ahead of those
+  // effects, which React schedules as a later task.
+  it("takes the capture on a Return pressed as soon as the bar appears", async () => {
+    const observer = new MutationObserver(() => {
+      if (!screen.queryByRole("toolbar", { name: "Capture" })) return;
+      observer.disconnect();
+      fireEvent.keyDown(window, { key: "Enter" });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      setup();
+      await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 1 }));
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   // Return on a focused bar button is that button's: it must not also take
   // the capture.
   it("leaves Return on a focused bar button to the button", async () => {
