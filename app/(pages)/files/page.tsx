@@ -75,6 +75,8 @@ const FilesPage: FC = () => {
           // `actions` renders at every width and in the cards view.
           //
           // Only on the folder list: see `showPlanCard`.
+          // Capture is not here: on the folder list it leads the folders'
+          // own toolbar (DriveOnboarding), inside a drive that drive's.
           showPlanCard ? <PlanSummaryCard /> : null
         }
       />

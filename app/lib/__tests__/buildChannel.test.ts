@@ -168,3 +168,16 @@ describe("FOLDER_ROLES_ENABLED", () => {
     expect(flags).not.toMatch(/FOLDER_ROLES_ENABLED\s*=\s*enabledFrom\(/);
   });
 });
+
+/**
+ * Screen capture ships to beta and staging and not yet to production. A
+ * literal `true`, or a lane edited per branch, would put it in front of
+ * every user on the next release.
+ */
+describe("SCREEN_CAPTURE_ENABLED", () => {
+  const flags = read("app/lib/featureFlags.ts");
+
+  it("is on in beta and staging only", () => {
+    expect(flags).toMatch(/SCREEN_CAPTURE_ENABLED\s*=\s*enabledFrom\("beta"\);/);
+  });
+});

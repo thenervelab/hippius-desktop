@@ -85,6 +85,7 @@ import {
 } from "@/lib/utils/getTileTypeFromExtension";
 import { PreviewTrigger } from "@/app/components/page-sections/drive/file-preview";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
+import { sharesPageHref } from "@/app/lib/utils/sharesPageLink";
 import { Icons } from "@/app/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/drive/shared/FileViewUtils";
@@ -108,9 +109,10 @@ import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 import UploaderCell from "./UploaderCell";
 
 import { toast } from "sonner";
-import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { Refresh } from "@/components/ui/icons";
+import { failedRowMenuItem } from "./failedRowMenu";
+import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
+import { entryKey } from "../highlightEntry";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -387,6 +389,8 @@ const DriveFileRow = memo(function DriveFileRow({
   return (
     <>
       <TableModule.Tr
+        // "Show in folder" finds the row by this (`highlightEntry.ts`).
+        data-drive-entry={entryKey(rowData)}
         rowHover={!isDeleting}
         transparent
         className={cn(
@@ -510,6 +514,12 @@ interface FilesTableProps {
    * page one's rows on every page.
    */
   windowStart?: number;
+  /**
+   * Receives `allFiles` and the level in the order this table sorts it, so
+   * "Show in folder" can page to a file: the comparators live here, and a
+   * page is a window of THIS order. Passed only while such a request waits.
+   */
+  onSortedLevel?: (source: readonly FormattedUserFile[], rows: readonly FormattedUserFile[]) => void;
   isRecentFiles?: boolean;
   sharedState?: FileViewSharedState;
   handleFileDownload: (
@@ -562,6 +572,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     files,
     allFiles,
     windowStart = 0,
+    onSortedLevel,
     isRecentFiles = false,
     sharedState,
     handleFileDownload,
@@ -592,21 +603,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       return currentSubfolderPath.replace(/^\/+|\/+$/g, "");
     }, [currentSubfolderPath]);
 
-    const resolveRelativePath = useCallback(
-      (basePath: string, entryName: string) => {
-        const normalizedName = entryName.replace(/^\/+|\/+$/g, "");
-        if (!basePath) return normalizedName;
-        if (
-          normalizedName === basePath ||
-          normalizedName.startsWith(`${basePath}/`)
-        ) {
-          return normalizedName;
-        }
-        if (normalizedName.includes("/")) return normalizedName;
-        return `${basePath}/${normalizedName}`;
-      },
-      [],
-    );
+    // Shared with NameCell's failure badge, so the badge and the row menu
+    // can never look up different rows.
+    const resolveRelativePath = resolveRowRelativePath;
 
     const getFolderKey = useCallback(
       (file: FormattedUserFile, basePath = normalizedSubfolderPath) => {
@@ -1043,32 +1042,24 @@ const FilesTable: FC<FilesTableProps> = memo(
                   disabled: itemDeleting,
                 },
               ]),
-          ...(!file.isFolder && file.syncStatus === "failed" && file.label
-            ? [
-                {
-                  icon: <Refresh className="size-4" />,
-                  itemTitle: "Retry sync",
-                  onItemClick: () => {
-                    const relativePath = resolveRelativePath(
-                      parentSubFolderPath ?? normalizedSubfolderPath,
-                      file.actualFileName || file.name,
-                    );
-                    void invoke("retry_file_failure", {
-                      label: file.label,
-                      path: relativePath,
-                    })
-                      .then(() => {
-                        void queryClient.invalidateQueries({
-                          queryKey: ["drive-failures", file.label],
-                        });
-                        toast.success("Retrying sync…");
-                      })
-                      .catch((e) => toast.error(`Retry failed: ${e}`));
-                  },
-                  disabled: itemDeleting,
-                },
-              ]
-            : []),
+          // A refused file offers Dismiss, an undecryptable one nothing: the
+          // action follows the saved failure's kind (`failedRowAction`).
+          ...(() => {
+            if (file.isFolder || file.syncStatus !== "failed" || !file.label) {
+              return [];
+            }
+            const item = failedRowMenuItem({
+              label: file.label,
+              relativePath: resolveRelativePath(
+                parentSubFolderPath ?? normalizedSubfolderPath,
+                file.actualFileName || file.name,
+              ),
+              queryClient,
+              polkadotAddress,
+              disabled: itemDeleting,
+            });
+            return item ? [item] : [];
+          })(),
           ...(!file.isFolder && isPreviewableFileName(file.name) && canPreview
             ? [
                 {
@@ -1512,7 +1503,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 source={file.source}
                 mainReqHash={file.mainReqHash}
                 syncStatus={file.syncStatus}
-                onManageShare={() => router.push("/shares")}
+                onManageShare={(ids) => router.push(sharesPageHref(ids))}
               />
             );
 
@@ -1898,6 +1889,14 @@ const FilesTable: FC<FilesTableProps> = memo(
     // is on screen. The start matters as much as the length once the window
     // is a page: sorting the level and then always rendering its first page
     // is what made sorting look broken from page two onwards.
+    useEffect(() => {
+      if (!onSortedLevel) return;
+      onSortedLevel(
+        allFiles,
+        table.getRowModel().rows.map((row) => row.original),
+      );
+    }, [onSortedLevel, allFiles, table, enrichedAllFiles, sorting]);
+
     const visibleRows = useMemo(() => {
       return table
         .getRowModel()

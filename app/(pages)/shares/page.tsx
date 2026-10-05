@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createColumnHelper,
@@ -58,6 +58,7 @@ import {
   type ShareTtl,
 } from "@/app/lib/tauri/shares";
 import { FOLDER_SHARES_QUERY_KEY } from "@/app/lib/hooks/useFolderShares";
+import { pointOut } from "@/app/components/page-sections/drive/useDriveHighlight";
 import {
   clearShareHistory,
   listShareHistory,
@@ -74,16 +75,20 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import {
+  parseSharesHighlight,
+  SHARES_HIGHLIGHT_PARAM,
+} from "@/app/lib/utils/sharesPageLink";
 import { cn } from "@/lib/utils";
 import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import {
   activeShareRowId,
-  folderSharePathLabel,
   folderShareRowPlan,
   mergeActiveShareRows,
   pickHistoryRowDisplay,
   type ActiveShareRow,
 } from "./shareRowDisplay";
+import FolderShareScope from "@/app/(pages)/shares/FolderShareScope";
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
@@ -111,12 +116,27 @@ type PendingRevoke =
   | { kind: "file"; shareToken: string }
   | { kind: "folder"; tokenHash: string };
 
+// `useSearchParams` needs a Suspense boundary in a static export.
 export default function MySharesPage() {
+  return (
+    <React.Suspense>
+      <MySharesContent />
+    </React.Suspense>
+  );
+}
+
+function MySharesContent() {
   const { polkadotAddress } = useWalletAuth();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
   const queryClient = useQueryClient();
   const router = useRouter();
+  // Rows the drive's link badge pointed at (`sharesPageHref`).
+  const highlightParam = useSearchParams().get(SHARES_HIGHLIGHT_PARAM);
+  const highlightedRowIds = React.useMemo(
+    () => parseSharesHighlight(highlightParam),
+    [highlightParam],
+  );
   const [pendingRevoke, setPendingRevoke] = React.useState<PendingRevoke | null>(null);
   const [revokeBusy, setRevokeBusy] = React.useState(false);
   const [busyToken, setBusyToken] = React.useState<string | null>(null);
@@ -308,6 +328,7 @@ export default function MySharesPage() {
                   onChangeExpiry={onChangeExpiry}
                   onChangeFolderExpiry={onChangeFolderExpiry}
                   busyToken={busyToken}
+                  highlightedRowIds={highlightedRowIds}
                 />
               )}
             </SectionCard>
@@ -498,6 +519,9 @@ interface ActiveSharesTableProps {
   onChangeExpiry: (token: string, ttl: ShareTtl) => void;
   onChangeFolderExpiry: (token: string, ttl: ShareTtl) => void;
   busyToken: string | null;
+  /** Row ids from the drive's link badge. The first one on screen is
+   *  pointed out once, so the file's link is found without hunting. */
+  highlightedRowIds: ReadonlySet<string>;
 }
 
 /** Expiry sort rank shared by both kinds: never-expiring links sort after
@@ -513,8 +537,26 @@ function ActiveSharesTable({
   onChangeExpiry,
   onChangeFolderExpiry,
   busyToken,
+  highlightedRowIds,
 }: ActiveSharesTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
+  const scrollerRef = React.useRef<HTMLDivElement>(null);
+  const hasHighlightedRow = rows.some((row) =>
+    highlightedRowIds.has(activeShareRowId(row)),
+  );
+
+  // Point the row out the way Drive's "Show in folder" does (scroll to it,
+  // a highlight that fades) once it has rendered. Keyed on the boolean, not
+  // the rows: the listing refetches every few seconds and must not pull the
+  // page back after the user has scrolled away.
+  React.useEffect(() => {
+    if (!hasHighlightedRow) return;
+    const row = scrollerRef.current?.querySelector<HTMLElement>(
+      "[data-share-highlight-target]",
+    );
+    return row ? pointOut(row) : undefined;
+  }, [hasHighlightedRow]);
+
   // A server can carry folder shares without the by-hash pair, so this is a
   // separate flag. Unfetched capabilities read as false, which keeps the
   // controls disabled until the answer is known rather than the reverse.
@@ -681,7 +723,7 @@ function ActiveSharesTable({
 
   return (
     <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
-      <div className="overflow-x-auto custom-scrollbar-thin">
+      <div ref={scrollerRef} className="overflow-x-auto custom-scrollbar-thin">
         <Table className="min-w-[540px]">
           <THead>
             {table.getHeaderGroups().map((hg) => (
@@ -699,17 +741,25 @@ function ActiveSharesTable({
           </THead>
           <TBody>
             {table.getRowModel().rows.map((row) => (
-              <Tr key={row.id}>
+              <Tr
+                key={row.id}
+                data-share-highlight-target={
+                  highlightedRowIds.has(row.id) || undefined
+                }
+                // The stripe is on the row, not its cells: the highlight
+                // tint is the row's background image, which cell colours
+                // would paint over.
+                className={
+                  row.index % 2 === 0
+                    ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                    : "bg-[#f5f5f5] dark:bg-[#1e1e1e]"
+                }
+              >
                 {row.getVisibleCells().map((cell) => (
                   <Td
                     key={cell.id}
                     cell={cell}
-                    className={cn(
-                      "!border-[#E3E3E3] dark:!border-[#313131]",
-                      row.index % 2 === 0
-                        ? "bg-[#fbfbfb] dark:bg-[#161616]"
-                        : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
-                    )}
+                    className="!border-[#E3E3E3] dark:!border-[#313131]"
                   />
                 ))}
               </Tr>
@@ -745,14 +795,12 @@ function ActiveNameCell({ row }: { row: ShareSummary }) {
 }
 
 /**
- * Name cell for a folder-share row: display name on top, the shared subtree
- * underneath — `""` is the whole drive and renders the console's idiom for
- * it. Dead rows keep their name readable; the dead state itself lives in the
- * Expires column.
+ * Name cell for a folder-share row: display name on top, the scope line
+ * underneath (the shared subtree, "Whole drive", "Folder link", or "Uploaded
+ * copy"; see `folderShareScope`). Dead rows keep their name readable; the
+ * dead state itself lives in the Expires column.
  */
 function FolderNameCell({ row }: { row: FolderShareSummary }) {
-  const pathLabel = folderSharePathLabel(row.pathPrefix);
-
   return (
     <div className="flex items-center gap-2 min-w-0 max-w-[260px]">
       <FolderIcon className="size-3.5 shrink-0 text-primary-50" />
@@ -761,12 +809,7 @@ function FolderNameCell({ row }: { row: FolderShareSummary }) {
           name={row.displayName}
           textClassName="text-xs font-medium text-grey-20 dark:text-grey-dark-200"
         />
-        <span
-          className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600"
-          title={pathLabel}
-        >
-          {pathLabel}
-        </span>
+        <FolderShareScope row={row} />
       </div>
     </div>
   );

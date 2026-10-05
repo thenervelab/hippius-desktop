@@ -34,6 +34,7 @@ import {
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
 import { Button } from "@/components/ui/button";
 import FolderList from "./folder-list/FolderList";
+import CaptureButtons from "@/app/components/capture/CaptureButtons";
 import FolderListEmptyState from "./folder-list/FolderListEmptyState";
 import DriveStatusBanner from "./service-status/DriveStatusBanner";
 import FreshAccountPlans from "./FreshAccountPlans";
@@ -727,7 +728,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                "Sync a Folder" is easy to pick wrong — a mistake only
                discovered later, when the copy silently fails to track
                changes. */
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {/* Capture first: it files into the capture drive, not a
+                  drive picked here, so it is not gated on canUpload. */}
+              <CaptureButtons size="compact" />
               {canUpload && (
                 <>
                   <Button

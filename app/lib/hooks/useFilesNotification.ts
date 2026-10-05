@@ -8,6 +8,23 @@ import {
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { MASS_DELETE_EVENTS } from "@/app/lib/tauri/massDelete";
+import { CANCELLED_SHARE_LINK_LIVE_NOTIFY } from "@/app/lib/tauri/shares";
+import { EMPTY_REMOTE_EVENTS } from "@/app/lib/tauri/emptyRemote";
+
+/**
+ * Events Rust sends after saving a Files notification itself: the held
+ * large delete ("Large Delete Paused"), the unplugged drive folder
+ * ("Drive Disconnected"), the cancelled share whose link stayed live
+ * ("Link Still Active") and the refused empty listing ("Drive Empty on
+ * Hippius"). Only the bell refreshes, so the payload is unread.
+ */
+const RUST_SAVED_NOTIFICATION_EVENTS = [
+  MASS_DELETE_EVENTS.heldNotify,
+  "hcfs_drive_disconnected_notify",
+  CANCELLED_SHARE_LINK_LIVE_NOTIFY,
+  EMPTY_REMOTE_EVENTS.notify,
+] as const;
 
 /**
  * Aggregation window for the "Sync Complete" notification. The sync
@@ -87,6 +104,34 @@ export function useFilesNotification() {
   const pendingCountsRef = useRef({ uploaded: 0, downloaded: 0, deletedLocally: 0, deletedRemotely: 0 });
   const pendingFilesRef = useRef<SyncedFileDetail[]>([]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Rust saves these Files rows itself (for the account they belong to,
+  // respecting that account's Files toggle) and then sends the event; all
+  // that is left here is the bell. Always on: a held delete or a
+  // disconnected drive often comes from the first cycle after launch,
+  // before the wallet has restored the account or the enabled types have
+  // loaded, and a cancelled share's live-link row comes after its modal
+  // has closed.
+  useEffect(() => {
+    let cancelled = false;
+    const unlisteners: Array<() => void> = [];
+    for (const event of RUST_SAVED_NOTIFICATION_EVENTS) {
+      listen(event, () => {
+        void refreshUnread();
+      })
+        .then((u) => {
+          if (cancelled) u();
+          else unlisteners.push(u);
+        })
+        .catch((err) => {
+          console.warn(`[FilesNotification] Failed to listen for ${event}:`, err);
+        });
+    }
+    return () => {
+      cancelled = true;
+      for (const u of unlisteners) u();
+    };
+  }, [refreshUnread]);
 
   useEffect(() => {
     if (!areFilesNotificationsEnabled || !polkadotAddress) return;
@@ -192,6 +237,8 @@ export function useFilesNotification() {
             // threshold (see `sync::error_notify`) and fires it once per
             // outage. Cancels and transient single-cycle blips never reach
             // here, so every event is a real, sustained failure.
+            // An unplugged disk never reaches here: Rust saves its own
+            // "Drive Disconnected" row (see RUST_SAVED_NOTIFICATION_EVENTS).
             await invoke("create_sync_notification", {
               userAddress,
               description: `Sync failed for folder "${label}": ${e.payload.error}`,

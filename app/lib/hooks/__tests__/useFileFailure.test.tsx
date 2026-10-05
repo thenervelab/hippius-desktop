@@ -16,8 +16,12 @@ const h = await vi.hoisted(async () => {
 vi.mock("@tauri-apps/api/core", () => h.tauri.core);
 const { tauri } = h;
 
-const rec = (fileName: string): FileFailureRecord =>
-  ({ fileName, path: fileName, reason: "boom" }) as unknown as FileFailureRecord;
+const rec = (relativePath: string): FileFailureRecord =>
+  ({
+    relativePath,
+    fileName: relativePath.split("/").pop(),
+    kind: "serverError",
+  }) as unknown as FileFailureRecord;
 
 function makeHarness() {
   const client = new QueryClient({
@@ -55,19 +59,36 @@ describe("useDriveFailures", () => {
 });
 
 describe("useFileFailure", () => {
-  it("returns null when fileName is undefined", () => {
+  it("returns null when the path is undefined", () => {
     const { result } = renderHook(() => useFileFailure("photos", undefined), {
       wrapper: makeHarness().wrapper,
     });
     expect(result.current).toBeNull();
   });
 
-  it("matches the record by basename", async () => {
+  it("matches the record by its drive-relative path", async () => {
     tauri.onInvoke("get_drive_failures", () => [rec("a.txt"), rec("b.txt")]);
     const { result } = renderHook(() => useFileFailure("photos", "b.txt"), {
       wrapper: makeHarness().wrapper,
     });
     await waitFor(() => expect(result.current).toEqual(rec("b.txt")));
+  });
+
+  // Two files with one name in different folders: matching by basename gave
+  // both rows the first one's failure, so a healthy file showed another
+  // file's error (and its Retry targeted the wrong path).
+  it("tells same-named files in different folders apart", async () => {
+    tauri.onInvoke("get_drive_failures", () => [rec("Trips/notes.txt"), rec("Work/notes.txt")]);
+    const work = renderHook(() => useFileFailure("photos", "Work/notes.txt"), {
+      wrapper: makeHarness().wrapper,
+    });
+    await waitFor(() => expect(work.result.current).toEqual(rec("Work/notes.txt")));
+
+    const root = renderHook(() => useFileFailure("photos", "notes.txt"), {
+      wrapper: makeHarness().wrapper,
+    });
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalled());
+    expect(root.result.current, "a root file with the same name has no failure").toBeNull();
   });
 
   it("returns null when no record matches after the fetch lands", async () => {

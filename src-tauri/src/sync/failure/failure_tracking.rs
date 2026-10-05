@@ -25,6 +25,10 @@ pub struct FailedFileInfo {
     pub file_name: String,
     pub error: Option<String>,
     pub failure_count: u32,
+    /// The failure's kind, the persisted wire tag (`"refused"`, `"network"`,
+    /// ...), when hcfs's FileFailed event named it. The dialog decides Retry
+    /// by this, never by `error`: a refusal's text is hcfs's own.
+    pub kind: Option<&'static str>,
 }
 
 /// Per-file failure counters and session-skip state.
@@ -44,6 +48,10 @@ pub struct FileFailureState {
     /// does, and the dialog then lists every file at the threshold. Forgotten
     /// on success, retry, skip, and exclude.
     dismissed: Mutex<HashSet<String>>,
+    /// The latest failure kind per file, from hcfs's FileFailed event. The
+    /// counters come from the progress rows, which carry only text.
+    /// Forgotten with the counters.
+    kinds: Mutex<HashMap<String, &'static str>>,
 }
 
 impl FileFailureState {
@@ -52,6 +60,7 @@ impl FileFailureState {
             counts: Mutex::new(HashMap::new()),
             skipped: Mutex::new(HashSet::new()),
             dismissed: Mutex::new(HashSet::new()),
+            kinds: Mutex::new(HashMap::new()),
         }
     }
 
@@ -72,6 +81,18 @@ impl FileFailureState {
             }
         }
         prompt
+    }
+
+    /// Remember the kind of `path`'s latest failure, for the dialog.
+    pub fn note_kind(&self, label: &str, path: &str, kind: &'static str) {
+        self.kinds
+            .lock()
+            .expect("failure kinds lock poisoned")
+            .insert(Self::key(label, path), kind);
+    }
+
+    fn forget_kind(&self, key: &str) {
+        self.kinds.lock().expect("failure kinds lock poisoned").remove(key);
     }
 
     pub fn dismiss(&self, label: &str, path: &str) {
@@ -117,6 +138,7 @@ impl FileFailureState {
             let mut counts = self.counts.lock().expect("failure counts lock poisoned");
             counts.remove(&key);
         }
+        self.forget_kind(&key);
         self.forget_dismissal(&key);
     }
 
@@ -126,12 +148,17 @@ impl FileFailureState {
             let mut counts = self.counts.lock().expect("failure counts lock poisoned");
             counts.retain(|k, _| !k.starts_with(&prefix));
         }
+        self.kinds
+            .lock()
+            .expect("failure kinds lock poisoned")
+            .retain(|k, _| !k.starts_with(&prefix));
         let mut dismissed = self.dismissed.lock().expect("dismissed files lock poisoned");
         dismissed.retain(|k| !k.starts_with(&prefix));
     }
 
     pub fn files_at_threshold(&self) -> Vec<FailedFileInfo> {
         let counts = self.counts.lock().expect("failure counts lock poisoned");
+        let kinds = self.kinds.lock().expect("failure kinds lock poisoned");
         counts
             .iter()
             .filter(|(_, (count, _))| *count >= FAILURE_THRESHOLD)
@@ -144,6 +171,7 @@ impl FileFailureState {
                     file_name,
                     error: error.clone(),
                     failure_count: *count,
+                    kind: kinds.get(key).copied(),
                 })
             })
             .collect()
@@ -217,6 +245,33 @@ impl Default for FileFailureState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dialog decides Retry by kind, so the kind noted from hcfs's
+    /// FileFailed event travels with the file to the threshold, and is
+    /// forgotten with the failure.
+    #[test]
+    fn a_noted_kind_reaches_the_dialog_and_goes_with_the_failure() {
+        let state = FileFailureState::new();
+        state.note_kind("d", "Beach.JPG", "refused");
+        let failed = vec![("Beach.JPG".to_string(), Some("collides".to_string()))];
+        for _ in 0..FAILURE_THRESHOLD {
+            state.record_cycle_failures("d", &failed);
+        }
+
+        let at_threshold = state.files_at_threshold();
+        assert_eq!(at_threshold.len(), 1);
+        assert_eq!(at_threshold[0].kind, Some("refused"));
+        // Wire shape the FE's `FailedFileInfo.kind` reads.
+        let wire = serde_json::to_value(&at_threshold[0]).expect("serialize");
+        assert_eq!(wire["kind"], "refused");
+        assert_eq!(wire["failureCount"], 3);
+
+        state.clear_failure("d", "Beach.JPG");
+        state.record_cycle_failures("d", &failed);
+        state.record_cycle_failures("d", &failed);
+        state.record_cycle_failures("d", &failed);
+        assert_eq!(state.files_at_threshold()[0].kind, None, "a cleared failure forgets its kind");
+    }
 
     #[test]
     fn record_failure_increments_count() {

@@ -1252,32 +1252,8 @@ pub(crate) async fn initialize_sync_inner(
     // Member drives skip it outright: storage on a shared drive bills the
     // OWNER, so the member's own balance is irrelevant here, and the server's
     // per-request 402 stays the authoritative backstop either way.
-    if !skip_credits_check
-        && !identity.is_member
-        && let Ok(account) = app_state.current_session_account()
-    {
-        let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-        match client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
-            .await
-        {
-            Ok(resp) => {
-                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-                if balance_blocks_sync(resp.balance.as_deref()) {
-                    return Err(crate::error::AppError::Validation(
-                        "Insufficient credits. Please add credits to your account before syncing.".into(),
-                    ));
-                }
-            }
-            // Fail-open on a transport/HTTP/parse error: this pre-init gate is a
-            // best-effort proactive check. The gated upload IPCs each call the
-            // fail-closed `require_eligible`, and the per-file 402 path is the
-            // authoritative backstop, so a server blip here must not block sync.
-            // Log it so the skipped check is observable instead of silently dropped.
-            Err(e) => {
-                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)");
-            }
-        }
+    if !skip_credits_check && !identity.is_member {
+        require_credits_before_init(&app_state, &pool_owned).await?;
     }
 
     teardown_previous_drive(sync, &label).await;
@@ -1337,6 +1313,21 @@ pub(crate) async fn initialize_sync_inner(
         &label,
         crate::sync::folder_restore_notify::FolderRestoreNotifyState::baseline_exists(&folder_dir),
     );
+
+    // Arm the large-delete prompt's state with what hcfs recorded on disk, so
+    // a hold from an earlier run shows before the first cycle (and is not
+    // notified again). An unreadable record only seeds nothing here: the
+    // first cycle rewrites it and re-reports the hold, and the folder job
+    // reads it itself and fails closed. See `sync::mass_delete_hold`.
+    let seed = crate::sync::mass_delete_hold::read_recorded_holds(PathBuf::from(&cfg.sync_path), folder_dir.clone())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(label = %label, error = %e, "Could not read held mass deletes at init; the first cycle reports them");
+            Vec::new()
+        });
+    app_state
+        .mass_delete_holds
+        .arm(&label, &account_id, is_member, std::path::Path::new(&cfg.sync_path), &seed);
 
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
@@ -1690,6 +1681,12 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     // pattern — both are transient UI-affordance state that must
     // not survive across accounts.
     app_state.preparing.clear_all();
+    // Cached remote listings hold the signed-out account's file rows.
+    app_state.remote_listing_cache.clear_all();
+    // Held mass deletes belong to the signed-out account's drives.
+    app_state.mass_delete_holds.clear_all();
+    // And so do the empty-drive prompts.
+    app_state.empty_remote.clear_all();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
@@ -1747,8 +1744,50 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     remove_drive_for_account(app, label, None).await
 }
 
+/// The credits pre-gate of [`initialize_sync_inner`]: refuse to start a
+/// drive's sync when the account's balance is known to be exhausted.
+///
+/// Fail-open on anything but a known-exhausted balance (see the error arm),
+/// and nothing to check without a session account.
+///
+/// # Errors
+///
+/// [`crate::error::AppError::Validation`] when the balance blocks sync.
+async fn require_credits_before_init(app_state: &crate::app_state::AppState, pool: &sqlx::SqlitePool) -> Result<()> {
+    let Ok(account) = app_state.current_session_account() else {
+        return Ok(());
+    };
+    let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool.clone());
+    match client
+        .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
+        .await
+    {
+        Ok(resp) => {
+            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+            if balance_blocks_sync(resp.balance.as_deref()) {
+                return Err(crate::error::AppError::Validation(
+                    "Insufficient credits. Please add credits to your account before syncing.".into(),
+                ));
+            }
+        }
+        // Fail-open on a transport/HTTP/parse error: this pre-init gate is a
+        // best-effort proactive check. The gated upload IPCs each call the
+        // fail-closed `require_eligible`, and the per-file 402 path is the
+        // authoritative backstop, so a server blip here must not block sync.
+        // Log it so the skipped check is observable instead of silently dropped.
+        Err(e) => {
+            tracing::warn!(
+                account = %account,
+                error = %e,
+                "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Tear down a drive: cancel any in-flight sync, drop it from the in-memory
-/// map, delete its `sync_paths` row, clear its intent rows, and wipe its
+/// map, delete its `sync_paths` row, clear its intent and saved-failure rows, and wipe its
 /// on-disk sync baseline — in that drain-then-wipe order. `explicit_account`
 /// scopes the DB delete and baseline wipe: pass `Some` when the caller knows
 /// the owning account, `None` to fall back to the current session account.
@@ -1815,6 +1854,15 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         // init. Hygiene rather than correctness — but without it the map keeps
         // an entry per label ever initialized in this process.
         app_state.folder_restore_notify.clear(&label);
+        // The drive is gone, and with it any hold the prompt was showing.
+        // Nothing else takes those banners down (no cycle will report the
+        // drive again), so each side is cleared the way a cycle clears it.
+        for side in app_state.mass_delete_holds.clear(&label) {
+            crate::sync::tauri_bridge::emit_mass_delete_cleared(&app, &label, side);
+        }
+        // Same for an empty-drive prompt, and its episode: a re-added drive
+        // that hits an empty listing again notifies again.
+        crate::sync::empty_remote_prompt::end_episode(&app, &label);
 
         // Delete the DB row so the drive isn't resurrected on app restart, and
         // drop the intent-manifest rows for this drive so the snapshot overlay
@@ -1835,24 +1883,9 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
             );
         }
         if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
-            if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
-                warn!("Failed to remove sync path for '{}' from DB: {e}", label);
-            }
-
-            // `IntentRepo::new` takes `SqlitePool` by value; the pool is internally
-            // `Arc`-shaped so `.clone()` is just an `Arc` bump — no connection
-            // pool duplication.
-            let repo = crate::sync::intent::IntentRepo::new(pool.clone());
-            if let Err(e) = repo.clear_drive(acct, &label).await {
-                warn!("Failed to clear intent rows for drive '{}': {e}", label);
-            }
-
-            // `folder_entries_local` is keyed by account-key hash, not SS58.
-            let owner = crate::auth::account_key::account_key(acct);
-            if let Err(e) = crate::sync::folder_entries_backfill::clear_folder_entries_for_drive(pool, &owner, &label).await {
-                warn!("Failed to clear folder_entries_local for drive '{}': {e}", label);
-            }
+            clear_drive_rows(pool, acct, &label).await;
         }
+        app_state.file_failures.clear_all_for_label(&label);
 
         // Tell the FE to drop this drive's entry from its per-drive
         // status map — INSIDE the locked region so emission order
@@ -1919,6 +1952,53 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
     Ok(())
 }
 
+/// Delete a removed drive's rows: its `sync_paths` row (so it is not
+/// resurrected on restart), its intent-manifest rows, its cached folder
+/// entries and its saved failures. Best-effort, each logged on failure; see
+/// the call site in [`remove_drive_for_account`] for why each must go.
+async fn clear_drive_rows(pool: &sqlx::SqlitePool, acct: &str, label: &str) {
+    if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, label).await {
+        warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+    }
+
+    // `IntentRepo::new` takes `SqlitePool` by value; the pool is internally
+    // `Arc`-shaped so `.clone()` is just an `Arc` bump — no connection
+    // pool duplication.
+    let repo = crate::sync::intent::IntentRepo::new(pool.clone());
+    if let Err(e) = repo.clear_drive(acct, label).await {
+        warn!("Failed to clear intent rows for drive '{}': {e}", label);
+    }
+
+    // `folder_entries_local` is keyed by account-key hash, not SS58.
+    let owner = crate::auth::account_key::account_key(acct);
+    if let Err(e) = crate::sync::folder_entries_backfill::clear_folder_entries_for_drive(pool, &owner, label).await {
+        warn!("Failed to clear folder_entries_local for drive '{}': {e}", label);
+    }
+
+    // Refusals outlive clean cycles and dismissals are restored at
+    // init, so both would come back on a drive re-added under this
+    // label.
+    if let Err(e) = crate::sync::failure_repo::clear_failures_for_drive(pool, &owner, label).await {
+        warn!("Failed to clear saved failures for drive '{}': {e}", label);
+    }
+}
+
+/// hcfs-client's mass-delete files in a drive's config dir
+/// (`drive/mass_delete.rs`: `HELD_SET_FILE`, `MASS_DELETE_MARKER`,
+/// `RESTORE_MARKER_PREFIX` + each side, and `EMPTY_REMOTE_MARKER`). Private
+/// constants upstream, so spelled out here;
+/// `answers_write_hcfs_markers_without_the_drive_lock` (`sync::mass_delete`)
+/// and `tests/hcfs_contract.rs` check the marker names against hcfs's own
+/// writes. A re-added drive must not inherit an empty-drive confirmation: its
+/// first empty listing would delete this device's copies without asking.
+const HCFS_HOLD_FILES: [&str; 5] = [
+    "mass_delete_held.json",
+    "confirm_mass_delete",
+    "restore_mass_delete_server",
+    "restore_mass_delete_local",
+    "confirm_empty_remote",
+];
+
 /// Best-effort delete of `sync_state.json` and `sync_state.json.bak` for the
 /// given drive. Returns nothing — every failure mode here (account dir missing,
 /// label never persisted, file already gone, permission issue) is benign:
@@ -1933,11 +2013,16 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
 /// stale baseline intact — which is the exact bug the surrounding code is
 /// supposed to prevent. Without the log we'd have no way to diagnose a re-add
 /// data-loss recurrence in production.
+///
+/// hcfs's mass-delete hold record and answer markers go too
+/// ([`HCFS_HOLD_FILES`]): a drive re-added under this label would otherwise
+/// show the old drive's hold, and a removal confirmed for it (valid for an
+/// hour) could release deletes in the new one.
 fn clear_persisted_sync_state(account_id: &str, label: &str) {
     let Ok(folder_dir) = config_dir_for_folder(account_id, label) else {
         return;
     };
-    for name in ["sync_state.json", "sync_state.json.bak"] {
+    for name in ["sync_state.json", "sync_state.json.bak"].into_iter().chain(HCFS_HOLD_FILES) {
         let path = folder_dir.join(name);
         if let Err(err) = std::fs::remove_file(&path)
             && err.kind() != std::io::ErrorKind::NotFound
@@ -2319,7 +2404,10 @@ impl Drop for AutoInitGuard {
 /// return path.
 #[expect(
     clippy::too_many_lines,
-    reason = "Linear auto-init pipeline — concurrency guard, migration check, mnemonic persistence, path fetch, scope expansion, HCFS config check, paused emit, mnemonic resolution, credits check, init loop. Splitting fragments the early-return error paths and obscures the ordering constraint between the paused-emit loop and the init loop (FE listener relies on that order)."
+    reason = "Linear auto-init pipeline — concurrency guard, migration check, mnemonic persistence, path fetch, \
+              scope expansion, HCFS config check, paused emit, mnemonic resolution, credits check, init loop. \
+              Splitting fragments the early-return error paths and obscures the ordering constraint between \
+              the paused-emit loop and the init loop (FE listener relies on that order)."
 )]
 async fn auto_init_sync_inner(
     app: AppHandle,
@@ -3225,11 +3313,30 @@ mod tests {
         let backup_path = folder_dir.join("sync_state.json.bak");
         std::fs::write(&state_path, br#"{"local":{},"remote":{},"synced":{}}"#).unwrap();
         std::fs::write(&backup_path, br#"{"local":{},"remote":{},"synced":{}}"#).unwrap();
+        // hcfs's mass-delete hold record and its answer markers: a drive
+        // re-added under this label must not inherit the old drive's hold, or
+        // an answer the user gave it.
+        let hold_files = [
+            "mass_delete_held.json",
+            "confirm_mass_delete",
+            "restore_mass_delete_server",
+            "restore_mass_delete_local",
+            "confirm_empty_remote",
+        ];
+        for name in hold_files {
+            std::fs::write(folder_dir.join(name), b"{}").unwrap();
+        }
+        let unrelated = folder_dir.join("restore_notes.txt");
+        std::fs::write(&unrelated, b"").unwrap();
 
         clear_persisted_sync_state(account, label);
 
         assert!(!state_path.exists(), "sync_state.json must be removed");
         assert!(!backup_path.exists(), "sync_state.json.bak must be removed");
+        for name in hold_files {
+            assert!(!folder_dir.join(name).exists(), "{name} must be removed");
+        }
+        assert!(unrelated.exists(), "only hcfs's own files are removed");
     }
 
     #[test]

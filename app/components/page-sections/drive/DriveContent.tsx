@@ -62,6 +62,8 @@ interface DriveContentProps {
   serverSorted?: boolean;
   /** Where the rendered window starts in the sorted list. See FilesTable. */
   windowStart?: number;
+  /** Receives the level in the order the table sorts it (list view only). */
+  onSortedLevel?: (source: readonly FormattedUserFile[], rows: readonly FormattedUserFile[]) => void;
   isSyncPathEmpty?: boolean;
   /**
    * Why a drop into this drive will be refused, or `null` when it will not.
@@ -124,6 +126,7 @@ const DriveContent: FC<DriveContentProps> = ({
   onSortingChange,
   serverSorted,
   windowStart,
+  onSortedLevel,
   isSyncPathEmpty = false,
   writeRefusal = null,
   isStorageFull = false,
@@ -536,6 +539,7 @@ const DriveContent: FC<DriveContentProps> = ({
             onSortingChange={onSortingChange}
             serverSorted={serverSorted}
             windowStart={windowStart}
+            onSortedLevel={onSortedLevel}
             handleFileDownload={handleFileDownload}
             sharedState={sharedState}
             hasMore={hasMore}

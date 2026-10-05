@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tracing::{info, warn};
@@ -46,6 +47,26 @@ const MARGIN: f64 = 8.0;
 /// and the tray click as a single user gesture. See [`toggle_tray_panel`].
 const REOPEN_COOLDOWN_MS: u64 = 350;
 
+/// Window after a show within which a blur is the activation settling, not a
+/// click outside: [`on_panel_blur`] gives the panel the keyboard back instead
+/// of hiding it. Activating the app can hand the keyboard to the window that
+/// last had it (a capture card the user clicked, the recording pill) a beat
+/// after the panel took it, which used to hide the popover the moment it
+/// appeared. Shorter than any deliberate click elsewhere.
+pub const SHOW_SETTLE_MS: u64 = 400;
+
+/// The popover's window level on macOS: `NSPopUpMenuWindowLevel`, the level
+/// of a menu dropped from the menu bar. Tauri's `always_on_top` is
+/// `NSFloatingWindowLevel` (3), the SAME level as the capture preview card
+/// (`capture::commands::float_over_full_screen`), which is ordered front with
+/// `orderFrontRegardless` whenever it shows; on a laptop display the 330pt
+/// card in the bottom-right corner overlaps the 672pt popover hanging from a
+/// right-hand menu bar icon, so a card shown or brought back after the
+/// popover covered its lower half. Above the card and the Dock, still below
+/// the capture overlays (1000) and the camera bubble (1001), which the user
+/// is placing over the whole screen.
+pub const PANEL_WINDOW_LEVEL: i64 = 101;
+
 /// Tray-icon bounding rectangle forwarded from the frontend tray click.
 ///
 /// JavaScript numbers are `f64`; the tray event reports physical pixels. The
@@ -65,6 +86,19 @@ pub struct TrayIconRect {
 const MAX_COORD: f64 = 1_000_000.0;
 
 impl TrayIconRect {
+    /// The rect a tray event carries, in physical pixels (which is what
+    /// `tray-icon` reports on macOS and Windows).
+    fn from_tray(rect: tauri::Rect) -> Self {
+        let position = rect.position.to_physical::<f64>(1.0);
+        let size = rect.size.to_physical::<f64>(1.0);
+        Self {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        }
+    }
+
     /// Round + sanitize the floating-point screen rect into the integer [`Rect`]
     /// the geometry math operates on.
     ///
@@ -96,34 +130,119 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
+/// A tray icon event, from Rust's own tray listener (`main.rs` registers it
+/// with `Builder::on_tray_icon_event`). A left click on the Hippius icon is
+/// routed here, whatever state the webviews are in.
+///
+/// The click used to reach Rust through a callback the main window's
+/// webview attached when it made the icon (`TrayIcon.new({ action })`). That
+/// callback lives in the webview's page: once the page reloaded (a dev
+/// reload, the error screen's navigation), the icon kept sending clicks to a
+/// callback that no longer existed and the popover never opened again,
+/// because the reloaded page found the icon already there and did not make
+/// it again. Rust's listener belongs to the app, so it cannot go stale.
+///
+/// Linux gets no left-click event from `tray-icon` (the menu opens instead),
+/// and never shows the popover.
+pub fn on_tray_icon_event(app: &AppHandle, event: &TrayIconEvent) {
+    if cfg!(target_os = "linux") || event.id().as_ref() != crate::capture::tray_status::TRAY_ID {
+        return;
+    }
+    // macOS: keep the context menu off the status item, or the status item
+    // opens it on every click and the left click never arrives (see
+    // `tray::status_menu`). Also opens it on a right click.
+    super::status_menu::on_tray_event(app, event);
+    let TrayIconEvent::Click {
+        rect,
+        button,
+        button_state: MouseButtonState::Up,
+        ..
+    } = event
+    else {
+        return;
+    };
+    info!("tray: {button:?} click");
+    if *button != MouseButton::Left {
+        return;
+    }
+    if let Err(e) = on_left_click(app, Some(TrayIconRect::from_tray(*rect))) {
+        warn!("tray click: {e}");
+    }
+}
+
+/// Record whether the app on screen is signed in, which decides what a tray
+/// click opens (the popover, or the main window's sign-in screen). Sent by
+/// the main window's `useTrayInit` from the auth context's
+/// `isAuthenticated`, the value that decides whether the login screen shows,
+/// and sent again after any reload. NOT Rust's `AuthInfo.substrate_address`:
+/// that stays set for a session restored from disk while the UI shows the
+/// login screen.
+#[tauri::command]
+pub fn tray_set_signed_in(state: tauri::State<'_, AppState>, signed_in: bool) {
+    info!("tray: signed in = {signed_in}");
+    state.tray_signed_in.store(signed_in, Ordering::Relaxed);
+}
+
+/// A left click on the tray icon: the recording's pill, the main window, or
+/// the popover ([`crate::capture::tray_status::tray_click_route`]).
+fn on_left_click(app: &AppHandle, rect: Option<TrayIconRect>) -> Result<()> {
+    use crate::capture::tray_status::TrayClickRoute;
+    let signed_in = app.state::<AppState>().tray_signed_in.load(Ordering::Relaxed);
+    let route = crate::capture::commands::on_tray_click(app, signed_in);
+    info!("tray click: signed in = {signed_in}, route = {route:?}, rect = {rect:?}");
+    match route {
+        TrayClickRoute::ShowRecordingControls => Ok(()),
+        TrayClickRoute::OpenMainWindow => {
+            show_main_window(app);
+            Ok(())
+        }
+        TrayClickRoute::TogglePanel { recording } => toggle_panel(app, rect, recording),
+    }
+}
+
+/// The main window, forward: a signed-out tray click.
+fn show_main_window(app: &AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.unminimize();
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+}
+
+/// Toggle the tray panel (IPC form of a tray click). The click itself now
+/// reaches Rust directly ([`on_tray_icon_event`]); this stays for callers
+/// that hold an icon rect and routes the same way.
+///
+/// # Errors
+/// See [`toggle_panel`].
+#[tauri::command]
+pub fn toggle_tray_panel(app: AppHandle, rect: Option<TrayIconRect>) -> Result<()> {
+    on_left_click(&app, rect)
+}
+
 /// Toggle the tray panel: show it anchored to the tray icon, or hide it if it
 /// is already visible.
 ///
 /// `rect` is the tray icon's screen rectangle on macOS/Windows, where the
-/// left-click `action` event carries it. On **Linux** the `tray-icon` crate
-/// fires no left-click event, so the popover is opened from the native menu's
-/// "Open Hippius" item instead, which has no icon bounds to forward — there
-/// `rect` is `None` and the panel uses a deterministic top-right anchor (see
-/// [`fallback_anchor`]).
+/// left-click event carries it. With `None` the panel uses a deterministic
+/// top-right anchor (see [`fallback_anchor`]).
 ///
-/// Runs as a **synchronous** command so the window operations execute on the
-/// main thread, which macOS requires for `show`/`set_position`/`set_focus`.
+/// `recording`: a screen recording is running or paused. The popover still
+/// opens (the menu bar icon must never go dead mid-recording), kept out of
+/// the video by content protection, which is lifted again on the next open
+/// after the recording.
+///
+/// Runs on the main thread (the tray listener runs on the event loop), which
+/// macOS requires for `show`/`set_position`/`set_focus`.
 ///
 /// # Errors
 /// Returns [`AppError::Other`] if the window cannot be built, no monitor can be
 /// resolved, or a window operation (position/show/focus/hide)
 /// fails.
-#[tauri::command]
-pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect: Option<TrayIconRect>) -> Result<()> {
-    // NOTE: the signed-in/out decision is made by the frontend before calling
-    // this command (it gates on the auth context's `isAuthenticated`, the same
-    // value that decides whether the app shows its login screen). Rust's
-    // `AuthInfo.substrate_address` is NOT used here because it stays populated
-    // for a session restored from disk even while the UI is on the login
-    // screen — gating on it would wrongly open the popover for a logged-out UI.
+fn toggle_panel(app: &AppHandle, rect: Option<TrayIconRect>, recording: bool) -> Result<()> {
     let win = match app.get_webview_window(PANEL_LABEL) {
         Some(w) => w,
-        None => build_panel(&app)?,
+        None => build_panel(app)?,
     };
 
     if win.is_visible().unwrap_or(false) {
@@ -136,7 +255,7 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
     // timestamp in `on_panel_blur`) and then fires this toggle. Within the
     // cooldown, treat that click as the dismiss and stay hidden rather than
     // immediately re-opening.
-    let hidden_at = state.tray_panel_hidden_at.load(Ordering::Relaxed);
+    let hidden_at = app.state::<AppState>().tray_panel_hidden_at.load(Ordering::Relaxed);
     if hidden_at != 0 && now_ms().saturating_sub(hidden_at) < REOPEN_COOLDOWN_MS {
         info!("tray panel: hidden by this click's blur, stays hidden");
         return Ok(());
@@ -148,9 +267,9 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
     // the same geometry.
     let icon = match rect {
         Some(r) => r.to_rect(),
-        None => fallback_anchor(&app)?,
+        None => fallback_anchor(app)?,
     };
-    let (work_area, scale) = target_work_area(&app, icon)?;
+    let (work_area, scale) = target_work_area(app, icon)?;
 
     // Convert the logical panel/gap/margin to physical pixels for the target
     // monitor so the placement matches `work_area`, which is physical.
@@ -161,15 +280,20 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
 
     let (x, y) = geometry::compute_panel_position(icon, panel_w, panel_h, work_area, gap, margin);
 
-    info!("tray panel: show at ({x}, {y}) on work area {work_area:?} x{scale}");
+    info!("tray panel: show at ({x}, {y}) on work area {work_area:?} x{scale}, recording = {recording}");
     win.set_position(PhysicalPosition::new(x, y))
         .map_err(|e| AppError::Other(format!("failed to position tray panel: {e}")))?;
+    if let Err(e) = win.set_content_protected(recording) {
+        warn!("tray panel content protection: {e}");
+    }
+    raise_above_capture_surfaces(&win);
+    app.state::<AppState>().tray_panel_shown_at.store(now_ms(), Ordering::Relaxed);
     win.show().map_err(|e| AppError::Other(format!("failed to show tray panel: {e}")))?;
     win.set_focus().map_err(|e| AppError::Other(format!("failed to focus tray panel: {e}")))?;
     // Clear the dismiss timestamp now that the panel is open again, so a stale
     // value can never interfere with a later toggle (the cooldown only guards the
     // blur→click gesture immediately after a hide).
-    state.tray_panel_hidden_at.store(0, Ordering::Relaxed);
+    app.state::<AppState>().tray_panel_hidden_at.store(0, Ordering::Relaxed);
 
     // Tell the (reused, prewarmed) popover webview it is now visible so it
     // re-fetches its account / credits / uploads. The webview's own
@@ -221,6 +345,13 @@ pub fn on_panel_blur(app: &AppHandle) {
         return;
     };
     if win.is_visible().unwrap_or(false) {
+        let shown_at = app.state::<AppState>().tray_panel_shown_at.load(Ordering::Relaxed);
+        if !blur_dismisses(now_ms(), shown_at) {
+            // The activation settling, not a click outside: keep the keyboard.
+            info!("tray panel: blur right after the show, keeps focus");
+            let _ = win.set_focus();
+            return;
+        }
         info!("tray panel: blur, hidden");
         if let Err(e) = win.hide() {
             warn!("failed to hide tray panel on blur: {e}");
@@ -229,6 +360,40 @@ pub fn on_panel_blur(app: &AppHandle) {
         app.state::<AppState>().tray_panel_hidden_at.store(now_ms(), Ordering::Relaxed);
     }
 }
+
+/// Whether a blur at `now` hides the panel shown at `shown_at` (Unix ms;
+/// `0` = never shown): only once [`SHOW_SETTLE_MS`] have passed since the
+/// show. A clock that went backwards dismisses, so it can never hold the
+/// panel open.
+fn blur_dismisses(now: u64, shown_at: u64) -> bool {
+    shown_at == 0 || now < shown_at || now - shown_at >= SHOW_SETTLE_MS
+}
+
+/// Put the panel at [`PANEL_WINDOW_LEVEL`], above every capture surface it
+/// can meet, and let it open over a full-screen app's Space like a real menu
+/// bar popover. macOS only; elsewhere `always_on_top` and show order decide.
+#[cfg(target_os = "macos")]
+fn raise_above_capture_surfaces(win: &WebviewWindow) {
+    use objc::{msg_send, sel, sel_impl};
+    /// NSWindowCollectionBehaviorFullScreenAuxiliary.
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+    let target = win.clone();
+    let _ = win.run_on_main_thread(move || {
+        if let Ok(ns_window) = target.ns_window() {
+            let ns_window = ns_window.cast::<objc::runtime::Object>();
+            // SAFETY: the panel's live NSWindow, touched only here, on the
+            // main thread.
+            unsafe {
+                let () = msg_send![ns_window, setLevel: PANEL_WINDOW_LEVEL];
+                let behavior: usize = msg_send![ns_window, collectionBehavior];
+                let () = msg_send![ns_window, setCollectionBehavior: behavior | FULL_SCREEN_AUXILIARY];
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_above_capture_surfaces(_win: &WebviewWindow) {}
 
 /// Eagerly create the (hidden) panel window at startup so the first tray click
 /// only has to position and show it — the webview + Next route load cost is
@@ -240,8 +405,9 @@ pub fn prewarm(app: &AppHandle) {
     if app.get_webview_window(PANEL_LABEL).is_some() {
         return;
     }
-    if let Err(e) = build_panel(app) {
-        warn!("failed to prewarm tray panel: {e}");
+    match build_panel(app) {
+        Ok(win) => raise_above_capture_surfaces(&win),
+        Err(e) => warn!("failed to prewarm tray panel: {e}"),
     }
 }
 
@@ -379,6 +545,39 @@ mod tests {
         assert_eq!(huge.y, -max);
         assert_eq!(huge.width, max, "width clamped to the safe bound");
         assert_eq!(huge.height, 0, "negative dimension clamps to 0");
+    }
+
+    /// A capture window taking the keyboard back as the app activates used to
+    /// hide the popover the moment it appeared; a real click outside, later,
+    /// still dismisses it.
+    #[test]
+    fn a_blur_right_after_the_show_does_not_dismiss() {
+        let shown = 1_000_000;
+        assert!(!blur_dismisses(shown, shown));
+        assert!(!blur_dismisses(shown + SHOW_SETTLE_MS - 1, shown));
+        assert!(blur_dismisses(shown + SHOW_SETTLE_MS, shown));
+        assert!(blur_dismisses(shown + 5_000, shown));
+        assert!(blur_dismisses(shown, 0), "never shown: nothing to protect");
+        // A clock that went backwards must not pin the panel open.
+        assert!(blur_dismisses(shown - 10, shown));
+    }
+
+    /// The settle window must stay shorter than a deliberate click elsewhere,
+    /// and at least as long as the reopen cooldown it sits beside.
+    #[test]
+    fn the_settle_window_is_short() {
+        const { assert!(SHOW_SETTLE_MS >= REOPEN_COOLDOWN_MS && SHOW_SETTLE_MS <= 500) };
+    }
+
+    /// The popover sits above the capture card (`NSFloatingWindowLevel`, 3,
+    /// which is also `always_on_top`) and the Dock (20), and below the
+    /// capture overlays (1000) and the camera bubble (1001).
+    #[test]
+    fn the_popover_level_is_above_the_card_and_below_the_overlays() {
+        const FLOATING: i64 = 3;
+        const DOCK: i64 = 20;
+        const OVERLAY: i64 = 1000;
+        const { assert!(PANEL_WINDOW_LEVEL > FLOATING && PANEL_WINDOW_LEVEL > DOCK && PANEL_WINDOW_LEVEL < OVERLAY) };
     }
 
     #[test]

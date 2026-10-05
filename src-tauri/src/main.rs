@@ -15,6 +15,7 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+pub mod capture;
 pub mod chat;
 mod cli;
 pub mod console_access;
@@ -123,11 +124,12 @@ use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files
 use crate::sync::rekey_probe::probe_rekey_recovery;
 use crate::sync::remote::{
     cache_remote_file, download_remote_file, folder_grant_stats, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped,
+    locate_remote_folder_entry,
 };
 use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, rename_remote_folder};
 use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
-use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
+use crate::tray::panel::{hide_tray_panel, toggle_tray_panel, tray_set_signed_in};
 use crate::updates::{
     check_for_update, current_release_channel, install_update, note_update_prompted, release_channel_status, spawn_background_update_checks,
     switch_release_channel,
@@ -241,6 +243,17 @@ fn main() {
         }
     }
 
+    // The capture recorder child (`--capture-recorder`, Windows and Linux):
+    // the app starts its own executable in this mode to record, so a crashing
+    // encoder takes the child and not the app. It speaks JSON on stdin and
+    // stdout and must not start a window, tray, single-instance or deep-link
+    // handler, so it branches before everything else. Pinned by
+    // `tests/capture_wiring.rs`.
+    if crate::cli::argv_requests_recorder(std::env::args().skip(1)) {
+        let code = crate::capture::recorder_child::run(std::env::args().skip(1));
+        std::process::exit(code);
+    }
+
     // `--version` / `-V` must not boot the UI. Inspected *after*
     // `--finder-share` so a file-manager share click still wins if both
     // flags appear. `skip(1)` drops argv[0] so a strangely named binary
@@ -298,9 +311,20 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // Screen capture copies the share link it mints; Rust-side only, so no
+        // webview capability grants clipboard access.
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             info!("Another instance attempted to start with argv: {:?}", argv);
+            // `hippius --capture`: a keyboard shortcut in the desktop's own
+            // settings (Wayland without a shortcut portal). It does what the
+            // capture shortcut does and nothing else; bringing the main
+            // window forward would put it in a recording.
+            if crate::cli::argv_requests_capture(&argv) {
+                crate::capture::commands::on_shortcut(app);
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(e) = window.unminimize() {
                     debug!("Failed to unminimize window: {e}");
@@ -328,6 +352,9 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
+        // The tray icon's clicks reach Rust here, whatever state the webview
+        // that made the icon is in (see `tray::panel::on_tray_icon_event`).
+        .on_tray_icon_event(|app, event| crate::tray::panel::on_tray_icon_event(app, &event))
         .invoke_handler(tauri::generate_handler![
             // Team chat (Rust half: gate, OIDC bridge, keyring session, 4S key, native surfaces)
             chat::config::chat_get_config,
@@ -360,6 +387,11 @@ fn main() {
             pause_drive,
             resume_drive,
             trigger_sync_now,
+            crate::sync::mass_delete::restore_mass_delete,
+            crate::sync::mass_delete::confirm_mass_delete,
+            crate::sync::mass_delete::get_mass_delete_holds,
+            crate::sync::empty_remote_prompt::confirm_empty_remote,
+            crate::sync::empty_remote_prompt::get_empty_remote_drives,
             reveal_drive_in_finder,
             reveal_path_in_file_manager,
             change_sync_folder,
@@ -422,6 +454,7 @@ fn main() {
             crate::sync::failure_commands::sp_dismiss_failed_files,
             crate::sync::failure_commands::get_drive_failures,
             crate::sync::failure_commands::retry_file_failure,
+            crate::sync::failure_commands::clear_file_failure,
             crate::sync::failure_commands::retry_all_failures,
             // Stage & conflict resolution
             crate::sync::control::stage_changes,
@@ -446,6 +479,7 @@ fn main() {
             rename_remote_folder,
             create_remote_folder,
             list_remote_folder_grouped,
+            locate_remote_folder_entry,
             folder_grant_stats,
             download_remote_file,
             cache_remote_file,
@@ -638,6 +672,7 @@ fn main() {
             get_tray_menu_data,
             // Tray popover panel (replaces the native tray menu)
             toggle_tray_panel,
+            tray_set_signed_in,
             crate::tray::status_menu::tray_menu_attached,
             check_for_update,
             note_update_prompted,
@@ -646,6 +681,62 @@ fn main() {
             release_channel_status,
             switch_release_channel,
             hide_tray_panel,
+            // Screen capture
+            crate::capture::commands::capture_start,
+            crate::capture::commands::capture_overlay_context,
+            crate::capture::commands::capture_select,
+            crate::capture::commands::capture_pause,
+            crate::capture::commands::capture_resume,
+            crate::capture::commands::capture_stop,
+            crate::capture::commands::capture_cancel,
+            crate::capture::commands::capture_state,
+            crate::capture::commands::capture_support,
+            crate::capture::commands::capture_open_permission_settings,
+            crate::capture::commands::capture_open_privacy_settings,
+            crate::capture::commands::capture_get_destination,
+            crate::capture::commands::capture_set_destination,
+            crate::capture::commands::capture_set_mode,
+            crate::capture::commands::capture_set_pending,
+            crate::capture::commands::capture_confirm,
+            crate::capture::commands::capture_get_options,
+            crate::capture::commands::capture_set_options,
+            crate::capture::commands::capture_destination_choices,
+            crate::capture::commands::capture_preview_context,
+            crate::capture::commands::capture_preview_copy_link,
+            crate::capture::commands::capture_preview_show_in_folder,
+            crate::capture::commands::capture_preview_dismiss,
+            crate::capture::commands::capture_preview_retry,
+            crate::capture::commands::capture_sync_shortcut,
+            crate::capture::commands::capture_get_shortcut,
+            crate::capture::commands::capture_set_shortcut,
+            crate::capture::commands::capture_configure_shortcut,
+            crate::capture::commands::capture_skip_countdown,
+            crate::capture::commands::capture_area_context,
+            crate::capture::commands::capture_area_choose,
+            crate::capture::commands::capture_controls_context,
+            crate::capture::commands::capture_add_desktop_shortcut,
+            crate::capture::commands::capture_camera_context,
+            crate::capture::commands::capture_set_cameras,
+            crate::capture::commands::capture_cameras,
+            crate::capture::commands::capture_microphones,
+            crate::capture::commands::capture_mic_meter_start,
+            crate::capture::commands::capture_mic_meter_stop,
+            crate::capture::commands::capture_camera_toggle,
+            crate::capture::commands::capture_camera_set_size,
+            crate::capture::commands::capture_camera_dismiss,
+            crate::capture::commands::capture_share_targets,
+            crate::capture::commands::capture_share_done,
+            crate::capture::commands::capture_refresh_windows,
+            crate::capture::commands::capture_restart,
+            crate::capture::commands::capture_request_permission,
+            crate::capture::commands::capture_permission_status,
+            crate::capture::commands::capture_reset_permission,
+            crate::capture::commands::capture_relaunch_for_permission,
+            crate::capture::commands::capture_preview_mint_link,
+            crate::capture::commands::capture_preview_revoke_link,
+            crate::capture::commands::capture_preview_reveal,
+            crate::capture::commands::capture_preview_discard,
+            crate::capture::commands::capture_preview_upgrade,
             get_platform_info,
             is_app_translocated,
             // Finder extension enablement. Registered on every platform (they
@@ -723,10 +814,6 @@ fn main() {
 
     let builder = setup(builder);
     let builder = on_window_event(builder);
-    // Every tray event, alongside the page's `action` callback (which still
-    // owns the left click): logs clicks, and on macOS keeps the context menu
-    // off the status item so a left click reaches the app at all.
-    let builder = builder.on_tray_icon_event(crate::tray::status_menu::on_tray_icon_event);
 
     // E2E only: register the in-process WebDriver automation server so the
     // WebdriverIO smoke suite (`e2e/`) can drive a real macOS WKWebView build.
@@ -737,15 +824,23 @@ fn main() {
     #[cfg(feature = "e2e-webdriver")]
     let builder = builder.plugin(tauri_plugin_webdriver::init());
 
+    // The capture bar's system-wide shortcut. Registered later, from Rust, once
+    // the saved choice is read (`capture_sync_shortcut`); the plugin only
+    // carries the handler. On Linux only an X11 session gets it: a Wayland
+    // app cannot grab keys, and binds through the GlobalShortcuts portal.
+    #[cfg(any(target_os = "macos", windows))]
+    let builder = builder.plugin(crate::capture::shortcut::plugin());
+    #[cfg(target_os = "linux")]
+    let builder = if crate::capture::shortcut::plugin_grabs_keys() {
+        builder.plugin(crate::capture::shortcut::plugin())
+    } else {
+        builder
+    };
+
     info!("Running Tauri application...");
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        // `app_handle` is consumed only by the macOS-gated `Reopen` arm below;
-        // on other platforms borrow-and-discard it so the unused-binding lint
-        // stays quiet without an `#[allow]`.
-        #[cfg(not(target_os = "macos"))]
-        let _ = &app_handle;
         match event {
             // macOS dock icon click with no visible windows. Mirrors the
             // tray's "Open Hippius" action.
@@ -767,10 +862,66 @@ fn main() {
                 }
             }
 
+            // Quitting mid-share: every running Finder mint is told to stop,
+            // and the quit waits briefly so an outside-folder upload can
+            // abort its half-built link on the server instead of being cut
+            // off. Which quit waits how long:
+            // - the tray's Quit, any `app.exit`, and on Linux and Windows a
+            //   main-window close raise `ExitRequested`: the exit is held for up to
+            //   FINDER_SHARE_EXIT_GRACE (decision and the double-request
+            //   reasoning in `AppState::on_exit_requested`);
+            // - macOS Cmd+Q, Dock Quit and logout raise no `ExitRequested`
+            //   (tao's `applicationWillTerminate` ends the loop directly), so
+            //   `Exit` cancels and blocks for up to FINDER_SHARE_FINAL_WAIT;
+            // - a restart is never held (Tauri ignores `prevent_exit` for it)
+            //   and gets no wait.
+            #[cfg(any(unix, windows))]
+            tauri::RunEvent::ExitRequested { api, code, .. } => {
+                use crate::app_state::{AppState, ExitDecision};
+
+                let ExitDecision::Hold { start_grace } = app_handle.state::<AppState>().on_exit_requested(code) else {
+                    return;
+                };
+                api.prevent_exit();
+                if !start_grace {
+                    return;
+                }
+                info!("exit held for running Finder shares to cancel");
+                let app = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    app.state::<AppState>().finish_exit_grace(FINDER_SHARE_EXIT_GRACE).await;
+                    app.exit(code.unwrap_or(0));
+                });
+            }
+
+            #[cfg(any(unix, windows))]
+            tauri::RunEvent::Exit => {
+                let state = app_handle.state::<crate::app_state::AppState>();
+                if state.on_final_exit() {
+                    info!("waiting briefly for cancelled Finder shares before exit");
+                    // Blocking the main thread is the point: the process ends
+                    // when this returns. The mints run on the async runtime's
+                    // workers, so they keep making progress meanwhile.
+                    tauri::async_runtime::block_on(state.wait_for_finder_mints(FINDER_SHARE_FINAL_WAIT));
+                }
+            }
+
             _ => {}
         }
     });
 }
+
+/// How long quitting waits for cancelled Finder shares to abort. Short: the
+/// abort is one request, and the server reaps an idle link within the hour
+/// regardless.
+#[cfg(any(unix, windows))]
+const FINDER_SHARE_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long the final `Exit` blocks for the same aborts on a quit that
+/// raised no `ExitRequested` (macOS Cmd+Q). Shorter than the grace: it
+/// blocks the main thread while the OS is already terminating the app.
+#[cfg(any(unix, windows))]
+const FINDER_SHARE_FINAL_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 // ---------------------------------------------------------------------------
 // App setup (was setup.rs)
@@ -886,7 +1037,9 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 /// in `main()`'s builder chain.
 #[expect(
     clippy::too_many_lines,
-    reason = "Linear one-shot startup pipeline — env load, dir hardening (R-17 chmod), deep links, AppState, migrations, tray. Splitting it fragments the strict ordering between the steps without reducing complexity."
+    reason = "Linear one-shot startup pipeline — env load, dir hardening (R-17 chmod), deep links, AppState, \
+              migrations, tray. Splitting it fragments the strict ordering between the steps without reducing \
+              complexity."
 )]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
@@ -934,6 +1087,17 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                  /Applications."
             );
         }
+
+        // Screen capture: clear capture temp folders a crash or an abandoned
+        // upload left a day or more ago. Its own thread; never delays start.
+        crate::capture::commands::reclaim_capture_tmp_at_launch();
+        // Say in the log, once, when a release build has no recording helper
+        // (Record is shown disabled). Its own thread: it runs `sw_vers`.
+        std::thread::spawn(crate::capture::recording::warn_if_helper_missing);
+        // Whether a Wayland session has the GlobalShortcuts portal, so
+        // Settings shows the right shortcut route.
+        #[cfg(target_os = "linux")]
+        crate::capture::shortcut_portal::warm();
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);

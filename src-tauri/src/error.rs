@@ -182,6 +182,15 @@ pub enum NotReadyKind {
     /// generic auth error. Distinct from [`Self::SharedDrivesUnavailable`]
     /// (feature off, bare 404): here the feature is on and the routes exist.
     SharedDrivesNotEntitled,
+    /// The OS has not granted this app permission to capture the screen
+    /// (macOS Screen Recording). Raised by `capture::commands::capture_start`
+    /// so the FE can show the explainer — open System Settings, then relaunch —
+    /// instead of taking a capture that silently comes back black.
+    ScreenRecordingPermission,
+    /// A capture was started before the user chose which drive captures go
+    /// to. Raised by `capture::commands::capture_start` so the FE opens the
+    /// destination picker and retries, rather than guessing a drive.
+    CaptureDestinationUnset,
     /// The server cannot send drive invitations by email (`503
     /// email_invites_unavailable`: no mail service configured). The FE keeps
     /// the "Invite by email" option and says, inline, that email invites are
@@ -206,6 +215,25 @@ pub enum NotReadyKind {
     /// the person away when they try to join. The FE shows the "This drive
     /// is full" warning, with the plan's number from `ShareAccess.capacity`.
     DriveFull,
+    /// A mass-delete restore or removal named a side nothing is held on any
+    /// more (a cycle cleared it). The FE refreshes the holds.
+    MassDeleteNothingHeld,
+    /// The hold changed since the user was shown it; `held` is the count it
+    /// covers now. Serialized as an extra `held` field so the FE can show
+    /// the new count and ask again without parsing the message.
+    MassDeleteHoldChanged { held: usize },
+    /// A restore of that side is under way; removal must wait for it.
+    MassDeleteRestoreInProgress,
+    /// A shared-drive member asked to restore a local-side hold: the files
+    /// are missing from the server because its owner may have removed them.
+    MassDeleteMemberCannotRestore,
+    /// The user confirmed a drive is empty, but hcfs is no longer refusing
+    /// its listing (a cycle accepted one). The FE refreshes the prompt.
+    EmptyRemoteNothingHeld,
+    /// A shared-drive member asked to confirm the drive is empty: hcfs
+    /// refuses it, since the owner may have deleted the drive and this
+    /// device may hold the last copies.
+    EmptyRemoteMemberCannotConfirm,
 }
 
 impl NotReadyKind {
@@ -233,11 +261,19 @@ impl NotReadyKind {
             Self::VpnNotConnected => "VPN_NOT_CONNECTED",
             Self::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
             Self::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
+            Self::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
+            Self::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
             Self::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
             Self::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
             Self::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
             Self::FolderEmailInvitesUnavailable => "FOLDER_EMAIL_INVITES_UNAVAILABLE",
             Self::DriveFull => "DRIVE_FULL",
+            Self::MassDeleteNothingHeld => "MASS_DELETE_NOTHING_HELD",
+            Self::MassDeleteHoldChanged { .. } => "MASS_DELETE_HOLD_CHANGED",
+            Self::MassDeleteRestoreInProgress => "MASS_DELETE_RESTORE_IN_PROGRESS",
+            Self::MassDeleteMemberCannotRestore => "MASS_DELETE_MEMBER_CANNOT_RESTORE",
+            Self::EmptyRemoteNothingHeld => "EMPTY_REMOTE_NOTHING_HELD",
+            Self::EmptyRemoteMemberCannotConfirm => "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM",
         }
     }
 }
@@ -315,6 +351,26 @@ impl std::fmt::Display for NotReadyKind {
             Self::DriveFull => {
                 write!(f, "This drive is full. Remove someone, or upgrade the plan, to add more people.")
             }
+            Self::ScreenRecordingPermission => {
+                write!(f, "Hippius needs permission to record your screen before it can take a capture.")
+            }
+            Self::CaptureDestinationUnset => {
+                write!(f, "Choose where your captures should be saved first.")
+            }
+            Self::MassDeleteNothingHeld => write!(f, "These files are no longer waiting for a decision."),
+            Self::MassDeleteHoldChanged { held } => {
+                let held = crate::sync::mass_delete_hold::group_thousands(*held);
+                write!(f, "The number of missing files changed to {held}. Check it and choose again.")
+            }
+            Self::MassDeleteRestoreInProgress => write!(f, "A restore is already running. Let it finish first."),
+            Self::MassDeleteMemberCannotRestore => {
+                write!(f, "Only the owner of this shared drive can put these files back on Hippius.")
+            }
+            Self::EmptyRemoteNothingHeld => write!(f, "This drive is no longer waiting for a decision."),
+            Self::EmptyRemoteMemberCannotConfirm => write!(
+                f,
+                "Only the owner of this shared drive can confirm it is empty. Your files are kept; remove the drive to stop syncing it."
+            ),
         }
     }
 }
@@ -522,7 +578,15 @@ impl Serialize for AppError {
             }
         }
 
-        if let Self::NotReady(subkind) = self {
+        if let Self::NotReady(subkind @ NotReadyKind::MassDeleteHoldChanged { held }) = self {
+            // The one subkind with data the FE acts on: the new count to show.
+            let mut s = serializer.serialize_struct("AppError", 4)?;
+            s.serialize_field("kind", kind)?;
+            s.serialize_field("subkind", subkind.wire_name())?;
+            s.serialize_field("message", &self.to_string())?;
+            s.serialize_field("held", held)?;
+            s.end()
+        } else if let Self::NotReady(subkind) = self {
             let mut s = serializer.serialize_struct("AppError", 3)?;
             s.serialize_field("kind", kind)?;
             s.serialize_field("subkind", subkind.wire_name())?;
@@ -608,6 +672,24 @@ mod tests {
         let json = serde_json::to_value(&err).expect("serialize");
         assert_eq!(json["kind"], "NotReady");
         assert!(json["message"].as_str().expect("message str").contains("Sync setup"));
+    }
+
+    /// The large-delete prompt shows the new count from this field; it must
+    /// not have to parse the message.
+    #[test]
+    fn hold_changed_carries_the_new_count() {
+        let err = AppError::NotReady(NotReadyKind::MassDeleteHoldChanged { held: 1_800 });
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "NotReady");
+        assert_eq!(json["subkind"], "MASS_DELETE_HOLD_CHANGED");
+        assert_eq!(json["held"], 1_800);
+        assert!(
+            json["message"].as_str().expect("message").contains("changed to 1,800."),
+            "the count reads as the banner writes it"
+        );
+
+        let other = serde_json::to_value(AppError::NotReady(NotReadyKind::MassDeleteNothingHeld)).expect("serialize");
+        assert!(other.get("held").is_none(), "only the changed-hold subkind carries a count");
     }
 
     #[test]
@@ -771,11 +853,19 @@ mod tests {
                 NotReadyKind::VpnNotConnected => "VPN_NOT_CONNECTED",
                 NotReadyKind::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
                 NotReadyKind::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
+                NotReadyKind::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
+                NotReadyKind::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
                 NotReadyKind::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEmailInvitesUnavailable => "FOLDER_EMAIL_INVITES_UNAVAILABLE",
                 NotReadyKind::DriveFull => "DRIVE_FULL",
+                NotReadyKind::MassDeleteNothingHeld => "MASS_DELETE_NOTHING_HELD",
+                NotReadyKind::MassDeleteHoldChanged { .. } => "MASS_DELETE_HOLD_CHANGED",
+                NotReadyKind::MassDeleteRestoreInProgress => "MASS_DELETE_RESTORE_IN_PROGRESS",
+                NotReadyKind::MassDeleteMemberCannotRestore => "MASS_DELETE_MEMBER_CANNOT_RESTORE",
+                NotReadyKind::EmptyRemoteNothingHeld => "EMPTY_REMOTE_NOTHING_HELD",
+                NotReadyKind::EmptyRemoteMemberCannotConfirm => "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM",
             }
         }
         for kind in [
@@ -798,11 +888,19 @@ mod tests {
             NotReadyKind::VpnNotConnected,
             NotReadyKind::SharedDrivesUnavailable,
             NotReadyKind::SharedDrivesNotEntitled,
+            NotReadyKind::ScreenRecordingPermission,
+            NotReadyKind::CaptureDestinationUnset,
             NotReadyKind::EmailInvitesUnavailable,
             NotReadyKind::FolderInvitesUnavailable,
             NotReadyKind::FolderEditorInvitesUnavailable,
             NotReadyKind::FolderEmailInvitesUnavailable,
             NotReadyKind::DriveFull,
+            NotReadyKind::MassDeleteNothingHeld,
+            NotReadyKind::MassDeleteHoldChanged { held: 7 },
+            NotReadyKind::MassDeleteRestoreInProgress,
+            NotReadyKind::MassDeleteMemberCannotRestore,
+            NotReadyKind::EmptyRemoteNothingHeld,
+            NotReadyKind::EmptyRemoteMemberCannotConfirm,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");

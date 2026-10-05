@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { failureMessage } from "@/app/lib/utils/failureMessage";
+import {
+  failedRowAction,
+  failureMessage,
+  isRetryableFailedFile,
+  isRetryableFailure,
+  UNDECRYPTABLE_MESSAGE,
+} from "@/app/lib/utils/failureMessage";
 import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 
 const base: FileFailureRecord = {
@@ -115,9 +121,71 @@ describe("failureMessage", () => {
     expect(msg.toLowerCase()).not.toContain("connection");
   });
 
+  it("shows Rust's copy for a refused file as it was saved", () => {
+    // Rust writes the refusal's copy from hcfs's typed refusal
+    // (`refusal_copy`) and persists it as the row's `message`; hcfs's own
+    // words stay in the logs.
+    const reason =
+      "“Beach.JPG” wasn't synced: another file here has the same name apart from capital " +
+      "letters or accents. Rename one of them and both sync.";
+    expect(failureMessage({ ...base, kind: "refused", message: reason })).toBe(reason);
+  });
+
+  it("gives a refused row without a reason non-retry copy, not the generic line", () => {
+    const msg = failureMessage({ ...base, kind: "refused", message: "  " });
+    expect(msg).toBe("Not synced. This file needs your attention before it can sync.");
+    expect(msg.toLowerCase()).not.toContain("retry");
+    expect(msg.toLowerCase()).not.toContain("try again");
+  });
+
   it("degrades an unknown future kind to the generic line", () => {
     expect(failureMessage({ ...base, kind: "somethingNew" })).toBe(
       "Sync failed. Please try again."
     );
+  });
+});
+
+describe("isRetryableFailure", () => {
+  it("offers no retry for a refusal or an undecryptable file", () => {
+    // hcfs reports a refusal once per revision: a retry clears the row and
+    // the next cycle refuses the file again in silence.
+    expect(isRetryableFailure("refused")).toBe(false);
+    expect(isRetryableFailure("undecryptable")).toBe(false);
+  });
+
+  it("offers retry for every kind a retry can fix", () => {
+    for (const kind of ["network", "serverError", "insufficientBalance", "other"]) {
+      expect(isRetryableFailure(kind)).toBe(true);
+    }
+  });
+});
+
+describe("failedRowAction", () => {
+  it("offers Dismiss, not Retry, for a refusal", () => {
+    expect(failedRowAction({ ...base, kind: "refused" })).toBe("dismiss");
+  });
+
+  it("offers nothing for an undecryptable file", () => {
+    expect(failedRowAction({ ...base, kind: "undecryptable" })).toBeNull();
+  });
+
+  it("offers Retry for a retryable kind, and for a live failure with no saved row", () => {
+    expect(failedRowAction({ ...base, kind: "network" })).toBe("retry");
+    expect(failedRowAction(null)).toBe("retry");
+  });
+});
+
+describe("isRetryableFailedFile", () => {
+  it("decides by kind, so a refusal's own text is never read as retryable", () => {
+    const refusal =
+      "Hippius couldn't read this file. Check that it isn't locked or open in another app; " +
+      "it syncs once it can be read.";
+    expect(isRetryableFailedFile({ kind: "refused", error: refusal })).toBe(false);
+    expect(isRetryableFailedFile({ kind: "network", error: UNDECRYPTABLE_MESSAGE })).toBe(true);
+  });
+
+  it("falls back to the authored undecryptable copy when no kind is known", () => {
+    expect(isRetryableFailedFile({ error: UNDECRYPTABLE_MESSAGE })).toBe(false);
+    expect(isRetryableFailedFile({ kind: null, error: "Server error (500)." })).toBe(true);
   });
 });

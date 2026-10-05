@@ -557,7 +557,7 @@ fn revoked_latch_clears_ride_the_existing_teardown_edges() {
         "handle_sync_completed must re-arm the revocation latch on the recovery edge"
     );
 
-    let reset = fn_body(&src, "fn handle_sync_reset(");
+    let reset = fn_body(&src, "fn handle_sync_reset<");
     assert!(
         reset.contains("revoked_notify.clear_all()"),
         "handle_sync_reset must wipe the revocation latch across accounts"
@@ -689,7 +689,7 @@ fn a_remote_upload_names_its_drive_before_the_storage_gate() {
     let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
 
     for sig in [
-        "pub async fn upload_files_to_remote_folder",
+        "pub(crate) async fn upload_files_to_remote_folder_inner",
         "pub async fn upload_folder_to_remote_folder",
     ] {
         let body = fn_body(&src, sig);
@@ -711,6 +711,24 @@ fn a_remote_upload_names_its_drive_before_the_storage_gate() {
     }
 }
 
+/// The file-upload command is a thin wrapper over its `_inner`, which is
+/// where the two pins around this one look. Screen capture calls the inner
+/// directly; if the command grew its own copy of the body again, those pins
+/// would keep passing against the inner while the IPC path drifted.
+#[test]
+fn the_file_upload_command_goes_through_its_inner() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/remote_upload.rs")).expect("read remote_upload.rs");
+    let command = fn_body(&src, "pub async fn upload_files_to_remote_folder(");
+    assert!(
+        command.contains("upload_files_to_remote_folder_inner("),
+        "the command must delegate to its inner"
+    );
+    assert!(
+        !command.contains("require_eligible"),
+        "the command must not carry its own copy of the gate"
+    );
+}
+
 /// The folder key is derived ONCE per upload, not once per file.
 ///
 /// It used to be derived inside the per-file function. For a drive shared
@@ -729,7 +747,7 @@ fn the_folder_key_is_derived_once_per_upload_not_per_file() {
     );
 
     for sig in [
-        "pub async fn upload_files_to_remote_folder",
+        "pub(crate) async fn upload_files_to_remote_folder_inner",
         "pub async fn upload_folder_to_remote_folder",
     ] {
         let body = fn_body(&src, sig);

@@ -17,6 +17,10 @@ import { Link as LinkIcon } from "lucide-react";
 
 import { useFolderShareBadge } from "@/app/lib/hooks/useFolderShares";
 import { useSharedFiles } from "@/app/lib/hooks/useSharedFiles";
+import {
+  fileShareRowId,
+  folderShareRowId,
+} from "@/app/lib/utils/sharesPageLink";
 import { cn } from "@/lib/utils";
 import { buildSharedBadgeTooltip } from "./sharedBadgeTooltip";
 
@@ -37,13 +41,15 @@ interface SharedLinkBadgeProps {
   folderRelativePath?: string;
   /**
    * Navigates to share-link management (the `/shares` page) for this file.
+   * Gets the Active Shares row ids of this file's links (see
+   * `sharesPageHref`), so the page can highlight them.
    * When provided the badge becomes clickable and stops the click from
    * bubbling to the row/card, whose own click opens the file preview —
    * matching Dropbox/Drive, where the link icon takes you to manage the
    * link, it doesn't open the file (or re-create the share). Omit it to keep
    * the badge display-only.
    */
-  onManageShare?: () => void;
+  onManageShare?: (shareRowIds: string[]) => void;
 }
 
 const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
@@ -69,9 +75,11 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   // Legacy zip-era folder shares were FILE shares of an archive with an
   // origin row keyed by the folder's path, so a folder row still consults
   // the file index too until those links age out.
-  const rows = isFolder
-    ? [...folderRows, ...getSharesFor(label, folderRelativePath ?? actualName)]
-    : getSharesFor(label, actualName);
+  const fileRows = getSharesFor(
+    label,
+    isFolder ? (folderRelativePath ?? actualName) : actualName,
+  );
+  const rows = isFolder ? [...folderRows, ...fileRows] : fileRows;
   const tooltipLines = buildSharedBadgeTooltip(rows);
   // `buildSharedBadgeTooltip` returns null for unshared files, which
   // doubles as the "don't render the badge" signal.
@@ -87,7 +95,10 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   ) => {
     e.stopPropagation();
     e.preventDefault();
-    onManageShare?.();
+    onManageShare?.([
+      ...(isFolder ? folderRows : []).map((r) => folderShareRowId(r.tokenHash)),
+      ...fileRows.map((r) => fileShareRowId(r.shareToken)),
+    ]);
   };
 
   const triggerClassName = cn(

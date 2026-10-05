@@ -31,7 +31,7 @@ use crate::error::{AppError, Result};
 use crate::sync::config::build_hcfs_config;
 use crate::sync::mnemonic::get_mnemonic_for_account;
 use hcfs_client::drive::keys::folder_hash;
-use hcfs_client::drive::remote::{RemoteFileAccess, derive_encryption_key, download_remote_file, list_remote_files};
+use hcfs_client::drive::remote::{ExpectedContent, RemoteFileAccess, derive_encryption_key, download_remote_file_expecting, list_remote_files};
 
 /// Domain-separation tag prepended to a challenge before signing. Binds the
 /// signature to *this* protocol so it cannot be replayed against another
@@ -509,7 +509,13 @@ async fn recover_one_folder(run: &RecoveryRun<'_>, label: &str, fhash: &str, sum
             summary.record_error(format!("folder '{label}': could not create '{}': {e}", parent.display()));
             continue;
         }
-        match download_remote_file(&access, &file.file_id, &dest, Some(|_: u64, _: u64| {})).await {
+        // Verify against the row just listed: the plain download would page
+        // the folder's whole listing again for every file it recovers.
+        let downloaded = match ExpectedContent::from_info(file) {
+            Ok(expected) => download_remote_file_expecting(&access, &file.file_id, expected, &dest, Some(|_: u64, _: u64| {})).await,
+            Err(e) => Err(e),
+        };
+        match downloaded {
             Ok(bytes) => {
                 summary.files_recovered += 1;
                 summary.bytes += bytes;

@@ -128,7 +128,10 @@ tauri-plugin-dialog = "2.6.0"
 # OS notifications for team chat messages (preference-gated in `chat::notify`).
 tauri-plugin-notification = "2"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
-rand = "0.8"
+# Wallet and account mnemonics take their entropy from `rand::rngs::SysRng`
+# (the OS CSPRNG) in `auth::mnemonic`, so this is the newest rand rather
+# than the 0.8 line bip39 2.x still pulls in for hcfs-client/subxt-signer.
+rand = "=0.10.3"
 tauri-plugin-process = "2"
 which = "4.4"
 hostname = "0.4"
@@ -140,7 +143,13 @@ hkdf = "0.12"
 # through the chat stack; `static_secrets` lets the KAT inject its secret.
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 argon2 = "0.5"
-bip39 = { version = "2.2", features = ["rand"] }
+# No `rand` feature: `auth::mnemonic` fills the entropy itself and calls
+# `Mnemonic::from_entropy`, so bip39 never picks the RNG. hcfs-client and
+# subxt-signer keep their own bip39 2.x; phrases cross as strings.
+# `zeroize` wipes a `Mnemonic`'s words on drop. A separate major does not
+# share 2.x's features, so it must be asked for here; `auth::mnemonic`
+# fails to compile without it.
+bip39 = { version = "=3.0.0", features = ["zeroize"] }
 zxcvbn = { version = "3", default-features = false }
 keyring = { version = "3", default-features = false, features = [
     "apple-native",
@@ -215,14 +224,32 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # totals change above is already what the deployed server sends, whatever
 # this pin says.
 #
+# Now at hcfs main 1f8dc76 (#550, hcfs-client 0.1.10). It brings the client
+# hardening #499..#513: `SyncEvent::MassDeleteHeld` (one side's deletes held
+# when they would remove most of a drive or the root looks empty; nothing on
+# that side is deleted until the user answers), `FileFailureKind::Refused`
+# (a path collision, an unreadable file or a download with no room on disk:
+# only the user can fix it), verified downloads (`RemoteFileInfo` gains the
+# revision it was listed at) and a `downloaded_<file id>` matcher that needs
+# the full 64-hex id. Then the Camera Uploads fields on `RemoteFileEntry`
+# (#524); folder links whose files are uploaded as a copy (#547,
+# `create_upload_folder_share`, `FolderShareListItem::source`; the owner
+# listing sends "" for an upload row's folder_hash/path_prefix); and #550,
+# which lets a held mass delete be restored instead of removed
+# (`DriveManager::restore_mass_delete` / `confirm_mass_delete` /
+# `held_mass_deletes`, a typed `MassDeleteRequestError`,
+# `SyncEvent::MassDeleteRestored` / `MassDeleteRestoreRefused`) and fails a
+# whole cycle with `SyncError::RootNotMounted` when a mounted drive folder is
+# gone. The desktop must answer a hold, or such deletes never propagate.
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "9b3d3635d1d2c665b7b657ac3c50fce77ba7f318" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1f8dc76c7ae713b9d83fac7e464f1903db5ba09d" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "9b3d3635d1d2c665b7b657ac3c50fce77ba7f318" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1f8dc76c7ae713b9d83fac7e464f1903db5ba09d" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
@@ -254,6 +281,7 @@ tracing-appender = "0.2"
 # Pattern-based redaction of secrets (mnemonics, auth tokens, private keys)
 # from log text before it is zipped and uploaded with a support ticket.
 regex = "1"
+tauri-plugin-clipboard-manager = "2"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.2", features = ["fs"] }
@@ -270,10 +298,104 @@ objc = "0.2"
 # (pre-1.0 crate; audit: pure-Rust deps + objc2-io-kit/windows bindings, no
 # build.rs downloads — covered by the CI `cargo deny check`).
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
+# Screen capture (displays, windows) for the capture feature. macOS and Windows
+# only: on Linux xcap links PipeWire and XCB, which would add build packages
+# to every release workflow and a runtime dependency to the .deb. Linux takes
+# screenshots through the xdg-desktop-portal instead (follow-up).
+# `wgc`: Windows shots go through Windows.Graphics.Capture, which renders a
+# DPI-unaware app's window whole on a scaled monitor (GDI returned its
+# top-left fraction) and honours WDA_EXCLUDEFROMCAPTURE. A compile-time
+# switch with NO GDI fallback in 0.9.8; it only adds `windows` features, so
+# it is a no-op on macOS.
+xcap = { version = "0.9", features = ["wgc"] }
 keepawake = "=0.6.0"
+
+# Windows-only capture calls: reading back an overlay's display affinity
+# (did WDA_EXCLUDEFROMCAPTURE hold?), settling DWM before a grab, and the OS
+# build (RtlGetVersion) the capture floor is checked against. The same 0.62
+# xcap uses, so no second copy; Tauri's own handles (0.61) cross as raw HWNDs.
+[target.'cfg(windows)'.dependencies]
+# Plus, for the recorder child (`capture/recorder_child/windows`): Media
+# Foundation for the fragmented MP4, WASAPI (Media_Audio) for the microphone
+# and system audio, COM and property stores for device names, the registry
+# for the camera and microphone privacy switches, power requests to keep
+# the display awake while recording, and device-interface notifications
+# (CM_Register_Notification) so the bar's camera list follows a camera
+# plugged in while it is open.
+windows = { version = "0.62", features = [
+    "Wdk_System_SystemServices",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_Multimedia",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Performance",
+    "Win32_System_Power",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Windows.Graphics.Capture sessions for a monitor or a window (the recorder
+# child's frames): MIT, on the same windows 0.62 as xcap. Its own encoder is
+# NOT used (plain MP4 with the index last, frame-stamped times): see decision
+# 1 of docs/plans/2026-10-01-capture-windows-linux.md.
+windows-capture = "2.0.1"
+# `#[implement]` for the one COM object the recorder child hands Windows
+# (process loopback's completion handler): the macro names `windows_core`
+# directly. The same 0.62 `windows` re-exports, already in the lock file.
+windows-core = "0.62"
+# WebView2's PermissionRequested, so the camera bubble and the bar's mic meter
+# can open their devices. The same 0.38 wry already uses (windows 0.61).
+webview2-com = "0.38"
+
+# Linux screen capture (docs/plans/2026-10-01-capture-windows-linux.md,
+# Phase 3). X11: x11rb (already in the graph through arboard; pure Rust, no
+# new build or runtime package) with RandR for the monitors. Wayland: the
+# xdg-desktop-portal Screenshot interface through ashpd, on the zbus 5 the
+# Linux build already carries (notify-rust, opener, single-instance), so no
+# second D-Bus stack. Only the portals capture uses are switched on: Phase 4
+# adds `screencast` (Wayland recording) and `inhibit` (no screen blanking
+# while recording), and Phase 6 `global_shortcuts` (the capture shortcut on
+# Wayland, KDE Plasma and GNOME 48+).
+#
+# Linux recording (Phase 4): GStreamer from the distro through gstreamer-rs
+# (MIT/Apache). It links only libgstreamer-1.0 and libgstapp-1.0, which
+# WebKitGTK's own GStreamer dependency already brings onto every desktop;
+# the encoders are the distro's plugins, found at run time (the deb only
+# recommends them). Building needs libgstreamer1.0-dev and
+# libgstreamer-plugins-base1.0-dev.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["randr"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot", "screencast", "inhibit", "global_shortcuts"] }
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+# The camera bubble's getUserMedia (Phase 5): WebKitGTK's media-stream
+# setting and permission-request signal on the capture windows. The same
+# webkit2gtk wry already links (pinned to its exact version), no new
+# library; gtk and gdkx11 (also tao's and wry's) name the camera window's
+# XID for camera only on X11.
+webkit2gtk = "=2.0.2"
+gtk = "0.18"
+gdkx11 = "0.18"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
+# The capture bar's system-wide shortcut (default Cmd/Ctrl+Shift+2).
+# Registered from Rust; no JS permission. On Linux it grabs the keys on X11
+# only (global-hotkey's backend is x11rb, pure Rust, nothing new to build or
+# install); a Wayland session uses the GlobalShortcuts portal instead.
+tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = { version = "2", default-features = false, features = [

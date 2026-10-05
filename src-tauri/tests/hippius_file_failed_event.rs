@@ -234,6 +234,18 @@ fn each_upstream_variant_translates_to_distinct_wire_shape() {
     let json = serde_json::to_value(&other_payload).expect("serialise");
     assert_eq!(json.get("kind").and_then(|v| v.as_str()), Some("other"));
     assert_eq!(json.get("message").and_then(|v| v.as_str()), Some("unmapped"));
+
+    // `Refused` carries Rust's copy for hcfs's refusal under `reason`, the
+    // key the FE and the persisted row's `message` column both take it from;
+    // hcfs's own words never reach it.
+    let hcfs_text = hcfs_client::sync::SyncError::LocalUnreadable("Permission denied".into()).to_string();
+    let refused = FileFailureKind::Refused { reason: hcfs_text.clone() };
+    let payload = FileFailureKindPayload::from(&refused);
+    let json = serde_json::to_value(&payload).expect("serialise");
+    assert_eq!(json.get("kind").and_then(|v| v.as_str()), Some("refused"));
+    let reason = json.get("reason").and_then(|v| v.as_str()).expect("reason");
+    assert_eq!(reason, payload.display_reason());
+    assert_ne!(reason, hcfs_text);
 }
 
 // ─────────────────────────────────────────────────────────────────────

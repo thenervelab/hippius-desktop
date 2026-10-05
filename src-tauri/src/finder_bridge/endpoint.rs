@@ -30,6 +30,7 @@
 //! - **Windows:** a named pipe `\\.\pipe\hippius-finder-<user>` (the pipe
 //!   namespace is machine-global, so the user name scopes it per session).
 
+#[cfg(unix)]
 use std::path::PathBuf;
 
 use crate::finder_bridge::error::FinderBridgeError;

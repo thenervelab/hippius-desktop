@@ -69,7 +69,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use base64::Engine as _;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -246,7 +246,7 @@ fn b64url(bytes: &[u8]) -> String {
 /// 32 random bytes, base64url → 43 chars, inside RFC 7636's 43..128 window.
 pub fn new_code_verifier() -> Zeroizing<String> {
     let mut b = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut b);
+    rand::rng().fill_bytes(&mut b);
     Zeroizing::new(b64url(&b))
 }
 
@@ -257,7 +257,7 @@ pub fn code_challenge(verifier: &str) -> String {
 
 fn new_state() -> String {
     let mut b = [0u8; 24];
-    rand::thread_rng().fill_bytes(&mut b);
+    rand::rng().fill_bytes(&mut b);
     b64url(&b)
 }
 
@@ -266,7 +266,7 @@ fn new_state() -> String {
 pub fn generate_device_id() -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut b = [0u8; 10];
-    rand::thread_rng().fill_bytes(&mut b);
+    rand::rng().fill_bytes(&mut b);
     b.iter().map(|x| ALPHABET[(*x as usize) % ALPHABET.len()] as char).collect()
 }
 

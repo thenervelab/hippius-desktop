@@ -106,7 +106,7 @@ fn bridge_gates_only_the_notification_channel() {
 #[test]
 fn sync_reset_clears_the_restore_gate() {
     let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/projection/tauri_bridge.rs")).expect("read tauri_bridge.rs");
-    let body = fn_body(&src, "fn handle_sync_reset(");
+    let body = fn_body(&src, "fn handle_sync_reset<");
 
     assert!(
         body.contains("folder_restore_notify.clear_all()"),

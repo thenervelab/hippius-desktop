@@ -3,6 +3,16 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { checkForUpdates } from "@/components/updater/checkForUpdates";
+import {
+  HELD_DELETE_PAGE,
+  heldDeleteFromLink,
+  showHeldDelete,
+} from "@/app/lib/massDelete/notificationLink";
+import {
+  EMPTY_REMOTE_PAGE,
+  emptyRemoteFromLink,
+  showEmptyRemote,
+} from "@/app/lib/emptyRemote/notificationLink";
 
 // Centralized object containing all application links
 export const APP_LINKS: any = {
@@ -45,7 +55,19 @@ export const handleButtonLink = (
   if (buttonLink) {
     e.preventDefault();
     e.stopPropagation();
-    if (buttonLink.includes("Install")) {
+    const heldDelete = heldDeleteFromLink(buttonLink);
+    const emptyRemote = emptyRemoteFromLink(buttonLink);
+    if (emptyRemote) {
+      // An empty-drive notification: bring back the banner the user may
+      // have put away with "Keep my files".
+      showEmptyRemote(emptyRemote);
+      router.push(EMPTY_REMOTE_PAGE);
+    } else if (heldDelete) {
+      // A held-delete notification: bring back the banner the user may
+      // have put off with "Decide later".
+      showHeldDelete(heldDelete);
+      router.push(HELD_DELETE_PAGE);
+    } else if (buttonLink.includes("Install")) {
       checkForUpdates();
     } else if (buttonLink.includes("BILLING")) {
       openLinkByKey(buttonLink);

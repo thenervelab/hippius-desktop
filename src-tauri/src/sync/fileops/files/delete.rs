@@ -134,6 +134,12 @@ pub async fn delete_files(
     // via the cache overlay. Force the reconcile here instead of waiting for a
     // cycle that may never complete. Fire-and-forget: a failed run is retried by
     // the next eligible cycle, so it must not fail the user's delete.
+    //
+    // While a mass delete is held on the server side, the forced run unregisters
+    // nothing: it reaches the same hold gate as every run, so a deliberate folder
+    // delete waits for the large-delete prompt's answer like the files do (Remove
+    // lifts it; Restore puts the folder back). Consistent by design: the folder
+    // job cannot tell this delete apart from the unmounted-folder case it guards.
     for label in folder_entity_sync_labels(&dirs_removed_for) {
         crate::sync::folder_entries_materialize::spawn_folder_entity_sync(
             app.clone(),

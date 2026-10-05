@@ -34,6 +34,8 @@ use sqlx::sqlite::SqlitePool;
 
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::state::AuthCapabilities;
+use tauri_project_lib::sync::events::FileFailureKindPayload;
+use tauri_project_lib::sync::failure_repo;
 use tauri_project_lib::sync::files::{FileEntry, list_sync_folder_grouped_inner};
 
 const ACCOUNT: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -78,7 +80,42 @@ async fn make_pool() -> SqlitePool {
     .execute(&pool)
     .await
     .expect("create folder_entries_local");
+    // Mirror the production `sync_file_failures` schema (utils/schema.rs):
+    // the listing reads the drive's refusals from it.
+    sqlx::query(
+        "CREATE TABLE sync_file_failures (
+            owner          TEXT    NOT NULL,
+            label          TEXT    NOT NULL,
+            relative_path  TEXT    NOT NULL,
+            file_name      TEXT    NOT NULL,
+            kind           TEXT    NOT NULL,
+            message        TEXT,
+            http_status    INTEGER,
+            balance_cents  INTEGER,
+            required_cents INTEGER,
+            failure_count  INTEGER NOT NULL DEFAULT 1,
+            last_failed_at INTEGER NOT NULL,
+            dismissed_at   INTEGER,
+            PRIMARY KEY (owner, label, relative_path)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create sync_file_failures");
     pool
+}
+
+/// Persist a failure row through the production upsert, as the bridge does
+/// when hcfs reports a file failure.
+async fn insert_failure(pool: &SqlitePool, label: &str, rel: &str, kind: &FileFailureKindPayload) {
+    let name = rel.rsplit('/').next().expect("rsplit yields at least one item");
+    failure_repo::upsert_failure(pool, &account_owner(ACCOUNT), label, rel, name, kind, 1)
+        .await
+        .expect("insert failure");
+}
+
+fn refused(reason: &str) -> FileFailureKindPayload {
+    FileFailureKindPayload::Refused { reason: reason.to_string() }
 }
 
 /// Insert a `folder_entries_local` cache row for the default account/label.
@@ -664,4 +701,202 @@ async fn hidden_dotfiles_are_listed_as_hidden_not_pending() {
             .all(|e| e.sync_status == "hidden"),
         "overlay must not resurrect a hidden rel-path as pending"
     );
+}
+
+/// Opening a folder used to DELETE any `downloaded_<64 hex>` file and any
+/// 0-byte `file_<hex>` stub in it. hcfs writes the first name only at the
+/// drive root (its fallback name for a download whose path it cannot
+/// resolve), and its post-sync sweep removes either only when its state does
+/// not track it; anywhere else, or tracked, the file is a user's. So the
+/// listing deletes nothing, hides only the untracked leftovers, and lists
+/// the rest, including a user's `downloaded_2024` and a tracked empty stub.
+#[tokio::test]
+async fn listing_never_deletes_engine_leftovers_and_hides_only_untracked_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = |byte: &str| format!("downloaded_{}", byte.repeat(32));
+    let root_temp = id("ab");
+    let root_tracked = id("cd");
+    let nested = format!("sub/{}", id("ef"));
+    for rel in [
+        root_temp.as_str(),
+        root_tracked.as_str(),
+        nested.as_str(),
+        "sub/downloaded_2024",
+        "downloaded_2024",
+    ] {
+        write_file(tmp.path(), rel);
+    }
+
+    // 0-byte `file_<hex>` stubs: hcfs's post-sync sweep removes only the
+    // ones its state does not track, so a tracked one is a real (empty)
+    // file the listing must show and keep.
+    let tracked_stub = "file_0123456789abcdef";
+    let untracked_stub = "file_fedcba9876543210";
+    for stub in [tracked_stub, untracked_stub] {
+        std::fs::write(tmp.path().join(stub), b"").expect("write stub");
+    }
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &tmp.path().to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool);
+    seed_cache(&state, &[root_tracked.as_str(), tracked_stub]);
+
+    let path: String = tmp.path().to_string_lossy().into();
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path.clone(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+    let sub = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, Some("sub".into()), Some(LABEL.into()))
+        .await
+        .expect("sub listing");
+
+    let root_names = entry_names(&root.files);
+    assert!(
+        !root_names.contains(&root_temp.as_str()),
+        "an untracked root temp is hidden: {root_names:?}"
+    );
+    assert!(
+        root_names.contains(&root_tracked.as_str()),
+        "a tracked one is a synced file: {root_names:?}"
+    );
+    assert!(root_names.contains(&"downloaded_2024"));
+    assert!(
+        root_names.contains(&tracked_stub),
+        "a tracked 0-byte stub is a synced file: {root_names:?}"
+    );
+    assert_status(&root.files, tracked_stub, "synced");
+    assert!(
+        !root_names.contains(&untracked_stub),
+        "an untracked 0-byte stub is hidden until hcfs's sweep: {root_names:?}"
+    );
+
+    let sub_names = entry_names(&sub.files);
+    assert!(
+        sub_names.contains(&id("ef").as_str()),
+        "below the root the name is a user's: {sub_names:?}"
+    );
+    assert!(sub_names.contains(&"downloaded_2024"));
+
+    for rel in [
+        root_temp.as_str(),
+        root_tracked.as_str(),
+        nested.as_str(),
+        "sub/downloaded_2024",
+        "downloaded_2024",
+        tracked_stub,
+        untracked_stub,
+    ] {
+        assert!(tmp.path().join(rel).exists(), "a listing must not delete {rel}");
+    }
+}
+
+/// With no synced map (drive paused, logged out, still cold) the listing
+/// cannot tell a tracked stub from a leftover, so it hides every 0-byte
+/// `file_<hex>` stub and deletes none: deleting on a guess is how a
+/// user's empty file would be lost.
+#[tokio::test]
+async fn without_a_synced_map_a_stub_is_hidden_but_never_deleted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stub = "file_0123456789abcdef";
+    std::fs::write(tmp.path().join(stub), b"").expect("write stub");
+
+    let state = make_state(make_pool().await);
+    let path: String = tmp.path().to_string_lossy().into();
+    let listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, None, None)
+        .await
+        .expect("listing");
+
+    assert!(!entry_names(&listing.files).contains(&stub), "hidden");
+    assert!(tmp.path().join(stub).exists(), "a listing must not delete {stub}");
+}
+
+/// An older client saved a download it could not place as
+/// `downloaded_<hex of the file id>` at the drive root, and hcfs's sweep
+/// keeps such a file when its state knows that id (`knows_downloaded_as`):
+/// it is the verified copy of a real file, not a leftover. The listing
+/// mirrors that and shows it, with no sync badge: hcfs keeps the copy out
+/// of every plan while it is on disk, so it is neither pending nor synced.
+#[tokio::test]
+async fn a_legacy_copy_of_a_known_file_is_listed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let known = format!("downloaded_{}", "05".repeat(32));
+    let unknown = format!("downloaded_{}", "06".repeat(32));
+    for name in [known.as_str(), unknown.as_str()] {
+        write_file(tmp.path(), name);
+    }
+
+    let state = make_state(make_pool().await);
+    let mut map: HashMap<String, SyncedFileInfo> = HashMap::new();
+    map.insert("photo.jpg".to_string(), fake_info(5));
+    state.sync.update_synced_paths_cache(LABEL, map);
+
+    let path: String = tmp.path().to_string_lossy().into();
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    let names = entry_names(&root.files);
+    assert!(names.contains(&known.as_str()), "the state knows its id: {names:?}");
+    assert_status(&root.files, &known, "unknown");
+    assert!(!names.contains(&unknown.as_str()), "nothing knows this one: {names:?}");
+}
+
+/// hcfs reports a refusal once per revision, so the live progress that paints
+/// a row "failed" is gone after that cycle while the file is still not
+/// syncing. The saved refusal row is what keeps the row visibly failed, at
+/// any depth; the reason itself is read from the row by the FE. Other kinds
+/// and other drives' refusals do not mark anything.
+#[tokio::test]
+async fn a_saved_refusal_keeps_its_row_failed() {
+    let tmp = tempfile::tempdir().unwrap();
+    for rel in ["Beach.JPG", "ok.txt", "flaky.bin", "sub/locked.pdf"] {
+        write_file(tmp.path(), rel);
+    }
+
+    let pool = make_pool().await;
+    insert_failure(&pool, LABEL, "Beach.JPG", &refused("collides with beach.jpg")).await;
+    insert_failure(&pool, LABEL, "sub/locked.pdf", &refused("unreadable")).await;
+    insert_failure(&pool, LABEL, "flaky.bin", &FileFailureKindPayload::Network).await;
+    insert_failure(&pool, "other-drive", "ok.txt", &refused("elsewhere")).await;
+    let state = make_state(pool);
+    seed_cache(&state, &["ok.txt", "flaky.bin", "Beach.JPG"]);
+
+    let path: String = tmp.path().to_string_lossy().into();
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path.clone(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+    let sub = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, Some("sub".into()), Some(LABEL.into()))
+        .await
+        .expect("sub listing");
+
+    assert_status(&root.files, "Beach.JPG", "failed");
+    assert_status(&root.files, "ok.txt", "synced");
+    assert_status(&root.files, "flaky.bin", "synced");
+    assert_status(&sub.files, "locked.pdf", "failed");
+}
+
+/// A listing drops a refusal only when it knows the file is gone from the
+/// server too. With no drive state to ask (drive not loaded), a row whose
+/// file is not on disk stays: it may be a download hcfs refused for space.
+#[tokio::test]
+async fn a_refusal_for_a_missing_file_stays_when_the_server_side_is_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_file(tmp.path(), "here.txt");
+
+    let pool = make_pool().await;
+    insert_failure(&pool, LABEL, "here.txt", &refused("unreadable")).await;
+    insert_failure(&pool, LABEL, "big.mov", &refused("no room")).await;
+    let state = make_state(pool.clone());
+    seed_cache(&state, &[]);
+
+    let path: String = tmp.path().to_string_lossy().into();
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), path, None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    assert_status(&root.files, "here.txt", "failed");
+    let left = failure_repo::list_refused_paths(&pool, &account_owner(ACCOUNT), LABEL)
+        .await
+        .expect("read refusals");
+    assert!(left.contains("big.mov"), "kept: {left:?}");
+    assert!(left.contains("here.txt"), "kept: {left:?}");
 }

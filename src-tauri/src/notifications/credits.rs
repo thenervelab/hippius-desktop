@@ -439,6 +439,27 @@ pub enum SyncNotificationOutcome {
     /// the usual cause is deleting the folder from the web console, which the
     /// desktop then silently undoes.
     FolderRestored,
+    /// hcfs held back a large delete on one side of a drive and is waiting
+    /// for the user to restore the files or remove them. Saved by Rust once
+    /// per episode ([`create_mass_delete_held_notification`]); the frontend
+    /// never sends it. Title: "Large Delete Paused". Not an error (nothing
+    /// failed and nothing was deleted) and not a success (the drive is
+    /// waiting on the user).
+    MassDeleteHeld,
+    /// The drive folder's disk or share is not mounted, so hcfs refused the
+    /// cycle before planning and nothing synced. Saved by Rust once per
+    /// episode (`sync::tauri_bridge`'s unmounted-root arm); the frontend
+    /// never sends it. Title: "Drive Disconnected". Not "Sync Failed":
+    /// nothing went wrong with the sync, and it resumes once the disk is
+    /// back.
+    DriveDisconnected,
+    /// The server listing for a drive came back empty while this device
+    /// still has its files, so hcfs refused it and nothing was deleted; the
+    /// drive waits for the owner's answer. Saved by Rust once per episode
+    /// ([`create_empty_remote_notification`]); the frontend never sends it.
+    /// Title: "Drive Empty on Hippius". Not "Sync Failed": the refusal is
+    /// the safety check working, and the user has a decision to make.
+    EmptyRemote,
 }
 
 impl SyncNotificationOutcome {
@@ -447,6 +468,9 @@ impl SyncNotificationOutcome {
             Self::Success => "Sync Complete",
             Self::Error => "Sync Failed",
             Self::FolderRestored => "Folder Restored",
+            Self::MassDeleteHeld => "Large Delete Paused",
+            Self::DriveDisconnected => "Drive Disconnected",
+            Self::EmptyRemote => "Drive Empty on Hippius",
         }
     }
 
@@ -459,7 +483,7 @@ impl SyncNotificationOutcome {
     fn list_title(self, files: &SyncFileSummary<'_>) -> String {
         match self {
             Self::Success => success_list_title(files),
-            Self::Error | Self::FolderRestored => self.title().to_string(),
+            Self::Error | Self::FolderRestored | Self::MassDeleteHeld | Self::DriveDisconnected | Self::EmptyRemote => self.title().to_string(),
         }
     }
 
@@ -468,6 +492,9 @@ impl SyncNotificationOutcome {
             Self::Success => "FileSyncComplete",
             Self::Error => "FileSyncError",
             Self::FolderRestored => "FileSyncFolderRestored",
+            Self::MassDeleteHeld => "FileSyncMassDeleteHeld",
+            Self::DriveDisconnected => "FileSyncDriveDisconnected",
+            Self::EmptyRemote => "FileSyncEmptyRemote",
         }
     }
 }
@@ -688,6 +715,175 @@ pub async fn create_sync_notification_inner(
     Ok(id)
 }
 
+/// The label of the preference category every `Files` row belongs to, as
+/// `notifications::crud` seeds it.
+const FILES_CATEGORY: &str = "Files";
+
+/// Save a Files notification Rust raises itself (not the UI) for `owner`,
+/// unless that account turned Files notifications off. Returns the new
+/// row's id, or `None` when off.
+///
+/// For notifications raised from the sync engine's events, often before
+/// the UI has restored the session: saved under the account the drive
+/// belongs to, never whoever is signed in when the write lands.
+///
+/// # Errors
+///
+/// A database error reading the preference or writing the row.
+pub async fn create_files_notification(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    description: &str,
+    outcome: SyncNotificationOutcome,
+) -> Result<Option<i64>, AppError> {
+    if !files_notifications_enabled(pool, owner).await? {
+        return Ok(None);
+    }
+    let files = SyncFileSummary {
+        details_json: "",
+        file_count: None,
+    };
+    create_sync_notification_inner(pool, owner, description, files, outcome).await.map(Some)
+}
+
+/// Save a held mass delete's notification ("Large Delete Paused") for
+/// `owner`, the account whose drive holds it (see
+/// [`create_files_notification`]).
+///
+/// Rust raises it once per episode (`sync::mass_delete_hold`). The row's
+/// button reads "Review" and links back to its banner
+/// (`/files?heldDelete=<side>&drive=<label>`), so the UI can show a banner
+/// the user put off with "Decide later". The link is set by a second
+/// statement: a failure there leaves the row with the plain `/files` link,
+/// which still opens the right page.
+///
+/// # Errors
+///
+/// A database error reading the preference or writing the row.
+pub async fn create_mass_delete_held_notification(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    label: &str,
+    side: hcfs_client::sync::MassDeleteSide,
+    description: &str,
+) -> Result<Option<i64>, AppError> {
+    let Some(id) = create_files_notification(pool, owner, description, SyncNotificationOutcome::MassDeleteHeld).await? else {
+        return Ok(None);
+    };
+    sqlx::query("UPDATE notifications SET link = ?, link_text = 'Review' WHERE id = ?")
+        .bind(held_banner_link(label, side))
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(Some(id))
+}
+
+/// Save the notification for a Finder folder share that was cancelled after
+/// its link was made, when revoking that link failed, so the link is still
+/// live. Saved for `owner`, the account that shared, unless that account
+/// turned Files notifications off. Returns the new row's id, or `None` when
+/// off.
+///
+/// The share modal closes on Cancel, so the error the share returns reaches
+/// no one; this row is the only place the user learns a link they meant to
+/// drop still works, and the row opens Shared Links, where it is revoked.
+/// `folder_name` names the shared folder: the user may have cancelled
+/// several shares and must know which link to revoke.
+///
+/// # Errors
+///
+/// A database error reading the preference or writing the row.
+pub async fn create_cancelled_share_link_live_notification(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    folder_name: &str,
+) -> Result<Option<i64>, AppError> {
+    if !files_notifications_enabled(pool, owner).await? {
+        return Ok(None);
+    }
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    let description = format!(
+        "You cancelled sharing \u{201c}{folder_name}\u{201d}, but its link could not be removed, so it \
+         still works until it expires. Revoke it from Shared Links."
+    );
+    let id = sqlx::query(
+        r"
+        INSERT INTO notifications (
+            user_address, notification_type, notification_subtype,
+            title_text, description, link_text, link,
+            is_unread, creation_time, is_deleted
+        )
+        VALUES (?, 'Files', ?, 'Link Still Active', ?, 'View Shared Links', '/shares', 1,
+                CAST(strftime('%s','now') * 1000 AS INTEGER), 0)
+        ",
+    )
+    .bind(owner)
+    .bind(format!("ShareCancelledLinkLive-{timestamp}"))
+    .bind(description)
+    .execute(pool)
+    .await?
+    .last_insert_rowid();
+
+    Ok(Some(id))
+}
+
+/// Whether `owner` keeps Files notifications on. Read in Rust because the
+/// rows that ask are saved by Rust, often for an account the UI has not
+/// loaded preferences for.
+async fn files_notifications_enabled(pool: &sqlx::sqlite::SqlitePool, owner: &str) -> Result<bool, AppError> {
+    let enabled = crate::notifications::crud::enabled_types_inner(pool, owner).await?;
+    Ok(enabled.iter().any(|category| category == FILES_CATEGORY))
+}
+
+/// Save a refused empty listing's notification ("Drive Empty on Hippius")
+/// for `owner`, the account whose drive it is (see
+/// [`create_files_notification`]).
+///
+/// Rust raises it once per episode (`sync::empty_remote`). The row's button
+/// reads "Review" and links back to the drive's banner
+/// (`/files?emptyDrive=1&drive=<label>`), so the UI can show a banner the
+/// user put away with "Keep my files". As for the held-delete row, a failure
+/// setting the link leaves the plain `/files` link, which opens the right
+/// page.
+///
+/// # Errors
+///
+/// A database error reading the preference or writing the row.
+pub async fn create_empty_remote_notification(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    label: &str,
+    description: &str,
+) -> Result<Option<i64>, AppError> {
+    let Some(id) = create_files_notification(pool, owner, description, SyncNotificationOutcome::EmptyRemote).await? else {
+        return Ok(None);
+    };
+    sqlx::query("UPDATE notifications SET link = ?, link_text = 'Review' WHERE id = ?")
+        .bind(files_page_link("emptyDrive", label, None))
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(Some(id))
+}
+
+/// The Files page link naming a banner to show again: `key` carries the
+/// banner's kind (with `side` as its value for a held delete), `drive` the
+/// drive label.
+fn files_page_link(key: &str, label: &str, side: Option<&str>) -> String {
+    // `reqwest::Url` for its form encoding only (`url` is not a direct
+    // dependency); the base is a constant, so parsing it cannot fail.
+    let mut url = reqwest::Url::parse("app://local/files").expect("a constant, valid URL");
+    url.query_pairs_mut().append_pair(key, side.unwrap_or("1")).append_pair("drive", label);
+    format!("{}?{}", url.path(), url.query().unwrap_or_default())
+}
+
+/// The in-app link a held-delete notification opens: the Files page, naming
+/// the drive and side of the banner to show again.
+fn held_banner_link(label: &str, side: hcfs_client::sync::MassDeleteSide) -> String {
+    files_page_link("heldDelete", label, Some(side.as_str()))
+}
+
 /// Create a sync notification row.
 ///
 /// `outcome` drives the title ("Sync Failed" vs. the success titles above) and
@@ -809,6 +1005,7 @@ pub async fn create_credit_notifications(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hcfs_client::sync::MassDeleteSide;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
     use tempfile::TempDir;
@@ -1234,5 +1431,154 @@ mod tests {
         assert_eq!(parse_credit_amount_planck(""), None);
         assert_eq!(parse_credit_amount_planck("abc"), None);
         assert_eq!(parse_credit_amount_planck("12x34"), None);
+    }
+
+    // ── Held mass delete ────────────────────────────────────────────
+
+    async fn held_rows(pool: &sqlx::SqlitePool) -> Vec<(String, String, String, String, String)> {
+        sqlx::query_as("SELECT user_address, title_text, notification_subtype, link, link_text FROM notifications ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("rows")
+    }
+
+    async fn files_notifications(pool: &sqlx::SqlitePool, owner: &str, enabled: bool) {
+        crate::notifications::crud::set_preferences_inner(
+            pool,
+            owner,
+            &[crate::notifications::crud::PreferenceUpdate { id: "files".into(), enabled }],
+        )
+        .await
+        .expect("set preference");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_held_delete_is_saved_for_the_drive_owner_with_a_link_back_to_its_banner() {
+        let (_dir, pool) = fresh_pool().await;
+
+        let id = create_mass_delete_held_notification(&pool, "addrA", "Photo & Video", MassDeleteSide::Server, "150 files are missing")
+            .await
+            .expect("save");
+        assert!(id.is_some());
+
+        let rows = held_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        let (user, title, subtype, link, link_text) = &rows[0];
+        assert_eq!(user, "addrA");
+        assert_eq!(title, "Large Delete Paused");
+        assert_eq!(link_text, "Review", "it opens the banner to decide, not a file list");
+        assert!(subtype.starts_with("FileSyncMassDeleteHeld-"), "{subtype}");
+        assert_eq!(
+            link, "/files?heldDelete=server&drive=Photo+%26+Video",
+            "the drive and side the banner is keyed on, URL-encoded"
+        );
+    }
+
+    /// The user's Files toggle is read in Rust, for the account that owns
+    /// the drive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nothing_is_saved_when_the_owner_turned_files_notifications_off() {
+        let (_dir, pool) = fresh_pool().await;
+        files_notifications(&pool, "addrA", false).await;
+        files_notifications(&pool, "addrB", true).await;
+
+        let id = create_mass_delete_held_notification(&pool, "addrA", "Photos", MassDeleteSide::Local, "x")
+            .await
+            .expect("save");
+        assert_eq!(id, None);
+        assert!(held_rows(&pool).await.is_empty(), "another account's toggle does not count");
+
+        create_mass_delete_held_notification(&pool, "addrB", "Photos", MassDeleteSide::Local, "x")
+            .await
+            .expect("save");
+        let rows = held_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "addrB", "saved under the account it was raised for, never another");
+    }
+
+    // ── Cancelled share whose link stayed live ──────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_cancelled_link_is_saved_with_a_way_to_revoke_it() {
+        let (_dir, pool) = fresh_pool().await;
+
+        let id = create_cancelled_share_link_live_notification(&pool, "addrA", "Holiday Photos")
+            .await
+            .expect("save");
+        assert!(id.is_some());
+
+        let (user, kind, title, subtype, link, link_text, description): (String, String, String, String, String, String, String) = sqlx::query_as(
+            "SELECT user_address, notification_type, title_text, notification_subtype, link, link_text, description \
+                 FROM notifications",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("one row");
+        assert_eq!(user, "addrA");
+        assert_eq!(kind, "Files", "a Files row, so the Files toggle governs it");
+        assert_eq!(title, "Link Still Active");
+        assert!(subtype.starts_with("ShareCancelledLinkLive-"), "{subtype}");
+        assert_eq!(link, "/shares", "opens Shared Links, where the link is revoked");
+        assert_eq!(link_text, "View Shared Links");
+        assert!(description.contains("\u{201c}Holiday Photos\u{201d}"), "names the folder: {description}");
+        assert!(description.contains("Revoke it from Shared Links"), "{description}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_cancelled_link_is_not_saved_when_files_notifications_are_off() {
+        let (_dir, pool) = fresh_pool().await;
+        files_notifications(&pool, "addrA", false).await;
+
+        let id = create_cancelled_share_link_live_notification(&pool, "addrA", "Holiday Photos")
+            .await
+            .expect("save");
+
+        assert_eq!(id, None);
+        assert!(held_rows(&pool).await.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_empty_remote_is_saved_for_the_drive_owner_with_a_link_back_to_its_banner() {
+        let (_dir, pool) = fresh_pool().await;
+
+        let id = create_empty_remote_notification(&pool, "addrA", "Photo & Video", "Hippius has no files")
+            .await
+            .expect("save");
+        assert!(id.is_some());
+
+        let rows = held_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        let (user, title, subtype, link, link_text) = &rows[0];
+        assert_eq!(user, "addrA");
+        assert_eq!(title, "Drive Empty on Hippius");
+        assert_eq!(link_text, "Review");
+        assert!(subtype.starts_with("FileSyncEmptyRemote-"), "{subtype}");
+        assert_eq!(link, "/files?emptyDrive=1&drive=Photo+%26+Video");
+
+        files_notifications(&pool, "addrB", false).await;
+        let off = create_empty_remote_notification(&pool, "addrB", "Photos", "x").await.expect("save");
+        assert_eq!(off, None, "the Files toggle is respected");
+    }
+
+    /// An unplugged disk is not a failed sync: Rust saves its own row,
+    /// titled for what happened, under the Files toggle like the others.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_disconnected_drive_is_saved_as_drive_disconnected() {
+        let (_dir, pool) = fresh_pool().await;
+
+        let id = create_files_notification(&pool, "addrA", "Folder \"Photos\": reconnect", SyncNotificationOutcome::DriveDisconnected)
+            .await
+            .expect("save");
+        assert!(id.is_some());
+        let rows = held_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "Drive Disconnected");
+        assert!(rows[0].2.starts_with("FileSyncDriveDisconnected-"), "{}", rows[0].2);
+
+        files_notifications(&pool, "addrB", false).await;
+        let off = create_files_notification(&pool, "addrB", "x", SyncNotificationOutcome::DriveDisconnected)
+            .await
+            .expect("save");
+        assert_eq!(off, None, "the Files toggle is respected");
     }
 }

@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import {
   resolveUploadAction,
+  SECONDARY_PILL_CLASSES,
   TOOLBAR_BUTTON_GAP,
   UPLOAD_FILE_BUTTON_LABEL,
   UPLOAD_FILE_LABEL,
@@ -41,19 +42,8 @@ import {
 import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
 import RemoteFolderUploadButton from "./RemoteFolderUploadButton";
+import CaptureButtons from "@/app/components/capture/CaptureButtons";
 
-// Figma white pill style shared by Add Folder / View All Files / Shared Links.
-// Mirrors the trigger styling used across the home dashboard cards.
-const SECONDARY_PILL_CLASSES = cn(
-  "h-[30px] px-3 py-2 rounded-[6px]",
-  TOOLBAR_BUTTON_GAP,
-  "bg-white border border-grey-dark-100 text-black-600",
-  "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
-  "font-geist text-[14px] font-medium tracking-[-0.28px] leading-[1.109]",
-  "hover:bg-grey-light-700",
-  "dark:bg-black-primary-bg dark:border-black-300 dark:text-grey-light-200",
-  "dark:hover:bg-black-300",
-);
 
 const VIEW_TOGGLE_BUTTON_BASE =
   "flex items-center justify-center size-6 rounded-[3px] transition-opacity";
@@ -486,6 +476,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               View All Files
               <Icons.ArrowRight className="size-[0.875rem]" />
             </Button>
+            {/* Beside Folder and File, as in a drive's own toolbar. The
+                capture goes to the capture drive, not a drive on screen. */}
+            <CaptureButtons />
             {actionButtons}
           </div>
         </div>
@@ -537,6 +530,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             </div>
             <div className="flex items-center gap-3 flex-wrap ml-auto">
               {refreshButton}
+              {/* Not gated on the open drive's role: a capture is filed in
+                  the capture drive the user chose, not the one on screen. */}
+              <CaptureButtons />
               {actionButtons}
             </div>
           </div>

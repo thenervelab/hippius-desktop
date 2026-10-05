@@ -7,6 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import { Window } from "@tauri-apps/api/window";
 import { Upload, Check, AlertCircle } from "lucide-react";
 import "./tray-panel.css";
+import TrayCaptureRow from "./TrayCaptureRow";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
 import {
   getTraySyncSummary,
@@ -120,6 +121,9 @@ export default function TrayPanelPage() {
           chatUnread={chatUnread}
         />
         <SearchBar />
+        {/* Screenshot / Record, under the search pill (off where capture is
+            off or unsupported; see TrayCaptureRow). */}
+        <TrayCaptureRow />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-2">
           <h2 className="py-2 font-geist text-[16px] font-medium leading-8 text-grey-10 dark:text-white">
