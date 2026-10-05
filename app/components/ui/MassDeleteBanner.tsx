@@ -41,9 +41,26 @@ import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 export default function MassDeleteBanner() {
   const holds = useAtomValue(massDeleteHoldsAtom);
   const visible = Array.from(holds.entries()).filter(([, hold]) => !hold.dismissed);
-  if (visible.length === 0) return null;
+  const device = deviceName(isMacPlatform());
+  // A banner that appears on its own (a cycle, hydration at launch) does not
+  // take focus from wherever the user is; it is said here instead. The
+  // region is mounted before any banner, because a live region announces
+  // changes to its content, not the content it is mounted with.
+  const announcement = visible
+    .filter(([, hold]) => hold.state === "held")
+    .map(([, hold]) => `${holdCopy(hold, device).title}.`)
+    .join(" ");
   return (
     <>
+      <div
+        data-testid="mass-delete-announcer"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {announcement}
+      </div>
       {visible.map(([key, hold]) => (
         <MassDeleteBannerRow key={key} holdKey={key} hold={hold} />
       ))}
@@ -66,6 +83,15 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
   const copy = holdCopy(hold, device);
   const progress = progressCopy(hold);
   const titleId = `mass-delete-${holdKey.replace(/\W/g, "-")}`;
+
+  const focus = useBannerFocus({
+    holdKey,
+    count: hold.count,
+    canRestore: hold.canRestore,
+    answerable: progress === null,
+    dialogOpen: confirmCount !== null,
+  });
+  const { requestRestoreFocus } = focus;
 
   const patch = useCallback(
     (fields: Partial<MassDeleteHoldView>) => setHolds((prev) => updateHold(prev, holdKey, fields)),
@@ -90,6 +116,9 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
           await refresh();
           return;
         case "holdChanged":
+          // Asked again because of the user's own answer: they are
+          // answering, so the safe answer takes focus again.
+          requestRestoreFocus();
           patch({
             count: refusal.held,
             requested: null,
@@ -108,7 +137,7 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
           toast.error("Couldn't send your choice", { description: tauriErrorMessage(err) });
       }
     },
-    [patch, refresh],
+    [patch, refresh, requestRestoreFocus],
   );
 
   const answer = useCallback(
@@ -128,20 +157,14 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
   );
 
   const confirm = removeConfirmCopy({ ...hold, count: confirmCount ?? hold.count }, device);
-  const focus = useBannerFocus({
-    holdKey,
-    count: hold.count,
-    canRestore: hold.canRestore,
-    answerable: progress === null,
-    dialogOpen: confirmCount !== null,
-  });
 
   return (
     <>
       {/* A labelled region, not role="alert": an alert is read out at once
-          and is not meant to hold controls. Focus on Restore announces the
-          banner when it appears; later changes go through the status line. */}
+          and is not meant to hold controls. The page-wide announcer says
+          when it appears; later changes go through the status line. */}
       <section
+        ref={focus.sectionRef}
         aria-labelledby={titleId}
         className="relative overflow-hidden rounded-xl border border-warning-50/40 bg-gradient-to-r from-warning-50/[0.14] to-warning-50/[0.04] px-4 py-3.5 mt-2 dark:border-warning-50/35 dark:from-warning-50/[0.16] dark:to-warning-50/[0.05]"
       >
@@ -250,27 +273,51 @@ interface BannerFocusInput {
 /**
  * Where keyboard focus goes in a banner.
  *
- * - The safe answer is the default: when a hold appears, or asks again with a
- *   new count, focus goes to Restore (Decide later when this account cannot
- *   restore). Never while the Remove confirmation is open: its focus trap
- *   owns focus then.
+ * - Restore is first in tab order, and the safe answer takes focus when the
+ *   hold appears or changes, or its buttons come back, but only when that
+ *   takes focus from no one: nothing is focused, or focus is already in
+ *   this banner. A hold that arrives on its own while the user types
+ *   elsewhere leaves their focus alone (the page-wide announcer says it).
+ *   Decide later stands in when this account cannot restore.
+ * - After the user's own answer was refused because the hold changed, the
+ *   safe answer takes focus whatever had it: they are answering this banner.
+ *   This includes the answer sent from the Remove confirmation, so the move
+ *   waits for the confirmation to close.
  * - When the buttons go away (an answer accepted, Restore refused for a
  *   member, the confirmation closed over a vanished trigger), focus would
  *   fall to the page body; it goes to the status line, which says what is
- *   happening. Checked a tick later, after Radix's own close-time focus
- *   restore has run, and only when focus is actually lost.
+ *   happening.
+ *
+ * Every move is checked a tick later, after Radix's own close-time focus
+ * restore has run, against where focus actually is then.
  */
 function useBannerFocus({ holdKey, count, canRestore, answerable, dialogOpen }: BannerFocusInput) {
+  const sectionRef = useRef<HTMLElement>(null);
   const restoreRef = useRef<HTMLButtonElement>(null);
   const laterRef = useRef<HTMLButtonElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
-  const dialogOpenRef = useRef(dialogOpen);
-  dialogOpenRef.current = dialogOpen;
+  // The hold and buttons focus was last placed for, and whether the user's
+  // own answer asked for focus on Restore.
+  const placedForRef = useRef<string | null>(null);
+  const requestedRef = useRef(false);
 
   useEffect(() => {
-    if (dialogOpenRef.current) return;
-    (restoreRef.current ?? laterRef.current)?.focus();
-  }, [holdKey, count]);
+    if (dialogOpen) return;
+    const shown = `${holdKey}\u0000${count}\u0000${answerable}`;
+    const changed = placedForRef.current !== shown;
+    placedForRef.current = shown;
+    if (!changed && !requestedRef.current) return;
+
+    // The request is taken when the move runs, so a re-render that cancels
+    // this timer leaves it for the next one.
+    const timer = setTimeout(() => {
+      const requested = requestedRef.current;
+      requestedRef.current = false;
+      if (!requested && !focusIsFree(sectionRef.current)) return;
+      (restoreRef.current ?? laterRef.current)?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [holdKey, count, answerable, dialogOpen]);
 
   useEffect(() => {
     if (dialogOpen) return;
@@ -281,5 +328,15 @@ function useBannerFocus({ holdKey, count, canRestore, answerable, dialogOpen }: 
     return () => clearTimeout(timer);
   }, [answerable, canRestore, dialogOpen]);
 
-  return { restoreRef, laterRef, statusRef };
+  const requestRestoreFocus = useCallback(() => {
+    requestedRef.current = true;
+  }, []);
+
+  return { sectionRef, restoreRef, laterRef, statusRef, requestRestoreFocus };
+}
+
+/** Moving focus into `section` takes it from no one. */
+function focusIsFree(section: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body || (section?.contains(active) ?? false);
 }

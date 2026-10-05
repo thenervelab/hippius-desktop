@@ -62,6 +62,27 @@ function renderBanner(...holds: MassDeleteHold[]) {
 
 const restoreButton = () => screen.queryByRole("button", { name: "Restore files" });
 
+/** The banner's own status line (the page-wide announcer is another). */
+const bannerStatus = () => within(screen.getByRole("region")).getByRole("status");
+
+const announcer = () => screen.getByTestId("mass-delete-announcer");
+
+/** A banner next to a text field, as on a page the user is typing in. */
+function renderBesideInput(...holds: MassDeleteHold[]) {
+  const store = createStore();
+  store.set(
+    massDeleteHoldsAtom,
+    holds.reduce((map, hold) => applyHeld(map, hold), new Map()),
+  );
+  render(
+    <Provider store={store}>
+      <input aria-label="Search" />
+      <MassDeleteBanner />
+    </Provider>,
+  );
+  return store;
+}
+
 async function click(name: string | RegExp) {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name }));
@@ -69,9 +90,10 @@ async function click(name: string | RegExp) {
 }
 
 describe("MassDeleteBanner", () => {
-  it("renders nothing without a hold", () => {
+  it("renders no banner without a hold", () => {
     renderBanner();
     expect(screen.queryByRole("region")).toBeNull();
+    expect(announcer()).toBeEmptyDOMElement();
   });
 
   it("announces a server-side hold with its counts, Restore first", () => {
@@ -95,7 +117,7 @@ describe("MassDeleteBanner", () => {
       side: "server",
       count: 150,
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Restoring 150 files…");
+    expect(bannerStatus()).toHaveTextContent("Restoring 150 files…");
     expect(restoreButton()).toBeNull();
   });
 
@@ -124,7 +146,7 @@ describe("MassDeleteBanner", () => {
       side: "server",
       count: 150,
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Removing 150 files…");
+    expect(bannerStatus()).toHaveTextContent("Removing 150 files…");
   });
 
   // The confirmation is the user agreeing to one number. A hold that grows
@@ -242,7 +264,7 @@ describe("MassDeleteBanner", () => {
 
   it("a restoring hold offers no answers", () => {
     renderBanner({ ...SERVER, state: "restoring" });
-    expect(screen.getByRole("status")).toHaveTextContent("Restoring 150 files…");
+    expect(bannerStatus()).toHaveTextContent("Restoring 150 files…");
     expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 
@@ -284,25 +306,72 @@ describe("MassDeleteBanner", () => {
     });
     renderBanner(SERVER);
     await click("Restore files");
-    expect(screen.getByRole("status")).toHaveTextContent(/changed to 180/);
+    expect(bannerStatus()).toHaveTextContent(/changed to 180/);
   });
 
   // The safe answer is the default: a hold that appears, or asks again with
   // a new count, puts focus on Restore.
-  it("focuses Restore when a hold appears and when its count changes", async () => {
+  it("focuses Restore when a hold appears with nothing focused, and when its count changes", async () => {
     const store = renderBanner(SERVER);
-    expect(restoreButton()).toHaveFocus();
+    await waitFor(() => expect(restoreButton()).toHaveFocus());
 
     screen.getByRole("button", { name: "Decide later" }).focus();
     await act(async () => {
       store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 170 }));
     });
-    expect(restoreButton()).toHaveFocus();
+    await waitFor(() => expect(restoreButton()).toHaveFocus());
   });
 
-  it("focuses Decide later when this account cannot restore", () => {
+  it("focuses Decide later when this account cannot restore", async () => {
     renderBanner({ ...SERVER, side: "local", canRestore: false });
-    expect(screen.getByRole("button", { name: "Decide later" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Decide later" })).toHaveFocus());
+  });
+
+  // A hold arrives on its own (a cycle, or hydration at launch) while the
+  // user is typing elsewhere: moving focus would send their keystrokes
+  // into the banner. The always-mounted live region says it instead.
+  it("leaves focus where the user is typing when a hold appears", async () => {
+    const store = renderBesideInput();
+    const input = screen.getByRole("textbox", { name: "Search" });
+    input.focus();
+
+    await act(async () => {
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, SERVER));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(input).toHaveFocus();
+    expect(announcer()).toHaveTextContent("150 of 200 files in “Photos” are missing from this Mac");
+
+    await act(async () => {
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 170 }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(input).toHaveFocus();
+    expect(announcer()).toHaveTextContent("170 of 200 files");
+  });
+
+  it("announces through a polite region that is there before any banner", () => {
+    renderBanner();
+    expect(announcer()).toHaveAttribute("aria-live", "polite");
+  });
+
+  // Asked again after their own click: the user is answering, so focus
+  // goes back to the safe answer, even from the closed confirmation.
+  it("focuses Restore when the hold changed under the user's answer", async () => {
+    tauri.onInvoke("confirm_mass_delete", () => {
+      throw notReady("MASS_DELETE_HOLD_CHANGED", { held: 180 });
+    });
+    renderBesideInput(SERVER);
+    screen.getByRole("textbox", { name: "Search" }).focus();
+    await click("Remove from Hippius");
+    await screen.findByText("Remove 150 files from Hippius?");
+    await click("Remove 150 files");
+
+    await waitFor(() => expect(restoreButton()).toHaveFocus());
   });
 
   // Answering removes the buttons; focus must land on the banner's status
@@ -311,7 +380,7 @@ describe("MassDeleteBanner", () => {
     tauri.onInvoke("restore_mass_delete", () => undefined);
     renderBanner(SERVER);
     await click("Restore files");
-    await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+    await waitFor(() => expect(bannerStatus()).toHaveFocus());
   });
 
   it("moves focus to the status line after confirming Remove", async () => {
@@ -320,8 +389,8 @@ describe("MassDeleteBanner", () => {
     await click("Remove from Hippius");
     await screen.findByText("Remove 150 files from Hippius?");
     await click("Remove 150 files");
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Removing 150 files…"));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+    await waitFor(() => expect(bannerStatus()).toHaveTextContent("Removing 150 files…"));
+    await waitFor(() => expect(bannerStatus()).toHaveFocus());
   });
 
   it("shows one banner per drive side", () => {
