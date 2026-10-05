@@ -89,8 +89,13 @@ function makeFailure(kind: FileFailureRecord["kind"]): FileFailureRecord {
   };
 }
 const retryMutate = vi.fn();
+// Records what the badge asked for, so the lookup key is pinned too.
+const failureLookups: Array<[string | undefined, string | undefined]> = [];
 vi.mock("@/app/lib/hooks/useFileFailure", () => ({
-  useFileFailure: () => failureOverride,
+  useFileFailure: (label: string | undefined, relativePath: string | undefined) => {
+    failureLookups.push([label, relativePath]);
+    return failureOverride;
+  },
   useRetryFailure: () => ({ retryFile: { mutate: retryMutate, isPending: false } }),
 }));
 
@@ -323,5 +328,25 @@ describe("NameCell hover preview icon", () => {
     expect(
       screen.queryByTestId("hover-preview-icon"),
     ).not.toBeInTheDocument();
+  });
+});
+
+// The badge must look a failure up by the file's drive-relative path, exactly
+// as the row menu does. By basename, two same-named files in different
+// folders both showed the first one's failure.
+describe("NameCell failure lookup", () => {
+  it("asks for the file's full path inside an expanded folder", () => {
+    failureLookups.length = 0;
+    render(
+      <NameCell
+        {...baseProps}
+        rawName="notes.txt"
+        actualName="notes.txt"
+        label="drive"
+        parentSubFolderPath="Work"
+        syncStatus="failed"
+      />,
+    );
+    expect(failureLookups.at(-1)).toEqual(["drive", "Work/notes.txt"]);
   });
 });

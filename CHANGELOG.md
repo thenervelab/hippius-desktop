@@ -124,6 +124,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A file's sync error shows only on that file.** Two files with the same
+  name in different folders no longer both show the error of one of them.
+
 - **Opening a folder no longer deletes files in it.** Files whose names start
   with 'downloaded_', and some empty files, were removed when you opened their
   folder.

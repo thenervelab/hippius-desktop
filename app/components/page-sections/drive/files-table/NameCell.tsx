@@ -23,6 +23,7 @@ import {
 } from "@/app/lib/hooks/useFileFailure";
 import { failureMessage, isRetryableFailure } from "@/app/lib/utils/failureMessage";
 import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
+import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
 import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 
 // Mirrors `FormattedUserFile.syncStatus`. `failed` is the FE-facing label for a
@@ -338,12 +339,6 @@ const NameCell: FC<NameCellProps> = ({
     ? null
     : resolveBadgeStatus(live.status, syncStatus);
 
-  // The persisted "why it failed" record + a retry handler for this row. The
-  // drive query is shared across all rows (TanStack dedupe); folders never
-  // match, so they read it for free.
-  const failure = useFileFailure(label, actualName ?? rawName);
-  const { retryFile } = useRetryFailure(label);
-
   const mainFolderHash = getParam("mainFolderCid", "");
   const folderActualName = isFolder ? actualName || "" : "";
   // When the caller hands us a runtime-known parent path (inline-expanded
@@ -361,6 +356,16 @@ const NameCell: FC<NameCellProps> = ({
   const subFolderPath = trimmedParentPath
     ? trimmedParentPath
     : getParam("subFolderPath", "");
+
+  // The persisted "why it failed" record + a retry handler for this row,
+  // looked up by the file's drive-relative path exactly as the row menu
+  // does. The drive query is shared across all rows (TanStack dedupe);
+  // folders pass no path, so they read it for free.
+  const fileRelativePath = isFolder
+    ? undefined
+    : resolveRowRelativePath(subFolderPath, actualName || rawName);
+  const failure = useFileFailure(label, fileRelativePath);
+  const { retryFile } = useRetryFailure(label);
 
   const effectiveMainFolderHash = mainFolderHash || arionHash;
   const folderRelativePath = isFolder

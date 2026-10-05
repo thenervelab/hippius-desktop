@@ -111,6 +111,7 @@ import UploaderCell from "./UploaderCell";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { failedRowMenuItem } from "./failedRowMenu";
+import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
 import { entryKey } from "../highlightEntry";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -602,21 +603,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       return currentSubfolderPath.replace(/^\/+|\/+$/g, "");
     }, [currentSubfolderPath]);
 
-    const resolveRelativePath = useCallback(
-      (basePath: string, entryName: string) => {
-        const normalizedName = entryName.replace(/^\/+|\/+$/g, "");
-        if (!basePath) return normalizedName;
-        if (
-          normalizedName === basePath ||
-          normalizedName.startsWith(`${basePath}/`)
-        ) {
-          return normalizedName;
-        }
-        if (normalizedName.includes("/")) return normalizedName;
-        return `${basePath}/${normalizedName}`;
-      },
-      [],
-    );
+    // Shared with NameCell's failure badge, so the badge and the row menu
+    // can never look up different rows.
+    const resolveRelativePath = resolveRowRelativePath;
 
     const getFolderKey = useCallback(
       (file: FormattedUserFile, basePath = normalizedSubfolderPath) => {
