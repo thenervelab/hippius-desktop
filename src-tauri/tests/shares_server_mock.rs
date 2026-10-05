@@ -29,6 +29,9 @@
 //!   drive folder link's, a Finder Cancel mid-upload aborting the
 //!   half-built link through the real Finder mint path, the quota gate
 //!   before any upload, and the capability refusal before any work.
+//! - An uploaded copy in the owner listing: labelled `UploadedCopy` with no
+//!   drive identity, no Finder badge row, and Copy / Change expiry / Revoke
+//!   working by its token.
 
 use axum::{
     Json, Router,
@@ -56,8 +59,9 @@ use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::finder_bridge::dispatch::{FinderMint, mint_confirmed};
 use tauri_project_lib::shares::SqliteShareKeystore;
 use tauri_project_lib::shares::commands::{
-    ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_inner, update_folder_share_expiry_inner,
+    FolderShareOrigin, ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_inner, update_folder_share_expiry_inner,
 };
+use tauri_project_lib::shares::origin::folder_origin;
 use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, SHARE_CANCELLED, UPLOAD_FOLDER_SHARES_UNAVAILABLE, share_outside_folder};
 
 /// One shared `$HOME` for every test in this binary that touches config dirs
@@ -338,6 +342,20 @@ async fn make_pool(dir: &std::path::Path) -> sqlx::SqlitePool {
     .execute(&pool)
     .await
     .expect("share_keystore schema");
+
+    // The Finder folder badge's source; same shape as `utils/schema.rs`.
+    sqlx::query(
+        "CREATE TABLE folder_share_origin (
+            share_token TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            folder_label TEXT NOT NULL,
+            path_prefix TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("folder_share_origin schema");
 
     pool
 }
@@ -1354,12 +1372,23 @@ fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
 /// folder needs none. The legacy `share_router` routes ride along, so the
 /// same server also mints drive folder links.
 async fn upload_harness(account: &str, caps: &str, mock: UploadMock) -> (AppState, UploadRecorded, Recorded, tempfile::TempDir) {
+    upload_harness_listing(account, caps, mock, json!([])).await
+}
+
+/// [`upload_harness`] whose `GET /v1/folder-shares` answers `list`.
+async fn upload_harness_listing(
+    account: &str,
+    caps: &str,
+    mock: UploadMock,
+    list: serde_json::Value,
+) -> (AppState, UploadRecorded, Recorded, tempfile::TempDir) {
     let _home = &*TEST_HOME;
     let dir = tempfile::TempDir::new().expect("tempdir");
     let pool = make_pool(dir.path()).await;
     let (recorded, uploads) = (Recorded::default(), UploadRecorded::default());
     let options = MockOptions {
         capabilities: serde_json::from_str(caps).expect("caps json"),
+        list,
         ..MockOptions::default()
     };
     let router = share_router(options, recorded.clone())
@@ -1545,6 +1574,74 @@ async fn an_uploaded_copy_is_wrapped_exactly_like_a_drive_folder_link() {
         assert_eq!(Some(secret), keystore.get(&link.share_token).unwrap());
         assert!(open_folder_wrap(entry, OWNER_SS58).is_none(), "bound to the owner address");
     }
+}
+
+/// The owner listing as the server sends an uploaded copy (`source:
+/// "upload"`, `folder_hash: null`) next to a drive link: the copy reaches
+/// the FE as `UploadedCopy` with no drive identity, resolves to the very
+/// link the share returned (Copy), and Change expiry and Revoke act on it
+/// by its token like on any folder link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_uploaded_copy_lists_as_one_and_is_managed_like_a_drive_link() {
+    let account = "5UploadListAcct";
+    let list = json!([
+        {
+            "token_hash": folder_share_token_hash(UPLOAD_TOKEN),
+            "folder_hash": null,
+            "path_prefix": "",
+            "display_name": "T2-KD",
+            "source": "upload",
+            "created_at": "2026-10-02T00:00:00+00:00",
+            "expires_at": "2026-10-09T00:00:00+00:00",
+            "revoked_at": null,
+        },
+        {
+            "token_hash": "ee".repeat(32),
+            "folder_hash": "abcdef0123456789",
+            "path_prefix": "",
+            "display_name": "drive",
+            "source": "drive",
+            "created_at": "2026-10-01T00:00:00+00:00",
+            "expires_at": null,
+            "revoked_at": null,
+        },
+    ]);
+    let (state, _, recorded, _db) = upload_harness_listing(account, CAPS_UPLOADS_ON, UploadMock::default(), list).await;
+    seed_own_drive(state.pool().unwrap(), account, "drive").await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+    let drive_link = create_folder_share_inner(&state, account, "drive", "", ShareTtl::Days7, ShareChoice::Public)
+        .await
+        .expect("drive folder link");
+    let link = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect("uploaded copy");
+
+    // The Finder folder badge reads `folder_share_origin`: the drive link
+    // badges its folder, the copy has no drive folder and leaves no row.
+    let owner = account_key(account);
+    let pool = state.pool().unwrap();
+    let drive_origin = folder_origin(pool, &owner, &drive_link.share_token).await.expect("origin read");
+    assert_eq!(drive_origin, Some(("drive".to_string(), String::new())));
+    let copy_origin = folder_origin(pool, &owner, UPLOAD_TOKEN).await.expect("origin read");
+    assert_eq!(copy_origin, None, "an uploaded copy never badges a drive folder in Finder");
+
+    let rows = list_folder_shares_inner(&state, account).await.expect("list");
+    let copy = &rows[0];
+    assert_eq!(copy.source, FolderShareOrigin::UploadedCopy);
+    assert_eq!((copy.folder_hash.as_str(), copy.path_prefix.as_str()), ("", ""), "no drive identity");
+    assert_eq!(copy.share_url.as_deref(), Some(link.share_url.as_str()), "Copy hands out the minted link");
+    assert_eq!(copy.share_token.as_deref(), Some(UPLOAD_TOKEN));
+    assert_eq!(rows[1].source, FolderShareOrigin::Drive, "a whole-drive link stays a drive link");
+
+    update_folder_share_expiry_inner(&state, account, UPLOAD_TOKEN, ShareTtl::Days30)
+        .await
+        .expect("expiry update");
+    revoke_folder_share_inner(&state, account, UPLOAD_TOKEN).await.expect("revoke");
+    assert_eq!(*recorded.revoked_tokens.lock().unwrap(), vec![UPLOAD_TOKEN.to_string()]);
+    assert_eq!(recorded.patch_bodies.lock().unwrap().len(), 1);
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    assert_eq!(keystore.get(UPLOAD_TOKEN).unwrap(), None, "revoke forgets the copy's key");
 }
 
 /// The modal's Cancel during a Finder share of an outside folder, through

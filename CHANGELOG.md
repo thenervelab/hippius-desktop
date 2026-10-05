@@ -323,6 +323,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Share any folder from Finder as a link, even one outside your Hippius
   drives.** Hippius uploads a copy for the link, shows its size before you
   confirm, and removes the copy when the link expires or you revoke it.
+  Shared Links marks such a link "Uploaded copy", since later changes to the
+  folder are not in it.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a
