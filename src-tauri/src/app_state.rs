@@ -501,8 +501,10 @@ impl AppState {
             .replace(id.clone());
         let mut pending = self.pending_finder_shares.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // The older click's chooser is replaced, so nobody will see what
-        // its folder scan finds. It stays parked: only its scan stops.
-        if let Some(older) = superseded.and_then(|older| pending.get(&older)) {
+        // its folder scan finds or confirm it: drop the request and stop
+        // its scan. A request already confirmed was taken out of `pending`
+        // and is not touched here.
+        if let Some(older) = superseded.and_then(|older| pending.remove(&older)) {
             older.scan_stop.cancel();
         }
         pending.insert(id.clone(), req);
@@ -967,6 +969,32 @@ mod tests {
         assert!(!state.finder_share_is_latest(&a), "a later click supersedes a");
         assert!(state.finder_share_is_latest(&b));
         assert!(!state.finder_share_is_latest("unknown"));
+    }
+
+    /// A replaced chooser's request is dropped, not left parked for the
+    /// life of the app: nothing can confirm or cancel it any more.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_superseded_finder_request_is_dropped_and_its_scan_stopped() {
+        use crate::finder_bridge::dispatch::PendingFinderShare;
+        use std::path::PathBuf;
+
+        let state = AppState::new();
+        let a_stop = tokio_util::sync::CancellationToken::new();
+        let a = state.store_finder_share(PendingFinderShare {
+            path: PathBuf::from("/x/a"),
+            name: "a".into(),
+            scan_stop: a_stop.clone(),
+        });
+        let b = state.store_finder_share(PendingFinderShare {
+            path: PathBuf::from("/x/b"),
+            name: "b".into(),
+            scan_stop: tokio_util::sync::CancellationToken::new(),
+        });
+
+        assert!(a_stop.is_cancelled(), "a's scan stops");
+        assert!(state.take_finder_share(&a).is_none(), "a is no longer parked");
+        assert!(state.take_finder_share(&b).is_some(), "b is");
     }
 
     #[cfg(any(unix, windows))]

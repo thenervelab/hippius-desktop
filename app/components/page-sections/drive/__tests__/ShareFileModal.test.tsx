@@ -15,6 +15,7 @@ import type { ReactNode } from "react";
 // Resolves to the mocked `Channel` class below — used as the constructor
 // for `expect.any(Channel)` in the call assertions.
 import { Channel } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 
 import ShareFileModal from "../ShareFileModal";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -746,6 +747,16 @@ describe("ShareFileModal", () => {
       expect(invokeMock).not.toHaveBeenCalledWith("hcfs_finder_cancel_share", {
         requestId: "req-2",
       });
+    });
+
+    it("tells the user, by name, that the replaced share stopped", async () => {
+      vi.mocked(toast.error).mockClear();
+      startAThenOpenB();
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith(
+          "Sharing \u201cT2-KD\u201d was stopped to open the new share.",
+        ),
+      );
     });
 
     it("keeps B on the chooser when A's link lands late", async () => {

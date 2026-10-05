@@ -132,17 +132,25 @@ pub(crate) fn scan_folder(root: &Path, stop: &AtomicBool) -> Result<FolderScan> 
 /// empty-folder names too long to send together, or a folder with no files;
 /// [`SHARE_CANCELLED`] once `stop` is set.
 pub(crate) fn scan_folder_with(root: &Path, limits: &ScanLimits, stop: &AtomicBool) -> Result<FolderScan> {
+    // The root's own name is the link's title on the recipient page, so it
+    // must be a name the link could hold too, not only its contents.
+    if let Some(name) = root.file_name() {
+        let name = name.to_str().ok_or_else(|| not_text(&name.to_string_lossy()))?;
+        check_path(name)?;
+    }
     let mut walk = Walk::new(limits);
     let mut pending = vec![(root.to_path_buf(), String::new())];
 
     while let Some((dir, relative)) = pending.pop() {
-        // Checked per directory: one listing is the unit of work, and a
-        // flat folder's listing is bounded by the file cap anyway.
+        // Checked per directory: one listing is the unit of work.
         // Relaxed: the flag carries no data, only "stop soon".
         if stop.load(Ordering::Relaxed) {
             return Err(AppError::Validation(SHARE_CANCELLED.into()));
         }
-        let mut children = visible_children(&dir).map_err(|e| unreadable(&relative, &e))?;
+        // One listing is bounded too: more visible children than both caps
+        // together must break one of them, so the rest need no stat.
+        let listing_limit = limits.files + limits.dirs + 1;
+        let mut children = visible_children(&dir, listing_limit).map_err(|e| unreadable(&relative, &e))?;
         if children.is_empty() {
             // The root itself is the link, not an entry of it.
             if !relative.is_empty() {
@@ -290,7 +298,12 @@ fn invalid_name(raw: &str, error: &PathValidationError) -> AppError {
             "Rename it or the folders it is in to something shorter, or share a folder closer \
              to it.",
         ),
-        PathValidationError::TooDeep(_) => ("it is more than 64 folders deep", "Share a folder closer to it, or move it higher up."),
+        // The validator counts the item itself, so a file in the 64th folder
+        // down is already too deep: quote levels, not folders.
+        PathValidationError::TooDeep(_) => (
+            "it is nested more than 64 levels deep inside the folder",
+            "Share a folder closer to it, or move it higher up.",
+        ),
         // A name read from disk and normalized never has these; kept as a
         // sentence rather than a panic in case a filesystem surprises us.
         PathValidationError::Empty
@@ -573,6 +586,26 @@ mod tests {
         assert!(validation(&err).contains("no files"), "{err:?}");
     }
 
+    /// A flat folder past both caps is refused even though its listing is
+    /// cut short at the caps' sum.
+    #[test]
+    fn a_flat_folder_past_the_caps_is_refused_from_a_cut_listing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("Flat");
+        std::fs::create_dir_all(&root).expect("dir");
+        for i in 0..10 {
+            std::fs::write(root.join(format!("f{i}")), b"x").expect("file");
+        }
+        let small = ScanLimits {
+            files: 2,
+            dirs: 1,
+            ..limits()
+        };
+
+        let err = scan_folder_with(&root, &small, &RUN).expect_err("past the file cap");
+        assert_eq!(validation(&err), validation(&too_many_items(&small)));
+    }
+
     /// The file cap counts files only, as the client and server do: a kept
     /// empty folder is not a file.
     #[test]
@@ -746,6 +779,19 @@ mod tests {
         }
     }
 
+    /// The shared folder's own name is its title for recipients, so a name
+    /// the link could not hold is refused like any name inside it.
+    #[test]
+    fn an_invalid_name_on_the_shared_folder_itself_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("Trip\u{202e}gpj.exe");
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("a.txt"), b"x").expect("file");
+
+        let err = scan_folder(&root, &RUN).expect_err("format character in the root's name");
+        assert!(validation(&err).contains("invisible formatting character"), "{err:?}");
+    }
+
     /// A folder whose own name is invalid is named itself, not one of the
     /// files inside it, and the walk does not descend into it.
     #[test]
@@ -775,7 +821,7 @@ mod tests {
         let err = scan_folder(&root, &RUN).expect_err("65 levels");
         let message = validation(&err);
         assert!(message.contains("/d/f.txt\u{201d}"), "{message}");
-        assert!(message.contains("64 folders deep"), "{message}");
+        assert!(message.contains("more than 64 levels deep"), "{message}");
     }
 
     /// macOS can hand back decomposed names; the validator only accepts

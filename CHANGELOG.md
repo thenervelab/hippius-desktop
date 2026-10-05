@@ -331,8 +331,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Later changes to the folder are not in the copy, so Shared Links marks the
   link "Uploaded copy". The share window opens right away and shows the
   folder's size once it has been measured. If a folder can't be shared (it is
-  empty, too big, or has a name a link can't hold), the window says so before
-  you confirm, and you can share it again once it is fixed. A link holds up
+  empty, too big, has a name a link can't hold, or holds one of your Hippius
+  drives), the window says so before you confirm, and you can share it again
+  once it is fixed. A link holds up
   to 50,000 files, each up to about 5 GB.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the

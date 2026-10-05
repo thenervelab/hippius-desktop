@@ -59,8 +59,8 @@ pub struct OutsideFolderShare<'a> {
 /// Upload `request.folder` as a copy and return its folder link.
 ///
 /// The order is the point. The capability probe comes first, so an older
-/// server refuses before the disk is walked; a folder with no name to share
-/// it under refuses before the walk too. The scan comes before the gate,
+/// server refuses before the disk is walked; a folder that holds a drive,
+/// or has no name to share it under, refuses before the walk too. The scan comes before the gate,
 /// because the gate needs the real bytes. The gate comes before any upload
 /// request, so an account over its plan uploads nothing. The owner wrap
 /// comes last, because only a sealed link has a secret worth wrapping.
@@ -82,6 +82,7 @@ pub struct OutsideFolderShare<'a> {
 pub async fn share_outside_folder(state: &AppState, account_id: &str, request: OutsideFolderShare<'_>) -> Result<ShareLink> {
     let cancel = &request.cancel;
     before_open(cancel, require_upload_folder_shares_supported(state, account_id)).await?;
+    before_open(cancel, refuse_a_folder_holding_a_drive(state, account_id, request.folder)).await?;
     let display_name = folder_display_name(request.folder)?;
     let scan = before_open(cancel, scan_off_main_thread(request.folder)).await?;
     // The server bills the copy against the Drive quota, so the gate asks
@@ -202,6 +203,43 @@ async fn notify_link_still_live(state: &AppState, account_id: &str, folder_name:
         Ok(None) => info!("Files notifications are off; live-link notification not saved"),
         Err(error) => warn!(%error, "uploaded-copy share: could not save the live-link notification"),
     }
+}
+
+/// Refuse to copy a folder that holds one of the account's drives. The walk
+/// would upload that drive's files a second time, billed again, without
+/// its exclude rules, and, for a shared drive, other members' files into a
+/// link that outlives their membership. The user wants a live link inside
+/// the drive, or a folder that holds none.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] naming the drive folder; a database error
+/// reading the drive roots.
+pub(crate) async fn refuse_a_folder_holding_a_drive(state: &AppState, account_id: &str, folder: &Path) -> Result<()> {
+    let roots = crate::sync::paths::list_drive_roots(state.pool()?, account_id).await?;
+    let roots = crate::sync::paths::with_canonical_roots(roots).await;
+    match drive_root_inside(folder, &roots) {
+        Some(root) => Err(AppError::Validation(format!(
+            "\u{201c}{}\u{201d} can't be shared as a copy: it holds your Hippius drive folder \
+             \u{201c}{}\u{201d}. Share a folder inside the drive instead.",
+            name_of(folder),
+            name_of(root)
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// The first drive root at or below `folder`, compared by whole path
+/// components so `/a/b` does not hold `/a/bc`.
+fn drive_root_inside<'r>(folder: &Path, roots: &'r [(String, std::path::PathBuf)]) -> Option<&'r Path> {
+    roots.iter().map(|(_, root)| root.as_path()).find(|root| root.starts_with(folder))
+}
+
+/// A path's last component for a sentence, or the whole path when it has
+/// none.
+fn name_of(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
 }
 
 /// Capability gate. It is this path's own authority: the Finder menu shows
@@ -519,6 +557,21 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_holds_a_drive_by_whole_components_only() {
+        let roots = vec![
+            ("docs".to_string(), std::path::PathBuf::from("/Users/me/Documents/Hippius")),
+            ("pics".to_string(), std::path::PathBuf::from("/Volumes/USB/Photos")),
+        ];
+        let holds = |folder: &str| drive_root_inside(Path::new(folder), &roots).map(Path::to_path_buf);
+
+        assert_eq!(holds("/Users/me/Documents"), Some("/Users/me/Documents/Hippius".into()));
+        assert_eq!(holds("/Users/me"), Some("/Users/me/Documents/Hippius".into()));
+        assert_eq!(holds("/Users/me/Documents/Hippius"), Some("/Users/me/Documents/Hippius".into()));
+        assert_eq!(holds("/Users/me/Documents/Hip"), None, "a name prefix is not a parent");
+        assert_eq!(holds("/Users/me/Downloads"), None);
+    }
+
+    #[test]
     fn the_display_name_is_the_folder_s_own_name() {
         assert_eq!(folder_display_name(Path::new("/Users/me/Downloads/T2-KD")).unwrap(), "T2-KD");
         assert!(folder_display_name(Path::new("/")).is_err());
@@ -542,6 +595,7 @@ mod tests {
         let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("funnel must call {needle}"));
         let order = [
             at("require_upload_folder_shares_supported("),
+            at("refuse_a_folder_holding_a_drive("),
             at("folder_display_name("),
             at("scan_off_main_thread("),
             at("require_eligible(state, account_id, InsufficientCreditsAction::Sharing, scan.total_bytes)"),
