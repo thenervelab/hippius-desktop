@@ -124,6 +124,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Uploads that keep failing no longer fill your disk.** Hippius now clears
+  the temporary copy of a file whose upload has been failing for a day, even
+  if it has retried many times since.
+
 - **Return takes the capture as soon as the capture bar appears.** Pressing
   it the moment the bar or the "Choose what to share" list showed up could be
   ignored.
