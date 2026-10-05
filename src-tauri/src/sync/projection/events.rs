@@ -57,8 +57,10 @@ pub const FOLDER_ENTITIES_CHANGED: &str = "hcfs_folder_entities_changed";
 /// Payload: [`MassDeleteHoldPayload`]. Emitted only on a change, never on
 /// hcfs's per-cycle repeat; see `sync::mass_delete_hold`.
 pub const MASS_DELETE_HELD: &str = "hcfs_mass_delete_held";
-/// Gated companion to [`MASS_DELETE_HELD`]: once per episode, carrying the
-/// persisted notification's text ([`MassDeleteNotifyPayload`]).
+/// Gated companion to [`MASS_DELETE_HELD`]: Rust saved the episode's one
+/// notification ([`MassDeleteNotifyPayload`] carries its text), so the UI
+/// refreshes the bell. Not sent when the account turned Files notifications
+/// off.
 pub const MASS_DELETE_HELD_NOTIFY: &str = "hcfs_mass_delete_held_notify";
 /// A side's hold ended: a cycle completed without it (removed, restored, or
 /// the files came back). Payload: [`MassDeleteSidePayload`].
@@ -1122,7 +1124,8 @@ impl From<&crate::sync::mass_delete_hold::LabeledHold> for MassDeleteHoldPayload
     }
 }
 
-/// [`MASS_DELETE_HELD_NOTIFY`]: the text of the episode's one notification.
+/// [`MASS_DELETE_HELD_NOTIFY`]: the text of the episode's one notification,
+/// already saved.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MassDeleteNotifyPayload {

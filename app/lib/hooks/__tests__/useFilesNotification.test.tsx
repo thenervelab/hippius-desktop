@@ -14,6 +14,7 @@ const h = await vi.hoisted(async () => {
   const { makeTauriMock } = await import("@/app/lib/test-utils/tauriMock");
   return {
     tauri: makeTauriMock(),
+    refreshUnread: vi.fn(),
     state: {
       polkadotAddress: "5poll" as string | null,
       oauthSession: null as { substrateAddress?: string } | null,
@@ -36,11 +37,13 @@ vi.mock("@/components/page-sections/notifications/notificationStore", async (imp
   const { atom } = await import("jotai");
   return {
     ...actual,
-    refreshUnreadCountAtom: atom(null, () => {}),
+    refreshUnreadCountAtom: atom(null, () => {
+      h.refreshUnread();
+    }),
     refreshEnabledTypesAtom: atom(null, () => {}),
   };
 });
-const { tauri, state } = h;
+const { tauri, state, refreshUnread } = h;
 
 import { useFilesNotification } from "@/lib/hooks/useFilesNotification";
 import { enabledNotificationTypesAtom } from "@/components/page-sections/notifications/notificationStore";
@@ -103,6 +106,7 @@ function syncNotificationCalls() {
 beforeEach(() => {
   vi.useFakeTimers();
   tauri.reset();
+  refreshUnread.mockClear();
   tauri.onInvoke("create_sync_notification", () => undefined);
   state.polkadotAddress = "5poll";
   state.oauthSession = null;
@@ -112,21 +116,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// Only the held-delete notification listens before both are known: Rust
-// raises it once per episode, so it is queued rather than dropped (see the
-// "mass delete held" tests below).
+// Only the held-delete refresh listens before both are known: Rust saves
+// that notification itself, whenever it comes (see the "mass delete held"
+// tests below).
 function listenedEvents(): unknown[] {
   return tauri.event.listen.mock.calls.map((c) => c[0]);
 }
 
 describe("useFilesNotification — gating", () => {
-  it("registers only the held-delete queue when Files notifications are disabled", async () => {
+  it("registers only the held-delete refresh when Files notifications are disabled", async () => {
     mount(false);
     await flushRegistration();
     expect(listenedEvents()).toEqual(["hcfs_mass_delete_held_notify"]);
   });
 
-  it("registers only the held-delete queue when there is no account address", async () => {
+  it("registers only the held-delete refresh when there is no account address", async () => {
     state.polkadotAddress = null;
     mount(true);
     await flushRegistration();
@@ -339,72 +343,32 @@ const HELD_NOTIFY = {
     'In "Photos", 150 of 200 files are missing from this Mac. Nothing has been deleted from Hippius yet.',
 };
 
-// One persisted notification per held mass delete. Rust gates the event to
-// once per episode and writes the text; the hook persists it verbatim under
-// its own outcome (Rust titles it "Delete Paused").
+// Rust saves the held-delete notification itself, once per episode, for the
+// account whose drive it is and only when that account has Files
+// notifications on (`create_mass_delete_held_notification`). The hook never
+// saves it; it only refreshes the bell when Rust says a row was added.
 describe("useFilesNotification — mass delete held", () => {
-  it("persists Rust's text under the mass_delete_held outcome", async () => {
+  it("refreshes the bell without saving a notification itself", async () => {
     mount(true);
     await flushRegistration();
-    const description =
-      'In "Photos", 150 of 200 files are missing from this Mac. Nothing has been deleted from Hippius yet.';
     await act(async () => {
-      await tauri.emitEvent("hcfs_mass_delete_held_notify", {
-        label: "Photos",
-        side: "server",
-        description,
-      });
+      await tauri.emitEvent("hcfs_mass_delete_held_notify", HELD_NOTIFY);
     });
-    const calls = syncNotificationCalls();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.[1]).toMatchObject({ outcome: "mass_delete_held", description });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
   });
 
-  // Rust raises this once per episode, often from the first cycle after
-  // launch, before the wallet has restored the account or the enabled
-  // types have loaded. Dropped then, it would never be raised again.
-  it("queues one that arrives before the account is known", async () => {
+  // Rust raises it once per episode, often from the first cycle after
+  // launch: the bell must refresh even before the session is restored.
+  it("refreshes the bell before the account or the enabled types are known", async () => {
     state.polkadotAddress = null;
-    const store = createStore();
-    store.set(enabledNotificationTypesAtom, ["Files"]);
-    const wrapper = ({ children }: { children: React.ReactNode }) => (
-      <Provider store={store}>{children}</Provider>
-    );
-    const { rerender } = renderHook(() => useFilesNotification(), { wrapper });
+    mount(false);
     await flushRegistration();
     await act(async () => {
       await tauri.emitEvent("hcfs_mass_delete_held_notify", HELD_NOTIFY);
     });
     expect(syncNotificationCalls()).toHaveLength(0);
-
-    state.polkadotAddress = "5poll";
-    rerender();
-    await flushRegistration();
-    const calls = syncNotificationCalls();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.[1]).toMatchObject({
-      userAddress: "5poll",
-      outcome: "mass_delete_held",
-      description: HELD_NOTIFY.description,
-    });
-  });
-
-  it("queues one that arrives before the enabled types load", async () => {
-    const { store } = mount(false);
-    await flushRegistration();
-    await act(async () => {
-      await tauri.emitEvent("hcfs_mass_delete_held_notify", HELD_NOTIFY);
-    });
-    expect(syncNotificationCalls()).toHaveLength(0);
-
-    await act(async () => {
-      store.set(enabledNotificationTypesAtom, ["Files"]);
-    });
-    await flushRegistration();
-    expect(syncNotificationCalls()).toHaveLength(1);
-
-    await flushRegistration();
-    expect(syncNotificationCalls()).toHaveLength(1);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
   });
 
   it("ignores the ungated hold event", async () => {

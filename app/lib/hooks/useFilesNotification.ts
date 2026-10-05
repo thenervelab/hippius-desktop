@@ -8,7 +8,7 @@ import {
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import type { MassDeleteNotifyPayload } from "@/app/lib/tauri/massDelete";
+import { MASS_DELETE_EVENTS } from "@/app/lib/tauri/massDelete";
 
 /**
  * Aggregation window for the "Sync Complete" notification. The sync
@@ -38,15 +38,6 @@ const SYNC_NOTIFICATION_AGGREGATION_MS = 10_000;
  * than silently drop.
  */
 const MAX_PENDING_NOTIFICATION_FILES = 200;
-
-/**
- * Bound on held-delete notifications queued before they can be persisted.
- * Rust raises at most one per drive side per episode, so this is never
- * reached in practice; it only stops a runaway from growing the queue.
- */
-const MAX_QUEUED_HELD_NOTIFICATIONS = 20;
-
-type PersistHeld = (payload: MassDeleteNotifyPayload) => Promise<void>;
 
 /** Serialisable summary of a synced file stored inside releaseNotes JSON. */
 export interface SyncedFileDetail {
@@ -101,27 +92,16 @@ export function useFilesNotification() {
   const pendingFilesRef = useRef<SyncedFileDetail[]>([]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Held-delete notifications that arrived before they could be persisted,
-  // and the persister once they can be (set by the effect below while it
-  // has an account and Files notifications are on).
-  const heldQueueRef = useRef<MassDeleteNotifyPayload[]>([]);
-  const persistHeldRef = useRef<PersistHeld | null>(null);
-
-  // Rust raises the held-delete notification ONCE per episode (a repeating
-  // hold, a relaunch or a pause and resume do not raise it again), often
-  // from the first cycle after launch, before the wallet has restored the
-  // account or the enabled types have loaded. So this listener is always
-  // on, and queues what it cannot persist yet instead of dropping it.
+  // Rust saves the held-delete notification itself (once per episode, for
+  // the account whose drive it is, respecting that account's Files toggle)
+  // and then sends this event; all that is left here is the bell. Always
+  // on: it often comes from the first cycle after launch, before the
+  // wallet has restored the account or the enabled types have loaded.
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listen<MassDeleteNotifyPayload>("hcfs_mass_delete_held_notify", (e) => {
-      const persist = persistHeldRef.current;
-      if (persist) {
-        void persist(e.payload);
-      } else if (heldQueueRef.current.length < MAX_QUEUED_HELD_NOTIFICATIONS) {
-        heldQueueRef.current.push(e.payload);
-      }
+    listen(MASS_DELETE_EVENTS.heldNotify, () => {
+      void refreshUnread();
     })
       .then((u) => {
         if (cancelled) u();
@@ -134,7 +114,7 @@ export function useFilesNotification() {
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [refreshUnread]);
 
   useEffect(() => {
     if (!areFilesNotificationsEnabled || !polkadotAddress) return;
@@ -143,28 +123,6 @@ export function useFilesNotification() {
     const unsubs: (() => void)[] = [];
 
     const userAddress = oauthSession?.substrateAddress || polkadotAddress;
-
-    // A large delete is being held until the user answers the banner. Rust
-    // writes the text, so the side, counts and advice match the hold.
-    const persistHeld: PersistHeld = async (payload) => {
-      if (cancelled) return;
-      try {
-        await invoke("create_sync_notification", {
-          userAddress,
-          description: payload.description,
-          fileDetailsJson: "",
-          outcome: "mass_delete_held",
-        });
-        await refreshUnread();
-      } catch (err) {
-        console.warn("[FilesNotification] Could not save the held-delete notification:", err);
-      }
-    };
-    persistHeldRef.current = persistHeld;
-    const queued = heldQueueRef.current.splice(0);
-    void (async () => {
-      for (const payload of queued) await persistHeld(payload);
-    })();
 
     const flushNotification = async () => {
       if (cancelled || !userAddress) return;
@@ -316,7 +274,6 @@ export function useFilesNotification() {
 
     return () => {
       cancelled = true;
-      if (persistHeldRef.current === persistHeld) persistHeldRef.current = null;
       unsubs.forEach((u) => u());
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);

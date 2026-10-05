@@ -52,13 +52,9 @@ export interface MassDeleteRestoreRefusedPayload extends MassDeleteSidePayload {
   neededBytes: number | null;
 }
 
-/** Rust's `MassDeleteNotifyPayload`: the episode's notification, written by Rust. */
-export interface MassDeleteNotifyPayload extends MassDeleteSidePayload {
-  description: string;
-}
-
 export const MASS_DELETE_EVENTS = {
   held: "hcfs_mass_delete_held",
+  /** Rust saved the episode's notification: refresh the bell. */
   heldNotify: "hcfs_mass_delete_held_notify",
   cleared: "hcfs_mass_delete_cleared",
   restored: "hcfs_mass_delete_restored",

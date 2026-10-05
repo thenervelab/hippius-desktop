@@ -440,9 +440,9 @@ pub enum SyncNotificationOutcome {
     /// desktop then silently undoes.
     FolderRestored,
     /// hcfs held back a large delete on one side of a drive and is waiting
-    /// for the user to restore the files or remove them
-    /// (`hcfs_mass_delete_held_notify`, once per episode). Title: "Delete
-    /// Paused". Not an error (nothing failed and nothing was deleted) and
+    /// for the user to restore the files or remove them. Saved by Rust once
+    /// per episode ([`create_mass_delete_held_notification`]); the frontend
+    /// never sends it. Title: "Delete Paused". Not an error (nothing failed and nothing was deleted) and
     /// not a success (the drive is waiting on the user).
     MassDeleteHeld,
 }
@@ -696,6 +696,62 @@ pub async fn create_sync_notification_inner(
     Ok(id)
 }
 
+/// The label of the preference category every `Files` row belongs to, as
+/// `notifications::crud` seeds it.
+const FILES_CATEGORY: &str = "Files";
+
+/// Save a held mass delete's notification ("Delete Paused") for `owner`,
+/// the account whose drive holds it, unless that account turned Files
+/// notifications off. Returns the new row's id, or `None` when off.
+///
+/// Rust raises it once per episode (`sync::mass_delete_hold`), often from
+/// the first cycle after launch, before the UI has restored the session,
+/// so it is saved here rather than by the UI, and under the drive's owner
+/// rather than whoever is signed in when the write lands.
+///
+/// The row links back to its banner (`/files?heldDelete=<side>&drive=<label>`)
+/// so the UI can show a banner the user put off with "Decide later". The
+/// link is set by a second statement: a failure there leaves the row with
+/// the plain `/files` link, which still opens the right page.
+///
+/// # Errors
+///
+/// A database error reading the preference or writing the row.
+pub async fn create_mass_delete_held_notification(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    label: &str,
+    side: hcfs_client::sync::MassDeleteSide,
+    description: &str,
+) -> Result<Option<i64>, AppError> {
+    let enabled = crate::notifications::crud::enabled_types_inner(pool, owner).await?;
+    if !enabled.iter().any(|category| category == FILES_CATEGORY) {
+        return Ok(None);
+    }
+
+    let files = SyncFileSummary {
+        details_json: "",
+        file_count: None,
+    };
+    let id = create_sync_notification_inner(pool, owner, description, files, SyncNotificationOutcome::MassDeleteHeld).await?;
+    sqlx::query("UPDATE notifications SET link = ? WHERE id = ?")
+        .bind(held_banner_link(label, side))
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(Some(id))
+}
+
+/// The in-app link a held-delete notification opens: the Files page, naming
+/// the drive and side of the banner to show again.
+fn held_banner_link(label: &str, side: hcfs_client::sync::MassDeleteSide) -> String {
+    // `reqwest::Url` for its form encoding only (`url` is not a direct
+    // dependency); the base is a constant, so parsing it cannot fail.
+    let mut url = reqwest::Url::parse("app://local/files").expect("a constant, valid URL");
+    url.query_pairs_mut().append_pair("heldDelete", side.as_str()).append_pair("drive", label);
+    format!("{}?{}", url.path(), url.query().unwrap_or_default())
+}
+
 /// Create a sync notification row.
 ///
 /// `outcome` drives the title ("Sync Failed" vs. the success titles above) and
@@ -817,6 +873,7 @@ pub async fn create_credit_notifications(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hcfs_client::sync::MassDeleteSide;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
     use tempfile::TempDir;
@@ -847,7 +904,6 @@ mod tests {
             ("success", "Sync Complete", "FileSyncComplete"),
             ("error", "Sync Failed", "FileSyncError"),
             ("folder_restored", "Folder Restored", "FileSyncFolderRestored"),
-            ("mass_delete_held", "Delete Paused", "FileSyncMassDeleteHeld"),
         ];
 
         for (wire, title, prefix) in cases {
@@ -1243,5 +1299,67 @@ mod tests {
         assert_eq!(parse_credit_amount_planck(""), None);
         assert_eq!(parse_credit_amount_planck("abc"), None);
         assert_eq!(parse_credit_amount_planck("12x34"), None);
+    }
+
+    // ── Held mass delete ────────────────────────────────────────────
+
+    async fn held_rows(pool: &sqlx::SqlitePool) -> Vec<(String, String, String, String)> {
+        sqlx::query_as("SELECT user_address, title_text, notification_subtype, link FROM notifications ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("rows")
+    }
+
+    async fn files_notifications(pool: &sqlx::SqlitePool, owner: &str, enabled: bool) {
+        crate::notifications::crud::set_preferences_inner(
+            pool,
+            owner,
+            &[crate::notifications::crud::PreferenceUpdate { id: "files".into(), enabled }],
+        )
+        .await
+        .expect("set preference");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_held_delete_is_saved_for_the_drive_owner_with_a_link_back_to_its_banner() {
+        let (_dir, pool) = fresh_pool().await;
+
+        let id = create_mass_delete_held_notification(&pool, "addrA", "Photo & Video", MassDeleteSide::Server, "150 files are missing")
+            .await
+            .expect("save");
+        assert!(id.is_some());
+
+        let rows = held_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        let (user, title, subtype, link) = &rows[0];
+        assert_eq!(user, "addrA");
+        assert_eq!(title, "Delete Paused");
+        assert!(subtype.starts_with("FileSyncMassDeleteHeld-"), "{subtype}");
+        assert_eq!(
+            link, "/files?heldDelete=server&drive=Photo+%26+Video",
+            "the drive and side the banner is keyed on, URL-encoded"
+        );
+    }
+
+    /// The user's Files toggle is read in Rust, for the account that owns
+    /// the drive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nothing_is_saved_when_the_owner_turned_files_notifications_off() {
+        let (_dir, pool) = fresh_pool().await;
+        files_notifications(&pool, "addrA", false).await;
+        files_notifications(&pool, "addrB", true).await;
+
+        let id = create_mass_delete_held_notification(&pool, "addrA", "Photos", MassDeleteSide::Local, "x")
+            .await
+            .expect("save");
+        assert_eq!(id, None);
+        assert!(held_rows(&pool).await.is_empty(), "another account's toggle does not count");
+
+        create_mass_delete_held_notification(&pool, "addrB", "Photos", MassDeleteSide::Local, "x")
+            .await
+            .expect("save");
+        let rows = held_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "addrB", "saved under the account it was raised for, never another");
     }
 }

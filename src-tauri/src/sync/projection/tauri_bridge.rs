@@ -596,10 +596,11 @@ fn handle_mass_delete_held<R: tauri::Runtime>(
     });
 }
 
-/// Log a settled hold and tell the UI; with `notify`, also raise the
-/// episode's persisted notification. Runs under the hold state's lock (see
-/// `MassDeleteHoldState::settle_held`), so it must not touch that state.
-fn emit_mass_delete_held<R: tauri::Runtime>(app: &AppHandle<R>, hold: &crate::sync::mass_delete_hold::LabeledHold, notify: bool) {
+/// Log a settled hold and tell the UI; with `notify` (the drive's owner),
+/// also save the episode's notification for that account. Runs under the
+/// hold state's lock (see `MassDeleteHoldState::settle_held`), so it must
+/// not touch that state; the save is spawned.
+fn emit_mass_delete_held<R: tauri::Runtime>(app: &AppHandle<R>, hold: &crate::sync::mass_delete_hold::LabeledHold, notify: Option<&str>) {
     use crate::sync::mass_delete_hold::held_notification_text;
 
     tracing::warn!(
@@ -612,13 +613,41 @@ fn emit_mass_delete_held<R: tauri::Runtime>(app: &AppHandle<R>, hold: &crate::sy
     );
     let _ = app.emit(events::MASS_DELETE_HELD, events::MassDeleteHoldPayload::from(hold));
 
-    if notify {
+    if let Some(owner) = notify {
         let payload = events::MassDeleteNotifyPayload {
             label: hold.label.clone(),
             side: hold.side.as_str(),
             description: held_notification_text(&hold.label, hold.side, hold.entry, hold.can_restore),
         };
-        let _ = app.emit(events::MASS_DELETE_HELD_NOTIFY, payload);
+        tauri::async_runtime::spawn(save_held_notification(app.clone(), owner.to_string(), hold.side, payload));
+    }
+}
+
+/// Save a held mass delete's notification for `owner` (unless that account
+/// turned Files notifications off), then tell the UI a row was added so the
+/// bell refreshes. Rust saves it, not the UI: it is raised once per
+/// episode, often before the UI has restored the session.
+async fn save_held_notification<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    owner: String,
+    side: hcfs_client::sync::MassDeleteSide,
+    payload: events::MassDeleteNotifyPayload,
+) {
+    use tauri::Manager;
+    let pool = match app.state::<crate::app_state::AppState>().pool() {
+        Ok(pool) => pool.clone(),
+        Err(e) => {
+            tracing::warn!(label = %payload.label, error = %e, "No database for the held-delete notification");
+            return;
+        }
+    };
+    let saved = crate::notifications::credits::create_mass_delete_held_notification(&pool, &owner, &payload.label, side, &payload.description).await;
+    match saved {
+        Ok(Some(_)) => {
+            let _ = app.emit(events::MASS_DELETE_HELD_NOTIFY, payload);
+        }
+        Ok(None) => tracing::debug!(label = %payload.label, "Files notifications are off; held-delete notification not saved"),
+        Err(e) => tracing::warn!(label = %payload.label, error = %e, "Could not save the held-delete notification"),
     }
 }
 
@@ -2418,7 +2447,7 @@ mod tests {
         app.manage(crate::app_state::AppState::new());
         let handle = app.handle().clone();
         let holds = std::sync::Arc::clone(&handle.state::<crate::app_state::AppState>().mass_delete_holds);
-        holds.arm("photos", false, std::path::Path::new("/nonexistent"), &[]);
+        holds.arm("photos", "5Owner", false, std::path::Path::new("/nonexistent"), &[]);
         holds.begin_cycle("photos");
 
         let outcome = SyncOutcome {

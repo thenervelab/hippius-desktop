@@ -1355,7 +1355,7 @@ pub(crate) async fn initialize_sync_inner(
         });
     app_state
         .mass_delete_holds
-        .arm(&label, is_member, std::path::Path::new(&cfg.sync_path), &seed);
+        .arm(&label, &account_id, is_member, std::path::Path::new(&cfg.sync_path), &seed);
 
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());

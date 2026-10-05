@@ -24,7 +24,8 @@
 //!   because the empty-root check reads the drive folder.
 //! - **One notification per episode.** An episode starts when a side becomes
 //!   held and ends when the hold clears or is restored; the latch is the
-//!   side's `notified` flag, and the first settle of the episode raises it.
+//!   side's `notified` flag, and the first settle of the episode raises it,
+//!   for the account the drive was armed for (the bridge saves it).
 //!   A hold seeded from disk at init counts as already notified, so a
 //!   relaunch or a pause and resume does not notify again (see
 //!   [`MassDeleteHoldState::arm`]).
@@ -284,6 +285,9 @@ impl SideSlot {
 /// Everything recorded for one drive label.
 #[derive(Debug, Default)]
 struct LabelHolds {
+    /// The account whose drive this is (armed at init): the episode's
+    /// notification is saved for it.
+    owner: Option<String>,
     /// Shared-drive member drive (armed at init).
     member: bool,
     /// The drive folder (armed at init), for the empty-root check.
@@ -340,8 +344,9 @@ impl MassDeleteHoldState {
         self.inner.lock().expect("mass-delete-hold mutex poisoned")
     }
 
-    /// Record a drive's init: whether it is a shared-drive member drive, its
-    /// folder, and the holds hcfs recorded on disk (so the prompt shows
+    /// Record a drive's init: the account it belongs to, whether it is a
+    /// shared-drive member drive, its folder, and the holds hcfs recorded on
+    /// disk (so the prompt shows
     /// before the first cycle, and survives a relaunch).
     ///
     /// Seeded holds count as already notified: the user was told when the
@@ -359,9 +364,10 @@ impl MassDeleteHoldState {
     /// A re-init also closes any cycle the previous drive left open: none of
     /// the seeded holds was reported in it, so its late `SyncCompleted`
     /// would otherwise read them all as cleared.
-    pub fn arm(&self, label: &str, member: bool, sync_root: &Path, seed: &[HeldMassDelete]) {
+    pub fn arm(&self, label: &str, owner: &str, member: bool, sync_root: &Path, seed: &[HeldMassDelete]) {
         let mut map = self.lock();
         let holds = map.entry(label.to_string()).or_default();
+        holds.owner = Some(owner.to_string());
         holds.member = member;
         holds.sync_root = Some(sync_root.to_path_buf());
         holds.cycle_open = false;
@@ -459,8 +465,12 @@ impl MassDeleteHoldState {
 
     /// Finish the settle [`Self::record_held`] started for `side`: store the
     /// empty-root check on the side's current hold and hand that hold to
-    /// `emit`, with whether this is the episode's notification. Returns
-    /// whether `emit` ran.
+    /// `emit`, with the account to save the episode's notification for when
+    /// this settle raises it (the drive's owner, as armed). Returns whether
+    /// `emit` ran.
+    ///
+    /// A drive no init armed has no owner: its notification stays pending
+    /// for the first settle after the arm rather than being spent.
     ///
     /// It settles the hold as it stands now, not as it was when the settle
     /// started: reports that arrived meanwhile started no settle of their
@@ -472,12 +482,13 @@ impl MassDeleteHoldState {
     /// emit) or waits until the held event is out, and its cleared event
     /// follows it; the UI never sees a hold after its clear. `emit` must not
     /// call back into this state.
-    pub fn settle_held(&self, label: &str, side: MassDeleteSide, empty_root: bool, emit: impl FnOnce(&LabeledHold, bool)) -> bool {
+    pub fn settle_held(&self, label: &str, side: MassDeleteSide, empty_root: bool, emit: impl FnOnce(&LabeledHold, Option<&str>)) -> bool {
         let mut map = self.lock();
         let Some(holds) = map.get_mut(label) else {
             return false;
         };
         let can_restore = holds.can_restore(side);
+        let owner = holds.owner.clone();
         let slot = holds.slot_mut(side);
         slot.settling = false;
         if slot.settled {
@@ -490,7 +501,10 @@ impl MassDeleteHoldState {
         entry.empty_root = empty_root;
         let entry = *entry;
         slot.settled = true;
-        let notify = std::mem::take(&mut slot.notify_pending);
+        let notify = owner.as_deref().filter(|_| slot.notify_pending);
+        if notify.is_some() {
+            slot.notify_pending = false;
+        }
 
         let hold = LabeledHold {
             label: label.to_string(),
@@ -746,6 +760,14 @@ mod tests {
     use MassDeleteSide::{Local, Server};
 
     const L: &str = "photos";
+    const OWNER: &str = "5Owner";
+
+    /// A state with `L` armed for `OWNER`, as init leaves it.
+    fn armed() -> MassDeleteHoldState {
+        let state = MassDeleteHoldState::new();
+        state.arm(L, OWNER, false, Path::new("/x"), &[]);
+        state
+    }
 
     fn held(side: MassDeleteSide, state: HoldState, count: usize) -> HeldMassDelete {
         HeldMassDelete {
@@ -773,7 +795,7 @@ mod tests {
             return None;
         }
         let mut emitted = None;
-        state.settle_held(L, side, false, |_, notify| emitted = Some(notify));
+        state.settle_held(L, side, false, |_, notify| emitted = Some(notify.is_some()));
         emitted
     }
 
@@ -786,8 +808,8 @@ mod tests {
 
     #[test]
     fn a_repeated_hold_is_emitted_and_notified_once() {
-        let state = MassDeleteHoldState::new();
-        state.arm(L, false, Path::new("/x"), &[]);
+        let state = armed();
+        state.arm(L, OWNER, false, Path::new("/x"), &[]);
 
         state.begin_cycle(L);
         assert_eq!(report_held(&state, Server, 150), Some(true));
@@ -808,7 +830,7 @@ mod tests {
 
     #[test]
     fn a_cycle_without_the_hold_clears_it_and_starts_a_new_episode() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             report_held(s, Local, 120);
         });
@@ -827,8 +849,8 @@ mod tests {
     /// unreported and clear it.
     #[test]
     fn a_second_completion_of_one_cycle_keeps_the_hold() {
-        let state = MassDeleteHoldState::new();
-        state.arm(L, false, Path::new("/x"), &[]);
+        let state = armed();
+        state.arm(L, OWNER, false, Path::new("/x"), &[]);
 
         state.begin_cycle(L);
         assert_eq!(report_held(&state, Server, 150), Some(true));
@@ -846,15 +868,15 @@ mod tests {
 
     #[test]
     fn a_completion_without_a_start_clears_nothing() {
-        let state = MassDeleteHoldState::new();
-        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        let state = armed();
+        state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
         assert!(state.finish_cycle(L).is_empty(), "no cycle is open, so nothing went unreported");
         assert!(state.entry(L, Server).is_some());
     }
 
     #[test]
     fn sides_are_tracked_apart() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             report_held(s, Server, 150);
             report_held(s, Local, 110);
@@ -869,7 +891,7 @@ mod tests {
 
     #[test]
     fn a_restore_restores_for_one_cycle_then_clears() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             report_held(s, Server, 150);
         });
@@ -884,7 +906,7 @@ mod tests {
 
     #[test]
     fn a_hold_after_a_restore_notifies_again() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             report_held(s, Server, 150);
         });
@@ -896,7 +918,7 @@ mod tests {
 
     #[test]
     fn a_refusal_is_reported_once_per_episode_and_keeps_the_hold() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         state.begin_cycle(L);
         assert!(state.record_refused(L, Server, "insufficient_space"));
         report_held(&state, Server, 150);
@@ -919,7 +941,7 @@ mod tests {
     /// empty folders have no transfer to wait for.
     #[test]
     fn every_applied_restore_owes_folders() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| s.record_restored(L, Local, 40));
         let owed = state.folder_restores(L);
         assert_eq!(owed.sides(), FolderRestores { server: false, local: true });
@@ -933,7 +955,7 @@ mod tests {
     /// restore it never saw, which stays owed for the next run.
     #[test]
     fn an_ack_does_not_cover_a_restore_that_landed_after_the_read() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| s.record_restored(L, Server, 10));
         let read = state.folder_restores(L);
 
@@ -948,17 +970,17 @@ mod tests {
 
     #[test]
     fn a_folder_restore_outlives_the_episode_and_a_re_init() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| s.record_restored(L, Server, 10));
         cycle(&state, |_| {});
-        state.arm(L, false, Path::new("/x"), &[]);
+        state.arm(L, OWNER, false, Path::new("/x"), &[]);
         assert!(state.folder_restores(L).sides().server, "consumed only by the folder job");
     }
 
     #[test]
     fn a_seeded_hold_is_shown_but_not_notified_again() {
-        let state = MassDeleteHoldState::new();
-        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        let state = armed();
+        state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
         assert_eq!(state.entry(L, Server).map(|e| e.phase), Some(HoldPhase::Held));
 
         state.begin_cycle(L);
@@ -971,7 +993,7 @@ mod tests {
 
     #[test]
     fn a_settle_stores_the_empty_root_check() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         state.begin_cycle(L);
         assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
         assert!(state.settle_held(L, Server, true, |hold, _| assert!(hold.entry.empty_root)));
@@ -986,7 +1008,7 @@ mod tests {
     /// cleared before it finished must not be shown after its clear.
     #[test]
     fn a_hold_cleared_before_it_settles_is_never_shown() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             s.record_held(L, report(Server, 150));
         });
@@ -999,7 +1021,7 @@ mod tests {
     /// neither is lost; once it is done, the next change starts a new one.
     #[test]
     fn a_running_settle_shows_the_hold_as_it_stands() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         state.begin_cycle(L);
         assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
         state.finish_cycle(L);
@@ -1007,7 +1029,7 @@ mod tests {
         assert_eq!(state.record_held(L, report(Server, 160)), HeldChange::Settling);
 
         let mut shown = None;
-        assert!(state.settle_held(L, Server, false, |hold, notify| shown = Some((hold.entry.count, notify))));
+        assert!(state.settle_held(L, Server, false, |hold, notify| shown = Some((hold.entry.count, notify.is_some()))));
         assert_eq!(shown, Some((160, true)));
 
         assert_eq!(state.record_held(L, report(Server, 160)), HeldChange::Unchanged);
@@ -1018,7 +1040,7 @@ mod tests {
     /// not show the restoring side as held again.
     #[test]
     fn a_settle_after_a_restore_shows_nothing() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         state.begin_cycle(L);
         state.record_held(L, report(Server, 150));
         state.record_restored(L, Server, 150);
@@ -1030,7 +1052,7 @@ mod tests {
     /// reports must not queue more blocking checks behind it.
     #[test]
     fn reports_during_a_settle_start_no_second_one() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         state.begin_cycle(L);
         assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
         state.finish_cycle(L);
@@ -1054,15 +1076,15 @@ mod tests {
     /// notification had not gone out yet still raises it.
     #[test]
     fn a_re_init_keeps_a_notification_not_yet_raised() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         state.begin_cycle(L);
         state.record_held(L, report(Server, 150));
-        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
 
         state.begin_cycle(L);
         assert_eq!(report_held(&state, Server, 150), Some(true));
 
-        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
         state.begin_cycle(L);
         assert_eq!(report_held(&state, Server, 150), Some(false), "raised once, never again for the episode");
     }
@@ -1072,11 +1094,11 @@ mod tests {
     /// and must not read them as cleared.
     #[test]
     fn a_late_completion_after_a_re_init_keeps_the_seeded_holds() {
-        let state = MassDeleteHoldState::new();
-        state.arm(L, false, Path::new("/x"), &[]);
+        let state = armed();
+        state.arm(L, OWNER, false, Path::new("/x"), &[]);
         state.begin_cycle(L);
 
-        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
         assert!(state.finish_cycle(L).is_empty(), "the old drive's cycle closes nothing");
         assert_eq!(state.entry(L, Server).map(|e| e.count), Some(150));
     }
@@ -1088,7 +1110,7 @@ mod tests {
     /// report does not count.
     #[test]
     fn an_answer_the_next_cycle_did_not_apply_re_emits_the_hold() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         state.begin_cycle(L);
         assert_eq!(report_held(&state, Server, 150), Some(true));
         state.finish_cycle(L);
@@ -1120,7 +1142,7 @@ mod tests {
     /// again; the side whose answer took effect clears.
     #[test]
     fn one_marker_for_both_sides_re_emits_the_side_whose_answer_was_lost() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             report_held(s, Server, 150);
             report_held(s, Local, 120);
@@ -1138,7 +1160,7 @@ mod tests {
     /// after the restore is a new one, not a lost answer.
     #[test]
     fn an_applied_restore_forgets_the_answer() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             report_held(s, Server, 150);
         });
@@ -1154,9 +1176,10 @@ mod tests {
 
     #[test]
     fn a_member_cannot_restore_the_local_side() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         state.arm(
             L,
+            OWNER,
             true,
             Path::new("/x"),
             &[held(Local, HoldState::Held, 120), held(Server, HoldState::Restoring, 130)],
@@ -1172,7 +1195,7 @@ mod tests {
 
     #[test]
     fn clear_and_clear_all_forget_everything() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             report_held(s, Server, 150);
             s.record_restored("other", Local, 5);
@@ -1191,7 +1214,7 @@ mod tests {
     /// was showing one (held or restoring), so each can be told to the UI.
     #[test]
     fn clear_returns_the_sides_it_held() {
-        let state = MassDeleteHoldState::new();
+        let state = armed();
         cycle(&state, |s| {
             report_held(s, Server, 150);
             s.record_restored(L, Local, 5);
@@ -1202,6 +1225,75 @@ mod tests {
         cycle(&state, |s| s.record_restored(L, Server, 5));
         cycle(&state, |_| {});
         assert!(state.clear(L).is_empty(), "an owed folder restore is not a banner");
+    }
+
+    /// The episode's notification is saved for the account whose drive
+    /// holds the files, as recorded when the drive was armed: never for
+    /// whoever is signed in when the settle lands.
+    #[test]
+    fn the_notification_names_the_account_that_armed_the_drive() {
+        let state = armed();
+        state.begin_cycle(L);
+        state.record_held(L, report(Server, 150));
+        let mut owner = None;
+        state.settle_held(L, Server, false, |_, notify| owner = notify.map(str::to_string));
+        assert_eq!(owner.as_deref(), Some(OWNER));
+
+        state.clear_all();
+        state.arm(L, "5Next", false, Path::new("/x"), &[]);
+        state.begin_cycle(L);
+        state.record_held(L, report(Server, 150));
+        state.settle_held(L, Server, false, |_, notify| owner = notify.map(str::to_string));
+        assert_eq!(owner.as_deref(), Some("5Next"), "the next account's own episode");
+    }
+
+    /// A hold reported for a drive no init armed has no account to save
+    /// its notification for. It is shown, and the notification waits for
+    /// the arm instead of being spent on nobody.
+    #[test]
+    fn an_unarmed_drive_keeps_its_notification_for_the_arm() {
+        let state = MassDeleteHoldState::new();
+        state.begin_cycle(L);
+        assert_eq!(report_held(&state, Server, 150), Some(false), "shown, nobody to notify");
+
+        state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        state.begin_cycle(L);
+        assert_eq!(report_held(&state, Server, 150), Some(true));
+    }
+
+    /// One saved notification per episode, end to end: the state raises
+    /// it on the first settle only, and each raise saves one row.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn one_notification_is_saved_per_episode() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(dir.path().join("test.db"))
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(options).await.expect("pool");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+        let state = armed();
+
+        for count in [150, 150, 160] {
+            state.begin_cycle(L);
+            let mut raise = None;
+            if state.record_held(L, report(Server, count)) != HeldChange::Unchanged {
+                state.settle_held(L, Server, false, |hold, notify| {
+                    raise = notify.map(|owner| (owner.to_string(), held_notification_text(L, hold.side, hold.entry, hold.can_restore)));
+                });
+            }
+            if let Some((owner, text)) = raise {
+                crate::notifications::credits::create_mass_delete_held_notification(&pool, &owner, L, Server, &text)
+                    .await
+                    .expect("save");
+            }
+            state.finish_cycle(L);
+        }
+
+        let saved: Vec<(String,)> = sqlx::query_as("SELECT user_address FROM notifications")
+            .fetch_all(&pool)
+            .await
+            .expect("rows");
+        assert_eq!(saved, vec![(OWNER.to_string(),)]);
     }
 
     #[test]
