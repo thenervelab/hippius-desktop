@@ -21,11 +21,11 @@ mod dir_stats;
 mod exclude_match;
 mod export_zip;
 mod listing;
-// `pub(super)` so a sibling in `fileops` can share the hidden-name rule
-// rather than writing a second copy of it — the rule exists precisely so
-// that every walk agrees on which names the engine skips.
 mod new_folder;
-pub(super) mod pathops;
+// `pub(crate)` so every walk that uploads a local tree (the remote folder
+// upload, the outside-folder share scan in `shares::folder_scan`) shares
+// the hidden-name and symlink rule rather than writing a second copy of it.
+pub(crate) mod pathops;
 mod recent;
 mod refused_rows;
 mod rename;

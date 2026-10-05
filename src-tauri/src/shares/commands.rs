@@ -166,7 +166,7 @@ impl ShareChoice {
     }
 
     /// The password to wrap the share key under, if any.
-    fn password(&self) -> Option<&str> {
+    pub(crate) fn password(&self) -> Option<&str> {
         match self {
             Self::Public => None,
             Self::Private { password } => Some(password),
@@ -175,7 +175,7 @@ impl ShareChoice {
 
     /// The password to surface to the user, cloned onto the response. Only
     /// a private share has one.
-    fn into_password(self) -> Option<String> {
+    pub(crate) fn into_password(self) -> Option<String> {
         match self {
             Self::Public => None,
             Self::Private { password } => Some(password),

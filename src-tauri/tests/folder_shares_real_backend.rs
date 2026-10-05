@@ -27,6 +27,12 @@
 //! - **The password wrap**: a `#p=` mint's fragment blob unwraps with the
 //!   password (client-side Argon2id, no server involvement) to exactly the
 //!   drive key, and a wrong password fails.
+//! - **The uploaded copy** (scenario 4): an outside folder shared through
+//!   `share_outside_folder` uploads under the link's own key; the live
+//!   browse lists its file and empty subfolder, the `#k=` key opens the
+//!   blob, the owner listing marks the row `UploadedCopy` with no drive
+//!   identity, and a revoke cuts recipients off. Needs a server that
+//!   advertises `upload_folder_shares`.
 //! - **Revocation**: while live the anonymous meta/blob answer; after
 //!   `revoke_folder_share_inner` both collapse to the server's bodiless
 //!   404 and the local keystore has forgotten the token.
@@ -116,7 +122,10 @@ use tauri_project_lib::auth::account_key::account_key;
 use tauri_project_lib::auth::state::AuthCapabilities;
 use tauri_project_lib::error::AppError;
 use tauri_project_lib::shares::SqliteShareKeystore;
-use tauri_project_lib::shares::commands::{ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_inner};
+use tauri_project_lib::shares::commands::{
+    FolderShareOrigin, FolderShareSummary, ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_inner,
+};
+use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, share_outside_folder};
 use tauri_project_lib::utils::schema::ensure_table_schema;
 
 // ── Environment ────────────────────────────────────────────────────────────
@@ -740,4 +749,129 @@ async fn member_drive_mint_refuses_against_the_live_capability_doc() {
 
     let keystore = SqliteShareKeystore::new(pool);
     assert!(keystore.all_entries().expect("scan").is_empty(), "nothing may be persisted on refusal");
+}
+
+// ── Scenario 4: an outside folder uploaded as a copy ───────────────────────
+
+/// What a live recipient sees of an uploaded copy, captured before the
+/// revoke so a red run still revokes the link it made.
+struct CopyCapture {
+    browse_status: u16,
+    browse: serde_json::Value,
+    blob_status: u16,
+    ciphertext: Vec<u8>,
+    rows: tauri_project_lib::error::Result<Vec<FolderShareSummary>>,
+}
+
+/// Fetch the copy's root listing, its one file's blob, and the owner
+/// listing, without panicking: every failure is kept for the asserts that
+/// run after the revoke.
+async fn capture_copy(http: &reqwest::Client, env: &LiveEnv, state: &AppState, token: &str) -> CopyCapture {
+    let browse = anon_get(http, &format!("{}/v1/folder-shares/{token}/browse", env.server_url)).await;
+    let browse_status = browse.status().as_u16();
+    let browse = browse.json().await.unwrap_or_default();
+
+    let blob = anon_get(http, &format!("{}/v1/folder-shares/{token}/blob?path=hello.txt", env.server_url)).await;
+    let blob_status = blob.status().as_u16();
+    let ciphertext = blob.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+
+    CopyCapture {
+        browse_status,
+        browse,
+        blob_status,
+        ciphertext,
+        rows: list_folder_shares_inner(state, &env.ss58).await,
+    }
+}
+
+/// The Finder outside-folder share against a real server, through the
+/// real funnel (`share_outside_folder`: live capability probe, scan, quota
+/// pre-flight, `create_upload_folder_share`, owner wrap). Mocks cannot
+/// show that the server browses an upload-source link (empty subfolder
+/// included), serves ciphertext the `#k=` key opens, lists the row as an
+/// uploaded copy, and cuts recipients off on revoke. Everything is
+/// captured first, then revoked, then asserted, so a red run leaves no
+/// live link behind.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER + HCFS_DESKTOP_E2E_SS58 and a running hcfs-server with upload_folder_shares"]
+async fn outside_folder_copy_round_trips_browse_decrypt_list_and_revoke() {
+    let Some(env) = live_env() else {
+        return; // hermetic default stays green
+    };
+    let _home = &*TEST_HOME;
+    let http = reqwest::Client::new();
+
+    // An outside folder: never registered as a drive, one file and one
+    // empty subfolder (the only directory kind the upload declares).
+    let tree = tempfile::TempDir::new().expect("outside tree");
+    let root = tree.path().join(unique_label("outside"));
+    std::fs::create_dir_all(root.join("empty")).expect("mkdir empty subfolder");
+    let plaintext: &[u8] = b"an uploaded copy must open with its own link key";
+    std::fs::write(root.join("hello.txt"), plaintext).expect("write file");
+
+    let dir = tempfile::TempDir::new().expect("db tempdir");
+    let pool = live_pool(dir.path()).await;
+    seed_account(&pool, &env).await;
+    ensure_master_seal(&env.ss58);
+    let state = make_state(pool.clone(), &env.ss58);
+
+    // --- Act: share the folder; Hours24 bounds any residue to a day ---
+    let request = OutsideFolderShare {
+        folder: &root,
+        ttl: ShareTtl::Hours24,
+        choice: ShareChoice::Public,
+        progress: None,
+        cancel: CancellationToken::new(),
+    };
+    let link = share_outside_folder(&state, &env.ss58, request)
+        .await
+        .expect("uploaded-copy share against the live server");
+    let (token, key_bytes) = split_share_url(&link.share_url, "#k=");
+    assert!(token == link.share_token, "the URL's token segment must be the minted token");
+
+    // --- Capture, revoke, then assert ---
+    let captured = capture_copy(&http, &env, &state, &token).await;
+    let revoked = revoke_folder_share_inner(&state, &env.ss58, &token).await;
+    let meta_after = anon_get(&http, &format!("{}/v1/folder-shares/{token}/meta", env.server_url)).await;
+
+    assert_eq!(captured.browse_status, 200, "anonymous browse must answer for a sealed copy");
+    let browse = &captured.browse;
+    let named = |key: &str, name: &str| browse[key].as_array().is_some_and(|entries| entries.iter().any(|e| e["name"] == name));
+    assert!(named("files", "hello.txt"), "the file is listed at the copy's root: {browse}");
+    assert!(named("directories", "empty"), "the empty subfolder is listed: {browse}");
+
+    assert_eq!(captured.blob_status, 200, "anonymous blob must stream for a sealed copy");
+    let key_len = key_bytes.len();
+    let key: [u8; 32] = key_bytes
+        .try_into()
+        .unwrap_or_else(|_| panic!("#k= fragment must be exactly 32 key bytes, got {key_len}"));
+    let mut decrypted = Vec::new();
+    hcfs_client::crypto::decrypt_stream(
+        &mut std::io::Cursor::new(&captured.ciphertext),
+        &mut decrypted,
+        &key,
+        None,
+        None::<fn(u64, u64)>,
+    )
+    .expect("the #k= fragment key must decrypt the uploaded copy's ciphertext");
+    assert_eq!(decrypted, plaintext, "the decrypted bytes are the original file");
+
+    let rows = captured.rows.expect("list folder shares");
+    let row = rows
+        .iter()
+        .find(|r| r.token_hash == folder_share_token_hash(&token))
+        .expect("the uploaded copy must appear in the live listing");
+    assert_eq!(row.source, FolderShareOrigin::UploadedCopy, "the server lists it as an uploaded copy");
+    assert_eq!(row.folder_hash, "", "an uploaded copy has no drive identity to badge");
+    assert_eq!(row.path_prefix, "");
+    assert!(row.resolvable, "the minting device must resolve its own row");
+
+    revoked.expect("revoke");
+    assert_eq!(meta_after.status().as_u16(), 404, "recipients are cut off once the copy is revoked");
+    let keystore = SqliteShareKeystore::new(pool);
+    // `assert!`, not `assert_eq!`: a surviving secret must not be printed.
+    assert!(
+        keystore.get(&token).expect("keystore get").is_none(),
+        "the revoked token's secret must be forgotten"
+    );
 }
