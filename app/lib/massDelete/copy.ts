@@ -87,28 +87,49 @@ export function progressCopy(hold: MassDeleteHoldView): string | null {
   return null;
 }
 
-/** Why a restore did not run, in words the user can act on. */
-export function refusalCopy(refusal: MassDeleteRefusal, device: string): string {
+/**
+ * Why a restore did not run, in words the user can act on. hcfs measures the
+ * space on the volume that holds the drive folder, which may be an external
+ * disk, so the copy names that disk rather than the device.
+ */
+export function refusalCopy(refusal: MassDeleteRefusal): string {
   if (refusal.reason === "insufficient_space") {
     const needed =
       refusal.neededBytes !== null ? ` (${formatBytes(refusal.neededBytes)} needed)` : "";
-    return `There is not enough free space on ${device} to restore these files${needed}. Free up space; the restore continues once they fit.`;
+    return `There is not enough free space on the disk that holds your Hippius folder to restore these files${needed}. Free up space; the restore continues once they fit.`;
   }
   return "Hippius could not restore these files yet. Nothing has been deleted.";
 }
 
-/** The success toast after a restore cycle. */
+/** "1 file is" / "3 files are", and the like. */
+function filesVerb(count: number, singular: string, plural: string): string {
+  return `${files(count)} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * The toast after a cycle applied a restore. hcfs reports it whatever the
+ * counts: `restored` finished this cycle, `pending` started and finish on
+ * later cycles, and `skipped` no longer looked deleted and were left to
+ * ordinary sync. A restore with nothing finished yet is still under way,
+ * so it is never titled "Restored 0 files".
+ */
 export function restoredToastCopy(
   label: string,
   side: MassDeleteSide,
   counts: { restored: number; pending: number; skipped: number },
 ): { title: string; description: string | undefined } {
   const where = side === "server" ? "downloaded" : "uploaded";
+  const stillRestoring = counts.restored === 0 && counts.pending > 0;
   const parts: string[] = [];
-  if (counts.pending > 0) parts.push(`${files(counts.pending)} still being ${where}.`);
-  if (counts.skipped > 0) parts.push(`${files(counts.skipped)} were already back.`);
-  return {
-    title: `Restored ${files(counts.restored)} in “${label}”`,
-    description: parts.length > 0 ? parts.join(" ") : undefined,
-  };
+  if (counts.pending > 0 && !stillRestoring) {
+    parts.push(`${filesVerb(counts.pending, "is", "are")} still being ${where}.`);
+  }
+  if (counts.skipped > 0) {
+    parts.push(`${filesVerb(counts.skipped, "was", "were")} left to normal sync.`);
+  }
+
+  let title = `Restored ${files(counts.restored)} in “${label}”`;
+  if (stillRestoring) title = `Restoring ${files(counts.pending)} in “${label}”…`;
+  else if (counts.restored === 0) title = `Restore finished in “${label}”`;
+  return { title, description: parts.length > 0 ? parts.join(" ") : undefined };
 }

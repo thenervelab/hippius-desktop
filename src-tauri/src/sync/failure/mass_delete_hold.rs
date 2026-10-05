@@ -667,8 +667,11 @@ pub fn held_notification_text(label: &str, side: MassDeleteSide, entry: HoldEntr
             )
         }
         MassDeleteSide::Local => {
+            // A folder renamed or moved on another device reads here as its
+            // files missing from Hippius; restoring cannot tell, and uploads
+            // the old copies. The banner says the same.
             let caveat = if can_restore {
-                ""
+                " If you renamed or moved the folder on another device, restoring uploads the old copies again."
             } else {
                 " Only the owner of this shared drive can put them back."
             };
@@ -1090,5 +1093,12 @@ mod tests {
         assert!(local.contains("150 files are missing from Hippius."));
         assert!(!local.contains("reconnect"), "the empty-root advice is about this device's folder");
         assert!(local.contains("Only the owner"));
+        assert!(!local.contains("renamed"), "a member cannot restore, so the restore caveat is moot");
+
+        let own = held_notification_text("Photos", Local, entry, true);
+        assert!(
+            own.contains("If you renamed or moved the folder on another device, restoring uploads the old copies again."),
+            "the banner's caveat, so the notification read later does not promise more than Restore does"
+        );
     }
 }

@@ -148,7 +148,7 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
             ))}
             {hold.refusal && (
               <p className="text-xs font-medium text-grey-10 dark:text-white">
-                {refusalCopy(hold.refusal, device)}
+                {refusalCopy(hold.refusal)}
               </p>
             )}
             {hold.notice && (

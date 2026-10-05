@@ -238,7 +238,7 @@ describe("MassDeleteBanner", () => {
         return next;
       });
     });
-    expect(screen.getByText(/not enough free space on this Mac/)).toHaveTextContent(
+    expect(screen.getByText(/not enough free space on the disk that holds your Hippius folder/)).toHaveTextContent(
       "2 GB needed",
     );
   });

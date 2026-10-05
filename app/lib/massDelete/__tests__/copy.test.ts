@@ -78,12 +78,15 @@ describe("mass delete copy", () => {
     expect(progressCopy(view({ count: 1, state: "restoring" }))).toBe("Restoring 1 file…");
   });
 
-  it("an insufficient-space refusal says to free space", () => {
-    const text = refusalCopy({ reason: "insufficient_space", neededBytes: 5_000_000_000 }, MAC);
-    expect(text).toMatch(/not enough free space on this Mac/);
+  // hcfs measures the space on the drive folder's own volume, which may be
+  // an external disk rather than the one the device boots from.
+  it("an insufficient-space refusal names the disk that holds the folder", () => {
+    const text = refusalCopy({ reason: "insufficient_space", neededBytes: 5_000_000_000 });
+    expect(text).toMatch(/not enough free space on the disk that holds your Hippius folder/);
+    expect(text).not.toMatch(/this Mac/);
     expect(text).toMatch(/5 GB needed/);
     expect(text).toMatch(/Free up space/);
-    expect(refusalCopy({ reason: "something_new", neededBytes: null }, MAC)).toMatch(
+    expect(refusalCopy({ reason: "something_new", neededBytes: null })).toMatch(
       /Nothing has been deleted/,
     );
   });
@@ -91,8 +94,30 @@ describe("mass delete copy", () => {
   it("the restored toast carries the counts", () => {
     const copy = restoredToastCopy("Photos", "server", { restored: 140, pending: 8, skipped: 2 });
     expect(copy.title).toBe("Restored 140 files in “Photos”");
-    expect(copy.description).toBe("8 files still being downloaded. 2 files were already back.");
+    expect(copy.description).toBe(
+      "8 files are still being downloaded. 2 files were left to normal sync.",
+    );
     expect(restoredToastCopy("Photos", "local", { restored: 3, pending: 0, skipped: 0 }).description)
       .toBeUndefined();
+  });
+
+  it("says one file in the singular", () => {
+    const copy = restoredToastCopy("Photos", "local", { restored: 1, pending: 1, skipped: 1 });
+    expect(copy.title).toBe("Restored 1 file in “Photos”");
+    expect(copy.description).toBe(
+      "1 file is still being uploaded. 1 file was left to normal sync.",
+    );
+  });
+
+  // hcfs reports a restore it applied even when no file finished in that
+  // cycle: "Restored 0 files" would read as a failure.
+  it("a restore with nothing finished yet says it is restoring", () => {
+    const copy = restoredToastCopy("Photos", "server", { restored: 0, pending: 12, skipped: 0 });
+    expect(copy.title).toBe("Restoring 12 files in “Photos”…");
+    expect(copy.description).toBeUndefined();
+
+    const skippedOnly = restoredToastCopy("Photos", "server", { restored: 0, pending: 0, skipped: 3 });
+    expect(skippedOnly.title).not.toMatch(/Restored 0/);
+    expect(skippedOnly.description).toBe("3 files were left to normal sync.");
   });
 });
