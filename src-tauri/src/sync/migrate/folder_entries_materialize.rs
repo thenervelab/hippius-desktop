@@ -420,7 +420,13 @@ pub(crate) async fn read_folder_hold_gate(root: &Path, config_dir: Option<PathBu
 ///   them (`server \ disk`).
 /// - Local side (files uploaded back): `(cache ∩ disk) \ server`. Kept,
 ///   materialize would remove them as dropped by the server; forgotten,
-///   reconcile re-registers them (`disk \ cache`).
+///   reconcile re-registers them (`disk \ cache`). This cannot tell a
+///   folder the listing lost from one another device deliberately deleted
+///   while the hold stood: both are on disk here and missing from the
+///   server, so a local restore puts the deliberately deleted one back too.
+///   That matches the files (the restore re-uploads every held file,
+///   including ones deleted elsewhere on purpose); the user chose to keep
+///   this device's copy of everything.
 ///
 /// Sorted, without duplicates.
 #[must_use]
