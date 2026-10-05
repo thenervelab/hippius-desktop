@@ -4,6 +4,7 @@ import {
   failedFilesAtom,
   creditsExhaustedAtom,
   massDeleteHoldsAtom,
+  emptyRemoteDrivesAtom,
   syncEngineHealthAtom,
   DEFAULT_SYNC_ENGINE_HEALTH,
 } from "@/lib/store/syncAtoms";
@@ -39,6 +40,7 @@ export function resetSyncSession(): void {
   appStore.set(failedFilesAtom, null);
   appStore.set(creditsExhaustedAtom, null);
   appStore.set(massDeleteHoldsAtom, new Map());
+  appStore.set(emptyRemoteDrivesAtom, new Map());
   appStore.set(syncEngineHealthAtom, DEFAULT_SYNC_ENGINE_HEALTH);
   appStore.set(driveStatusesAtom, new Map());
   appStore.set(driveStatusesLoadedAtom, false);

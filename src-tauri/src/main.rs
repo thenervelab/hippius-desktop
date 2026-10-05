@@ -390,6 +390,8 @@ fn main() {
             crate::sync::mass_delete::restore_mass_delete,
             crate::sync::mass_delete::confirm_mass_delete,
             crate::sync::mass_delete::get_mass_delete_holds,
+            crate::sync::empty_remote_prompt::confirm_empty_remote,
+            crate::sync::empty_remote_prompt::get_empty_remote_drives,
             reveal_drive_in_finder,
             reveal_path_in_file_manager,
             change_sync_folder,

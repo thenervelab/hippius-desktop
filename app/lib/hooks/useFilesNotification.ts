@@ -10,17 +10,20 @@ import {
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { MASS_DELETE_EVENTS } from "@/app/lib/tauri/massDelete";
 import { CANCELLED_SHARE_LINK_LIVE_NOTIFY } from "@/app/lib/tauri/shares";
+import { EMPTY_REMOTE_EVENTS } from "@/app/lib/tauri/emptyRemote";
 
 /**
  * Events Rust sends after saving a Files notification itself: the held
  * large delete ("Large Delete Paused"), the unplugged drive folder
- * ("Drive Disconnected") and the cancelled share whose link stayed live
- * ("Link Still Active"). Only the bell refreshes, so the payload is unread.
+ * ("Drive Disconnected"), the cancelled share whose link stayed live
+ * ("Link Still Active") and the refused empty listing ("Drive Empty on
+ * Hippius"). Only the bell refreshes, so the payload is unread.
  */
 const RUST_SAVED_NOTIFICATION_EVENTS = [
   MASS_DELETE_EVENTS.heldNotify,
   "hcfs_drive_disconnected_notify",
   CANCELLED_SHARE_LINK_LIVE_NOTIFY,
+  EMPTY_REMOTE_EVENTS.notify,
 ] as const;
 
 /**

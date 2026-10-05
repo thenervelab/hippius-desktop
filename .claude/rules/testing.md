@@ -84,6 +84,7 @@ Every foreign hcfs type that crosses the boundary is pinned next to where it cro
 | `SyncEngineHealth` / `ConnectivityStatus` | `sync/status.rs` (a variant rename would HIDE an outage) |
 | `ShareProgress` / `SharePhase` | `shares/commands.rs` |
 | Mass-delete hold (`MassDeleteSide`, `MassDeleteRequestError` kinds, `HoldState`, `RestoreRefusal`, the `RootNotMounted` message the error string is classified by) | `tests/hcfs_contract.rs` |
+| Empty-listing confirmation (`confirm_empty_remote` on `Drive` / `DriveManager`, its marker name, the `SuspiciousEmptyRemote` Display the error string is classified by, the member revocation pre-check) | `tests/hcfs_contract.rs` |
 | `FolderShareSource` (converted to desktop `FolderShareOrigin`, exhaustive `From`) | `shares/commands.rs` |
 
 Desktop-owned FE-facing types are pinned next to where they live in the `sync/files/` split (`UserFileEntry` camelCase incl. the `type`/`fileId` keys in `user_files.rs`; the `GroupedListing` camelCase / `FileEntry` snake_case mixed split in `listing.rs`).

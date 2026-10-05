@@ -7,6 +7,7 @@ pub mod config;
 pub mod control;
 pub mod device;
 pub mod drive_status;
+pub mod empty_remote_prompt;
 pub mod exclude_literal;
 pub mod identity;
 pub mod lifecycle;

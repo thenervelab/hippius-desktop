@@ -221,6 +221,13 @@ pub enum NotReadyKind {
     /// A shared-drive member asked to restore a local-side hold: the files
     /// are missing from the server because its owner may have removed them.
     MassDeleteMemberCannotRestore,
+    /// The user confirmed a drive is empty, but hcfs is no longer refusing
+    /// its listing (a cycle accepted one). The FE refreshes the prompt.
+    EmptyRemoteNothingHeld,
+    /// A shared-drive member asked to confirm the drive is empty: hcfs
+    /// refuses it, since the owner may have deleted the drive and this
+    /// device may hold the last copies.
+    EmptyRemoteMemberCannotConfirm,
 }
 
 impl NotReadyKind {
@@ -258,6 +265,8 @@ impl NotReadyKind {
             Self::MassDeleteHoldChanged { .. } => "MASS_DELETE_HOLD_CHANGED",
             Self::MassDeleteRestoreInProgress => "MASS_DELETE_RESTORE_IN_PROGRESS",
             Self::MassDeleteMemberCannotRestore => "MASS_DELETE_MEMBER_CANNOT_RESTORE",
+            Self::EmptyRemoteNothingHeld => "EMPTY_REMOTE_NOTHING_HELD",
+            Self::EmptyRemoteMemberCannotConfirm => "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM",
         }
     }
 }
@@ -347,6 +356,11 @@ impl std::fmt::Display for NotReadyKind {
             Self::MassDeleteMemberCannotRestore => {
                 write!(f, "Only the owner of this shared drive can put these files back on Hippius.")
             }
+            Self::EmptyRemoteNothingHeld => write!(f, "This drive is no longer waiting for a decision."),
+            Self::EmptyRemoteMemberCannotConfirm => write!(
+                f,
+                "Only the owner of this shared drive can confirm it is empty. Your files are kept; remove the drive to stop syncing it."
+            ),
         }
     }
 }
@@ -839,6 +853,8 @@ mod tests {
                 NotReadyKind::MassDeleteHoldChanged { .. } => "MASS_DELETE_HOLD_CHANGED",
                 NotReadyKind::MassDeleteRestoreInProgress => "MASS_DELETE_RESTORE_IN_PROGRESS",
                 NotReadyKind::MassDeleteMemberCannotRestore => "MASS_DELETE_MEMBER_CANNOT_RESTORE",
+                NotReadyKind::EmptyRemoteNothingHeld => "EMPTY_REMOTE_NOTHING_HELD",
+                NotReadyKind::EmptyRemoteMemberCannotConfirm => "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM",
             }
         }
         for kind in [
@@ -871,6 +887,8 @@ mod tests {
             NotReadyKind::MassDeleteHoldChanged { held: 7 },
             NotReadyKind::MassDeleteRestoreInProgress,
             NotReadyKind::MassDeleteMemberCannotRestore,
+            NotReadyKind::EmptyRemoteNothingHeld,
+            NotReadyKind::EmptyRemoteMemberCannotConfirm,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");

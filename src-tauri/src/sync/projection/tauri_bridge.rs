@@ -256,6 +256,9 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     // A completed cycle means the drive folder's disk is mounted again, so
     // a later unplug is a new episode that notifies.
     app_state.root_not_mounted_notify.clear(&payload.label);
+    // A completed cycle accepted a listing, so hcfs is no longer refusing an
+    // empty one. Normally the plan callback ended the episode already.
+    crate::sync::empty_remote_prompt::end_episode(app, &payload.label);
     // The cycle may have changed the drive's rows; one-off downloads must
     // not keep verifying against the listing from before it.
     app_state.remote_listing_cache.invalidate(&payload.label);
@@ -362,6 +365,11 @@ pub(crate) enum SyncErrorDisposition {
     /// planning. Its own copy and one notification per episode; not
     /// terminal (the drive syncs again once the disk is back).
     RootNotMounted,
+    /// hcfs refused an empty server listing over a non-empty baseline:
+    /// nothing was deleted, and the drive waits for its owner's answer. Its
+    /// own prompt and one notification per episode; not terminal (the next
+    /// listing with files, or the owner's confirmation, ends it).
+    EmptyRemote { synced_count: usize },
     /// Everything else: the generic gated error path.
     RealError,
 }
@@ -378,6 +386,8 @@ pub(crate) fn classify_sync_error(error: &str) -> SyncErrorDisposition {
         SyncErrorDisposition::SharedDriveRevoked
     } else if events::is_root_not_mounted_error(error) {
         SyncErrorDisposition::RootNotMounted
+    } else if let Some(synced_count) = events::suspicious_empty_remote_count(error) {
+        SyncErrorDisposition::EmptyRemote { synced_count }
     } else {
         SyncErrorDisposition::RealError
     }
@@ -435,6 +445,12 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         //     copy, own once-per-episode latch, never the 3-strike counter.
         SyncErrorDisposition::RootNotMounted => {
             handle_root_not_mounted(app, payload, notify);
+            return;
+        }
+        // 1d. A refused empty listing is the engine's safety check holding,
+        //     not a failure: its own prompt, never the 3-strike counter.
+        SyncErrorDisposition::EmptyRemote { synced_count } => {
+            handle_empty_remote(app, payload, synced_count);
             return;
         }
         SyncErrorDisposition::RealError => {}
@@ -837,6 +853,31 @@ fn handle_root_not_mounted(app: &AppHandle, mut payload: events::SyncErrorPayloa
     let _ = app.emit(events::SYNC_ERROR, payload);
 }
 
+/// Handle a cycle hcfs refused because the server listing came back empty
+/// while this device still has the drive's files
+/// (`SyncError::SuspiciousEmptyRemote`): nothing was planned, so nothing
+/// was deleted.
+///
+/// Runs [`clear_after_failed_cycle`] like the generic arm, rewrites `error`
+/// to [`events::EMPTY_REMOTE_MESSAGE`] with
+/// [`events::SyncErrorKind::EmptyRemote`], and hands the report to the
+/// empty-drive prompt (`sync::empty_remote_prompt::report`), which shows it
+/// on change and saves one notification per episode. hcfs repeats the
+/// refusal on every backoff retry; `SYNC_ERROR` still fires each time for
+/// its live consumers, and no `SYNC_FAILED_NOTIFY` is sent: this is not a
+/// failed sync, and a reviewed sync that hits it raises the same prompt.
+fn handle_empty_remote(app: &AppHandle, mut payload: events::SyncErrorPayload, synced_count: usize) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    clear_after_failed_cycle(app, &app_state, &payload.label, "empty server listing refused");
+    crate::sync::empty_remote_prompt::report(app, &payload.label, synced_count);
+
+    payload.error = events::EMPTY_REMOTE_MESSAGE.to_string();
+    payload.kind = events::SyncErrorKind::EmptyRemote;
+    let _ = app.emit(events::SYNC_ERROR, payload);
+}
+
 /// Save the "Drive Disconnected" notification for `owner` (unless that
 /// account turned Files notifications off), then tell the UI a row was
 /// added so the bell refreshes. Rust saves it, as it does the held-delete
@@ -968,6 +1009,9 @@ fn handle_sync_started(app: &AppHandle, mut payload: events::SyncStartedPayload)
         // Not a clear: the hold stands across cycles and is emitted only
         // when it changes.
         app_state.mass_delete_holds.begin_cycle(&payload.label, CycleSource::Engine);
+        // hcfs reads an empty-drive confirmation at the start of a cycle, so
+        // from here on a refusal means the answer was not applied.
+        crate::sync::empty_remote_prompt::begin_cycle(app, &payload.label);
 
         // ARM (don't mark) the preparing override. Marking here would
         // paint the red "Preparing sync…" widget/tray state across the
@@ -1014,6 +1058,9 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
     // A resumed or re-added drive whose disk is still missing is a new
     // episode the user should hear about.
     app_state.root_not_mounted_notify.clear(&label);
+    // No cycle runs to act on an empty-drive answer now, so its prompt goes;
+    // the same refusal after a resume shows it again without notifying.
+    crate::sync::empty_remote_prompt::hide(app, &label);
     // A paused or removed drive must not serve a listing from before it
     // stopped; a resume fetches afresh.
     app_state.remote_listing_cache.invalidate(&label);
@@ -1064,6 +1111,8 @@ fn handle_sync_reset<R: tauri::Runtime>(app: &AppHandle<R>, account_id: String, 
     app_state.revoked_notify.clear_all();
     // And for the unmounted-disk latch, keyed by labels a new account reuses.
     app_state.root_not_mounted_notify.clear_all();
+    // And the empty-drive prompts, keyed by labels a new account reuses.
+    app_state.empty_remote.clear_all();
     // Cached listings belong to the previous account's drives.
     app_state.remote_listing_cache.clear_all();
     // And for the folder-restore gate — its armed flags describe the previous
@@ -2443,6 +2492,20 @@ mod tests {
         assert_eq!(classify_sync_error(&wrapped), SyncErrorDisposition::RealError);
     }
 
+    /// A refused empty listing is the engine's safety check, not a failure:
+    /// it goes to the empty-drive prompt with its count, and a wrapped or
+    /// reworded variant falls through to the generic path.
+    #[test]
+    fn classify_sync_error_routes_an_empty_remote_to_its_own_path() {
+        use hcfs_client::sync::SyncError;
+
+        let error = SyncError::SuspiciousEmptyRemote { synced_count: 12 }.to_string();
+        assert_eq!(classify_sync_error(&error), SyncErrorDisposition::EmptyRemote { synced_count: 12 });
+
+        let wrapped = format!("Sync failed: {error}");
+        assert_eq!(classify_sync_error(&wrapped), SyncErrorDisposition::RealError);
+    }
+
     /// An unmounted root is re-reported every backoff cycle until the disk
     /// comes back; the latch lets one notification through per episode and
     /// a completed cycle (the disk is back) re-arms it.
@@ -2551,6 +2614,8 @@ mod tests {
             .arm("photos", "5Owner", false, std::path::Path::new("/nonexistent"), &[]);
         state.mass_delete_holds.begin_cycle("photos", CycleSource::Engine);
         state.mass_delete_holds.record_restored("photos", MassDeleteSide::Server, 3);
+        state.empty_remote.record("photos", 12);
+        state.empty_remote.publish("photos", true, |_| {});
 
         let fetches = AtomicUsize::new(0);
         let lookup = || {
@@ -2567,6 +2632,7 @@ mod tests {
 
         assert!(state.mass_delete_holds.all().is_empty(), "no hold survives the reset");
         assert!(!state.mass_delete_holds.folder_restores("photos").any());
+        assert!(state.empty_remote.all().is_empty(), "no empty-drive prompt survives the reset");
         lookup().await.expect("listing");
         assert_eq!(fetches.load(std::sync::atomic::Ordering::SeqCst), 2, "the listing is fetched afresh");
     }

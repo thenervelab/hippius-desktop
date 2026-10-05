@@ -453,6 +453,13 @@ pub enum SyncNotificationOutcome {
     /// nothing went wrong with the sync, and it resumes once the disk is
     /// back.
     DriveDisconnected,
+    /// The server listing for a drive came back empty while this device
+    /// still has its files, so hcfs refused it and nothing was deleted; the
+    /// drive waits for the owner's answer. Saved by Rust once per episode
+    /// ([`create_empty_remote_notification`]); the frontend never sends it.
+    /// Title: "Drive Empty on Hippius". Not "Sync Failed": the refusal is
+    /// the safety check working, and the user has a decision to make.
+    EmptyRemote,
 }
 
 impl SyncNotificationOutcome {
@@ -463,6 +470,7 @@ impl SyncNotificationOutcome {
             Self::FolderRestored => "Folder Restored",
             Self::MassDeleteHeld => "Large Delete Paused",
             Self::DriveDisconnected => "Drive Disconnected",
+            Self::EmptyRemote => "Drive Empty on Hippius",
         }
     }
 
@@ -475,7 +483,9 @@ impl SyncNotificationOutcome {
     fn list_title(self, files: &SyncFileSummary<'_>) -> String {
         match self {
             Self::Success => success_list_title(files),
-            Self::Error | Self::FolderRestored | Self::MassDeleteHeld | Self::DriveDisconnected => self.title().to_string(),
+            Self::Error | Self::FolderRestored | Self::MassDeleteHeld | Self::DriveDisconnected | Self::EmptyRemote => {
+                self.title().to_string()
+            }
         }
     }
 
@@ -486,6 +496,7 @@ impl SyncNotificationOutcome {
             Self::FolderRestored => "FileSyncFolderRestored",
             Self::MassDeleteHeld => "FileSyncMassDeleteHeld",
             Self::DriveDisconnected => "FileSyncDriveDisconnected",
+            Self::EmptyRemote => "FileSyncEmptyRemote",
         }
     }
 }
@@ -827,14 +838,52 @@ async fn files_notifications_enabled(pool: &sqlx::sqlite::SqlitePool, owner: &st
     Ok(enabled.iter().any(|category| category == FILES_CATEGORY))
 }
 
-/// The in-app link a held-delete notification opens: the Files page, naming
-/// the drive and side of the banner to show again.
-fn held_banner_link(label: &str, side: hcfs_client::sync::MassDeleteSide) -> String {
+/// Save a refused empty listing's notification ("Drive Empty on Hippius")
+/// for `owner`, the account whose drive it is (see
+/// [`create_files_notification`]).
+///
+/// Rust raises it once per episode (`sync::empty_remote`). The row's button
+/// reads "Review" and links back to the drive's banner
+/// (`/files?emptyDrive=1&drive=<label>`), so the UI can show a banner the
+/// user put away with "Keep my files". As for the held-delete row, a failure
+/// setting the link leaves the plain `/files` link, which opens the right
+/// page.
+///
+/// # Errors
+///
+/// A database error reading the preference or writing the row.
+pub async fn create_empty_remote_notification(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    label: &str,
+    description: &str,
+) -> Result<Option<i64>, AppError> {
+    let Some(id) = create_files_notification(pool, owner, description, SyncNotificationOutcome::EmptyRemote).await? else {
+        return Ok(None);
+    };
+    sqlx::query("UPDATE notifications SET link = ?, link_text = 'Review' WHERE id = ?")
+        .bind(files_page_link("emptyDrive", label, None))
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(Some(id))
+}
+
+/// The Files page link naming a banner to show again: `key` carries the
+/// banner's kind (with `side` as its value for a held delete), `drive` the
+/// drive label.
+fn files_page_link(key: &str, label: &str, side: Option<&str>) -> String {
     // `reqwest::Url` for its form encoding only (`url` is not a direct
     // dependency); the base is a constant, so parsing it cannot fail.
     let mut url = reqwest::Url::parse("app://local/files").expect("a constant, valid URL");
-    url.query_pairs_mut().append_pair("heldDelete", side.as_str()).append_pair("drive", label);
+    url.query_pairs_mut().append_pair(key, side.unwrap_or("1")).append_pair("drive", label);
     format!("{}?{}", url.path(), url.query().unwrap_or_default())
+}
+
+/// The in-app link a held-delete notification opens: the Files page, naming
+/// the drive and side of the banner to show again.
+fn held_banner_link(label: &str, side: hcfs_client::sync::MassDeleteSide) -> String {
+    files_page_link("heldDelete", label, Some(side.as_str()))
 }
 
 /// Create a sync notification row.
@@ -1488,6 +1537,29 @@ mod tests {
 
         assert_eq!(id, None);
         assert!(held_rows(&pool).await.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_empty_remote_is_saved_for_the_drive_owner_with_a_link_back_to_its_banner() {
+        let (_dir, pool) = fresh_pool().await;
+
+        let id = create_empty_remote_notification(&pool, "addrA", "Photo & Video", "Hippius has no files")
+            .await
+            .expect("save");
+        assert!(id.is_some());
+
+        let rows = held_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        let (user, title, subtype, link, link_text) = &rows[0];
+        assert_eq!(user, "addrA");
+        assert_eq!(title, "Drive Empty on Hippius");
+        assert_eq!(link_text, "Review");
+        assert!(subtype.starts_with("FileSyncEmptyRemote-"), "{subtype}");
+        assert_eq!(link, "/files?emptyDrive=1&drive=Photo+%26+Video");
+
+        files_notifications(&pool, "addrB", false).await;
+        let off = create_empty_remote_notification(&pool, "addrB", "Photos", "x").await.expect("save");
+        assert_eq!(off, None, "the Files toggle is respected");
     }
 
     /// An unplugged disk is not a failed sync: Rust saves its own row,

@@ -140,6 +140,12 @@ pub struct AppState {
     /// never feeds the flaky-endpoint counter. Cleared on `SyncCompleted`
     /// (the disk is back), `SyncStopped`, and globally on `SyncReset`.
     pub root_not_mounted_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
+    /// Per-label record of a refused empty server listing
+    /// (`SyncError::SuspiciousEmptyRemote`), as the empty-drive prompt shows
+    /// it. Ended when a cycle gets past the fetch and on drive removal,
+    /// hidden on `SyncStopped`, and cleared on logout and `SyncReset`. See
+    /// `sync::empty_remote`.
+    pub empty_remote: std::sync::Arc<crate::sync::empty_remote::EmptyRemoteState>,
     /// Per-label gate for the "Folder Restored" notification raised when the
     /// engine finds an own drive's folder missing from the server, re-registers
     /// it, and discards the local baseline (so the whole drive re-uploads).
@@ -412,6 +418,7 @@ impl AppState {
             error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             revoked_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             root_not_mounted_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
+            empty_remote: std::sync::Arc::new(crate::sync::empty_remote::EmptyRemoteState::new()),
             folder_restore_notify: std::sync::Arc::new(crate::sync::folder_restore_notify::FolderRestoreNotifyState::new()),
             mass_delete_holds: std::sync::Arc::new(crate::sync::mass_delete_hold::MassDeleteHoldState::new()),
             keep_awake: std::sync::Arc::new(crate::power::SyncKeepAwake::new_native()),
