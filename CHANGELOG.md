@@ -314,7 +314,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   deletes nothing and asks you first, with a banner and one notification.
   Restore files puts everything back, empty folders included; Remove deletes
   the files once you confirm how many; Decide later keeps them safe until you
-  choose.
+  choose, and opening the notification brings the banner back.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a
