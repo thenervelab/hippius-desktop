@@ -112,18 +112,25 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// Only the held-delete notification listens before both are known: Rust
+// raises it once per episode, so it is queued rather than dropped (see the
+// "mass delete held" tests below).
+function listenedEvents(): unknown[] {
+  return tauri.event.listen.mock.calls.map((c) => c[0]);
+}
+
 describe("useFilesNotification — gating", () => {
-  it("registers no listeners when Files notifications are disabled", async () => {
+  it("registers only the held-delete queue when Files notifications are disabled", async () => {
     mount(false);
     await flushRegistration();
-    expect(tauri.event.listen).not.toHaveBeenCalled();
+    expect(listenedEvents()).toEqual(["hcfs_mass_delete_held_notify"]);
   });
 
-  it("registers no listeners when there is no account address", async () => {
+  it("registers only the held-delete queue when there is no account address", async () => {
     state.polkadotAddress = null;
     mount(true);
     await flushRegistration();
-    expect(tauri.event.listen).not.toHaveBeenCalled();
+    expect(listenedEvents()).toEqual(["hcfs_mass_delete_held_notify"]);
   });
 });
 
@@ -325,6 +332,13 @@ describe("useFilesNotification — folder restored", () => {
   });
 });
 
+const HELD_NOTIFY = {
+  label: "Photos",
+  side: "server",
+  description:
+    'In "Photos", 150 of 200 files are missing from this Mac. Nothing has been deleted from Hippius yet.',
+};
+
 // One persisted notification per held mass delete. Rust gates the event to
 // once per episode and writes the text; the hook persists it verbatim under
 // its own outcome (Rust titles it "Delete Paused").
@@ -344,6 +358,53 @@ describe("useFilesNotification — mass delete held", () => {
     const calls = syncNotificationCalls();
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[1]).toMatchObject({ outcome: "mass_delete_held", description });
+  });
+
+  // Rust raises this once per episode, often from the first cycle after
+  // launch, before the wallet has restored the account or the enabled
+  // types have loaded. Dropped then, it would never be raised again.
+  it("queues one that arrives before the account is known", async () => {
+    state.polkadotAddress = null;
+    const store = createStore();
+    store.set(enabledNotificationTypesAtom, ["Files"]);
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <Provider store={store}>{children}</Provider>
+    );
+    const { rerender } = renderHook(() => useFilesNotification(), { wrapper });
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_mass_delete_held_notify", HELD_NOTIFY);
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+
+    state.polkadotAddress = "5poll";
+    rerender();
+    await flushRegistration();
+    const calls = syncNotificationCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toMatchObject({
+      userAddress: "5poll",
+      outcome: "mass_delete_held",
+      description: HELD_NOTIFY.description,
+    });
+  });
+
+  it("queues one that arrives before the enabled types load", async () => {
+    const { store } = mount(false);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_mass_delete_held_notify", HELD_NOTIFY);
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+
+    await act(async () => {
+      store.set(enabledNotificationTypesAtom, ["Files"]);
+    });
+    await flushRegistration();
+    expect(syncNotificationCalls()).toHaveLength(1);
+
+    await flushRegistration();
+    expect(syncNotificationCalls()).toHaveLength(1);
   });
 
   it("ignores the ungated hold event", async () => {
