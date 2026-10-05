@@ -103,14 +103,24 @@ export function applyRefused(
  * Replace the map with Rust's current holds (start, reload, or a refresh
  * after a "nothing held" refusal). A hold that is unchanged keeps its
  * presentation state, so a refresh does not re-raise a dismissed banner.
+ *
+ * `eventKeys` are the sides an event changed while the read was in flight:
+ * the event is newer than the read for those, so they keep what the events
+ * made of them (present or not), and the read fills in every other side.
  */
 export function applyHydration(
   holds: MassDeleteHolds,
   current: MassDeleteHold[],
+  eventKeys: ReadonlySet<string> = new Set(),
 ): MassDeleteHolds {
   const next: MassDeleteHolds = new Map();
+  for (const key of eventKeys) {
+    const previous = holds.get(key);
+    if (previous) next.set(key, previous);
+  }
   for (const hold of current) {
     const key = holdKey(hold.label, hold.side);
+    if (eventKeys.has(key)) continue;
     const previous = holds.get(key);
     const same =
       previous !== undefined &&

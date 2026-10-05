@@ -19,14 +19,16 @@ import {
   applyHydration,
   applyRefused,
   applyRestored,
+  holdKey,
 } from "@/app/lib/massDelete/holds";
 import { restoredToastCopy } from "@/app/lib/massDelete/copy";
 
 /**
- * Keeps `massDeleteHoldsAtom` in step with Rust: hydrates from
- * `get_mass_delete_holds` on mount (app start or reload, when the events of
- * earlier cycles are gone), then folds in the hold events. Rust emits each
- * only when something changed, so every event is worth applying.
+ * Keeps `massDeleteHoldsAtom` in step with Rust: listens for the hold
+ * events, then hydrates from `get_mass_delete_holds` (app start or reload,
+ * when the events of earlier cycles are gone). Rust emits each event only
+ * when something changed, so one emitted before its listener existed would
+ * be lost for good; the read waits until every listener is registered.
  *
  * Mount once, in `SyncEventLogger`. `resetSyncSession` empties the atom on
  * logout.
@@ -36,56 +38,67 @@ export function useMassDeleteHolds(): void {
 
   useEffect(() => {
     let cancelled = false;
-    // Events applied while the hydration read was in flight are newer than
-    // what it may return; when any arrive, read again rather than let the
-    // older answer overwrite them.
-    let eventsSeen = 0;
+    // Sides an event changed while the current hydration read is in flight.
+    // The event is newer than the read for them: read again, and when the
+    // re-reads run out, apply the read to every other side only.
+    const eventKeys = new Set<string>();
 
-    const hydrate = async (attemptsLeft: number) => {
-      const seenBefore = eventsSeen;
+    const hydrate = async (attemptsLeft: number): Promise<void> => {
+      eventKeys.clear();
       const holds = await getMassDeleteHolds();
       if (cancelled) return;
-      if (eventsSeen !== seenBefore && attemptsLeft > 0) {
+      if (eventKeys.size > 0 && attemptsLeft > 0) {
         await hydrate(attemptsLeft - 1);
         return;
       }
-      setHolds((prev) => applyHydration(prev, holds));
+      const raced = new Set(eventKeys);
+      setHolds((prev) => applyHydration(prev, holds, raced));
     };
-    hydrate(2).catch((err) => {
-      // Not fatal: the next hold event fills the prompt in.
-      console.warn("[MassDelete] Could not read the held deletes:", err);
-    });
 
-    const apply = (update: Parameters<typeof setHolds>[0]) => {
-      eventsSeen += 1;
+    const apply = (payload: MassDeleteSidePayload, update: Parameters<typeof setHolds>[0]) => {
+      eventKeys.add(holdKey(payload.label, payload.side));
       setHolds(update);
     };
 
-    const { cleanup } = registerTauriListeners([
+    const { cleanup, ready } = registerTauriListeners([
       [
         MASS_DELETE_EVENTS.held,
-        (event) => apply((prev) => applyHeld(prev, event.payload as MassDeleteHold)),
+        (event) => {
+          const payload = event.payload as MassDeleteHold;
+          apply(payload, (prev) => applyHeld(prev, payload));
+        },
       ],
       [
         MASS_DELETE_EVENTS.cleared,
-        (event) =>
-          apply((prev) => applyCleared(prev, event.payload as MassDeleteSidePayload)),
+        (event) => {
+          const payload = event.payload as MassDeleteSidePayload;
+          apply(payload, (prev) => applyCleared(prev, payload));
+        },
       ],
       [
         MASS_DELETE_EVENTS.restored,
         (event) => {
           const payload = event.payload as MassDeleteRestoredPayload;
-          apply((prev) => applyRestored(prev, payload));
+          apply(payload, (prev) => applyRestored(prev, payload));
           const copy = restoredToastCopy(payload.label, payload.side, payload);
           toast.success(copy.title, { description: copy.description, duration: 8000 });
         },
       ],
       [
         MASS_DELETE_EVENTS.restoreRefused,
-        (event) =>
-          apply((prev) => applyRefused(prev, event.payload as MassDeleteRestoreRefusedPayload)),
+        (event) => {
+          const payload = event.payload as MassDeleteRestoreRefusedPayload;
+          apply(payload, (prev) => applyRefused(prev, payload));
+        },
       ],
     ]);
+
+    ready
+      .then(() => (cancelled ? undefined : hydrate(2)))
+      .catch((err) => {
+        // Not fatal: the next hold event fills the prompt in.
+        console.warn("[MassDelete] Could not read the held deletes:", err);
+      });
 
     return () => {
       cancelled = true;

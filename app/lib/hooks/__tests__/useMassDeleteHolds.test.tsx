@@ -125,4 +125,33 @@ describe("useMassDeleteHolds", () => {
     await waitFor(() => expect(calls).toBe(2));
     await waitFor(() => expect(store.get(massDeleteHoldsAtom).get(KEY)?.count).toBe(160));
   });
+
+  // A hold event emitted before the listeners exist is lost for good (Rust
+  // emits a hold only when it changes), so the read must not start first.
+  it("registers every listener before it reads the holds", async () => {
+    tauri.onInvoke("get_mass_delete_holds", () => []);
+    mount();
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("get_mass_delete_holds"));
+
+    const read = tauri.core.invoke.mock.invocationCallOrder[0] ?? 0;
+    const listens = tauri.event.listen.mock.invocationCallOrder;
+    expect(listens).toHaveLength(4);
+    expect(Math.max(...listens)).toBeLessThan(read);
+  });
+
+  // Events keep landing during every read: once the re-reads run out, the
+  // last read must not overwrite the newer event state it raced with.
+  it("keeps event state when every read raced an event", async () => {
+    let calls = 0;
+    tauri.onInvoke("get_mass_delete_holds", async () => {
+      calls += 1;
+      await tauri.emitEvent("hcfs_mass_delete_held", { ...HOLD, count: 150 + calls });
+      return [];
+    });
+    const store = mount();
+
+    await waitFor(() => expect(calls).toBe(3));
+    await flush();
+    expect(store.get(massDeleteHoldsAtom).get(KEY)?.count).toBe(153);
+  });
 });

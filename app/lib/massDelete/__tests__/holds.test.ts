@@ -99,4 +99,19 @@ describe("mass delete holds", () => {
     holds = applyHydration(holds, [hold({ count: 151 })]);
     expect(holds.get(KEY)).toMatchObject({ dismissed: false, count: 151 });
   });
+
+  // An event that landed while the read was in flight is newer than the
+  // read for its side; the read still fills in every side no event touched.
+  it("hydration leaves the sides events touched to the events", () => {
+    const LOCAL = holdKey("Photos", "local");
+    let holds = applyHeld(new Map(), hold({ count: 160 }));
+    holds = applyHydration(
+      holds,
+      [hold({ count: 150 }), hold({ side: "local", count: 9 }), hold({ label: "Docs" })],
+      new Set([KEY, holdKey("Docs", "server")]),
+    );
+    expect(holds.get(KEY)?.count).toBe(160);
+    expect(holds.get(LOCAL)?.count).toBe(9);
+    expect(holds.has(holdKey("Docs", "server"))).toBe(false);
+  });
 });
