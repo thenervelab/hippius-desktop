@@ -953,7 +953,7 @@ mod tests {
     /// `downloaded_<file id>` artifact, and a 0-byte `file_<hex>` stub. A
     /// non-zero stub and a `downloaded_` name that is not a full 64-hex file
     /// id stay counted (`downloaded_deadbeef` is a user's file since hcfs
-    /// #505 tightened the matcher, because listing deletes what it matches).
+    /// #505 tightened the matcher, and listing hides what it matches).
     #[test]
     fn walk_regular_files_stats_skips_hidden_dirs_artifacts_and_zero_byte_stubs() {
         let tmp = tempfile::TempDir::new().unwrap();

@@ -153,7 +153,8 @@ pub struct AppState {
     /// Short-lived per-drive remote listing rows that one-off downloads
     /// (thumbnails, previews, Download) verify against, so a screen of them
     /// pages the drive's listing once rather than once per file. Invalidated
-    /// per label on `SyncCompleted`, wholesale on `SyncReset`. See
+    /// per label on `SyncCompleted` and when the drive stops (pause,
+    /// removal), wholesale on `SyncReset` and logout. See
     /// `crate::sync::listing_cache`.
     pub remote_listing_cache: std::sync::Arc<crate::sync::listing_cache::RemoteListingCache>,
     /// Monotonically increasing counter, incremented on every
