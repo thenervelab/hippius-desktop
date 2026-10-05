@@ -327,11 +327,16 @@ impl MassDeleteHoldState {
     /// without a cleared event: hydration reads the state afresh. A pending
     /// folder restore is kept across a re-init (pause and resume between
     /// the restore and the folder job would otherwise lose it).
+    ///
+    /// A re-init also closes any cycle the previous drive left open: none of
+    /// the seeded holds was reported in it, so its late `SyncCompleted`
+    /// would otherwise read them all as cleared.
     pub fn arm(&self, label: &str, member: bool, sync_root: &Path, seed: &[HeldMassDelete]) {
         let mut map = self.lock();
         let holds = map.entry(label.to_string()).or_default();
         holds.member = member;
         holds.sync_root = Some(sync_root.to_path_buf());
+        holds.cycle_open = false;
 
         for side in SIDES {
             let slot = holds.slot_mut(side);
@@ -945,6 +950,20 @@ mod tests {
         state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
         state.begin_cycle(L);
         assert_eq!(report_held(&state, Server, 150), Some(false), "raised once, never again for the episode");
+    }
+
+    /// A re-init lands while the old drive's cycle is still open: that
+    /// cycle's late `SyncCompleted` saw none of the seeded holds reported,
+    /// and must not read them as cleared.
+    #[test]
+    fn a_late_completion_after_a_re_init_keeps_the_seeded_holds() {
+        let state = MassDeleteHoldState::new();
+        state.arm(L, false, Path::new("/x"), &[]);
+        state.begin_cycle(L);
+
+        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        assert!(state.finish_cycle(L).is_empty(), "the old drive's cycle closes nothing");
+        assert_eq!(state.entry(L, Server).map(|e| e.count), Some(150));
     }
 
     #[test]
