@@ -32,7 +32,9 @@
 //! - **Folder restores owed.** The engine plans files only; the desktop's
 //!   folder job puts empty folders back itself, once per applied restore
 //!   (see `folder_entries_materialize`). The flag is set by every applied
-//!   restore, whatever its counts, and never by a refusal.
+//!   restore, whatever its counts, and never by a refusal. It is a
+//!   generation counter, so the job's ack covers only the restores it read
+//!   ([`OwedFolderRestores`]).
 //!
 //! ## Cycle bookkeeping
 //!
@@ -148,9 +150,40 @@ impl FolderRestores {
     }
 }
 
+/// The folder restores a drive owes, as the folder job read them.
+///
+/// Carries the generation of the latest applied restore per side, so the
+/// job's acknowledgement covers exactly what it read: a restore recorded
+/// while the job was fetching the server set has a later generation and
+/// stays owed for the next run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OwedFolderRestores {
+    /// Generation owed for the server side; 0 when nothing is owed.
+    server: u64,
+    /// Generation owed for the local side; 0 when nothing is owed.
+    local: u64,
+}
+
+impl OwedFolderRestores {
+    /// Which sides are owed.
+    #[must_use]
+    pub fn sides(self) -> FolderRestores {
+        FolderRestores {
+            server: self.server > 0,
+            local: self.local > 0,
+        }
+    }
+
+    /// Whether any side is owed.
+    #[must_use]
+    pub fn any(self) -> bool {
+        self.sides().any()
+    }
+}
+
 /// Per-side bookkeeping. `entry` is what the UI shows; the rest is latch
-/// state that lives exactly as long as the episode (except `folder_restore`,
-/// which outlives it until the folder job consumes it).
+/// state that lives exactly as long as the episode (except the folder
+/// restore generations, which outlive it until the folder job acks them).
 #[derive(Debug, Default)]
 struct SideSlot {
     /// The current hold, if any.
@@ -161,8 +194,29 @@ struct SideSlot {
     seen: bool,
     /// The refusal reason last emitted in this episode.
     refused: Option<String>,
-    /// An applied restore whose empty folders the folder job still owes.
-    folder_restore: bool,
+    /// Generation of the latest applied restore (0: none yet). Bumped by
+    /// every `MassDeleteRestored`.
+    restores_applied: u64,
+    /// The latest generation whose folders the folder job has put back.
+    /// Owed while below `restores_applied`.
+    restores_done: u64,
+}
+
+impl SideSlot {
+    /// The generation the folder job owes, or 0.
+    fn owed_restore(&self) -> u64 {
+        if self.restores_applied > self.restores_done {
+            self.restores_applied
+        } else {
+            0
+        }
+    }
+
+    /// Acknowledge every generation up to `generation`; a later one stays
+    /// owed.
+    fn ack_restore(&mut self, generation: u64) {
+        self.restores_done = self.restores_done.max(generation);
+    }
 }
 
 impl SideSlot {
@@ -330,7 +384,7 @@ impl MassDeleteHoldState {
             synced_count: previous.map_or(0, |e| e.synced_count),
             empty_root: false,
         });
-        slot.folder_restore = true;
+        slot.restores_applied += 1;
     }
 
     /// Record a `MassDeleteRestoreRefused`, reporting whether this reason is
@@ -413,22 +467,19 @@ impl MassDeleteHoldState {
     /// job acknowledges with [`Self::ack_folder_restores`] only once it has
     /// applied them, so a failed run retries.
     #[must_use]
-    pub fn folder_restores(&self, label: &str) -> FolderRestores {
-        self.lock().get(label).map_or_else(FolderRestores::default, |h| FolderRestores {
-            server: h.server.folder_restore,
-            local: h.local.folder_restore,
+    pub fn folder_restores(&self, label: &str) -> OwedFolderRestores {
+        self.lock().get(label).map_or_else(OwedFolderRestores::default, |h| OwedFolderRestores {
+            server: h.server.owed_restore(),
+            local: h.local.owed_restore(),
         })
     }
 
-    /// Mark the given folder restores done.
-    pub fn ack_folder_restores(&self, label: &str, done: FolderRestores) {
+    /// Mark the folder restores the job read as done. A restore recorded
+    /// since that read has a later generation and stays owed.
+    pub fn ack_folder_restores(&self, label: &str, done: OwedFolderRestores) {
         if let Some(holds) = self.lock().get_mut(label) {
-            if done.server {
-                holds.server.folder_restore = false;
-            }
-            if done.local {
-                holds.local.folder_restore = false;
-            }
+            holds.server.ack_restore(done.server);
+            holds.local.ack_restore(done.local);
         }
     }
 
@@ -665,7 +716,7 @@ mod tests {
         assert!(!state.record_refused(L, Server, "insufficient_space"), "repeated every cycle by hcfs");
         assert_eq!(state.record_held(L, Server, 150, 200, false), HeldChange::Unchanged);
         assert!(state.finish_cycle(L).is_empty());
-        assert_eq!(state.folder_restores(L), FolderRestores::default(), "a refusal restores no folders");
+        assert!(!state.folder_restores(L).any(), "a refusal restores no folders");
 
         state.begin_cycle(L);
         state.finish_cycle(L);
@@ -680,10 +731,29 @@ mod tests {
     fn every_applied_restore_owes_folders() {
         let state = MassDeleteHoldState::new();
         cycle(&state, |s| s.record_restored(L, Local, 40));
-        assert_eq!(state.folder_restores(L), FolderRestores { server: false, local: true });
+        let owed = state.folder_restores(L);
+        assert_eq!(owed.sides(), FolderRestores { server: false, local: true });
 
-        state.ack_folder_restores(L, FolderRestores { server: false, local: true });
+        state.ack_folder_restores(L, owed);
         assert!(!state.folder_restores(L).any());
+    }
+
+    /// A second restore lands while the folder job is fetching the server
+    /// set for the first. The job's ack covers what it read, not the
+    /// restore it never saw, which stays owed for the next run.
+    #[test]
+    fn an_ack_does_not_cover_a_restore_that_landed_after_the_read() {
+        let state = MassDeleteHoldState::new();
+        cycle(&state, |s| s.record_restored(L, Server, 10));
+        let read = state.folder_restores(L);
+
+        cycle(&state, |s| s.record_restored(L, Server, 12));
+        state.ack_folder_restores(L, read);
+        assert!(state.folder_restores(L).sides().server, "the later restore is still owed");
+
+        let read = state.folder_restores(L);
+        state.ack_folder_restores(L, read);
+        assert!(!state.folder_restores(L).any(), "acked once the job has read it");
     }
 
     #[test]
@@ -692,7 +762,7 @@ mod tests {
         cycle(&state, |s| s.record_restored(L, Server, 10));
         cycle(&state, |_| {});
         state.arm(L, false, Path::new("/x"), &[]);
-        assert!(state.folder_restores(L).server, "consumed only by the folder job");
+        assert!(state.folder_restores(L).sides().server, "consumed only by the folder job");
     }
 
     #[test]
