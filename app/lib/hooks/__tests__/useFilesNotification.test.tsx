@@ -52,7 +52,11 @@ const AGGREGATION_MS = 10_000;
 
 /** The rows Rust saves itself; the hook only refreshes the bell for them,
  *  whatever the account or the enabled types. */
-const RUST_SAVED_EVENTS = ["hcfs_mass_delete_held_notify", "hcfs_drive_disconnected_notify"];
+const RUST_SAVED_EVENTS = [
+  "hcfs_mass_delete_held_notify",
+  "hcfs_drive_disconnected_notify",
+  "hcfs_empty_remote_notify",
+];
 
 interface CompletedOverrides {
   files_uploaded?: number;
@@ -255,6 +259,18 @@ describe("useFilesNotification — failure path", () => {
     await flushRegistration();
     await act(async () => {
       await tauri.emitEvent("hcfs_drive_disconnected_notify", { label: "photos" });
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
+  });
+
+  // A refused empty listing is the safety check holding, not a failed sync:
+  // Rust saves its own "Drive Empty on Hippius" row once per episode.
+  it("leaves an empty drive's notification to Rust and refreshes the bell", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_empty_remote_notify", { label: "photos" });
     });
     expect(syncNotificationCalls()).toHaveLength(0);
     expect(refreshUnread).toHaveBeenCalledTimes(1);

@@ -74,6 +74,18 @@ pub const MASS_DELETE_RESTORED: &str = "hcfs_mass_delete_restored";
 /// A cycle refused a requested restore; the hold stands. Emitted once per
 /// reason per episode. Payload: [`MassDeleteRestoreRefusedPayload`].
 pub const MASS_DELETE_RESTORE_REFUSED: &str = "hcfs_mass_delete_restore_refused";
+/// hcfs is refusing a drive's empty server listing because this device still
+/// has its files; the prompt began or its count changed. Payload:
+/// [`EmptyRemotePayload`]. Emitted only on a change, never on hcfs's
+/// per-retry repeat; see `sync::empty_remote`.
+pub const EMPTY_REMOTE_HELD: &str = "hcfs_empty_remote_held";
+/// Gated companion to [`EMPTY_REMOTE_HELD`]: Rust saved the episode's one
+/// notification, so the UI refreshes the bell. Not sent when the account
+/// turned Files notifications off. Payload: [`LabelPayload`].
+pub const EMPTY_REMOTE_NOTIFY: &str = "hcfs_empty_remote_notify";
+/// A drive's empty-listing prompt ended: a cycle accepted a listing, the
+/// drive stopped, or it was removed. Payload: [`LabelPayload`].
+pub const EMPTY_REMOTE_CLEARED: &str = "hcfs_empty_remote_cleared";
 /// Emitted when the backend detects credentials are invalid and re-login is needed.
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
 /// Emitted when `AuthInfo` has been fully populated post-login (mnemonic
@@ -778,6 +790,60 @@ mod tests {
     fn sync_error_kind_wire_strings_are_pinned() {
         assert_eq!(serde_json::to_value(SyncErrorKind::Generic).unwrap(), "generic");
         assert_eq!(serde_json::to_value(SyncErrorKind::RootNotMounted).unwrap(), "rootNotMounted");
+        assert_eq!(serde_json::to_value(SyncErrorKind::EmptyRemote).unwrap(), "emptyRemote");
+    }
+
+    #[test]
+    fn suspicious_empty_remote_is_recognised_with_its_count() {
+        use hcfs_client::sync::SyncError;
+
+        for count in [1, 12, 1_234_567] {
+            let error = SyncError::SuspiciousEmptyRemote { synced_count: count }.to_string();
+            assert_eq!(suspicious_empty_remote_count(&error), Some(count), "{error}");
+        }
+    }
+
+    #[test]
+    fn other_errors_are_not_read_as_an_empty_remote() {
+        use hcfs_client::sync::SyncError;
+
+        let real = SyncError::SuspiciousEmptyRemote { synced_count: 12 }.to_string();
+        for error in [
+            format!("Sync failed: {real}"),
+            format!("{real} (retrying)"),
+            real.replace("12", "twelve"),
+            real.replace("12", ""),
+            real.replace("12", "-1"),
+            SyncError::RootNotMounted { path: String::new() }.to_string(),
+            String::new(),
+        ] {
+            assert_eq!(suspicious_empty_remote_count(&error), None, "{error}");
+        }
+    }
+
+    #[test]
+    fn empty_remote_payload_pins_its_wire_keys() {
+        let payload = EmptyRemotePayload {
+            label: "photos".into(),
+            synced_count: 12,
+            can_confirm: false,
+            title: "t".into(),
+            body: vec!["b".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&payload).unwrap(),
+            serde_json::json!({ "label": "photos", "syncedCount": 12, "canConfirm": false, "title": "t", "body": ["b"] })
+        );
+        assert_eq!(EMPTY_REMOTE_HELD, "hcfs_empty_remote_held");
+        assert_eq!(EMPTY_REMOTE_NOTIFY, "hcfs_empty_remote_notify");
+        assert_eq!(EMPTY_REMOTE_CLEARED, "hcfs_empty_remote_cleared");
+    }
+
+    #[test]
+    fn empty_remote_copy_says_nothing_was_deleted() {
+        assert!(EMPTY_REMOTE_MESSAGE.contains("Nothing was deleted"));
+        let lower = EMPTY_REMOTE_MESSAGE.to_lowercase();
+        assert!(!lower.contains("suspicious") && !lower.contains("connection"), "{EMPTY_REMOTE_MESSAGE}");
     }
 
     #[test]
@@ -1150,6 +1216,41 @@ impl From<&crate::sync::mass_delete_hold::LabeledHold> for MassDeleteHoldPayload
     }
 }
 
+/// A drive whose empty server listing hcfs is refusing, for the
+/// [`EMPTY_REMOTE_HELD`] event and for `get_empty_remote_drives` hydration
+/// (one shape, so the banner reads both).
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmptyRemotePayload {
+    /// The drive label.
+    pub label: String,
+    /// How many synced files this device still has for the drive.
+    pub synced_count: usize,
+    /// Whether this account may confirm the drive is empty: false on a
+    /// shared drive this account is a member of, where hcfs refuses it.
+    pub can_confirm: bool,
+    /// The banner's title, written by Rust: the same words the persisted
+    /// notification opens with (`empty_remote::empty_remote_text`).
+    pub title: String,
+    /// The banner's lines under the title, written by Rust.
+    pub body: Vec<String>,
+}
+
+impl EmptyRemotePayload {
+    /// The payload for `label`'s prompt.
+    #[must_use]
+    pub fn new(label: &str, entry: crate::sync::empty_remote::EmptyRemoteEntry) -> Self {
+        let text = crate::sync::empty_remote::empty_remote_text(label, entry);
+        Self {
+            label: label.to_string(),
+            synced_count: entry.synced_count,
+            can_confirm: entry.can_confirm,
+            title: text.title,
+            body: text.body,
+        }
+    }
+}
+
 /// [`MASS_DELETE_CLEARED`]: which side's hold ended.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1302,6 +1403,42 @@ pub enum SyncErrorKind {
     /// whole cycle before planning: nothing was uploaded, downloaded or
     /// deleted. Resolves itself once the disk is back.
     RootNotMounted,
+    /// hcfs refused an empty server listing because this device still has
+    /// the drive's files (`SyncError::SuspiciousEmptyRemote`): nothing was
+    /// deleted, and the drive waits for the owner's answer
+    /// ([`EMPTY_REMOTE_HELD`]).
+    EmptyRemote,
+}
+
+/// User copy for a cycle hcfs refused because the server listing came back
+/// empty while this device still has the drive's files. hcfs's own text
+/// names the mechanism ("Suspicious empty remote response"); this says what
+/// happened and that nothing was deleted.
+pub const EMPTY_REMOTE_MESSAGE: &str = if cfg!(target_os = "macos") {
+    "Hippius has no files for this drive, but this Mac still has them. Nothing was deleted; sync is on hold."
+} else {
+    "Hippius has no files for this drive, but this computer still has them. Nothing was deleted; sync is on hold."
+};
+
+/// The synced count of hcfs's `SyncError::SuspiciousEmptyRemote`, when
+/// `error` is exactly that error's Display.
+///
+/// Matched against the upstream Display built from the upstream type, with
+/// only the count free, so a reworded upstream message falls through to the
+/// generic path instead of being half-matched; pinned in
+/// `tests/hcfs_contract.rs`.
+pub fn suspicious_empty_remote_count(error: &str) -> Option<usize> {
+    // A sentinel count no real drive reaches splits the template into the
+    // text before and after the number.
+    const SENTINEL: usize = usize::MAX;
+    let template = hcfs_client::sync::SyncError::SuspiciousEmptyRemote { synced_count: SENTINEL }.to_string();
+    let (prefix, suffix) = template.split_once(&SENTINEL.to_string())?;
+
+    let count = error.strip_prefix(prefix)?.strip_suffix(suffix)?;
+    if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    count.parse().ok()
 }
 
 /// User copy for a cycle hcfs refused because the drive folder's volume is

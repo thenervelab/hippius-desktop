@@ -1088,3 +1088,64 @@ fn expected_content_download_surface_is_pinned() {
     };
     assert_eq!(expected.size_bytes, 3);
 }
+
+// ── Empty-listing confirmation (hcfs #550) ─────────────────────────────────
+
+/// The confirmation the empty-drive prompt writes, through the same
+/// lock-free `DriveManager` the large-delete answers use, plus `Drive`'s own
+/// method that refuses a member at cycle time.
+#[test]
+fn empty_remote_confirmation_surface_is_reachable() {
+    use hcfs_client::drive::Drive;
+    use hcfs_client::engine::DriveManager;
+    use hcfs_client::sync::SyncResult;
+
+    let _: fn(&Drive) -> SyncResult<()> = Drive::confirm_empty_remote;
+    let _: fn(&DriveManager) -> Result<(), String> = DriveManager::confirm_empty_remote;
+}
+
+/// The desktop recognises the refusal by its Display with only the count
+/// free (`events::suspicious_empty_remote_count`); a reworded upstream
+/// message must fail here, not turn the prompt into a generic failure.
+#[test]
+fn suspicious_empty_remote_display_carries_its_count() {
+    use hcfs_client::sync::SyncError;
+
+    let error = SyncError::SuspiciousEmptyRemote { synced_count: 4_321 }.to_string();
+    assert_eq!(
+        tauri_project_lib::sync::events::suspicious_empty_remote_count(&error),
+        Some(4_321),
+        "{error}"
+    );
+    assert!(error.starts_with("Suspicious empty remote response"), "{error}");
+}
+
+/// On a member drive the engine checks for a revocation before the refusal
+/// reaches the desktop (`try_error_folder_recovery`): a confirmed one arrives
+/// as the revoked marker instead, so the prompt only ever shows a member a
+/// drive that still exists.
+#[test]
+fn the_engine_checks_a_member_refusal_for_revocation_first() {
+    use hcfs_client::sync::SyncError;
+
+    let error = SyncError::SuspiciousEmptyRemote { synced_count: 1 }.to_string();
+    assert!(hcfs_client::engine::classify::is_member_revocation_candidate_error(&error));
+}
+
+/// A confirmation written through a never-initialized manager lands as the
+/// marker file hcfs reads at the start of the next cycle, under the name the
+/// desktop wipes on drive removal (`HCFS_HOLD_FILES`).
+#[test]
+fn a_throwaway_manager_writes_the_empty_remote_marker() {
+    use hcfs_client::engine::DriveManager;
+
+    let sync_dir = tempfile::tempdir().expect("sync dir");
+    let config_dir = tempfile::tempdir().expect("config dir");
+
+    let manager = DriveManager::new(sync_dir.path().to_path_buf(), config_dir.path().to_path_buf());
+    manager
+        .confirm_empty_remote()
+        .expect("an unconfigured manager has no membership to refuse");
+
+    assert!(config_dir.path().join("confirm_empty_remote").is_file());
+}

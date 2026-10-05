@@ -613,6 +613,7 @@ fn sort_completed_tail_by_recency(snapshot: &mut SyncSnapshot) {
 /// and BEFORE `cap_snapshot_files` truncates the rows it reads.
 pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot, preparing: &crate::sync::preparing::PreparingState) {
     rewrite_root_not_mounted_error(snapshot);
+    rewrite_empty_remote_error(snapshot);
     fixup_stalled_completion(snapshot);
     fixup_gone_only_failures(snapshot);
     apply_preparing_override(snapshot, preparing);
@@ -626,6 +627,20 @@ pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot, preparing: 
 fn rewrite_root_not_mounted_error(snapshot: &mut SyncSnapshot) {
     if snapshot.last_error.as_deref().is_some_and(crate::sync::events::is_root_not_mounted_error) {
         snapshot.last_error = Some(crate::sync::events::ROOT_NOT_MOUNTED_MESSAGE.to_string());
+    }
+}
+
+/// Same for a refused empty server listing: hcfs's text ("Suspicious empty
+/// remote response …") reads like a fault, and the widget must say what the
+/// `SYNC_ERROR` payload says.
+fn rewrite_empty_remote_error(snapshot: &mut SyncSnapshot) {
+    if snapshot
+        .last_error
+        .as_deref()
+        .and_then(crate::sync::events::suspicious_empty_remote_count)
+        .is_some()
+    {
+        snapshot.last_error = Some(crate::sync::events::EMPTY_REMOTE_MESSAGE.to_string());
     }
 }
 
@@ -1014,6 +1029,10 @@ mod tests {
         snap.last_error = Some(SyncError::RootNotMounted { path: "/Volumes/X".into() }.to_string());
         prepare_snapshot_for_emit(&mut snap, &preparing);
         assert_eq!(snap.last_error.as_deref(), Some(crate::sync::events::ROOT_NOT_MOUNTED_MESSAGE));
+
+        snap.last_error = Some(SyncError::SuspiciousEmptyRemote { synced_count: 12 }.to_string());
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+        assert_eq!(snap.last_error.as_deref(), Some(crate::sync::events::EMPTY_REMOTE_MESSAGE));
 
         let mut other = base_snapshot();
         other.last_error = Some("Server returned 500".to_string());

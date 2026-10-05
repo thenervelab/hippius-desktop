@@ -10,6 +10,7 @@ import { useUploadProcessing } from "@/lib/hooks/useUploadProcessing";
 import { useCreditsExhausted } from "@/lib/hooks/useCreditsExhausted";
 import { useMetadataStale } from "@/lib/hooks/useMetadataStale";
 import { useMassDeleteHolds } from "@/lib/hooks/useMassDeleteHolds";
+import { useEmptyRemoteDrives } from "@/lib/hooks/useEmptyRemoteDrives";
 import { useSyncRecorder } from "@/lib/sync/syncEventRecorder";
 
 /**
@@ -27,6 +28,8 @@ import { useSyncRecorder } from "@/lib/sync/syncEventRecorder";
  *   dates" banner when the bounded-retry reconcile exhausts its budget.
  * - `useMassDeleteHolds()` — hydrates and updates the large-delete prompt's
  *   `massDeleteHoldsAtom` from `hcfs_mass_delete_*` events.
+ * - `useEmptyRemoteDrives()` — hydrates and updates the empty-drive prompt's
+ *   `emptyRemoteDrivesAtom` from `hcfs_empty_remote_*` events.
  * - `useSyncRecorder()` — dev-only, self-gated capture of the snapshot event
  *   stream into a replay fixture. No-op in production / unless armed via
  *   `localStorage["hippius:record-sync"] = "1"`.
@@ -45,6 +48,7 @@ export default function SyncEventLogger() {
   useCreditsExhausted();
   useMetadataStale();
   useMassDeleteHolds();
+  useEmptyRemoteDrives();
   useSyncRecorder();
   // Caches `serverCapabilitiesAtom` once per session so share UI surfaces
   // can gate themselves on `shares: true` without each surface fetching

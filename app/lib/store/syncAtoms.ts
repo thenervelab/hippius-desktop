@@ -2,6 +2,7 @@ import { atom } from "jotai";
 import type { StagedChanges } from "@/lib/types/syncTypes";
 import type { FileFailureKind } from "@/app/lib/types/fileFailure";
 import type { MassDeleteHolds } from "@/app/lib/massDelete/holds";
+import type { EmptyRemoteDrives } from "@/app/lib/emptyRemote/drives";
 
 // Per-drive pending conflicts detected during auto-sync, keyed by drive label.
 // The multi-drive engine emits conflict-review events per drive (each carries a
@@ -122,3 +123,12 @@ export const creditsExhaustedAtom = atom<CreditsExhaustedInfo | null>(null);
  * `resetSyncSession` empties it on logout.
  */
 export const massDeleteHoldsAtom = atom<MassDeleteHolds>(new Map());
+
+/**
+ * Drives whose empty server listing hcfs is refusing, keyed by label, as
+ * the empty-drive prompt shows them. Rust decides every prompt; this is its
+ * projection plus presentation state (see `app/lib/emptyRemote/drives.ts`).
+ * `useEmptyRemoteDrives` is the only writer besides the banner's own
+ * answers; `resetSyncSession` empties it on logout.
+ */
+export const emptyRemoteDrivesAtom = atom<EmptyRemoteDrives>(new Map());

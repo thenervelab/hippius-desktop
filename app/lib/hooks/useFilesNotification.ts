@@ -9,15 +9,18 @@ import {
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { MASS_DELETE_EVENTS } from "@/app/lib/tauri/massDelete";
+import { EMPTY_REMOTE_EVENTS } from "@/app/lib/tauri/emptyRemote";
 
 /**
  * Events Rust sends after saving a Files notification itself: the held
- * large delete ("Large Delete Paused") and the unplugged drive folder
- * ("Drive Disconnected"). Payload `{ label }`; only the bell refreshes.
+ * large delete ("Large Delete Paused"), the unplugged drive folder
+ * ("Drive Disconnected") and the refused empty listing ("Drive Empty on
+ * Hippius"). Payload `{ label }`; only the bell refreshes.
  */
 const RUST_SAVED_NOTIFICATION_EVENTS = [
   MASS_DELETE_EVENTS.heldNotify,
   "hcfs_drive_disconnected_notify",
+  EMPTY_REMOTE_EVENTS.notify,
 ] as const;
 
 /**

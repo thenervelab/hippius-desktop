@@ -34,7 +34,9 @@ export type NotReadyKind =
   | "MASS_DELETE_NOTHING_HELD"
   | "MASS_DELETE_HOLD_CHANGED"
   | "MASS_DELETE_RESTORE_IN_PROGRESS"
-  | "MASS_DELETE_MEMBER_CANNOT_RESTORE";
+  | "MASS_DELETE_MEMBER_CANNOT_RESTORE"
+  | "EMPTY_REMOTE_NOTHING_HELD"
+  | "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM";
 
 /**
  * Shape of an `AppError` returned by Tauri commands. The `kind` field

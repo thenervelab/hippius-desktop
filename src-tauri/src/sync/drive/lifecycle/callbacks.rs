@@ -399,6 +399,10 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
     Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
         sync.touch_progress_time();
         end_root_not_mounted_episode(&app, &label);
+        // hcfs plans only after it accepted the server listing, so a refused
+        // empty listing is over too: the files came back, or the owner's
+        // confirmation was applied.
+        crate::sync::empty_remote_prompt::end_episode(&app, &label);
         // Persist the planner's view to the desktop-side intent manifest.
         // Runs UNCONDITIONALLY — above the `total == 0` early-return —
         // because an empty plan must still flush stale pending rows (see

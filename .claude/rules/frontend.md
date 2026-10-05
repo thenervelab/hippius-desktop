@@ -274,6 +274,11 @@ The home page's two chart cards were removed by product decision in favor of ONE
 - **The always-mounted announcer says only holds that arrived** (a live region announces changes to content it already holds; repeating every title would read the same banners out again). Pinned by `announces only the hold that arrived`.
 - **Rust saves the held-delete notification** (button "Review"); its link, and selecting the row in the bell or on the notifications page, clear that side's `dismissed` (`notificationLink.ts`). Pinned by `notificationLink.test.ts`.
 
+## Empty-drive prompt (`EmptyRemoteBanner`)
+
+- **Presentation only**, like the large-delete prompt: Rust writes `title` / `body`, decides `canConfirm`, and validates the answer; refusals are matched by `subkind` (`classifyEmptyRemoteError`). Hydrated by `useEmptyRemoteDrives` after its listeners are registered.
+- **"Keep my files" is the safe answer and comes first**; it changes nothing and only puts the banner away until the prompt changes or its notification is opened (`emptyRemote/notificationLink.ts`). The owner's "The drive really is empty" opens a danger `ConfirmDialog` whose cancel is "Keep my files"; only its destructive button calls `confirm_empty_remote`. A member is never offered it. Pinned by `EmptyRemoteBanner.test.tsx`.
+
 ## Files table: failure badge lookup
 
 **A file row's failure badge looks its failure up by drive-relative path** (`resolveRowRelativePath`, shared with the row menu), never by basename: two same-named files in different folders both showed the first one's failure. The resolver trims the folder path itself, since the URL's `subFolderPath` may carry slashes the table's own path does not. Pinned by `useFileFailure.test.tsx` and `NameCell.test.tsx`.

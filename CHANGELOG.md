@@ -313,6 +313,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **A drive that is suddenly empty on Hippius asks before anything here is
+  deleted.** If Hippius has no files for a drive this computer still has
+  files in, the drive stops syncing and a banner and one notification
+  explain it. Keep my files changes nothing; if you own the drive and
+  emptied it on purpose, you can confirm twice to remove the files here too.
+  Members of a shared drive keep their copies.
+
 - **Large deletes wait for you to decide.** When most of a drive suddenly
   looks deleted, for example because an external disk was unplugged, Hippius
   deletes nothing and asks you first, with a banner and one notification.

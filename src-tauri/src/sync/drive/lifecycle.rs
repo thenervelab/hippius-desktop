@@ -1685,6 +1685,8 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     app_state.remote_listing_cache.clear_all();
     // Held mass deletes belong to the signed-out account's drives.
     app_state.mass_delete_holds.clear_all();
+    // And so do the empty-drive prompts.
+    app_state.empty_remote.clear_all();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
@@ -1858,6 +1860,9 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         for side in app_state.mass_delete_holds.clear(&label) {
             crate::sync::tauri_bridge::emit_mass_delete_cleared(&app, &label, side);
         }
+        // Same for an empty-drive prompt, and its episode: a re-added drive
+        // that hits an empty listing again notifies again.
+        crate::sync::empty_remote_prompt::end_episode(&app, &label);
 
         // Delete the DB row so the drive isn't resurrected on app restart, and
         // drop the intent-manifest rows for this drive so the snapshot overlay
@@ -1979,15 +1984,19 @@ async fn clear_drive_rows(pool: &sqlx::SqlitePool, acct: &str, label: &str) {
 }
 
 /// hcfs-client's mass-delete files in a drive's config dir
-/// (`drive/mass_delete.rs`: `HELD_SET_FILE`, `MASS_DELETE_MARKER`, and
-/// `RESTORE_MARKER_PREFIX` + each side). Private constants upstream, so
-/// spelled out here; `answers_write_hcfs_markers_without_the_drive_lock`
-/// (`sync::mass_delete`) checks the marker names against hcfs's own writes.
-const HCFS_HOLD_FILES: [&str; 4] = [
+/// (`drive/mass_delete.rs`: `HELD_SET_FILE`, `MASS_DELETE_MARKER`,
+/// `RESTORE_MARKER_PREFIX` + each side, and `EMPTY_REMOTE_MARKER`). Private
+/// constants upstream, so spelled out here;
+/// `answers_write_hcfs_markers_without_the_drive_lock` (`sync::mass_delete`)
+/// and `tests/hcfs_contract.rs` check the marker names against hcfs's own
+/// writes. A re-added drive must not inherit an empty-drive confirmation: its
+/// first empty listing would delete this device's copies without asking.
+const HCFS_HOLD_FILES: [&str; 5] = [
     "mass_delete_held.json",
     "confirm_mass_delete",
     "restore_mass_delete_server",
     "restore_mass_delete_local",
+    "confirm_empty_remote",
 ];
 
 /// Best-effort delete of `sync_state.json` and `sync_state.json.bak` for the
@@ -3312,6 +3321,7 @@ mod tests {
             "confirm_mass_delete",
             "restore_mass_delete_server",
             "restore_mass_delete_local",
+            "confirm_empty_remote",
         ];
         for name in hold_files {
             std::fs::write(folder_dir.join(name), b"{}").unwrap();
