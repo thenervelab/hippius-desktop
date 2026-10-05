@@ -27,13 +27,14 @@
 //!
 //! This module is the desktop-side reclaim, deliberately independent of the
 //! pinned hcfs-client so existing users get their space back without a dep bump.
+//! It walks every drive's `temp/` on this machine — including drives whose
+//! `sync_paths` row is long gone, whose chunks nothing else would ever visit.
+//!
 //! It ages a directory on the same clock hcfs-client's own prune uses
 //! (`UploadChunkManifest::staged_since`): `first_staged_at` when the manifest
 //! carries it, else `encrypted_at`. Keying on `encrypted_at` alone would let
 //! the very upload this module exists for — one that keeps failing and
 //! re-encrypting — never age out.
-//! It walks every drive's `temp/` on this machine — including drives whose
-//! `sync_paths` row is long gone, whose chunks nothing else would ever visit.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
