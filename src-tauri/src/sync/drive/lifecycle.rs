@@ -1275,7 +1275,11 @@ pub(crate) async fn initialize_sync_inner(
             // authoritative backstop, so a server blip here must not block sync.
             // Log it so the skipped check is observable instead of silently dropped.
             Err(e) => {
-                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)");
+                tracing::warn!(
+                    account = %account,
+                    error = %e,
+                    "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)"
+                );
             }
         }
     }
@@ -2349,7 +2353,10 @@ impl Drop for AutoInitGuard {
 /// return path.
 #[expect(
     clippy::too_many_lines,
-    reason = "Linear auto-init pipeline — concurrency guard, migration check, mnemonic persistence, path fetch, scope expansion, HCFS config check, paused emit, mnemonic resolution, credits check, init loop. Splitting fragments the early-return error paths and obscures the ordering constraint between the paused-emit loop and the init loop (FE listener relies on that order)."
+    reason = "Linear auto-init pipeline — concurrency guard, migration check, mnemonic persistence, path fetch, \
+              scope expansion, HCFS config check, paused emit, mnemonic resolution, credits check, init loop. \
+              Splitting fragments the early-return error paths and obscures the ordering constraint between \
+              the paused-emit loop and the init loop (FE listener relies on that order)."
 )]
 async fn auto_init_sync_inner(
     app: AppHandle,
