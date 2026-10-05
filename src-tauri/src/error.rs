@@ -209,6 +209,18 @@ pub enum NotReadyKind {
     /// The server refused to MAIL a folder invite (`400` "folder invites
     /// cannot be mailed yet; mint a link instead"). The link works.
     FolderEmailInvitesUnavailable,
+    /// A mass-delete restore or removal named a side nothing is held on any
+    /// more (a cycle cleared it). The FE refreshes the holds.
+    MassDeleteNothingHeld,
+    /// The hold changed since the user was shown it; `held` is the count it
+    /// covers now. Serialized as an extra `held` field so the FE can show
+    /// the new count and ask again without parsing the message.
+    MassDeleteHoldChanged { held: usize },
+    /// A restore of that side is under way; removal must wait for it.
+    MassDeleteRestoreInProgress,
+    /// A shared-drive member asked to restore a local-side hold: the files
+    /// are missing from the server because its owner may have removed them.
+    MassDeleteMemberCannotRestore,
 }
 
 impl NotReadyKind {
@@ -242,6 +254,10 @@ impl NotReadyKind {
             Self::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
             Self::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
             Self::FolderEmailInvitesUnavailable => "FOLDER_EMAIL_INVITES_UNAVAILABLE",
+            Self::MassDeleteNothingHeld => "MASS_DELETE_NOTHING_HELD",
+            Self::MassDeleteHoldChanged { .. } => "MASS_DELETE_HOLD_CHANGED",
+            Self::MassDeleteRestoreInProgress => "MASS_DELETE_RESTORE_IN_PROGRESS",
+            Self::MassDeleteMemberCannotRestore => "MASS_DELETE_MEMBER_CANNOT_RESTORE",
         }
     }
 }
@@ -321,6 +337,14 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::CaptureDestinationUnset => {
                 write!(f, "Choose where your captures should be saved first.")
+            }
+            Self::MassDeleteNothingHeld => write!(f, "These files are no longer waiting for a decision."),
+            Self::MassDeleteHoldChanged { held } => {
+                write!(f, "The number of missing files changed to {held}. Check it and choose again.")
+            }
+            Self::MassDeleteRestoreInProgress => write!(f, "A restore is already running. Let it finish first."),
+            Self::MassDeleteMemberCannotRestore => {
+                write!(f, "Only the owner of this shared drive can put these files back on Hippius.")
             }
         }
     }
@@ -529,7 +553,15 @@ impl Serialize for AppError {
             }
         }
 
-        if let Self::NotReady(subkind) = self {
+        if let Self::NotReady(NotReadyKind::MassDeleteHoldChanged { held }) = self {
+            // The one subkind with data the FE acts on: the new count to show.
+            let mut s = serializer.serialize_struct("AppError", 4)?;
+            s.serialize_field("kind", kind)?;
+            s.serialize_field("subkind", "MASS_DELETE_HOLD_CHANGED")?;
+            s.serialize_field("message", &self.to_string())?;
+            s.serialize_field("held", held)?;
+            s.end()
+        } else if let Self::NotReady(subkind) = self {
             let mut s = serializer.serialize_struct("AppError", 3)?;
             s.serialize_field("kind", kind)?;
             s.serialize_field("subkind", subkind.wire_name())?;
@@ -615,6 +647,21 @@ mod tests {
         let json = serde_json::to_value(&err).expect("serialize");
         assert_eq!(json["kind"], "NotReady");
         assert!(json["message"].as_str().expect("message str").contains("Sync setup"));
+    }
+
+    /// The large-delete prompt shows the new count from this field; it must
+    /// not have to parse the message.
+    #[test]
+    fn hold_changed_carries_the_new_count() {
+        let err = AppError::NotReady(NotReadyKind::MassDeleteHoldChanged { held: 180 });
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "NotReady");
+        assert_eq!(json["subkind"], "MASS_DELETE_HOLD_CHANGED");
+        assert_eq!(json["held"], 180);
+        assert!(json["message"].as_str().expect("message").contains("180"));
+
+        let other = serde_json::to_value(AppError::NotReady(NotReadyKind::MassDeleteNothingHeld)).expect("serialize");
+        assert!(other.get("held").is_none(), "only the changed-hold subkind carries a count");
     }
 
     #[test]
@@ -784,6 +831,10 @@ mod tests {
                 NotReadyKind::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEmailInvitesUnavailable => "FOLDER_EMAIL_INVITES_UNAVAILABLE",
+                NotReadyKind::MassDeleteNothingHeld => "MASS_DELETE_NOTHING_HELD",
+                NotReadyKind::MassDeleteHoldChanged { .. } => "MASS_DELETE_HOLD_CHANGED",
+                NotReadyKind::MassDeleteRestoreInProgress => "MASS_DELETE_RESTORE_IN_PROGRESS",
+                NotReadyKind::MassDeleteMemberCannotRestore => "MASS_DELETE_MEMBER_CANNOT_RESTORE",
             }
         }
         for kind in [
@@ -812,6 +863,10 @@ mod tests {
             NotReadyKind::FolderInvitesUnavailable,
             NotReadyKind::FolderEditorInvitesUnavailable,
             NotReadyKind::FolderEmailInvitesUnavailable,
+            NotReadyKind::MassDeleteNothingHeld,
+            NotReadyKind::MassDeleteHoldChanged { held: 7 },
+            NotReadyKind::MassDeleteRestoreInProgress,
+            NotReadyKind::MassDeleteMemberCannotRestore,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");

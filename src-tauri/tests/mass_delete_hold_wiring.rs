@@ -121,3 +121,16 @@ fn teardown_paths_forget_the_holds() {
         "an account switch must not inherit the previous account's holds"
     );
 }
+
+/// The prompt's three commands must be registered, and async: a sync
+/// `#[tauri::command]` runs on the OS main thread, and these read a held
+/// record that can be megabytes and query the database.
+#[test]
+fn the_prompt_commands_are_registered_and_async() {
+    let main = read("src/main.rs");
+    let commands = read("src/sync/drive/mass_delete.rs");
+    for name in ["restore_mass_delete", "confirm_mass_delete", "get_mass_delete_holds"] {
+        assert!(main.contains(&format!("crate::sync::mass_delete::{name},")), "{name} must be in generate_handler!");
+        assert!(commands.contains(&format!("pub async fn {name}(")), "{name} must be async (off the main thread)");
+    }
+}
