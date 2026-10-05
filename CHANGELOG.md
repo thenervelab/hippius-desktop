@@ -128,8 +128,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   name in different folders no longer both show the error of one of them.
 
 - **Opening a folder no longer deletes files in it.** Files whose names start
-  with 'downloaded_', and some empty files, were removed when you opened their
-  folder.
+  with 'downloaded_', and empty files whose names start with 'file_', were
+  removed when you opened their folder.
 
 - **A file that can't sync now says why, and stays marked until it's fixed.**
   If two files' names differ only in capital letters, a file can't be read, or
@@ -311,8 +311,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **Large deletes wait for you to decide.** When most of a drive suddenly
   looks deleted, for example because an external disk was unplugged, Hippius
-  holds the deletes and asks you: Restore files puts them back, empty folders
-  included, or Remove lets the delete go ahead after you confirm the count.
+  deletes nothing and asks you first, with a banner and one notification.
+  Restore files puts everything back, empty folders included; Remove deletes
+  the files once you confirm how many; Decide later keeps them safe until you
+  choose.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a
