@@ -13,9 +13,10 @@
 //!   AND synced trees. A file still on disk awaiting upload is *by definition*
 //!   in `local`; a file whose finalize timed out but landed server-side is in
 //!   `remote` + `synced`. Both are structurally immune.
-//! - The age prune keys on `manifest.encrypted_at`, which is re-stamped on every
-//!   re-encryption — a file that fails and re-encrypts each cycle refreshes its
-//!   own clock forever.
+//! - Older hcfs-client builds aged directories by `manifest.encrypted_at`,
+//!   which is re-stamped on every re-encryption — a file that fails and
+//!   re-encrypts each cycle refreshes its own clock forever. Current builds
+//!   write `first_staged_at`, carried across re-encryptions, and age by that.
 //! - Both run only *inside* a sync cycle, so a paused drive, a stopped sync, or
 //!   a closed app reclaims nothing at all.
 //!
@@ -28,6 +29,12 @@
 //! pinned hcfs-client so existing users get their space back without a dep bump.
 //! It walks every drive's `temp/` on this machine — including drives whose
 //! `sync_paths` row is long gone, whose chunks nothing else would ever visit.
+//!
+//! It ages a directory on the same clock hcfs-client's own prune uses
+//! (`UploadChunkManifest::staged_since`): `first_staged_at` when the manifest
+//! carries it, else `encrypted_at`. Keying on `encrypted_at` alone would let
+//! the very upload this module exists for — one that keeps failing and
+//! re-encrypting — never age out.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -77,12 +84,14 @@ pub(crate) const CHUNK_CACHE_BUDGET_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StagedUpload {
     pub(crate) path: PathBuf,
-    /// `encrypted_at` from the manifest, or `None` when there is no readable
-    /// manifest — encryption never finished, so there is nothing to resume.
+    /// When this directory first started occupying disk: the manifest's
+    /// `first_staged_at`, falling back to `encrypted_at` on manifests written
+    /// before that field existed. `None` when there is no readable manifest —
+    /// encryption never finished, so there is nothing to resume.
     /// An unparseable manifest reads as `None` on purpose: hcfs-client's own
     /// `UploadChunkManifest::load` would fail on it too and treat the directory
     /// as incomplete, and the two must not disagree about what is live.
-    pub(crate) encrypted_at: Option<u64>,
+    pub(crate) staged_since: Option<u64>,
     pub(crate) size_bytes: u64,
 }
 
@@ -126,14 +135,14 @@ pub(crate) fn plan_reclaim(mut staged: Vec<StagedUpload>, now_secs: u64, max_age
     // `None` sorts before `Some`, so manifest-less directories lead. The path
     // tiebreak keeps the plan deterministic for a given set regardless of the
     // order `read_dir` happened to hand entries back in.
-    staged.sort_by(|a, b| a.encrypted_at.cmp(&b.encrypted_at).then_with(|| a.path.cmp(&b.path)));
+    staged.sort_by(|a, b| a.staged_since.cmp(&b.staged_since).then_with(|| a.path.cmp(&b.path)));
 
     let mut plan = Vec::new();
     let mut survivors: Vec<&StagedUpload> = Vec::new();
     let mut retained_bytes: u64 = 0;
 
     for entry in &staged {
-        match entry.encrypted_at {
+        match entry.staged_since {
             None => plan.push((entry.path.clone(), ReclaimReason::Incomplete)),
             // `saturating_sub` so a manifest stamped in the future (clock skew,
             // a restored backup) reads as age 0 and is kept, never as wildly
@@ -178,15 +187,31 @@ fn read_staged(path: PathBuf) -> StagedUpload {
         }
     }
 
-    let encrypted_at = std::fs::read(path.join(MANIFEST_NAME))
+    let staged_since = std::fs::read(path.join(MANIFEST_NAME))
         .ok()
         .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
-        .and_then(|v| v.get("encrypted_at").and_then(serde_json::Value::as_u64));
+        .and_then(|manifest| manifest_staged_since(&manifest));
 
     StagedUpload {
         path,
-        encrypted_at,
+        staged_since,
         size_bytes,
+    }
+}
+
+/// The age clock of one parsed manifest, mirroring hcfs-client's
+/// `UploadChunkManifest::staged_since`: `first_staged_at`, else `encrypted_at`.
+///
+/// `None` (incomplete) wherever either clock field would make hcfs-client's
+/// own `UploadChunkManifest::load` reject the manifest — `encrypted_at` missing
+/// or not an integer, or `first_staged_at` present as anything but an integer
+/// or `null` — so the two never disagree about which directories are live.
+fn manifest_staged_since(manifest: &serde_json::Value) -> Option<u64> {
+    let encrypted_at = manifest.get("encrypted_at").and_then(serde_json::Value::as_u64)?;
+
+    match manifest.get("first_staged_at") {
+        None | Some(serde_json::Value::Null) => Some(encrypted_at),
+        Some(first_staged_at) => first_staged_at.as_u64(),
     }
 }
 
@@ -351,10 +376,10 @@ mod tests {
     const HOUR: u64 = 60 * 60;
     const NOW: u64 = 1_000 * HOUR;
 
-    fn staged(name: &str, encrypted_at: Option<u64>, size_bytes: u64) -> StagedUpload {
+    fn staged(name: &str, staged_since: Option<u64>, size_bytes: u64) -> StagedUpload {
         StagedUpload {
             path: PathBuf::from(format!("/tmp/temp/upload_{name}")),
-            encrypted_at,
+            staged_since,
             size_bytes,
         }
     }
@@ -514,7 +539,78 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create dir");
         std::fs::write(dir.join(MANIFEST_NAME), b"not json").expect("write manifest");
 
-        assert_eq!(read_staged(dir).encrypted_at, None);
+        assert_eq!(read_staged(dir).staged_since, None);
+    }
+
+    /// Write `<dir>/upload_<name>` with one 64-byte chunk and `manifest` as its
+    /// manifest, returning the directory.
+    fn write_manifest_dir(dir: &Path, name: &str, manifest: &serde_json::Value) -> PathBuf {
+        let staged = dir.join(format!("upload_{name}"));
+        std::fs::create_dir_all(&staged).expect("create staging dir");
+        std::fs::write(staged.join("chunk_0"), vec![0u8; 64]).expect("write chunk");
+        std::fs::write(staged.join(MANIFEST_NAME), manifest.to_string()).expect("write manifest");
+        staged
+    }
+
+    /// The failure this clock exists for: an upload that keeps failing is
+    /// re-encrypted every cycle, so `encrypted_at` is always fresh. Aged by
+    /// `encrypted_at` it would never expire; aged by `first_staged_at` it does.
+    #[test]
+    fn a_re_encrypted_upload_ages_from_when_it_was_first_staged() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let temp = tmp.path().join("drives/acct/folder-a/temp");
+        let manifest = serde_json::json!({
+            "encrypted_at": NOW - HOUR,
+            "first_staged_at": NOW - 30 * HOUR,
+        });
+        let staged = write_manifest_dir(&temp, "refailing", &manifest);
+
+        let summary = reclaim_under(&tmp.path().join("drives"), NOW);
+
+        assert_eq!(summary.removed_dirs, 1);
+        assert!(!staged.exists(), "an upload first staged 30h ago must expire");
+    }
+
+    #[test]
+    fn a_manifest_without_first_staged_at_ages_from_encrypted_at() {
+        // Manifests written before hcfs-client carried the field.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let old = write_manifest_dir(tmp.path(), "old", &serde_json::json!({ "encrypted_at": NOW - 30 * HOUR }));
+        let fresh = write_manifest_dir(
+            tmp.path(),
+            "fresh",
+            &serde_json::json!({ "encrypted_at": NOW - HOUR, "first_staged_at": null }),
+        );
+
+        assert_eq!(read_staged(old).staged_since, Some(NOW - 30 * HOUR));
+        assert_eq!(read_staged(fresh).staged_since, Some(NOW - HOUR));
+    }
+
+    #[test]
+    fn a_malformed_first_staged_at_reads_as_incomplete() {
+        // hcfs-client's loader rejects it, so it is not live there either.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest = serde_json::json!({ "encrypted_at": NOW, "first_staged_at": "yesterday" });
+        let dir = write_manifest_dir(tmp.path(), "malformed", &manifest);
+
+        assert_eq!(read_staged(dir).staged_since, None);
+    }
+
+    /// Budget eviction is oldest-first on the same clock as the age rule, so a
+    /// long-failing upload with a fresh `encrypted_at` goes before a newer one.
+    #[test]
+    fn budget_eviction_orders_by_first_staged_at_not_encrypted_at() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let long_failing = serde_json::json!({ "encrypted_at": NOW - HOUR, "first_staged_at": NOW - 20 * HOUR });
+        let recent = serde_json::json!({ "encrypted_at": NOW - 2 * HOUR });
+        let long_failing = read_staged(write_manifest_dir(tmp.path(), "long_failing", &long_failing));
+        let recent = read_staged(write_manifest_dir(tmp.path(), "recent", &recent));
+        let budget = recent.size_bytes;
+
+        let plan = plan_reclaim(vec![recent, long_failing], NOW, RESUMABLE_MAX_AGE_SECS, budget);
+
+        assert_eq!(reasons(&plan, "long_failing"), Some(ReclaimReason::OverBudget));
+        assert_eq!(reasons(&plan, "recent"), None);
     }
 
     #[test]
