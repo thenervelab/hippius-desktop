@@ -483,9 +483,7 @@ impl SyncNotificationOutcome {
     fn list_title(self, files: &SyncFileSummary<'_>) -> String {
         match self {
             Self::Success => success_list_title(files),
-            Self::Error | Self::FolderRestored | Self::MassDeleteHeld | Self::DriveDisconnected | Self::EmptyRemote => {
-                self.title().to_string()
-            }
+            Self::Error | Self::FolderRestored | Self::MassDeleteHeld | Self::DriveDisconnected | Self::EmptyRemote => self.title().to_string(),
         }
     }
 

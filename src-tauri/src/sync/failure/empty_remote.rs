@@ -29,7 +29,10 @@
 //! - **One notification per episode.** The first publish of an episode
 //!   claims it. A pause hides the prompt ([`EmptyRemoteState::hide`]) without
 //!   ending the episode, so a resume into the same empty listing does not
-//!   notify again; success, drive removal and logout end it.
+//!   notify again; success, drive removal and logout end it. The state is
+//!   in memory only, since hcfs keeps no record of the refusal: a relaunch
+//!   while the listing is still empty starts a new episode and notifies
+//!   once more.
 //! - **An answer that did not take.** A confirmation is a marker that can
 //!   expire unused, or that hcfs refuses at cycle time. When the first cycle
 //!   that started after the answer reports the empty listing again, the
