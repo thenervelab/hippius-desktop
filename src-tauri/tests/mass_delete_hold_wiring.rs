@@ -160,3 +160,21 @@ fn the_folder_job_gates_both_halves_and_restores_first() {
         .expect("materialize is gated");
     assert!(gate < restore && restore < reconcile && reconcile < materialize);
 }
+
+/// The empty-root check reads the drive folder, which an unplugged network
+/// share can stall. It must run on the blocking pool, after the change
+/// check, never on hcfs's event thread for every repeated report.
+#[test]
+fn the_empty_root_check_runs_off_the_event_thread_and_only_on_a_change() {
+    let src = bridge_src();
+    let body = fn_body(&src, "fn handle_mass_delete_held(");
+    let record = body.find("record_held(").expect("the report is recorded first");
+    let unchanged = body.find("HeldChange::Unchanged").expect("an unchanged report returns early");
+    let blocking = body.find("spawn_blocking(").expect("the check runs on the blocking pool");
+    let check = body.find("root_looks_empty(").expect("the check is made");
+    assert!(record < unchanged && unchanged < blocking && blocking < check);
+    assert!(
+        body[blocking..].contains("settle_held("),
+        "the emit goes through settle_held, which drops a hold that changed or cleared meanwhile"
+    );
+}

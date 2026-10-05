@@ -555,50 +555,60 @@ fn handle_mass_delete_event(app: &AppHandle, event: SyncEvent) {
     }
 }
 
-/// Record a `MassDeleteHeld` and, when it changed, log it and tell the UI;
-/// the first one of an episode also raises the persisted notification.
+/// Record a `MassDeleteHeld` and, when it changed, check the drive folder
+/// and tell the UI off this thread; the first one of an episode also raises
+/// the persisted notification.
 ///
-/// The empty-root check reads the drive folder's first entries on every
-/// report (one `read_dir`, stopping at the first visible entry): the advice
-/// it drives must follow the disk, which can come back mid-hold.
+/// The bridge runs on hcfs's event thread, so it only records here. The
+/// empty-root check reads the drive folder, and an unplugged network share
+/// can stall that `read_dir`, so it runs on the blocking pool and only for
+/// a report that changed (hcfs repeats a standing hold every cycle). The
+/// settle emits nothing if the hold changed or cleared meanwhile, and
+/// orders its emit before any later clear (`MassDeleteHoldState::settle_held`).
 fn handle_mass_delete_held(app: &AppHandle, label: String, side: hcfs_client::sync::MassDeleteSide, count: usize, synced_count: usize) {
-    use crate::sync::mass_delete_hold::{HeldChange, HoldEntry, HoldPhase, LabeledHold, held_notification_text, root_looks_empty};
+    use crate::sync::mass_delete_hold::{HeldChange, HeldReport, root_looks_empty};
     use tauri::Manager;
 
-    let app_state = app.state::<crate::app_state::AppState>();
-    let holds = &app_state.mass_delete_holds;
-    let empty_root = side == hcfs_client::sync::MassDeleteSide::Server && holds.sync_root(&label).is_some_and(|root| root_looks_empty(&root));
-    let HeldChange::Changed { notify } = holds.record_held(&label, side, count, synced_count, empty_root) else {
+    let holds = std::sync::Arc::clone(&app.state::<crate::app_state::AppState>().mass_delete_holds);
+    let report = HeldReport { side, count, synced_count };
+    if holds.record_held(&label, report) == HeldChange::Unchanged {
         return;
+    }
+
+    // Only the server side's advice is about this device's folder.
+    let root = if side == hcfs_client::sync::MassDeleteSide::Server {
+        holds.sync_root(&label)
+    } else {
+        None
     };
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let empty_root = root.is_some_and(|root| root_looks_empty(&root));
+        holds.settle_held(&label, report, empty_root, |hold, notify| emit_mass_delete_held(&app, hold, notify));
+    });
+}
+
+/// Log a settled hold and tell the UI; with `notify`, also raise the
+/// episode's persisted notification. Runs under the hold state's lock (see
+/// `MassDeleteHoldState::settle_held`), so it must not touch that state.
+fn emit_mass_delete_held(app: &AppHandle, hold: &crate::sync::mass_delete_hold::LabeledHold, notify: bool) {
+    use crate::sync::mass_delete_hold::held_notification_text;
 
     tracing::warn!(
-        label = %label,
-        side = side.as_str(),
-        count,
-        synced_count,
-        empty_root,
+        label = %hold.label,
+        side = hold.side.as_str(),
+        count = hold.entry.count,
+        synced_count = hold.entry.synced_count,
+        empty_root = hold.entry.empty_root,
         "hcfs held a mass delete; nothing on that side was deleted"
     );
-    let can_restore = holds.can_restore(&label, side);
-    let hold = LabeledHold {
-        label,
-        side,
-        entry: HoldEntry {
-            phase: HoldPhase::Held,
-            count,
-            synced_count,
-            empty_root,
-        },
-        can_restore,
-    };
-    let _ = app.emit(events::MASS_DELETE_HELD, events::MassDeleteHoldPayload::from(&hold));
+    let _ = app.emit(events::MASS_DELETE_HELD, events::MassDeleteHoldPayload::from(hold));
 
     if notify {
         let payload = events::MassDeleteNotifyPayload {
             label: hold.label.clone(),
-            side: side.as_str(),
-            description: held_notification_text(&hold.label, side, hold.entry, hold.can_restore),
+            side: hold.side.as_str(),
+            description: held_notification_text(&hold.label, hold.side, hold.entry, hold.can_restore),
         };
         let _ = app.emit(events::MASS_DELETE_HELD_NOTIFY, payload);
     }

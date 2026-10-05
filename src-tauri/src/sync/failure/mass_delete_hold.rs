@@ -19,11 +19,15 @@
 //!
 //! - **Change-only emits.** The UI and the log need the hold once, and again
 //!   only when it changes; per-cycle repeats are absorbed here
-//!   ([`HeldChange::Unchanged`]).
+//!   ([`HeldChange::Unchanged`]). A change is recorded on the bridge's
+//!   thread and settled off it ([`MassDeleteHoldState::settle_held`]),
+//!   because the empty-root check reads the drive folder.
 //! - **One notification per episode.** An episode starts when a side becomes
 //!   held and ends when the hold clears or is restored; the latch is the
-//!   side's `notified` flag. A hold seeded from disk at init counts as
-//!   already notified, so relaunching the app does not notify again.
+//!   side's `notified` flag, and the first settle of the episode raises it.
+//!   A hold seeded from disk at init counts as already notified, so a
+//!   relaunch or a pause and resume does not notify again (see
+//!   [`MassDeleteHoldState::arm`]).
 //! - **The hold as the commands validate it.** `restore_mass_delete` /
 //!   `confirm_mass_delete` check the side and count the user was shown
 //!   against [`MassDeleteHoldState::entry`]. hcfs's own confirm does not
@@ -51,8 +55,9 @@
 //! ## Concurrency
 //!
 //! One `std::sync::Mutex` locked for a single map operation per call; every
-//! method returns owned values, and the bridge calling them is synchronous,
-//! so no guard crosses an `.await`.
+//! method returns owned values, and none is async, so no guard crosses an
+//! `.await`. [`MassDeleteHoldState::settle_held`] calls its `emit` under
+//! the lock on purpose (ordering against a clear; see there).
 
 use hcfs_client::sync::{HeldMassDelete, HoldState, MassDeleteSide};
 use std::collections::HashMap;
@@ -119,16 +124,25 @@ pub struct LabeledHold {
     pub can_restore: bool,
 }
 
+/// One `MassDeleteHeld` report, as hcfs sends it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeldReport {
+    /// Which copies the held deletes would remove.
+    pub side: MassDeleteSide,
+    /// How many files the hold covers.
+    pub count: usize,
+    /// The synced baseline the count was measured against.
+    pub synced_count: usize,
+}
+
 /// What recording a `MassDeleteHeld` changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeldChange {
-    /// The same hold as last cycle: nothing to emit or log.
+    /// The same hold as last cycle, already shown: nothing to emit or log.
     Unchanged,
-    /// New or different: emit it. `notify` is true once per episode.
-    Changed {
-        /// Raise the persisted notification for this episode.
-        notify: bool,
-    },
+    /// New, different, or not yet shown: check the drive folder and settle
+    /// it ([`MassDeleteHoldState::settle_held`]).
+    Changed,
 }
 
 /// Which sides of a drive owe their empty folders a restore.
@@ -188,8 +202,13 @@ impl OwedFolderRestores {
 struct SideSlot {
     /// The current hold, if any.
     entry: Option<HoldEntry>,
-    /// The episode's notification has been raised.
+    /// The episode's notification has been claimed.
     notified: bool,
+    /// The episode's notification is claimed but not yet raised: the next
+    /// successful [`MassDeleteHoldState::settle_held`] raises it.
+    notify_pending: bool,
+    /// The current `entry` has been settled (empty-root checked and shown).
+    settled: bool,
     /// A hold or restore event for this side arrived in the current cycle.
     seen: bool,
     /// The refusal reason last emitted in this episode.
@@ -217,14 +236,20 @@ impl SideSlot {
     fn ack_restore(&mut self, generation: u64) {
         self.restores_done = self.restores_done.max(generation);
     }
-}
 
-impl SideSlot {
     /// End the episode, keeping only what outlives it.
     fn end_episode(&mut self) {
         self.entry = None;
         self.notified = false;
+        self.notify_pending = false;
+        self.settled = false;
         self.refused = None;
+    }
+
+    /// Whether the current entry is the hold `report` describes.
+    fn holds(&self, report: HeldReport) -> bool {
+        self.entry
+            .is_some_and(|e| e.phase == HoldPhase::Held && e.count == report.count && e.synced_count == report.synced_count)
     }
 }
 
@@ -292,9 +317,16 @@ impl MassDeleteHoldState {
     /// before the first cycle, and survives a relaunch).
     ///
     /// Seeded holds count as already notified: the user was told when the
-    /// episode began, possibly in an earlier run. A pending folder restore
-    /// is kept across a re-init (pause and resume between the restore and
-    /// the folder job would otherwise lose it).
+    /// episode began, possibly in an earlier run, and a re-init (pause and
+    /// resume, a relaunch) is not a new episode. The one exception is a
+    /// notification claimed but not yet raised when the re-init came: it is
+    /// still raised by the next settle, so the episode is not left silent.
+    /// A seeded hold is unsettled, so the first cycle's report checks the
+    /// drive folder and shows it again (with the empty-root advice, which
+    /// the seed cannot carry). A hold the record no longer has is dropped
+    /// without a cleared event: hydration reads the state afresh. A pending
+    /// folder restore is kept across a re-init (pause and resume between
+    /// the restore and the folder job would otherwise lose it).
     pub fn arm(&self, label: &str, member: bool, sync_root: &Path, seed: &[HeldMassDelete]) {
         let mut map = self.lock();
         let holds = map.entry(label.to_string()).or_default();
@@ -303,9 +335,11 @@ impl MassDeleteHoldState {
 
         for side in SIDES {
             let slot = holds.slot_mut(side);
+            let notify_pending = slot.notify_pending;
             slot.end_episode();
             slot.seen = false;
             if let Some(held) = seed.iter().find(|h| h.side == side) {
+                slot.notify_pending = notify_pending;
                 slot.entry = Some(HoldEntry {
                     phase: held.state.into(),
                     count: held.count,
@@ -338,19 +372,18 @@ impl MassDeleteHoldState {
         holds.local.seen = false;
     }
 
-    /// Record a `MassDeleteHeld`, reporting whether it changed anything.
-    pub fn record_held(&self, label: &str, side: MassDeleteSide, count: usize, synced_count: usize, empty_root: bool) -> HeldChange {
-        let entry = HoldEntry {
-            phase: HoldPhase::Held,
-            count,
-            synced_count,
-            empty_root,
-        };
-
+    /// Record a `MassDeleteHeld`, reporting whether it needs settling.
+    ///
+    /// Cheap and synchronous, for the bridge's event thread: it touches no
+    /// disk. The empty-root check, the emits and the episode's notification
+    /// happen in [`Self::settle_held`], off that thread, and only for a
+    /// [`HeldChange::Changed`] report. Until then the entry keeps the last
+    /// known empty-root flag (false for a new hold).
+    pub fn record_held(&self, label: &str, report: HeldReport) -> HeldChange {
         let mut map = self.lock();
-        let slot = map.entry(label.to_string()).or_default().slot_mut(side);
+        let slot = map.entry(label.to_string()).or_default().slot_mut(report.side);
         slot.seen = true;
-        if slot.entry == Some(entry) {
+        if slot.holds(report) && slot.settled {
             return HeldChange::Unchanged;
         }
 
@@ -358,9 +391,58 @@ impl MassDeleteHoldState {
         if slot.entry.is_some_and(|e| e.phase == HoldPhase::Restoring) {
             slot.end_episode();
         }
-        slot.entry = Some(entry);
-        let notify = !std::mem::replace(&mut slot.notified, true);
-        HeldChange::Changed { notify }
+        let empty_root = slot.entry.is_some_and(|e| e.empty_root);
+        slot.entry = Some(HoldEntry {
+            phase: HoldPhase::Held,
+            count: report.count,
+            synced_count: report.synced_count,
+            empty_root,
+        });
+        slot.settled = false;
+        if !std::mem::replace(&mut slot.notified, true) {
+            slot.notify_pending = true;
+        }
+        HeldChange::Changed
+    }
+
+    /// Settle a hold [`Self::record_held`] reported as changed: store the
+    /// empty-root check and hand the hold to `emit`, with whether this is
+    /// the episode's notification. Returns whether `emit` ran.
+    ///
+    /// `emit` runs only if the hold is still exactly `report` and unsettled:
+    /// a hold that changed again meanwhile is settled by its own report, and
+    /// one that cleared must not be shown. It runs under the state's lock,
+    /// so a `finish_cycle` that clears this side either happened first (no
+    /// emit) or waits until the held event is out, and its cleared event
+    /// follows it; the UI never sees a hold after its clear. `emit` must not
+    /// call back into this state.
+    pub fn settle_held(&self, label: &str, report: HeldReport, empty_root: bool, emit: impl FnOnce(&LabeledHold, bool)) -> bool {
+        let mut map = self.lock();
+        let Some(holds) = map.get_mut(label) else {
+            return false;
+        };
+        let can_restore = holds.can_restore(report.side);
+        let slot = holds.slot_mut(report.side);
+        if !slot.holds(report) || slot.settled {
+            return false;
+        }
+
+        let Some(entry) = slot.entry.as_mut() else {
+            return false;
+        };
+        entry.empty_root = empty_root;
+        let entry = *entry;
+        slot.settled = true;
+        let notify = std::mem::take(&mut slot.notify_pending);
+
+        let hold = LabeledHold {
+            label: label.to_string(),
+            side: report.side,
+            entry,
+            can_restore,
+        };
+        emit(&hold, notify);
+        true
     }
 
     /// Record a `MassDeleteRestored`: the side is restoring until the next
@@ -518,12 +600,23 @@ pub async fn read_recorded_holds(sync_root: PathBuf, config_dir: PathBuf) -> std
 
 /// Whether `root` has no visible entries: the empty-root shape of a
 /// disconnected disk or an evicted cloud folder. Dot-entries (`.DS_Store`,
-/// a cloud provider's markers) do not count. An unreadable root reads as
-/// not empty, so the extra "reconnect" advice is only given when true.
+/// a cloud provider's markers) do not count.
+///
+/// A missing root reads as empty too. On unix hcfs refuses a cycle whose
+/// root is missing after it held files (`SyncError::RootNotMounted`,
+/// before anything is planned, so no hold is reported), and elsewhere the
+/// scan of a missing root fails; a hold reported with the root missing is
+/// therefore a disk removed during the cycle, and the reconnect advice is
+/// right. Any other unreadable root reads as not empty, so the advice is
+/// only given on evidence.
+///
+/// Blocking: an unplugged network share can stall `read_dir`, so callers
+/// run it off the async workers and the bridge's event thread.
 #[must_use]
 pub fn root_looks_empty(root: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return false;
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) => return e.kind() == std::io::ErrorKind::NotFound,
     };
     !entries.flatten().any(|e| !e.file_name().to_string_lossy().starts_with('.'))
 }
@@ -579,6 +672,26 @@ mod tests {
         }
     }
 
+    fn report(side: MassDeleteSide, count: usize) -> HeldReport {
+        HeldReport {
+            side,
+            count,
+            synced_count: 200,
+        }
+    }
+
+    /// Report a hold and settle it as the bridge does. `None` when nothing
+    /// was emitted, else whether the emit carried the episode's
+    /// notification.
+    fn report_held(state: &MassDeleteHoldState, side: MassDeleteSide, count: usize) -> Option<bool> {
+        if state.record_held(L, report(side, count)) == HeldChange::Unchanged {
+            return None;
+        }
+        let mut emitted = None;
+        state.settle_held(L, report(side, count), false, |_, notify| emitted = Some(notify));
+        emitted
+    }
+
     /// One cycle reporting `events` (each a closure over the state).
     fn cycle(state: &MassDeleteHoldState, events: impl FnOnce(&MassDeleteHoldState)) -> Vec<MassDeleteSide> {
         state.begin_cycle(L);
@@ -592,21 +705,17 @@ mod tests {
         state.arm(L, false, Path::new("/x"), &[]);
 
         state.begin_cycle(L);
-        assert_eq!(state.record_held(L, Server, 150, 200, false), HeldChange::Changed { notify: true });
+        assert_eq!(report_held(&state, Server, 150), Some(true));
         assert!(state.finish_cycle(L).is_empty(), "a side held this cycle is not cleared");
 
         state.begin_cycle(L);
-        assert_eq!(
-            state.record_held(L, Server, 150, 200, false),
-            HeldChange::Unchanged,
-            "same hold, next cycle"
-        );
+        assert_eq!(report_held(&state, Server, 150), None, "same hold, next cycle");
         assert!(state.finish_cycle(L).is_empty());
 
         state.begin_cycle(L);
         assert_eq!(
-            state.record_held(L, Server, 160, 200, false),
-            HeldChange::Changed { notify: false },
+            report_held(&state, Server, 160),
+            Some(false),
             "a changed count is emitted but the episode already notified"
         );
         assert_eq!(state.entry(L, Server).map(|e| e.count), Some(160));
@@ -616,7 +725,7 @@ mod tests {
     fn a_cycle_without_the_hold_clears_it_and_starts_a_new_episode() {
         let state = MassDeleteHoldState::new();
         cycle(&state, |s| {
-            s.record_held(L, Local, 120, 200, false);
+            report_held(s, Local, 120);
         });
 
         assert_eq!(cycle(&state, |_| {}), vec![Local], "the hold is reported cleared once");
@@ -624,11 +733,7 @@ mod tests {
         assert!(cycle(&state, |_| {}).is_empty(), "nothing left to clear");
 
         state.begin_cycle(L);
-        assert_eq!(
-            state.record_held(L, Local, 120, 200, false),
-            HeldChange::Changed { notify: true },
-            "a hold after a cleared one is a new episode"
-        );
+        assert_eq!(report_held(&state, Local, 120), Some(true), "a hold after a cleared one is a new episode");
     }
 
     /// hcfs completes a cycle that skipped conflicts twice: once from the
@@ -641,15 +746,15 @@ mod tests {
         state.arm(L, false, Path::new("/x"), &[]);
 
         state.begin_cycle(L);
-        assert_eq!(state.record_held(L, Server, 150, 200, false), HeldChange::Changed { notify: true });
+        assert_eq!(report_held(&state, Server, 150), Some(true));
         assert!(state.finish_cycle(L).is_empty());
         assert!(state.finish_cycle(L).is_empty(), "the repeated completion clears nothing");
         assert!(state.entry(L, Server).is_some(), "the hold stands");
 
         state.begin_cycle(L);
         assert_eq!(
-            state.record_held(L, Server, 150, 200, false),
-            HeldChange::Unchanged,
+            report_held(&state, Server, 150),
+            None,
             "the episode was not ended, so it does not notify again"
         );
     }
@@ -666,12 +771,12 @@ mod tests {
     fn sides_are_tracked_apart() {
         let state = MassDeleteHoldState::new();
         cycle(&state, |s| {
-            s.record_held(L, Server, 150, 200, true);
-            s.record_held(L, Local, 110, 200, false);
+            report_held(s, Server, 150);
+            report_held(s, Local, 110);
         });
 
         let cleared = cycle(&state, |s| {
-            s.record_held(L, Server, 150, 200, true);
+            report_held(s, Server, 150);
         });
         assert_eq!(cleared, vec![Local]);
         assert!(state.entry(L, Server).is_some());
@@ -681,7 +786,7 @@ mod tests {
     fn a_restore_restores_for_one_cycle_then_clears() {
         let state = MassDeleteHoldState::new();
         cycle(&state, |s| {
-            s.record_held(L, Server, 150, 200, false);
+            report_held(s, Server, 150);
         });
 
         assert!(cycle(&state, |s| s.record_restored(L, Server, 150)).is_empty());
@@ -696,12 +801,12 @@ mod tests {
     fn a_hold_after_a_restore_notifies_again() {
         let state = MassDeleteHoldState::new();
         cycle(&state, |s| {
-            s.record_held(L, Server, 150, 200, false);
+            report_held(s, Server, 150);
         });
         cycle(&state, |s| s.record_restored(L, Server, 150));
 
         state.begin_cycle(L);
-        assert_eq!(state.record_held(L, Server, 150, 200, false), HeldChange::Changed { notify: true });
+        assert_eq!(report_held(&state, Server, 150), Some(true));
     }
 
     #[test]
@@ -709,12 +814,12 @@ mod tests {
         let state = MassDeleteHoldState::new();
         state.begin_cycle(L);
         assert!(state.record_refused(L, Server, "insufficient_space"));
-        state.record_held(L, Server, 150, 200, false);
+        report_held(&state, Server, 150);
         state.finish_cycle(L);
 
         state.begin_cycle(L);
         assert!(!state.record_refused(L, Server, "insufficient_space"), "repeated every cycle by hcfs");
-        assert_eq!(state.record_held(L, Server, 150, 200, false), HeldChange::Unchanged);
+        assert_eq!(report_held(&state, Server, 150), None);
         assert!(state.finish_cycle(L).is_empty());
         assert!(!state.folder_restores(L).any(), "a refusal restores no folders");
 
@@ -773,10 +878,73 @@ mod tests {
 
         state.begin_cycle(L);
         assert_eq!(
-            state.record_held(L, Server, 150, 200, true),
-            HeldChange::Changed { notify: false },
-            "the empty-root check fills in, but the episode was notified when it began"
+            report_held(&state, Server, 150),
+            Some(false),
+            "a seeded hold is shown again by the first cycle, but the episode was notified when it began"
         );
+    }
+
+    #[test]
+    fn a_settle_stores_the_empty_root_check() {
+        let state = MassDeleteHoldState::new();
+        state.begin_cycle(L);
+        assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
+        assert!(state.settle_held(L, report(Server, 150), true, |hold, _| assert!(hold.entry.empty_root)));
+        assert_eq!(state.entry(L, Server).map(|e| e.empty_root), Some(true));
+        assert!(
+            !state.settle_held(L, report(Server, 150), true, |_, _| panic!("settled twice")),
+            "a hold is shown once"
+        );
+    }
+
+    /// The empty-root check runs off the bridge's thread. A hold that
+    /// cleared before it finished must not be shown after its clear.
+    #[test]
+    fn a_hold_cleared_before_it_settles_is_never_shown() {
+        let state = MassDeleteHoldState::new();
+        cycle(&state, |s| {
+            s.record_held(L, report(Server, 150));
+        });
+        assert_eq!(cycle(&state, |_| {}), vec![Server]);
+        assert!(!state.settle_held(L, report(Server, 150), false, |_, _| panic!("shown after its clear")));
+    }
+
+    /// The hold changed again before the first check finished: the stale
+    /// settle emits nothing, and the episode's notification goes out with
+    /// the current hold instead of being lost.
+    #[test]
+    fn a_stale_settle_leaves_the_notification_to_the_current_hold() {
+        let state = MassDeleteHoldState::new();
+        state.begin_cycle(L);
+        state.record_held(L, report(Server, 150));
+        state.finish_cycle(L);
+        state.begin_cycle(L);
+        state.record_held(L, report(Server, 160));
+
+        assert!(!state.settle_held(L, report(Server, 150), false, |_, _| panic!("stale hold shown")));
+        let mut notified = None;
+        assert!(state.settle_held(L, report(Server, 160), false, |hold, notify| {
+            assert_eq!(hold.entry.count, 160);
+            notified = Some(notify);
+        }));
+        assert_eq!(notified, Some(true));
+    }
+
+    /// A pause and resume (or relaunch) is not a new episode, but one whose
+    /// notification had not gone out yet still raises it.
+    #[test]
+    fn a_re_init_keeps_a_notification_not_yet_raised() {
+        let state = MassDeleteHoldState::new();
+        state.begin_cycle(L);
+        state.record_held(L, report(Server, 150));
+        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+
+        state.begin_cycle(L);
+        assert_eq!(report_held(&state, Server, 150), Some(true));
+
+        state.arm(L, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
+        state.begin_cycle(L);
+        assert_eq!(report_held(&state, Server, 150), Some(false), "raised once, never again for the episode");
     }
 
     #[test]
@@ -801,7 +969,7 @@ mod tests {
     fn clear_and_clear_all_forget_everything() {
         let state = MassDeleteHoldState::new();
         cycle(&state, |s| {
-            s.record_held(L, Server, 150, 200, false);
+            report_held(s, Server, 150);
             s.record_restored("other", Local, 5);
         });
 
@@ -824,7 +992,10 @@ mod tests {
 
         std::fs::write(dir.path().join("a.txt"), b"").expect("write");
         assert!(!root_looks_empty(dir.path()));
-        assert!(!root_looks_empty(&dir.path().join("missing")), "unreadable is not called empty");
+        assert!(
+            root_looks_empty(&dir.path().join("missing")),
+            "a missing root is the disconnected shape too (a disk removed mid-cycle)"
+        );
     }
 
     #[test]
