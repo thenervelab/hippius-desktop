@@ -506,7 +506,7 @@ fn handle_folder_recovered(app: &AppHandle, label: String) {
 /// state absorbs the repeats, so the UI events and the log lines below fire
 /// only when something changed, and the notification once per episode.
 /// A restore is reported once by the cycle that applies it.
-fn handle_mass_delete_event(app: &AppHandle, event: SyncEvent) {
+fn handle_mass_delete_event<R: tauri::Runtime>(app: &AppHandle<R>, event: SyncEvent) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let holds = &app_state.mass_delete_holds;
@@ -567,7 +567,13 @@ fn handle_mass_delete_event(app: &AppHandle, event: SyncEvent) {
 /// left to it (`HeldChange::Settling`). The settle shows the hold as it
 /// stands when the check finishes, nothing if it cleared meanwhile, and
 /// orders its emit before any later clear (`MassDeleteHoldState::settle_held`).
-fn handle_mass_delete_held(app: &AppHandle, label: String, side: hcfs_client::sync::MassDeleteSide, count: usize, synced_count: usize) {
+fn handle_mass_delete_held<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    label: String,
+    side: hcfs_client::sync::MassDeleteSide,
+    count: usize,
+    synced_count: usize,
+) {
     use crate::sync::mass_delete_hold::{HeldChange, HeldReport, root_looks_empty};
     use tauri::Manager;
 
@@ -593,7 +599,7 @@ fn handle_mass_delete_held(app: &AppHandle, label: String, side: hcfs_client::sy
 /// Log a settled hold and tell the UI; with `notify`, also raise the
 /// episode's persisted notification. Runs under the hold state's lock (see
 /// `MassDeleteHoldState::settle_held`), so it must not touch that state.
-fn emit_mass_delete_held(app: &AppHandle, hold: &crate::sync::mass_delete_hold::LabeledHold, notify: bool) {
+fn emit_mass_delete_held<R: tauri::Runtime>(app: &AppHandle<R>, hold: &crate::sync::mass_delete_hold::LabeledHold, notify: bool) {
     use crate::sync::mass_delete_hold::held_notification_text;
 
     tracing::warn!(
@@ -616,9 +622,47 @@ fn emit_mass_delete_held(app: &AppHandle, hold: &crate::sync::mass_delete_hold::
     }
 }
 
+/// Record a reviewed sync's mass-delete results, as an engine cycle's events
+/// would have: its restores, then its holds, then the cycle's end.
+///
+/// The reviewed-conflict sync runs the same hcfs cycle body as the engine
+/// (`Drive::sync_with_resolver`: it applies requested restores and holds
+/// mass deletes; pinned by `tests/mass_delete_reviewed_sync.rs`), but the
+/// runner's `report_mass_deletes`, which turns the outcome into events,
+/// only runs for engine cycles. Without this, a restore the reviewed sync
+/// applied would never put its empty folders back, and a hold it found
+/// would never reach the banner. The caller opens the cycle
+/// (`MassDeleteHoldState::begin_cycle`) when the reviewed sync starts, so
+/// an answer sent while it ran counts for the next cycle, as hcfs reads it.
+pub(crate) fn report_reviewed_mass_deletes<R: tauri::Runtime>(app: &AppHandle<R>, label: &str, outcome: &hcfs_client::sync::SyncOutcome) {
+    // Same order as hcfs's `report_mass_deletes`: a refused restore is
+    // followed by the hold it left in place.
+    for restore in &outcome.mass_delete_restores {
+        let event = match restore.refused {
+            Some(reason) => SyncEvent::MassDeleteRestoreRefused {
+                label: label.to_string(),
+                side: restore.side,
+                reason,
+            },
+            None => SyncEvent::MassDeleteRestored {
+                label: label.to_string(),
+                side: restore.side,
+                restored: restore.restored,
+                pending: restore.pending,
+                skipped: restore.skipped,
+            },
+        };
+        handle_mass_delete_event(app, event);
+    }
+    for hold in &outcome.mass_deletes_held {
+        handle_mass_delete_held(app, label.to_string(), hold.side, hold.count, hold.synced_count);
+    }
+    finish_mass_delete_cycle(app, label);
+}
+
 /// A cycle completed for `label`: every side it did not report is no longer
 /// held. Tells the UI once per cleared side.
-fn finish_mass_delete_cycle(app: &AppHandle, label: &str) {
+fn finish_mass_delete_cycle<R: tauri::Runtime>(app: &AppHandle<R>, label: &str) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
 
@@ -1180,11 +1224,11 @@ impl SyncEventHandler for TauriSyncBridge {
                 conflicts_skipped,
                 files_failed,
             } => {
-                // Engine cycles only: the reviewed-conflict path shares
-                // `handle_sync_completed` but not the engine's hold events,
-                // so ending the hold bookkeeping there would clear a hold
-                // that cycle never re-reported. hcfs may complete one cycle
-                // twice (it skipped conflicts); the state acts on the first.
+                // Here, not in the shared `handle_sync_completed`: the
+                // reviewed-conflict path records its own results and ends
+                // its own cycle (`report_reviewed_mass_deletes`). hcfs may
+                // complete one cycle twice (it skipped conflicts); the state
+                // acts on the first.
                 finish_mass_delete_cycle(&app, &label);
                 // Single source of truth for the completion transition: the
                 // cleanup (preparing-clear, banner-clear, failure-counter
@@ -2351,5 +2395,50 @@ mod tests {
         // Teardown tail (SyncStopped) re-arms the label.
         assert!(latch.clear("team-drive"));
         assert!(latch.record_failure("team-drive", REVOKED_NOTIFY_THRESHOLD));
+    }
+
+    // ── Reviewed-conflict sync ─────────────────────────────────────────
+
+    /// A reviewed sync carries its restore and its hold on the outcome, not
+    /// as events. Recorded like an engine cycle's, the restore owes the
+    /// folder job its empty folders and the hold reaches the banner.
+    #[tokio::test]
+    async fn a_reviewed_sync_records_its_folder_restore_and_its_hold() {
+        use crate::sync::mass_delete_hold::HoldPhase;
+        use hcfs_client::sync::{MassDeleteHold, MassDeleteRestore, MassDeleteSide, SyncOutcome};
+        use tauri::Manager;
+
+        let app = tauri::test::mock_app();
+        app.manage(crate::app_state::AppState::new());
+        let handle = app.handle().clone();
+        let holds = std::sync::Arc::clone(&handle.state::<crate::app_state::AppState>().mass_delete_holds);
+        holds.arm("photos", false, std::path::Path::new("/nonexistent"), &[]);
+        holds.begin_cycle("photos");
+
+        let outcome = SyncOutcome {
+            mass_delete_restores: vec![MassDeleteRestore {
+                side: MassDeleteSide::Server,
+                requested: 10,
+                restored: 10,
+                pending: 0,
+                skipped: 0,
+                refused: None,
+            }],
+            mass_deletes_held: vec![MassDeleteHold {
+                side: MassDeleteSide::Local,
+                count: 120,
+                synced_count: 200,
+            }],
+            ..SyncOutcome::default()
+        };
+        report_reviewed_mass_deletes(&handle, "photos", &outcome);
+
+        assert!(holds.folder_restores("photos").sides().server, "the restore owes its empty folders");
+        assert_eq!(holds.entry("photos", MassDeleteSide::Server).map(|e| e.phase), Some(HoldPhase::Restoring));
+        assert_eq!(
+            holds.entry("photos", MassDeleteSide::Local).map(|e| (e.phase, e.count)),
+            Some((HoldPhase::Held, 120)),
+            "the hold is recorded, and survives the cycle's end"
+        );
     }
 }

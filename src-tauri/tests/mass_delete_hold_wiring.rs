@@ -5,9 +5,10 @@
 //! cannot see is WHERE the bridge and the lifecycle drive them, and each of
 //! these call sites needs a live Tauri app and a real engine cycle to reach.
 //! A missing one fails silently: no `begin_cycle` and a hold is never
-//! cleared; a `finish` on the reviewed-conflict path and a hold that cycle
-//! never re-reported is cleared while it stands; a missing clear and one
-//! account's hold shows on another's drive. Pinned by source inspection, the
+//! cleared; a `finish` in the completion handler both paths share and a
+//! cycle is finished twice; a reviewed sync that does not record its
+//! outcome and a restore it applied never puts its folders back; a missing
+//! clear and one account's hold shows on another's drive. Pinned by source inspection, the
 //! idiom `folder_restore_notify_wiring.rs` uses.
 
 /// Extract the brace-matched `{ ... }` body of the first fn whose declaration
@@ -56,7 +57,7 @@ fn every_engine_cycle_start_resets_what_it_has_seen() {
 }
 
 #[test]
-fn only_an_engine_completion_clears_holds_it_did_not_report() {
+fn each_path_finishes_its_own_cycle_outside_the_shared_completion() {
     let src = bridge_src();
     let on_event = fn_body(&src, "fn on_event(&self, event: SyncEvent)");
     let finish = on_event
@@ -71,8 +72,8 @@ fn only_an_engine_completion_clears_holds_it_did_not_report() {
     let shared = fn_body(&src, "pub(crate) fn handle_sync_completed(");
     assert!(
         !shared.contains("finish_mass_delete_cycle"),
-        "handle_sync_completed is shared with the reviewed-conflict path, which carries no hold events: \
-         finishing there would clear a hold that still stands"
+        "handle_sync_completed is shared with the reviewed-conflict path, which finishes its own cycle \
+         (report_reviewed_mass_deletes): finishing here too would run it twice"
     );
 }
 
@@ -168,7 +169,7 @@ fn the_folder_job_gates_both_halves_and_restores_first() {
 #[test]
 fn the_empty_root_check_runs_off_the_event_thread_and_only_on_a_change() {
     let src = bridge_src();
-    let body = fn_body(&src, "fn handle_mass_delete_held(");
+    let body = fn_body(&src, "fn handle_mass_delete_held<");
     let record = body.find("record_held(").expect("the report is recorded first");
     let unchanged = body.find("!= HeldChange::Changed").expect("a report that starts no settle returns early");
     let blocking = body.find("spawn_blocking(").expect("the check runs on the blocking pool");
@@ -196,4 +197,23 @@ fn an_accepted_answer_is_noted_between_the_write_and_the_sync_round() {
         .expect("the answer is noted on the hold state");
     let round = body.find("trigger_sync(").expect("a sync round is started");
     assert!(write < noted && noted < round);
+}
+
+/// The reviewed-conflict sync runs the same hcfs cycle body as the engine
+/// (restores applied, holds found; `mass_delete_reviewed_sync.rs`), but
+/// its results arrive on the outcome rather than as events. It must open
+/// the cycle before hcfs reads the answers, and record the outcome's
+/// restores and holds (closing the cycle) before the shared completion
+/// handler, as the engine's `SyncCompleted` arm does.
+#[test]
+fn a_reviewed_sync_records_its_restores_and_holds() {
+    let src = read("src/sync/drive/control.rs");
+    let body = fn_body(&src, "pub async fn sync_with_conflict_resolutions(");
+    let begin = body.find("mass_delete_holds.begin_cycle(").expect("the reviewed sync opens a hold cycle");
+    let sync = body.find(".sync_with_resolutions(").expect("the reviewed sync runs");
+    let report = body
+        .find("report_reviewed_mass_deletes(")
+        .expect("the outcome's restores and holds are recorded");
+    let completed = body.find("handle_sync_completed(").expect("completion is shared");
+    assert!(begin < sync && sync < report && report < completed);
 }
