@@ -19,8 +19,8 @@
 
 use base64::Engine;
 use hcfs_client::client::folder_share::{
-    CreatedFolderShare, FolderShareListItem, FolderShareOptions, FolderShareSource, ShareTtl, build_folder_share_url, build_folder_share_url_for,
-    build_folder_share_url_private, folder_share_token_hash,
+    CreatedFolderShare, FolderShareError, FolderShareListItem, FolderShareOptions, FolderShareSource, ShareTtl, UploadFolderEntry,
+    UploadFolderShareOptions, build_folder_share_url, build_folder_share_url_for, build_folder_share_url_private, folder_share_token_hash,
 };
 use hcfs_client::client::share::{ShareSecret, wrap_share_key};
 use hcfs_client::crypto::{decrypt_small, encrypt_small};
@@ -1087,4 +1087,111 @@ fn expected_content_download_surface_is_pinned() {
         revision_id: entry.revision_id,
     };
     assert_eq!(expected.size_bytes, 3);
+}
+
+/// Compile-time pin of the uploaded-copy folder-share surface the Finder
+/// outside-folder share consumes. Exhaustive literals: a renamed, dropped or
+/// added field fails here, in the pin-bump PR, not in the share path at
+/// runtime. `CreatedFolderShare` is the same return type the drive mint
+/// pins above.
+#[test]
+fn upload_folder_share_client_surface_is_reachable() {
+    let file = UploadFolderEntry::File {
+        relative_path: "sub/a.txt".to_string(),
+        source: std::path::PathBuf::from("/tmp/T2-KD/sub/a.txt"),
+        size: 5,
+    };
+    let dir = UploadFolderEntry::Dir {
+        relative_path: "empty".to_string(),
+    };
+    let UploadFolderEntry::File { size, .. } = &file else {
+        panic!("expected a file entry, got {file:?}");
+    };
+    assert_eq!(*size, 5);
+    assert_ne!(file, dir, "file and directory entries are distinct values");
+
+    // Borrowed, like `FolderShareOptions`, and passed by reference.
+    let options = UploadFolderShareOptions {
+        display_name: "T2-KD",
+        ttl: ShareTtl::Days7,
+        password: None,
+        console_base_url: "https://console.example.com",
+    };
+    assert_eq!(options.display_name, "T2-KD");
+
+    let _ = hcfs_client::client::HcfsClient::create_upload_folder_share;
+}
+
+/// The listing's source discriminator. `Drive` is the default because a row
+/// from a server that predates uploaded copies carries no `source` and is a
+/// drive link; the wire strings are what the listing and the console read.
+#[test]
+fn folder_share_source_wire_values_are_pinned() {
+    assert_eq!(FolderShareSource::default(), FolderShareSource::Drive);
+
+    for (source, wire) in [(FolderShareSource::Drive, "drive"), (FolderShareSource::Upload, "upload")] {
+        assert_eq!(serde_json::to_value(source).expect("serialize source"), serde_json::json!(wire));
+        assert_eq!(source.as_str(), wire);
+        assert_eq!(FolderShareSource::from_column(wire), Some(source));
+    }
+    assert_eq!(
+        FolderShareSource::from_column("somethingnew"),
+        None,
+        "an unknown source is the caller's call"
+    );
+}
+
+/// The uploaded-copy `FolderShareError` variants the desktop maps to its own
+/// copy, matched by name. Constructing each with every field named means a
+/// rename, a dropped field or a re-shaped variant fails here rather than
+/// silently falling into the non-exhaustive catch-all arm, where the user
+/// would get generic text instead of "rename this file".
+#[test]
+fn upload_folder_share_error_variants_are_reachable() {
+    let path = || "sub/a.txt".to_string();
+    let errors = [
+        FolderShareError::EmptyFolder,
+        FolderShareError::TooManyItems { count: 50_001, max: 50_000 },
+        FolderShareError::DirListTooLarge { bytes: 7, max: 6 },
+        FolderShareError::InvalidPath {
+            relative_path: path(),
+            reason: "control character".to_string(),
+        },
+        FolderShareError::FileTooLarge {
+            relative_path: path(),
+            size: u64::MAX,
+        },
+        FolderShareError::PathCollision { relative_path: path() },
+        FolderShareError::SourceChanged { relative_path: path() },
+        FolderShareError::SourceUnreadable {
+            relative_path: path(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        },
+        FolderShareError::TooManyUploadsInProgress { max: 8 },
+        FolderShareError::Cancelled,
+        FolderShareError::NotFound,
+        FolderShareError::Server {
+            status: 402,
+            message: "quota".to_string(),
+        },
+    ];
+    assert_eq!(errors.len(), 12);
+}
+
+/// Limits the desktop's folder scan pre-empts with friendly copy before a
+/// byte uploads. They come from hcfs-shared so the scan and the server can
+/// never disagree; a changed value must be a visible decision in the
+/// pin-bump PR, because the desktop's refusal copy names these numbers.
+#[test]
+fn upload_folder_share_limits_are_pinned() {
+    use hcfs_shared::shares::{
+        MAX_UPLOAD_FOLDER_SHARE_DIRS, MAX_UPLOAD_FOLDER_SHARE_DIRS_BYTES, MAX_UPLOAD_FOLDER_SHARE_FILE_CIPHERTEXT, MAX_UPLOAD_FOLDER_SHARE_FILES,
+        MAX_UPLOADING_FOLDER_SHARES_PER_ACCOUNT,
+    };
+
+    assert_eq!(MAX_UPLOAD_FOLDER_SHARE_FILES, 50_000);
+    assert_eq!(MAX_UPLOAD_FOLDER_SHARE_DIRS, 50_000);
+    assert_eq!(MAX_UPLOAD_FOLDER_SHARE_DIRS_BYTES, 6 * 1024 * 1024);
+    assert_eq!(MAX_UPLOAD_FOLDER_SHARE_FILE_CIPHERTEXT, 5 * 1024 * 1024 * 1024);
+    assert_eq!(MAX_UPLOADING_FOLDER_SHARES_PER_ACCOUNT, 8);
 }

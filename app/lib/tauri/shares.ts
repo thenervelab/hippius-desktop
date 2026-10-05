@@ -50,6 +50,12 @@ export interface ServerCapabilities {
    * "coming soon".
    */
   folder_grant_writes?: boolean;
+  /**
+   * Folder links whose files are uploaded as a copy (Finder shares of a
+   * folder outside every drive). Read by Rust only; listed so the type
+   * matches the wire.
+   */
+  upload_folder_shares?: boolean;
 }
 
 /**
