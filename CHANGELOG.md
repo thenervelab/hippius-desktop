@@ -124,6 +124,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Return takes the capture as soon as the capture bar appears.** Pressing
+  it the moment the bar or the "Choose what to share" list showed up could be
+  ignored.
+
 - **A file's sync error shows only on that file.** Two files with the same
   name in different folders no longer both show the error of one of them.
 

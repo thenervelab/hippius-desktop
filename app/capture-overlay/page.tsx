@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Camera, Video } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
@@ -320,56 +320,68 @@ export default function CaptureOverlayPage() {
     [submitSelection],
   );
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // The picker answers Return (share the pick) and Escape (close it,
-      // leaving the capture bar up) itself; an open bar menu takes the key
-      // first and marks it handled.
-      if (picker !== null || e.defaultPrevented) return;
-      if (e.key === "Escape") {
-        if (countdown !== null && !inFlightRef.current) {
-          // Esc during the countdown stops it, not the whole capture.
-          pendingAction.current = null;
-          setCountdown(null);
-          submitted.current = false;
-          return;
-        }
-        // Nothing to stop short of the capture itself, including one Rust
-        // is already taking: cancel it.
-        void cancelCapture();
+  // The key handler reads this render's state. It is published through a ref
+  // in a layout effect and the window listener is bound once, so a key
+  // pressed the moment the bar appears acts on the context that drew it: a
+  // listener re-bound in a passive effect kept the previous render's
+  // closure until React got round to that effect, and the bar's first
+  // render comes from an async context load, whose effects run a task later.
+  const onKey = (e: KeyboardEvent) => {
+    // The picker answers Return (share the pick) and Escape (close it,
+    // leaving the capture bar up) itself; an open bar menu takes the key
+    // first and marks it handled.
+    if (picker !== null || e.defaultPrevented) return;
+    if (e.key === "Escape") {
+      if (countdown !== null && !inFlightRef.current) {
+        // Esc during the countdown stops it, not the whole capture.
+        pendingAction.current = null;
+        setCountdown(null);
+        submitted.current = false;
         return;
       }
-      // Return on a focused bar button is that button's (Options opens its
-      // menu); only a Return aimed at the screen takes the capture.
-      if (isFromControl(e.target)) return;
-      if (e.key === "Enter") {
-        if (countdown === null) confirm();
-        else if (!inFlightRef.current) skipCountdown();
-        return;
-      }
-      if (countdown !== null || inFlightRef.current) return;
-      // Space swaps window and area, as it does in macOS's ⌘⇧4. Not mid-drag,
-      // and not with the camera alone (nothing on screen is chosen then).
-      if (e.key === " " && context && context.selection !== "systemPicker" && !latest.current.dragging) {
-        const stage = context.kind === "recording" && cameraShape === "stage";
-        const next = stage ? null : spaceToggleMode(context.mode, context.kind, supportedModesOf(context));
-        if (next) {
-          e.preventDefault();
-          setNotice(null);
-          void setCaptureMode(context.kind, next).catch((error) => setNotice(errorMessage(error)));
-        }
-        return;
-      }
-      const { rect: area, nudge } = latest.current;
-      const next = area && nudge ? nudgeRect(area, e.key, e.shiftKey, bounds()) : null;
-      if (next && nudge) {
+      // Nothing to stop short of the capture itself, including one Rust
+      // is already taking: cancel it.
+      void cancelCapture();
+      return;
+    }
+    // Return on a focused bar button is that button's (Options opens its
+    // menu); only a Return aimed at the screen takes the capture.
+    if (isFromControl(e.target)) return;
+    if (e.key === "Enter") {
+      if (countdown === null) confirm();
+      else if (!inFlightRef.current) skipCountdown();
+      return;
+    }
+    if (countdown !== null || inFlightRef.current) return;
+    // Space swaps window and area, as it does in macOS's ⌘⇧4. Not mid-drag,
+    // and not with the camera alone (nothing on screen is chosen then).
+    if (e.key === " " && context && context.selection !== "systemPicker" && !latest.current.dragging) {
+      const stage = context.kind === "recording" && cameraShape === "stage";
+      const next = stage ? null : spaceToggleMode(context.mode, context.kind, supportedModesOf(context));
+      if (next) {
         e.preventDefault();
-        nudge(next);
+        setNotice(null);
+        void setCaptureMode(context.kind, next).catch((error) => setNotice(errorMessage(error)));
       }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [confirm, countdown, picker, skipCountdown, context, cameraShape]);
+      return;
+    }
+    const { rect: area, nudge } = latest.current;
+    const next = area && nudge ? nudgeRect(area, e.key, e.shiftKey, bounds()) : null;
+    if (next && nudge) {
+      e.preventDefault();
+      nudge(next);
+    }
+  };
+
+  const keyHandler = useRef(onKey);
+  useLayoutEffect(() => {
+    keyHandler.current = onKey;
+  });
+  useEffect(() => {
+    const listener = (e: KeyboardEvent) => keyHandler.current(e);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
 
   if (!context || displayId === null) return null;
   const { kind } = context;
