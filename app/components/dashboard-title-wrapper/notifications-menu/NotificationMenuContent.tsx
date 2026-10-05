@@ -16,6 +16,7 @@ import NoNotificationsFound from "@/components/page-sections/notifications/NoNot
 import NoNotificationsEnabled from "@/components/page-sections/notifications/NoNotificationsEnabled";
 import NotificationMenuFooter from "./NotificationMenuFooter";
 import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
+import { revealHeldDelete } from "@/app/lib/massDelete/notificationLink";
 
 interface Props {
   count: number;
@@ -71,6 +72,8 @@ const NotificationMenuContent: React.FC<Props> = ({
   );
 
   const handleSelect = async (id: number) => {
+    // A held-delete row also brings back the banner "Decide later" hid.
+    revealHeldDelete(notifications.find((n) => n.id === id)?.buttonLink);
     onClose?.();
     router.push(`/notifications?selected=${id}`);
   };

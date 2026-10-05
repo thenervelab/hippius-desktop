@@ -24,7 +24,32 @@ import { massDeleteHoldsAtom } from "@/app/lib/store/syncAtoms";
 import { applyHeld, holdKey } from "@/app/lib/massDelete/holds";
 import type { MassDeleteHold } from "@/app/lib/tauri/massDelete";
 
-const SERVER: MassDeleteHold = {
+/** A hold as Rust sends it, its title and lines written the way Rust's
+ *  `hold_text` writes them (pinned there); the banner only shows them. */
+function rustHold(fields: Omit<MassDeleteHold, "title" | "body">): MassDeleteHold {
+  const n = (count: number) => count.toLocaleString("en-US");
+  if (fields.side === "server") {
+    const body = ["Nothing has been deleted from Hippius yet."];
+    if (fields.emptyRoot) body.push("If an external disk or cloud folder is disconnected, reconnect it.");
+    return {
+      ...fields,
+      title: `${n(fields.count)} of ${n(fields.syncedCount)} files in “${fields.label}” are missing from this Mac`,
+      body,
+    };
+  }
+  return {
+    ...fields,
+    title: `${n(fields.count)} files in “${fields.label}” are missing from Hippius`,
+    body: [
+      "Nothing has been deleted from this Mac yet.",
+      fields.canRestore
+        ? "If you renamed or moved the folder on another device, restoring uploads the old copies again."
+        : "Only the owner of this shared drive can put them back on Hippius.",
+    ],
+  };
+}
+
+const SERVER_FIELDS = {
   label: "Photos",
   side: "server",
   state: "held",
@@ -32,12 +57,31 @@ const SERVER: MassDeleteHold = {
   syncedCount: 200,
   emptyRoot: false,
   canRestore: true,
+} as const;
+
+/** The server-side hold, with `overrides` applied before Rust's words are
+ *  written, so a changed count carries its own title. */
+const hold = (overrides: Partial<Omit<MassDeleteHold, "title" | "body">> = {}) =>
+  rustHold({ ...SERVER_FIELDS, ...overrides });
+
+const SERVER: MassDeleteHold = hold();
+
+/** Rust's sentence for each refusal (`NotReadyKind`'s Display). */
+const RUST_MESSAGES: Record<string, string> = {
+  MASS_DELETE_NOTHING_HELD: "These files are no longer waiting for a decision.",
+  MASS_DELETE_RESTORE_IN_PROGRESS: "A restore is already running. Let it finish first.",
+  MASS_DELETE_MEMBER_CANNOT_RESTORE:
+    "Only the owner of this shared drive can put these files back on Hippius.",
 };
 
 const notReady = (subkind: string, extra: Record<string, unknown> = {}) => ({
   kind: "NotReady",
   subkind,
-  message: "words the prompt must not parse",
+  message:
+    subkind === "MASS_DELETE_HOLD_CHANGED"
+      ? `The number of missing files changed to ${Number(extra.held).toLocaleString("en-US")}. ` +
+        "Check it and choose again."
+      : RUST_MESSAGES[subkind],
   ...extra,
 });
 
@@ -97,7 +141,7 @@ describe("MassDeleteBanner", () => {
   });
 
   it("announces a server-side hold with its counts, Restore first", () => {
-    renderBanner({ ...SERVER, emptyRoot: true });
+    renderBanner(hold({ emptyRoot: true }));
     const banner = screen.getByRole("region");
     expect(banner).toHaveAccessibleName("150 of 200 files in “Photos” are missing from this Mac");
     expect(within(banner).getByText("Nothing has been deleted from Hippius yet.")).toBeInTheDocument();
@@ -161,7 +205,7 @@ describe("MassDeleteBanner", () => {
     await screen.findByText("Remove 150 files from Hippius?");
 
     await act(async () => {
-      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 180 }));
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, hold({ count: 180 })));
     });
     expect(screen.getByText("Remove 150 files from Hippius?")).toBeInTheDocument();
     await click("Remove 150 files");
@@ -180,7 +224,7 @@ describe("MassDeleteBanner", () => {
     expect(screen.queryByRole("region")).toBeNull();
 
     await act(async () => {
-      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 160 }));
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, hold({ count: 160 })));
     });
     expect(screen.getByRole("region")).toHaveAccessibleName(/160 of 200 files/);
   });
@@ -189,6 +233,7 @@ describe("MassDeleteBanner", () => {
     tauri.onInvoke("confirm_mass_delete", () => {
       throw notReady("MASS_DELETE_HOLD_CHANGED", { held: 180 });
     });
+    tauri.onInvoke("get_mass_delete_holds", () => [hold({ count: 180 })]);
     renderBanner(SERVER);
     await click("Remove from Hippius");
     await screen.findByText("Remove 150 files from Hippius?");
@@ -206,7 +251,7 @@ describe("MassDeleteBanner", () => {
     tauri.onInvoke("restore_mass_delete", () => {
       throw notReady("MASS_DELETE_HOLD_CHANGED", { held: 180 });
     });
-    tauri.onInvoke("get_mass_delete_holds", () => [{ ...SERVER, count: 180, syncedCount: 220 }]);
+    tauri.onInvoke("get_mass_delete_holds", () => [hold({ count: 180, syncedCount: 220 })]);
     renderBanner(SERVER);
     await click("Restore files");
 
@@ -229,6 +274,18 @@ describe("MassDeleteBanner", () => {
     await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
   });
 
+  // Rust writes every refusal's words; the banner decides only what to do.
+  it("says a refusal in Rust's words, not its own", async () => {
+    tauri.onInvoke("confirm_mass_delete", () => {
+      throw { kind: "NotReady", subkind: "MASS_DELETE_RESTORE_IN_PROGRESS", message: "Rust's words." };
+    });
+    renderBanner(SERVER);
+    await click("Remove from Hippius");
+    await screen.findByText("Remove 150 files from Hippius?");
+    await click("Remove 150 files");
+    expect(toast.info).toHaveBeenCalledWith("Rust's words.");
+  });
+
   it("a restore already running is said, and the hold stays", async () => {
     tauri.onInvoke("restore_mass_delete", () => {
       throw notReady("MASS_DELETE_RESTORE_IN_PROGRESS");
@@ -239,13 +296,13 @@ describe("MassDeleteBanner", () => {
     expect(restoreButton()).toBeInTheDocument();
   });
 
-  // The body already says why for a hold that cannot be restored; the
-  // refusal must not add a second sentence saying the same.
+  // Rust's hold said this account could restore, so its lines do not say
+  // who can; the refusal's sentence does, once.
   it("a member refused a restore loses the Restore button, said once", async () => {
     tauri.onInvoke("restore_mass_delete", () => {
       throw notReady("MASS_DELETE_MEMBER_CANNOT_RESTORE");
     });
-    renderBanner({ ...SERVER, side: "local" });
+    renderBanner(hold({ side: "local" }));
     await click("Restore files");
     expect(restoreButton()).toBeNull();
     expect(screen.getAllByText(/Only the owner of this shared drive/)).toHaveLength(1);
@@ -264,7 +321,7 @@ describe("MassDeleteBanner", () => {
   });
 
   it("a member's local-side hold hides Restore and warns on Remove", async () => {
-    renderBanner({ ...SERVER, side: "local", canRestore: false });
+    renderBanner(hold({ side: "local", canRestore: false }));
     const banner = screen.getByRole("region");
     expect(banner).toHaveAccessibleName("150 files in “Photos” are missing from Hippius");
     expect(restoreButton()).toBeNull();
@@ -274,13 +331,13 @@ describe("MassDeleteBanner", () => {
   });
 
   it("an own local-side hold carries the renamed-elsewhere caveat", () => {
-    renderBanner({ ...SERVER, side: "local" });
+    renderBanner(hold({ side: "local" }));
     expect(screen.getByText(/renamed or moved the folder on another device/)).toBeInTheDocument();
     expect(restoreButton()).toBeInTheDocument();
   });
 
   it("a restoring hold offers no answers", () => {
-    renderBanner({ ...SERVER, state: "restoring" });
+    renderBanner(hold({ state: "restoring" }));
     expect(bannerStatus()).toHaveTextContent("Restoring 150 files…");
     expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
@@ -334,13 +391,13 @@ describe("MassDeleteBanner", () => {
 
     screen.getByRole("button", { name: "Decide later" }).focus();
     await act(async () => {
-      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 170 }));
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, hold({ count: 170 })));
     });
     await waitFor(() => expect(restoreButton()).toHaveFocus());
   });
 
   it("focuses Decide later when this account cannot restore", async () => {
-    renderBanner({ ...SERVER, side: "local", canRestore: false });
+    renderBanner(hold({ side: "local", canRestore: false }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Decide later" })).toHaveFocus());
   });
 
@@ -362,13 +419,14 @@ describe("MassDeleteBanner", () => {
     expect(announcer()).toHaveTextContent("150 of 200 files in “Photos” are missing from this Mac");
 
     await act(async () => {
-      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, { ...SERVER, count: 170 }));
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, hold({ count: 170 })));
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(input).toHaveFocus();
-    expect(announcer()).toHaveTextContent("170 of 200 files");
+    expect(announcer()).toHaveTextContent("150 of 200 files");
+    expect(announcer()).not.toHaveTextContent("170");
   });
 
   it("announces through a polite region that is there before any banner", () => {
@@ -410,8 +468,73 @@ describe("MassDeleteBanner", () => {
     await waitFor(() => expect(bannerStatus()).toHaveFocus());
   });
 
+  // Restore is gone after the refusal; focus must not fall to the page
+  // body with it, and the next answer this account can give is Decide later.
+  it("moves focus to Decide later when a member's restore is refused", async () => {
+    tauri.onInvoke("restore_mass_delete", () => {
+      throw notReady("MASS_DELETE_MEMBER_CANNOT_RESTORE");
+    });
+    renderBanner(hold({ side: "local" }));
+    await waitFor(() => expect(restoreButton()).toHaveFocus());
+    await click("Restore files");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Decide later" })).toHaveFocus());
+  });
+
+  it("Decide later moves focus to the next banner's Restore before it goes", async () => {
+    renderBanner(SERVER, hold({ label: "Docs" }));
+    const [first] = screen.getAllByRole("button", { name: "Decide later" });
+    first?.focus();
+    await act(async () => {
+      if (first) fireEvent.click(first);
+    });
+    expect(screen.getAllByRole("region")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Restore files" })).toHaveFocus();
+  });
+
+  it("Decide later on the last banner moves focus to the page's heading", async () => {
+    const store = createStore();
+    store.set(massDeleteHoldsAtom, applyHeld(new Map(), SERVER));
+    render(
+      <Provider store={store}>
+        <MassDeleteBanner />
+        <main>
+          <h1>Files</h1>
+        </main>
+      </Provider>,
+    );
+    await click("Decide later");
+    expect(screen.queryByRole("region")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Files" })).toHaveFocus();
+  });
+
+  // The announcer says what arrived; it does not read every banner out
+  // again when one changes (the status line covers a refused answer).
+  it("announces only the hold that arrived", async () => {
+    const store = renderBanner(SERVER);
+    expect(announcer()).toHaveTextContent("150 of 200 files in “Photos”");
+    expect(announcer()).not.toHaveAttribute("aria-atomic", "true");
+
+    await act(async () => {
+      store.set(massDeleteHoldsAtom, (prev) => applyHeld(prev, hold({ label: "Docs", count: 120 })));
+    });
+    expect(announcer()).toHaveTextContent("120 of 200 files in “Docs”");
+    expect(announcer()).not.toHaveTextContent("Photos");
+  });
+
+  // A refused answer is said once, in the banner's status line; the
+  // announcer does not repeat the changed hold.
+  it("a changed count under the user's answer is not announced twice", async () => {
+    tauri.onInvoke("restore_mass_delete", () => {
+      throw notReady("MASS_DELETE_HOLD_CHANGED", { held: 1800 });
+    });
+    renderBanner(SERVER);
+    await click("Restore files");
+    expect(bannerStatus()).toHaveTextContent("The number of missing files changed to 1,800.");
+    expect(announcer()).not.toHaveTextContent("1,800");
+  });
+
   it("shows one banner per drive side", () => {
-    renderBanner(SERVER, { ...SERVER, label: "Docs", side: "local" });
+    renderBanner(SERVER, hold({ label: "Docs", side: "local" }));
     expect(screen.getAllByRole("region")).toHaveLength(2);
   });
 });

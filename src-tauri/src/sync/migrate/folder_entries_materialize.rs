@@ -410,6 +410,82 @@ pub(crate) async fn read_folder_hold_gate(root: &Path, config_dir: Option<PathBu
     }
 }
 
+/// The gate after checking the walk itself: an empty drive folder whose
+/// folders are cached holds every removal and every create (see
+/// [`gate_for_walk`]). Logs the first such run of an episode; the folder
+/// job runs every cycle while the folder stays away.
+async fn guard_empty_walk(drive: FolderJobDrive<'_>, root: &Path, on_disk: &BTreeSet<String>, gate: FolderHoldGate) -> Result<FolderHoldGate> {
+    let mut gone = false;
+    if on_disk.is_empty() && !read_cached_dir_set(drive.pool, drive.owner, drive.label).await?.is_empty() {
+        // Blocking: an unplugged network share can stall `read_dir`.
+        let root = root.to_path_buf();
+        gone = tokio::task::spawn_blocking(move || crate::sync::mass_delete_hold::root_looks_empty(&root))
+            .await
+            .unwrap_or(true);
+    }
+    let guarded = gate_for_walk(gate, on_disk, gone);
+    let empty_walk = guarded != gate;
+    if note_empty_walk(drive.label, empty_walk) {
+        warn!(
+            label = %drive.label,
+            "folder-entity sync: the drive folder walks as empty but its folders are cached; holding folder changes until it is back"
+        );
+    }
+    Ok(guarded)
+}
+
+/// Whether this run starts an empty-walk episode for `label` (the log
+/// line's once-per-episode latch); a walk that finds folders ends it.
+fn note_empty_walk(label: &str, empty_walk: bool) -> bool {
+    static EMPTY_WALKS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::LazyLock::new(Default::default);
+    // Poison only loses the log latch; the gate itself does not read it.
+    let mut labels = EMPTY_WALKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if empty_walk {
+        labels.insert(label.to_string())
+    } else {
+        labels.remove(label);
+        false
+    }
+}
+
+/// The hold gate for a run whose walk found `on_disk`. Pure.
+///
+/// An unmounted disk or an evicted cloud folder walks as an empty tree.
+/// hcfs holds that only when the drive has files to hold; a drive of empty
+/// folders, or one below hcfs's threshold, reaches here with the gate open,
+/// and reconcile would unregister every cached folder from the server
+/// (removing them on every other device) while materialize recreated the
+/// server's folders on the parent disk. `folder_gone` is that shape: no
+/// directory walked, folders cached for the drive, and no visible entry in
+/// the drive folder at all (a drive whose folders were deleted but whose
+/// files remain is not it). Then both sides are held
+/// ([`FolderHoldGate::CLOSED`]). The cost: deleting the last folder of an
+/// otherwise empty drive waits until something is in the drive again.
+#[must_use]
+pub(crate) fn gate_for_walk(gate: FolderHoldGate, on_disk: &BTreeSet<String>, folder_gone: bool) -> FolderHoldGate {
+    if on_disk.is_empty() && folder_gone {
+        FolderHoldGate::CLOSED
+    } else {
+        gate
+    }
+}
+
+/// The trigger for the folder job after a completed cycle of `label`.
+///
+/// Routine upkeep is throttled ([`FolderEntitySyncTrigger::PerCycle`]), but
+/// a restore hcfs applied owes its empty folders now, beside the files it
+/// just put back: while one is owed the run is forced. It stays owed until
+/// the job has applied it, so a run the throttle or a failure skipped is
+/// retried on the next completion, not 30 s later.
+#[must_use]
+pub(crate) fn completion_trigger(holds: &MassDeleteHoldState, label: &str) -> FolderEntitySyncTrigger {
+    if holds.folder_restores(label).any() {
+        FolderEntitySyncTrigger::Forced
+    } else {
+        FolderEntitySyncTrigger::PerCycle
+    }
+}
+
 /// The cached folder rows to forget after an applied restore, so the folder
 /// job puts the drive's empty folders back the way the restore put its
 /// files back. Pure.
@@ -593,6 +669,7 @@ pub async fn run_folder_entity_sync_for_drive(state: &AppState, account_id: &str
     //    forced run reaches the same gate, so the delete waits for the
     //    prompt's answer like every other one.
     let gate = read_folder_hold_gate(&root, crate::sync::mnemonic::config_dir_for_folder(account_id, label).ok(), label).await;
+    let gate = guard_empty_walk(drive, &root, &on_disk, gate).await?;
     if gate.any() {
         debug!(label = %label, ?gate, "folder-entity sync: a mass delete is held; its side's folder changes wait");
     }
@@ -617,7 +694,8 @@ pub(crate) enum FolderEntitySyncTrigger {
     /// per [`MIN_FOLDER_ENTITY_SYNC_INTERVAL`] per drive.
     PerCycle,
     /// A user action already removed a directory from disk
-    /// (`crate::sync::files::delete_files`). Bypasses the interval because
+    /// (`crate::sync::files::delete_files`), or a restore hcfs applied owes
+    /// its empty folders ([`completion_trigger`]). Bypasses the interval because
     /// deleting a folder can produce NO file work at all — hcfs-client ends that
     /// cycle `NoChanges`, which emits no `SyncCompleted`, so the routine trigger
     /// may never fire and the folder would stay registered on the server (and
@@ -1182,6 +1260,7 @@ mod tests {
 mod hold_tests {
     use super::*;
     use crate::sync::folder_entries_reconcile::compute_dir_delta;
+    use crate::sync::mass_delete_hold::CycleSource;
     use hcfs_client::sync::{HeldMassDelete, HoldState, MassDeleteSide};
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -1398,9 +1477,9 @@ mod hold_tests {
             .expect("seed cache");
 
         let holds = MassDeleteHoldState::new();
-        holds.begin_cycle("docs");
+        holds.begin_cycle("docs", CycleSource::Engine);
         holds.record_restored("docs", MassDeleteSide::Server, 5);
-        holds.finish_cycle("docs");
+        holds.finish_cycle("docs", CycleSource::Engine);
 
         let drive = FolderJobDrive {
             pool: &pool,
@@ -1417,6 +1496,51 @@ mod hold_tests {
             read_cached_dir_set(&pool, owner, "docs").await.expect("read"),
             set(&["Trips"]),
             "nothing forgotten without the server set"
+        );
+    }
+
+    /// The folder job runs at most every 30 s after a cycle. A restore hcfs
+    /// just applied must not wait for that: its files are back now, and its
+    /// empty folders should be too. The run after a completed cycle is
+    /// forced while a restore is owed, and throttled again once acked.
+    #[test]
+    fn an_owed_folder_restore_forces_the_next_run() {
+        let holds = MassDeleteHoldState::new();
+        assert_eq!(completion_trigger(&holds, "docs"), FolderEntitySyncTrigger::PerCycle);
+
+        holds.begin_cycle("docs", CycleSource::Engine);
+        holds.record_restored("docs", MassDeleteSide::Local, 5);
+        holds.finish_cycle("docs", CycleSource::Engine);
+        assert_eq!(completion_trigger(&holds, "docs"), FolderEntitySyncTrigger::Forced);
+
+        let owed = holds.folder_restores("docs");
+        holds.ack_folder_restores("docs", owed);
+        assert_eq!(completion_trigger(&holds, "docs"), FolderEntitySyncTrigger::PerCycle);
+    }
+
+    /// An unmounted or evicted drive folder walks as empty. With folders
+    /// cached for it and nothing at all in the folder, that is the shape of
+    /// a folder that is not there, not of a user who deleted every folder,
+    /// so no removal may follow from it, whatever hcfs's record says (a
+    /// drive of empty folders has no files for hcfs to hold).
+    #[test]
+    fn an_empty_walk_over_a_cached_drive_holds_every_removal() {
+        let empty = BTreeSet::new();
+        assert_eq!(gate_for_walk(FolderHoldGate::OPEN, &empty, true), FolderHoldGate::CLOSED);
+        assert_eq!(
+            gate_for_walk(FolderHoldGate::OPEN, &empty, false),
+            FolderHoldGate::OPEN,
+            "nothing cached, or files still in the folder: the folders were deleted, not lost"
+        );
+        assert_eq!(
+            gate_for_walk(FolderHoldGate::OPEN, &set(&["Trips"]), true),
+            FolderHoldGate::OPEN,
+            "a walk that found folders is trusted"
+        );
+        assert_eq!(
+            gate_for_walk(SERVER_HELD, &set(&["Trips"]), true),
+            SERVER_HELD,
+            "hcfs's own hold still applies"
         );
     }
 

@@ -204,6 +204,8 @@ fn the_bridge_records_each_failure_kind_for_the_dialog() {
 fn removing_a_drive_clears_its_failures() {
     let lifecycle = read_src("src/sync/drive/lifecycle.rs");
     let body = slice_between(&lifecycle, "pub(crate) async fn remove_drive_for_account", "\n}\n");
-    assert!(body.contains("clear_failures_for_drive("), "the drive's rows must go");
+    assert!(body.contains("clear_drive_rows(pool, acct, &label)"), "the drive's rows must go");
     assert!(body.contains("file_failures.clear_all_for_label("), "its counters and dismissals too");
+    let rows = slice_between(&lifecycle, "async fn clear_drive_rows(", "\n}\n");
+    assert!(rows.contains("clear_failures_for_drive("), "saved failures are among the rows");
 }

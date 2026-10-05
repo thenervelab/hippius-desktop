@@ -22,6 +22,7 @@ import { useSearchParams } from "next/navigation";
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
+import { revealHeldDelete } from "@/app/lib/massDelete/notificationLink";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
 import PageHeader from "@/components/ui/page-header";
 
@@ -101,6 +102,8 @@ const Notifications = () => {
   };
 
   const onItemClick = (id: number) => {
+    // A held-delete row also brings back the banner "Decide later" hid.
+    revealHeldDelete(items.find((n) => n.id === id)?.buttonLink);
     markRead(id).then(refreshUnread);
     setSelectedId(id);
   };

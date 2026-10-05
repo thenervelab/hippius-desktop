@@ -340,6 +340,7 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::MassDeleteNothingHeld => write!(f, "These files are no longer waiting for a decision."),
             Self::MassDeleteHoldChanged { held } => {
+                let held = crate::sync::mass_delete_hold::group_thousands(*held);
                 write!(f, "The number of missing files changed to {held}. Check it and choose again.")
             }
             Self::MassDeleteRestoreInProgress => write!(f, "A restore is already running. Let it finish first."),
@@ -653,12 +654,15 @@ mod tests {
     /// not have to parse the message.
     #[test]
     fn hold_changed_carries_the_new_count() {
-        let err = AppError::NotReady(NotReadyKind::MassDeleteHoldChanged { held: 180 });
+        let err = AppError::NotReady(NotReadyKind::MassDeleteHoldChanged { held: 1_800 });
         let json = serde_json::to_value(&err).expect("serialize");
         assert_eq!(json["kind"], "NotReady");
         assert_eq!(json["subkind"], "MASS_DELETE_HOLD_CHANGED");
-        assert_eq!(json["held"], 180);
-        assert!(json["message"].as_str().expect("message").contains("180"));
+        assert_eq!(json["held"], 1_800);
+        assert!(
+            json["message"].as_str().expect("message").contains("changed to 1,800."),
+            "the count reads as the banner writes it"
+        );
 
         let other = serde_json::to_value(AppError::NotReady(NotReadyKind::MassDeleteNothingHeld)).expect("serialize");
         assert!(other.get("held").is_none(), "only the changed-hold subkind carries a count");

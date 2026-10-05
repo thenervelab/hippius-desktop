@@ -111,9 +111,10 @@ fn the_undecryptable_copy_promises_no_retry_in_either_language() {
     );
 }
 
-/// The refusal fallback is the one refusal copy authored on both sides (the
-/// real reason is hcfs's own text), and like the undecryptable copy it must
-/// not promise a retry: hcfs reports a refusal once per revision.
+/// The refusal fallback is the one refusal copy authored on both sides (each
+/// known refusal's copy is Rust's alone, `refusal_copy`, persisted as the
+/// row's message), and like the undecryptable copy it must not promise a
+/// retry: hcfs reports a refusal once per revision.
 #[test]
 fn the_refusal_fallback_matches_and_promises_no_retry() {
     let reason = rust_const("REFUSED_FALLBACK_REASON");

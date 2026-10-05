@@ -11,6 +11,16 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { MASS_DELETE_EVENTS } from "@/app/lib/tauri/massDelete";
 
 /**
+ * Events Rust sends after saving a Files notification itself: the held
+ * large delete ("Large Delete Paused") and the unplugged drive folder
+ * ("Drive Disconnected"). Payload `{ label }`; only the bell refreshes.
+ */
+const RUST_SAVED_NOTIFICATION_EVENTS = [
+  MASS_DELETE_EVENTS.heldNotify,
+  "hcfs_drive_disconnected_notify",
+] as const;
+
+/**
  * Aggregation window for the "Sync Complete" notification. The sync
  * engine can run several cycles back-to-back for a single user action
  * (e.g. an initial scan finishes with 2 files, then a rescan picks up
@@ -69,9 +79,6 @@ interface SyncOutcome {
 interface SyncError {
   label?: string;
   error: string;
-  /** Rust's `SyncErrorKind`. `rootNotMounted`: the drive folder's disk is
-   *  not mounted, so nothing synced; `error` is already the user copy. */
-  kind?: "generic" | "rootNotMounted";
 }
 
 /** Payload of `hcfs_folder_recovered` — Rust's `events::LabelPayload`. */
@@ -92,27 +99,30 @@ export function useFilesNotification() {
   const pendingFilesRef = useRef<SyncedFileDetail[]>([]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Rust saves the held-delete notification itself (once per episode, for
-  // the account whose drive it is, respecting that account's Files toggle)
-  // and then sends this event; all that is left here is the bell. Always
-  // on: it often comes from the first cycle after launch, before the
-  // wallet has restored the account or the enabled types have loaded.
+  // Rust saves the held-delete and drive-disconnected notifications itself
+  // (once per episode, for the account whose drive it is, respecting that
+  // account's Files toggle) and then sends these events; all that is left
+  // here is the bell. Always on: they often come from the first cycle
+  // after launch, before the wallet has restored the account or the
+  // enabled types have loaded.
   useEffect(() => {
     let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    listen(MASS_DELETE_EVENTS.heldNotify, () => {
-      void refreshUnread();
-    })
-      .then((u) => {
-        if (cancelled) u();
-        else unlisten = u;
+    const unlisteners: Array<() => void> = [];
+    for (const event of RUST_SAVED_NOTIFICATION_EVENTS) {
+      listen(event, () => {
+        void refreshUnread();
       })
-      .catch((err) => {
-        console.warn("[FilesNotification] Failed to listen for held deletes:", err);
-      });
+        .then((u) => {
+          if (cancelled) u();
+          else unlisteners.push(u);
+        })
+        .catch((err) => {
+          console.warn(`[FilesNotification] Failed to listen for ${event}:`, err);
+        });
+    }
     return () => {
       cancelled = true;
-      unlisten?.();
+      for (const u of unlisteners) u();
     };
   }, [refreshUnread]);
 
@@ -220,15 +230,11 @@ export function useFilesNotification() {
             // threshold (see `sync::error_notify`) and fires it once per
             // outage. Cancels and transient single-cycle blips never reach
             // here, so every event is a real, sustained failure.
-            // An unplugged disk is not a failed sync: Rust's copy already
-            // says nothing synced and what to do, so drop the prefix.
-            const description =
-              e.payload.kind === "rootNotMounted"
-                ? `Folder "${label}": ${e.payload.error}`
-                : `Sync failed for folder "${label}": ${e.payload.error}`;
+            // An unplugged disk never reaches here: Rust saves its own
+            // "Drive Disconnected" row (see RUST_SAVED_NOTIFICATION_EVENTS).
             await invoke("create_sync_notification", {
               userAddress,
-              description,
+              description: `Sync failed for folder "${label}": ${e.payload.error}`,
               fileDetailsJson: "",
               outcome: "error",
             });

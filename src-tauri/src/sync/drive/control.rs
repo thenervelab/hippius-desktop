@@ -168,25 +168,16 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
     // listeners that read the plan fields get an empty plan (the reviewed sync's
     // plan isn't known until sync_with_resolutions runs) rather than `undefined`
     // from a bare LabelPayload.
-    let _ = app.emit(
-        crate::sync::events::SYNC_STARTED,
-        crate::sync::events::SyncStartedPayload {
-            label: label.clone(),
-            uploads: 0,
-            downloads: 0,
-            local_deletes: 0,
-            remote_deletes: 0,
-            upload_files: Vec::new(),
-            download_files: Vec::new(),
-            local_delete_files: Vec::new(),
-            remote_delete_files: Vec::new(),
-        },
-    );
+    let started = crate::sync::events::SyncStartedPayload::without_plan(label.clone());
+    let _ = app.emit(crate::sync::events::SYNC_STARTED, started);
 
     // Open a hold cycle, as the engine's `SyncStarted` does: hcfs reads the
     // user's restore/remove answers when this sync starts, so one sent while
-    // it runs belongs to the next cycle. Its results are recorded below.
-    app_state.mass_delete_holds.begin_cycle(&label);
+    // it runs belongs to the next cycle. Its results are recorded below, and
+    // only they may close it (an engine completion still on its way may not).
+    app_state
+        .mass_delete_holds
+        .begin_cycle(&label, crate::sync::mass_delete_hold::CycleSource::Reviewed);
 
     // Suppress file watcher during sync to prevent feedback loops
     sync.begin_sync();

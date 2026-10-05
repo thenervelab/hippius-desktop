@@ -50,6 +50,10 @@ import { enabledNotificationTypesAtom } from "@/components/page-sections/notific
 
 const AGGREGATION_MS = 10_000;
 
+/** The rows Rust saves itself; the hook only refreshes the bell for them,
+ *  whatever the account or the enabled types. */
+const RUST_SAVED_EVENTS = ["hcfs_mass_delete_held_notify", "hcfs_drive_disconnected_notify"];
+
 interface CompletedOverrides {
   files_uploaded?: number;
   files_downloaded?: number;
@@ -124,17 +128,17 @@ function listenedEvents(): unknown[] {
 }
 
 describe("useFilesNotification — gating", () => {
-  it("registers only the held-delete refresh when Files notifications are disabled", async () => {
+  it("registers only the refreshes for Rust-saved rows when Files notifications are disabled", async () => {
     mount(false);
     await flushRegistration();
-    expect(listenedEvents()).toEqual(["hcfs_mass_delete_held_notify"]);
+    expect(listenedEvents()).toEqual(RUST_SAVED_EVENTS);
   });
 
-  it("registers only the held-delete refresh when there is no account address", async () => {
+  it("registers only the refreshes for Rust-saved rows when there is no account address", async () => {
     state.polkadotAddress = null;
     mount(true);
     await flushRegistration();
-    expect(listenedEvents()).toEqual(["hcfs_mass_delete_held_notify"]);
+    expect(listenedEvents()).toEqual(RUST_SAVED_EVENTS);
   });
 });
 
@@ -242,23 +246,18 @@ describe("useFilesNotification — failure path", () => {
     expect((calls[0]?.[1] as { fileCount?: number }).fileCount).toBeUndefined();
   });
 
-  it("does not call an unplugged disk a failed sync", async () => {
-    // Rust tags hcfs's RootNotMounted refusal with its own kind and copy:
-    // nothing failed, the disk is just not there, and the copy says so.
+  // An unplugged disk is not a failed sync. Rust saves its own "Drive
+  // Disconnected" row (`create_files_notification`, its title pinned there)
+  // and says so; the hook only refreshes the bell, and never writes a
+  // "Sync Failed" row for it.
+  it("leaves an unplugged disk's notification to Rust and refreshes the bell", async () => {
     mount(true);
     await flushRegistration();
-    const copy = "Your Hippius folder looks disconnected. Reconnect the disk; nothing was synced.";
     await act(async () => {
-      await tauri.emitEvent("hcfs_sync_failed_notify", {
-        label: "photos",
-        error: copy,
-        kind: "rootNotMounted",
-      });
+      await tauri.emitEvent("hcfs_drive_disconnected_notify", { label: "photos" });
     });
-    expect(syncNotificationCalls()[0]?.[1]).toMatchObject({
-      outcome: "error",
-      description: `Folder "photos": ${copy}`,
-    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the 'default' label when the failure payload omits it", async () => {
@@ -336,12 +335,7 @@ describe("useFilesNotification — folder restored", () => {
   });
 });
 
-const HELD_NOTIFY = {
-  label: "Photos",
-  side: "server",
-  description:
-    'In "Photos", 150 of 200 files are missing from this Mac. Nothing has been deleted from Hippius yet.',
-};
+const HELD_NOTIFY = { label: "Photos" };
 
 // Rust saves the held-delete notification itself, once per episode, for the
 // account whose drive it is and only when that account has Files

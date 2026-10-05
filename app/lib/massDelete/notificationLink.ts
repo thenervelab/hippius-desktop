@@ -36,3 +36,14 @@ export function showHeldDelete({ label, side }: MassDeleteSidePayload): void {
     updateHold(prev, holdKey(label, side), { dismissed: false }),
   );
 }
+
+/** When `link` is a held-delete notification's, show its banner again and
+ *  return `true`; any other link is left alone. For selecting the row in
+ *  the bell or on the notifications page, which open the row rather than
+ *  follow its link. */
+export function revealHeldDelete(link: string | undefined): boolean {
+  const heldDelete = link ? heldDeleteFromLink(link) : null;
+  if (!heldDelete) return false;
+  showHeldDelete(heldDelete);
+  return true;
+}

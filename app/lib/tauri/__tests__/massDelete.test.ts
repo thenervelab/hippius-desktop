@@ -16,22 +16,27 @@ describe("classifyMassDeleteError", () => {
   it("matches each refusal by subkind", () => {
     expect(classifyMassDeleteError(notReady("MASS_DELETE_NOTHING_HELD"))).toEqual({
       type: "nothingHeld",
+      message: "the same words",
     });
     expect(classifyMassDeleteError(notReady("MASS_DELETE_HOLD_CHANGED", { held: 180 }))).toEqual({
       type: "holdChanged",
       held: 180,
+      message: "the same words",
     });
     expect(classifyMassDeleteError(notReady("MASS_DELETE_RESTORE_IN_PROGRESS"))).toEqual({
       type: "restoreInProgress",
+      message: "the same words",
     });
     expect(classifyMassDeleteError(notReady("MASS_DELETE_MEMBER_CANNOT_RESTORE"))).toEqual({
       type: "memberCannotRestore",
+      message: "the same words",
     });
   });
 
   it("a changed hold without a count refreshes instead", () => {
     expect(classifyMassDeleteError(notReady("MASS_DELETE_HOLD_CHANGED"))).toEqual({
       type: "nothingHeld",
+      message: "",
     });
   });
 
