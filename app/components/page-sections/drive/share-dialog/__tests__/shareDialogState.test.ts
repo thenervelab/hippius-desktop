@@ -240,15 +240,6 @@ describe("driveFullCopy", () => {
     );
   });
 
-  it("keeps plain sentences, not 0 of 0, for a plan without shared drives", () => {
-    expect(driveFullCopy({ ownerIsYou: true, memberLimit: 0, people: 0 }).body).toBe(
-      "Your plan does not allow new people on shared drives. Upgrade your plan to add more.",
-    );
-    const manager = driveFullCopy({ ownerIsYou: false, memberLimit: 0, people: 2 });
-    expect(manager.body).not.toMatch(/0 of 0/);
-    expect(manager.action).toBeNull();
-  });
-
   it("still reads without a limit", () => {
     expect(driveFullCopy({ ownerIsYou: true, memberLimit: null, people: 1 }).body).toBe(
       "1 person, plus you. Upgrade your plan to add more.",

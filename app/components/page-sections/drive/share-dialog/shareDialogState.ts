@@ -118,7 +118,9 @@ export const DRIVE_FULL_LINKS_NOTE =
  * to the owner and "plus the owner" to a Manager. After a downgrade the
  * count can pass the limit ("10 of 8 people"), which is said as it is. The
  * limit is the OWNER's plan: the owner is told to upgrade (with the way to
- * the plans), a Manager to remove someone or ask the owner.
+ * the plans), a Manager to remove someone or ask the owner. Rust never
+ * reports a limit of 0 as full (the plan gate answers that), so there is no
+ * "0 of 0" to word.
  */
 export function driveFullCopy(params: {
   ownerIsYou: boolean;
@@ -127,17 +129,6 @@ export function driveFullCopy(params: {
 }): { title: string; body: string; linksNote: string; action: string | null } {
   const title = "This drive is full";
   const limit = params.memberLimit;
-  // A plan with no shared drives at all: there is no count to give.
-  if (limit === 0) {
-    return {
-      title,
-      body: params.ownerIsYou
-        ? "Your plan does not allow new people on shared drives. Upgrade your plan to add more."
-        : "The drive owner\u2019s plan does not allow new people on shared drives. Ask the owner to upgrade their plan.",
-      linksNote: DRIVE_FULL_LINKS_NOTE,
-      action: params.ownerIsYou ? "Upgrade plan" : null,
-    };
-  }
   const plus = params.ownerIsYou ? "plus you" : "plus the owner";
   const count =
     limit === null

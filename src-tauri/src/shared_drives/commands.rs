@@ -1555,19 +1555,13 @@ pub async fn list_share_access(
     });
     invites.iter_mut().for_each(normalize_invite_fields);
 
-    // How full the drive is: the server's own count and limit when it gives
-    // them, else the listing against this account's plan on a drive it owns.
-    // A Viewer or an Editor is refused the seats route and adds nobody, so
-    // their unknown answer changes nothing.
+    // How full the drive is, as the server counts it. A Viewer or an Editor
+    // is refused the seats route and adds nobody, so their unknown answer
+    // changes nothing.
     let seats = seats
-        .inspect_err(|e| debug!(label = %label, error = %e, "Share dialog: drive seats unavailable; counting from the listing"))
+        .inspect_err(|e| debug!(label = %label, error = %e, "Share dialog: drive seats unavailable"))
         .ok();
-    let fallback_limit = if seats.is_none() && !identity.is_member {
-        crate::billing::storage_overview::fetch_people_per_drive(&state).await
-    } else {
-        None
-    };
-    let capacity = super::capacity::resolve_capacity(seats, super::capacity::count_people(&listing, &identity.wire_ss58), fallback_limit);
+    let capacity = super::capacity::capacity_from_seats(seats.as_ref());
 
     let emails_with_access = super::capacity::emails_with_access(&listing);
 

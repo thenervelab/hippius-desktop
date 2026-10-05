@@ -26,9 +26,9 @@
 //! not be loaded) is left to the server.
 //!
 //! How many people one shared drive may hold on each of those plans also
-//! lives here ([`people_per_drive`]): the plans page shows it, and the Share
-//! dialog warns an owner whose drive is full before an invite goes out
-//! (`shared_drives::capacity`).
+//! lives here ([`people_per_drive`]), for the plans page. Whether one drive
+//! is full is the server's answer (`shared_drives::capacity`), since bought
+//! seats raise a drive's limit past its plan's.
 
 use crate::billing::storage_overview::PlanInfo;
 
@@ -55,10 +55,9 @@ pub fn plan_code_allows_sharing(code: Option<&str>) -> bool {
 /// People one shared drive may hold on each plan that includes sharing, by
 /// plan code: Plus (`duo`) 3, Max 8, Scale 20. The owner is not counted.
 ///
-/// The same table hcfs-server checks an invite accept against. The app reads
-/// it to say how many people a plan includes (the plans page) and, when the
-/// server cannot tell it a drive's own limit, how many people the owner's
-/// drive holds before the Share dialog warns that it is full.
+/// The same table hcfs-server checks an invite accept against (its
+/// `SHARED_DRIVE_MEMBER_LIMITS`). Only the plans page reads it: a drive's
+/// own limit comes from the server, which adds any seats bought for it.
 const PEOPLE_PER_DRIVE: [(&str, u32); 3] = [("duo", 3), ("max", 8), ("scale", 20)];
 
 /// How many people a plan lets one shared drive hold, or `None` for a plan
@@ -76,13 +75,6 @@ fn active_drive_plan_code(sub: &serde_json::Value) -> Option<&str> {
         return None;
     }
     sub.get("plan").and_then(serde_json::Value::as_str)
-}
-
-/// The plan code that decides sharing for this account, from what the
-/// overview managed to read: the resolved plan's, else an active drive
-/// subscription's. `None` when neither names one.
-pub fn sharing_plan_code<'a>(plan: Option<&'a PlanInfo>, drive_sub: Option<&'a serde_json::Value>) -> Option<&'a str> {
-    plan.map(|p| p.code.as_str()).or_else(|| drive_sub.and_then(active_drive_plan_code))
 }
 
 /// Decide `canShareDrives` from what the overview managed to read.
@@ -228,14 +220,5 @@ mod tests {
         for code in SHARING_PLAN_CODES {
             assert!(people_per_drive(code).is_some(), "{code} has no people count");
         }
-    }
-
-    #[test]
-    fn the_sharing_plan_code_prefers_the_resolved_plan() {
-        let sub = json!({ "active": true, "plan": "scale" });
-        assert_eq!(sharing_plan_code(Some(&plan("duo")), Some(&sub)), Some("duo"));
-        assert_eq!(sharing_plan_code(None, Some(&sub)), Some("scale"));
-        assert_eq!(sharing_plan_code(None, Some(&json!({ "active": false, "plan": "max" }))), None);
-        assert_eq!(sharing_plan_code(None, None), None);
     }
 }
