@@ -200,17 +200,16 @@ describe("MassDeleteBanner", () => {
     expect(restoreButton()).toBeInTheDocument();
   });
 
-  it("a member refused a restore loses the Restore button", async () => {
+  // The body already says why for a hold that cannot be restored; the
+  // refusal must not add a second sentence saying the same.
+  it("a member refused a restore loses the Restore button, said once", async () => {
     tauri.onInvoke("restore_mass_delete", () => {
       throw notReady("MASS_DELETE_MEMBER_CANNOT_RESTORE");
     });
     renderBanner({ ...SERVER, side: "local" });
     await click("Restore files");
     expect(restoreButton()).toBeNull();
-    expect(
-      screen.getAllByText("Only the owner of this shared drive can put these files back on Hippius.")
-        .length,
-    ).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Only the owner of this shared drive/)).toHaveLength(1);
   });
 
   it("any other failure is a toast, and the buttons stay", async () => {

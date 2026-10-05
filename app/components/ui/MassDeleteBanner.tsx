@@ -100,10 +100,9 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
           toast.info("A restore is already running. Let it finish first.");
           return;
         case "memberCannotRestore":
-          patch({
-            canRestore: false,
-            notice: "Only the owner of this shared drive can put these files back on Hippius.",
-          });
+          // The body of a hold that cannot be restored already says only
+          // the owner can put the files back; a notice would repeat it.
+          patch({ canRestore: false, notice: null });
           return;
         case "other":
           toast.error("Couldn't send your choice", { description: tauriErrorMessage(err) });
