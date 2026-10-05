@@ -8,8 +8,9 @@
 //! cleared; a `finish` in the completion handler both paths share and a
 //! cycle is finished twice; a reviewed sync that does not record its
 //! outcome and a restore it applied never puts its folders back; a missing
-//! clear and one account's hold shows on another's drive. Pinned by source inspection, the
-//! idiom `folder_restore_notify_wiring.rs` uses.
+//! clear and one account's hold shows on another's drive. Pinned by source
+//! inspection, the idiom `folder_restore_notify_wiring.rs` uses, where no
+//! behavior test can reach the call site.
 
 /// Extract the brace-matched `{ ... }` body of the first fn whose declaration
 /// contains `sig`.
@@ -51,7 +52,7 @@ fn every_engine_cycle_start_resets_what_it_has_seen() {
     let src = bridge_src();
     let body = fn_body(&src, "fn handle_sync_started(");
     assert!(
-        body.contains("mass_delete_holds.begin_cycle("),
+        body.contains("mass_delete_holds.begin_cycle(&payload.label, CycleSource::Engine)"),
         "without begin_cycle a side once seen stays seen, and a hold that ended is never cleared"
     );
 }
@@ -60,33 +61,22 @@ fn every_engine_cycle_start_resets_what_it_has_seen() {
 fn each_path_finishes_its_own_cycle_outside_the_shared_completion() {
     let src = bridge_src();
     let on_event = fn_body(&src, "fn on_event(&self, event: SyncEvent)");
-    let finish = on_event
-        .find("finish_mass_delete_cycle(")
-        .expect("the engine's SyncCompleted arm must finish the hold bookkeeping");
-    let completed = on_event.find("handle_sync_completed(").expect("SyncCompleted arm delegates");
     assert!(
-        finish < completed,
-        "finish the cycle's holds in the SyncCompleted arm, before the shared completion handler"
+        on_event.contains("handle_engine_sync_completed(&app, event)"),
+        "the engine's SyncCompleted goes through its own handler"
     );
+    let engine = fn_body(&src, "fn handle_engine_sync_completed(");
+    let finish = engine
+        .find("finish_mass_delete_cycle(app, &label, CycleSource::Engine)")
+        .expect("the engine's completion must finish the hold bookkeeping it opened");
+    let completed = engine.find("handle_sync_completed(").expect("the engine's completion delegates");
+    assert!(finish < completed, "finish the cycle's holds before the shared completion handler");
 
     let shared = fn_body(&src, "pub(crate) fn handle_sync_completed(");
     assert!(
         !shared.contains("finish_mass_delete_cycle"),
         "handle_sync_completed is shared with the reviewed-conflict path, which finishes its own cycle \
          (report_reviewed_mass_deletes): finishing here too would run it twice"
-    );
-}
-
-#[test]
-fn the_logging_stop_gap_is_gone() {
-    let src = bridge_src();
-    assert!(
-        !src.contains("MASS_DELETE_LOGGED"),
-        "the hold is tracked on AppState now; the static stop-gap must not come back"
-    );
-    assert!(
-        src.contains("handle_mass_delete_event(&app, event)"),
-        "mass-delete events reach the state"
     );
 }
 
@@ -115,12 +105,8 @@ fn teardown_paths_forget_the_holds() {
         fn_body(&lifecycle, "pub(crate) async fn remove_drive_for_account(").contains("mass_delete_holds.clear(&label)"),
         "a removed drive's hold must not linger"
     );
-
-    let bridge = bridge_src();
-    assert!(
-        fn_body(&bridge, "fn handle_sync_reset(").contains("mass_delete_holds.clear_all()"),
-        "an account switch must not inherit the previous account's holds"
-    );
+    // The account-switch reset is a behavior test in `tauri_bridge`
+    // (`an_account_reset_forgets_the_holds_and_the_cached_listings`).
 }
 
 /// The prompt's three commands must be registered, and async: a sync
@@ -209,7 +195,9 @@ fn an_accepted_answer_is_noted_between_the_write_and_the_sync_round() {
 fn a_reviewed_sync_records_its_restores_and_holds() {
     let src = read("src/sync/drive/control.rs");
     let body = fn_body(&src, "pub async fn sync_with_conflict_resolutions(");
-    let begin = body.find("mass_delete_holds.begin_cycle(").expect("the reviewed sync opens a hold cycle");
+    let begin = body
+        .find("begin_cycle(&label, crate::sync::mass_delete_hold::CycleSource::Reviewed)")
+        .expect("the reviewed sync opens a hold cycle of its own");
     let sync = body.find(".sync_with_resolutions(").expect("the reviewed sync runs");
     let report = body
         .find("report_reviewed_mass_deletes(")
@@ -235,4 +223,16 @@ fn removing_a_drive_tells_the_ui_its_holds_cleared() {
         fn_body(&bridge, "fn finish_mass_delete_cycle<").contains("emit_mass_delete_cleared("),
         "one cleared event shape for both"
     );
+}
+
+/// A completed cycle starts the folder job unthrottled while a restore owes
+/// its empty folders (`completion_trigger`, unit-tested in
+/// `folder_entries_materialize`); a fixed `PerCycle` here would leave them
+/// missing for up to 30 s after their files are back.
+#[test]
+fn a_completion_picks_the_folder_job_trigger_from_the_owed_restores() {
+    let src = bridge_src();
+    let body = fn_body(&src, "pub(crate) fn handle_sync_completed(");
+    assert!(body.contains("completion_trigger(&app_state.mass_delete_holds, &payload.label)"));
+    assert!(!body.contains("FolderEntitySyncTrigger::PerCycle"));
 }

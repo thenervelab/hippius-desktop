@@ -1,7 +1,9 @@
-// The large-delete prompt's words, by side. Presentation only: every fact in
-// them (side, counts, empty root, member) comes from Rust's hold. The
-// persisted notification's text is Rust's own (`held_notification_text`);
-// these lines say the same things in the banner's shorter form.
+// The large-delete prompt's words that are not the hold's own. The banner's
+// title and lines come from Rust with the hold (`hold.title`, `hold.body`,
+// from `mass_delete_hold::hold_text`), the same words the persisted
+// notification uses; these are the buttons, the confirmation and the
+// progress lines around them. Presentation only: every fact in them (side,
+// counts, member) comes from Rust's hold.
 
 import type { MassDeleteSide } from "@/app/lib/tauri/massDelete";
 import type { MassDeleteHoldView, MassDeleteRefusal } from "@/app/lib/massDelete/holds";
@@ -12,46 +14,16 @@ export function deviceName(isMac: boolean): string {
   return isMac ? "this Mac" : "this computer";
 }
 
+/** "1 file" / "1,234 files": grouped as Rust's `group_thousands` writes
+ *  counts, whatever the system locale, so a count reads the same in the
+ *  banner title and the lines around it. */
 function files(count: number): string {
-  return `${count.toLocaleString()} file${count === 1 ? "" : "s"}`;
+  return `${count.toLocaleString("en-US")} file${count === 1 ? "" : "s"}`;
 }
 
-export interface HoldCopy {
-  title: string;
-  body: string[];
-  /** Label of the destructive button. */
-  removeLabel: string;
-}
-
-/** The banner's title, body lines and Remove label for a hold. */
-export function holdCopy(hold: MassDeleteHoldView, device: string): HoldCopy {
-  if (hold.side === "server") {
-    const body = ["Nothing has been deleted from Hippius yet."];
-    if (hold.emptyRoot) {
-      body.push("If an external disk or cloud folder is disconnected, reconnect it.");
-    }
-    return {
-      title: `${hold.count.toLocaleString()} of ${files(hold.syncedCount)} in “${hold.label}” are missing from ${device}`,
-      body,
-      removeLabel: "Remove from Hippius",
-    };
-  }
-
-  const body = [`Nothing has been deleted from ${device} yet.`];
-  if (hold.canRestore) {
-    // A folder renamed or moved on another device reads here as its files
-    // missing from Hippius; restoring cannot tell, and uploads the old copies.
-    body.push(
-      "If you renamed or moved the folder on another device, restoring uploads the old copies again.",
-    );
-  } else {
-    body.push("Only the owner of this shared drive can put them back on Hippius.");
-  }
-  return {
-    title: `${files(hold.count)} in “${hold.label}” are missing from Hippius`,
-    body,
-    removeLabel: `Remove from ${device}`,
-  };
+/** Label of the destructive button. */
+export function removeLabel(side: MassDeleteSide, device: string): string {
+  return side === "server" ? "Remove from Hippius" : `Remove from ${device}`;
 }
 
 /** The Remove confirmation's title and description. */

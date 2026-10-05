@@ -121,12 +121,13 @@ describe("failureMessage", () => {
     expect(msg.toLowerCase()).not.toContain("connection");
   });
 
-  it("shows hcfs's own reason for a refused file, which names it", () => {
-    // Rust persists hcfs's refusal message as the row's `message`; it names
-    // the file and says what to do, so it is the copy.
+  it("shows Rust's copy for a refused file as it was saved", () => {
+    // Rust writes the refusal's copy from hcfs's typed refusal
+    // (`refusal_copy`) and persists it as the row's `message`; hcfs's own
+    // words stay in the logs.
     const reason =
-      "Not synced: Photos/Beach.JPG names the same file on this filesystem as another file " +
-      "(they differ only in letter case or Unicode normalization); rename one of them";
+      "“Beach.JPG” wasn't synced: another file here has the same name apart from capital " +
+      "letters or accents. Rename one of them and both sync.";
     expect(failureMessage({ ...base, kind: "refused", message: reason })).toBe(reason);
   });
 
@@ -176,7 +177,9 @@ describe("failedRowAction", () => {
 
 describe("isRetryableFailedFile", () => {
   it("decides by kind, so a refusal's own text is never read as retryable", () => {
-    const refusal = "Not synced: could not be read (Permission denied)";
+    const refusal =
+      "Hippius couldn't read this file. Check that it isn't locked or open in another app; " +
+      "it syncs once it can be read.";
     expect(isRetryableFailedFile({ kind: "refused", error: refusal })).toBe(false);
     expect(isRetryableFailedFile({ kind: "network", error: UNDECRYPTABLE_MESSAGE })).toBe(true);
   });

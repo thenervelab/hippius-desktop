@@ -47,13 +47,16 @@
 //!
 //! ## Cycle bookkeeping
 //!
-//! [`MassDeleteHoldState::begin_cycle`] (on `SyncStarted`) opens the cycle
-//! and marks every side unseen; a hold or restore event marks its side seen;
-//! [`MassDeleteHoldState::finish_cycle`] (on the cycle's first
-//! `SyncCompleted`) closes it, dropping every side still unseen and
-//! reporting it as cleared. A further `SyncCompleted` for the same cycle
-//! (hcfs sends two when a cycle skipped conflicts) finds it closed and
-//! clears nothing. A `Restoring` side is kept
+//! [`MassDeleteHoldState::begin_cycle`] (on `SyncStarted`, or when a reviewed
+//! sync starts) opens the cycle and marks every side unseen; a hold or
+//! restore event marks its side seen; [`MassDeleteHoldState::finish_cycle`]
+//! (on the cycle's first `SyncCompleted`, or the reviewed sync's end) closes
+//! it, dropping every side still unseen and reporting it as cleared. A
+//! further `SyncCompleted` for the same cycle (hcfs sends two when a cycle
+//! skipped conflicts) finds it closed and clears nothing. A cycle is closed
+//! only by the path that opened it ([`CycleSource`]): an engine completion
+//! still on its way when a reviewed sync starts must not close the reviewed
+//! cycle before its results are recorded. A `Restoring` side is kept
 //! for one cycle, mirroring hcfs, which keeps a restored side in its held
 //! record until the next cycle completes.
 //!
@@ -151,6 +154,16 @@ pub enum HeldChange {
     /// New or different, but a settle for this side is already running and
     /// shows the side's hold as it stands when it finishes: start no other.
     Settling,
+}
+
+/// Which path opened a hold cycle; only the same path may close it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CycleSource {
+    /// The sync engine's own cycle (`SyncStarted` .. `SyncCompleted`).
+    Engine,
+    /// A reviewed-conflict sync (`sync_with_conflict_resolutions`), whose
+    /// results arrive on its outcome rather than as engine events.
+    Reviewed,
 }
 
 /// Which sides of a drive owe their empty folders a restore.
@@ -292,10 +305,11 @@ struct LabelHolds {
     member: bool,
     /// The drive folder (armed at init), for the empty-root check.
     sync_root: Option<PathBuf>,
-    /// A cycle has started and not yet completed. hcfs can complete one
-    /// cycle twice (see [`MassDeleteHoldState::finish_cycle`]); only the
-    /// first completion may clear anything.
-    cycle_open: bool,
+    /// The cycle started and not yet completed, and which path opened it.
+    /// hcfs can complete one cycle twice (see
+    /// [`MassDeleteHoldState::finish_cycle`]); only the first completion
+    /// from the same path may clear anything.
+    cycle_open: Option<CycleSource>,
     /// Deletes of the server copies (files missing here).
     server: SideSlot,
     /// Deletes of this device's copies (files missing from the server).
@@ -324,6 +338,31 @@ impl LabelHolds {
 
 /// Both sides, in a fixed order, for iteration.
 const SIDES: [MassDeleteSide; 2] = [MassDeleteSide::Server, MassDeleteSide::Local];
+
+/// Re-seed one side at init from hcfs's record (see
+/// [`MassDeleteHoldState::arm`]).
+fn seed_slot(slot: &mut SideSlot, seeded: Option<&HeldMassDelete>) {
+    let notify_pending = slot.notify_pending;
+    let was_restoring = slot.entry.is_some_and(|e| e.phase == HoldPhase::Restoring);
+    slot.end_episode();
+    slot.seen = false;
+    let Some(held) = seeded else {
+        return;
+    };
+
+    let phase = HoldPhase::from(held.state);
+    if phase == HoldPhase::Restoring && !was_restoring {
+        slot.restores_applied += 1;
+    }
+    slot.notify_pending = notify_pending;
+    slot.entry = Some(HoldEntry {
+        phase,
+        count: held.count,
+        synced_count: held.synced_count,
+        empty_root: false,
+    });
+    slot.notified = true;
+}
 
 /// Per-label held mass deletes. See the module docs.
 #[derive(Debug, Default)]
@@ -364,29 +403,22 @@ impl MassDeleteHoldState {
     /// A re-init also closes any cycle the previous drive left open: none of
     /// the seeded holds was reported in it, so its late `SyncCompleted`
     /// would otherwise read them all as cleared.
+    ///
+    /// A side seeded as `Restoring` that this state did not already record
+    /// as restoring owes its folders: hcfs applied that restore in a run
+    /// that ended before the folder job put the empty folders back, and the
+    /// owed generation lived in that run's memory.
     pub fn arm(&self, label: &str, owner: &str, member: bool, sync_root: &Path, seed: &[HeldMassDelete]) {
         let mut map = self.lock();
         let holds = map.entry(label.to_string()).or_default();
         holds.owner = Some(owner.to_string());
         holds.member = member;
         holds.sync_root = Some(sync_root.to_path_buf());
-        holds.cycle_open = false;
+        holds.cycle_open = None;
 
         for side in SIDES {
-            let slot = holds.slot_mut(side);
-            let notify_pending = slot.notify_pending;
-            slot.end_episode();
-            slot.seen = false;
-            if let Some(held) = seed.iter().find(|h| h.side == side) {
-                slot.notify_pending = notify_pending;
-                slot.entry = Some(HoldEntry {
-                    phase: held.state.into(),
-                    count: held.count,
-                    synced_count: held.synced_count,
-                    empty_root: false,
-                });
-                slot.notified = true;
-            }
+            let seeded = seed.iter().find(|h| h.side == side);
+            seed_slot(holds.slot_mut(side), seeded);
         }
     }
 
@@ -402,11 +434,14 @@ impl MassDeleteHoldState {
         self.lock().get(label).is_some_and(|h| h.member)
     }
 
-    /// A cycle started: every side is unseen until an event reports it.
-    pub fn begin_cycle(&self, label: &str) {
+    /// A cycle started on `source`'s path: every side is unseen until an
+    /// event reports it. The latest start wins: a reviewed sync holds the
+    /// drive's lock, so an engine start seen after it is stale, and one
+    /// seen before it is overtaken.
+    pub fn begin_cycle(&self, label: &str, source: CycleSource) {
         let mut map = self.lock();
         let holds = map.entry(label.to_string()).or_default();
-        holds.cycle_open = true;
+        holds.cycle_open = Some(source);
         for side in SIDES {
             let slot = holds.slot_mut(side);
             slot.seen = false;
@@ -574,22 +609,28 @@ impl MassDeleteHoldState {
         true
     }
 
-    /// A cycle completed: drop every side no event reported this cycle and
-    /// return those that had a hold (the cleared ones).
+    /// A cycle on `source`'s path completed: drop every side no event
+    /// reported this cycle and return those that had a hold (the cleared
+    /// ones).
     ///
-    /// Acts once per [`Self::begin_cycle`]. hcfs emits `SyncCompleted` twice
-    /// for a cycle that skipped conflicts (once from the conflict re-stage,
-    /// again from the result dispatch, both after the hold events), and a
-    /// second pass over sides it had just marked unseen would clear a hold
-    /// that still stands. A completion with no cycle open clears nothing.
-    pub fn finish_cycle(&self, label: &str) -> Vec<MassDeleteSide> {
+    /// Acts once per [`Self::begin_cycle`], and only for the path that
+    /// opened the cycle. hcfs emits `SyncCompleted` twice for a cycle that
+    /// skipped conflicts (once from the conflict re-stage, again from the
+    /// result dispatch, both after the hold events), and a second pass over
+    /// sides it had just marked unseen would clear a hold that still
+    /// stands. An engine completion arriving while a reviewed sync's cycle
+    /// is open belongs to an earlier engine cycle, and closing the reviewed
+    /// one before its results are recorded would clear its holds. A
+    /// completion with no matching cycle open clears nothing.
+    pub fn finish_cycle(&self, label: &str, source: CycleSource) -> Vec<MassDeleteSide> {
         let mut map = self.lock();
         let Some(holds) = map.get_mut(label) else {
             return Vec::new();
         };
-        if !std::mem::replace(&mut holds.cycle_open, false) {
+        if holds.cycle_open != Some(source) {
             return Vec::new();
         }
+        holds.cycle_open = None;
 
         let mut cleared = Vec::new();
         for side in SIDES {
@@ -720,38 +761,91 @@ pub fn root_looks_empty(root: &Path) -> bool {
 /// What the user's machine is called in copy.
 const THIS_DEVICE: &str = if cfg!(target_os = "macos") { "this Mac" } else { "this computer" };
 
-/// The persisted notification's text for a new hold. Rust owns it so the
-/// side, the empty-root advice and the member caveat cannot drift from the
-/// state that decides them.
+/// A hold's words, as both the banner and the notification show them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldText {
+    /// One line naming what is missing and where.
+    pub title: String,
+    /// What has (not) happened yet, and the advice that applies.
+    pub body: Vec<String>,
+}
+
+/// `n` with comma thousands separators ("12,345"), the way the UI writes
+/// every count, so a number reads the same in a banner, a notification and
+/// a refusal.
 #[must_use]
-pub fn held_notification_text(label: &str, side: MassDeleteSide, entry: HoldEntry, can_restore: bool) -> String {
+pub fn group_thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+/// "1 file" / "1,234 files".
+fn files(n: usize) -> String {
+    let noun = if n == 1 { "file" } else { "files" };
+    format!("{} {noun}", group_thousands(n))
+}
+
+/// The verb agreeing with a count of files.
+fn are(n: usize) -> &'static str {
+    if n == 1 { "is" } else { "are" }
+}
+
+/// The words for a hold. Rust owns them so the side, the empty-root advice
+/// and the member caveat cannot drift from the state that decides them,
+/// and the banner and the notification cannot drift from each other.
+#[must_use]
+pub fn hold_text(label: &str, side: MassDeleteSide, entry: HoldEntry, can_restore: bool) -> HoldText {
     match side {
         MassDeleteSide::Server => {
-            let reconnect = if entry.empty_root {
-                " If an external disk or cloud folder is disconnected, reconnect it."
-            } else {
-                ""
-            };
-            format!(
-                "In \"{label}\", {} of {} files are missing from {THIS_DEVICE}. Nothing has been deleted from Hippius yet.{reconnect}",
-                entry.count, entry.synced_count
-            )
+            let mut body = vec!["Nothing has been deleted from Hippius yet.".to_string()];
+            if entry.empty_root {
+                body.push("If an external disk or cloud folder is disconnected, reconnect it.".to_string());
+            }
+            HoldText {
+                title: format!(
+                    "{} of {} in “{label}” {} missing from {THIS_DEVICE}",
+                    group_thousands(entry.count),
+                    files(entry.synced_count),
+                    are(entry.count)
+                ),
+                body,
+            }
         }
         MassDeleteSide::Local => {
             // A folder renamed or moved on another device reads here as its
             // files missing from Hippius; restoring cannot tell, and uploads
-            // the old copies. The banner says the same.
+            // the old copies.
             let caveat = if can_restore {
-                " If you renamed or moved the folder on another device, restoring uploads the old copies again."
+                "If you renamed or moved the folder on another device, restoring uploads the old copies again."
             } else {
-                " Only the owner of this shared drive can put them back."
+                "Only the owner of this shared drive can put them back on Hippius."
             };
-            format!(
-                "In \"{label}\", {} files are missing from Hippius. Nothing has been deleted from {THIS_DEVICE} yet.{caveat}",
-                entry.count
-            )
+            HoldText {
+                title: format!("{} in “{label}” {} missing from Hippius", files(entry.count), are(entry.count)),
+                body: vec![format!("Nothing has been deleted from {THIS_DEVICE} yet."), caveat.to_string()],
+            }
         }
     }
+}
+
+/// The persisted notification's text for a new hold: the banner's words,
+/// then what to do about them.
+#[must_use]
+pub fn held_notification_text(label: &str, side: MassDeleteSide, entry: HoldEntry, can_restore: bool) -> String {
+    let text = hold_text(label, side, entry, can_restore);
+    let next = if can_restore {
+        "Open Hippius to restore them or remove them."
+    } else {
+        "Open Hippius to remove them."
+    };
+    format!("{}. {} {next}", text.title, text.body.join(" "))
 }
 
 #[cfg(test)]
@@ -761,6 +855,7 @@ mod tests {
 
     const L: &str = "photos";
     const OWNER: &str = "5Owner";
+    const ENGINE: CycleSource = CycleSource::Engine;
 
     /// A state with `L` armed for `OWNER`, as init leaves it.
     fn armed() -> MassDeleteHoldState {
@@ -801,9 +896,9 @@ mod tests {
 
     /// One cycle reporting `events` (each a closure over the state).
     fn cycle(state: &MassDeleteHoldState, events: impl FnOnce(&MassDeleteHoldState)) -> Vec<MassDeleteSide> {
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         events(state);
-        state.finish_cycle(L)
+        state.finish_cycle(L, ENGINE)
     }
 
     #[test]
@@ -811,15 +906,15 @@ mod tests {
         let state = armed();
         state.arm(L, OWNER, false, Path::new("/x"), &[]);
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(true));
-        assert!(state.finish_cycle(L).is_empty(), "a side held this cycle is not cleared");
+        assert!(state.finish_cycle(L, ENGINE).is_empty(), "a side held this cycle is not cleared");
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), None, "same hold, next cycle");
-        assert!(state.finish_cycle(L).is_empty());
+        assert!(state.finish_cycle(L, ENGINE).is_empty());
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(
             report_held(&state, Server, 160),
             Some(false),
@@ -839,7 +934,7 @@ mod tests {
         assert_eq!(state.entry(L, Local), None);
         assert!(cycle(&state, |_| {}).is_empty(), "nothing left to clear");
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Local, 120), Some(true), "a hold after a cleared one is a new episode");
     }
 
@@ -852,13 +947,13 @@ mod tests {
         let state = armed();
         state.arm(L, OWNER, false, Path::new("/x"), &[]);
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(true));
-        assert!(state.finish_cycle(L).is_empty());
-        assert!(state.finish_cycle(L).is_empty(), "the repeated completion clears nothing");
+        assert!(state.finish_cycle(L, ENGINE).is_empty());
+        assert!(state.finish_cycle(L, ENGINE).is_empty(), "the repeated completion clears nothing");
         assert!(state.entry(L, Server).is_some(), "the hold stands");
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(
             report_held(&state, Server, 150),
             None,
@@ -866,11 +961,43 @@ mod tests {
         );
     }
 
+    /// A reviewed sync starts while the engine's completion of the cycle
+    /// before it is still on its way to the bridge. That completion belongs
+    /// to the engine's cycle: closing the reviewed one with it would clear
+    /// every hold before the reviewed sync recorded it.
+    #[test]
+    fn an_engine_completion_does_not_close_a_reviewed_cycle() {
+        let state = armed();
+        cycle(&state, |s| {
+            report_held(s, Server, 150);
+        });
+
+        state.begin_cycle(L, CycleSource::Reviewed);
+        assert!(state.finish_cycle(L, ENGINE).is_empty(), "the late engine completion clears nothing");
+        assert!(state.entry(L, Server).is_some(), "the hold stands");
+
+        assert_eq!(report_held(&state, Server, 150), None, "the reviewed sync reports it unchanged");
+        assert!(state.finish_cycle(L, CycleSource::Reviewed).is_empty());
+        assert!(state.entry(L, Server).is_some());
+    }
+
+    /// The reviewed sync's own end does close it, clearing what it did not
+    /// report.
+    #[test]
+    fn a_reviewed_cycle_clears_what_it_did_not_report() {
+        let state = armed();
+        cycle(&state, |s| {
+            report_held(s, Server, 150);
+        });
+        state.begin_cycle(L, CycleSource::Reviewed);
+        assert_eq!(state.finish_cycle(L, CycleSource::Reviewed), vec![Server]);
+    }
+
     #[test]
     fn a_completion_without_a_start_clears_nothing() {
         let state = armed();
         state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
-        assert!(state.finish_cycle(L).is_empty(), "no cycle is open, so nothing went unreported");
+        assert!(state.finish_cycle(L, ENGINE).is_empty(), "no cycle is open, so nothing went unreported");
         assert!(state.entry(L, Server).is_some());
     }
 
@@ -912,27 +1039,27 @@ mod tests {
         });
         cycle(&state, |s| s.record_restored(L, Server, 150));
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(true));
     }
 
     #[test]
     fn a_refusal_is_reported_once_per_episode_and_keeps_the_hold() {
         let state = armed();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert!(state.record_refused(L, Server, "insufficient_space"));
         report_held(&state, Server, 150);
-        state.finish_cycle(L);
+        state.finish_cycle(L, ENGINE);
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert!(!state.record_refused(L, Server, "insufficient_space"), "repeated every cycle by hcfs");
         assert_eq!(report_held(&state, Server, 150), None);
-        assert!(state.finish_cycle(L).is_empty());
+        assert!(state.finish_cycle(L, ENGINE).is_empty());
         assert!(!state.folder_restores(L).any(), "a refusal restores no folders");
 
-        state.begin_cycle(L);
-        state.finish_cycle(L);
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
+        state.finish_cycle(L, ENGINE);
+        state.begin_cycle(L, ENGINE);
         assert!(state.record_refused(L, Server, "insufficient_space"), "a new episode reports it again");
     }
 
@@ -977,13 +1104,36 @@ mod tests {
         assert!(state.folder_restores(L).sides().server, "consumed only by the folder job");
     }
 
+    /// The app quit after a cycle applied a restore but before the folder
+    /// job put the empty folders back: the owed flag lived in memory only.
+    /// hcfs's record still says `Restoring`, so the arm owes it again.
+    #[test]
+    fn a_seeded_restoring_side_owes_its_folders_after_a_relaunch() {
+        let state = MassDeleteHoldState::new();
+        state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Restoring, 150)]);
+        assert_eq!(state.folder_restores(L).sides(), FolderRestores { server: true, local: false });
+    }
+
+    /// A pause and resume in the same run re-seeds the `Restoring` side the
+    /// state already recorded; the restore it owed was already done once.
+    #[test]
+    fn a_re_init_does_not_owe_a_restore_the_folder_job_already_did() {
+        let state = armed();
+        cycle(&state, |s| s.record_restored(L, Server, 150));
+        let owed = state.folder_restores(L);
+        state.ack_folder_restores(L, owed);
+
+        state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Restoring, 150)]);
+        assert!(!state.folder_restores(L).any());
+    }
+
     #[test]
     fn a_seeded_hold_is_shown_but_not_notified_again() {
         let state = armed();
         state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
         assert_eq!(state.entry(L, Server).map(|e| e.phase), Some(HoldPhase::Held));
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(
             report_held(&state, Server, 150),
             Some(false),
@@ -994,7 +1144,7 @@ mod tests {
     #[test]
     fn a_settle_stores_the_empty_root_check() {
         let state = armed();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
         assert!(state.settle_held(L, Server, true, |hold, _| assert!(hold.entry.empty_root)));
         assert_eq!(state.entry(L, Server).map(|e| e.empty_root), Some(true));
@@ -1022,10 +1172,10 @@ mod tests {
     #[test]
     fn a_running_settle_shows_the_hold_as_it_stands() {
         let state = armed();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
-        state.finish_cycle(L);
-        state.begin_cycle(L);
+        state.finish_cycle(L, ENGINE);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(state.record_held(L, report(Server, 160)), HeldChange::Settling);
 
         let mut shown = None;
@@ -1041,7 +1191,7 @@ mod tests {
     #[test]
     fn a_settle_after_a_restore_shows_nothing() {
         let state = armed();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         state.record_held(L, report(Server, 150));
         state.record_restored(L, Server, 150);
         assert!(!state.settle_held(L, Server, false, |_, _| panic!("restoring side shown as held")));
@@ -1053,18 +1203,18 @@ mod tests {
     #[test]
     fn reports_during_a_settle_start_no_second_one() {
         let state = armed();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
-        state.finish_cycle(L);
+        state.finish_cycle(L, ENGINE);
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_ne!(
             state.record_held(L, report(Server, 150)),
             HeldChange::Changed,
             "same hold, check still running"
         );
-        state.finish_cycle(L);
-        state.begin_cycle(L);
+        state.finish_cycle(L, ENGINE);
+        state.begin_cycle(L, ENGINE);
         assert_ne!(
             state.record_held(L, report(Server, 160)),
             HeldChange::Changed,
@@ -1077,15 +1227,15 @@ mod tests {
     #[test]
     fn a_re_init_keeps_a_notification_not_yet_raised() {
         let state = armed();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         state.record_held(L, report(Server, 150));
         state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(true));
 
         state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(false), "raised once, never again for the episode");
     }
 
@@ -1096,10 +1246,10 @@ mod tests {
     fn a_late_completion_after_a_re_init_keeps_the_seeded_holds() {
         let state = armed();
         state.arm(L, OWNER, false, Path::new("/x"), &[]);
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
 
         state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
-        assert!(state.finish_cycle(L).is_empty(), "the old drive's cycle closes nothing");
+        assert!(state.finish_cycle(L, ENGINE).is_empty(), "the old drive's cycle closes nothing");
         assert_eq!(state.entry(L, Server).map(|e| e.count), Some(150));
     }
 
@@ -1111,28 +1261,28 @@ mod tests {
     #[test]
     fn an_answer_the_next_cycle_did_not_apply_re_emits_the_hold() {
         let state = armed();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(true));
-        state.finish_cycle(L);
+        state.finish_cycle(L, ENGINE);
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         state.note_answered(L, Server);
         assert_eq!(
             report_held(&state, Server, 150),
             None,
             "this cycle started before the answer and never read it"
         );
-        state.finish_cycle(L);
+        state.finish_cycle(L, ENGINE);
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(
             report_held(&state, Server, 150),
             Some(false),
             "the first cycle after the answer still holds: shown again, not notified again"
         );
-        state.finish_cycle(L);
+        state.finish_cycle(L, ENGINE);
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), None, "shown once per answer");
     }
 
@@ -1167,10 +1317,10 @@ mod tests {
         state.note_answered(L, Server);
         cycle(&state, |s| s.record_restored(L, Server, 150));
 
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(true), "a new episode");
-        state.finish_cycle(L);
-        state.begin_cycle(L);
+        state.finish_cycle(L, ENGINE);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), None);
     }
 
@@ -1233,7 +1383,7 @@ mod tests {
     #[test]
     fn the_notification_names_the_account_that_armed_the_drive() {
         let state = armed();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         state.record_held(L, report(Server, 150));
         let mut owner = None;
         state.settle_held(L, Server, false, |_, notify| owner = notify.map(str::to_string));
@@ -1241,7 +1391,7 @@ mod tests {
 
         state.clear_all();
         state.arm(L, "5Next", false, Path::new("/x"), &[]);
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         state.record_held(L, report(Server, 150));
         state.settle_held(L, Server, false, |_, notify| owner = notify.map(str::to_string));
         assert_eq!(owner.as_deref(), Some("5Next"), "the next account's own episode");
@@ -1253,11 +1403,11 @@ mod tests {
     #[test]
     fn an_unarmed_drive_keeps_its_notification_for_the_arm() {
         let state = MassDeleteHoldState::new();
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(false), "shown, nobody to notify");
 
         state.arm(L, OWNER, false, Path::new("/x"), &[held(Server, HoldState::Held, 150)]);
-        state.begin_cycle(L);
+        state.begin_cycle(L, ENGINE);
         assert_eq!(report_held(&state, Server, 150), Some(true));
     }
 
@@ -1274,7 +1424,7 @@ mod tests {
         let state = armed();
 
         for count in [150, 150, 160] {
-            state.begin_cycle(L);
+            state.begin_cycle(L, ENGINE);
             let mut raise = None;
             if state.record_held(L, report(Server, count)) != HeldChange::Unchanged {
                 state.settle_held(L, Server, false, |hold, notify| {
@@ -1286,7 +1436,7 @@ mod tests {
                     .await
                     .expect("save");
             }
-            state.finish_cycle(L);
+            state.finish_cycle(L, ENGINE);
         }
 
         let saved: Vec<(String,)> = sqlx::query_as("SELECT user_address FROM notifications")
@@ -1313,6 +1463,34 @@ mod tests {
     }
 
     #[test]
+    fn counts_are_grouped_like_the_ui_writes_them() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1_000), "1,000");
+        assert_eq!(group_thousands(1_234_567), "1,234,567");
+        assert_eq!(files(1), "1 file");
+        assert_eq!(files(12_000), "12,000 files");
+    }
+
+    #[test]
+    fn hold_text_is_the_banners_title_and_lines() {
+        let entry = HoldEntry {
+            phase: HoldPhase::Held,
+            count: 1_500,
+            synced_count: 2_000,
+            empty_root: false,
+        };
+        let device = THIS_DEVICE;
+        let server = hold_text("Photos", Server, entry, true);
+        assert_eq!(server.title, format!("1,500 of 2,000 files in “Photos” are missing from {device}"));
+        assert_eq!(server.body, vec!["Nothing has been deleted from Hippius yet.".to_string()]);
+
+        let one = hold_text("Photos", Local, HoldEntry { count: 1, ..entry }, false);
+        assert_eq!(one.title, "1 file in “Photos” is missing from Hippius");
+        assert_eq!(one.body[1], "Only the owner of this shared drive can put them back on Hippius.");
+    }
+
+    #[test]
     fn notification_copy_follows_the_side() {
         let entry = HoldEntry {
             phase: HoldPhase::Held,
@@ -1322,20 +1500,26 @@ mod tests {
         };
 
         let server = held_notification_text("Photos", Server, entry, true);
-        assert!(server.contains("150 of 200 files are missing from"));
+        assert!(server.contains("150 of 200 files in “Photos” are missing from"));
         assert!(server.contains("Nothing has been deleted from Hippius yet."));
         assert!(server.contains("reconnect it"));
 
         let local = held_notification_text("Photos", Local, entry, false);
-        assert!(local.contains("150 files are missing from Hippius."));
+        assert!(local.contains("150 files in “Photos” are missing from Hippius."));
         assert!(!local.contains("reconnect"), "the empty-root advice is about this device's folder");
         assert!(local.contains("Only the owner"));
         assert!(!local.contains("renamed"), "a member cannot restore, so the restore caveat is moot");
+        assert!(
+            local.ends_with("Open Hippius to remove them."),
+            "a member is not offered a restore: {local}"
+        );
 
         let own = held_notification_text("Photos", Local, entry, true);
         assert!(
             own.contains("If you renamed or moved the folder on another device, restoring uploads the old copies again."),
             "the banner's caveat, so the notification read later does not promise more than Restore does"
         );
+        assert!(own.ends_with("Open Hippius to restore them or remove them."), "{own}");
+        assert!(server.ends_with("Open Hippius to restore them or remove them."), "{server}");
     }
 }

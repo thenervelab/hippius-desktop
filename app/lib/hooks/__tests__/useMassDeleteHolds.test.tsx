@@ -28,6 +28,8 @@ const HOLD: MassDeleteHold = {
   syncedCount: 200,
   emptyRoot: true,
   canRestore: true,
+  title: "Rust's title",
+  body: ["Rust's line"],
 };
 const KEY = holdKey("Photos", "server");
 

@@ -43,7 +43,26 @@ pub fn generate() -> Result<Zeroizing<String>, AppError> {
 
     let mnemonic =
         bip39::Mnemonic::from_entropy(entropy.as_ref()).map_err(|e| AppError::Crypto(format!("BIP-39 encoding of fresh entropy failed: {e}")))?;
-    Ok(Zeroizing::new(mnemonic.to_string()))
+    Ok(phrase_of(&mnemonic))
+}
+
+/// The phrase, written into a buffer sized for it before the first word.
+///
+/// `to_string()` grows its buffer as it writes, and every reallocation
+/// frees a partial copy of the phrase that nothing wipes. Sizing it up
+/// front (the words, plus one space between each two) means the only copy
+/// is the one `Zeroizing` wipes on drop.
+fn phrase_of(mnemonic: &bip39::Mnemonic) -> Zeroizing<String> {
+    let words = mnemonic.word_count();
+    let len = mnemonic.words().map(str::len).sum::<usize>() + words.saturating_sub(1);
+    let mut phrase = Zeroizing::new(String::with_capacity(len));
+    for (i, word) in mnemonic.words().enumerate() {
+        if i > 0 {
+            phrase.push(' ');
+        }
+        phrase.push_str(word);
+    }
+    phrase
 }
 
 #[cfg(test)]
@@ -61,6 +80,24 @@ mod tests {
 
         assert_eq!(mnemonic.word_count(), 12);
         assert_eq!(mnemonic.to_entropy().len(), 16);
+    }
+
+    /// The phrase is written into a buffer sized for it up front. Grown as
+    /// it was built, each reallocation would leave a partial copy of the
+    /// phrase in freed memory that nothing wipes.
+    #[test]
+    fn the_phrase_is_built_without_reallocating() {
+        for _ in 0..16 {
+            let phrase = generate().unwrap();
+            assert_eq!(phrase.capacity(), phrase.len(), "{} words", phrase.split(' ').count());
+        }
+    }
+
+    /// The hand-built phrase is exactly bip39's own rendering.
+    #[test]
+    fn the_phrase_matches_bip39s_rendering() {
+        let mnemonic = bip39::Mnemonic::from_entropy(&[7u8; 16]).unwrap();
+        assert_eq!(phrase_of(&mnemonic).as_str(), mnemonic.to_string());
     }
 
     /// Catches a generator that ignores its entropy (a zeroed buffer encodes

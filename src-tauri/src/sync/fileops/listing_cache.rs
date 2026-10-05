@@ -24,6 +24,9 @@
 //! Concurrent lookups for one drive share a single fetch: the per-drive slot
 //! is an async mutex held across the fetch, so the second caller waits and
 //! then reads what the first fetched rather than paging the listing again.
+//! A failed fetch is shared the same way: for [`FAILURE_TTL`] the drive's
+//! lookups get that failure instead of fetching again, so during an outage
+//! a queue of waiters does not run into the full timeout one after another.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -47,6 +50,11 @@ const MAX_DRIVES: usize = 4;
 /// absent without fetching again. Short: the file may be uploading, and its
 /// download should work soon after it lands.
 const MISS_TTL: Duration = Duration::from_secs(5);
+
+/// How long a failed fetch answers the drive's lookups with its failure.
+/// Covers the lookups queued behind it (a screen of thumbnails), and is
+/// short enough that the next action after the outage fetches again.
+const FAILURE_TTL: Duration = Duration::from_secs(3);
 
 /// Misses remembered per drive. A screen of thumbnails is tens of files;
 /// the bound only stops a long browse from growing the map.
@@ -81,7 +89,22 @@ struct SlotData {
     /// Files a fetched listing lacked, and when that fetch was. Kept across
     /// refetches (another miss refetches too), dropped with the slot.
     misses: HashMap<[u8; 32], Instant>,
+    /// The latest fetch failed: when, and why. Cleared by a successful one.
+    failed: Option<(Instant, String)>,
 }
+
+/// A drive's listing could not be fetched (now, or within [`FAILURE_TTL`]
+/// by the fetch the caller queued behind). Carries the fetch's message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingFetchError(String);
+
+impl std::fmt::Display for ListingFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ListingFetchError {}
 
 /// A drive's slot. Async so a fetch in progress holds it and concurrent
 /// lookups wait for that fetch instead of starting theirs.
@@ -97,6 +120,8 @@ pub struct RemoteListingCache {
     max_drives: usize,
     /// How long a miss is answered without fetching.
     miss_ttl: Duration,
+    /// How long a failed fetch is answered without fetching.
+    failure_ttl: Duration,
     /// How many misses a drive remembers.
     max_misses: usize,
 }
@@ -123,8 +148,16 @@ impl RemoteListingCache {
             ttl,
             max_drives,
             miss_ttl: MISS_TTL,
+            failure_ttl: FAILURE_TTL,
             max_misses: MAX_MISSES,
         }
+    }
+
+    /// Test-only: another failure TTL.
+    #[cfg(test)]
+    fn with_failure_ttl(mut self, failure_ttl: Duration) -> Self {
+        self.failure_ttl = failure_ttl;
+        self
     }
 
     /// Test-only: other miss limits.
@@ -143,7 +176,9 @@ impl RemoteListingCache {
     ///
     /// # Errors
     ///
-    /// Whatever `fetch` returns; nothing is cached on an error.
+    /// [`ListingFetchError`] with `fetch`'s message when it fails, or when
+    /// the drive's latest fetch failed within [`FAILURE_TTL`] (no fetch is
+    /// made then). No listing or miss is cached from a failure.
     pub async fn expected<F, Fut, E>(
         &self,
         label: &str,
@@ -151,10 +186,11 @@ impl RemoteListingCache {
         folder_hash: &str,
         path_hash: [u8; 32],
         fetch: F,
-    ) -> Result<Option<ExpectedContent>, E>
+    ) -> Result<Option<ExpectedContent>, ListingFetchError>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = Result<Vec<RemoteFileEntry>, E>>,
+        E: std::fmt::Display,
     {
         let key = ListingKey {
             label: label.to_string(),
@@ -172,8 +208,20 @@ impl RemoteListingCache {
         if held.misses.get(&path_hash).is_some_and(|at| at.elapsed() < self.miss_ttl) {
             return Ok(None);
         }
+        if let Some((_, message)) = held.failed.as_ref().filter(|(at, _)| at.elapsed() < self.failure_ttl) {
+            return Err(ListingFetchError(message.clone()));
+        }
 
-        let listing = listing_from(fetch().await?);
+        let entries = match fetch().await {
+            Ok(entries) => entries,
+            Err(e) => {
+                let message = e.to_string();
+                held.failed = Some((Instant::now(), message.clone()));
+                return Err(ListingFetchError(message));
+            }
+        };
+        held.failed = None;
+        let listing = listing_from(entries);
         let row = listing.rows.get(&path_hash).copied();
         if row.is_none() {
             self.remember_miss(&mut held.misses, path_hash, listing.fetched_at);
@@ -425,11 +473,54 @@ mod tests {
         assert_eq!(server.listings(), 4, "the third was not");
     }
 
+    /// During an outage every fetch runs into its full timeout. Lookups
+    /// queued behind a failing fetch must not each pay that again in turn:
+    /// they get the failure the drive's fetch just had.
+    #[tokio::test]
+    async fn lookups_waiting_on_a_failed_fetch_share_its_failure() {
+        let cache = RemoteListingCache::default();
+        let fetches = AtomicUsize::new(0);
+        let failing = || async {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            Err::<Vec<RemoteFileEntry>, String>("offline".to_string())
+        };
+
+        let lookups = (0..5).map(|byte| cache.expected("photos", "owner", "folder", [byte; 32], failing));
+        let results = futures_util::future::join_all(lookups).await;
+
+        assert!(results.iter().all(Result::is_err));
+        assert_eq!(fetches.load(Ordering::SeqCst), 1, "one fetch for the whole queue");
+        assert!(
+            results.iter().all(|r| r.as_ref().is_err_and(|e| e.to_string().contains("offline"))),
+            "each waiter is told why"
+        );
+    }
+
+    /// The failure is remembered only briefly: once it is older than the
+    /// TTL, the next lookup fetches again and a recovered server answers.
+    #[tokio::test]
+    async fn a_remembered_failure_expires() {
+        let cache = RemoteListingCache::default().with_failure_ttl(Duration::ZERO);
+        let failed = cache
+            .expected("photos", "owner", "folder", [1; 32], || async {
+                Err::<Vec<RemoteFileEntry>, _>("offline".to_string())
+            })
+            .await;
+        assert!(failed.is_err());
+
+        let server = FakeServer::with(&[1]);
+        assert!(lookup(&cache, &server, "photos", 1).await.is_some());
+        assert_eq!(server.listings(), 1);
+    }
+
     #[tokio::test]
     async fn a_failed_fetch_caches_nothing() {
-        let cache = RemoteListingCache::default();
-        let failed: Result<Option<ExpectedContent>, String> = cache
-            .expected("photos", "owner", "folder", [1; 32], || async { Err("offline".to_string()) })
+        let cache = RemoteListingCache::default().with_failure_ttl(Duration::ZERO);
+        let failed = cache
+            .expected("photos", "owner", "folder", [1; 32], || async {
+                Err::<Vec<RemoteFileEntry>, _>("offline".to_string())
+            })
             .await;
         assert!(failed.is_err());
 

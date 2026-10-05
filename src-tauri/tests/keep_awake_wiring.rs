@@ -56,7 +56,7 @@ fn progress_snapshot_funnel_drives_keep_awake() {
 #[test]
 fn terminal_event_arms_reevaluate_keep_awake() {
     let src = bridge_src();
-    for sig in ["fn handle_sync_stopped(", "fn handle_sync_reset(", "fn clear_after_failed_cycle("] {
+    for sig in ["fn handle_sync_stopped(", "fn handle_sync_reset<", "fn clear_after_failed_cycle("] {
         let body = fn_body(&src, sig);
         assert!(
             body.contains("reevaluate_keep_awake"),
