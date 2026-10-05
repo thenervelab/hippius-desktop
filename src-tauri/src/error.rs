@@ -553,11 +553,11 @@ impl Serialize for AppError {
             }
         }
 
-        if let Self::NotReady(NotReadyKind::MassDeleteHoldChanged { held }) = self {
+        if let Self::NotReady(subkind @ NotReadyKind::MassDeleteHoldChanged { held }) = self {
             // The one subkind with data the FE acts on: the new count to show.
             let mut s = serializer.serialize_struct("AppError", 4)?;
             s.serialize_field("kind", kind)?;
-            s.serialize_field("subkind", "MASS_DELETE_HOLD_CHANGED")?;
+            s.serialize_field("subkind", subkind.wire_name())?;
             s.serialize_field("message", &self.to_string())?;
             s.serialize_field("held", held)?;
             s.end()
