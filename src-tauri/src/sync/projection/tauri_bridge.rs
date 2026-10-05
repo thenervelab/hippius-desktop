@@ -525,7 +525,7 @@ fn handle_mass_delete_event(app: &AppHandle, event: SyncEvent) {
             pending,
             skipped,
         } => {
-            holds.record_restored(&label, side, restored, restored + pending + skipped);
+            holds.record_restored(&label, side, restored + pending + skipped);
             tracing::info!(label = %label, side = side.as_str(), restored, pending, skipped, "hcfs restored a held mass delete");
             let payload = events::MassDeleteRestoredPayload {
                 label,

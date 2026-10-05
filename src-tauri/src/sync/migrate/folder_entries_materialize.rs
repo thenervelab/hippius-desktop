@@ -441,7 +441,7 @@ pub(crate) fn folder_rows_to_forget(
 }
 
 /// Apply the folder restores the drive owes (set when hcfs reported a
-/// restore that put files back), then acknowledge them. Runs before
+/// restore it applied), then acknowledge them. Runs before
 /// reconcile so both halves see the forgotten rows. A failed server listing
 /// keeps them owed for the next run; a refused restore never set them.
 async fn restore_held_folders(state: &AppState, drive: FolderJobDrive<'_>, on_disk: &BTreeSet<String>) -> Result<()> {

@@ -31,8 +31,8 @@
 //!   from releasing a hold that has grown since.
 //! - **Folder restores owed.** The engine plans files only; the desktop's
 //!   folder job puts empty folders back itself, once per applied restore
-//!   (see `folder_entries_materialize`). The flag is set only when files were
-//!   actually restored, never on a refusal.
+//!   (see `folder_entries_materialize`). The flag is set by every applied
+//!   restore, whatever its counts, and never by a refusal.
 //!
 //! ## Cycle bookkeeping
 //!
@@ -310,9 +310,14 @@ impl MassDeleteHoldState {
     }
 
     /// Record a `MassDeleteRestored`: the side is restoring until the next
-    /// cycle completes, and the episode is over. Owes the folder job a
-    /// restore only when files were actually put back.
-    pub fn record_restored(&self, label: &str, side: MassDeleteSide, restored: usize, total: usize) {
+    /// cycle completes, and the episode is over. `total` is every file the
+    /// restore covered (restored, pending and skipped).
+    ///
+    /// Always owes the folder job a restore, whatever the counts: hcfs only
+    /// reports a restore it applied (a refusal is a different event), files
+    /// still `pending` finish on later cycles, and the empty folders beside
+    /// them have no transfer to wait for.
+    pub fn record_restored(&self, label: &str, side: MassDeleteSide, total: usize) {
         let mut map = self.lock();
         let slot = map.entry(label.to_string()).or_default().slot_mut(side);
         let previous = slot.entry;
@@ -325,9 +330,7 @@ impl MassDeleteHoldState {
             synced_count: previous.map_or(0, |e| e.synced_count),
             empty_root: false,
         });
-        if restored > 0 {
-            slot.folder_restore = true;
-        }
+        slot.folder_restore = true;
     }
 
     /// Record a `MassDeleteRestoreRefused`, reporting whether this reason is
@@ -630,7 +633,7 @@ mod tests {
             s.record_held(L, Server, 150, 200, false);
         });
 
-        assert!(cycle(&state, |s| s.record_restored(L, Server, 150, 150)).is_empty());
+        assert!(cycle(&state, |s| s.record_restored(L, Server, 150)).is_empty());
         let entry = state.entry(L, Server).expect("restoring side is kept");
         assert_eq!(entry.phase, HoldPhase::Restoring);
         assert_eq!(entry.count, 150);
@@ -644,7 +647,7 @@ mod tests {
         cycle(&state, |s| {
             s.record_held(L, Server, 150, 200, false);
         });
-        cycle(&state, |s| s.record_restored(L, Server, 150, 150));
+        cycle(&state, |s| s.record_restored(L, Server, 150));
 
         state.begin_cycle(L);
         assert_eq!(state.record_held(L, Server, 150, 200, false), HeldChange::Changed { notify: true });
@@ -670,13 +673,13 @@ mod tests {
         assert!(state.record_refused(L, Server, "insufficient_space"), "a new episode reports it again");
     }
 
+    /// An applied restore owes its folders even when no file finished this
+    /// cycle: the transfers that started (`pending`) finish later, and the
+    /// empty folders have no transfer to wait for.
     #[test]
-    fn only_a_restore_that_put_files_back_owes_folders() {
+    fn every_applied_restore_owes_folders() {
         let state = MassDeleteHoldState::new();
-        cycle(&state, |s| s.record_restored(L, Local, 0, 40));
-        assert_eq!(state.folder_restores(L), FolderRestores::default());
-
-        cycle(&state, |s| s.record_restored(L, Local, 3, 40));
+        cycle(&state, |s| s.record_restored(L, Local, 40));
         assert_eq!(state.folder_restores(L), FolderRestores { server: false, local: true });
 
         state.ack_folder_restores(L, FolderRestores { server: false, local: true });
@@ -686,7 +689,7 @@ mod tests {
     #[test]
     fn a_folder_restore_outlives_the_episode_and_a_re_init() {
         let state = MassDeleteHoldState::new();
-        cycle(&state, |s| s.record_restored(L, Server, 10, 10));
+        cycle(&state, |s| s.record_restored(L, Server, 10));
         cycle(&state, |_| {});
         state.arm(L, false, Path::new("/x"), &[]);
         assert!(state.folder_restores(L).server, "consumed only by the folder job");
@@ -729,7 +732,7 @@ mod tests {
         let state = MassDeleteHoldState::new();
         cycle(&state, |s| {
             s.record_held(L, Server, 150, 200, false);
-            s.record_restored("other", Local, 5, 5);
+            s.record_restored("other", Local, 5);
         });
 
         state.clear(L);
