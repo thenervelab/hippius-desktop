@@ -124,6 +124,27 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A file's sync error shows only on that file.** Two files with the same
+  name in different folders no longer both show the error of one of them.
+
+- **Opening a folder no longer deletes files in it.** Files whose names start
+  with 'downloaded_', and empty files whose names start with 'file_', were
+  removed when you opened their folder.
+
+- **A file that can't sync now says why, and stays marked until it's fixed.**
+  If two files' names differ only in capital letters, a file can't be read, or
+  your disk is too full to download it, Hippius names the file and tells you
+  what to do, instead of a vague "Sync failed. Please try again." Such a file
+  offers Dismiss rather than a Retry that could not help.
+
+- **A disconnected disk is called what it is.** When your Hippius folder is on
+  a disk that isn't plugged in, Hippius says so once and changes nothing,
+  instead of reporting a sync failure on every retry.
+
+- **A folder link made from a copy no longer claims to share your whole
+  drive.** Shared Links marks it "Uploaded copy" and no drive folder shows it
+  as shared, since it holds a copy of the files rather than your drive.
+
 - **The menu bar popover opens under its icon again, recording or not.** It
   no longer does nothing while a recording runs, vanishes the moment it
   opens, or hides behind a capture's preview card.
@@ -287,6 +308,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   remain the last line of defence.
 
 ### Added
+
+- **Large deletes wait for you to decide.** When most of a drive suddenly
+  looks deleted, for example because an external disk was unplugged, Hippius
+  deletes nothing and asks you first, with a banner and one notification.
+  Restore files puts everything back, empty folders included; Remove deletes
+  the files once you confirm how many; Decide later keeps them safe until you
+  choose, and opening the notification brings the banner back.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a

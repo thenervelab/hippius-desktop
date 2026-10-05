@@ -678,7 +678,7 @@ async fn get_preferences_inner(pool: &sqlx::SqlitePool, owner: &str) -> Result<V
 
 /// Account-scoped preference toggle update (defaults seeded first so toggling a
 /// not-yet-seeded category persists instead of being a silent no-op UPDATE).
-async fn set_preferences_inner(pool: &sqlx::SqlitePool, owner: &str, preferences: &[PreferenceUpdate]) -> Result<(), AppError> {
+pub(crate) async fn set_preferences_inner(pool: &sqlx::SqlitePool, owner: &str, preferences: &[PreferenceUpdate]) -> Result<(), AppError> {
     seed_default_preferences(pool, owner).await?;
     let mut tx = pool.begin().await?;
     for pref in preferences {
@@ -695,7 +695,7 @@ async fn set_preferences_inner(pool: &sqlx::SqlitePool, owner: &str, preferences
 }
 
 /// Account-scoped labels of enabled categories (defaults seeded first).
-async fn enabled_types_inner(pool: &sqlx::SqlitePool, owner: &str) -> Result<Vec<String>, AppError> {
+pub(crate) async fn enabled_types_inner(pool: &sqlx::SqlitePool, owner: &str) -> Result<Vec<String>, AppError> {
     seed_default_preferences(pool, owner).await?;
     let rows = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE owner = ? AND enabled = 1")
         .bind(owner)

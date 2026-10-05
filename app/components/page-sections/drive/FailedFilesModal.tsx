@@ -28,7 +28,7 @@ import FramedDialog from "@/components/ui/FramedDialog";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import { failedFilesAtom, type FailedFileInfo } from "@/lib/store/syncAtoms";
-import { isRetryableReason } from "@/app/lib/utils/failureMessage";
+import { isRetryableFailedFile } from "@/app/lib/utils/failureMessage";
 import { getFileIcon } from "@/lib/utils/fileTypeUtils";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { getFilePartsFromFileName } from "@/lib/utils";
@@ -104,13 +104,13 @@ export default function FailedFilesModal() {
 
   const runBulk = useCallback(
     async (action: Action) => {
-      // "Retry all" leaves out files hcfs has quarantined: the command would
-      // report success, clear their badges, and the next cycle would skip them
-      // and re-emit the failure. Skip and Exclude still apply to everything —
+      // "Retry all" leaves out files hcfs has quarantined or refused: the
+      // command would report success, clear their badges, and the next cycle
+      // would skip them (or refuse them again, unreported). Skip and Exclude still apply to everything —
       // those are the two escape hatches that DO work for such a file.
       const all = failedFiles ?? [];
       const targets =
-        action === "retry" ? all.filter((f) => isRetryableReason(f.error)) : all;
+        action === "retry" ? all.filter((f) => isRetryableFailedFile(f)) : all;
       if (targets.length === 0) return;
       setBulkBusy(true);
       // allSettled so a single Rust failure (e.g. file already removed
@@ -323,11 +323,11 @@ function FileRow({ file, busy, onAction, isLast }: FileRowProps) {
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
-        {/* Hidden, not disabled, for a quarantined file: hcfs has stopped
-            fetching it and `sp_retry_file` cannot reach that quarantine, so
-            the button would clear the badge, the next cycle would skip the
-            file, and the re-emitted failure would bring the badge back. */}
-        {isRetryableReason(file.error) && (
+        {/* Hidden, not disabled, for a quarantined or refused file: hcfs has
+            stopped fetching it (or reports the refusal once per revision) and
+            `sp_retry_file` cannot change that, so the button would clear the
+            badge and promise a sync that never happens. */}
+        {isRetryableFailedFile(file) && (
           <Button
             variant="defaultStable"
             size="sm"

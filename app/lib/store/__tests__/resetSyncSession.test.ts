@@ -5,6 +5,7 @@ import {
   pendingConflictsAtom,
   failedFilesAtom,
   creditsExhaustedAtom,
+  massDeleteHoldsAtom,
   syncEngineHealthAtom,
   DEFAULT_SYNC_ENGINE_HEALTH,
 } from "@/lib/store/syncAtoms";
@@ -15,6 +16,7 @@ import {
   syncRequiresReauthAtom,
 } from "@/lib/global-atoms/unpinAtoms";
 import type { StagedChanges } from "@/lib/types/syncTypes";
+import { applyHeld } from "@/app/lib/massDelete/holds";
 
 describe("resetSyncSession", () => {
   // appStore is a module-level singleton; clear it before each case so a
@@ -36,6 +38,18 @@ describe("resetSyncSession", () => {
       { label: "a", path: "/a/p", fileName: "p", error: "boom", failureCount: 5 },
     ]);
     appStore.set(creditsExhaustedAtom, { label: "a", balanceCents: 0, requiredCents: 100, fileCount: 3 });
+    appStore.set(
+      massDeleteHoldsAtom,
+      applyHeld(new Map(), {
+        label: "a",
+        side: "server",
+        state: "held",
+        count: 150,
+        syncedCount: 200,
+        emptyRoot: false,
+        canRestore: true,
+      })
+    );
     appStore.set(syncEngineHealthAtom, {
       ...DEFAULT_SYNC_ENGINE_HEALTH,
       status: "server_unreachable",
@@ -55,6 +69,7 @@ describe("resetSyncSession", () => {
     expect(appStore.get(pendingConflictsAtom).size).toBe(0);
     expect(appStore.get(failedFilesAtom)).toBeNull();
     expect(appStore.get(creditsExhaustedAtom)).toBeNull();
+    expect(appStore.get(massDeleteHoldsAtom).size).toBe(0);
     expect(appStore.get(syncEngineHealthAtom)).toEqual(DEFAULT_SYNC_ENGINE_HEALTH);
     expect(appStore.get(driveStatusesAtom).size).toBe(0);
     expect(appStore.get(driveStatusesLoadedAtom)).toBe(false);

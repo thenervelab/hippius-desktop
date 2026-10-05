@@ -23,7 +23,9 @@ use crate::shares::client::build_account_client;
 use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
 use chrono::Utc;
-use hcfs_client::client::folder_share::{FolderShareError, FolderShareListItem, build_folder_share_url_for, folder_share_token_hash};
+use hcfs_client::client::folder_share::{
+    FolderShareError, FolderShareListItem, FolderShareSource, build_folder_share_url_for, folder_share_token_hash,
+};
 use hcfs_client::client::share::{
     ShareKeystore, ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
     generate_share_password, validate_share_password,
@@ -1277,6 +1279,33 @@ pub async fn hcfs_create_folder_share(
 
 // ─── Folder-share owner ops (list / revoke / expiry) ───────────────────────
 
+/// Where a folder link's contents come from, as the shares page labels it.
+///
+/// Desktop-owned rather than hcfs-client's [`FolderShareSource`], so the FE
+/// reads a key Rust chose, and the `From` below is an exhaustive match: a
+/// new upstream variant fails the build here instead of silently being
+/// labelled (or badged) as a drive folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FolderShareOrigin {
+    /// A live link onto a drive folder.
+    Drive,
+    /// A copy uploaded from a folder outside every drive. It has no drive
+    /// identity (`folder_hash` and `path_prefix` are `""`), so it never
+    /// badges a drive folder, and later changes to the source folder are
+    /// not in it.
+    UploadedCopy,
+}
+
+impl From<FolderShareSource> for FolderShareOrigin {
+    fn from(source: FolderShareSource) -> Self {
+        match source {
+            FolderShareSource::Drive => Self::Drive,
+            FolderShareSource::Upload => Self::UploadedCopy,
+        }
+    }
+}
+
 /// One row of the owner's folder-share listing, resolved against this
 /// device's keystore. Mirrors the server's listing fields (camelCased,
 /// timestamps as RFC 3339 strings) plus the local resolution.
@@ -1322,6 +1351,10 @@ pub struct FolderShareSummary {
     /// device — reporting `false` would label a password-protected share
     /// "public". `None` coincides with `share_url` being `None`.
     pub is_private: Option<bool>,
+    /// Drive folder or uploaded copy. Only a `Drive` row may feed a
+    /// folder badge; an uploaded copy's empty `folder_hash` must never be
+    /// read as "the whole drive".
+    pub source: FolderShareOrigin,
 }
 
 /// Index the keystore's stored tokens by their blake3 hex — the join key
@@ -1361,6 +1394,7 @@ fn resolve_folder_share_rows(
                 created_at: row.created_at.to_rfc3339(),
                 expires_at: row.expires_at.map(|e| e.to_rfc3339()),
                 revoked_at: row.revoked_at.map(|e| e.to_rfc3339()),
+                source: row.source.into(),
             }
         })
         .collect()
@@ -2391,6 +2425,9 @@ mod tests {
             // New upstream field (hcfs #457/#458 sealed invite tokens); the
             // listing-resolution tests do not exercise it.
             owner_wrap: None,
+            // A drive folder link: these resolution tests predate uploaded
+            // copies, whose rows the listing labels `Upload`.
+            source: FolderShareSource::Drive,
             created_at: Utc::now(),
             expires_at: None,
             revoked_at: None,
@@ -2416,6 +2453,7 @@ mod tests {
             share_token: Some("tok".to_string()),
             share_url: Some("https://x.io/share/folder/tok#k=AA".to_string()),
             is_private: Some(false),
+            source: FolderShareOrigin::Drive,
         };
         let json = serde_json::to_value(&summary).expect("serialize FolderShareSummary");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
@@ -2431,11 +2469,29 @@ mod tests {
             "shareToken",
             "shareUrl",
             "isPrivate",
+            "source",
         ]
         .into_iter()
         .map(String::from)
         .collect();
         assert_eq!(keys, expected, "FolderShareSummary wire keys drifted — FE shares.ts reads these");
+    }
+
+    /// An uploaded-copy row reaches the FE as `"uploadedCopy"`: Rust picks
+    /// the key the shares page labels and the badge index skips. A drive
+    /// row stays `"drive"`.
+    #[test]
+    fn listing_rows_carry_their_source_to_the_fe() {
+        let mut upload = mk_folder_row(&"cd".repeat(32), "");
+        upload.source = FolderShareSource::Upload;
+        upload.folder_hash = String::new();
+        let rows = resolve_folder_share_rows(vec![mk_folder_row(&"ab".repeat(32), "photos"), upload], &HashMap::new(), "https://x.io");
+
+        let json = serde_json::to_value(&rows).expect("serialize");
+        assert_eq!(json[0]["source"], "drive");
+        assert_eq!(json[1]["source"], "uploadedCopy");
+        assert_eq!(json[1]["folderHash"], "", "an uploaded copy names no drive folder");
+        assert_eq!(json[1]["pathPrefix"], "");
     }
 
     /// The resolution rules in one place: a hash with a stored token

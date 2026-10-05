@@ -29,9 +29,9 @@ const FILES: FailedFileInfo[] = [
   { label: "media", path: "Shows/Ep 01.mp4", fileName: "Ep 01.mp4", error: "Server error (500).", failureCount: 3 },
 ];
 
-function renderModal() {
+function renderModal(files: FailedFileInfo[] = FILES) {
   const store = createStore();
-  store.set(failedFilesAtom, FILES);
+  store.set(failedFilesAtom, files);
   render(
     <Provider store={store}>
       <FailedFilesModal />
@@ -60,5 +60,25 @@ describe("FailedFilesModal", () => {
       }),
     );
     expect(store.get(failedFilesAtom)).toBeNull();
+  });
+
+  // A refusal's text is hcfs's own, so only the kind can say a retry would
+  // not help: hcfs reports a refusal once per revision.
+  it("offers no Retry for a refused file, and leaves it out of Retry all", async () => {
+    const refused: FailedFileInfo = {
+      label: "media",
+      path: "Beach.JPG",
+      fileName: "Beach.JPG",
+      error: "Not synced: collides with beach.jpg",
+      failureCount: 3,
+      kind: "refused",
+    };
+    renderModal([refused, FILES[1]!]);
+
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry all" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    expect(invoke).toHaveBeenCalledWith("sp_retry_file", { label: "media", path: "Shows/Ep 01.mp4" });
   });
 });

@@ -1275,7 +1275,11 @@ pub(crate) async fn initialize_sync_inner(
             // authoritative backstop, so a server blip here must not block sync.
             // Log it so the skipped check is observable instead of silently dropped.
             Err(e) => {
-                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)");
+                tracing::warn!(
+                    account = %account,
+                    error = %e,
+                    "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)"
+                );
             }
         }
     }
@@ -1337,6 +1341,21 @@ pub(crate) async fn initialize_sync_inner(
         &label,
         crate::sync::folder_restore_notify::FolderRestoreNotifyState::baseline_exists(&folder_dir),
     );
+
+    // Arm the large-delete prompt's state with what hcfs recorded on disk, so
+    // a hold from an earlier run shows before the first cycle (and is not
+    // notified again). An unreadable record only seeds nothing here: the
+    // first cycle rewrites it and re-reports the hold, and the folder job
+    // reads it itself and fails closed. See `sync::mass_delete_hold`.
+    let seed = crate::sync::mass_delete_hold::read_recorded_holds(PathBuf::from(&cfg.sync_path), folder_dir.clone())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(label = %label, error = %e, "Could not read held mass deletes at init; the first cycle reports them");
+            Vec::new()
+        });
+    app_state
+        .mass_delete_holds
+        .arm(&label, &account_id, is_member, std::path::Path::new(&cfg.sync_path), &seed);
 
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
@@ -1690,6 +1709,10 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     // pattern — both are transient UI-affordance state that must
     // not survive across accounts.
     app_state.preparing.clear_all();
+    // Cached remote listings hold the signed-out account's file rows.
+    app_state.remote_listing_cache.clear_all();
+    // Held mass deletes belong to the signed-out account's drives.
+    app_state.mass_delete_holds.clear_all();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
@@ -1748,7 +1771,7 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
 }
 
 /// Tear down a drive: cancel any in-flight sync, drop it from the in-memory
-/// map, delete its `sync_paths` row, clear its intent rows, and wipe its
+/// map, delete its `sync_paths` row, clear its intent and saved-failure rows, and wipe its
 /// on-disk sync baseline — in that drain-then-wipe order. `explicit_account`
 /// scopes the DB delete and baseline wipe: pass `Some` when the caller knows
 /// the owning account, `None` to fall back to the current session account.
@@ -1815,6 +1838,12 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         // init. Hygiene rather than correctness — but without it the map keeps
         // an entry per label ever initialized in this process.
         app_state.folder_restore_notify.clear(&label);
+        // The drive is gone, and with it any hold the prompt was showing.
+        // Nothing else takes those banners down (no cycle will report the
+        // drive again), so each side is cleared the way a cycle clears it.
+        for side in app_state.mass_delete_holds.clear(&label) {
+            crate::sync::tauri_bridge::emit_mass_delete_cleared(&app, &label, side);
+        }
 
         // Delete the DB row so the drive isn't resurrected on app restart, and
         // drop the intent-manifest rows for this drive so the snapshot overlay
@@ -1852,7 +1881,15 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
             if let Err(e) = crate::sync::folder_entries_backfill::clear_folder_entries_for_drive(pool, &owner, &label).await {
                 warn!("Failed to clear folder_entries_local for drive '{}': {e}", label);
             }
+
+            // Refusals outlive clean cycles and dismissals are restored at
+            // init, so both would come back on a drive re-added under this
+            // label.
+            if let Err(e) = crate::sync::failure_repo::clear_failures_for_drive(pool, &owner, &label).await {
+                warn!("Failed to clear saved failures for drive '{}': {e}", label);
+            }
         }
+        app_state.file_failures.clear_all_for_label(&label);
 
         // Tell the FE to drop this drive's entry from its per-drive
         // status map — INSIDE the locked region so emission order
@@ -2319,7 +2356,10 @@ impl Drop for AutoInitGuard {
 /// return path.
 #[expect(
     clippy::too_many_lines,
-    reason = "Linear auto-init pipeline — concurrency guard, migration check, mnemonic persistence, path fetch, scope expansion, HCFS config check, paused emit, mnemonic resolution, credits check, init loop. Splitting fragments the early-return error paths and obscures the ordering constraint between the paused-emit loop and the init loop (FE listener relies on that order)."
+    reason = "Linear auto-init pipeline — concurrency guard, migration check, mnemonic persistence, path fetch, \
+              scope expansion, HCFS config check, paused emit, mnemonic resolution, credits check, init loop. \
+              Splitting fragments the early-return error paths and obscures the ordering constraint between \
+              the paused-emit loop and the init loop (FE listener relies on that order)."
 )]
 async fn auto_init_sync_inner(
     app: AppHandle,

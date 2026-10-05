@@ -398,6 +398,18 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
     let sync = sync.clone();
     Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
         sync.touch_progress_time();
+        // hcfs plans only after its mount check passed (`check_root_mounted`
+        // runs between scan and fetch), so a plan, empty or not, means the
+        // drive folder's disk is there: the unmounted-root episode is over
+        // and the next unplug notifies again. `SyncStarted` cannot say this;
+        // hcfs emits it before the check. `try_state`: a callback racing app
+        // teardown must not panic across the hcfs boundary.
+        {
+            use tauri::Manager;
+            if let Some(app_state) = app.try_state::<crate::app_state::AppState>() {
+                app_state.root_not_mounted_notify.clear(&label);
+            }
+        }
         // Persist the planner's view to the desktop-side intent manifest.
         // Runs UNCONDITIONALLY — above the `total == 0` early-return —
         // because an empty plan must still flush stale pending rows (see

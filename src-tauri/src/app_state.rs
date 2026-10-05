@@ -87,6 +87,13 @@ pub struct AppState {
     /// notify again), on the `SyncCompleted` recovery edge, and globally on
     /// `SyncReset`.
     pub revoked_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
+    /// Per-label once-per-episode latch for the "Hippius folder looks
+    /// disconnected" notification (`SyncError::RootNotMounted`). hcfs refuses
+    /// every cycle until the disk is back, so only the first refusal of an
+    /// episode notifies. Separate from `error_notify` so an unplugged disk
+    /// never feeds the flaky-endpoint counter. Cleared on `SyncCompleted`
+    /// (the disk is back), `SyncStopped`, and globally on `SyncReset`.
+    pub root_not_mounted_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
     /// Per-label gate for the "Folder Restored" notification raised when the
     /// engine finds an own drive's folder missing from the server, re-registers
     /// it, and discards the local baseline (so the whole drive re-uploads).
@@ -98,6 +105,13 @@ pub struct AppState {
     /// the most common flow in the product. See
     /// `crate::sync::folder_restore_notify`.
     pub folder_restore_notify: std::sync::Arc<crate::sync::folder_restore_notify::FolderRestoreNotifyState>,
+    /// Per-label held mass deletes for the large-delete prompt: change-only
+    /// emits, one notification per episode, the hold the restore/confirm
+    /// commands validate against, and the empty-folder restores the folder
+    /// job owes. Armed at init (seeded from hcfs's held record), driven by
+    /// the bridge's hold/restore/cycle events, cleared on drive removal,
+    /// logout and `SyncReset`. See `crate::sync::mass_delete_hold`.
+    pub mass_delete_holds: std::sync::Arc<crate::sync::mass_delete_hold::MassDeleteHoldState>,
     /// Edge-triggered owner of the OS "prevent idle system sleep" assertion
     /// held while any sync session still has non-terminal files, so macOS/
     /// Windows can't idle-sleep mid-transfer of a large folder. Display sleep
@@ -136,6 +150,13 @@ pub struct AppState {
     /// its own smaller gate purely to skip scrolled-past rows before the
     /// IPC is even issued).
     pub remote_media_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Short-lived per-drive remote listing rows that one-off downloads
+    /// (thumbnails, previews, Download) verify against, so a screen of them
+    /// pages the drive's listing once rather than once per file. Invalidated
+    /// per label on `SyncCompleted` and when the drive stops (pause,
+    /// removal), wholesale on `SyncReset` and logout. See
+    /// `crate::sync::listing_cache`.
+    pub remote_listing_cache: std::sync::Arc<crate::sync::listing_cache::RemoteListingCache>,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -336,11 +357,14 @@ impl AppState {
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             revoked_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
+            root_not_mounted_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             folder_restore_notify: std::sync::Arc::new(crate::sync::folder_restore_notify::FolderRestoreNotifyState::new()),
+            mass_delete_holds: std::sync::Arc::new(crate::sync::mass_delete_hold::MassDeleteHoldState::new()),
             keep_awake: std::sync::Arc::new(crate::power::SyncKeepAwake::new_native()),
             chunk_reclaim: tokio::sync::OnceCell::new(),
             folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),
             remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
+            remote_listing_cache: std::sync::Arc::default(),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             tray_panel_shown_at: AtomicU64::new(0),
@@ -411,9 +435,9 @@ impl AppState {
     /// across an `.await` (axiom 74).
     #[cfg(any(unix, windows))]
     pub fn store_finder_share(&self, req: crate::finder_bridge::dispatch::PendingFinderShare) -> String {
-        use rand::Rng;
-        use rand::distributions::Alphanumeric;
-        let id: String = rand::thread_rng().sample_iter(&Alphanumeric).take(22).map(char::from).collect();
+        use rand::RngExt;
+        use rand::distr::Alphanumeric;
+        let id: String = rand::rng().sample_iter(&Alphanumeric).take(22).map(char::from).collect();
         self.pending_finder_shares
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

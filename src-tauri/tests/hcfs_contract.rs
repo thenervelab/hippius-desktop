@@ -19,7 +19,7 @@
 
 use base64::Engine;
 use hcfs_client::client::folder_share::{
-    CreatedFolderShare, FolderShareListItem, FolderShareOptions, ShareTtl, build_folder_share_url, build_folder_share_url_for,
+    CreatedFolderShare, FolderShareListItem, FolderShareOptions, FolderShareSource, ShareTtl, build_folder_share_url, build_folder_share_url_for,
     build_folder_share_url_private, folder_share_token_hash,
 };
 use hcfs_client::client::share::{ShareSecret, wrap_share_key};
@@ -824,6 +824,7 @@ fn folder_share_client_surface_is_reachable() {
         created_at,
         expires_at: None,
         revoked_at: Some(created_at),
+        source: FolderShareSource::Drive,
     };
     assert_eq!(item.path_prefix, "", "whole-drive share is the empty prefix");
 
@@ -840,4 +841,250 @@ fn folder_share_client_surface_is_reachable() {
     let _ = hcfs_client::client::HcfsClient::list_folder_shares;
     let _ = hcfs_client::client::HcfsClient::revoke_folder_share;
     let _ = hcfs_client::client::HcfsClient::update_folder_share_expiry;
+}
+
+// ── Mass-delete hold surface (hcfs #550) ───────────────────────────────────
+
+/// Compile-time pin of the calls the large-delete prompt makes. Each fn item
+/// is bound to its full signature, so a changed argument, return or error
+/// type fails here in the pin-bump PR. The `Drive` trio is the lock-free path
+/// (a throwaway `Drive::with_config_dir` for the drive's config directory
+/// answers while the syncing manager holds its lock); the `DriveManager`
+/// pair is where the typed `MassDeleteRequestError` comes from.
+#[test]
+fn mass_delete_client_surface_is_reachable() {
+    use hcfs_client::drive::Drive;
+    use hcfs_client::engine::DriveManager;
+    use hcfs_client::sync::{HeldMassDelete, MassDeleteRequestError, MassDeleteRestoreRequest, MassDeleteSide, SyncResult};
+
+    let _: fn(&'static std::path::Path, &'static std::path::Path) -> Drive = Drive::with_config_dir::<&std::path::Path, &std::path::Path>;
+    let _: fn(&Drive) -> SyncResult<Vec<HeldMassDelete>> = Drive::held_mass_deletes;
+    let _: fn(&Drive, MassDeleteSide, usize) -> SyncResult<MassDeleteRestoreRequest> = Drive::restore_mass_delete;
+    let _: fn(&Drive, MassDeleteSide, usize) -> SyncResult<()> = Drive::confirm_mass_delete;
+
+    let _: fn(&DriveManager) -> Result<Vec<HeldMassDelete>, String> = DriveManager::held_mass_deletes;
+    let _: fn(&DriveManager, MassDeleteSide, usize) -> Result<MassDeleteRestoreRequest, MassDeleteRequestError> = DriveManager::restore_mass_delete;
+    let _: fn(&DriveManager, MassDeleteSide, usize) -> Result<(), MassDeleteRequestError> = DriveManager::confirm_mass_delete;
+}
+
+/// Exhaustive literals of the records the prompt reads: a renamed, dropped
+/// or added field fails here. `HoldState` is the gate the folder job keys
+/// on: closed for `Held` AND `Restoring`, so both names are pinned, with the
+/// wire strings and the default an older held-set file reads as.
+#[test]
+fn held_mass_delete_records_are_pinned() {
+    use hcfs_client::sync::{HeldMassDelete, HoldState, MassDeleteRestoreRequest, MassDeleteSide};
+
+    let held = HeldMassDelete {
+        side: MassDeleteSide::Server,
+        state: HoldState::Restoring,
+        count: 150,
+        synced_count: 200,
+        held_at: 1_700_000_000,
+    };
+    assert_eq!(held.state, HoldState::Restoring);
+
+    let request = MassDeleteRestoreRequest {
+        side: MassDeleteSide::Local,
+        count: 150,
+    };
+    assert_eq!(request.count, 150);
+
+    assert_eq!(HoldState::default(), HoldState::Held);
+    for (state, wire) in [(HoldState::Held, "held"), (HoldState::Restoring, "restoring")] {
+        assert_eq!(serde_json::to_value(state).expect("serialize hold state"), serde_json::json!(wire));
+        assert_eq!(state.as_str(), wire);
+    }
+}
+
+/// The side crosses the IPC boundary both ways (the hold event out, the
+/// restore/confirm request back), as these lowercase strings.
+#[test]
+fn mass_delete_side_wire_values_are_pinned() {
+    use hcfs_client::sync::MassDeleteSide;
+
+    for (side, wire) in [(MassDeleteSide::Server, "server"), (MassDeleteSide::Local, "local")] {
+        assert_eq!(serde_json::to_value(side).expect("serialize side"), serde_json::json!(wire));
+        assert_eq!(
+            serde_json::from_value::<MassDeleteSide>(serde_json::json!(wire)).expect("deserialize side"),
+            side
+        );
+        assert_eq!(side.as_str(), wire);
+        assert_eq!(wire.parse::<MassDeleteSide>().expect("parse side"), side);
+    }
+    assert!("Server".parse::<MassDeleteSide>().is_err(), "the names are case-sensitive");
+}
+
+/// The desktop branches on `MassDeleteRequestError` by `kind`, never by text
+/// (NothingHeld refreshes, HoldChanged asks again with the new count,
+/// RestoreInProgress waits, MemberCannotRestore hides Restore). Every kind
+/// and its fields are pinned as hcfs serializes them; the enum is
+/// `#[non_exhaustive]`, so a new kind still needs a deliberate arm.
+#[test]
+fn mass_delete_request_error_kinds_are_pinned() {
+    use hcfs_client::sync::{MassDeleteRequestError as E, MassDeleteSide};
+    use serde_json::json;
+
+    let side = MassDeleteSide::Server;
+    let cases = [
+        (E::NothingHeld { side }, json!({"kind": "nothing_held", "side": "server"})),
+        (
+            E::HoldChanged { side, held: 160, shown: 150 },
+            json!({"kind": "hold_changed", "side": "server", "held": 160, "shown": 150}),
+        ),
+        (E::RestoreInProgress { side }, json!({"kind": "restore_in_progress", "side": "server"})),
+        (E::MemberCannotRestore, json!({"kind": "member_cannot_restore"})),
+        (
+            E::Failed {
+                message: "disk full".to_string(),
+            },
+            json!({"kind": "failed", "message": "disk full"}),
+        ),
+    ];
+    for (error, wire) in cases {
+        assert_eq!(serde_json::to_value(&error).expect("serialize request error"), wire, "{error:?}");
+        assert!(!error.to_string().is_empty(), "{error:?} has a display message");
+    }
+}
+
+/// Behaviour the prompt relies on, against a fresh config directory: an
+/// unrecorded hold reads as nothing held (not an error), and a restore with
+/// nothing held is the typed `NothingHeld`, which the prompt answers by
+/// refreshing rather than by showing a failure.
+#[test]
+fn a_fresh_drive_holds_nothing_and_refuses_a_restore_as_nothing_held() {
+    use hcfs_client::drive::Drive;
+    use hcfs_client::engine::DriveManager;
+    use hcfs_client::sync::{MassDeleteRequestError, MassDeleteSide};
+
+    let sync_dir = tempfile::tempdir().expect("sync dir");
+    let config_dir = tempfile::tempdir().expect("config dir");
+
+    let drive = Drive::with_config_dir(sync_dir.path(), config_dir.path());
+    assert_eq!(drive.held_mass_deletes().expect("readable"), Vec::new());
+
+    let manager = DriveManager::new(sync_dir.path().to_path_buf(), config_dir.path().to_path_buf());
+    assert_eq!(manager.held_mass_deletes().expect("readable"), Vec::new());
+    assert_eq!(
+        manager.restore_mass_delete(MassDeleteSide::Server, 150),
+        Err(MassDeleteRequestError::NothingHeld {
+            side: MassDeleteSide::Server
+        })
+    );
+}
+
+/// The reason a server-side restore is refused, as hcfs serializes it (the
+/// desktop shows the free-space copy for `insufficient_space`).
+#[test]
+fn restore_refusal_wire_shape_is_pinned() {
+    use hcfs_client::sync::RestoreRefusal;
+
+    let refusal = RestoreRefusal::InsufficientSpace { needed: 4096 };
+    assert_eq!(
+        serde_json::to_value(refusal).expect("serialize refusal"),
+        serde_json::json!({"reason": "insufficient_space", "needed": 4096})
+    );
+    assert_eq!(refusal.as_str(), "insufficient_space");
+}
+
+/// The three mass-delete events by name, every field named: the bridge
+/// matches on them, so a renamed variant or field fails here as well as in
+/// the bridge's exhaustive match.
+#[test]
+fn mass_delete_sync_events_are_pinned() {
+    use hcfs_client::engine::SyncEvent;
+    use hcfs_client::sync::{MassDeleteSide, RestoreRefusal};
+
+    let label = || "default".to_string();
+    let events = [
+        SyncEvent::MassDeleteHeld {
+            label: label(),
+            side: MassDeleteSide::Server,
+            count: 150,
+            synced_count: 200,
+        },
+        SyncEvent::MassDeleteRestored {
+            label: label(),
+            side: MassDeleteSide::Server,
+            restored: 140,
+            pending: 6,
+            skipped: 4,
+        },
+        SyncEvent::MassDeleteRestoreRefused {
+            label: label(),
+            side: MassDeleteSide::Server,
+            reason: RestoreRefusal::InsufficientSpace { needed: 4096 },
+        },
+    ];
+    // `SyncEvent` has no `Debug`, so name each one to show they survive the
+    // round trip through a match as the variant they were built as.
+    let names: Vec<&str> = events
+        .iter()
+        .map(|event| match event {
+            SyncEvent::MassDeleteHeld { .. } => "held",
+            SyncEvent::MassDeleteRestored { .. } => "restored",
+            SyncEvent::MassDeleteRestoreRefused { .. } => "refused",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(names, ["held", "restored", "refused"]);
+}
+
+/// An unmounted drive folder fails the whole cycle with `RootNotMounted`,
+/// and the desktop only sees it as the `SyncError` event's string, so its
+/// message is what the desktop classifies. Pinned verbatim, and pinned to
+/// leave the folder path out (hcfs classifies cycle errors by substring, so a
+/// folder named like an error must not change the class).
+#[test]
+fn root_not_mounted_message_is_pinned() {
+    use hcfs_client::sync::SyncError;
+
+    let error = SyncError::RootNotMounted {
+        path: "/Volumes/Backup401/Hippius".to_string(),
+    };
+    let message = error.to_string();
+    assert_eq!(
+        message,
+        "The drive folder is not the volume it was: it was a mounted disk or share and is now missing or a plain folder \
+         on its parent's disk. Nothing was synced; mount it and sync again."
+    );
+    assert!(!message.contains("Backup401"), "the path stays out of the message");
+}
+
+/// One-off downloads and recovery verify against a row they already hold
+/// (`sync::listing_cache`, the recovery listings) instead of letting hcfs
+/// page the drive's listing per file. Pin the calls and the row fields that
+/// path builds `ExpectedContent` from, so a bump that reshapes them fails
+/// here rather than in a download.
+#[test]
+fn expected_content_download_surface_is_pinned() {
+    use hcfs_client::drive::remote::{ExpectedContent, RemoteFileInfo};
+    use hcfs_shared::network::RemoteFileEntry;
+
+    let _: fn(&RemoteFileInfo) -> Result<ExpectedContent, hcfs_client::sync::SyncError> = ExpectedContent::from_info;
+    let _ = hcfs_client::drive::remote::download_remote_file_expecting::<fn(u64, u64)>;
+
+    let entry = RemoteFileEntry {
+        path_hash: [1; 32],
+        salted_hash: [2; 32],
+        size_bytes: 3,
+        revision_seq: 4,
+        revision_id: [5; 32],
+        ..serde_json::from_value(serde_json::json!({
+            "path_hash": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": 0,
+            "revision_seq": 0,
+            "revision_id": vec![0u8; 32],
+            "created_at": 0,
+            "updated_at": 0,
+        }))
+        .expect("a minimal row parses")
+    };
+    let expected = ExpectedContent {
+        salted_hash: entry.salted_hash,
+        size_bytes: entry.size_bytes,
+        revision_id: entry.revision_id,
+    };
+    assert_eq!(expected.size_bytes, 3);
 }

@@ -22,15 +22,16 @@ no-default-features = false
 [advisories]
 # Vulnerability-class advisories deny by default — the security purpose of this
 # gate, which we do not relax. A *matched* unsound advisory also errors: on first
-# run the gate caught RUSTSEC-2026-0097 (rand 0.8.5 unsound on reseed), fixed by
-# bumping our direct rand to the patched 0.8.6 AND production hcfs-client's rand
-# to the patched 0.9.3. Caveat worth knowing so the green check isn't read as
-# "zero affected crates": RUSTSEC-2026-0097 is *function-scoped* (to rand::rng /
-# rand::thread_rng), so cargo-deny does NOT flag the residual transitive rand
-# 0.7.3 — build-time only via phf -> tauri-build, plus bip39's upstream-capped
-# rand which can't reach the 0.8.6 patch — on version range alone. Neither meets
-# the advisory's exotic trigger (a custom `log` logger calling rng() during a
-# reseed), so this is a known, accepted residual, not an unguarded vulnerability.
+# run the gate caught RUSTSEC-2026-0097 (rand 0.8.5 unsound on reseed). Today the
+# direct rand is 0.10.3, hcfs-client's is the patched 0.9.3, and the 0.8 line
+# that bip39 2.x (hcfs-client, subxt-signer) and the phf generators pull in
+# resolves to the patched 0.8.8. Caveat worth knowing so the green check isn't
+# read as "zero affected crates": RUSTSEC-2026-0097 is *function-scoped* (to
+# rand::rng / rand::thread_rng), so cargo-deny does NOT flag the residual rand
+# 0.7.3 on version range alone. That one is build-time only (phf_codegen 0.8
+# in selectors' build script, reached through tauri-utils) and never meets the
+# advisory's exotic trigger (a custom `log` logger calling rng() during a
+# reseed), so it is a known, accepted residual, not an unguarded vulnerability.
 #
 # `unmaintained = "workspace"` scopes the unmaintained check to crates we
 # directly control (workspace members + their direct deps). The graph today

@@ -387,6 +387,9 @@ fn main() {
             pause_drive,
             resume_drive,
             trigger_sync_now,
+            crate::sync::mass_delete::restore_mass_delete,
+            crate::sync::mass_delete::confirm_mass_delete,
+            crate::sync::mass_delete::get_mass_delete_holds,
             reveal_drive_in_finder,
             reveal_path_in_file_manager,
             change_sync_folder,
@@ -449,6 +452,7 @@ fn main() {
             crate::sync::failure_commands::sp_dismiss_failed_files,
             crate::sync::failure_commands::get_drive_failures,
             crate::sync::failure_commands::retry_file_failure,
+            crate::sync::failure_commands::clear_file_failure,
             crate::sync::failure_commands::retry_all_failures,
             // Stage & conflict resolution
             crate::sync::control::stage_changes,

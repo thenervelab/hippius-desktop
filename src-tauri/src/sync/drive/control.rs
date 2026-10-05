@@ -97,6 +97,7 @@ fn fail_drive_unavailable(app: &AppHandle, label: &str) -> crate::error::AppErro
             error: "Drive not initialized or not unlocked".to_string(),
             retry_in_secs: 0,
             consecutive_failures: 0,
+            kind: crate::sync::events::SyncErrorKind::Generic,
         },
         // User-initiated reviewed sync: a real failure always notifies.
         crate::sync::tauri_bridge::FailureNotify::Always,
@@ -182,6 +183,11 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
         },
     );
 
+    // Open a hold cycle, as the engine's `SyncStarted` does: hcfs reads the
+    // user's restore/remove answers when this sync starts, so one sent while
+    // it runs belongs to the next cycle. Its results are recorded below.
+    app_state.mass_delete_holds.begin_cycle(&label);
+
     // Suppress file watcher during sync to prevent feedback loops
     sync.begin_sync();
 
@@ -243,6 +249,11 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
             // instead of emitting the completion event directly and skipping
             // all of it. A reviewed sync has no cycle-level failure count, so
             // `files_failed = 0`.
+            //
+            // First its mass-delete results, which arrive on the outcome rather
+            // than as engine events: the restores it applied, the holds it
+            // found, and the cycle's end (clearing sides it did not report).
+            crate::sync::tauri_bridge::report_reviewed_mass_deletes(&app, &label, &outcome);
             crate::sync::tauri_bridge::handle_sync_completed(&app, crate::sync::events::SyncCompletedPayload::from_outcome(&label, &outcome), 0);
             Ok(())
         }
@@ -258,6 +269,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
                     error: e.clone(),
                     retry_in_secs: 0,
                     consecutive_failures: 0,
+                    kind: crate::sync::events::SyncErrorKind::Generic,
                 },
                 // User-initiated reviewed sync: a real failure always notifies
                 // (not the auto-loop's per-label rate-limited path).

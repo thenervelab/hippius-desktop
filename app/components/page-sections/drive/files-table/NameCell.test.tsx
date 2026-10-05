@@ -43,9 +43,11 @@ vi.mock("next/link", () => ({
 // `useUrlParams` reads from `useSearchParams`/`usePathname` — both unavailable
 // in jsdom without a Next Router. The cell only uses the parameter values
 // for folder navigation, which is orthogonal to the badge assertion.
+// `urlParams` lets a test set what the URL carries (e.g. `subFolderPath`).
+const urlParams: Record<string, string> = {};
 vi.mock("@/app/utils/hooks/useUrlParams", () => ({
   useUrlParams: () => ({
-    getParam: (_key: string, fallback: string) => fallback,
+    getParam: (key: string, fallback: string) => urlParams[key] ?? fallback,
   }),
 }));
 
@@ -89,8 +91,13 @@ function makeFailure(kind: FileFailureRecord["kind"]): FileFailureRecord {
   };
 }
 const retryMutate = vi.fn();
+// Records what the badge asked for, so the lookup key is pinned too.
+const failureLookups: Array<[string | undefined, string | undefined]> = [];
 vi.mock("@/app/lib/hooks/useFileFailure", () => ({
-  useFileFailure: () => failureOverride,
+  useFileFailure: (label: string | undefined, relativePath: string | undefined) => {
+    failureLookups.push([label, relativePath]);
+    return failureOverride;
+  },
   useRetryFailure: () => ({ retryFile: { mutate: retryMutate, isPending: false } }),
 }));
 
@@ -157,6 +164,20 @@ describe("NameCell sync-status badge", () => {
     expect(badge).not.toHaveAttribute("role", "button");
     expect(badge.className).not.toContain("cursor-pointer");
 
+    badge.click();
+    expect(retryMutate).not.toHaveBeenCalled();
+    failureOverride = null;
+  });
+
+  it("never offers retry on a file hcfs refused", () => {
+    // A refusal is reported once per revision and only the user can fix it
+    // (rename, unlock, free space). A retry would clear the reason while the
+    // next cycle refuses the file again without saying so.
+    failureOverride = makeFailure("refused");
+    render(<NameCell {...baseProps} syncStatus="failed" />);
+    const badge = screen.getByTestId("sync-status-failed");
+
+    expect(badge).not.toHaveAttribute("role", "button");
     badge.click();
     expect(retryMutate).not.toHaveBeenCalled();
     failureOverride = null;
@@ -309,5 +330,61 @@ describe("NameCell hover preview icon", () => {
     expect(
       screen.queryByTestId("hover-preview-icon"),
     ).not.toBeInTheDocument();
+  });
+});
+
+// The badge must look a failure up by the file's drive-relative path, exactly
+// as the row menu does. By basename, two same-named files in different
+// folders both showed the first one's failure.
+describe("NameCell failure lookup", () => {
+  it("asks for the file's full path inside an expanded folder", () => {
+    failureLookups.length = 0;
+    render(
+      <NameCell
+        {...baseProps}
+        rawName="notes.txt"
+        actualName="notes.txt"
+        label="drive"
+        parentSubFolderPath="Work"
+        syncStatus="failed"
+      />,
+    );
+    expect(failureLookups.at(-1)).toEqual(["drive", "Work/notes.txt"]);
+  });
+
+  it("trims the URL's folder path like the row menu does", () => {
+    failureLookups.length = 0;
+    urlParams.subFolderPath = "/Work/";
+    try {
+      render(
+        <NameCell
+          {...baseProps}
+          rawName="notes.txt"
+          actualName="notes.txt"
+          label="drive"
+          syncStatus="failed"
+        />,
+      );
+    } finally {
+      delete urlParams.subFolderPath;
+    }
+    expect(failureLookups.at(-1)).toEqual(["drive", "Work/notes.txt"]);
+  });
+
+  // The recent view's rows carry the full drive-relative path as their
+  // actual name (Rust's get_recent_files sets it from the activity's
+  // relative path) and no folder, so the path is used as it is.
+  it("uses a recent row's full path as it is", () => {
+    failureLookups.length = 0;
+    render(
+      <NameCell
+        {...baseProps}
+        rawName="notes.txt"
+        actualName="Trips/2024/notes.txt"
+        label="drive"
+        syncStatus="failed"
+      />,
+    );
+    expect(failureLookups.at(-1)).toEqual(["drive", "Trips/2024/notes.txt"]);
   });
 });

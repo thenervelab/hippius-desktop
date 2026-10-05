@@ -1,5 +1,7 @@
 import { atom } from "jotai";
 import type { StagedChanges } from "@/lib/types/syncTypes";
+import type { FileFailureKind } from "@/app/lib/types/fileFailure";
+import type { MassDeleteHolds } from "@/app/lib/massDelete/holds";
 
 // Per-drive pending conflicts detected during auto-sync, keyed by drive label.
 // The multi-drive engine emits conflict-review events per drive (each carries a
@@ -76,6 +78,9 @@ export interface FailedFileInfo {
   fileName: string;
   error: string | null;
   failureCount: number;
+  /** The failure's kind when hcfs named it; decides whether Retry is
+   *  offered. Absent for a file whose failure event was not seen. */
+  kind?: FileFailureKind | null;
 }
 
 /** Files that have repeatedly failed to sync (null when no failures at threshold). */
@@ -108,3 +113,12 @@ export interface CreditsExhaustedInfo {
  * future failures.
  */
 export const creditsExhaustedAtom = atom<CreditsExhaustedInfo | null>(null);
+
+/**
+ * Held mass deletes per drive side (`holdKey(label, side)`), as the
+ * large-delete prompt shows them. Rust decides every hold; this is its
+ * projection plus presentation state (see `app/lib/massDelete/holds.ts`).
+ * `useMassDeleteHolds` is the only writer besides the banner's own answers;
+ * `resetSyncSession` empties it on logout.
+ */
+export const massDeleteHoldsAtom = atom<MassDeleteHolds>(new Map());
