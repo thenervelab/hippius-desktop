@@ -15,6 +15,12 @@
 //! invalidation on each completed sync of the drive only bound how often
 //! that slower path is taken.
 //!
+//! A file still missing from the refetched listing (one not uploaded yet,
+//! whose thumbnail the screen keeps asking for) is remembered as a miss for
+//! [`MISS_TTL`], so those repeats do not page the whole listing each time.
+//! Up to [`MAX_MISSES`] per drive; past that a miss costs a fetch, as
+//! before. A completed sync forgets them with the listing.
+//!
 //! Concurrent lookups for one drive share a single fetch: the per-drive slot
 //! is an async mutex held across the fetch, so the second caller waits and
 //! then reads what the first fetched rather than paging the listing again.
@@ -37,6 +43,15 @@ const LISTING_TTL: Duration = Duration::from_secs(45);
 /// browses many drives from holding every listing it ever fetched.
 const MAX_DRIVES: usize = 4;
 
+/// How long a file absent from a freshly fetched listing is answered as
+/// absent without fetching again. Short: the file may be uploading, and its
+/// download should work soon after it lands.
+const MISS_TTL: Duration = Duration::from_secs(5);
+
+/// Misses remembered per drive. A screen of thumbnails is tens of files;
+/// the bound only stops a long browse from growing the map.
+const MAX_MISSES: usize = 512;
+
 /// One drive's listing as the server names it. The label alone is not
 /// enough: a shared drive's rows live under its owner's namespace, and a
 /// label can be reused by another account after a switch.
@@ -58,9 +73,19 @@ struct Listing {
     rows: HashMap<[u8; 32], ExpectedContent>,
 }
 
-/// A drive's slot: `None` until fetched. Async so a fetch in progress holds
-/// it and concurrent lookups wait for that fetch instead of starting theirs.
-type Slot = Arc<tokio::sync::Mutex<Option<Listing>>>;
+/// What a drive's slot holds.
+#[derive(Default)]
+struct SlotData {
+    /// The latest listing; `None` until fetched.
+    listing: Option<Listing>,
+    /// Files a fetched listing lacked, and when that fetch was. Kept across
+    /// refetches (another miss refetches too), dropped with the slot.
+    misses: HashMap<[u8; 32], Instant>,
+}
+
+/// A drive's slot. Async so a fetch in progress holds it and concurrent
+/// lookups wait for that fetch instead of starting theirs.
+type Slot = Arc<tokio::sync::Mutex<SlotData>>;
 
 /// Per-drive cache of remote listing rows; see the module docs.
 pub struct RemoteListingCache {
@@ -70,6 +95,10 @@ pub struct RemoteListingCache {
     ttl: Duration,
     /// How many drives keep a slot.
     max_drives: usize,
+    /// How long a miss is answered without fetching.
+    miss_ttl: Duration,
+    /// How many misses a drive remembers.
+    max_misses: usize,
 }
 
 impl std::fmt::Debug for RemoteListingCache {
@@ -93,13 +122,24 @@ impl RemoteListingCache {
             slots: std::sync::Mutex::new(HashMap::new()),
             ttl,
             max_drives,
+            miss_ttl: MISS_TTL,
+            max_misses: MAX_MISSES,
         }
+    }
+
+    /// Test-only: other miss limits.
+    #[cfg(test)]
+    fn with_miss_limits(mut self, miss_ttl: Duration, max_misses: usize) -> Self {
+        self.miss_ttl = miss_ttl;
+        self.max_misses = max_misses;
+        self
     }
 
     /// Returns the verification row for `path_hash` in the drive's listing,
     /// fetching the listing with `fetch` only when no fresh one is held, or
-    /// when a held one lacks the file (it may be newer than the listing).
-    /// `None` when a freshly fetched listing does not have the file either.
+    /// when a held one lacks the file (it may be newer than the listing)
+    /// and no fetch in the last [`MISS_TTL`] lacked it too. `None` when the
+    /// file is not on the server, as far as that tells.
     ///
     /// # Errors
     ///
@@ -124,16 +164,33 @@ impl RemoteListingCache {
         let slot = self.slot(key);
         let mut held = slot.lock().await;
 
-        if let Some(listing) = held.as_ref().filter(|listing| listing.fetched_at.elapsed() < self.ttl)
+        if let Some(listing) = held.listing.as_ref().filter(|listing| listing.fetched_at.elapsed() < self.ttl)
             && let Some(row) = listing.rows.get(&path_hash)
         {
             return Ok(Some(*row));
         }
+        if held.misses.get(&path_hash).is_some_and(|at| at.elapsed() < self.miss_ttl) {
+            return Ok(None);
+        }
 
         let listing = listing_from(fetch().await?);
         let row = listing.rows.get(&path_hash).copied();
-        *held = Some(listing);
+        if row.is_none() {
+            self.remember_miss(&mut held.misses, path_hash, listing.fetched_at);
+        }
+        held.listing = Some(listing);
         Ok(row)
+    }
+
+    /// Remember that the listing fetched at `at` lacked `path_hash`, unless
+    /// the bound is reached even after dropping expired misses.
+    fn remember_miss(&self, misses: &mut HashMap<[u8; 32], Instant>, path_hash: [u8; 32], at: Instant) {
+        if misses.len() >= self.max_misses {
+            misses.retain(|_, missed_at| missed_at.elapsed() < self.miss_ttl);
+        }
+        if misses.len() < self.max_misses {
+            misses.insert(path_hash, at);
+        }
     }
 
     /// Drops every listing held for `label`. Called when a sync of the drive
@@ -313,6 +370,59 @@ mod tests {
 
         assert!(lookup(&cache, &server, "photos", 3).await.is_none(), "not on the server at all");
         assert_eq!(server.listings(), 3, "one fetch per miss, no loop");
+    }
+
+    /// A row for a file not uploaded yet (a thumbnail of a new photo) is
+    /// asked for again and again while the screen redraws. A miss is
+    /// trusted for a few seconds, so those lookups do not page the whole
+    /// listing each time; after that the file may have arrived, and the
+    /// listing is fetched again.
+    #[tokio::test]
+    async fn a_miss_is_trusted_for_a_few_seconds() {
+        let cache = RemoteListingCache::default();
+        let server = FakeServer::with(&[1]);
+
+        assert!(lookup(&cache, &server, "photos", 9).await.is_none());
+        assert!(lookup(&cache, &server, "photos", 9).await.is_none());
+        assert!(lookup(&cache, &server, "photos", 9).await.is_none());
+        assert_eq!(server.listings(), 1, "one listing for the repeated miss");
+
+        assert!(lookup(&cache, &server, "photos", 1).await.is_some(), "hits still served");
+        assert_eq!(server.listings(), 1);
+
+        cache.invalidate("photos");
+        server.rows.lock().unwrap().push(9);
+        assert!(lookup(&cache, &server, "photos", 9).await.is_some(), "a completed sync forgets the miss");
+        assert_eq!(server.listings(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_expired_miss_is_looked_up_again() {
+        let cache = RemoteListingCache::with_limits(LISTING_TTL, MAX_DRIVES).with_miss_limits(Duration::ZERO, MAX_MISSES);
+        let server = FakeServer::with(&[1]);
+
+        lookup(&cache, &server, "photos", 9).await;
+        server.rows.lock().unwrap().push(9);
+        assert!(lookup(&cache, &server, "photos", 9).await.is_some(), "uploaded since");
+        assert_eq!(server.listings(), 2);
+    }
+
+    /// The misses a listing remembers are bounded: past the bound a miss is
+    /// simply not remembered, and costs a fetch as before.
+    #[tokio::test]
+    async fn remembered_misses_are_bounded() {
+        let cache = RemoteListingCache::with_limits(LISTING_TTL, MAX_DRIVES).with_miss_limits(MISS_TTL, 2);
+        let server = FakeServer::with(&[1]);
+
+        for byte in [7, 8, 9] {
+            lookup(&cache, &server, "photos", byte).await;
+        }
+        assert_eq!(server.listings(), 3);
+        lookup(&cache, &server, "photos", 7).await;
+        lookup(&cache, &server, "photos", 8).await;
+        assert_eq!(server.listings(), 3, "the first two are remembered");
+        lookup(&cache, &server, "photos", 9).await;
+        assert_eq!(server.listings(), 4, "the third was not");
     }
 
     #[tokio::test]
