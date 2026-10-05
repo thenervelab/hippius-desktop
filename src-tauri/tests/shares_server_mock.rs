@@ -2255,6 +2255,37 @@ async fn an_empty_outside_folder_is_refused_before_any_request() {
     assert!(rec.opens.lock().unwrap().is_empty(), "no open");
 }
 
+/// A folder that holds one of the account's drives is refused before any
+/// request: copying it would upload that drive's files a second time,
+/// outside its exclude rules, into a link that outlives the drive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_folder_holding_a_drive_is_refused_before_any_request() {
+    let account = "5UploadHoldsDriveAcct";
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, UploadMock::default()).await;
+    let tree = tempfile::TempDir::new().expect("tempdir");
+    let root = tree.path().join("Documents");
+    std::fs::create_dir_all(root.join("Hippius")).expect("drive root");
+    std::fs::write(root.join("Hippius/synced.txt"), b"in the drive").expect("drive file");
+    std::fs::write(root.join("notes.txt"), b"beside it").expect("outside file");
+    sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, 'private', 'docs', 0)")
+        .bind(account_key(account))
+        .bind(root.join("Hippius").to_string_lossy().into_owned())
+        .execute(state.pool().expect("pool"))
+        .await
+        .expect("seed drive row");
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("holds a drive");
+
+    assert!(
+        matches!(&err, AppError::Validation(m) if m.contains("holds your Hippius drive folder \u{201c}Hippius\u{201d}")),
+        "{err:?}"
+    );
+    assert!(rec.can_upload_sizes.lock().unwrap().is_empty(), "no quota pre-flight");
+    assert!(rec.opens.lock().unwrap().is_empty(), "no open");
+}
+
 /// Empty folders are part of the copy: the recipient sees them. A chain of
 /// empty folders is sent once, by its deepest folder (the server derives
 /// the rest), and an empty folder beside a file is sent too; a folder that

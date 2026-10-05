@@ -314,6 +314,9 @@ async fn share_for_path(state: &AppState, clicked: &Path, mint: FinderMint) -> R
     // directories.
     let metadata = tokio::fs::metadata(clicked).await?;
     let roots = crate::sync::paths::list_drive_roots(state.pool()?, &account_id).await?;
+    // Matched in both spellings: a stored root that misses Finder's
+    // canonical path would send an in-drive folder down the copy path.
+    let roots = crate::sync::paths::with_canonical_roots(roots).await;
     let FinderMint {
         ttl,
         choice,
@@ -440,7 +443,7 @@ async fn placement(state: &AppState, clicked: &Path) -> Placement {
         return Placement::Unknown;
     };
     match crate::sync::paths::list_drive_roots(pool, &account_id).await {
-        Ok(roots) => match resolve_share_target(clicked, &roots) {
+        Ok(roots) => match resolve_share_target(clicked, &crate::sync::paths::with_canonical_roots(roots).await) {
             ShareTarget::InDrive { .. } => Placement::InDrive,
             ShareTarget::Outside => Placement::Outside,
         },
@@ -457,12 +460,31 @@ async fn placement(state: &AppState, clicked: &Path) -> Placement {
 /// is the request's [`PendingFinderShare::scan_stop`]; once it fires there
 /// is nobody to show the facts to, so nothing comes back.
 async fn folder_facts_for_latest(state: &AppState, id: &str, folder: &Path, stop: &CancellationToken) -> Option<FinderShareFacts> {
-    let (size_bytes, refusal) = outside_folder_facts(folder, stop).await?;
+    let (size_bytes, refusal) = match drive_holding_refusal(state, folder).await {
+        Some(refusal) => (None, Some(refusal)),
+        None => outside_folder_facts(folder, stop).await?,
+    };
     state.finder_share_is_latest(id).then(|| FinderShareFacts {
         id: id.to_owned(),
         size_bytes,
         refusal,
     })
+}
+
+/// The share's refusal of a folder that holds a drive, so the chooser shows
+/// it before the user confirms and no walk of that drive starts. Anything
+/// short of a refusal (no account, a database error) reads as none: the
+/// confirm checks again with real errors.
+async fn drive_holding_refusal(state: &AppState, folder: &Path) -> Option<AppError> {
+    let account_id = state.current_account_id().ok()?;
+    match crate::shares::outside_folder::refuse_a_folder_holding_a_drive(state, &account_id, folder).await {
+        Ok(()) => None,
+        Err(refusal @ AppError::Validation(_)) => Some(refusal),
+        Err(error) => {
+            warn!(%error, "finder bridge: could not check the chooser's folder against the drives");
+            None
+        }
+    }
 }
 
 /// Bytes an outside folder's copy would upload, or the share's refusal of
@@ -855,6 +877,37 @@ mod tests {
         assert!(facts.is_folder, "the chooser words it as a folder link");
         assert_eq!(facts.is_folder_copy, Some(false));
         assert_eq!(facts.size_bytes, None);
+    }
+
+    /// Finder sends canonical paths; a drive stored through a symlink must
+    /// still hold its folders, or an in-drive folder would be copied.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_chooser_matches_a_drive_stored_through_a_symlink() {
+        let tree = drive_and_outside_tree();
+        let linked = tree.path().join("linked");
+        std::os::unix::fs::symlink(tree.path(), &linked).expect("symlink");
+        let state = state_with_drive(&linked.join("Drive")).await;
+        let clicked = std::fs::canonicalize(tree.path().join("Drive/Photos")).expect("canonical");
+
+        let facts = chooser_facts(&state, &clicked).await;
+
+        assert_eq!(facts.is_folder_copy, Some(false), "a live link, not a copy");
+    }
+
+    /// A folder that holds a drive is refused in the chooser, naming the
+    /// drive folder, before any walk of it; a folder beside the drive is not.
+    #[tokio::test]
+    async fn the_chooser_refuses_a_folder_that_holds_a_drive() {
+        let tree = drive_and_outside_tree();
+        let state = state_with_drive(&tree.path().join("Drive")).await;
+
+        let refusal = drive_holding_refusal(&state, tree.path()).await.expect("refused");
+        let AppError::Validation(message) = refusal else {
+            panic!("expected a sentence, got {refusal:?}");
+        };
+        assert!(message.contains("holds your Hippius drive folder \u{201c}Drive\u{201d}"), "{message}");
+        assert!(drive_holding_refusal(&state, &tree.path().join("Outside")).await.is_none());
     }
 
     /// A folder outside every drive is uploaded as a copy. The chooser opens

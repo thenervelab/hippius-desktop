@@ -82,15 +82,21 @@ pub(crate) struct VisibleEntry {
 ///   silently can refuse it by name;
 /// - a non-UTF-8 name is reported as [`VisibleKind::NotText`].
 ///
+/// At most `limit` children are returned: listing stops there, so a caller
+/// that refuses past a count does not stat a million-entry folder first.
+///
 /// # Errors
 ///
 /// The `read_dir` of `dir` itself, or an error reading its next entry
 /// (that is the directory failing to list, and no name exists to report).
 /// The caller decides whether an unreadable directory is skippable (drive
 /// upload) or fatal (a share must not silently drop a subfolder).
-pub(crate) fn visible_children(dir: &Path) -> std::io::Result<Vec<VisibleEntry>> {
+pub(crate) fn visible_children(dir: &Path, limit: usize) -> std::io::Result<Vec<VisibleEntry>> {
     let mut children = Vec::new();
     for entry in std::fs::read_dir(dir)? {
+        if children.len() >= limit {
+            break;
+        }
         let entry = entry?;
         let name = entry.file_name();
         if is_engine_hidden_name(&name) {
@@ -176,6 +182,19 @@ pub(super) async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Re
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    /// Listing stops at the limit, so a capped walk never stats the rest of
+    /// a huge folder.
+    #[test]
+    fn visible_children_stops_at_the_limit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for i in 0..5 {
+            std::fs::write(dir.path().join(format!("f{i}")), b"x").expect("file");
+        }
+
+        assert_eq!(visible_children(dir.path(), 2).expect("list").len(), 2);
+        assert_eq!(visible_children(dir.path(), usize::MAX).expect("list").len(), 5);
+    }
 
     #[test]
     fn strips_sync_path_prefix() {

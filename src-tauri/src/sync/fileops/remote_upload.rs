@@ -621,10 +621,12 @@ struct PlannedUpload {
     size: u64,
 }
 
-/// Most folder levels below the uploaded folder, matching
-/// `hcfs_shared::path_validator`'s depth rule (64). Symlinks are never
-/// followed (`visible_children`), so this is not a cycle guard: it refuses
-/// a tree too deep to address rather than walking it to the end.
+/// Most segments a wire path may have (`hcfs_shared::path_validator`'s
+/// depth rule, which counts the file itself). The walk measures each folder
+/// by its full wire path, upload target included, so no planned file is
+/// one the server refuses for depth. Symlinks are never followed
+/// (`visible_children`), so this is not a cycle guard: it refuses a tree
+/// too deep to address rather than walking it to the end.
 const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = hcfs_shared::path_validator::MAX_DEPTH;
 
 /// Flatten a folder into the files to upload and the wire folder each
@@ -640,27 +642,32 @@ const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = hcfs_shared::path_validator::MAX_DEP
 ///
 /// # Errors
 ///
-/// [`AppError::Validation`] naming the first folder more than
-/// [`REMOTE_FOLDER_WALK_MAX_DEPTH`] levels below `root`. Refused rather
+/// [`AppError::Validation`] naming the first folder whose wire path leaves
+/// no room for a file under [`REMOTE_FOLDER_WALK_MAX_DEPTH`]. Refused rather
 /// than skipped: a silently partial upload is what this used to do.
 fn plan_folder_upload(root: &Path, wire_parent: &str) -> Result<Vec<PlannedUpload>> {
     let Some(folder_name) = root.file_name().and_then(|n| n.to_str()) else {
         return Ok(Vec::new());
     };
     let base = wire_relative_path(wire_parent, folder_name);
+    let base_depth = base.split('/').count();
+    if base_depth >= REMOTE_FOLDER_WALK_MAX_DEPTH {
+        return Err(too_deep(root, folder_name, root));
+    }
 
     let mut planned = Vec::new();
-    // Each entry carries its own depth below `root`: the stack's length is
-    // how many folders are waiting, which a wide folder makes large.
-    let mut stack = vec![(root.to_path_buf(), base, 0_usize)];
+    // Each entry carries its wire path's segment count: the stack's length
+    // is how many folders are waiting, which a wide folder makes large.
+    let mut stack = vec![(root.to_path_buf(), base, base_depth)];
     while let Some((dir, parent, depth)) = stack.pop() {
         // An unreadable subfolder is skipped here (the other files still
         // upload and the result lists per-file failures); a share instead
         // treats it as fatal.
-        let Ok(children) = visible_children(&dir) else { continue };
+        let Ok(children) = visible_children(&dir, usize::MAX) else { continue };
         for child in children {
             match child.kind {
-                VisibleKind::Dir if depth >= REMOTE_FOLDER_WALK_MAX_DEPTH => {
+                // A file inside the child would take `depth + 2` segments.
+                VisibleKind::Dir if depth + 2 > REMOTE_FOLDER_WALK_MAX_DEPTH => {
                     return Err(too_deep(root, folder_name, &child.path));
                 }
                 VisibleKind::Dir => stack.push((child.path, wire_relative_path(&parent, &child.name), depth + 1)),
@@ -684,8 +691,9 @@ fn plan_folder_upload(root: &Path, wire_parent: &str) -> Result<Vec<PlannedUploa
 fn too_deep(root: &Path, folder_name: &str, dir: &Path) -> AppError {
     let inside = dir.strip_prefix(root).unwrap_or(dir);
     AppError::Validation(format!(
-        "\u{201c}{}\u{201d} is more than {REMOTE_FOLDER_WALK_MAX_DEPTH} folders deep inside the \
-         folder you are uploading. Upload a folder closer to it, or move it higher up.",
+        "\u{201c}{}\u{201d} is nested too deeply to upload: a drive holds files at most \
+         {REMOTE_FOLDER_WALK_MAX_DEPTH} levels deep. Upload a folder closer to it, or move it \
+         higher up.",
         Path::new(folder_name).join(inside).display()
     ))
 }
@@ -945,26 +953,44 @@ mod tests {
         assert_eq!(planned.len(), 70);
     }
 
-    /// A folder 64 levels below the uploaded one is walked; one more level
-    /// is refused, naming the folder, rather than silently left behind.
+    /// The deepest file the walk plans has a wire path the server's depth
+    /// rule accepts (it counts the upload target and the file itself); a
+    /// folder one level deeper is refused, naming it, rather than planned
+    /// into uploads the server would refuse one by one.
     #[test]
     fn a_folder_upload_refuses_a_tree_past_the_depth_cap_naming_it() {
         let dir = tempfile::tempdir().expect("temp dir");
         let root = dir.path().join("Deep");
-        let at_cap = root.join(vec!["d"; REMOTE_FOLDER_WALK_MAX_DEPTH].join("/"));
-        std::fs::create_dir_all(&at_cap).expect("64 levels");
+        // "Archive/Deep" + 61 folders + the file = 64 segments.
+        let at_cap = root.join(vec!["d"; REMOTE_FOLDER_WALK_MAX_DEPTH - 3].join("/"));
+        std::fs::create_dir_all(&at_cap).expect("deep folders");
         std::fs::write(at_cap.join("a.txt"), b"a").expect("deepest file");
-        let planned = plan_folder_upload(&root, "").expect("64 levels is allowed");
+        let planned = plan_folder_upload(&root, "Archive").expect("the deepest valid file is allowed");
         assert_eq!(planned.len(), 1);
+        let wire = wire_relative_path(&planned[0].parent, "a.txt");
+        assert_eq!(hcfs_shared::path_validator::validate(&wire), Ok(()), "{wire}");
 
-        std::fs::create_dir_all(at_cap.join("too-deep")).expect("65th level");
-        let err = plan_folder_upload(&root, "").err().expect("65 levels is refused");
+        std::fs::create_dir_all(at_cap.join("too-deep")).expect("one level more");
+        let err = plan_folder_upload(&root, "Archive").err().expect("one level more is refused");
         let AppError::Validation(message) = err else {
             panic!("expected a validation error, got {err:?}");
         };
         assert!(message.contains("/d/too-deep\u{201d}"), "{message}");
         assert!(message.starts_with("\u{201c}Deep/d/"), "{message}");
-        assert!(message.contains("more than 64 folders deep"), "{message}");
+        assert!(message.contains("at most 64 levels deep"), "{message}");
+    }
+
+    /// An upload target already at the depth cap leaves no room for a file.
+    #[test]
+    fn a_folder_upload_into_a_target_at_the_depth_cap_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("a.jpg"), b"a").expect("file");
+        let target = vec!["t"; REMOTE_FOLDER_WALK_MAX_DEPTH - 1].join("/");
+
+        let err = plan_folder_upload(&root, &target).err().expect("no room for a file");
+        assert!(matches!(err, AppError::Validation(_)), "{err:?}");
     }
 
     /// Unlike a share, a drive upload carries on past what it cannot read:

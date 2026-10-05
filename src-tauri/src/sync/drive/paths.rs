@@ -477,6 +477,26 @@ pub(crate) async fn list_drive_roots(pool: &SqlitePool, account_id: &str) -> Res
         .collect())
 }
 
+/// `roots` plus, for each root whose canonical spelling differs from the
+/// stored one, that canonical spelling under the same label. Finder hands
+/// over canonical paths, while a stored root keeps the spelling it was added
+/// with (a symlinked parent, `/tmp` for `/private/tmp`), so a containment
+/// test against the stored spelling alone would miss. A root that cannot be
+/// resolved (an unplugged disk) keeps its stored spelling only.
+#[cfg(any(unix, windows))]
+pub(crate) async fn with_canonical_roots(roots: Vec<(String, std::path::PathBuf)>) -> Vec<(String, std::path::PathBuf)> {
+    let mut all = Vec::with_capacity(roots.len() * 2);
+    for (label, root) in roots {
+        if let Ok(canonical) = tokio::fs::canonicalize(&root).await
+            && canonical != root
+        {
+            all.push((label.clone(), canonical));
+        }
+        all.push((label, root));
+    }
+    all
+}
+
 /// F-1 regression tests: a same-basename second drive must never overwrite the
 /// first drive's path (the silent-merge data-loss bug). These drive the real
 /// `set_sync_path_internal` against a file-backed SQLite pool configured exactly
@@ -529,6 +549,26 @@ mod set_path_tests {
             .await
             .expect("rows");
         rows.iter().map(|r| (r.get("label"), r.get("path"))).collect()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_root_stored_through_a_symlink_also_resolves_canonically() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(real.join("Hippius")).expect("real root");
+        let linked = dir.path().join("linked");
+        std::os::unix::fs::symlink(&real, &linked).expect("symlink");
+        let stored = linked.join("Hippius");
+        let gone = dir.path().join("unplugged");
+
+        let roots = with_canonical_roots(vec![("docs".into(), stored.clone()), ("usb".into(), gone.clone())]).await;
+
+        let canonical = std::fs::canonicalize(real.join("Hippius")).expect("canonical");
+        assert!(roots.contains(&("docs".into(), stored)), "the stored spelling stays");
+        assert!(roots.contains(&("docs".into(), canonical)), "the canonical spelling is added");
+        assert!(roots.contains(&("usb".into(), gone)), "an unresolvable root keeps its spelling");
+        assert_eq!(roots.len(), 3);
     }
 
     // `unix`-gated to match `list_drive_roots` itself (its callers are the
