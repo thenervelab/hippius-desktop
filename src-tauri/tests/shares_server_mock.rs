@@ -24,31 +24,56 @@
 //!   folder-shares-capable server, and the expiry PATCH pins its `{ttl}`
 //!   body and consumes the token-less `{expires_at}` response.
 //! - Path-prefix validation refusing `..` and friends before any request.
+//! - The uploaded-copy (outside-folder) share: open → files → chunks → seal,
+//!   ciphertext under the fragment key, an owner wrap sealed exactly like a
+//!   drive folder link's, a Finder Cancel mid-upload aborting the
+//!   half-built link through the real Finder mint path, the quota gate
+//!   before any upload, and the capability refusal before any work.
+//! - The uploaded copy's failures as a user meets them: a file that changes
+//!   mid-upload fails the share by name and aborts the link, the server's
+//!   own 402 at open opens the plans dialog with nothing sent, the
+//!   per-account cap on uploading links reads as a sentence, a link that
+//!   vanishes mid-upload says to share again, and an empty folder is
+//!   refused before any request. Empty folders, nested ones included, reach
+//!   the open request; a password link round-trips through its `#p=` blob
+//!   and its owner wrap.
+//! - An uploaded copy in the owner listing: labelled `UploadedCopy` with no
+//!   drive identity, no Finder badge row, and Copy / Change expiry / Revoke
+//!   working by its token, and by its `token_hash` from another device. A
+//!   row with a `null` drive identity still parses.
 
 use axum::{
     Json, Router,
     extract::Path,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::json;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 use hcfs_client::client::folder_share::{ShareTtl, folder_share_token_hash};
-use hcfs_client::client::share::{ShareKeystore, ShareSecret};
+use hcfs_client::client::share::{ShareKeystore, SharePhase, ShareProgress, ShareSecret};
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::account_key::account_key;
 use tauri_project_lib::auth::state::AuthCapabilities;
-use tauri_project_lib::error::AppError;
+use tauri_project_lib::error::{AppError, NotReadyKind};
+use tauri_project_lib::finder_bridge::dispatch::{FinderMint, mint_confirmed};
 use tauri_project_lib::shares::SqliteShareKeystore;
 use tauri_project_lib::shares::commands::{
-    ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_inner, update_folder_share_expiry_inner,
+    FolderShareOrigin, ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_by_hash_inner,
+    revoke_folder_share_inner, update_folder_share_expiry_inner,
+};
+use tauri_project_lib::shares::origin::folder_origin;
+use tauri_project_lib::shares::outside_folder::{
+    CANCELLED_BUT_LINK_LIVE, OutsideFolderShare, SHARE_CANCELLED, UPLOAD_FOLDER_SHARES_UNAVAILABLE, share_outside_folder,
 };
 
 /// One shared `$HOME` for every test in this binary that touches config dirs
@@ -119,11 +144,16 @@ struct MockOptions {
     list: serde_json::Value,
     /// Tokens whose DELETE/PATCH answers the server's bodiless 404.
     missing_tokens: Vec<String>,
+    /// Tokens whose DELETE answers 500: a revoke that did not happen.
+    unrevokable_tokens: Vec<String>,
     /// `expires_at` echoed by a successful PATCH — the response carries
     /// nothing else (no token echo).
     patch_expires_at: serde_json::Value,
     /// Body of `GET /v1/drive-memberships`: the member-mint role gate.
     memberships: serde_json::Value,
+    /// Fired when `GET /v1/capabilities` is served: the modal's Cancel
+    /// arriving while a share is still preparing.
+    cancel_on_capabilities: Option<CancellationToken>,
 }
 
 impl Default for MockOptions {
@@ -136,8 +166,10 @@ impl Default for MockOptions {
             },
             list: json!([]),
             missing_tokens: Vec::new(),
+            unrevokable_tokens: Vec::new(),
             patch_expires_at: json!(null),
             memberships: json!({ "memberships": [] }),
+            cancel_on_capabilities: None,
         }
     }
 }
@@ -165,9 +197,11 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
     let revoke_recorder = recorded.revoked_tokens.clone();
     let patch_recorder = recorded.patch_bodies.clone();
     let delete_missing = opts.missing_tokens.clone();
+    let delete_failing = opts.unrevokable_tokens.clone();
     let patch_missing = opts.missing_tokens.clone();
     let patch_expires = opts.patch_expires_at.clone();
     let memberships_body = opts.memberships.clone();
+    let caps_cancel = opts.cancel_on_capabilities.clone();
 
     Router::new()
         .route(
@@ -183,6 +217,9 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
             "/v1/capabilities",
             get(move || async move {
                 *caps_hits.lock().unwrap() += 1;
+                if let Some(cancel) = &caps_cancel {
+                    cancel.cancel();
+                }
                 Json(caps_body).into_response()
             }),
         )
@@ -224,6 +261,9 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
                 if delete_missing.contains(&token) {
                     // Bodiless, like the server's collapsed 404.
                     return StatusCode::NOT_FOUND.into_response();
+                }
+                if delete_failing.contains(&token) {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "internal", "message": "boom"}))).into_response();
                 }
                 StatusCode::NO_CONTENT.into_response()
             })
@@ -329,6 +369,20 @@ async fn make_pool(dir: &std::path::Path) -> sqlx::SqlitePool {
     .execute(&pool)
     .await
     .expect("share_keystore schema");
+
+    // The Finder folder badge's source; same shape as `utils/schema.rs`.
+    sqlx::query(
+        "CREATE TABLE folder_share_origin (
+            share_token TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            folder_label TEXT NOT NULL,
+            path_prefix TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("folder_share_origin schema");
 
     pool
 }
@@ -1179,4 +1233,1166 @@ async fn an_editor_shares_a_folder_naming_the_owner() {
 
     let keystore = SqliteShareKeystore::new(pool);
     assert!(matches!(keystore.get("tok_member").expect("get"), Some(ShareSecret::Public(_))));
+}
+
+// ── Uploaded-copy (outside-folder) shares ──────────────────────────────────
+
+const CAPS_UPLOADS_ON: &str = r#"{"shares":true,"folder_shares":true,"upload_folder_shares":true}"#;
+
+/// The token the mock server mints on open. The server, not the client,
+/// mints an uploaded copy's token, so the mock has to hand one out.
+const UPLOAD_TOKEN: &str = "UploadCopyToken_0123456789abcdefghijklmnopq";
+
+/// What the upload routes saw, in arrival order.
+#[derive(Clone, Default)]
+struct UploadRecorded {
+    opens: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Every declared file: the body as sent plus the `file_id` the mock
+    /// answered with, both written under one lock so a lookup by path
+    /// finds the id that file's chunks were sent under.
+    files: Arc<Mutex<Vec<serde_json::Value>>>,
+    chunks: Arc<Mutex<Vec<ChunkPut>>>,
+    file_completes: Arc<Mutex<Vec<i64>>>,
+    seals: Arc<Mutex<u32>>,
+    aborts: Arc<Mutex<Vec<String>>>,
+    /// `size_bytes` of every `/can_upload` pre-flight.
+    can_upload_sizes: Arc<Mutex<Vec<u64>>>,
+    /// Every `{token_hash, wrap}` entry PUT to the folder owner-wrap route.
+    folder_wraps: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// The `{token_hash}` of every `DELETE /v1/folder-shares/by-hash/..`.
+    by_hash_revokes: Arc<Mutex<Vec<String>>>,
+}
+
+/// One chunk PUT as the server received it.
+#[derive(Clone)]
+struct ChunkPut {
+    file_id: i64,
+    index: u32,
+    body: Vec<u8>,
+}
+
+/// Something the user, the filesystem or the server does while the first
+/// chunk is in flight.
+#[derive(Clone)]
+enum OnFirstChunk {
+    Nothing,
+    /// The modal's Cancel.
+    Cancel(CancellationToken),
+    /// The link was reaped or revoked: the chunk answers 404.
+    Gone,
+}
+
+#[derive(Clone)]
+struct UploadMock {
+    /// Body of `POST /can_upload` (hcfs-server's quota pre-flight).
+    can_upload: serde_json::Value,
+    seal_expires_at: Option<&'static str>,
+    on_first_chunk: OnFirstChunk,
+    /// A still-downloading file, grown while its OWN declare is answered:
+    /// after the scan and after the client stamped it, before the client
+    /// reads it. Keyed by the declared `relative_path`, so it does not
+    /// depend on how many files the client uploads at once.
+    grow_on_declare: Option<(&'static str, std::path::PathBuf)>,
+    /// See [`MockOptions::cancel_on_capabilities`].
+    cancel_on_capabilities: Option<CancellationToken>,
+    /// A refused open: its status and JSON body. `None` mints the link.
+    open_refusal: Option<(StatusCode, serde_json::Value)>,
+    /// Fired while the seal is answered: the modal's Cancel landing after
+    /// the seal was sent, so the link it ends up with is already sealed.
+    cancel_on_seal: Option<CancellationToken>,
+    /// Fired while the owner wrap is answered: the modal's Cancel landing
+    /// after the client has handed back a finished link.
+    cancel_on_wrap: Option<CancellationToken>,
+    /// The finished link's revoke answers 500.
+    revoke_fails: bool,
+}
+
+impl Default for UploadMock {
+    fn default() -> Self {
+        Self {
+            can_upload: json!({ "result": true, "error": null }),
+            seal_expires_at: Some("2026-10-09T00:00:00+00:00"),
+            on_first_chunk: OnFirstChunk::Nothing,
+            grow_on_declare: None,
+            cancel_on_capabilities: None,
+            open_refusal: None,
+            cancel_on_seal: None,
+            cancel_on_wrap: None,
+            revoke_fails: false,
+        }
+    }
+}
+
+/// Open, seal, abort, keepalive and the quota pre-flight.
+fn upload_lifecycle_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
+    let (opens, seals, aborts, sizes) = (rec.opens.clone(), rec.seals.clone(), rec.aborts.clone(), rec.can_upload_sizes.clone());
+    let (verdict, expires, refusal) = (mock.can_upload.clone(), mock.seal_expires_at, mock.open_refusal.clone());
+    let by_hash = rec.by_hash_revokes.clone();
+    let seal_cancel = mock.cancel_on_seal.clone();
+    let sealed = rec.seals.clone();
+    Router::new()
+        .route(
+            "/can_upload",
+            post(move |Json(body): Json<serde_json::Value>| async move {
+                sizes.lock().unwrap().push(body["size_bytes"].as_u64().expect("size_bytes"));
+                Json(verdict).into_response()
+            }),
+        )
+        .route(
+            "/v1/folder-shares/uploads",
+            post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                if let Some(resp) = bearer_rejection(&headers) {
+                    return resp;
+                }
+                opens.lock().unwrap().push(body);
+                if let Some((status, body)) = refusal {
+                    return (status, Json(body)).into_response();
+                }
+                let minted = json!({ "share_token": UPLOAD_TOKEN, "token_hash": folder_share_token_hash(UPLOAD_TOKEN) });
+                (StatusCode::CREATED, Json(minted)).into_response()
+            }),
+        )
+        .route(
+            "/v1/folder-shares/uploads/{token_hash}/complete",
+            post(move |Path(_): Path<String>| async move {
+                *seals.lock().unwrap() += 1;
+                if let Some(cancel) = &seal_cancel {
+                    cancel.cancel();
+                }
+                Json(json!({ "expires_at": expires })).into_response()
+            }),
+        )
+        .route(
+            "/v1/folder-shares/uploads/{token_hash}/keepalive",
+            post(|Path(_): Path<String>| async { StatusCode::NO_CONTENT.into_response() }),
+        )
+        .route(
+            "/v1/folder-shares/uploads/{token_hash}",
+            delete(move |Path(token_hash): Path<String>| async move {
+                aborts.lock().unwrap().push(token_hash);
+                // A sealed link can no longer be aborted, only revoked.
+                if *sealed.lock().unwrap() > 0 {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                StatusCode::NO_CONTENT.into_response()
+            }),
+        )
+        .route(
+            "/v1/folder-shares/by-hash/{token_hash}",
+            delete(move |headers: HeaderMap, Path(token_hash): Path<String>| async move {
+                if let Some(resp) = bearer_rejection(&headers) {
+                    return resp;
+                }
+                by_hash.lock().unwrap().push(token_hash);
+                StatusCode::NO_CONTENT.into_response()
+            }),
+        )
+}
+
+/// Per-file declare, chunk and complete, plus the folder owner-wrap PUT.
+/// Each answers and refuses as `docs/public/api/folder-shares.md` in hcfs
+/// says the server does, so a client that sends an out-of-range chunk or
+/// completes a file early fails here as it would live.
+fn upload_file_routes(mock: &UploadMock, rec: &UploadRecorded) -> Router {
+    let (files, chunks, wraps) = (rec.files.clone(), rec.chunks.clone(), rec.folder_wraps.clone());
+    let (chunk_files, complete_files, complete_chunks, completes) =
+        (rec.files.clone(), rec.files.clone(), rec.chunks.clone(), rec.file_completes.clone());
+    let grow_on_declare = mock.grow_on_declare.clone();
+    let fired = Arc::new(AtomicBool::new(false));
+    let hook = mock.on_first_chunk.clone();
+    let wrap_cancel = mock.cancel_on_wrap.clone();
+    Router::new()
+        .route(
+            "/v1/folder-shares/uploads/{token_hash}/files",
+            post(move |Path(_): Path<String>, Json(body): Json<serde_json::Value>| async move {
+                if let Some((relative_path, path)) = &grow_on_declare
+                    && body["relative_path"] == *relative_path
+                {
+                    grow(path);
+                }
+                let file_id = declare_file(&files, body);
+                (StatusCode::CREATED, Json(json!({ "file_id": file_id }))).into_response()
+            }),
+        )
+        .route(
+            "/v1/folder-shares/uploads/{token_hash}/files/{file_id}/chunks/{n}",
+            put(
+                move |Path((_, file_id, n)): Path<(String, i64, u32)>, body: axum::body::Bytes| async move {
+                    let chunk = ChunkPut {
+                        file_id,
+                        index: n,
+                        body: body.to_vec(),
+                    };
+                    if let Err(status) = store_chunk(&chunk_files, &chunks, chunk) {
+                        return status.into_response();
+                    }
+                    if !fired.swap(true, Ordering::SeqCst) {
+                        match &hook {
+                            OnFirstChunk::Nothing => {}
+                            OnFirstChunk::Cancel(token) => token.cancel(),
+                            OnFirstChunk::Gone => return StatusCode::NOT_FOUND.into_response(),
+                        }
+                    }
+                    StatusCode::NO_CONTENT.into_response()
+                },
+            )
+            // A transport chunk is bigger than axum's 2 MiB default limit.
+            .layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/v1/folder-shares/uploads/{token_hash}/files/{file_id}/complete",
+            post(move |Path((_, file_id)): Path<(String, i64)>| async move {
+                let Some(declared) = declared_file(&complete_files, file_id) else {
+                    return StatusCode::NOT_FOUND.into_response();
+                };
+                if !declared.is_complete(&complete_chunks.lock().unwrap()) {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
+                completes.lock().unwrap().push(file_id);
+                StatusCode::NO_CONTENT.into_response()
+            }),
+        )
+        .route(
+            "/v1/folder-shares/owner-wraps",
+            put(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                if let Some(resp) = bearer_rejection(&headers) {
+                    return resp;
+                }
+                let entries = body["wraps"].as_array().cloned().expect("wraps array");
+                wraps.lock().unwrap().extend(entries);
+                if let Some(cancel) = &wrap_cancel {
+                    cancel.cancel();
+                }
+                StatusCode::NO_CONTENT.into_response()
+            }),
+        )
+}
+
+/// The server's largest chunk body.
+const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
+/// What a declare fixed for one file.
+struct DeclaredFile {
+    file_id: i64,
+    total_chunks: u32,
+    ciphertext_size: u64,
+}
+
+impl DeclaredFile {
+    /// Every chunk `0..total_chunks` stored, adding up to `ciphertext_size`.
+    fn is_complete(&self, chunks: &[ChunkPut]) -> bool {
+        let mine: Vec<&ChunkPut> = chunks.iter().filter(|c| c.file_id == self.file_id).collect();
+        let indices: std::collections::BTreeSet<u32> = mine.iter().map(|c| c.index).collect();
+        let bytes: u64 = mine.iter().map(|c| c.body.len() as u64).sum();
+        indices.len() == self.total_chunks as usize && bytes == self.ciphertext_size
+    }
+}
+
+/// Record a declare and return its id. A resend of a path with the same
+/// sizes gets the first id back, as on the server.
+fn declare_file(files: &Mutex<Vec<serde_json::Value>>, mut body: serde_json::Value) -> i64 {
+    let mut files = files.lock().unwrap();
+    let same = |f: &&serde_json::Value| {
+        ["relative_path", "plaintext_size", "ciphertext_size", "total_chunks"]
+            .iter()
+            .all(|key| f[key] == body[key])
+    };
+    if let Some(earlier) = files.iter().find(same) {
+        return earlier["file_id"].as_i64().expect("recorded id");
+    }
+    let file_id = i64::try_from(files.len()).expect("few files") + 1;
+    body["file_id"] = json!(file_id);
+    files.push(body);
+    file_id
+}
+
+fn declared_file(files: &Mutex<Vec<serde_json::Value>>, file_id: i64) -> Option<DeclaredFile> {
+    let files = files.lock().unwrap();
+    let body = files.iter().find(|f| f["file_id"] == file_id)?;
+    Some(DeclaredFile {
+        file_id,
+        total_chunks: u32::try_from(body["total_chunks"].as_u64().expect("total_chunks")).expect("u32"),
+        ciphertext_size: body["ciphertext_size"].as_u64().expect("ciphertext_size"),
+    })
+}
+
+/// Store one chunk, refusing it as the server would: an unknown file is
+/// 404; an empty body, an index at or past `total_chunks`, or bytes past
+/// `ciphertext_size` are 400; a body over 8 MiB is 413. A resend of an
+/// index replaces it, so each index is stored once.
+fn store_chunk(files: &Mutex<Vec<serde_json::Value>>, chunks: &Mutex<Vec<ChunkPut>>, chunk: ChunkPut) -> Result<(), StatusCode> {
+    let declared = declared_file(files, chunk.file_id).ok_or(StatusCode::NOT_FOUND)?;
+    if chunk.body.len() > MAX_CHUNK_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    if chunk.body.is_empty() || chunk.index >= declared.total_chunks {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut chunks = chunks.lock().unwrap();
+    let others: u64 = chunks
+        .iter()
+        .filter(|c| c.file_id == chunk.file_id && c.index != chunk.index)
+        .map(|c| c.body.len() as u64)
+        .sum();
+    if others + chunk.body.len() as u64 > declared.ciphertext_size {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    chunks.retain(|c| !(c.file_id == chunk.file_id && c.index == chunk.index));
+    chunks.push(chunk);
+    Ok(())
+}
+
+/// Append to `path` as a writer still busy with it would.
+fn grow(path: &std::path::Path) {
+    use std::io::Write;
+
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).expect("open the growing file");
+    file.write_all(b"more bytes").expect("grow the file");
+}
+
+/// A served mock plus a state for `account`, with no drive rows: an outside
+/// folder needs none. The legacy `share_router` routes ride along, so the
+/// same server also mints drive folder links.
+async fn upload_harness(account: &str, caps: &str, mock: UploadMock) -> (AppState, UploadRecorded, Recorded, tempfile::TempDir) {
+    upload_harness_listing(account, caps, mock, json!([])).await
+}
+
+/// [`upload_harness`] whose `GET /v1/folder-shares` answers `list`.
+async fn upload_harness_listing(
+    account: &str,
+    caps: &str,
+    mock: UploadMock,
+    list: serde_json::Value,
+) -> (AppState, UploadRecorded, Recorded, tempfile::TempDir) {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let (recorded, uploads) = (Recorded::default(), UploadRecorded::default());
+    let options = MockOptions {
+        capabilities: serde_json::from_str(caps).expect("caps json"),
+        list,
+        cancel_on_capabilities: mock.cancel_on_capabilities.clone(),
+        unrevokable_tokens: if mock.revoke_fails { vec![UPLOAD_TOKEN.to_string()] } else { Vec::new() },
+        ..MockOptions::default()
+    };
+    let router = share_router(options, recorded.clone())
+        .merge(upload_lifecycle_routes(&mock, &uploads))
+        .merge(upload_file_routes(&mock, &uploads));
+    let base = serve(router).await;
+    seed_account(&pool, account, &base).await;
+    (make_state(pool, account), uploads, recorded, dir)
+}
+
+/// `T2-KD/` as Finder would hand it over: two real files (one large enough
+/// to span several transport chunks), an empty subfolder, and the things
+/// the walk must skip.
+fn outside_folder() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let root = dir.path().join("T2-KD");
+    std::fs::create_dir_all(root.join("sub")).expect("sub");
+    std::fs::create_dir_all(root.join("empty")).expect("empty");
+    std::fs::write(root.join("a.txt"), b"hello").expect("a");
+    std::fs::write(root.join("sub/b.bin"), big_file()).expect("b");
+    std::fs::write(root.join(".DS_Store"), b"skip").expect("hidden");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("a.txt"), root.join("alias.txt")).expect("link");
+    (dir, root)
+}
+
+fn big_file() -> Vec<u8> {
+    (0..9 * 1024 * 1024).map(|i: u32| (i % 251) as u8).collect()
+}
+
+fn share_request(folder: &std::path::Path, cancel: CancellationToken) -> OutsideFolderShare<'_> {
+    OutsideFolderShare {
+        folder,
+        ttl: ShareTtl::Days7,
+        choice: ShareChoice::Public,
+        progress: None,
+        cancel,
+    }
+}
+
+/// One uploaded file's ciphertext, reassembled from its chunk PUTs in index
+/// order.
+fn uploaded_ciphertext(rec: &UploadRecorded, file_id: i64) -> Vec<u8> {
+    let mut parts: Vec<(u32, Vec<u8>)> = rec
+        .chunks
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|chunk| chunk.file_id == file_id)
+        .map(|chunk| (chunk.index, chunk.body.clone()))
+        .collect();
+    parts.sort_by_key(|(n, _)| *n);
+    parts.into_iter().flat_map(|(_, body)| body).collect()
+}
+
+/// The whole upload through the real funnel: one open declaring exactly the
+/// visible tree (empty folder kept, hidden file and symlink not), every file
+/// initialised, chunked and completed, one seal, and a `#k=` link whose key
+/// opens the uploaded ciphertext. The keystore holds that key, so the
+/// shares page can rebuild the link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn outside_folder_share_uploads_every_file_then_seals() {
+    let account = "5UploadOkAcct";
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, UploadMock::default()).await;
+    let (_tree, root) = outside_folder();
+    let seen: Arc<Mutex<Vec<ShareProgress>>> = Arc::default();
+    let sink = seen.clone();
+    let mut request = share_request(&root, CancellationToken::new());
+    request.progress = Some(Arc::new(move |p: ShareProgress| sink.lock().unwrap().push(p)));
+
+    let link = share_outside_folder(&state, account, request).await.expect("share");
+
+    assert_eq!(link.share_token, UPLOAD_TOKEN);
+    let open = rec.opens.lock().unwrap().first().cloned().expect("one open");
+    assert_eq!(open["display_name"], "T2-KD");
+    assert_eq!(open["file_count"], 2);
+    assert_eq!(open["total_bytes"], 5 + 9 * 1024 * 1024);
+    assert_eq!(open["dirs"], json!(["empty"]));
+    assert_eq!(open["ttl"], "7d");
+    assert_eq!(
+        *rec.can_upload_sizes.lock().unwrap(),
+        vec![5 + 9 * 1024 * 1024],
+        "gated on the copy's bytes"
+    );
+
+    let files = rec.files.lock().unwrap().clone();
+    let mut declared: Vec<&str> = files.iter().map(|f| f["relative_path"].as_str().unwrap()).collect();
+    declared.sort_unstable();
+    assert_eq!(declared, vec!["a.txt", "sub/b.bin"], "hidden file and symlink are not uploaded");
+    assert_eq!(rec.file_completes.lock().unwrap().len(), 2);
+    assert_eq!(*rec.seals.lock().unwrap(), 1);
+    assert!(rec.aborts.lock().unwrap().is_empty());
+
+    // The fragment key opens the ciphertext the server was handed, chunk
+    // by chunk, and each file declared exactly the chunks it sent.
+    let (_, key) = link.share_url.split_once("#k=").expect("#k= link");
+    let key: [u8; 32] = URL_SAFE_NO_PAD.decode(key).expect("b64").try_into().expect("32 bytes");
+    for file in &files {
+        let id = file["file_id"].as_i64().expect("declared id");
+        assert!(rec.file_completes.lock().unwrap().contains(&id), "{file}");
+        let sent = rec.chunks.lock().unwrap().iter().filter(|chunk| chunk.file_id == id).count() as u64;
+        assert_eq!(sent, file["total_chunks"].as_u64().unwrap(), "{file}");
+        let ciphertext = uploaded_ciphertext(&rec, id);
+        let mut plaintext = Vec::new();
+        hcfs_client::crypto::decrypt_stream(&mut std::io::Cursor::new(&ciphertext), &mut plaintext, &key, None, None::<fn(u64, u64)>)
+            .expect("drive framing under the link key");
+        let expected = if file["relative_path"] == "a.txt" {
+            b"hello".to_vec()
+        } else {
+            big_file()
+        };
+        assert_eq!(plaintext, expected, "{file}");
+    }
+
+    assert_eq!(
+        link.expires_at.as_deref(),
+        Some("2026-10-09T00:00:00+00:00"),
+        "expiry comes from the seal"
+    );
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    assert_eq!(keystore.get(&link.share_token).unwrap(), Some(ShareSecret::Public(key)));
+
+    let seen = seen.lock().unwrap();
+    assert!(matches!(seen.last().map(|p| p.phase), Some(SharePhase::Finalizing)), "ends finalizing");
+    assert!(
+        seen.iter()
+            .any(|p| p.phase == SharePhase::Uploading && p.bytes_done == p.bytes_total && p.bytes_total > 0),
+        "uploading reaches its total, summed across files"
+    );
+}
+
+/// Open a folder owner wrap the way the console does: with the account
+/// mnemonic and the session (login) address, bound to the row's
+/// `token_hash`. Uses hcfs-client's own opener, not the desktop sealer, so a
+/// drift between the two fails here.
+fn open_folder_wrap(entry: &serde_json::Value, owner_ss58: &str) -> Option<(String, ShareSecret)> {
+    use base64::engine::general_purpose::STANDARD;
+    use hcfs_client::client::share_wrap::{OwnerWrapContext, open_folder_owner_secret};
+
+    let token_hash = entry["token_hash"].as_str().expect("token_hash");
+    let wrap = STANDARD.decode(entry["wrap"].as_str().expect("wrap")).expect("b64 wrap");
+    let ctx = OwnerWrapContext {
+        master_mnemonic: MASTER,
+        owner_ss58,
+        row_key: token_hash,
+    };
+    open_folder_owner_secret(ctx, &wrap).ok()
+}
+
+/// An uploaded copy's owner wrap is sealed with exactly the inputs a drive
+/// folder link's wrap is: the same mnemonic, the same owner address, the
+/// row's `token_hash`. Both are minted on one account against one server;
+/// both wraps open under one context, each carries its own link's token
+/// (which hashes to the row it was PUT under) and the keystore's secret.
+/// Without this wrap the console's Copy works on this device only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_uploaded_copy_is_wrapped_exactly_like_a_drive_folder_link() {
+    let account = "5UploadWrapAcct";
+    let label = "photo-drive";
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, UploadMock::default()).await;
+    seed_own_drive(state.pool().unwrap(), account, label).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let drive_link = create_folder_share_inner(&state, account, label, "photos", ShareTtl::Days7, ShareChoice::Public)
+        .await
+        .expect("drive folder link");
+    let copy_link = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect("uploaded copy");
+
+    let wraps = rec.folder_wraps.lock().unwrap().clone();
+    assert_eq!(wraps.len(), 2, "one wrap per link: {wraps:?}");
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    for link in [&drive_link, &copy_link] {
+        let row_hash = folder_share_token_hash(&link.share_token);
+        let entry = wraps
+            .iter()
+            .find(|w| w["token_hash"] == row_hash.as_str())
+            .expect("a wrap under the row's token_hash");
+        let (token, secret) = open_folder_wrap(entry, account).expect("opens with the account's mnemonic and address");
+        assert_eq!(token, link.share_token);
+        assert_eq!(folder_share_token_hash(&token), row_hash, "the wrapped token names its own row");
+        assert_eq!(Some(secret), keystore.get(&link.share_token).unwrap());
+        assert!(open_folder_wrap(entry, OWNER_SS58).is_none(), "bound to the owner address");
+    }
+}
+
+/// The owner listing as the server sends an uploaded copy (`source:
+/// "upload"`, `folder_hash` and `path_prefix` both `""`) next to a drive
+/// link: the copy reaches the FE as `UploadedCopy` with no drive identity,
+/// resolves to the very link the share returned (Copy), and Change expiry
+/// and Revoke act on it by its token like on any folder link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_uploaded_copy_lists_as_one_and_is_managed_like_a_drive_link() {
+    let account = "5UploadListAcct";
+    let list = json!([
+        {
+            "token_hash": folder_share_token_hash(UPLOAD_TOKEN),
+            "folder_hash": "",
+            "path_prefix": "",
+            "display_name": "T2-KD",
+            "source": "upload",
+            "created_at": "2026-10-02T00:00:00+00:00",
+            "expires_at": "2026-10-09T00:00:00+00:00",
+            "revoked_at": null,
+        },
+        {
+            "token_hash": "ee".repeat(32),
+            "folder_hash": "abcdef0123456789",
+            "path_prefix": "",
+            "display_name": "drive",
+            "source": "drive",
+            "created_at": "2026-10-01T00:00:00+00:00",
+            "expires_at": null,
+            "revoked_at": null,
+        },
+    ]);
+    let (state, _, recorded, _db) = upload_harness_listing(account, CAPS_UPLOADS_ON, UploadMock::default(), list).await;
+    seed_own_drive(state.pool().unwrap(), account, "drive").await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+    let drive_link = create_folder_share_inner(&state, account, "drive", "", ShareTtl::Days7, ShareChoice::Public)
+        .await
+        .expect("drive folder link");
+    let link = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect("uploaded copy");
+
+    // The Finder folder badge reads `folder_share_origin`: the drive link
+    // badges its folder, the copy has no drive folder and leaves no row.
+    let owner = account_key(account);
+    let pool = state.pool().unwrap();
+    let drive_origin = folder_origin(pool, &owner, &drive_link.share_token).await.expect("origin read");
+    assert_eq!(drive_origin, Some(("drive".to_string(), String::new())));
+    let copy_origin = folder_origin(pool, &owner, UPLOAD_TOKEN).await.expect("origin read");
+    assert_eq!(copy_origin, None, "an uploaded copy never badges a drive folder in Finder");
+    let origin_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM folder_share_origin WHERE owner = ?")
+        .bind(&owner)
+        .fetch_one(pool)
+        .await
+        .expect("count origin rows");
+    assert_eq!(origin_rows, 1, "the drive link's row and nothing else, under any token");
+
+    let rows = list_folder_shares_inner(&state, account).await.expect("list");
+    let copy = &rows[0];
+    assert_eq!(copy.source, FolderShareOrigin::UploadedCopy);
+    assert_eq!((copy.folder_hash.as_str(), copy.path_prefix.as_str()), ("", ""), "no drive identity");
+    assert_eq!(copy.share_url.as_deref(), Some(link.share_url.as_str()), "Copy hands out the minted link");
+    assert_eq!(copy.share_token.as_deref(), Some(UPLOAD_TOKEN));
+    assert_eq!(rows[1].source, FolderShareOrigin::Drive, "a whole-drive link stays a drive link");
+
+    update_folder_share_expiry_inner(&state, account, UPLOAD_TOKEN, ShareTtl::Days30)
+        .await
+        .expect("expiry update");
+    revoke_folder_share_inner(&state, account, UPLOAD_TOKEN).await.expect("revoke");
+    assert_eq!(*recorded.revoked_tokens.lock().unwrap(), vec![UPLOAD_TOKEN.to_string()]);
+    assert_eq!(recorded.patch_bodies.lock().unwrap().len(), 1);
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    assert_eq!(keystore.get(UPLOAD_TOKEN).unwrap(), None, "revoke forgets the copy's key");
+}
+
+/// The modal's Cancel during a Finder share of an outside folder, through
+/// the real Finder mint path: the token reaches the upload, so the client
+/// sends the abort for the half-built link before reporting the cancel. A
+/// mint raced against the token instead would be dropped mid-request and
+/// send no abort, leaving the link to the server's idle reaper.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_finder_cancel_mid_upload_aborts_the_half_built_link() {
+    let account = "5UploadCancelAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        on_first_chunk: OnFirstChunk::Cancel(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+    let mint = FinderMint {
+        ttl: ShareTtl::Days7,
+        choice: ShareChoice::Public,
+        progress: None,
+        cancel,
+    };
+
+    let err = mint_confirmed(&state, &root, mint).await.expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(rec.opens.lock().unwrap().len(), 1, "the link was opened before the cancel");
+    assert_eq!(
+        *rec.aborts.lock().unwrap(),
+        vec![folder_share_token_hash(UPLOAD_TOKEN)],
+        "the open link is aborted on the server"
+    );
+    assert_eq!(*rec.seals.lock().unwrap(), 0, "a cancelled link is never sealed");
+}
+
+/// The modal's Cancel landing while the seal is in flight: the seal may
+/// commit and cannot be called back, so the share must not end as a live
+/// link the user believes they cancelled. hcfs-client tears this one down
+/// itself (its abort meets a sealed link, so it revokes by hash); the
+/// desktop reports the cancel, keeps no key and pushes no owner wrap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_during_the_seal_revokes_the_sealed_link() {
+    let account = "5UploadSealCancelAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_seal: Some(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(*rec.seals.lock().unwrap(), 1, "the seal was sent");
+    assert_eq!(
+        *rec.by_hash_revokes.lock().unwrap(),
+        vec![folder_share_token_hash(UPLOAD_TOKEN)],
+        "the sealed link is revoked"
+    );
+    assert!(recorded.revoked_tokens.lock().unwrap().is_empty(), "revoked once, not twice");
+    assert!(rec.folder_wraps.lock().unwrap().is_empty(), "no owner wrap for a cancelled link");
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    assert_eq!(keystore.get(UPLOAD_TOKEN).unwrap(), None, "the cancelled link's key is forgotten");
+}
+
+/// The modal's Cancel landing while the owner wrap is pushed, after the
+/// client handed back a finished link: the share still reports the cancel
+/// and revokes that link, rather than returning a link the modal no longer
+/// shows to anyone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_during_the_owner_wrap_revokes_the_finished_link() {
+    let account = "5UploadWrapCancelAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_wrap: Some(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(rec.folder_wraps.lock().unwrap().len(), 1, "the wrap was pushed before the cancel");
+    assert_eq!(
+        *recorded.revoked_tokens.lock().unwrap(),
+        vec![UPLOAD_TOKEN.to_string()],
+        "the finished link is revoked"
+    );
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    assert_eq!(keystore.get(UPLOAD_TOKEN).unwrap(), None, "the cancelled link's key is forgotten");
+}
+
+/// A late cancel whose revoke fails must not read as a plain cancel: the
+/// link is still live, and the user has to be told where to remove it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_cancel_whose_revoke_fails_says_the_link_is_still_live() {
+    let account = "5UploadWrapCancelRevokeFailsAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_wrap: Some(cancel.clone()),
+        revoke_fails: true,
+        ..UploadMock::default()
+    };
+    let (state, _rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    with_notification_tables(&state).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert_eq!(
+        *recorded.revoked_tokens.lock().unwrap(),
+        vec![UPLOAD_TOKEN.to_string()],
+        "the revoke was tried"
+    );
+    assert!(
+        matches!(&err, AppError::Validation(m) if m == CANCELLED_BUT_LINK_LIVE),
+        "a failed revoke is not reported as a plain cancel: {err:?}"
+    );
+
+    // The modal closed on Cancel, so the error above reaches no one. The
+    // lasting copy is a notification, saved for the account that shared.
+    let rows = notification_rows(&state).await;
+    assert_eq!(rows.len(), 1, "one notification for the live link: {rows:?}");
+    let (owner, link, description) = &rows[0];
+    assert_eq!(owner, account);
+    assert_eq!(link, "/shares");
+    assert!(description.contains("T2-KD"), "names the shared folder: {description}");
+}
+
+/// A late cancel whose revoke succeeds leaves nothing live, so nothing is
+/// saved: the notification exists only for a link the user must remove.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_cancel_that_revokes_its_link_saves_no_notification() {
+    let account = "5UploadWrapCancelNoNoticeAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_wrap: Some(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, _rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    with_notification_tables(&state).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(recorded.revoked_tokens.lock().unwrap().len(), 1);
+    assert!(notification_rows(&state).await.is_empty());
+}
+
+/// The production schema on top of the harness's hand-made tables, for the
+/// tests that read notifications. Every statement is `IF NOT EXISTS` or an
+/// additive migration, so the harness's tables are left as they are.
+async fn with_notification_tables(state: &AppState) {
+    let pool = state.pool().expect("harness pool");
+    tauri_project_lib::utils::schema::ensure_table_schema(pool)
+        .await
+        .expect("production schema over the harness tables");
+}
+
+/// `(user_address, link, description)` of every notification row.
+async fn notification_rows(state: &AppState) -> Vec<(String, String, String)> {
+    let pool = state.pool().expect("harness pool");
+    sqlx::query_as("SELECT user_address, link, description FROM notifications ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .expect("notification rows")
+}
+
+/// The modal's Cancel while the share is still preparing (capability probe,
+/// scan, quota pre-flight, client build): nothing exists on the server yet,
+/// so the share stops at the next step with no quota request and no open,
+/// instead of running on to upload a copy nobody is waiting for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_before_the_upload_opens_stops_the_share() {
+    let account = "5UploadEarlyCancelAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_capabilities: Some(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(*recorded.capability_hits.lock().unwrap(), 1);
+    assert!(rec.can_upload_sizes.lock().unwrap().is_empty(), "no quota pre-flight");
+    assert!(rec.opens.lock().unwrap().is_empty(), "no open");
+    assert!(rec.aborts.lock().unwrap().is_empty(), "nothing to abort");
+}
+
+/// Over the plan: refused at the pre-flight with the copy's REAL size, and
+/// nothing is opened, so no half-built link and no billing hold. The modal
+/// opens the plans dialog on this kind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_quota_refusal_stops_the_share_before_any_upload() {
+    let account = "5UploadQuotaAcct";
+    let mock = UploadMock {
+        can_upload: json!({ "result": false, "error": "drive_quota_exceeded" }),
+        ..UploadMock::default()
+    };
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("over quota");
+
+    assert!(matches!(err, AppError::NotReady(NotReadyKind::StorageLimitReached)), "{err:?}");
+    assert_eq!(
+        *rec.can_upload_sizes.lock().unwrap(),
+        vec![5 + 9 * 1024 * 1024],
+        "gated on the copy's bytes"
+    );
+    assert!(rec.opens.lock().unwrap().is_empty(), "nothing opened");
+    assert!(rec.files.lock().unwrap().is_empty(), "no file declared");
+    assert!(rec.chunks.lock().unwrap().is_empty(), "no chunk sent");
+}
+
+/// A server that predates uploaded copies: refused with the "isn't
+/// available yet" wording before the quota is asked or anything opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_without_uploaded_copies_refuses_before_any_work() {
+    let account = "5UploadCapsAcct";
+    let caps = r#"{"shares":true,"folder_shares":true}"#;
+    let (state, rec, recorded, _db) = upload_harness(account, caps, UploadMock::default()).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("capability missing");
+
+    assert!(
+        matches!(&err, AppError::Validation(m) if m == UPLOAD_FOLDER_SHARES_UNAVAILABLE),
+        "{err:?}"
+    );
+    assert_eq!(*recorded.capability_hits.lock().unwrap(), 1);
+    assert!(rec.can_upload_sizes.lock().unwrap().is_empty(), "no quota pre-flight");
+    assert!(rec.opens.lock().unwrap().is_empty(), "no open");
+}
+
+/// `Downloads-in-progress/` with four finished files and one still being
+/// written (`movie.part`). The test grows `movie.part` while its own declare
+/// is answered: hcfs-client stamps a file before declaring it and re-stamps
+/// it after reading it, so a grow there lands strictly between the two, in
+/// whatever order and with however many files at once the client uploads.
+fn folder_with_a_growing_file() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let root = dir.path().join("Downloads-in-progress");
+    std::fs::create_dir_all(&root).expect("root");
+    for n in 1..=4 {
+        std::fs::write(root.join(format!("a{n}.txt")), b"done").expect("finished file");
+    }
+    let growing = root.join("movie.part");
+    std::fs::write(&growing, vec![1u8; 4096]).expect("seed");
+    (dir, root, growing)
+}
+
+/// A file that grows after the scan fails the share naming it, and the
+/// client aborts the half-built link instead of sealing a copy that holds a
+/// silent prefix of the file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_that_changes_mid_upload_fails_the_share_naming_it() {
+    let account = "5UploadGrowAcct";
+    let (_tree, root, growing) = folder_with_a_growing_file();
+    let mock = UploadMock {
+        grow_on_declare: Some(("movie.part", growing)),
+        ..UploadMock::default()
+    };
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("source changed");
+
+    assert!(
+        matches!(&err, AppError::Validation(m) if m.contains("\u{201c}movie.part\u{201d}") && m.contains("changed")),
+        "{err:?}"
+    );
+    assert_eq!(
+        *rec.aborts.lock().unwrap(),
+        vec![folder_share_token_hash(UPLOAD_TOKEN)],
+        "the open link is aborted"
+    );
+    assert_eq!(*rec.seals.lock().unwrap(), 0, "a copy with a changed file is never sealed");
+    let changed_id = rec
+        .files
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|f| f["relative_path"] == "movie.part")
+        .and_then(|f| f["file_id"].as_i64())
+        .expect("movie.part was declared before it grew");
+    assert!(
+        !rec.chunks.lock().unwrap().iter().any(|chunk| chunk.file_id == changed_id),
+        "not a byte of the changed file was sent"
+    );
+    assert!(
+        !rec.file_completes.lock().unwrap().contains(&changed_id),
+        "the changed file was never completed"
+    );
+}
+
+/// The server's own quota gate refuses the open (402): our pre-flight said
+/// yes, but the account filled up in between. Same plans dialog, and not a
+/// byte of the folder is sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_402_at_open_opens_the_plans_dialog_and_sends_nothing() {
+    let account = "5UploadOpen402Acct";
+    let mock = UploadMock {
+        open_refusal: Some((
+            StatusCode::PAYMENT_REQUIRED,
+            json!({ "error": "drive_quota_exceeded", "message": "over plan" }),
+        )),
+        ..UploadMock::default()
+    };
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("402");
+
+    assert!(matches!(err, AppError::NotReady(NotReadyKind::StorageLimitReached)), "{err:?}");
+    assert_eq!(rec.opens.lock().unwrap().len(), 1, "one open, not retried");
+    assert!(rec.files.lock().unwrap().is_empty(), "no file declared");
+    assert!(rec.chunks.lock().unwrap().is_empty(), "no chunk sent");
+    assert!(rec.aborts.lock().unwrap().is_empty(), "no link exists to abort");
+}
+
+/// Eight links already uploading on this account: the open's 409 reads as
+/// the user's way out, not as a raw conflict, and is not retried.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn too_many_uploading_links_say_how_to_get_unstuck() {
+    let account = "5UploadBusyAcct";
+    let mock = UploadMock {
+        open_refusal: Some((
+            StatusCode::CONFLICT,
+            json!({ "error": "too_many_uploads_in_progress", "message": "busy" }),
+        )),
+        ..UploadMock::default()
+    };
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("busy");
+
+    assert!(
+        matches!(&err, AppError::Validation(m)
+            if m.starts_with("8 folder shares are already uploading") && m.contains("Wait for one to finish or cancel it")),
+        "{err:?}"
+    );
+    assert_eq!(rec.opens.lock().unwrap().len(), 1, "one open, not retried");
+    assert!(rec.files.lock().unwrap().is_empty(), "no file declared");
+}
+
+/// The link vanished mid-upload (revoked from another device, or reaped):
+/// the share says so and to share again, and the copy is never sealed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_link_removed_mid_upload_says_to_share_again() {
+    let account = "5UploadGoneAcct";
+    let mock = UploadMock {
+        on_first_chunk: OnFirstChunk::Gone,
+        ..UploadMock::default()
+    };
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("gone");
+
+    assert!(
+        matches!(&err, AppError::Validation(m) if m.contains("expired or was removed") && m.contains("Share the folder again")),
+        "{err:?}"
+    );
+    assert_eq!(*rec.seals.lock().unwrap(), 0, "never sealed");
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    assert_eq!(keystore.get(UPLOAD_TOKEN).unwrap(), None, "no key kept for a link that never existed");
+}
+
+/// A folder with only hidden files has nothing to share: refused locally,
+/// so no quota question and no open (an open would hold quota for nothing).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_empty_outside_folder_is_refused_before_any_request() {
+    let account = "5UploadEmptyAcct";
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, UploadMock::default()).await;
+    let tree = tempfile::TempDir::new().expect("tempdir");
+    let root = tree.path().join("Nothing-here");
+    std::fs::create_dir_all(root.join("empty")).expect("root");
+    std::fs::write(root.join(".DS_Store"), b"hidden").expect("hidden");
+
+    let err = share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect_err("empty");
+
+    assert!(matches!(&err, AppError::Validation(m) if m.contains("no files")), "{err:?}");
+    assert!(rec.can_upload_sizes.lock().unwrap().is_empty(), "no quota pre-flight");
+    assert!(rec.opens.lock().unwrap().is_empty(), "no open");
+}
+
+/// Empty folders are part of the copy: the recipient sees them. A chain of
+/// empty folders is sent once, by its deepest folder (the server derives
+/// the rest), and an empty folder beside a file is sent too; a folder that
+/// holds a file is implied and not repeated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_folders_nested_or_not_reach_the_open() {
+    let account = "5UploadDirsAcct";
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, UploadMock::default()).await;
+    let tree = tempfile::TempDir::new().expect("tempdir");
+    let root = tree.path().join("Project");
+    std::fs::create_dir_all(root.join("a/b/c")).expect("empty chain");
+    std::fs::create_dir_all(root.join("docs/inner")).expect("empty beside a file");
+    std::fs::write(root.join("docs/readme.txt"), b"hi").expect("file");
+
+    share_outside_folder(&state, account, share_request(&root, CancellationToken::new()))
+        .await
+        .expect("share");
+
+    let open = rec.opens.lock().unwrap().first().cloned().expect("one open");
+    let mut dirs: Vec<String> = serde_json::from_value(open["dirs"].clone()).expect("dirs array");
+    dirs.sort_unstable();
+    assert_eq!(dirs, vec!["a/b/c", "docs/inner"]);
+    assert_eq!(open["file_count"], 1);
+    assert_eq!(*rec.seals.lock().unwrap(), 1);
+}
+
+/// A password link for an uploaded copy: the `#p=` fragment is the stored
+/// blob, the password unwraps it to the key the files were encrypted under,
+/// the raw key appears nowhere in the link, and the owner wrap carries the
+/// same blob so the console's Copy rebuilds the same link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_password_upload_link_round_trips_through_its_blob_and_owner_wrap() {
+    let account = "5UploadPwAcct";
+    let password = "hunter2-hunter2";
+    let (state, rec, _, _db) = upload_harness(account, CAPS_UPLOADS_ON, UploadMock::default()).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+    let mut request = share_request(&root, CancellationToken::new());
+    request.choice = ShareChoice::Private {
+        password: password.to_string(),
+    };
+
+    let link = share_outside_folder(&state, account, request).await.expect("share");
+
+    assert_eq!(link.password.as_deref(), Some(password), "shown once, on the create response");
+    let keystore = SqliteShareKeystore::new(state.pool().unwrap().clone());
+    let Some(ShareSecret::Private(blob)) = keystore.get(UPLOAD_TOKEN).expect("keystore get") else {
+        panic!("the keystore must hold the password-wrapped blob");
+    };
+    assert!(
+        link.share_url.ends_with(&format!("#p={}", URL_SAFE_NO_PAD.encode(&blob))),
+        "{}",
+        link.share_url
+    );
+    let key = hcfs_client::client::share::unwrap_share_key(password, &blob).expect("the password opens the blob");
+    assert!(!link.share_url.contains(&URL_SAFE_NO_PAD.encode(key)), "no raw key in a password link");
+
+    let a_id = rec
+        .files
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|f| f["relative_path"] == "a.txt")
+        .and_then(|f| f["file_id"].as_i64())
+        .expect("a.txt declared");
+    let mut plaintext = Vec::new();
+    hcfs_client::crypto::decrypt_stream(
+        &mut std::io::Cursor::new(uploaded_ciphertext(&rec, a_id)),
+        &mut plaintext,
+        &key,
+        None,
+        None::<fn(u64, u64)>,
+    )
+    .expect("the unwrapped key opens the upload");
+    assert_eq!(plaintext, b"hello");
+
+    let wraps = rec.folder_wraps.lock().unwrap().clone();
+    assert_eq!(wraps.len(), 1, "{wraps:?}");
+    let (token, secret) = open_folder_wrap(&wraps[0], account).expect("the owner wrap opens");
+    assert_eq!(token, UPLOAD_TOKEN);
+    assert_eq!(secret, ShareSecret::Private(blob), "the wrap carries the blob, never the bare key");
+}
+
+/// An uploaded copy minted on another device: this one holds no token for
+/// it, so Revoke goes by the `token_hash` the listing returned, and the
+/// request reaches the by-hash route under exactly that hash.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_uploaded_copy_from_another_device_is_revoked_by_its_hash() {
+    let account = "5UploadByHashAcct";
+    let hash = folder_share_token_hash(UPLOAD_TOKEN);
+    let list = json!([{
+        "token_hash": hash, "folder_hash": "", "path_prefix": "", "display_name": "T2-KD",
+        "source": "upload", "created_at": "2026-10-02T00:00:00+00:00",
+        "expires_at": null, "revoked_at": null,
+    }]);
+    let caps = r#"{"shares":true,"folder_shares":true,"upload_folder_shares":true,"folder_share_revoke_by_hash":true}"#;
+    let (state, rec, recorded, _db) = upload_harness_listing(account, caps, UploadMock::default(), list).await;
+
+    let rows = list_folder_shares_inner(&state, account).await.expect("list");
+    assert_eq!(rows[0].source, FolderShareOrigin::UploadedCopy);
+    assert_eq!(rows[0].share_token, None, "foreign: no token on this device");
+
+    revoke_folder_share_by_hash_inner(&state, account, &rows[0].token_hash)
+        .await
+        .expect("revoke by hash");
+
+    assert_eq!(*rec.by_hash_revokes.lock().unwrap(), vec![hash]);
+    assert!(recorded.revoked_tokens.lock().unwrap().is_empty(), "never the token route");
+}
+
+/// The server must send `""` for an uploaded copy's drive identity, but a
+/// server that sends `null` must not take the whole listing down with it:
+/// the row still parses, reaches the FE as an uploaded copy with `""`, and a
+/// drive row from a server that predates `source` stays a drive link. The
+/// FE keys are pinned on the wire, since the FE matches on them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_upload_row_with_null_drive_identity_still_parses() {
+    let account = "5UploadNullRowAcct";
+    let list = json!([
+        {
+            "token_hash": folder_share_token_hash(UPLOAD_TOKEN), "folder_hash": null, "path_prefix": null,
+            "display_name": "T2-KD", "source": "upload", "created_at": "2026-10-02T00:00:00+00:00",
+            "expires_at": null, "revoked_at": null,
+        },
+        {
+            "token_hash": "ab".repeat(32), "folder_hash": WIRE_HASH, "path_prefix": "",
+            "display_name": "drive", "created_at": "2026-10-01T00:00:00+00:00",
+            "expires_at": null, "revoked_at": null,
+        },
+    ]);
+    let (state, _, _, _db) = upload_harness_listing(account, CAPS_UPLOADS_ON, UploadMock::default(), list).await;
+
+    let rows = list_folder_shares_inner(&state, account)
+        .await
+        .expect("a null row must not fail the listing");
+
+    let wire = serde_json::to_value(&rows).expect("serialize");
+    assert_eq!(wire[0]["source"], "uploadedCopy");
+    assert_eq!((&wire[0]["folderHash"], &wire[0]["pathPrefix"]), (&json!(""), &json!("")));
+    assert_eq!(wire[1]["source"], "drive", "a row without source is a drive link");
 }

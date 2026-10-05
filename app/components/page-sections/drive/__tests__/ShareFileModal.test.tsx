@@ -17,6 +17,7 @@ import type { ReactNode } from "react";
 import { Channel } from "@tauri-apps/api/core";
 
 import ShareFileModal from "../ShareFileModal";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import {
   finderShareAtom,
   shareModalFileAtom,
@@ -76,8 +77,11 @@ function withProvider(
 // Seeds the Finder-driven atom in the `choosing` state — the same signal
 // `FinderShareListener` delivers when it maps the backend's
 // `finder:share-choosing` event. The modal then opens its public/private picker.
-function withFinderState(node: ReactNode, share: FinderShareState) {
-  const store = createStore();
+function withFinderState(
+  node: ReactNode,
+  share: FinderShareState,
+  store = createStore(),
+) {
   store.set(finderShareAtom, share);
   return <Provider store={store}>{node}</Provider>;
 }
@@ -92,6 +96,36 @@ const CHOOSING: FinderShareState = {
   name: "big-movie.mov",
   sizeBytes: null,
   modifiedSecsAgo: null,
+  isFolder: false,
+  isFolderCopy: false,
+  sizePending: false,
+  refusal: null,
+};
+
+// A Finder folder outside every drive: Rust measured the copy it will upload
+// and flagged that confirming uploads a copy rather than minting a live link.
+const FOLDER_COPY: FinderShareState = {
+  ...CHOOSING,
+  name: "T2-KD",
+  sizeBytes: 6_765_321,
+  isFolder: true,
+  isFolderCopy: true,
+};
+
+// A Finder folder inside a drive: a live link, minted with one request.
+const FINDER_DRIVE_FOLDER: FinderShareState = {
+  ...CHOOSING,
+  name: "Photos",
+  isFolder: true,
+};
+
+// A Finder folder whose placement Rust could not tell (drive roots
+// unreadable): it may be a live link or a copy, so neither is promised.
+const FINDER_UNKNOWN_FOLDER: FinderShareState = {
+  ...CHOOSING,
+  name: "Somewhere",
+  isFolder: true,
+  isFolderCopy: null,
 };
 
 /**
@@ -536,6 +570,206 @@ describe("ShareFileModal", () => {
     // Still dismissible — the error body offers a Close action (the dialog's own
     // "X" also matches, so assert at least one Close affordance).
     expect(screen.getAllByRole("button", { name: /close/i }).length).toBeGreaterThan(0);
+  });
+
+  it("tells the user an outside folder is uploaded as a copy, with its size", () => {
+    render(withFinderState(<ShareFileModal />, FOLDER_COPY));
+    expect(screen.getByText(/uploads a copy of this folder/i)).toBeInTheDocument();
+    expect(screen.getByText(/copy is removed when the link expires/i)).toBeInTheDocument();
+    expect(screen.getByText("6.77 MB")).toBeInTheDocument();
+    expect(screen.getByText(/view and download this folder/i)).toBeInTheDocument();
+    // A copy is NOT a live link — that notice would be false here.
+    expect(screen.queryByText(/always shows the current contents/i)).not.toBeInTheDocument();
+  });
+
+  it("words a Finder folder in a drive as a live folder link", () => {
+    render(withFinderState(<ShareFileModal />, FINDER_DRIVE_FOLDER));
+    expect(screen.getByText(/view and download this folder/i)).toBeInTheDocument();
+    expect(screen.getByText(/always shows the current contents/i)).toBeInTheDocument();
+    expect(screen.queryByText(/uploads a copy of this folder/i)).not.toBeInTheDocument();
+  });
+
+  it("waits on a spinner, not a progress bar, for a Finder folder in a drive", async () => {
+    invokeMock.mockReturnValueOnce(new Promise(() => {}));
+    render(withFinderState(<ShareFileModal />, FINDER_DRIVE_FOLDER));
+    confirmChooser();
+
+    expect(await screen.findByText(/creating share link/i)).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("shows a folder copy's size once Rust has measured it", () => {
+    const store = createStore();
+    render(
+      withFinderState(
+        <ShareFileModal />,
+        { ...FOLDER_COPY, sizeBytes: null, sizePending: true },
+        store,
+      ),
+    );
+    expect(screen.getByText(/measuring/i)).toBeInTheDocument();
+
+    act(() => {
+      store.set(finderShareAtom, { ...FOLDER_COPY, sizeBytes: 6_765_321, sizePending: false });
+    });
+
+    expect(screen.getByText("6.77 MB")).toBeInTheDocument();
+    expect(screen.queryByText(/measuring/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create share link/i })).toBeEnabled();
+  });
+
+  it("shows the share's refusal before confirming, and blocks the confirm", () => {
+    const message = "This folder has no files to share.";
+    render(
+      withFinderState(<ShareFileModal />, {
+        ...FOLDER_COPY,
+        sizeBytes: null,
+        refusal: { kind: "Validation", message },
+      }),
+    );
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create share link/i })).toBeDisabled();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  // Confirm stays disabled on this chooser, so without the way back the
+  // refusal reads as final: the user must learn a fixed folder can be
+  // shared again, and how.
+  it("says the folder can be shared again once the refusal is fixed", () => {
+    render(
+      withFinderState(<ShareFileModal />, {
+        ...FOLDER_COPY,
+        sizeBytes: null,
+        refusal: { kind: "Validation", message: "This folder has no files to share." },
+      }),
+    );
+
+    expect(screen.getByText(/choose share with hippius again/i)).toBeInTheDocument();
+  });
+
+  it("promises neither a live link nor a copy when the placement is unknown", () => {
+    render(withFinderState(<ShareFileModal />, FINDER_UNKNOWN_FOLDER));
+    expect(screen.getByText(/view and download this folder/i)).toBeInTheDocument();
+    expect(screen.queryByText(/always shows the current contents/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/uploads a copy of this folder/i)).not.toBeInTheDocument();
+  });
+
+  it("does not show the copy notice for a file", () => {
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+    expect(screen.queryByText(/uploads a copy of this folder/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/view and download this file/i)).toBeInTheDocument();
+  });
+
+  it("streams a folder copy's upload into the determinate bar", async () => {
+    invokeMock.mockReturnValueOnce(new Promise(() => {}));
+    render(withFinderState(<ShareFileModal />, FOLDER_COPY));
+    confirmChooser();
+
+    expect(await screen.findByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+    const args = invokeMock.mock.calls[0][1] as {
+      onProgress: {
+        onmessage:
+          | ((m: { phase: string; bytesDone: number; bytesTotal: number }) => void)
+          | null;
+      };
+    };
+    act(() => {
+      args.onProgress.onmessage?.({ phase: "uploading", bytesDone: 25, bytesTotal: 100 });
+    });
+
+    expect(await screen.findByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+    expect(screen.getByText("T2-KD")).toBeInTheDocument();
+  });
+
+  // Over the plan, Rust refuses with NotReady(StorageLimitReached), either
+  // from the pre-flight or the server's own 402 mid-upload. The way out is a
+  // bigger plan, so the plans dialog opens instead of an inline error.
+  it("opens the plans dialog when a Finder share hits the storage limit", async () => {
+    invokeMock.mockRejectedValueOnce({
+      kind: "NotReady",
+      subkind: "STORAGE_LIMIT_REACHED",
+      message: "Storage limit reached",
+    });
+    const store = createStore();
+    render(withFinderState(<ShareFileModal />, FOLDER_COPY, store));
+
+    confirmChooser();
+
+    await waitFor(() => expect(store.get(insufficientCreditsDialogOpenAtom)).toBe("sharing"));
+    expect(store.get(finderShareAtom)).toBeNull();
+    expect(screen.queryByText(/couldn.?t create share link/i)).not.toBeInTheDocument();
+  });
+
+  it("shows Rust's sentence verbatim when a folder copy is refused", async () => {
+    const message =
+      "\u201ca.mov\u201d changed while the folder was being shared, so the link was cancelled.";
+    invokeMock.mockRejectedValueOnce({ kind: "Validation", message });
+    render(withFinderState(<ShareFileModal />, FOLDER_COPY));
+
+    confirmChooser();
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+  });
+
+  describe("a Finder click arriving while another share runs", () => {
+    // Confirm A, let a second right-click (B) replace it, then settle A.
+    // Returns the store plus a settle handle for A's confirm.
+    function startAThenOpenB() {
+      let settleA: { resolve: (v: unknown) => void; reject: (e: unknown) => void } = {
+        resolve: () => undefined,
+        reject: () => undefined,
+      };
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "hcfs_finder_confirm_share"
+          ? new Promise((resolve, reject) => {
+              settleA = { resolve, reject };
+            })
+          : Promise.resolve(undefined),
+      );
+      const store = createStore();
+      render(withFinderState(<ShareFileModal />, FOLDER_COPY, store));
+      confirmChooser();
+      act(() => {
+        store.set(finderShareAtom, { ...CHOOSING, id: "req-2", name: "b.txt" });
+      });
+      return { settle: () => settleA };
+    }
+
+    it("cancels the running share when the new click replaces it", async () => {
+      startAThenOpenB();
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("hcfs_finder_cancel_share", {
+          requestId: "req-1",
+        }),
+      );
+      expect(invokeMock).not.toHaveBeenCalledWith("hcfs_finder_cancel_share", {
+        requestId: "req-2",
+      });
+    });
+
+    it("keeps B on the chooser when A's link lands late", async () => {
+      const { settle } = startAThenOpenB();
+      await act(async () => {
+        settle().resolve({
+          shareToken: "tok-a",
+          shareUrl: "https://console.hippius.com/share/tok-a#k=A",
+          expiresAt: null,
+        });
+      });
+      expect(screen.getByText(/general access/i)).toBeInTheDocument();
+      expect(screen.getByText("b.txt")).toBeInTheDocument();
+      expect(screen.queryByDisplayValue(/tok-a/)).not.toBeInTheDocument();
+    });
+
+    it("keeps B on the chooser when A reports its cancel", async () => {
+      const { settle } = startAThenOpenB();
+      await act(async () => {
+        settle().reject({ kind: "Validation", message: "Share cancelled." });
+      });
+      expect(screen.getByText(/general access/i)).toBeInTheDocument();
+      expect(screen.queryByText(/couldn.?t create share link/i)).not.toBeInTheDocument();
+    });
   });
 
   it("calls hcfs_revoke_share when the user revokes from the done state", async () => {

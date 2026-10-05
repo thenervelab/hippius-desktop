@@ -124,6 +124,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Uploads that keep failing no longer fill your disk.** Hippius now clears
+  the temporary copy of a file whose upload has been failing for a day, even
+  if it has retried many times since.
+
 - **Return takes the capture as soon as the capture bar appears.** Pressing
   it the moment the bar or the "Choose what to share" list showed up could be
   ignored.
@@ -326,6 +330,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Restore files puts everything back, empty folders included; Remove deletes
   the files once you confirm how many; Decide later keeps them safe until you
   choose, and the notification's Review button brings the banner back.
+
+- **Share a folder from Finder as a link, even one outside your Hippius
+  drives.** Hippius uploads a copy of the folder for the link, leaving out
+  hidden files and symbolic links, as a drive does. The copy counts toward
+  your storage until the link expires or you revoke it, and is then removed.
+  Later changes to the folder are not in the copy, so Shared Links marks the
+  link "Uploaded copy". The share window opens right away and shows the
+  folder's size once it has been measured. If a folder can't be shared (it is
+  empty, too big, or has a name a link can't hold), the window says so before
+  you confirm, and you can share it again once it is fixed. A link holds up
+  to 50,000 files, each up to about 5 GB.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a

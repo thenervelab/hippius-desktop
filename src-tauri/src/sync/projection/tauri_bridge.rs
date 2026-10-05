@@ -102,6 +102,14 @@ impl TauriSyncBridge {
             let _ = app.emit(events::AUTH_READY, ());
         }
     }
+
+    /// Tell the UI a cancelled share's live-link notification was saved, so
+    /// the bell refreshes. A no-op before the app handle is set.
+    pub fn emit_cancelled_share_link_live_notify(&self) {
+        if let Some(app) = self.app() {
+            let _ = app.emit(events::CANCELLED_SHARE_LINK_LIVE_NOTIFY, ());
+        }
+    }
 }
 
 /// Resolve `(pool, owner)` for durably persisting file failures, or `None` when

@@ -61,6 +61,12 @@ pub const MASS_DELETE_HELD: &str = "hcfs_mass_delete_held";
 /// notification, so the UI refreshes the bell. Not sent when the account
 /// turned Files notifications off. Payload: [`LabelPayload`].
 pub const MASS_DELETE_HELD_NOTIFY: &str = "hcfs_mass_delete_held_notify";
+/// Rust saved the notification for a Finder folder share cancelled after
+/// its link was made, whose link could not be revoked
+/// (`notifications::credits::create_cancelled_share_link_live_notification`),
+/// so the UI refreshes the bell. No payload. Not sent when the account
+/// turned Files notifications off.
+pub const CANCELLED_SHARE_LINK_LIVE_NOTIFY: &str = "hcfs_cancelled_share_link_live_notify";
 /// Rust saved a "Drive Disconnected" notification (the drive folder's disk
 /// is not mounted; once per episode), so the UI refreshes the bell. Not
 /// sent when the account turned Files notifications off. Payload:
@@ -275,6 +281,12 @@ mod tests {
         assert_eq!(MASS_DELETE_CLEARED, "hcfs_mass_delete_cleared");
         assert_eq!(MASS_DELETE_RESTORED, "hcfs_mass_delete_restored");
         assert_eq!(MASS_DELETE_RESTORE_REFUSED, "hcfs_mass_delete_restore_refused");
+    }
+
+    /// The UI listens by this exact string to refresh the bell.
+    #[test]
+    fn cancelled_share_link_live_notify_name_is_pinned() {
+        assert_eq!(CANCELLED_SHARE_LINK_LIVE_NOTIFY, "hcfs_cancelled_share_link_live_notify");
     }
 
     /// Catches upstream string drift when bumping the `hcfs-client` git rev.

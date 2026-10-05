@@ -179,7 +179,7 @@ jobs:
       # a green job that asserted nothing, the exact failure this lane exists to
       # prevent. Asserting a non-zero executed count catches that directly.
       #
-      # Expected counts as of this commit: shared_drives 2, folder_shares 3,
+      # Expected counts as of this commit: shared_drives 2, folder_shares 4,
       # folder_entries 2.
       # The guard is `>= 1`, not equality, so it would still pass if someone
       # dropped `#[ignore]` from one test of three and the rest stopped running

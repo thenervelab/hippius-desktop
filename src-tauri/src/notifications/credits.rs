@@ -483,7 +483,9 @@ impl SyncNotificationOutcome {
     fn list_title(self, files: &SyncFileSummary<'_>) -> String {
         match self {
             Self::Success => success_list_title(files),
-            Self::Error | Self::FolderRestored | Self::MassDeleteHeld | Self::DriveDisconnected | Self::EmptyRemote => self.title().to_string(),
+            Self::Error | Self::FolderRestored | Self::MassDeleteHeld | Self::DriveDisconnected | Self::EmptyRemote => {
+                self.title().to_string()
+            }
         }
     }
 
@@ -736,8 +738,7 @@ pub async fn create_files_notification(
     description: &str,
     outcome: SyncNotificationOutcome,
 ) -> Result<Option<i64>, AppError> {
-    let enabled = crate::notifications::crud::enabled_types_inner(pool, owner).await?;
-    if !enabled.iter().any(|category| category == FILES_CATEGORY) {
+    if !files_notifications_enabled(pool, owner).await? {
         return Ok(None);
     }
     let files = SyncFileSummary {
@@ -779,15 +780,74 @@ pub async fn create_mass_delete_held_notification(
     Ok(Some(id))
 }
 
+/// Save the notification for a Finder folder share that was cancelled after
+/// its link was made, when revoking that link failed, so the link is still
+/// live. Saved for `owner`, the account that shared, unless that account
+/// turned Files notifications off. Returns the new row's id, or `None` when
+/// off.
+///
+/// The share modal closes on Cancel, so the error the share returns reaches
+/// no one; this row is the only place the user learns a link they meant to
+/// drop still works, and the row opens Shared Links, where it is revoked.
+/// `folder_name` names the shared folder: the user may have cancelled
+/// several shares and must know which link to revoke.
+///
+/// # Errors
+///
+/// A database error reading the preference or writing the row.
+pub async fn create_cancelled_share_link_live_notification(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    folder_name: &str,
+) -> Result<Option<i64>, AppError> {
+    if !files_notifications_enabled(pool, owner).await? {
+        return Ok(None);
+    }
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    let description = format!(
+        "You cancelled sharing \u{201c}{folder_name}\u{201d}, but its link could not be removed, so it \
+         still works until it expires. Revoke it from Shared Links."
+    );
+    let id = sqlx::query(
+        r"
+        INSERT INTO notifications (
+            user_address, notification_type, notification_subtype,
+            title_text, description, link_text, link,
+            is_unread, creation_time, is_deleted
+        )
+        VALUES (?, 'Files', ?, 'Link Still Active', ?, 'View Shared Links', '/shares', 1,
+                CAST(strftime('%s','now') * 1000 AS INTEGER), 0)
+        ",
+    )
+    .bind(owner)
+    .bind(format!("ShareCancelledLinkLive-{timestamp}"))
+    .bind(description)
+    .execute(pool)
+    .await?
+    .last_insert_rowid();
+
+    Ok(Some(id))
+}
+
+/// Whether `owner` keeps Files notifications on. Read in Rust because the
+/// rows that ask are saved by Rust, often for an account the UI has not
+/// loaded preferences for.
+async fn files_notifications_enabled(pool: &sqlx::sqlite::SqlitePool, owner: &str) -> Result<bool, AppError> {
+    let enabled = crate::notifications::crud::enabled_types_inner(pool, owner).await?;
+    Ok(enabled.iter().any(|category| category == FILES_CATEGORY))
+}
+
 /// Save a refused empty listing's notification ("Drive Empty on Hippius")
 /// for `owner`, the account whose drive it is (see
 /// [`create_files_notification`]).
 ///
 /// Rust raises it once per episode (`sync::empty_remote`). The row's button
 /// reads "Review" and links back to the drive's banner
-/// (`/files?emptyDrive=<label>`), so the UI can show a banner the user put
-/// away with "Keep my files". As for the held-delete row, a failure setting
-/// the link leaves the plain `/files` link, which opens the right page.
+/// (`/files?emptyDrive=1&drive=<label>`), so the UI can show a banner the
+/// user put away with "Keep my files". As for the held-delete row, a failure
+/// setting the link leaves the plain `/files` link, which opens the right
+/// page.
 ///
 /// # Errors
 ///
@@ -810,20 +870,13 @@ pub async fn create_empty_remote_notification(
 }
 
 /// The Files page link naming a banner to show again: `key` carries the
-/// banner's kind (and `side` for a held delete), `drive` the drive label.
+/// banner's kind (with `side` as its value for a held delete), `drive` the
+/// drive label.
 fn files_page_link(key: &str, label: &str, side: Option<&str>) -> String {
     // `reqwest::Url` for its form encoding only (`url` is not a direct
     // dependency); the base is a constant, so parsing it cannot fail.
     let mut url = reqwest::Url::parse("app://local/files").expect("a constant, valid URL");
-    {
-        let mut query = url.query_pairs_mut();
-        if let Some(side) = side {
-            query.append_pair(key, side);
-        } else {
-            query.append_pair(key, "1");
-        }
-        query.append_pair("drive", label);
-    }
+    url.query_pairs_mut().append_pair(key, side.unwrap_or("1")).append_pair("drive", label);
     format!("{}?{}", url.path(), url.query().unwrap_or_default())
 }
 
@@ -1443,6 +1496,47 @@ mod tests {
         let rows = held_rows(&pool).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "addrB", "saved under the account it was raised for, never another");
+    }
+
+    // ── Cancelled share whose link stayed live ──────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_cancelled_link_is_saved_with_a_way_to_revoke_it() {
+        let (_dir, pool) = fresh_pool().await;
+
+        let id = create_cancelled_share_link_live_notification(&pool, "addrA", "Holiday Photos")
+            .await
+            .expect("save");
+        assert!(id.is_some());
+
+        let (user, kind, title, subtype, link, link_text, description): (String, String, String, String, String, String, String) = sqlx::query_as(
+            "SELECT user_address, notification_type, title_text, notification_subtype, link, link_text, description \
+                 FROM notifications",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("one row");
+        assert_eq!(user, "addrA");
+        assert_eq!(kind, "Files", "a Files row, so the Files toggle governs it");
+        assert_eq!(title, "Link Still Active");
+        assert!(subtype.starts_with("ShareCancelledLinkLive-"), "{subtype}");
+        assert_eq!(link, "/shares", "opens Shared Links, where the link is revoked");
+        assert_eq!(link_text, "View Shared Links");
+        assert!(description.contains("\u{201c}Holiday Photos\u{201d}"), "names the folder: {description}");
+        assert!(description.contains("Revoke it from Shared Links"), "{description}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_cancelled_link_is_not_saved_when_files_notifications_are_off() {
+        let (_dir, pool) = fresh_pool().await;
+        files_notifications(&pool, "addrA", false).await;
+
+        let id = create_cancelled_share_link_live_notification(&pool, "addrA", "Holiday Photos")
+            .await
+            .expect("save");
+
+        assert_eq!(id, None);
+        assert!(held_rows(&pool).await.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

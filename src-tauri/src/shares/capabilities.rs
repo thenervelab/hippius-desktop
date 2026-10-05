@@ -66,6 +66,11 @@ pub struct ServerCapabilities {
     /// server's refusal into "coming soon", so the option lights up on its
     /// own the day the server turns it on. See `shared_drives::folder_roles`.
     pub folder_grant_writes: bool,
+    /// Folder links whose files are uploaded as a copy
+    /// (`/v1/folder-shares/uploads`, hcfs #547), which is how a folder
+    /// outside every drive is shared from Finder. Absent on older servers;
+    /// the Finder path refuses with "isn't available yet" without it.
+    pub upload_folder_shares: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -185,7 +190,7 @@ mod tests {
     #[test]
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true}"#,
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true}"#,
         )
         .expect("parse");
         assert!(caps.shares);
@@ -195,6 +200,7 @@ mod tests {
         assert!(caps.folder_grants);
         assert!(caps.member_folder_shares);
         assert!(caps.folder_grant_writes);
+        assert!(caps.upload_folder_shares);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -210,7 +216,8 @@ mod tests {
                 "folder_shares",
                 "member_folder_shares",
                 "share_owner_wrap",
-                "shares"
+                "shares",
+                "upload_folder_shares"
             ]
             .into_iter()
             .collect(),
@@ -223,6 +230,18 @@ mod tests {
         assert!(!old.folder_grants);
         assert!(!old.member_folder_shares, "an older server never claims member folder shares");
         assert!(!old.folder_grant_writes, "writer folder invites stay off until a server says otherwise");
+        assert!(!old.upload_folder_shares, "an older server never claims uploaded folder links");
+    }
+
+    /// Uploaded-copy folder links ship after browsable folder shares, so a
+    /// server can advertise `folder_shares` without them. That must read as
+    /// "not yet", which is what keeps the Finder outside-folder share on its
+    /// "isn't available yet" refusal instead of a 404 mid-upload.
+    #[test]
+    fn folder_shares_without_uploads_reads_as_uploads_unavailable() {
+        let caps = parse_capabilities(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
+        assert!(caps.folder_shares);
+        assert!(!caps.upload_folder_shares);
     }
 
     /// A pre-folder-grants server omits the field; that must read as unavailable,

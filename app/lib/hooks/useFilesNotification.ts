@@ -9,17 +9,20 @@ import {
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { MASS_DELETE_EVENTS } from "@/app/lib/tauri/massDelete";
+import { CANCELLED_SHARE_LINK_LIVE_NOTIFY } from "@/app/lib/tauri/shares";
 import { EMPTY_REMOTE_EVENTS } from "@/app/lib/tauri/emptyRemote";
 
 /**
  * Events Rust sends after saving a Files notification itself: the held
  * large delete ("Large Delete Paused"), the unplugged drive folder
- * ("Drive Disconnected") and the refused empty listing ("Drive Empty on
- * Hippius"). Payload `{ label }`; only the bell refreshes.
+ * ("Drive Disconnected"), the cancelled share whose link stayed live
+ * ("Link Still Active") and the refused empty listing ("Drive Empty on
+ * Hippius"). Only the bell refreshes, so the payload is unread.
  */
 const RUST_SAVED_NOTIFICATION_EVENTS = [
   MASS_DELETE_EVENTS.heldNotify,
   "hcfs_drive_disconnected_notify",
+  CANCELLED_SHARE_LINK_LIVE_NOTIFY,
   EMPTY_REMOTE_EVENTS.notify,
 ] as const;
 
@@ -102,12 +105,13 @@ export function useFilesNotification() {
   const pendingFilesRef = useRef<SyncedFileDetail[]>([]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Rust saves the held-delete and drive-disconnected notifications itself
-  // (once per episode, for the account whose drive it is, respecting that
-  // account's Files toggle) and then sends these events; all that is left
-  // here is the bell. Always on: they often come from the first cycle
-  // after launch, before the wallet has restored the account or the
-  // enabled types have loaded.
+  // Rust saves these Files rows itself (for the account they belong to,
+  // respecting that account's Files toggle) and then sends the event; all
+  // that is left here is the bell. Always on: a held delete or a
+  // disconnected drive often comes from the first cycle after launch,
+  // before the wallet has restored the account or the enabled types have
+  // loaded, and a cancelled share's live-link row comes after its modal
+  // has closed.
   useEffect(() => {
     let cancelled = false;
     const unlisteners: Array<() => void> = [];
