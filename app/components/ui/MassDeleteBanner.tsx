@@ -13,6 +13,7 @@ import {
   confirmMassDelete,
   getMassDeleteHolds,
   restoreMassDelete,
+  type MassDeleteHold,
 } from "@/app/lib/tauri/massDelete";
 import {
   applyHydration,
@@ -98,14 +99,37 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
     [setHolds, holdKey],
   );
 
-  const refresh = useCallback(async () => {
+  /** Read Rust's holds back; returns them, or `null` when the read failed. */
+  const refresh = useCallback(async (): Promise<MassDeleteHold[] | null> => {
     try {
       const current = await getMassDeleteHolds();
       setHolds((prev) => applyHydration(prev, current));
+      return current;
     } catch (err) {
       console.warn("[MassDelete] Could not refresh the held deletes:", err);
+      return null;
     }
   }, [setHolds]);
+
+  /**
+   * The hold changed under the user's answer. The refusal carries only the
+   * new count, so the whole hold (its baseline, the empty-root advice) is
+   * read back from Rust; if that read fails, the refusal's count is shown.
+   */
+  const askAgain = useCallback(
+    async (held: number) => {
+      const current = await refresh();
+      const latest = current?.find((h) => h.label === hold.label && h.side === hold.side);
+      if (current && !latest) return;
+      const count = latest?.count ?? held;
+      patch({
+        count,
+        requested: null,
+        notice: `The number of missing files changed to ${count.toLocaleString()}. Check it and choose again.`,
+      });
+    },
+    [refresh, patch, hold.label, hold.side],
+  );
 
   const handleRefusal = useCallback(
     async (err: unknown) => {
@@ -119,11 +143,7 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
           // Asked again because of the user's own answer: they are
           // answering, so the safe answer takes focus again.
           requestRestoreFocus();
-          patch({
-            count: refusal.held,
-            requested: null,
-            notice: `The number of missing files changed to ${refusal.held.toLocaleString()}. Check it and choose again.`,
-          });
+          await askAgain(refusal.held);
           return;
         case "restoreInProgress":
           toast.info("A restore is already running. Let it finish first.");
@@ -137,7 +157,7 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
           toast.error("Couldn't send your choice", { description: tauriErrorMessage(err) });
       }
     },
-    [patch, refresh, requestRestoreFocus],
+    [patch, refresh, askAgain, requestRestoreFocus],
   );
 
   const answer = useCallback(

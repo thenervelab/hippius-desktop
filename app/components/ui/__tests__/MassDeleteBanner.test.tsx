@@ -199,6 +199,23 @@ describe("MassDeleteBanner", () => {
     expect(restoreButton()).toBeInTheDocument();
   });
 
+  // The refusal carries only the new count. The rest of the hold (the
+  // baseline it was measured against, the empty-root advice) is read back
+  // from Rust, so the title does not mix a new count with an old baseline.
+  it("a changed hold is read back whole from Rust", async () => {
+    tauri.onInvoke("restore_mass_delete", () => {
+      throw notReady("MASS_DELETE_HOLD_CHANGED", { held: 180 });
+    });
+    tauri.onInvoke("get_mass_delete_holds", () => [{ ...SERVER, count: 180, syncedCount: 220 }]);
+    renderBanner(SERVER);
+    await click("Restore files");
+
+    await waitFor(() =>
+      expect(screen.getByRole("region")).toHaveAccessibleName(/180 of 220 files/),
+    );
+    expect(screen.getByText(/changed to 180\. Check it and choose again\./)).toBeInTheDocument();
+  });
+
   it("nothing held refreshes the holds", async () => {
     tauri.onInvoke("restore_mass_delete", () => {
       throw notReady("MASS_DELETE_NOTHING_HELD");
