@@ -21,7 +21,8 @@ export interface MassDeleteRefusal {
 }
 
 export interface MassDeleteHoldView extends MassDeleteHold {
-  /** "Decide later": hidden until the next hold event for this side. */
+  /** "Decide later": hidden until the next hold event for this side, or
+   *  until its notification is opened (`notificationLink.ts`). */
   dismissed: boolean;
   /** The answer sent and accepted, until a cycle applies it. */
   requested: "restore" | "remove" | null;

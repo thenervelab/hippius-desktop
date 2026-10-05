@@ -35,7 +35,7 @@ import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
  *
  * Restore is the safe answer and comes first; Remove asks again with the
  * count before anything is deleted; "Decide later" hides the banner until
- * the hold next changes. Rust validates every answer against the hold it
+ * the hold next changes or its notification is opened. Rust validates every answer against the hold it
  * holds now and refuses a stale one with a structured kind, handled below.
  */
 export default function MassDeleteBanner() {
