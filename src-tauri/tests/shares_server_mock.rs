@@ -1946,6 +1946,7 @@ async fn a_late_cancel_whose_revoke_fails_says_the_link_is_still_live() {
         ..UploadMock::default()
     };
     let (state, _rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    with_notification_tables(&state).await;
     write_master_seal(account);
     let (_tree, root) = outside_folder();
 
@@ -1962,6 +1963,58 @@ async fn a_late_cancel_whose_revoke_fails_says_the_link_is_still_live() {
         matches!(&err, AppError::Validation(m) if m == CANCELLED_BUT_LINK_LIVE),
         "a failed revoke is not reported as a plain cancel: {err:?}"
     );
+
+    // The modal closed on Cancel, so the error above reaches no one. The
+    // lasting copy is a notification, saved for the account that shared.
+    let rows = notification_rows(&state).await;
+    assert_eq!(rows.len(), 1, "one notification for the live link: {rows:?}");
+    let (owner, link, description) = &rows[0];
+    assert_eq!(owner, account);
+    assert_eq!(link, "/shares");
+    assert!(description.contains("T2-KD"), "names the shared folder: {description}");
+}
+
+/// A late cancel whose revoke succeeds leaves nothing live, so nothing is
+/// saved: the notification exists only for a link the user must remove.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_late_cancel_that_revokes_its_link_saves_no_notification() {
+    let account = "5UploadWrapCancelNoNoticeAcct";
+    let cancel = CancellationToken::new();
+    let mock = UploadMock {
+        cancel_on_wrap: Some(cancel.clone()),
+        ..UploadMock::default()
+    };
+    let (state, _rec, recorded, _db) = upload_harness(account, CAPS_UPLOADS_ON, mock).await;
+    with_notification_tables(&state).await;
+    write_master_seal(account);
+    let (_tree, root) = outside_folder();
+
+    let err = share_outside_folder(&state, account, share_request(&root, cancel))
+        .await
+        .expect_err("cancelled");
+
+    assert!(matches!(&err, AppError::Validation(m) if m == SHARE_CANCELLED), "{err:?}");
+    assert_eq!(recorded.revoked_tokens.lock().unwrap().len(), 1);
+    assert!(notification_rows(&state).await.is_empty());
+}
+
+/// The production schema on top of the harness's hand-made tables, for the
+/// tests that read notifications. Every statement is `IF NOT EXISTS` or an
+/// additive migration, so the harness's tables are left as they are.
+async fn with_notification_tables(state: &AppState) {
+    let pool = state.pool().expect("harness pool");
+    tauri_project_lib::utils::schema::ensure_table_schema(pool)
+        .await
+        .expect("production schema over the harness tables");
+}
+
+/// `(user_address, link, description)` of every notification row.
+async fn notification_rows(state: &AppState) -> Vec<(String, String, String)> {
+    let pool = state.pool().expect("harness pool");
+    sqlx::query_as("SELECT user_address, link, description FROM notifications ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .expect("notification rows")
 }
 
 /// The modal's Cancel while the share is still preparing (capability probe,

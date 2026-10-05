@@ -506,3 +506,10 @@ export async function cancelFinderShare(requestId: string): Promise<void> {
 export async function generateSharePassword(): Promise<string> {
   return invoke<string>("hcfs_generate_share_password");
 }
+
+/**
+ * Rust saved a notification for a Finder folder share cancelled after its
+ * link was made, whose link could not be revoked: refresh the bell. Rust's
+ * `events::CANCELLED_SHARE_LINK_LIVE_NOTIFY`; no payload.
+ */
+export const CANCELLED_SHARE_LINK_LIVE_NOTIFY = "hcfs_cancelled_share_link_live_notify";

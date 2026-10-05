@@ -119,7 +119,7 @@ pub async fn share_outside_folder(state: &AppState, account_id: &str, request: O
             map_upload_folder_share_error(e)
         })?;
     if cancel.is_cancelled() {
-        return Err(revoke_cancelled(state, account_id, &created.share_token, &keystore).await);
+        return Err(revoke_cancelled(state, account_id, &display_name, &created.share_token, &keystore).await);
     }
 
     // The client does not push the owner wrap; without it the console's
@@ -135,7 +135,7 @@ pub async fn share_outside_folder(state: &AppState, account_id: &str, request: O
         Err(error) => warn!(%error, "uploaded-copy share: keystore read failed; owner wrap not pushed"),
     }
     if cancel.is_cancelled() {
-        return Err(revoke_cancelled(state, account_id, &created.share_token, &keystore).await);
+        return Err(revoke_cancelled(state, account_id, &display_name, &created.share_token, &keystore).await);
     }
 
     Ok(ShareLink {
@@ -163,9 +163,11 @@ async fn before_open<T>(cancel: &CancellationToken, step: impl Future<Output = R
 /// cancel to report. A failed revoke reports [`CANCELLED_BUT_LINK_LIVE`]
 /// rather than a plain cancel: the link then lives until it expires, and
 /// the user must know to revoke it from the shares page (by its hash).
+/// The modal closed on Cancel, so that error reaches no one; the lasting
+/// word is the notification [`notify_link_still_live`] saves.
 /// The key is forgotten either way, so this device never offers to copy a
 /// link the user cancelled.
-async fn revoke_cancelled(state: &AppState, account_id: &str, share_token: &str, keystore: &SqliteShareKeystore) -> AppError {
+async fn revoke_cancelled(state: &AppState, account_id: &str, folder_name: &str, share_token: &str, keystore: &SqliteShareKeystore) -> AppError {
     info!("uploaded-copy share cancelled after the link was sealed; revoking it");
     let revoked = crate::shares::commands::revoke_folder_share_inner(state, account_id, share_token).await;
     if let Err(error) = keystore.forget(share_token) {
@@ -175,8 +177,30 @@ async fn revoke_cancelled(state: &AppState, account_id: &str, share_token: &str,
         Ok(()) => AppError::Validation(SHARE_CANCELLED.into()),
         Err(error) => {
             warn!(%error, "uploaded-copy share: revoking a cancelled link failed; it stays live until it expires");
+            notify_link_still_live(state, account_id, folder_name).await;
             AppError::Validation(CANCELLED_BUT_LINK_LIVE.into())
         }
+    }
+}
+
+/// Save the notification that a cancelled share's link is still live, for
+/// the account that shared (unless it turned Files notifications off), and
+/// refresh the bell. Awaited rather than spawned so the row exists by the
+/// time the share returns. A failed save is logged: the share's outcome is
+/// already decided and the warn above records the live link.
+async fn notify_link_still_live(state: &AppState, account_id: &str, folder_name: &str) {
+    let pool = match state.pool() {
+        Ok(pool) => pool,
+        Err(error) => {
+            warn!(%error, "uploaded-copy share: no database for the live-link notification");
+            return;
+        }
+    };
+    let saved = crate::notifications::credits::create_cancelled_share_link_live_notification(pool, account_id, folder_name).await;
+    match saved {
+        Ok(Some(_)) => state.sync_bridge.emit_cancelled_share_link_live_notify(),
+        Ok(None) => info!("Files notifications are off; live-link notification not saved"),
+        Err(error) => warn!(%error, "uploaded-copy share: could not save the live-link notification"),
     }
 }
 

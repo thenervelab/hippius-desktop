@@ -116,25 +116,30 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// Only the held-delete refresh listens before both are known: Rust saves
-// that notification itself, whenever it comes (see the "mass delete held"
-// tests below).
+// Only the refreshes for rows Rust saves itself (a held delete, a cancelled
+// share's live link) listen before both are known: those rows come whenever
+// they come (see the "mass delete held" and "cancelled share" tests below).
+const RUST_SAVED_REFRESHES = [
+  "hcfs_mass_delete_held_notify",
+  "hcfs_cancelled_share_link_live_notify",
+];
+
 function listenedEvents(): unknown[] {
   return tauri.event.listen.mock.calls.map((c) => c[0]);
 }
 
 describe("useFilesNotification — gating", () => {
-  it("registers only the held-delete refresh when Files notifications are disabled", async () => {
+  it("registers only the Rust-saved refreshes when Files notifications are disabled", async () => {
     mount(false);
     await flushRegistration();
-    expect(listenedEvents()).toEqual(["hcfs_mass_delete_held_notify"]);
+    expect(listenedEvents()).toEqual(RUST_SAVED_REFRESHES);
   });
 
-  it("registers only the held-delete refresh when there is no account address", async () => {
+  it("registers only the Rust-saved refreshes when there is no account address", async () => {
     state.polkadotAddress = null;
     mount(true);
     await flushRegistration();
-    expect(listenedEvents()).toEqual(["hcfs_mass_delete_held_notify"]);
+    expect(listenedEvents()).toEqual(RUST_SAVED_REFRESHES);
   });
 });
 
@@ -378,5 +383,22 @@ describe("useFilesNotification — mass delete held", () => {
       await tauri.emitEvent("hcfs_mass_delete_held", { label: "Photos", side: "server", count: 150 });
     });
     expect(syncNotificationCalls()).toHaveLength(0);
+  });
+});
+
+// Rust saves this row when a Finder folder share is cancelled after its link
+// was made and the link could not be revoked
+// (`create_cancelled_share_link_live_notification`); the share modal is closed
+// by then, so the bell is the only place the user hears of it.
+describe("useFilesNotification — cancelled share whose link is still live", () => {
+  it("refreshes the bell without saving a notification itself", async () => {
+    state.polkadotAddress = null;
+    mount(false);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_cancelled_share_link_live_notify", null);
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
   });
 });
