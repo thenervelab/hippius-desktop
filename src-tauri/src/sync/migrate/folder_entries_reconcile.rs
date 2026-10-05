@@ -29,6 +29,7 @@
 
 use crate::error::Result;
 use crate::sync::folder_entries_backfill::{build_one_shot_client, cache_folder_entries, read_cached_dir_set};
+use crate::sync::mass_delete_hold::HoldPhase;
 use crate::sync::mnemonic::folder_hash;
 use hcfs_client::sync::{HeldMassDelete, MassDeleteSide};
 use hcfs_shared::network::MAX_REGISTER_RELATIVE_PATHS_BATCH;
@@ -102,6 +103,12 @@ pub(crate) struct FolderJobDrive<'a> {
 /// folders. A side counts as held while hcfs records it as `Held` OR
 /// `Restoring` (it keeps a restored side until the next cycle completes, so
 /// the gate does not reopen before the restore's own folder work has run).
+///
+/// One exception: a server side that is `Restoring` lets materialize create
+/// folders. That cycle downloaded the held files into the drive folder, so
+/// the folder is proven mounted and creating cannot land on a parent disk;
+/// waiting would leave the restored files' empty sibling folders missing for
+/// a whole extra cycle. Unregistering still waits.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct FolderHoldGate {
     /// Files are missing here: keep the server's folders (no unregister) and
@@ -110,6 +117,10 @@ pub(crate) struct FolderHoldGate {
     /// Files are missing from the server: keep this device's folders (no
     /// removal).
     pub local_held: bool,
+    /// The server side is `Restoring`, not `Held`: the folder is proven
+    /// mounted, so creating is allowed again. Only meaningful with
+    /// `server_held`.
+    pub server_restoring: bool,
 }
 
 impl FolderHoldGate {
@@ -117,6 +128,7 @@ impl FolderHoldGate {
     pub(crate) const OPEN: Self = Self {
         server_held: false,
         local_held: false,
+        server_restoring: false,
     };
 
     /// Both sides held: used when hcfs's record cannot be read, because a
@@ -124,14 +136,25 @@ impl FolderHoldGate {
     pub(crate) const CLOSED: Self = Self {
         server_held: true,
         local_held: true,
+        server_restoring: false,
     };
 
     /// The gate for the holds hcfs recorded, in any state.
     pub(crate) fn from_holds(holds: &[HeldMassDelete]) -> Self {
         holds.iter().fold(Self::OPEN, |gate, held| match held.side {
-            MassDeleteSide::Server => Self { server_held: true, ..gate },
+            MassDeleteSide::Server => Self {
+                server_held: true,
+                server_restoring: HoldPhase::from(held.state) == HoldPhase::Restoring,
+                ..gate
+            },
             MassDeleteSide::Local => Self { local_held: true, ..gate },
         })
+    }
+
+    /// Whether materialize must not create folders: the server side is held
+    /// and not yet proven mounted by a restore.
+    pub(crate) fn creates_held(self) -> bool {
+        self.server_held && !self.server_restoring
     }
 
     /// Whether any side is held.
@@ -785,6 +808,7 @@ mod tests {
         let gate = FolderHoldGate {
             server_held: true,
             local_held: false,
+            server_restoring: false,
         };
         let outcome = reconcile_with_on_disk(drive, &BTreeSet::new(), gate)
             .await

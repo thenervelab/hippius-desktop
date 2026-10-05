@@ -95,11 +95,12 @@ impl MaterializePlan {
 
     /// The part of the plan a held mass delete lets through. A server-side
     /// hold (files missing here, possibly an unmounted folder) creates
-    /// nothing; a local-side hold (files missing from the server, possibly
-    /// a truncated listing) removes nothing.
+    /// nothing until a restore has proven the folder mounted
+    /// ([`FolderHoldGate::creates_held`]); a local-side hold (files missing
+    /// from the server, possibly a truncated listing) removes nothing.
     #[must_use]
     pub(crate) fn held_back(mut self, gate: FolderHoldGate) -> Self {
-        if gate.server_held {
+        if gate.creates_held() {
             self.to_create.clear();
         }
         if gate.local_held {
@@ -1179,11 +1180,13 @@ mod hold_tests {
     const SERVER_HELD: FolderHoldGate = FolderHoldGate {
         server_held: true,
         local_held: false,
+        server_restoring: false,
     };
 
     const LOCAL_HELD: FolderHoldGate = FolderHoldGate {
         server_held: false,
         local_held: true,
+        server_restoring: false,
     };
 
     /// An unmounted or evicted drive folder scans as an empty tree. Without
@@ -1254,6 +1257,32 @@ mod hold_tests {
             LOCAL_HELD,
             "the gate stays closed until the cycle after a restore"
         );
+    }
+
+    /// The cycle that applied a server-side restore downloaded files into
+    /// the drive folder, so the folder is proven mounted: its folder run may
+    /// recreate the empty folders (otherwise they wait a whole extra cycle
+    /// for the record to drop the side). Unregistering still waits.
+    #[test]
+    fn a_restoring_server_side_recreates_folders_but_unregisters_nothing() {
+        let restoring = FolderHoldGate::from_holds(&[HeldMassDelete {
+            side: MassDeleteSide::Server,
+            state: HoldState::Restoring,
+            count: 150,
+            synced_count: 200,
+            held_at: 1,
+        }]);
+        let folders = set(&["Trips", "Trips/Empty"]);
+        let disk = BTreeSet::new();
+
+        let delta = restoring.gate_delta(compute_dir_delta(&disk, &folders));
+        assert!(delta.to_unregister.is_empty(), "restoring is still held for unregisters");
+
+        let plan = compute_materialize_plan(&folders, &disk, &BTreeSet::new()).held_back(restoring);
+        assert_eq!(plan.to_create, vec!["Trips".to_string(), "Trips/Empty".to_string()]);
+
+        let held = compute_materialize_plan(&folders, &disk, &BTreeSet::new()).held_back(SERVER_HELD);
+        assert!(held.to_create.is_empty(), "a plain hold still creates nothing");
     }
 
     /// Files missing here were downloaded back. The empty folders beside
@@ -1393,7 +1422,13 @@ mod hold_tests {
         let ids = vec![format!("{:064x}", 1)];
         let record = serde_json::json!([{ "side": "server", "state": "restoring", "synced_count": 20, "held_at": 1, "ids": ids }]);
         std::fs::write(config.path().join("mass_delete_held.json"), record.to_string()).expect("write record");
-        assert_eq!(read_folder_hold_gate(root.path(), Some(config.path().into()), "docs").await, SERVER_HELD);
+        assert_eq!(
+            read_folder_hold_gate(root.path(), Some(config.path().into()), "docs").await,
+            FolderHoldGate {
+                server_restoring: true,
+                ..SERVER_HELD
+            }
+        );
 
         std::fs::write(config.path().join("mass_delete_held.json"), b"not json").expect("corrupt record");
         assert_eq!(
