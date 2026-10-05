@@ -561,9 +561,11 @@ fn handle_mass_delete_event(app: &AppHandle, event: SyncEvent) {
 ///
 /// The bridge runs on hcfs's event thread, so it only records here. The
 /// empty-root check reads the drive folder, and an unplugged network share
-/// can stall that `read_dir`, so it runs on the blocking pool and only for
-/// a report that changed (hcfs repeats a standing hold every cycle). The
-/// settle emits nothing if the hold changed or cleared meanwhile, and
+/// can stall that `read_dir`, so it runs on the blocking pool, only for a
+/// report that changed (hcfs repeats a standing hold every cycle), and at
+/// most once at a time per side: a report arriving while a check runs is
+/// left to it (`HeldChange::Settling`). The settle shows the hold as it
+/// stands when the check finishes, nothing if it cleared meanwhile, and
 /// orders its emit before any later clear (`MassDeleteHoldState::settle_held`).
 fn handle_mass_delete_held(app: &AppHandle, label: String, side: hcfs_client::sync::MassDeleteSide, count: usize, synced_count: usize) {
     use crate::sync::mass_delete_hold::{HeldChange, HeldReport, root_looks_empty};
@@ -571,7 +573,7 @@ fn handle_mass_delete_held(app: &AppHandle, label: String, side: hcfs_client::sy
 
     let holds = std::sync::Arc::clone(&app.state::<crate::app_state::AppState>().mass_delete_holds);
     let report = HeldReport { side, count, synced_count };
-    if holds.record_held(&label, report) == HeldChange::Unchanged {
+    if holds.record_held(&label, report) != HeldChange::Changed {
         return;
     }
 
@@ -584,7 +586,7 @@ fn handle_mass_delete_held(app: &AppHandle, label: String, side: hcfs_client::sy
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let empty_root = root.is_some_and(|root| root_looks_empty(&root));
-        holds.settle_held(&label, report, empty_root, |hold, notify| emit_mass_delete_held(&app, hold, notify));
+        holds.settle_held(&label, side, empty_root, |hold, notify| emit_mass_delete_held(&app, hold, notify));
     });
 }
 

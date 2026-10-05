@@ -143,6 +143,9 @@ pub enum HeldChange {
     /// New, different, or not yet shown: check the drive folder and settle
     /// it ([`MassDeleteHoldState::settle_held`]).
     Changed,
+    /// New or different, but a settle for this side is already running and
+    /// shows the side's hold as it stands when it finishes: start no other.
+    Settling,
 }
 
 /// Which sides of a drive owe their empty folders a restore.
@@ -209,6 +212,10 @@ struct SideSlot {
     notify_pending: bool,
     /// The current `entry` has been settled (empty-root checked and shown).
     settled: bool,
+    /// A settle (the blocking empty-root check) is running for this side.
+    /// Outlives an episode end: the task is still running, and it settles
+    /// whatever hold the side has when it finishes.
+    settling: bool,
     /// A hold or restore event for this side arrived in the current cycle.
     seen: bool,
     /// The refusal reason last emitted in this episode.
@@ -384,6 +391,11 @@ impl MassDeleteHoldState {
     /// happen in [`Self::settle_held`], off that thread, and only for a
     /// [`HeldChange::Changed`] report. Until then the entry keeps the last
     /// known empty-root flag (false for a new hold).
+    ///
+    /// At most one settle runs per side: an unplugged network share can
+    /// stall the check, and hcfs keeps reporting the hold every cycle
+    /// meanwhile. A report arriving while one runs is recorded and left to
+    /// it ([`HeldChange::Settling`]).
     pub fn record_held(&self, label: &str, report: HeldReport) -> HeldChange {
         let mut map = self.lock();
         let slot = map.entry(label.to_string()).or_default().slot_mut(report.side);
@@ -407,32 +419,40 @@ impl MassDeleteHoldState {
         if !std::mem::replace(&mut slot.notified, true) {
             slot.notify_pending = true;
         }
+        if std::mem::replace(&mut slot.settling, true) {
+            return HeldChange::Settling;
+        }
         HeldChange::Changed
     }
 
-    /// Settle a hold [`Self::record_held`] reported as changed: store the
-    /// empty-root check and hand the hold to `emit`, with whether this is
-    /// the episode's notification. Returns whether `emit` ran.
+    /// Finish the settle [`Self::record_held`] started for `side`: store the
+    /// empty-root check on the side's current hold and hand that hold to
+    /// `emit`, with whether this is the episode's notification. Returns
+    /// whether `emit` ran.
     ///
-    /// `emit` runs only if the hold is still exactly `report` and unsettled:
-    /// a hold that changed again meanwhile is settled by its own report, and
-    /// one that cleared must not be shown. It runs under the state's lock,
+    /// It settles the hold as it stands now, not as it was when the settle
+    /// started: reports that arrived meanwhile started no settle of their
+    /// own ([`HeldChange::Settling`]), and the folder check is about the
+    /// folder, whatever the count. `emit` runs only for an unsettled `Held`
+    /// hold: one that cleared, or turned into a restore, must not be shown
+    /// as held. It runs under the state's lock,
     /// so a `finish_cycle` that clears this side either happened first (no
     /// emit) or waits until the held event is out, and its cleared event
     /// follows it; the UI never sees a hold after its clear. `emit` must not
     /// call back into this state.
-    pub fn settle_held(&self, label: &str, report: HeldReport, empty_root: bool, emit: impl FnOnce(&LabeledHold, bool)) -> bool {
+    pub fn settle_held(&self, label: &str, side: MassDeleteSide, empty_root: bool, emit: impl FnOnce(&LabeledHold, bool)) -> bool {
         let mut map = self.lock();
         let Some(holds) = map.get_mut(label) else {
             return false;
         };
-        let can_restore = holds.can_restore(report.side);
-        let slot = holds.slot_mut(report.side);
-        if !slot.holds(report) || slot.settled {
+        let can_restore = holds.can_restore(side);
+        let slot = holds.slot_mut(side);
+        slot.settling = false;
+        if slot.settled {
             return false;
         }
 
-        let Some(entry) = slot.entry.as_mut() else {
+        let Some(entry) = slot.entry.as_mut().filter(|e| e.phase == HoldPhase::Held) else {
             return false;
         };
         entry.empty_root = empty_root;
@@ -442,7 +462,7 @@ impl MassDeleteHoldState {
 
         let hold = LabeledHold {
             label: label.to_string(),
-            side: report.side,
+            side,
             entry,
             can_restore,
         };
@@ -693,7 +713,7 @@ mod tests {
             return None;
         }
         let mut emitted = None;
-        state.settle_held(L, report(side, count), false, |_, notify| emitted = Some(notify));
+        state.settle_held(L, side, false, |_, notify| emitted = Some(notify));
         emitted
     }
 
@@ -894,10 +914,10 @@ mod tests {
         let state = MassDeleteHoldState::new();
         state.begin_cycle(L);
         assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
-        assert!(state.settle_held(L, report(Server, 150), true, |hold, _| assert!(hold.entry.empty_root)));
+        assert!(state.settle_held(L, Server, true, |hold, _| assert!(hold.entry.empty_root)));
         assert_eq!(state.entry(L, Server).map(|e| e.empty_root), Some(true));
         assert!(
-            !state.settle_held(L, report(Server, 150), true, |_, _| panic!("settled twice")),
+            !state.settle_held(L, Server, true, |_, _| panic!("settled twice")),
             "a hold is shown once"
         );
     }
@@ -911,28 +931,63 @@ mod tests {
             s.record_held(L, report(Server, 150));
         });
         assert_eq!(cycle(&state, |_| {}), vec![Server]);
-        assert!(!state.settle_held(L, report(Server, 150), false, |_, _| panic!("shown after its clear")));
+        assert!(!state.settle_held(L, Server, false, |_, _| panic!("shown after its clear")));
     }
 
-    /// The hold changed again before the first check finished: the stale
-    /// settle emits nothing, and the episode's notification goes out with
-    /// the current hold instead of being lost.
+    /// The hold changed again before the first check finished: the running
+    /// settle shows the current hold, with the episode's notification, so
+    /// neither is lost; once it is done, the next change starts a new one.
     #[test]
-    fn a_stale_settle_leaves_the_notification_to_the_current_hold() {
+    fn a_running_settle_shows_the_hold_as_it_stands() {
+        let state = MassDeleteHoldState::new();
+        state.begin_cycle(L);
+        assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
+        state.finish_cycle(L);
+        state.begin_cycle(L);
+        assert_eq!(state.record_held(L, report(Server, 160)), HeldChange::Settling);
+
+        let mut shown = None;
+        assert!(state.settle_held(L, Server, false, |hold, notify| shown = Some((hold.entry.count, notify))));
+        assert_eq!(shown, Some((160, true)));
+
+        assert_eq!(state.record_held(L, report(Server, 160)), HeldChange::Unchanged);
+        assert_eq!(state.record_held(L, report(Server, 170)), HeldChange::Changed, "the settle is done");
+    }
+
+    /// A restore applied while the check ran ends the hold: the settle must
+    /// not show the restoring side as held again.
+    #[test]
+    fn a_settle_after_a_restore_shows_nothing() {
         let state = MassDeleteHoldState::new();
         state.begin_cycle(L);
         state.record_held(L, report(Server, 150));
+        state.record_restored(L, Server, 150);
+        assert!(!state.settle_held(L, Server, false, |_, _| panic!("restoring side shown as held")));
+    }
+
+    /// hcfs re-reports a hold every cycle. While the empty-root check for
+    /// one report is still running (a stalled network share), the next
+    /// reports must not queue more blocking checks behind it.
+    #[test]
+    fn reports_during_a_settle_start_no_second_one() {
+        let state = MassDeleteHoldState::new();
+        state.begin_cycle(L);
+        assert_eq!(state.record_held(L, report(Server, 150)), HeldChange::Changed);
+        state.finish_cycle(L);
+
+        state.begin_cycle(L);
+        assert_ne!(
+            state.record_held(L, report(Server, 150)),
+            HeldChange::Changed,
+            "same hold, check still running"
+        );
         state.finish_cycle(L);
         state.begin_cycle(L);
-        state.record_held(L, report(Server, 160));
-
-        assert!(!state.settle_held(L, report(Server, 150), false, |_, _| panic!("stale hold shown")));
-        let mut notified = None;
-        assert!(state.settle_held(L, report(Server, 160), false, |hold, notify| {
-            assert_eq!(hold.entry.count, 160);
-            notified = Some(notify);
-        }));
-        assert_eq!(notified, Some(true));
+        assert_ne!(
+            state.record_held(L, report(Server, 160)),
+            HeldChange::Changed,
+            "changed hold, check still running"
+        );
     }
 
     /// A pause and resume (or relaunch) is not a new episode, but one whose
