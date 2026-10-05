@@ -43,9 +43,11 @@ vi.mock("next/link", () => ({
 // `useUrlParams` reads from `useSearchParams`/`usePathname` — both unavailable
 // in jsdom without a Next Router. The cell only uses the parameter values
 // for folder navigation, which is orthogonal to the badge assertion.
+// `urlParams` lets a test set what the URL carries (e.g. `subFolderPath`).
+const urlParams: Record<string, string> = {};
 vi.mock("@/app/utils/hooks/useUrlParams", () => ({
   useUrlParams: () => ({
-    getParam: (_key: string, fallback: string) => fallback,
+    getParam: (key: string, fallback: string) => urlParams[key] ?? fallback,
   }),
 }));
 
@@ -348,5 +350,41 @@ describe("NameCell failure lookup", () => {
       />,
     );
     expect(failureLookups.at(-1)).toEqual(["drive", "Work/notes.txt"]);
+  });
+
+  it("trims the URL's folder path like the row menu does", () => {
+    failureLookups.length = 0;
+    urlParams.subFolderPath = "/Work/";
+    try {
+      render(
+        <NameCell
+          {...baseProps}
+          rawName="notes.txt"
+          actualName="notes.txt"
+          label="drive"
+          syncStatus="failed"
+        />,
+      );
+    } finally {
+      delete urlParams.subFolderPath;
+    }
+    expect(failureLookups.at(-1)).toEqual(["drive", "Work/notes.txt"]);
+  });
+
+  // The recent view's rows carry the full drive-relative path as their
+  // actual name (Rust's get_recent_files sets it from the activity's
+  // relative path) and no folder, so the path is used as it is.
+  it("uses a recent row's full path as it is", () => {
+    failureLookups.length = 0;
+    render(
+      <NameCell
+        {...baseProps}
+        rawName="notes.txt"
+        actualName="Trips/2024/notes.txt"
+        label="drive"
+        syncStatus="failed"
+      />,
+    );
+    expect(failureLookups.at(-1)).toEqual(["drive", "Trips/2024/notes.txt"]);
   });
 });
