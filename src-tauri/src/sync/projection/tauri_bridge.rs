@@ -668,12 +668,18 @@ fn finish_mass_delete_cycle<R: tauri::Runtime>(app: &AppHandle<R>, label: &str) 
 
     for side in app_state.mass_delete_holds.finish_cycle(label) {
         tracing::info!(label = %label, side = side.as_str(), "mass delete hold cleared");
-        let payload = events::MassDeleteSidePayload {
-            label: label.to_string(),
-            side: side.as_str(),
-        };
-        let _ = app.emit(events::MASS_DELETE_CLEARED, payload);
+        emit_mass_delete_cleared(app, label, side);
     }
+}
+
+/// Tell the UI `label`'s `side` holds nothing any more: its banner goes.
+/// Sent when a cycle ends without the hold and when the drive is removed.
+pub(crate) fn emit_mass_delete_cleared<R: tauri::Runtime>(app: &AppHandle<R>, label: &str, side: hcfs_client::sync::MassDeleteSide) {
+    let payload = events::MassDeleteSidePayload {
+        label: label.to_string(),
+        side: side.as_str(),
+    };
+    let _ = app.emit(events::MASS_DELETE_CLEARED, payload);
 }
 
 /// Handle a `SyncError` carrying [`events::SHARED_DRIVE_REVOKED_MARKER`]:

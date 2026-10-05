@@ -1839,8 +1839,11 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         // an entry per label ever initialized in this process.
         app_state.folder_restore_notify.clear(&label);
         // The drive is gone, and with it any hold the prompt was showing.
-        // The FE drops the banner on `DRIVE_REMOVED`.
-        app_state.mass_delete_holds.clear(&label);
+        // Nothing else takes those banners down (no cycle will report the
+        // drive again), so each side is cleared the way a cycle clears it.
+        for side in app_state.mass_delete_holds.clear(&label) {
+            crate::sync::tauri_bridge::emit_mass_delete_cleared(&app, &label, side);
+        }
 
         // Delete the DB row so the drive isn't resurrected on app restart, and
         // drop the intent-manifest rows for this drive so the snapshot overlay

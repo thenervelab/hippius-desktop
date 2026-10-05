@@ -217,3 +217,22 @@ fn a_reviewed_sync_records_its_restores_and_holds() {
     let completed = body.find("handle_sync_completed(").expect("completion is shared");
     assert!(begin < sync && sync < report && report < completed);
 }
+
+/// Removing a drive drops its holds, and each side that was showing a
+/// banner is told to the UI with the same cleared event a cycle sends:
+/// nothing else takes the banner down, and its buttons would answer a
+/// drive that is gone.
+#[test]
+fn removing_a_drive_tells_the_ui_its_holds_cleared() {
+    let lifecycle = lifecycle_src();
+    let body = fn_body(&lifecycle, "pub(crate) async fn remove_drive_for_account(");
+    let clear = body.find("mass_delete_holds.clear(&label)").expect("the holds are dropped");
+    let emit = body.find("emit_mass_delete_cleared(").expect("each cleared side is emitted");
+    assert!(clear < emit);
+
+    let bridge = bridge_src();
+    assert!(
+        fn_body(&bridge, "fn finish_mass_delete_cycle<").contains("emit_mass_delete_cleared("),
+        "one cleared event shape for both"
+    );
+}

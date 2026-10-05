@@ -642,9 +642,14 @@ impl MassDeleteHoldState {
         }
     }
 
-    /// Forget `label` entirely (drive removal).
-    pub fn clear(&self, label: &str) {
-        self.lock().remove(label);
+    /// Forget `label` entirely (drive removal), returning the sides that had
+    /// a hold (held or restoring), so the UI can drop their banners.
+    #[must_use = "a cleared side's banner stays up unless the UI is told"]
+    pub fn clear(&self, label: &str) -> Vec<MassDeleteSide> {
+        let Some(holds) = self.lock().remove(label) else {
+            return Vec::new();
+        };
+        SIDES.into_iter().filter(|side| holds.slot(*side).entry.is_some()).collect()
     }
 
     /// Forget every label (logout, account switch, `SyncReset`): the labels
@@ -1173,13 +1178,30 @@ mod tests {
             s.record_restored("other", Local, 5);
         });
 
-        state.clear(L);
+        assert_eq!(state.clear(L), vec![Server]);
         assert_eq!(state.entry(L, Server), None);
         assert!(state.entry("other", Local).is_some());
 
         state.clear_all();
         assert!(state.all().is_empty());
         assert!(!state.folder_restores("other").any());
+    }
+
+    /// A removed drive's banner must go: the clear reports every side that
+    /// was showing one (held or restoring), so each can be told to the UI.
+    #[test]
+    fn clear_returns_the_sides_it_held() {
+        let state = MassDeleteHoldState::new();
+        cycle(&state, |s| {
+            report_held(s, Server, 150);
+            s.record_restored(L, Local, 5);
+        });
+        assert_eq!(state.clear(L), vec![Server, Local]);
+        assert!(state.clear(L).is_empty(), "nothing left");
+
+        cycle(&state, |s| s.record_restored(L, Server, 5));
+        cycle(&state, |_| {});
+        assert!(state.clear(L).is_empty(), "an owed folder restore is not a banner");
     }
 
     #[test]
