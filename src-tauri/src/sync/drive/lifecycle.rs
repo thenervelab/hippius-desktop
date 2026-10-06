@@ -222,6 +222,8 @@ pub async fn add_local_sync_folder(
     // after a failed init. Flag it with an `Error` status: without one it sits
     // in its bootstrap-Active state and reads as "Syncing" forever, while the
     // only trace of the failure is the dialog's transient toast.
+    // `path` is exactly what `set_sync_path_internal` stored (it canonicalizes
+    // only for its overlap check), so the event matches the `sync_paths` row.
     if let Err(e) = initialize_sync_inner(app.clone(), account_id, label.clone(), mnemonic, true, None).await {
         warn!(label = %label, error = %e, "Initializing the added sync folder failed");
         if preparing.clear(&label) {
@@ -1716,13 +1718,14 @@ fn teardown_account(explicit: Option<String>, current: Option<String>) -> Option
 
 /// The status a drive should show after [`initialize_sync_inner`] failed.
 ///
-/// `NotReady` failures (mnemonic not yet recoverable, signing key missing,
-/// config missing) return `None`: each has its own retry path (the FE
-/// auth-ready listener, the reauth banner, a user resume), and flagging the
-/// drive `Error` meanwhile would render it as stopped while the retry is in
-/// flight. Every other failure returns an `Error` carrying `context` and the
+/// `NotReady` failures return `None`. Most of them (mnemonic not yet
+/// recoverable, signing key missing, config missing) have their own retry
+/// path (the FE auth-ready listener, the reauth banner, a user resume);
+/// `SupersededByPause` means a pause or removal won, and that already set the
+/// drive's status. Either way an `Error` would wrongly render the drive as
+/// stopped. Every other failure returns an `Error` carrying `context` and the
 /// cause, so the drive visibly stops instead of reading as "Syncing".
-fn init_failure_status(err: &crate::error::AppError, context: &str) -> Option<crate::sync::drive_status::DriveStatus> {
+pub(crate) fn init_failure_status(err: &crate::error::AppError, context: &str) -> Option<crate::sync::drive_status::DriveStatus> {
     if matches!(err, crate::error::AppError::NotReady(_)) {
         return None;
     }
@@ -3164,16 +3167,16 @@ mod tests {
         );
     }
 
-    // A failed init the user cannot retry their way out of must flag the drive,
-    // with the cause in the message: the "stuck on Syncing" report was a drive
-    // whose init failed and that was never given a status.
+    // A failed init with no automatic retry path must flag the drive, with the
+    // cause in the message: the "stuck on Syncing" report was a drive whose
+    // init failed and that was never given a status.
     #[test]
     fn init_failure_status_flags_unrecoverable_failures_with_the_cause() {
         let err = crate::error::AppError::Validation("folder is unreadable".into());
         assert_eq!(
             init_failure_status(&err, "Failed to start syncing"),
             Some(crate::sync::drive_status::DriveStatus::Error {
-                message: format!("Failed to start syncing: {err}"),
+                message: "Failed to start syncing: folder is unreadable".into(),
             })
         );
     }

@@ -563,7 +563,7 @@ fn resume_drive_clears_paused_under_commit_lock() {
 #[test]
 fn sync_init_is_not_gated_on_the_credit_balance() {
     let src = lifecycle_src();
-    for needle in ["/api/billing/credits/balance/", "CreditBalanceResponse", "billing::credits::"] {
+    for needle in ["/api/billing/credits/balance/", "CreditBalanceResponse", "billing::credits"] {
         assert!(
             !src.contains(needle),
             "sync/drive/lifecycle.rs must not read the credit balance (found `{needle}`): \

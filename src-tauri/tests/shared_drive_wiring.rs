@@ -49,9 +49,9 @@ fn lifecycle_src() -> String {
 /// The funnel resolves the wire identity exactly once and gates every
 /// member-skip on it. COUNTING the guard sites (the scan-throttle pin
 /// precedent) rather than merely `contains` means a refactor that drops ONE
-/// of the four — credits pre-gate, `prepare_config_dir`'s member flag, the
-/// folder-registration gate, the recovery-binding gate — fails here even
-/// while the other three keep the substring present.
+/// of the three — `prepare_config_dir`'s member flag, the folder-registration
+/// gate, the recovery-binding gate — fails here even while the other two keep
+/// the substring present.
 #[test]
 fn initialize_sync_inner_resolves_identity_once_and_gates_the_member_skips() {
     let src = lifecycle_src();
@@ -66,9 +66,9 @@ fn initialize_sync_inner_resolves_identity_once_and_gates_the_member_skips() {
 
     let guard_sites = body.matches("identity.is_member").count();
     assert_eq!(
-        guard_sites, 4,
-        "expected exactly 4 member-guard sites in initialize_sync_inner (credits pre-gate, \
-         prepare_config_dir flag, spawn_folder_registration gate, recovery-binding gate); found {guard_sites}"
+        guard_sites, 3,
+        "expected exactly 3 member-guard sites in initialize_sync_inner (prepare_config_dir flag, \
+         spawn_folder_registration gate, recovery-binding gate); found {guard_sites}"
     );
 }
 
