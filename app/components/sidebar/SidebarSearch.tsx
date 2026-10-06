@@ -9,9 +9,7 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { UnifiedMediaDialog } from "@/app/components/page-sections/drive/file-preview";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
-import { useDeleteFile } from "@/app/lib/hooks/use-delete-file";
-import ConfirmationDialog from "@/app/components/ConfirmationDialog";
-import { Trash2 } from "lucide-react";
+import DeleteFileConfirmDialog from "@/app/components/page-sections/drive/DeleteFileConfirmDialog";
 
 interface SidebarSearchProps {
   collapsed?: boolean;
@@ -85,26 +83,12 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
   const [fileToDelete, setFileToDelete] = useState<FormattedUserFile | null>(
     null,
   );
-  const deleteMutation = useDeleteFile({
-    files: fileToDelete ? [fileToDelete] : [],
-  });
-  const isDeleting = deleteMutation.isPending;
-
   const handleViewerDelete = useCallback((file: FormattedUserFile) => {
     setSelectedFile(null); // close the viewer; the confirm dialog takes over
     setFileToDelete(file);
   }, []);
 
-  const closeDeleteConfirm = useCallback(() => {
-    if (isDeleting) return;
-    setFileToDelete(null);
-  }, [isDeleting]);
-
-  const handleConfirmDelete = useCallback(() => {
-    deleteMutation.mutate(undefined, {
-      onSettled: () => setFileToDelete(null),
-    });
-  }, [deleteMutation]);
+  const closeDeleteConfirm = useCallback(() => setFileToDelete(null), []);
 
   return (
     <>
@@ -175,28 +159,10 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
       {/* Direct delete for a previewed search result — same `delete_files`
           backend call the drive page uses, just triggered without the
           selection-mode action bar (which the sidebar doesn't render). */}
-      {fileToDelete && (
-        <ConfirmationDialog
-          open={!!fileToDelete}
-          onClose={closeDeleteConfirm}
-          onBack={closeDeleteConfirm}
-          onConfirm={handleConfirmDelete}
-          heading="Delete File"
-          text={
-            <>
-              Are you sure you want to delete &quot;
-              {fileToDelete.actualFileName || fileToDelete.name}&quot;? This
-              action cannot be undone.
-            </>
-          }
-          button={isDeleting ? "Deleting..." : "Delete File"}
-          icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
-          iconBgColor="bg-[#fc7d73]"
-          confirmVariant="destructive"
-          disableButton={isDeleting}
-          disableBackButton={isDeleting}
-        />
-      )}
+      <DeleteFileConfirmDialog
+        file={fileToDelete}
+        onClose={closeDeleteConfirm}
+      />
     </>
   );
 };

@@ -16,6 +16,8 @@ import NoNotificationsFound from "@/components/page-sections/notifications/NoNot
 import NoNotificationsEnabled from "@/components/page-sections/notifications/NoNotificationsEnabled";
 import NotificationMenuFooter from "./NotificationMenuFooter";
 import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
+import { revealHeldDelete } from "@/app/lib/massDelete/notificationLink";
+import { revealEmptyRemote } from "@/app/lib/emptyRemote/notificationLink";
 
 interface Props {
   count: number;
@@ -71,6 +73,10 @@ const NotificationMenuContent: React.FC<Props> = ({
   );
 
   const handleSelect = async (id: number) => {
+    // A held-delete or empty-drive row also brings back the banner the
+    // user put away ("Decide later", "Keep my files").
+    const buttonLink = notifications.find((n) => n.id === id)?.buttonLink;
+    if (!revealHeldDelete(buttonLink)) revealEmptyRemote(buttonLink);
     onClose?.();
     router.push(`/notifications?selected=${id}`);
   };

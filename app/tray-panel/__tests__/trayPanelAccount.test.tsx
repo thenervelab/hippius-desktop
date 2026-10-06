@@ -16,6 +16,7 @@ vi.mock("@/app/lib/tray/useTrayPanelData", () => ({
   useTrayPanelData: () => ({
     menu,
     feed: [],
+    captures: [],
     snapshot: EMPTY_SNAPSHOT,
     blockNumber: 7792047,
     isConnected: true,
@@ -33,6 +34,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   Window: { getByLabel: vi.fn(() => Promise.resolve(null)) },
+}));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({ onDragDropEvent: () => Promise.resolve(() => {}) }),
 }));
 // The identicon is a client-only dynamic import; it says nothing here.
 vi.mock("next/dynamic", () => ({ default: () => () => null }));

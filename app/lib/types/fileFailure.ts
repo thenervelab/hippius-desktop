@@ -19,6 +19,11 @@ export type FileFailureKind =
    *  kind here that does not resolve itself: hcfs quarantines the file after
    *  two attempts on the same revision and stops fetching it. */
   | "undecryptable"
+  /** hcfs will not sync the file as things stand: its path collides with
+   *  another, it cannot be read, or the disk has no room for it. `message`
+   *  is Rust's copy for it. Kept across clean cycles and never retryable:
+   *  hcfs reports it once per revision and only the user can fix it. */
+  | "refused"
   | "other";
 
 export interface FileFailureRecord {

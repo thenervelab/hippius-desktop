@@ -335,7 +335,7 @@ const SyncFileItem = memo<SyncFileItemProps>(
 
     return (
       <div className="w-full py-[3px]" data-file-item data-testid="file-item">
-        <div className="flex min-w-0 flex-col gap-[3px]">
+        <div className="flex min-w-0 flex-col gap-[4px]">
           <div className="flex items-center gap-[6px]">
             <div className="flex size-4 shrink-0 items-center justify-center rounded-[4px]">
               <Icon className={cn("size-4", color)} />
@@ -354,7 +354,7 @@ const SyncFileItem = memo<SyncFileItemProps>(
                   event.stopPropagation();
                   onShowInFolder(file);
                 }}
-                className="-my-1 grid size-6 shrink-0 place-items-center rounded-[4px] text-grey-10/50 hover:bg-[#000]/5 hover:text-grey-10 dark:text-white/50 dark:hover:bg-white/10 dark:hover:text-white"
+                className="-my-0.5 grid size-5 shrink-0 place-items-center rounded-[4px] text-grey-10/50 hover:bg-[#000]/5 hover:text-grey-10 dark:text-white/50 dark:hover:bg-white/10 dark:hover:text-white"
               >
                 <FolderOpen className="size-3.5" />
               </button>

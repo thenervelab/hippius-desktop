@@ -29,7 +29,9 @@
 
 use crate::error::Result;
 use crate::sync::folder_entries_backfill::{build_one_shot_client, cache_folder_entries, read_cached_dir_set};
+use crate::sync::mass_delete_hold::HoldPhase;
 use crate::sync::mnemonic::folder_hash;
+use hcfs_client::sync::{HeldMassDelete, MassDeleteSide};
 use hcfs_shared::network::MAX_REGISTER_RELATIVE_PATHS_BATCH;
 use sqlx::sqlite::SqlitePool;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -75,6 +77,98 @@ pub(crate) fn compute_dir_delta(on_disk: &BTreeSet<String>, cached: &BTreeSet<St
     DirDelta {
         to_register: on_disk.difference(cached).cloned().collect(),
         to_unregister: cached.difference(on_disk).cloned().collect(),
+    }
+}
+
+/// One drive as the folder job's DB and server calls address it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FolderJobDrive<'a> {
+    /// The app database.
+    pub pool: &'a SqlitePool,
+    /// The account's SS58, the wire identity of the folder-entity calls.
+    pub account_id: &'a str,
+    /// The cache's owner key (`account_key(account_id)`).
+    pub owner: &'a str,
+    /// The drive label.
+    pub label: &'a str,
+}
+
+/// Which folder changes a held mass delete keeps waiting.
+///
+/// hcfs holds FILE deletes only; its planner has no folder entities. Without
+/// this gate the folder job would carry out the very delete hcfs is holding,
+/// for every empty folder: an unmounted or evicted drive folder scans as an
+/// empty tree, so reconcile would unregister every folder from the server,
+/// and a truncated listing would let materialize remove this device's empty
+/// folders. A side counts as held while hcfs records it as `Held` OR
+/// `Restoring` (it keeps a restored side until the next cycle completes, so
+/// the gate does not reopen before the restore's own folder work has run).
+///
+/// One exception: a server side that is `Restoring` lets materialize create
+/// folders. That cycle downloaded the held files into the drive folder, so
+/// the folder is proven mounted and creating cannot land on a parent disk;
+/// waiting would leave the restored files' empty sibling folders missing for
+/// a whole extra cycle. Unregistering still waits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct FolderHoldGate {
+    /// Files are missing here: keep the server's folders (no unregister) and
+    /// recreate nothing under a folder that may be unmounted (no create).
+    pub server_held: bool,
+    /// Files are missing from the server: keep this device's folders (no
+    /// removal).
+    pub local_held: bool,
+    /// The server side is `Restoring`, not `Held`: the folder is proven
+    /// mounted, so creating is allowed again. Only meaningful with
+    /// `server_held`.
+    pub server_restoring: bool,
+}
+
+impl FolderHoldGate {
+    /// Nothing held: the folder job runs as usual.
+    pub(crate) const OPEN: Self = Self {
+        server_held: false,
+        local_held: false,
+        server_restoring: false,
+    };
+
+    /// Both sides held: used when hcfs's record cannot be read, because a
+    /// gate that cannot tell must not delete anything.
+    pub(crate) const CLOSED: Self = Self {
+        server_held: true,
+        local_held: true,
+        server_restoring: false,
+    };
+
+    /// The gate for the holds hcfs recorded, in any state.
+    pub(crate) fn from_holds(holds: &[HeldMassDelete]) -> Self {
+        holds.iter().fold(Self::OPEN, |gate, held| match held.side {
+            MassDeleteSide::Server => Self {
+                server_held: true,
+                server_restoring: HoldPhase::from(held.state) == HoldPhase::Restoring,
+                ..gate
+            },
+            MassDeleteSide::Local => Self { local_held: true, ..gate },
+        })
+    }
+
+    /// Whether materialize must not create folders: the server side is held
+    /// and not yet proven mounted by a restore.
+    pub(crate) fn creates_held(self) -> bool {
+        self.server_held && !self.server_restoring
+    }
+
+    /// Whether any side is held.
+    pub(crate) fn any(self) -> bool {
+        self.server_held || self.local_held
+    }
+
+    /// The part of `delta` reconcile may apply. A server-side hold keeps
+    /// every unregister waiting; registering new folders is still safe.
+    pub(crate) fn gate_delta(self, mut delta: DirDelta) -> DirDelta {
+        if self.server_held {
+            delta.to_unregister.clear();
+        }
+        delta
     }
 }
 
@@ -269,17 +363,21 @@ pub enum ReconcileOutcome {
 /// NOTE: the register/unregister NETWORK round-trips are exercised by the
 /// real-backend harness (no mock). The hermetic tests cover the pure delta and
 /// the cache insert+delete application.
-pub(crate) async fn reconcile_with_on_disk(
-    pool: &SqlitePool,
-    account_id: &str,
-    owner: &str,
-    label: &str,
-    on_disk: &BTreeSet<String>,
-) -> Result<ReconcileOutcome> {
+pub(crate) async fn reconcile_with_on_disk(drive: FolderJobDrive<'_>, on_disk: &BTreeSet<String>, gate: FolderHoldGate) -> Result<ReconcileOutcome> {
+    let FolderJobDrive {
+        pool,
+        account_id,
+        owner,
+        label,
+    } = drive;
+
     // Read the cache and diff. An empty delta is the steady-state common case
-    // and short-circuits before any HTTP client is built.
+    // and short-circuits before any HTTP client is built. A held mass delete
+    // keeps its side's removals out of the delta; their cache rows stay, so
+    // once the user confirms and the hold lifts, the next run still unregisters
+    // them.
     let cached = read_cached_dir_set(pool, owner, label).await?;
-    let delta = compute_dir_delta(on_disk, &cached);
+    let delta = gate.gate_delta(compute_dir_delta(on_disk, &cached));
     if delta.is_empty() {
         return Ok(ReconcileOutcome::NoChanges);
     }
@@ -311,7 +409,11 @@ pub(crate) async fn reconcile_with_on_disk(
                 // endpoint (folder entities carry no file bytes); a non-zero value
                 // would mean the side-channel guarantee was violated upstream.
                 if result.files_deleted != 0 {
-                    warn!(label = %label, files_deleted = result.files_deleted, "reconcile: unregister reported file deletions — folder-entity endpoint should delete none");
+                    warn!(
+                        label = %label,
+                        files_deleted = result.files_deleted,
+                        "reconcile: unregister reported file deletions — folder-entity endpoint should delete none"
+                    );
                 }
             }
             Err(e) => {
@@ -679,10 +781,49 @@ mod tests {
             .unwrap();
 
         let on_disk = set(&["a", "a/b"]);
-        let outcome = reconcile_with_on_disk(&pool, "ACCT_reconcile_core_nochanges", &owner, "docs", &on_disk)
+        let drive = FolderJobDrive {
+            pool: &pool,
+            account_id: "ACCT_reconcile_core_nochanges",
+            owner: &owner,
+            label: "docs",
+        };
+        let outcome = reconcile_with_on_disk(drive, &on_disk, FolderHoldGate::OPEN)
             .await
             .expect("no-changes path must not error");
         assert_eq!(outcome, ReconcileOutcome::NoChanges);
+    }
+
+    /// An emptied drive folder under a server-side hold: the whole cache
+    /// reads as removed, and the gate keeps every unregister (and the cache
+    /// rows) waiting. Reaches no network: the gated delta is empty.
+    #[tokio::test]
+    async fn reconcile_core_unregisters_nothing_under_a_server_hold() {
+        let pool = temp_pool().await;
+        let owner = account_key("ACCT_reconcile_core_held");
+        let cached = vec!["a".to_string(), "a/b".to_string()];
+        cache_folder_entries(&pool, &owner, "docs", &cached).await.unwrap();
+
+        let drive = FolderJobDrive {
+            pool: &pool,
+            account_id: "ACCT_reconcile_core_held",
+            owner: &owner,
+            label: "docs",
+        };
+        let gate = FolderHoldGate {
+            server_held: true,
+            local_held: false,
+            server_restoring: false,
+        };
+        let outcome = reconcile_with_on_disk(drive, &BTreeSet::new(), gate)
+            .await
+            .expect("held path must not error");
+
+        assert_eq!(outcome, ReconcileOutcome::NoChanges);
+        assert_eq!(
+            read_cached_dir_set(&pool, &owner, "docs").await.unwrap(),
+            set(&["a", "a/b"]),
+            "cache rows wait with the hold"
+        );
     }
 
     proptest::proptest! {

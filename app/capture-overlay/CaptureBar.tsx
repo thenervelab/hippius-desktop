@@ -5,13 +5,10 @@ import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronDown, LayoutGrid, Mic, MicOff, Monitor, MonitorOff, Video, VideoOff, X } from "lucide-react";
 import {
   getCaptureCameras,
-  getCaptureDestinationChoices,
   getCaptureMicrophones,
   openCapturePrivacySettings,
   saveCaptureOptions,
-  setCaptureDestination,
   type CaptureDestination,
-  type CaptureDestinationChoice,
   type CaptureDevice,
   type CaptureKind,
   type CaptureMode,
@@ -178,7 +175,6 @@ function OptionsMenu({
   recordCountdown,
   systemAudioAvailable,
   onOptions,
-  onDestination,
 }: {
   menuRef: React.RefObject<HTMLDivElement | null>;
   kind: CaptureKind;
@@ -192,16 +188,7 @@ function OptionsMenu({
   /** Whether a recording here can carry the computer's sound (Rust's `systemAudio`). */
   systemAudioAvailable: boolean;
   onOptions: (next: CaptureOptions) => void;
-  onDestination: (next: CaptureDestination) => void;
 }) {
-  const [choices, setChoices] = useState<CaptureDestinationChoice[] | null>(null);
-
-  useEffect(() => {
-    getCaptureDestinationChoices()
-      .then(setChoices)
-      .catch(() => setChoices([]));
-  }, []);
-
   return (
     <div
       ref={menuRef}
@@ -209,24 +196,12 @@ function OptionsMenu({
       aria-label="Capture options"
       className={`absolute bottom-[calc(100%+10px)] right-0 max-h-[60vh] w-64 overflow-y-auto rounded-[12px] p-1.5 ${GLASS_PANEL}`}
     >
+      {/* Captures have a drive of their own; where it is changes in Hippius
+          (Settings, the Captures page), not per capture here. */}
       <MenuHeading>Save to</MenuHeading>
-      {choices === null ? (
-        <p className={`px-2.5 py-1.5 text-[13px] ${GLASS_MUTED}`}>Loading drives…</p>
-      ) : choices.length === 0 ? (
-        <p className={`px-2.5 py-1.5 text-[13px] ${GLASS_MUTED}`}>{destination?.displayName ?? "No drives found"}</p>
-      ) : (
-        choices.map((c) => (
-          <MenuRow
-            key={c.label}
-            role="menuitemradio"
-            checked={destination?.label === c.label}
-            onSelect={() => onDestination({ label: c.label, displayName: c.label })}
-          >
-            {c.label}
-            <span className={`ml-1.5 ${GLASS_MUTED}`}>› Captures</span>
-          </MenuRow>
-        ))
-      )}
+      <p data-testid="capture-save-to" className={`truncate px-2.5 py-1.5 text-[13px] ${GLASS_MUTED}`}>
+        {destination?.displayName ?? "Hippius Captures"}
+      </p>
 
       {kind === "screenshot" ? (
         screenshotTimer && (
@@ -292,6 +267,16 @@ function OptionsMenu({
       >
         Copy a share link after capture
       </MenuRow>
+      {/* Opens the link it just copied, so only offered while links are made. */}
+      {options.copyLink && (
+        <MenuRow
+          role="menuitemcheckbox"
+          checked={options.openLink}
+          onSelect={() => onOptions({ ...options, openLink: !options.openLink })}
+        >
+          Open the link in your browser
+        </MenuRow>
+      )}
     </div>
   );
 }
@@ -705,7 +690,6 @@ interface Props {
   onCancel: () => void;
   /** What Rust stored, with the countdown and whether the camera is filmed for the mode chosen now. */
   onOptionsSaved: (saved: CaptureSavedOptions) => void;
-  onDestinationSaved: (destination: CaptureDestination) => void;
 }
 
 export default function CaptureBar(props: Props) {
@@ -790,11 +774,6 @@ export default function CaptureBar(props: Props) {
   const saveOptions = (next: CaptureOptions) => {
     saveCaptureOptions(next)
       .then(props.onOptionsSaved)
-      .catch(() => undefined);
-  };
-  const saveDestination = (next: CaptureDestination) => {
-    setCaptureDestination(next)
-      .then(() => props.onDestinationSaved(next))
       .catch(() => undefined);
   };
 
@@ -907,7 +886,6 @@ export default function CaptureBar(props: Props) {
               recordCountdown={props.recordCountdown ?? true}
               systemAudioAvailable={props.systemAudioAvailable ?? true}
               onOptions={saveOptions}
-              onDestination={saveDestination}
             />
           )}
         </div>

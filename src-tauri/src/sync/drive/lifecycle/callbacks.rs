@@ -398,6 +398,11 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
     let sync = sync.clone();
     Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
         sync.touch_progress_time();
+        end_root_not_mounted_episode(&app, &label);
+        // hcfs plans only after it accepted the server listing, so a refused
+        // empty listing is over too: the files came back, or the owner's
+        // confirmation was applied.
+        crate::sync::empty_remote_prompt::end_episode(&app, &label);
         // Persist the planner's view to the desktop-side intent manifest.
         // Runs UNCONDITIONALLY — above the `total == 0` early-return —
         // because an empty plan must still flush stale pending rows (see
@@ -452,34 +457,8 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
             Some(label.to_string()),
         );
 
-        // Patch file sizes directly from plan items — avoids an intermediate
-        // HashMap that would clone every path string.
-        let mut progress_state = sync.progress.lock();
-        if let Some(session) = progress_state.current_session.as_mut() {
-            let mut patched = 0u32;
-            for f in uploads
-                .iter()
-                .chain(downloads.iter())
-                .chain(local_deletes.iter())
-                .chain(remote_deletes.iter())
-            {
-                if f.size_bytes > 0
-                    && let Some(file) = session.files.get_mut(&f.path)
-                    && file.total_bytes == 0
-                {
-                    file.total_bytes = f.size_bytes;
-                    patched += 1;
-                }
-            }
-            if patched > 0 {
-                debug!("Patched sizes for {patched} files from sync plan");
-            }
-        }
-        let needs_snapshot = progress_state.current_session.is_some();
-        drop(progress_state);
-        if needs_snapshot {
-            sync.emit_snapshot(true);
-        }
+        let planned = uploads.iter().chain(&downloads).chain(&local_deletes).chain(&remote_deletes);
+        patch_session_sizes(&sync, planned);
 
         // Build the event payload directly from plan slices. File-path vectors
         // are capped to avoid oversized JSON payloads that freeze the webview
@@ -501,6 +480,48 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
             },
         );
     })
+}
+
+/// A plan for `label` was built: its unmounted-root episode is over, and the
+/// next unplug notifies again.
+///
+/// hcfs plans only after its mount check passed (`check_root_mounted` runs
+/// between scan and fetch), so a plan, empty or not, means the drive
+/// folder's disk is there. `SyncStarted` cannot say this; hcfs emits it
+/// before the check. `try_state`: a callback racing app teardown must not
+/// panic across the hcfs boundary.
+fn end_root_not_mounted_episode<R: tauri::Runtime>(app: &AppHandle<R>, label: &str) {
+    use tauri::Manager;
+    if let Some(app_state) = app.try_state::<crate::app_state::AppState>() {
+        app_state.root_not_mounted_notify.clear(label);
+    }
+}
+
+/// Patch the session's file sizes from the plan items, then emit a snapshot
+/// when a session is open. Straight from the plan items: an intermediate
+/// map would clone every path string.
+fn patch_session_sizes<'a>(sync: &SyncRunner, planned: impl Iterator<Item = &'a hcfs_client::sync::SyncPlanFile>) {
+    let mut progress_state = sync.progress.lock();
+    if let Some(session) = progress_state.current_session.as_mut() {
+        let mut patched = 0u32;
+        for f in planned {
+            if f.size_bytes > 0
+                && let Some(file) = session.files.get_mut(&f.path)
+                && file.total_bytes == 0
+            {
+                file.total_bytes = f.size_bytes;
+                patched += 1;
+            }
+        }
+        if patched > 0 {
+            debug!("Patched sizes for {patched} files from sync plan");
+        }
+    }
+    let needs_snapshot = progress_state.current_session.is_some();
+    drop(progress_state);
+    if needs_snapshot {
+        sync.emit_snapshot(true);
+    }
 }
 
 /// Build an encrypt or decrypt progress callback.

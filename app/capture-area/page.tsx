@@ -13,6 +13,7 @@ import {
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { GLASS_BAR, GLASS_BUTTON, GLASS_PRIMARY, GLASS_MUTED } from "@/app/lib/capture/glass";
 import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
+import { preselectedRect } from "@/app/lib/capture/areaPreselect";
 import {
   dragRect,
   HANDLES,
@@ -69,6 +70,7 @@ function shownBox(img: HTMLImageElement | null): LogicalRect | null {
   const r = img.getBoundingClientRect();
   return r.width > 0 && r.height > 0 ? { x: r.left, y: r.top, width: r.width, height: r.height } : null;
 }
+
 
 export default function CaptureAreaPage() {
   const [context, setContext] = useState<CaptureAreaContext | null>(null);
@@ -204,7 +206,12 @@ export default function CaptureAreaPage() {
             src={context.picture}
             alt="Your screen, to draw the area to record on"
             draggable={false}
-            onLoad={() => setLoaded(true)}
+            onLoad={() => {
+              setLoaded(true);
+              // Start with Rust's area drawn (the last one recorded, else a
+              // centred half), unless the user already drew one.
+              setRect((current) => current ?? preselectedRect(context.initialArea, shownBox(imgRef.current)));
+            }}
             className="block h-auto max-h-full w-auto max-w-full"
           />
         </div>

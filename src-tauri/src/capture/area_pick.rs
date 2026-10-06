@@ -180,6 +180,103 @@ pub const fn next(step: AreaStep, event: AreaEvent) -> Option<AreaStep> {
 /// keeps the desktop's "sharing" indicator on.
 pub const DRAW_WITHIN: std::time::Duration = std::time::Duration::from_mins(5);
 
+/// The id the last Wayland area is kept under among the remembered areas
+/// (`bar::remember_area`, the same device-wide store the overlay's areas
+/// use). Wayland gives no display ids, so the area is kept once, in the
+/// stream's own pixels, and fitted to whatever monitor is chosen next
+/// ([`initial_area`]). No real display id is this value: xcap's are
+/// `CGDirectDisplayID`s, HMONITOR low bits and RandR outputs.
+pub const REMEMBERED_AREA_ID: u32 = u32::MAX;
+
+/// The area already drawn when the picture comes up, in stream pixels, so
+/// the user confirms or adjusts it instead of starting from nothing: the
+/// last area recorded (fitted onto this stream: moved back on, or shrunk,
+/// when the monitor is smaller), else a centred box half the stream's
+/// width and half its height. Whole, even pixels, like every crop. `None`
+/// only for a stream too small to hold an area.
+#[must_use]
+pub fn initial_area(remembered: Option<LogicalRect>, stream: (u32, u32)) -> Option<StreamCrop> {
+    let (sw, sh) = stream;
+    if sw < MIN_AREA_PX * 2 || sh < MIN_AREA_PX * 2 {
+        return None;
+    }
+    let to_crop = |px: plan::PixelRect| StreamCrop {
+        x: px.x0,
+        y: px.y0,
+        width: px.width(),
+        height: px.height(),
+    };
+    let fitted = remembered
+        .and_then(|r| super::bar::fit_area(r, f64::from(sw), f64::from(sh)))
+        .and_then(|r| {
+            let crop = CropRect {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+            };
+            plan::area_pixels(crop, 1.0, sw, sh)
+        })
+        .filter(|px| px.width() >= MIN_AREA_PX && px.height() >= MIN_AREA_PX);
+    if let Some(px) = fitted {
+        return Some(to_crop(px));
+    }
+    let even = |v: u32| v & !1;
+    let width = even(sw / 2).max(MIN_AREA_PX);
+    let height = even(sh / 2).max(MIN_AREA_PX);
+    Some(StreamCrop {
+        x: even((sw - width) / 2),
+        y: even((sh - height) / 2),
+        width,
+        height,
+    })
+}
+
+/// An area as fractions (0..1) of the stream's picture, which is how the
+/// selection page draws it: it only knows where it shows the picture, in
+/// its own CSS pixels, once the picture has loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct PictureFraction {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[must_use]
+pub fn fraction_of(area: StreamCrop, stream: (u32, u32)) -> Option<PictureFraction> {
+    if stream.0 == 0 || stream.1 == 0 {
+        return None;
+    }
+    let (w, h) = (f64::from(stream.0), f64::from(stream.1));
+    Some(PictureFraction {
+        x: f64::from(area.x) / w,
+        y: f64::from(area.y) / h,
+        width: f64::from(area.width) / w,
+        height: f64::from(area.height) / h,
+    })
+}
+
+/// Where a recorded area is on the desktop, in the monitor's layout units
+/// (GDK's logical pixels): the stream covers `monitor` whole, so the area
+/// scales by the monitor's size over the stream's. Used to keep the pill
+/// out of the area (`camera::pill_outside`). `None` for an empty stream or
+/// monitor.
+#[must_use]
+pub fn area_on_monitor(area: StreamCrop, stream: (u32, u32), monitor: MonitorBox) -> Option<super::camera::Frame> {
+    if stream.0 == 0 || stream.1 == 0 || monitor.width <= 0.0 || monitor.height <= 0.0 {
+        return None;
+    }
+    let sx = monitor.width / f64::from(stream.0);
+    let sy = monitor.height / f64::from(stream.1);
+    Some(super::camera::Frame {
+        x: monitor.x + f64::from(area.x) * sx,
+        y: monitor.y + f64::from(area.y) * sy,
+        width: f64::from(area.width) * sx,
+        height: f64::from(area.height) * sy,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +438,77 @@ mod tests {
         assert_eq!(next(S::Ended, E::AreaChosen), None, "an area after a cancel is refused");
         assert_eq!(next(S::Choosing, E::AreaChosen), None, "no area before the picture");
         assert_eq!(next(S::Drawing, E::Started), None);
+    }
+
+    fn crop(x: u32, y: u32, width: u32, height: u32) -> StreamCrop {
+        StreamCrop { x, y, width, height }
+    }
+
+    /// The first time, half the screen each way, centred, on even pixels:
+    /// something to confirm or adjust instead of an empty, dimmed picture.
+    #[test]
+    fn the_first_area_is_a_centred_half_of_the_screen() {
+        assert_eq!(initial_area(None, (1920, 1080)), Some(crop(480, 270, 960, 540)));
+        assert_eq!(initial_area(None, (3840, 2160)), Some(crop(960, 540, 1920, 1080)));
+        // Odd halves round down to even, still centred within a pixel.
+        let odd = initial_area(None, (2558, 1438)).unwrap();
+        assert_eq!((odd.width, odd.height), (1278, 718));
+        assert_eq!((odd.x, odd.y), (640, 360));
+        assert!(odd.x + odd.width <= 2558 && odd.y + odd.height <= 1438);
+    }
+
+    /// After that the last area recorded comes back as it was, fitted onto
+    /// a smaller monitor when the stream is now smaller.
+    #[test]
+    fn the_last_area_comes_back_fitted_to_the_stream() {
+        let last = rect(100.0, 200.0, 800.0, 600.0);
+        assert_eq!(initial_area(Some(last), (1920, 1080)), Some(crop(100, 200, 800, 600)));
+        // Hangs off a 1280x720 stream: moved back on, kept whole.
+        let moved = initial_area(Some(rect(1000.0, 500.0, 600.0, 400.0)), (1280, 720)).unwrap();
+        assert_eq!(moved, crop(680, 320, 600, 400));
+        // Larger than the stream: shrunk to it.
+        let shrunk = initial_area(Some(rect(0.0, 0.0, 4000.0, 3000.0)), (1920, 1080)).unwrap();
+        assert_eq!(shrunk, crop(0, 0, 1920, 1080));
+        // Unusable (a click, or garbage): the centred half instead.
+        assert_eq!(
+            initial_area(Some(rect(10.0, 10.0, 2.0, 2.0)), (1920, 1080)),
+            Some(crop(480, 270, 960, 540))
+        );
+        assert_eq!(
+            initial_area(Some(rect(f64::NAN, 0.0, 100.0, 100.0)), (1920, 1080)),
+            Some(crop(480, 270, 960, 540))
+        );
+        assert_eq!(initial_area(None, (10, 10)), None);
+    }
+
+    /// The page draws the preselected area from fractions of the picture,
+    /// and what it sends back maps onto the same stream pixels.
+    #[test]
+    fn a_preselected_area_round_trips_through_the_page() {
+        let stream = (2560, 1440);
+        let area = initial_area(None, stream).unwrap();
+        let f = fraction_of(area, stream).unwrap();
+        assert_eq!((f.x, f.y, f.width, f.height), (0.25, 0.25, 0.5, 0.5));
+        // The page shows the picture letterboxed at 1600x900 from (10, 20).
+        let shown = shown(10.0, 20.0, 1600.0, 900.0);
+        let drawn = rect(
+            shown.x + f.x * shown.width,
+            shown.y + f.y * shown.height,
+            f.width * shown.width,
+            f.height * shown.height,
+        );
+        assert_eq!(stream_area(drawn, shown, stream), Some(area));
+        assert_eq!(fraction_of(area, (0, 0)), None);
+    }
+
+    /// The recorded area on the desktop, for keeping the pill out of it:
+    /// a 2x monitor at (1920, 0) streamed at 3840x2160.
+    #[test]
+    fn a_recorded_area_is_placed_on_its_monitor() {
+        let m = monitor(1920.0, 0.0, 1920.0, 1080.0);
+        let f = area_on_monitor(crop(960, 540, 1920, 1080), (3840, 2160), m).unwrap();
+        assert_eq!((f.x, f.y, f.width, f.height), (2400.0, 270.0, 960.0, 540.0));
+        assert!(area_on_monitor(crop(0, 0, 10, 10), (0, 0), m).is_none());
+        assert!(area_on_monitor(crop(0, 0, 10, 10), (100, 100), monitor(0.0, 0.0, 0.0, 10.0)).is_none());
     }
 }

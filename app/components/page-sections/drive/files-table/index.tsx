@@ -31,6 +31,7 @@ import {
   Folder,
   FolderOpen,
   Pencil,
+  PenLine,
   FolderInput,
   Users,
 } from "lucide-react";
@@ -109,9 +110,11 @@ import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 import UploaderCell from "./UploaderCell";
 
 import { toast } from "sonner";
-import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { Refresh } from "@/components/ui/icons";
+import { failedRowMenuItem } from "./failedRowMenu";
+import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
+import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
+import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
 import { entryKey } from "../highlightEntry";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -603,21 +606,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       return currentSubfolderPath.replace(/^\/+|\/+$/g, "");
     }, [currentSubfolderPath]);
 
-    const resolveRelativePath = useCallback(
-      (basePath: string, entryName: string) => {
-        const normalizedName = entryName.replace(/^\/+|\/+$/g, "");
-        if (!basePath) return normalizedName;
-        if (
-          normalizedName === basePath ||
-          normalizedName.startsWith(`${basePath}/`)
-        ) {
-          return normalizedName;
-        }
-        if (normalizedName.includes("/")) return normalizedName;
-        return `${basePath}/${normalizedName}`;
-      },
-      [],
-    );
+    // Shared with NameCell's failure badge, so the badge and the row menu
+    // can never look up different rows.
+    const resolveRelativePath = resolveRowRelativePath;
 
     const getFolderKey = useCallback(
       (file: FormattedUserFile, basePath = normalizedSubfolderPath) => {
@@ -1054,32 +1045,24 @@ const FilesTable: FC<FilesTableProps> = memo(
                   disabled: itemDeleting,
                 },
               ]),
-          ...(!file.isFolder && file.syncStatus === "failed" && file.label
-            ? [
-                {
-                  icon: <Refresh className="size-4" />,
-                  itemTitle: "Retry sync",
-                  onItemClick: () => {
-                    const relativePath = resolveRelativePath(
-                      parentSubFolderPath ?? normalizedSubfolderPath,
-                      file.actualFileName || file.name,
-                    );
-                    void invoke("retry_file_failure", {
-                      label: file.label,
-                      path: relativePath,
-                    })
-                      .then(() => {
-                        void queryClient.invalidateQueries({
-                          queryKey: ["drive-failures", file.label],
-                        });
-                        toast.success("Retrying sync…");
-                      })
-                      .catch((e) => toast.error(`Retry failed: ${e}`));
-                  },
-                  disabled: itemDeleting,
-                },
-              ]
-            : []),
+          // A refused file offers Dismiss, an undecryptable one nothing: the
+          // action follows the saved failure's kind (`failedRowAction`).
+          ...(() => {
+            if (file.isFolder || file.syncStatus !== "failed" || !file.label) {
+              return [];
+            }
+            const item = failedRowMenuItem({
+              label: file.label,
+              relativePath: resolveRelativePath(
+                parentSubFolderPath ?? normalizedSubfolderPath,
+                file.actualFileName || file.name,
+              ),
+              queryClient,
+              polkadotAddress,
+              disabled: itemDeleting,
+            });
+            return item ? [item] : [];
+          })(),
           ...(!file.isFolder && isPreviewableFileName(file.name) && canPreview
             ? [
                 {
@@ -1087,6 +1070,33 @@ const FilesTable: FC<FilesTableProps> = memo(
                   itemTitle: "View",
                   onItemClick: () =>
                     handleSetSelectedFile(file, previewSiblings),
+                  disabled: itemDeleting,
+                },
+              ]
+            : []),
+          // The screenshot editor, for a PNG or JPEG in an own drive synced
+          // here (Rust checks again and opens it over this page).
+          ...(offersImageEditor({
+            name: file.name,
+            isFolder: Boolean(file.isFolder),
+            label: file.label,
+            cloudOnly: isCloudOnlyRow(file),
+            memberDrive: isMemberDriveLabel(file.label, memberDriveLabels),
+          })
+            ? [
+                {
+                  icon: <PenLine className="size-4" />,
+                  itemTitle: "Edit image",
+                  onItemClick: () => {
+                    if (!file.label) return;
+                    openFileInEditor(
+                      file.label,
+                      resolveRelativePath(
+                        parentSubFolderPath ?? normalizedSubfolderPath,
+                        file.actualFileName || file.name,
+                      ),
+                    ).catch((error) => toast.error(tauriErrorMessage(error)));
+                  },
                   disabled: itemDeleting,
                 },
               ]

@@ -289,7 +289,7 @@ pub(crate) async fn build_client(pool: &SqlitePool, account_id: &str, identity: 
 /// temp path distinct within this process and across processes; the rename into
 /// `cache_name` stays atomic and idempotent (a racing winner's copy has the
 /// same content hash, so replacing it is harmless).
-fn unique_part_path(cache_root: &std::path::Path, cache_name: &str) -> PathBuf {
+pub(crate) fn unique_part_path(cache_root: &std::path::Path, cache_name: &str) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     cache_root.join(format!("{cache_name}.{}.{n}.part", std::process::id()))
@@ -410,7 +410,9 @@ pub async fn download_remote_file(
         folder_hash: &identity.wire_folder_hash,
         encryption_key: &encryption_key,
     };
-    hcfs_client::drive::remote::download_remote_file(
+    download_with_cached_listing(
+        &state,
+        &label,
         &access,
         &file_id,
         &PathBuf::from(&output_path),
@@ -425,8 +427,7 @@ pub async fn download_remote_file(
             );
         }),
     )
-    .await
-    .map_err(|e| AppError::Hcfs(e.to_string()))?;
+    .await?;
 
     info!(file_id = %file_id, "File downloaded and decrypted successfully");
     Ok(())
@@ -532,7 +533,9 @@ pub async fn cache_remote_file(
         folder_hash: &identity.wire_folder_hash,
         encryption_key: &encryption_key,
     };
-    if let Err(e) = hcfs_client::drive::remote::download_remote_file(
+    if let Err(e) = download_with_cached_listing(
+        &state,
+        &label,
         &access,
         &file_id,
         &part,
@@ -547,7 +550,7 @@ pub async fn cache_remote_file(
         // unlink result is intentionally discarded — a missing/already-gone
         // partial must not mask the real download error.
         let _ = tokio::fs::remove_file(&part).await;
-        return Err(AppError::Hcfs(e.to_string()));
+        return Err(e);
     }
 
     // A rename failure is an I/O fault → `AppError::Io` (typed `#[from]`), which
@@ -648,7 +651,7 @@ fn evict_preview_cache_dir(root: &Path, cap: u64, keep: &Path) -> usize {
 /// which would expose the mnemonic and DB to the renderer). Pinned by
 /// `thumbnail_cache_is_inside_the_asset_protocol_scope`; moving this
 /// directory means updating the scope in the same commit.
-fn thumbnail_cache_root() -> Result<PathBuf> {
+pub(crate) fn thumbnail_cache_root() -> Result<PathBuf> {
     // home_dir None → documented Other (environment fault); see master_mnemonic_path.
     Ok(dirs::home_dir()
         .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
@@ -680,7 +683,7 @@ fn thumbnail_cache_name(key: &str, max_dim: u32) -> String {
 /// locally (cloud-only). A blank `source`, a missing path, or a non-file all
 /// fall through to `None` so the caller takes the download path. This is the
 /// same "is it really on disk" gate `useViewableFileUrl` applies on the FE.
-async fn local_source_path(source: Option<&str>) -> Option<PathBuf> {
+pub(crate) async fn local_source_path(source: Option<&str>) -> Option<PathBuf> {
     let s = source?.trim();
     if s.is_empty() {
         return None;
@@ -723,7 +726,9 @@ pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &
         folder_hash: &identity.wire_folder_hash,
         encryption_key: &encryption_key,
     };
-    hcfs_client::drive::remote::download_remote_file(
+    download_with_cached_listing(
+        state,
+        label,
         &access,
         file_id,
         dest,
@@ -733,7 +738,46 @@ pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &
     .await
     // Discard the downloaded byte count — callers only need success/failure.
     .map(|_bytes| ())
-    .map_err(|e| AppError::Hcfs(e.to_string()))
+}
+
+/// Download, decrypt and verify one remote file against its row in the
+/// drive's cached listing ([`crate::sync::listing_cache`]).
+///
+/// hcfs's plain `download_remote_file` pages the drive's whole listing to
+/// find that row, once per download, so a screen of thumbnails was one full
+/// listing per thumbnail. Every one-off download goes through here instead.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] for a malformed file id, [`AppError::Hcfs`] when
+/// the listing cannot be fetched, the file is not in it, or the download or
+/// its verification fails.
+async fn download_with_cached_listing<F>(
+    state: &AppState,
+    label: &str,
+    access: &hcfs_client::drive::remote::RemoteFileAccess<'_>,
+    file_id: &str,
+    dest: &Path,
+    progress: Option<F>,
+) -> Result<u64>
+where
+    F: Fn(u64, u64) + Send + Sync + Clone + 'static,
+{
+    let path_hash = <[u8; 32]>::try_from(hex::decode(file_id).unwrap_or_default())
+        .map_err(|_| AppError::Validation(format!("{file_id} is not a file id (64 hex characters)")))?;
+
+    let expected = state
+        .remote_listing_cache
+        .expected(label, access.ss58_address, access.folder_hash, path_hash, || {
+            access.client.get_all_files(access.ss58_address, access.folder_hash, None::<fn(u64, u64)>)
+        })
+        .await
+        .map_err(|e| AppError::Hcfs(format!("Failed to fetch remote files: {e}")))?
+        .ok_or_else(|| AppError::Hcfs(format!("file {file_id} is not in the remote folder")))?;
+
+    hcfs_client::drive::remote::download_remote_file_expecting(access, file_id, expected, dest, progress)
+        .await
+        .map_err(|e| AppError::Hcfs(e.to_string()))
 }
 
 /// Decode `src`, scale it to fit within `max_dim` (aspect preserved, never
@@ -838,10 +882,29 @@ pub async fn get_thumbnail(
     // Decrypts another account's file under the session's token/key path when
     // the file is cloud-only, so the requested account must be the session one.
     let account_id = state.require_session_account(&account_id)?;
+    let target = image_thumbnail_path(state.inner(), &account_id, &label, &file_id, &arion_hash, source.as_deref(), max_dim).await?;
+    thumbnail_path_to_string(&target)
+}
+
+/// The thumbnail JPEG for one image, generated on first request and cached.
+/// Backs [`get_thumbnail`] and the tray popover's rows (`tray::thumbnail`).
+/// `account_id` MUST already be the validated session account.
+///
+/// # Errors
+/// As [`get_thumbnail`].
+pub(crate) async fn image_thumbnail_path(
+    state: &AppState,
+    account_id: &str,
+    label: &str,
+    file_id: &str,
+    arion_hash: &str,
+    source: Option<&str>,
+    max_dim: Option<u32>,
+) -> Result<PathBuf> {
     // Clamp to a sane thumbnail range so a webview can't request a 100k-px decode.
     let max_dim = max_dim.unwrap_or(256).clamp(32, 1024);
 
-    let key = if arion_hash.is_empty() { file_id.as_str() } else { arion_hash.as_str() };
+    let key = if arion_hash.is_empty() { file_id } else { arion_hash };
     if key.is_empty() {
         return Err(AppError::Validation("thumbnail requires a content hash or file id".into()));
     }
@@ -851,18 +914,18 @@ pub async fn get_thumbnail(
     let cache_name = thumbnail_cache_name(key, max_dim);
     let target = cache_root.join(&cache_name);
 
-    // Cache hit — reuse the already-generated thumbnail.
+    // Cache hit: reuse the already-generated thumbnail.
     if matches!(tokio::fs::metadata(&target).await, Ok(meta) if meta.len() > 0) {
-        return thumbnail_path_to_string(&target);
+        return Ok(target);
     }
 
     // Source bytes: the local synced copy when present, else a throwaway
     // download of the cloud file (deleted after thumbnailing below).
-    let (src_path, cloud_temp) = if let Some(local) = local_source_path(source.as_deref()).await {
+    let (src_path, cloud_temp) = if let Some(local) = local_source_path(source).await {
         (local, None)
     } else {
         let tmp = unique_part_path(&cache_root, &cache_name);
-        if let Err(e) = download_cloud_file_to(&state, &account_id, &label, &file_id, &tmp).await {
+        if let Err(e) = download_cloud_file_to(state, account_id, label, file_id, &tmp).await {
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(e);
         }
@@ -882,7 +945,7 @@ pub async fn get_thumbnail(
             .map_err(|e| AppError::Other(format!("thumbnail task panicked: {e}")))?
     };
 
-    // Always reclaim the throwaway cloud download, success or not — only the
+    // Always reclaim the throwaway cloud download, success or not: only the
     // small JPEG should persist on disk.
     if let Some(tmp) = cloud_temp {
         let _ = tokio::fs::remove_file(&tmp).await;
@@ -890,7 +953,7 @@ pub async fn get_thumbnail(
     encode?;
 
     info!(label = %label, key = %key, "Generated thumbnail");
-    thumbnail_path_to_string(&target)
+    Ok(target)
 }
 
 // ─── Browsable remote folders (grouped listing) ─────────────────────────────
@@ -1644,6 +1707,14 @@ mod tests {
             // fixtures exercise the folder/file grouping, which does not
             // read the uploader.
             uploaded_by: None,
+            // Camera Uploads provenance and capture times (hcfs #524); the
+            // browse mapper does not read them, and a desktop upload sends none.
+            device_id: None,
+            backup_id: None,
+            backup_asset_key: None,
+            backup_hint: None,
+            source_taken_at: None,
+            source_modified_at: None,
         }
     }
 
@@ -2207,13 +2278,30 @@ mod tests {
             arion_hash: Some("Qm123".to_string()),
             created_at: 1_700_000_000,
             updated_at: 1_700_000_005,
+            salted_hash: "ab".repeat(32),
+            revision_seq: 3,
+            revision_id: "cd".repeat(32),
         };
         let json = serde_json::to_value(&info).expect("serialize RemoteFileInfo");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
-        let expected: BTreeSet<String> = ["arion_hash", "created_at", "file_id", "name", "path", "size_bytes", "updated_at"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        // `salted_hash` / `revision_seq` / `revision_id` (hcfs #502) are
+        // additive: the browser ignores them, and they let a download be
+        // verified against this listing row.
+        let expected: BTreeSet<String> = [
+            "arion_hash",
+            "created_at",
+            "file_id",
+            "name",
+            "path",
+            "revision_id",
+            "revision_seq",
+            "salted_hash",
+            "size_bytes",
+            "updated_at",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         assert_eq!(
             keys, expected,
             "RemoteFileInfo wire keys drifted — FE RemoteFolderBrowser reads these snake_case keys"

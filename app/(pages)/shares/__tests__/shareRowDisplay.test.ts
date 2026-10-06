@@ -5,8 +5,8 @@ import {
   EXPIRED_FOLDER_EXPIRY_TOOLTIP,
   FOREIGN_FOLDER_EXPIRY_TOOLTIP,
   FOREIGN_FOLDER_REVOKE_TOOLTIP,
-  folderSharePathLabel,
   folderShareRowPlan,
+  folderShareScope,
   mergeActiveShareRows,
   pickHistoryRowDisplay,
 } from "../shareRowDisplay";
@@ -73,6 +73,7 @@ const folderRow = (over: Partial<FolderShareSummary> = {}): FolderShareSummary =
   shareToken: "folder-tok",
   shareUrl: "https://console.hippius.com/shared-folder/folder-tok#k=K",
   isPrivate: false,
+  source: "drive",
   ...over,
 });
 
@@ -106,13 +107,34 @@ describe("mergeActiveShareRows", () => {
   });
 });
 
-describe("folderSharePathLabel", () => {
-  it("renders the whole-drive idiom for an empty prefix", () => {
-    expect(folderSharePathLabel("")).toBe("Whole drive");
+describe("folderShareScope", () => {
+  it("renders the whole-drive idiom for a drive row with an empty prefix", () => {
+    expect(folderShareScope(folderRow({ pathPrefix: "" }))).toEqual({ label: "Whole drive" });
   });
 
   it("passes a real prefix through", () => {
-    expect(folderSharePathLabel("Trips/Photos")).toBe("Trips/Photos");
+    expect(folderShareScope(folderRow({ pathPrefix: "Trips/Photos" }))).toEqual({
+      label: "Trips/Photos",
+    });
+  });
+
+  // An uploaded copy also has an empty prefix; "Whole drive" would claim the
+  // user's whole drive is exposed. The description is the snapshot caveat.
+  it("labels an uploaded copy as one and says later changes are not in it", () => {
+    const scope = folderShareScope(
+      folderRow({ source: "uploadedCopy", pathPrefix: "", folderHash: "" }),
+    );
+
+    expect(scope.label).toBe("Uploaded copy");
+    expect(scope.description).toMatch(/later changes to the folder are not included/i);
+  });
+
+  // A drive row that names no drive folder must not claim the whole drive
+  // either; it gets a neutral name.
+  it("names a drive row without a folder hash neutrally", () => {
+    expect(folderShareScope(folderRow({ folderHash: "", pathPrefix: "" }))).toEqual({
+      label: "Folder link",
+    });
   });
 });
 
@@ -127,6 +149,18 @@ describe("folderShareRowPlan", () => {
     expect(plan.revokeTooltip).toBeUndefined();
     expect(plan.canChangeExpiry).toBe(true);
     expect(plan.expiryTooltip).toBeUndefined();
+  });
+
+  // Copy, revoke and expiry are keyed by the token, its hash, or the owner
+  // wrap; none of them depends on where the folder's contents came from.
+  it("an uploaded copy is managed exactly like a drive link", () => {
+    const copy = folderRow({ source: "uploadedCopy", folderHash: "", pathPrefix: "" });
+
+    expect(folderShareRowPlan(copy, NOW)).toEqual(folderShareRowPlan(folderRow(), NOW));
+    const foreign = { resolvable: false, shareToken: null, shareUrl: null, isPrivate: null };
+    expect(folderShareRowPlan({ ...copy, ...foreign }, NOW, true)).toEqual(
+      folderShareRowPlan(folderRow(foreign), NOW, true),
+    );
   });
 
   it("foreign row on a server without the by-hash routes: view-only with the honest device tooltips", () => {

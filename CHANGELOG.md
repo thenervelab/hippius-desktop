@@ -15,7 +15,31 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+### Added
+
+- **Mute your microphone during a screen recording.** The recording carries on and stays in sync; it is silent until you unmute. On a Mac.
+- **Switch microphone or camera during a screen recording.** Pick another one from the recording controls without stopping. On a Mac; camera switching works on Windows too.
+- **Change the camera bubble's size during a screen recording.** Small, large or full size, and the saved video changes with it. On a Mac and Windows.
+- **Annotate from the menu bar.** Choose Annotate an image from the Screenshot tile's menu to open any picture in the screenshot editor, or press Edit on a screenshot in the list. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
+
 ### Changed
+
+- **The screenshot editor opens inside the Hippius window and keeps your original.** It covers the page you were on with the picture front and centre and one toolbar, and Save now offers to keep a copy beside the original (the default) or replace it; you can set your choice in Settings.
+
+- **A tidier menu bar window.** Screenshot, Record and Upload sit side by side at the top (drop files on the window to upload them), your captures and all your files are a tab apart, sync status is one short line, and every file shows a small picture of itself with Copy link and Edit a hover away.
+
+- **The screenshot shortcut takes a screenshot in one step.** Press the
+  capture shortcut (Cmd+Shift+2 on a Mac), drag over any part of the screen
+  and let go: the screenshot is saved and its link copied straight away, with
+  no bar to click through. Hold Space to move the area while dragging, or
+  press Esc to cancel. The Screenshot and Record buttons still open the
+  capture bar.
+
+- **Captures get a drive of their own.** Your first screenshot or recording
+  asks once where to keep your captures, a Hippius Captures folder in Documents
+  unless you pick another place, and backs it up as its own drive. The capture
+  you just took is kept safe while you decide. Captures you took before stay
+  where they are. Move the folder any time in Settings.
 
 - **Screenshots and screen recording on Windows and Linux, in beta.** The
   same capture tools as on a Mac, for beta testers first, before they reach
@@ -123,6 +147,76 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Overview and Drive, for free and paid plans — uploads are paused.
 
 ### Fixed
+
+- **Folders sync on the Free plan.** A new folder no longer stays on "Syncing" forever when your account has no credits, and a folder that cannot start syncing now says why instead.
+
+- **The camera options in the recording controls now appear as soon as a recording starts.** You can change the camera bubble's size or switch to another camera (your iPhone too) mid-recording, and pointing at the bubble no longer shows a pause button that did nothing and ended up in the video.
+
+- **The storage card reads cleanly when you are over your plan.** The amount
+  over no longer overlaps the storage figure; it sits on its own line when
+  the card is narrow.
+
+- **Drag anywhere outside the area to start a new one.** When choosing an
+  area for a screenshot or recording, the first drag outside the current area
+  now draws a fresh one on a Mac, instead of doing nothing until you clicked
+  again.
+
+- **The capture bar follows you to another screen.** With more than one display, move the pointer to another screen while choosing what to capture and the bar moves there with you, as the Mac's own screenshot bar does.
+
+- **Hippius can be opened during a screen recording.** Clicking its Dock
+  icon or switching to it with Cmd+Tab now brings the app up while you
+  record.
+
+- **Hippius's capture tools show up when you share your screen in a video
+  call.** The recording controls, the capture card and the menu bar panel
+  now appear in Google Meet, Zoom and similar screen sharing on a Mac, so
+  they can be demoed, and are still left out of your own Hippius recordings.
+
+- **Uploads that keep failing no longer fill your disk.** Hippius now clears
+  the temporary copy of a file whose upload has been failing for a day, even
+  if it has retried many times since.
+
+- **Return takes the capture as soon as the capture bar appears.** Pressing
+  it the moment the bar or the "Choose what to share" list showed up could be
+  ignored.
+
+- **A file's sync error shows only on that file.** Two files with the same
+  name in different folders no longer both show the error of one of them.
+
+- **Opening a folder no longer deletes files in it.** Files whose names start
+  with 'downloaded_', and empty files whose names start with 'file_', were
+  removed when you opened their folder.
+
+- **A file that can't sync now says why, and stays marked until it's fixed.**
+  If two files' names differ only in capital letters, a file can't be read, or
+  your disk is too full to download it, Hippius names the file and tells you
+  what to do, instead of a vague "Sync failed. Please try again." Such a file
+  offers Dismiss rather than a Retry that could not help.
+
+- **A disconnected disk is called what it is.** When your Hippius folder is on
+  a disk that isn't plugged in, Hippius says so once and changes nothing,
+  instead of reporting a sync failure on every retry.
+
+- **A folder link made from a copy no longer claims to share your whole
+  drive.** Shared Links marks it "Uploaded copy" and no drive folder shows it
+  as shared, since it holds a copy of the files rather than your drive.
+
+- **Recording an area on Linux starts with an area already selected.** The
+  first time it is a box in the middle of the screen; after that, the last
+  area you recorded, ready to confirm or adjust.
+
+- **On Linux, the recording controls stay out of the area being recorded**
+  where the desktop allows it, instead of floating in the middle of it.
+
+- **On Linux, the recording controls and camera bubble count as part of
+  Hippius** in the app switcher, instead of showing up as separate apps.
+
+- **Videos open in your video player on Linux.** The file viewer now offers
+  "Open in your video player" and Download for videos, instead of a black
+  frame that never played.
+
+- **Stop, Pause and Show recording controls work from the tray menu on
+  Linux.**
 
 - **The menu bar popover opens under its icon again, recording or not.** It
   no longer does nothing while a recording runs, vanishes the moment it
@@ -287,6 +381,48 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   remain the last line of defence.
 
 ### Added
+
+- **A drive that is suddenly empty on Hippius asks before anything here is
+  deleted.** If Hippius has no files for a drive this computer still has
+  files in, the drive stops syncing and a banner and one notification
+  explain it. Keep my files changes nothing; if you own the drive and
+  emptied it on purpose, you can confirm twice to remove the files here too.
+  Members of a shared drive keep their copies.
+
+- **Captures in the sidebar.** Your screenshots and recordings, shown like any
+  drive: search, filters, pages, list or cards, and every file action.
+
+- **Every upload in the menu bar window has its own menu.** Click the three
+  dots or right click a file to view, download, share, rename or delete it,
+  or find it in Hippius or on your computer, without opening Drive first.
+
+- **Quick buttons appear when you point at an upload in the menu bar window.**
+  Copy a file's link in one click (a link is made if it has none), jump to
+  its folder in Hippius, or take a look at it.
+
+- **Mark up a screenshot before you share it.** Crop it, blur or pixelate
+  anything private, and add arrows, shapes, text, highlights and numbered
+  steps, from the capture card or a picture's menu in Drive. A capture's link
+  is replaced when you save, so the unedited picture is no longer shared.
+
+- **Large deletes wait for you to decide.** When most of a drive suddenly
+  looks deleted, for example because an external disk was unplugged, Hippius
+  deletes nothing and asks you first, with a banner and one notification.
+  Restore files puts everything back, empty folders included; Remove deletes
+  the files once you confirm how many; Decide later keeps them safe until you
+  choose, and the notification's Review button brings the banner back.
+
+- **Share a folder from Finder as a link, even one outside your Hippius
+  drives.** Hippius uploads a copy of the folder for the link, leaving out
+  hidden files and symbolic links, as a drive does. The copy counts toward
+  your storage until the link expires or you revoke it, and is then removed.
+  Later changes to the folder are not in the copy, so Shared Links marks the
+  link "Uploaded copy". The share window opens right away and shows the
+  folder's size once it has been measured. If a folder can't be shared (it is
+  empty, too big, has a name a link can't hold, or holds one of your Hippius
+  drives), the window says so before you confirm, and you can share it again
+  once it is fixed. A link holds up
+  to 50,000 files, each up to about 5 GB.
 
 - **Screenshots on Linux (internal builds first).** On an X11 desktop the
   capture bar works as it does on a Mac or Windows: drag an area, click a

@@ -44,15 +44,46 @@ fn the_overlay_keeps_itself_out_of_the_capture() {
     );
 }
 
-/// Same rule for the recording control bar — otherwise it films itself.
+/// The recording pill is kept out of the recording: by content protection
+/// where the recorder cannot leave windows out (Windows), and on macOS by the
+/// helper, which leaves Hippius out of a screen or area recording all but
+/// the main window and the bubble. A protected pill would be missing from a
+/// Google Meet share too, so macOS must not protect it (`own_windows`).
 #[test]
 fn the_controls_keep_themselves_out_of_the_recording() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "fn open_controls(");
     assert!(
-        body.contains(".content_protected(true)"),
-        "the control bar must be excluded from screen capture"
+        body.contains(".content_protected(super::own_windows::content_protected(") && body.contains("OwnWindow::Pill"),
+        "the pill's protection is own_windows' decision"
     );
+    // The helper is told which of Hippius's windows it may film.
+    let begin = fn_body(&src, "async fn begin_recording(");
+    assert!(begin.contains("own_windows::recorder_leaves_app_out(") && begin.contains("own_windows_filmed,"));
+    assert!(begin.contains("main_window_number(app).await") && begin.contains("filmed_camera_window(&state.capture)"));
+    let protocol = read("src/capture/recording/protocol.rs");
+    assert!(protocol.contains("pub own_windows_filmed: Vec<u32>,"));
+    // The Swift helper reads that key and leaves its parent app out.
+    let swift = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
+    assert!(swift.contains(r#"obj["ownWindowsFilmed"]"#), "the helper reads ownWindowsFilmed");
+    assert!(
+        swift.contains("excludingApplications: [app]") && swift.contains("exceptingWindows:"),
+        "a screen or area recording leaves Hippius out with ScreenCaptureKit, not content protection"
+    );
+}
+
+/// A visible card is not content protected on macOS, so a screenshot hides
+/// it before the screen is read; Windows and Linux keep their own path.
+#[test]
+fn a_screenshot_takes_a_visible_card_off_screen_first() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "async fn finish_screenshot(");
+    let hide = body.find("hide_card_for_grab(app).await").expect("the card is hidden");
+    let gated = body.find("own_windows::hide_card_for_screenshot(").expect("where it is not protected");
+    let grab = body.find("take_screenshot(selection, clear)").expect("then the grab");
+    assert!(gated < hide && hide < grab);
+    let helper = fn_body(&src, "async fn hide_card_for_grab(");
+    assert!(helper.contains("card.hide()") && helper.contains("is_visible()"));
 }
 
 /// The overlay's capability must grant the labels the overlays are created
@@ -117,16 +148,23 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
     }
 }
 
-/// A failed upload must leave the capture on disk; only a delivered one is removed.
+/// A failed upload must leave the capture on disk; only a delivered one is
+/// removed, and only through `remove_temp_dir`, which touches nothing but the
+/// capture's own temp folder. A capture sent from the folder it was kept in
+/// while no drive existed lives in the user's drive folder: removing its
+/// parent there would delete every other capture with it.
 #[test]
 fn the_temp_copy_is_removed_only_after_the_upload_lands() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
-    let ok_arm = body.find("Ok((account_id, destination, mint_link, placed)) =>").expect("success arm");
+    let ok_arm = body.find("Ok(Delivery::Placed {").expect("success arm");
     let err_arm = body.find("Err(e) =>").expect("failure arm");
-    let removal = body.find("remove_dir_all").expect("the temp copy is removed somewhere");
-    assert!(ok_arm < removal && removal < err_arm, "remove_dir_all must sit in the success arm only");
-    assert_eq!(body.matches("remove_dir_all").count(), 1, "exactly one removal, on success");
+    let removal = body.find("remove_temp_dir(path)").expect("the temp copy is removed somewhere");
+    assert!(ok_arm < removal && removal < err_arm, "the removal must sit in the success arm only");
+    assert_eq!(body.matches("remove_temp_dir(").count(), 1, "exactly one removal, on success");
+    assert!(!body.contains("remove_dir_all"), "never a bare remove_dir_all of the file's parent");
+    let keep = fn_body(&src, "async fn keep_here(");
+    assert!(!keep.contains("remove_dir_all"), "a kept capture never removes a folder itself");
 }
 
 /// The card hears that the file is in the drive before the link is made,
@@ -160,6 +198,18 @@ fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
     );
 }
 
+/// An overlay that is not the key window (any display but the bar's, or all
+/// of them while another app is active) would spend the first press on
+/// focusing itself, so a drag to draw a new area did nothing at all.
+#[test]
+fn the_overlay_answers_the_first_press() {
+    let src = read("src/capture/commands.rs");
+    assert!(
+        fn_body(&src, "fn build_overlay(").contains(".accept_first_mouse(true)"),
+        "a press on an overlay must reach the page even when the overlay is not focused"
+    );
+}
+
 /// The preview card floats over whatever the user captures next, and it is
 /// information, not a dialog: it must stay out of captures and must not take
 /// the keyboard from the app the user is typing in.
@@ -167,7 +217,10 @@ fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
 fn the_preview_card_stays_out_of_captures_and_never_takes_focus() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "fn open_preview_window(");
-    assert!(body.contains(".content_protected(true)"), "the card must be excluded from screen capture");
+    assert!(
+        body.contains(".content_protected(super::own_windows::content_protected(") && body.contains("OwnWindow::Card"),
+        "the card's protection is own_windows' decision"
+    );
     assert!(body.contains(".focused(false)"), "the card must open without taking focus");
     // Never key, so without first-mouse its buttons swallow the first click.
     assert!(
@@ -242,6 +295,43 @@ fn retry_goes_through_the_same_delivery() {
     let body = fn_body(&src, "pub fn capture_preview_retry(");
     assert!(body.contains("deliver_and_announce("), "Retry must reuse deliver_and_announce");
     assert!(body.contains("can_retry()"), "only a failed upload can be retried");
+}
+
+/// The captures drive: its commands are registered, a capture nobody has
+/// placed yet asks the user (after it is kept, so the dialog never races the
+/// file), and the user's answer sends the card's capture through the same
+/// delivery as Retry BEFORE the rest of the waiting ones are moved in, so
+/// the two never move the same file. The drive itself is added through the
+/// same command the Drive page's Sync a Folder runs.
+#[test]
+fn the_captures_drive_is_asked_for_made_and_fed_through_the_usual_paths() {
+    let main = read("src/main.rs");
+    for name in ["capture_drive_status", "capture_drive_location", "capture_drive_create"] {
+        assert!(main.contains(&format!("crate::capture::setup::{name},")), "{name} must be registered");
+    }
+    let commands = read("src/capture/commands.rs");
+    let keep = fn_body(&commands, "async fn keep_here(");
+    let kept = keep.find("keep_in_folder(").expect("the capture is kept first");
+    let ask = keep.find("ask_for_location(").expect("an unplaced capture asks where captures go");
+    assert!(kept < ask, "keep the capture before asking");
+    assert!(keep.contains("if kept_as.ask"), "only a capture nobody placed asks");
+    let redeliver = fn_body(&commands, "pub(super) fn redeliver_kept_card(");
+    assert!(
+        redeliver.contains("deliver_and_announce("),
+        "the card's capture goes through the usual delivery"
+    );
+    assert!(redeliver.contains("kept_locally"), "only a capture kept on this computer is sent again");
+
+    let setup = read("src/capture/setup.rs");
+    let create = fn_body(&setup, "pub async fn capture_drive_create(");
+    let card = create.find("redeliver_kept_card(").expect("the card's capture is sent");
+    let rest = create.find("move_waiting(").expect("the other waiting captures are moved in");
+    assert!(card < rest, "the card's capture is claimed before the rest are moved");
+    assert!(create.contains("on_card.as_deref()"), "the card's capture is left for its own delivery");
+    assert!(create.contains("ENSURE_LOCK"), "one setup at a time");
+    let add = fn_body(&setup, "async fn add_drive(");
+    assert!(add.contains("add_local_sync_folder("), "the drive is added like Sync a Folder adds one");
+    assert!(add.contains("check_location("), "never inside or around another drive");
 }
 
 /// The camera is the one capture window that must be FILMED: a protected
@@ -1031,7 +1121,7 @@ fn only_the_camera_and_overlay_webviews_may_open_devices() {
     );
     assert!(!fn_body(&src, "fn open_controls(").contains("allow_capture_devices"));
     assert!(fn_body(&src, "fn open_camera_window(").contains(".content_protected(false)"));
-    assert!(fn_body(&src, "fn open_controls(").contains(".content_protected(true)"));
+    assert!(fn_body(&src, "fn open_controls(").contains("OwnWindow::Pill"));
     let media = read("src/capture/webview_media.rs");
     let gate = fn_body(&media, "pub fn allows_capture_devices(");
     assert!(gate.contains("CAMERA_LABEL") && gate.contains("OVERLAY_LABEL_PREFIX"));
@@ -1164,7 +1254,7 @@ fn the_wayland_panel_hands_the_choice_to_the_desktop() {
     let start = fn_body(&src, "pub async fn capture_start(");
     assert!(start.contains("open_panel(&app, &state.capture)"));
     assert!(start.contains("if plan != super::support::StartPlan::Panel {\n        spawn_display_watch("));
-    assert!(fn_body(&src, "async fn open_panel(").contains("build_overlay(app, &label, &display)"));
+    assert!(fn_body(&src, "async fn open_panel(").contains("build_overlay(app, &label, &display, false)"));
     assert!(fn_body(&src, "pub async fn capture_confirm(").contains("support::system_picker_selection(mode)"));
     let fail = fn_body(&src, "async fn fail_capture(");
     assert!(
@@ -1311,7 +1401,10 @@ fn a_windows_window_recording_films_the_bubble() {
     let commands = read("src/capture/commands.rs");
     // The app hands the child the bubble's window on Windows too.
     assert!(commands.contains("#[cfg(windows)]\nfn remember_camera_window_number("));
-    assert!(fn_body(&commands, "async fn recording_bubble_frame(").contains("camera::window_region("));
+    // Record (and a mid-recording resize) place the bubble by the window's
+    // frame, read in `filmed_now`.
+    assert!(fn_body(&commands, "async fn recording_bubble_frame(").contains("filmed_now(app)"));
+    assert!(fn_body(&commands, "async fn filmed_now(").contains("camera::window_region("));
 }
 
 /// An X11 window recording films the bubble: the app remembers the camera
@@ -1368,4 +1461,443 @@ fn the_recording_helper_has_no_main_swift() {
         "macos/HippiusCapture/Sources/main.swift is back; keep @main in HippiusCapture.swift"
     );
     assert!(read("../macos/HippiusCapture/Sources/HippiusCapture.swift").contains("@main"));
+}
+
+/// Mute mid-recording writes silence in place of the microphone: the device
+/// stays open and its buffers keep their timestamps, so the file's one audio
+/// track runs on in step with the picture (dropping them would leave a hole
+/// players close up, and the sound would drift ahead of the video). A switch
+/// is the same stream reconfigured, never a new recording.
+#[test]
+fn a_muted_or_switched_microphone_keeps_one_continuous_track() {
+    let swift = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
+    assert!(
+        swift.contains("let gain: Float = silent ? 0 :"),
+        "a muted microphone is mixed at zero gain, never skipped"
+    );
+    assert!(
+        swift.contains("mixAudio(sampleBuffer, from: .microphone, at: placed.time, silent: microphoneMuted(at: pts))"),
+        "the mute is decided by each buffer's capture time"
+    );
+    assert!(
+        swift.contains("try await stream.updateConfiguration(configuration)"),
+        "a microphone switch reconfigures the running stream"
+    );
+    assert_eq!(
+        swift.matches("AVAssetWriterInput(mediaType: .audio").count(),
+        1,
+        "still exactly one audio track"
+    );
+}
+
+/// The pill's microphone changes reach the recorder before the pill is told,
+/// so a refused switch leaves the old microphone recording and showing; every
+/// recording (a restart too) starts heard, and every ending forgets it.
+#[test]
+fn the_pill_changes_the_microphone_through_the_recorder_first() {
+    let src = read("src/capture/commands.rs");
+    let change = fn_body(&src, "async fn change_microphone(");
+    let asked = change.find("with_recorder(").expect("the recorder is asked");
+    let told = change.find("set_live_microphone(").expect("the pill is told");
+    assert!(asked < told, "the recorder answers before the pill is told");
+    assert!(change.contains(".plan("), "Rust decides whether the change applies");
+
+    let begin = fn_body(&src, "async fn begin_recording(");
+    let adopted = begin.find("adopt_recorder(").expect("the recorder is adopted");
+    let reset = begin.find("LiveMicrophone::started(").expect("the microphone is reset at start");
+    assert!(adopted < reset);
+    assert!(fn_body(&src, "async fn end_camera(").contains("LiveMicrophone::default()"));
+
+    let mute = fn_body(&src, "pub async fn capture_microphone_mute(");
+    assert!(mute.contains("MicrophoneAction::Mute(muted)"));
+    let switch = fn_body(&src, "pub async fn capture_microphone_switch(");
+    assert!(switch.contains("MicrophoneAction::Switch("));
+}
+
+/// The pill's menus live in the pill's own window, which is content
+/// protected (`the_controls_keep_themselves_out_of_the_recording`): the
+/// window grows to hold them and shrinks back, rather than a native menu or
+/// another window, which would be filmed.
+#[test]
+fn the_pill_menus_grow_the_protected_pill_window() {
+    let src = read("src/capture/commands.rs");
+    let menu = fn_body(&src, "pub async fn capture_controls_menu(");
+    assert!(menu.contains("get_webview_window(CONTROLS_LABEL)"));
+    assert!(menu.contains("live_controls::pill_with_menu("));
+    assert!(menu.contains("live_controls::pill_without_menu("));
+    // A pill shown again is placed at its own size, whatever was open.
+    assert!(fn_body(&src, "fn open_controls(").contains("pill_menu).take()"));
+}
+
+/// The bubble's size changes mid-recording by moving its window inside what
+/// is filmed, so the camera in the file follows; the camera only stage is
+/// never resized (it is the recording).
+#[test]
+fn a_bubble_resized_mid_recording_stays_in_the_video() {
+    let src = read("src/capture/commands.rs");
+    let set_size = fn_body(&src, "pub async fn capture_camera_set_size(");
+    let live = set_size.find("live_controls::is_live(").expect("a mid-recording branch");
+    let resize = set_size.find("resize_bubble_while_recording(").expect("resized while recording");
+    assert!(live < resize);
+    assert!(set_size[live..resize].contains("Some(CameraShape::Bubble)"), "only a bubble");
+    let body = fn_body(&src, "async fn resize_bubble_while_recording(");
+    assert!(body.contains("filmed_now(app)"), "sized inside what is filmed");
+    assert!(body.contains("camera::resized_while_recording("));
+}
+
+/// A camera switched from the pill goes through the camera window (the only
+/// page that may call `getUserMedia`), never the recorder, and is refused
+/// where the recorder holds the camera itself.
+#[test]
+fn a_camera_switched_mid_recording_goes_through_the_camera_window() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "pub async fn capture_camera_switch(");
+    assert!(body.contains("live_controls::camera_switch("));
+    assert!(body.contains("recorder_opens_camera("));
+    assert!(body.contains("sync_camera(&app)"), "the camera page is told the new device");
+    assert!(!body.contains("with_recorder("), "the recorder never opens the bubble's camera");
+}
+
+/// The pill's camera menu (the bubble's sizes, another camera) is offered
+/// only while the recording runs, so the camera state is sent again once the
+/// recorder is adopted. The last one before that was sent at Record, while
+/// still `Capturing`, and offered nothing: the pill had no camera menu at all.
+#[test]
+fn the_pill_hears_the_camera_state_once_the_recording_runs() {
+    let src = read("src/capture/commands.rs");
+    let begin = fn_body(&src, "async fn begin_recording(");
+    let adopted = begin.find("adopt_recorder(").expect("the recorder is adopted");
+    let announced = begin.find("announce_camera(app)").expect("the camera state is sent once recording");
+    assert!(adopted < announced, "sent after the phase is Recording");
+    let announce = fn_body(&src, "async fn announce_camera(");
+    assert!(announce.contains("CAMERA_STATE_EVENT"));
+    assert!(fn_body(&src, "async fn current_camera_state(").contains("camera_state_for("));
+}
+
+/// Linux's recording tray menu (Stop, Pause, Show recording controls) is
+/// answered by ONE app-wide listener, added at start-up before any
+/// recording's menu exists, and every click goes through the phase-aware
+/// route to the same commands the pill uses. Two listeners would run each
+/// click twice; none would leave the items doing nothing.
+#[test]
+fn the_linux_recording_menu_reaches_the_session() {
+    let main = read("src/main.rs");
+    let setup = fn_body(&main, "pub fn setup(");
+    assert!(
+        setup.contains("crate::capture::commands::listen_to_recording_menu(app.handle())"),
+        "the recording menu's listener is added at start-up"
+    );
+    let src = read("src/capture/commands.rs");
+    assert_eq!(src.matches(".on_menu_event(").count(), 1, "one menu listener for the recording's items");
+    let listener = fn_body(&src, "pub fn listen_to_recording_menu(");
+    assert!(listener.contains("Once") && listener.contains("on_recording_menu_item("));
+    let item = fn_body(&src, "fn on_recording_menu_item(");
+    assert!(item.contains("effect_for(action, phase)"), "clicks are read against the phase now");
+    for call in ["stop_inner(&app)", "capture_pause(app)", "capture_resume(app)", "bring_controls_back("] {
+        assert!(item.contains(call), "the tray menu uses {call}");
+    }
+    assert!(
+        fn_body(&src, "fn write_tray_menu(").contains("listen_to_recording_menu(app)"),
+        "a menu is never put up without its listener"
+    );
+}
+
+/// Wayland: the drawn area is remembered for the next one, and the pill is
+/// moved outside it before the recording's first cropped picture.
+#[test]
+fn a_wayland_area_is_remembered_and_keeps_the_pill_out() {
+    let src = read("src/capture/commands.rs");
+    let draw = fn_body(&src, "async fn draw_area(");
+    assert!(draw.contains("initial_area(remembered, stream)"));
+    assert!(draw.contains("bar::remember_area(pool, super::area_pick::REMEMBERED_AREA_ID"));
+    let placed = draw.find("place_pill_clear_of_stream_area(").expect("the pill is placed");
+    let cropped = draw.find("recorder.crop(area)").expect("the recorder crops");
+    assert!(placed < cropped, "the pill moves before the first cropped picture");
+}
+
+/// The shortcut is the one-step area screenshot: Rust's press asks the main
+/// window for `instant`, `capture_start` lets `capture::instant` decide what
+/// that is here, and the session's flag reaches every overlay (no bar, no
+/// remembered area, no timer). The bar's last mode is not moved by it.
+#[test]
+fn the_shortcut_starts_the_instant_area_screenshot() {
+    let src = read("src/capture/commands.rs");
+    let on = fn_body(&src, "pub fn on_shortcut(");
+    assert!(on.contains("shortcut::ShortcutStart::PRESSED"), "the press says what to start");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    assert!(start.contains("instant::start_choice("), "Rust decides what an instant start is");
+    assert!(start.contains("state.capture.instant.store(choice.instant"));
+    assert!(
+        start.contains("if choice.remember"),
+        "an instant shot is not remembered as the bar's last mode"
+    );
+    let ui = fn_body(&src, "async fn open_capture_ui(");
+    assert!(ui.contains("if instant {\n        None"), "nothing is drawn in advance");
+    assert!(ui.contains("open_overlay(app, display, Some(display.id) == host, instant)"));
+    let context = fn_body(&src, "pub async fn capture_overlay_context(");
+    assert!(context.contains("instant::countdown_secs(") && context.contains("instant,"));
+    let mode = fn_body(&src, "pub async fn capture_set_mode(");
+    assert!(mode.contains("instant::remembers_mode_switch("));
+    // The overlay page takes the shot when the drag ends and draws no bar.
+    let page = read("../app/capture-overlay/page.tsx");
+    assert!(page.contains("submitSelection({ target: \"area\", displayId, rect: created })"));
+    assert!(page.contains("context.hostsBar && !counting && !instant &&"));
+    // The main window passes Rust's payload on as is.
+    let host = read("../app/components/capture/CaptureHost.tsx");
+    assert!(host.contains("listen<CaptureShortcutStart>(\"capture_shortcut_pressed\""));
+}
+
+/// Hippius stays reachable during a recording (macOS): the Dock's reopen is
+/// no longer dropped because the pill is a visible window, Cmd+Tab (only
+/// "did become active") brings the hidden main window, and once the user has
+/// it the recording's end leaves it alone.
+#[test]
+fn hippius_can_be_opened_during_a_recording() {
+    let main = read("src/main.rs");
+    assert!(main.contains("tauri::RunEvent::Reopen { .. } => {"));
+    assert!(main.contains("crate::capture::commands::on_app_reopen(app_handle)"));
+    assert!(!main.contains("if has_visible_windows"), "a visible pill must not swallow the Dock click");
+    assert!(main.contains("crate::capture::activation::watch(app.handle())"));
+    assert!(main.contains("crate::capture::commands::on_main_window_focused(window.app_handle())"));
+
+    let src = read("src/capture/commands.rs");
+    assert!(fn_body(&src, "pub fn on_app_reopen(").contains("own_windows::reopen_shows_main("));
+    let activated = fn_body(&src, "pub fn on_app_activated(");
+    assert!(activated.contains("own_windows::activation_shows_main(") && activated.contains("activation::mouse_down()"));
+    let focused = fn_body(&src, "pub fn on_main_window_focused(");
+    for forget in ["restore_main.store(false", "main_was_focused.store(false", "previous_app).take()"] {
+        assert!(focused.contains(forget), "taking the main window back forgets {forget}");
+    }
+
+    let watch = read("src/capture/activation.rs");
+    assert!(watch.contains("NSApplicationDidBecomeActiveNotification"));
+    assert!(watch.contains("pressedMouseButtons"));
+}
+
+/// The screenshot editor: a layer of the main window, never a window of its
+/// own (no capability, no route, no window builder), opened by Rust telling
+/// the main window after bringing it forward; every command registered; a
+/// replace that writes the picture BEFORE the link is replaced, revokes the
+/// old link, and goes through the existing upload and share paths; and a
+/// copy that never writes over the original.
+#[test]
+fn the_screenshot_editor_is_wired_end_to_end() {
+    let editor = read("src/capture/editor.rs");
+    assert!(
+        !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities/capture-editor.json")
+            .exists(),
+        "the editor has no window, so no capability of its own"
+    );
+    let conf = read("tauri.conf.json");
+    assert!(!conf.contains("\"capture-editor\""), "no editor window capability is enabled");
+    let shell = read("../app/components/AppShell.tsx");
+    assert!(!shell.contains("/capture-editor"), "no editor route boots without the app");
+    assert!(!editor.contains("WebviewWindowBuilder"), "the editor opens in the main window");
+
+    let open = fn_body(&editor, "fn open_with(");
+    assert!(open.contains("show_in_main_window("));
+    let show = fn_body(&editor, "fn show_in_main_window(");
+    assert!(show.contains("hide_tray_panel("), "the popover never sits over the editor");
+    assert!(show.contains("show_main_window(app)"), "the main window comes forward");
+    assert!(show.contains("emit_to(super::commands::MAIN_WINDOW_LABEL, OPEN_EVENT"));
+    let refuse = fn_body(&editor, "fn refuse_if_open(");
+    assert!(refuse.contains("show_in_main_window("), "an open editor is brought back, not replaced");
+    // The main window listens for it, in the signed-in layout.
+    let host = read("../app/components/capture/editor/ScreenshotEditorHost.tsx");
+    assert!(host.contains("EDITOR_OPEN_EVENT"));
+    let ipc = read("../app/lib/tauri/captureEditor.ts");
+    let open_event = editor
+        .lines()
+        .find(|l| l.contains("pub const OPEN_EVENT"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("OPEN_EVENT");
+    assert!(
+        ipc.contains(&format!("EDITOR_OPEN_EVENT = \"{open_event}\"")),
+        "one event name on both sides"
+    );
+    assert!(read("../app/(pages)/layout.tsx").contains("<ScreenshotEditorHost />"));
+
+    let main = read("src/main.rs");
+    for name in [
+        "capture_preview_edit",
+        "capture_editor_open_file",
+        "capture_editor_context",
+        "capture_editor_image",
+        "capture_editor_save",
+        "capture_editor_copy",
+        "capture_editor_close",
+        "capture_editor_save_preference",
+        "capture_editor_set_save_preference",
+        "capture_editor_copy_saved_link",
+        "capture_annotate_latest",
+        "capture_annotate_open_latest",
+        "capture_annotate_pick",
+    ] {
+        assert!(main.contains(&format!("crate::capture::editor::{name},")), "{name} must be registered");
+    }
+
+    let save = fn_body(&editor, "pub async fn capture_editor_save(");
+    assert!(save.contains("requested_mode("), "a save in a drive names copy or replace");
+    let copy_branch = save.find("save_copy(").expect("save as a copy");
+    let written = save.find("write_edited(").expect("the picture is written");
+    let replaced = save.find("replace_link(").expect("the link is replaced");
+    assert!(copy_branch < written, "a copy returns before anything is written over the original");
+    assert!(written < replaced, "a new link is made from the EDITED file");
+    assert!(save.contains("session_for(&state, &request)"), "a save names its session");
+    let copy = fn_body(&editor, "async fn save_copy(");
+    assert!(copy.contains("write_beside("), "a copy is a new file beside the original");
+    assert!(!copy.contains("replace_atomically(") && !copy.contains("replace_link("));
+    let beside = fn_body(&editor, "pub fn write_beside(");
+    assert!(beside.contains("persist_noclobber("), "a copy never overwrites a file");
+    let write = fn_body(&editor, "async fn write_edited(");
+    assert!(write.contains("replace_atomically("));
+    assert!(
+        write.contains("upload_files_to_remote_folder_inner("),
+        "a remote capture reuses the remote upload"
+    );
+    assert!(write.contains("nudge_sync("), "a synced capture is uploaded by the engine");
+    assert!(fn_body(&editor, "fn nudge_sync(").contains("trigger_sync_now("));
+    let link = fn_body(&editor, "async fn replace_link(");
+    assert!(link.contains("super::deliver::mint("), "the capture's own share path");
+    assert!(link.contains("hcfs_revoke_share("), "the old link is revoked");
+    let copy_link = fn_body(&editor, "pub async fn capture_editor_copy_saved_link(");
+    assert!(copy_link.contains("quick_link::copy_file_share_link("), "the tray's quick-link path");
+
+    // The tray's Annotate: Rust shows the dialog and reads only its answer,
+    // so no IPC names a path to read.
+    let pick_cmd = editor
+        .split("pub async fn capture_annotate_pick(")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .expect("capture_annotate_pick");
+    assert!(
+        !pick_cmd.contains("String") && !pick_cmd.contains("Path"),
+        "the picker takes no path: {pick_cmd}"
+    );
+    let pick = fn_body(&editor, "async fn pick_and_open(");
+    assert!(pick.contains(".pick_file("), "the file comes from the system dialog");
+    let picked = fn_body(&editor, "async fn open_picked(");
+    assert!(picked.contains("locate_in_drives("), "a file in a drive is edited in place");
+    assert!(picked.contains("capture_editor_open_file("), "through Drive's own checks");
+    assert!(picked.contains("SaveTarget::NewCapture"), "anything else is saved as a new screenshot");
+    let new_shot = save.find("save_as_new_capture(").expect("a picked picture's save");
+    assert!(new_shot < written, "a picked file is never the one written");
+    let copy = fn_body(&editor, "async fn save_as_new_capture(");
+    assert!(copy.contains("fresh_capture_dir("), "the copy is a capture of its own");
+    assert!(copy.contains("deliver_as_new_screenshot("), "delivered like a fresh capture");
+    let commands = read("src/capture/commands.rs");
+    let deliver = fn_body(&commands, "pub(super) async fn deliver_as_new_screenshot(");
+    assert!(deliver.contains("open_preview(") && deliver.contains("deliver_and_announce("));
+}
+
+/// Every `.rs` file under `dir` (relative to the crate), recursively.
+fn rust_files(dir: &str) -> Vec<(String, String)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+    let mut pending = vec![root];
+    let mut found = Vec::new();
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+                found.push((path.display().to_string(), src));
+            }
+        }
+    }
+    found
+}
+
+/// The mutexes `stmt` locks with the capture code's `lock(&…)`, by field.
+fn locked_fields(stmt: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut rest = stmt;
+    while let Some(at) = rest.find("lock(&") {
+        let before = rest[..at].chars().last();
+        rest = &rest[at + "lock(&".len()..];
+        // `lock(` itself, not `unlock(`, `try_lock(` or `clock(`.
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        let path: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+            .collect();
+        if let Some(field) = path.rsplit('.').next().filter(|f| !f.is_empty()) {
+            fields.push(field.to_string());
+        }
+    }
+    fields
+}
+
+/// A `std::sync::Mutex` locked twice in one statement waits on its own
+/// guard, which lives to the end of the statement: that thread never wakes,
+/// and every later lock of that mutex waits too. `camera_state_for` once did
+/// this with the recording's camera, so every capture hung at Record (no
+/// pill, no bubble, the bar gone, only Escape) while each unit test passed.
+#[test]
+fn no_capture_statement_locks_the_same_mutex_twice() {
+    for (path, src) in rust_files("src/capture") {
+        let code: String = src.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        for stmt in code.split([';', '{', '}']) {
+            let fields = locked_fields(stmt);
+            for (i, field) in fields.iter().enumerate() {
+                assert!(
+                    !fields[i + 1..].contains(field),
+                    "{path}: `{field}` is locked twice in one statement, which deadlocks: {}",
+                    stmt.split_whitespace().collect::<Vec<_>>().join(" ")
+                );
+            }
+        }
+    }
+}
+
+/// The scan above finds the statement that hung every capture.
+#[test]
+fn the_double_lock_scan_finds_a_double_lock() {
+    let hung = "let (a, b) = controls(phase, *lock(&state.capture.recording_camera), hidden, opens(*lock(&state.capture.recording_camera)))";
+    assert_eq!(locked_fields(hung), ["recording_camera", "recording_camera"]);
+    assert_eq!(locked_fields("let camera = *lock(&self.recording_camera)"), ["recording_camera"]);
+    assert!(locked_fields("guard.try_lock(&x); unlock(&y)").is_empty());
+}
+
+/// The bar follows the pointer to another display while the user chooses,
+/// as macOS's own capture bar does. Each part fails without an error: a
+/// follow never spawned leaves the bar on the display the capture started
+/// on; one that outlives the choosing keeps reading the pointer for nothing;
+/// a move that does not rebroadcast changes Rust's mind but no overlay's;
+/// and a bar that is not held moves away mid-countdown.
+#[test]
+fn the_bar_follows_the_pointer_to_another_display() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    assert!(
+        start.contains("spawn_display_watch(app.clone());\n        spawn_bar_follow(app.clone());"),
+        "the follow runs beside the display watch, never for the Wayland panel"
+    );
+    let follow = fn_body(&src, "fn spawn_bar_follow(");
+    assert!(
+        follow.contains("CapturePhase::Selecting { .. }") && follow.contains("break;"),
+        "the follow ends with the choosing"
+    );
+    assert!(
+        follow.contains("bar::bar_follow(") && follow.contains("bar_held"),
+        "the move is bar::bar_follow's decision, and a held bar stays"
+    );
+    let moved = fn_body(&src, "fn move_bar(");
+    assert!(
+        moved.contains("rebroadcast(") && moved.contains("set_focus()"),
+        "the overlays hear the move"
+    );
+    assert!(
+        fn_body(&src, "async fn open_capture_ui(").contains("bar_held.store(false"),
+        "a hold from an earlier capture does not pin this one's bar"
+    );
+    let main = read("src/main.rs");
+    assert!(main.contains("crate::capture::commands::capture_hold_bar,"));
+    let page = read("../app/capture-overlay/page.tsx");
+    assert!(page.contains("holdCaptureBar(holdsBar)"), "the bar's overlay holds the bar");
 }

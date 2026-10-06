@@ -14,8 +14,11 @@ import type { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 export function resolveBreadcrumbBack(
   segments: BreadcrumbSegment[],
   onRootClick: () => void,
+  { hideRoot = false }: { hideRoot?: boolean } = {},
 ): { label: string; go: () => void } | null {
   if (segments.length === 0) return null;
+  // Pinned to one drive (Captures): its root is the top, with nothing above.
+  if (hideRoot && segments.length === 1) return null;
 
   // One segment deep: the parent IS the root, whatever the root is called.
   if (segments.length === 1) {

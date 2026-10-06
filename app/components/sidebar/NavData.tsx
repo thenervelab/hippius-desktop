@@ -1,9 +1,10 @@
 import { Icons } from "@/components/ui";
-import { MessagesSquare, Share2Icon } from "lucide-react";
+import { Camera, MessagesSquare, Share2Icon } from "lucide-react";
 import Support from "../ui/icons/Support";
 import {
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
+  SCREEN_CAPTURE_ENABLED,
 } from "@/app/lib/featureFlags";
 
 export interface SubMenuItemData {
@@ -29,10 +30,11 @@ export interface NavItemData {
   // advertises `shares: true` (see `shareFeatureEnabledAtom`); `"wallet"`
   // hides it while `WALLET_FEATURE_ENABLED` is off; `"referrals"` hides it
   // while `REFERRALS_FEATURE_ENABLED` is off; `"chat"` hides it until Rust's
-  // `chat_get_config` reports `enabled: true` (see `chatEnabledAtom`).
+  // `chat_get_config` reports `enabled: true` (see `chatEnabledAtom`);
+  // `"capture"` hides it while `SCREEN_CAPTURE_ENABLED` is off.
   // Adding a new gate is one entry here plus one branch in
   // `filterNavSections`.
-  featureFlag?: "shares" | "wallet" | "referrals" | "chat";
+  featureFlag?: "shares" | "wallet" | "referrals" | "chat" | "capture";
 }
 
 export interface NavSection {
@@ -61,6 +63,15 @@ export const navSections: NavSection[] = [
         label: "Drive",
         path: "/files",
         icon: <Icons.Category className={ICON_CLASS} />,
+      },
+      // Right under Drive, as its own row rather than a Drive submenu: a
+      // submenu would turn Drive into a toggle, and every capture is a file
+      // in a drive, so this reads as a view of Drive.
+      {
+        label: "Captures",
+        path: "/captures",
+        icon: <Camera className={ICON_CLASS} strokeWidth={1.5} />,
+        featureFlag: "capture",
       },
       {
         label: "Chat",
@@ -126,9 +137,9 @@ export const navSections: NavSection[] = [
  * Pure so the gating rules are unit-testable: `shares` is a runtime server
  * capability (passed in by the sidebar from `shareFeatureEnabledAtom`) and
  * `chat` is the runtime answer of Rust's `chat_get_config` (from
- * `chatEnabledAtom`; defaults to hidden until known), while `wallet` and
- * `referrals` are the build-time `WALLET_FEATURE_ENABLED` /
- * `REFERRALS_FEATURE_ENABLED` flags (defaulted here so callers don't
+ * `chatEnabledAtom`; defaults to hidden until known), while `wallet`,
+ * `referrals` and `capture` are the build-time `WALLET_FEATURE_ENABLED` /
+ * `REFERRALS_FEATURE_ENABLED` / `SCREEN_CAPTURE_ENABLED` flags (defaulted here so callers don't
  * re-import them). Sections whose items are all filtered out are dropped
  * entirely so no orphaned heading renders.
  */
@@ -139,11 +150,13 @@ export function filterNavSections(
     chatEnabled?: boolean;
     walletEnabled?: boolean;
     referralsEnabled?: boolean;
+    captureEnabled?: boolean;
   },
 ): NavSection[] {
   const walletEnabled = gates.walletEnabled ?? WALLET_FEATURE_ENABLED;
   const referralsEnabled =
     gates.referralsEnabled ?? REFERRALS_FEATURE_ENABLED;
+  const captureEnabled = gates.captureEnabled ?? SCREEN_CAPTURE_ENABLED;
   return sections
     .map((section) => ({
       ...section,
@@ -152,6 +165,7 @@ export function filterNavSections(
         if (item.featureFlag === "wallet") return walletEnabled;
         if (item.featureFlag === "referrals") return referralsEnabled;
         if (item.featureFlag === "chat") return gates.chatEnabled === true;
+        if (item.featureFlag === "capture") return captureEnabled;
         return true;
       }),
     }))

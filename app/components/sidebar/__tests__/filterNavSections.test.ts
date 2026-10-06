@@ -5,6 +5,7 @@ import { settingsNavItems } from "../SettingsSidebar";
 import {
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
+  SCREEN_CAPTURE_ENABLED,
 } from "@/app/lib/featureFlags";
 
 // Minimal fixture — gates only, no icons (icon is typed ReactNode but the
@@ -100,6 +101,24 @@ describe("filterNavSections", () => {
       (s) => s.label === "INFRASTRUCTURE",
     );
     expect(infra?.items.find((i) => i.label === "Chat")?.path).toBe("/chat");
+  });
+
+  // Captures is a view of Drive: it sits directly under Drive and follows the
+  // capture feature flag like every other capture surface.
+  it("puts Captures right under Drive, behind the capture flag", () => {
+    const infra = (captureEnabled: boolean) =>
+      filterNavSections(navSections, { shareEnabled: true, chatEnabled: true, captureEnabled })
+        .find((s) => s.label === "INFRASTRUCTURE")
+        ?.items.map((i) => `${i.label} ${i.path}`);
+    expect(infra(true)?.slice(0, 2)).toEqual(["Drive /files", "Captures /captures"]);
+    expect(infra(false)).not.toContain("Captures /captures");
+  });
+
+  it("wires the Captures entry to SCREEN_CAPTURE_ENABLED by default", () => {
+    const labels = filterNavSections(navSections, { shareEnabled: true }).flatMap((s) =>
+      s.items.map((i) => i.label),
+    );
+    expect(labels.includes("Captures")).toBe(SCREEN_CAPTURE_ENABLED);
   });
 
   // Pins the WIRING (not today's flag values, which are release decisions):

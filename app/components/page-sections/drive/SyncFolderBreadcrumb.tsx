@@ -30,6 +30,11 @@ interface SyncFolderBreadcrumbProps {
   segments: BreadcrumbSegment[];
   /** Optional overrides for the outer nav — used when embedding inline with action buttons. */
   className?: string;
+  /**
+   * No root segment: the page is pinned to one drive (Captures), so the
+   * drive is the top and there is no folder list above it to go back to.
+   */
+  hideRoot?: boolean;
 }
 
 /**
@@ -63,9 +68,10 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
   onLocalClick,
   segments,
   className,
+  hideRoot = false,
 }) => {
   const hasSegments = segments.length > 0;
-  const back = resolveBreadcrumbBack(segments, onLocalClick);
+  const back = resolveBreadcrumbBack(segments, onLocalClick, { hideRoot });
 
   return (
     <nav
@@ -94,22 +100,24 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
           <ChevronLeft className="size-4" />
         </button>
       )}
-      <button
-        type="button"
-        onClick={onLocalClick}
-        className={cn(
-          SEGMENT_BASE,
-          hasSegments ? SEGMENT_INACTIVE : SEGMENT_ACTIVE,
-          "bg-transparent border-0 p-0 m-0",
-        )}
-      >
-        {ROOT_LABEL}
-      </button>
+      {!hideRoot && (
+        <button
+          type="button"
+          onClick={onLocalClick}
+          className={cn(
+            SEGMENT_BASE,
+            hasSegments ? SEGMENT_INACTIVE : SEGMENT_ACTIVE,
+            "bg-transparent border-0 p-0 m-0",
+          )}
+        >
+          {ROOT_LABEL}
+        </button>
+      )}
       {segments.map((segment, index) => {
         const isLast = index === segments.length - 1;
         return (
           <Fragment key={`${index}-${segment.label}`}>
-            <ChevronRight aria-hidden className={CHEVRON_CLASSES} />
+            {(!hideRoot || index > 0) && <ChevronRight aria-hidden className={CHEVRON_CLASSES} />}
             {isLast ? (
               <span
                 className={cn(

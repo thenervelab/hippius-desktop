@@ -36,6 +36,7 @@ const LIVE_FOLDER_ROW = {
   shareToken: "tok",
   shareUrl: "https://x#k=y",
   isPrivate: false,
+  source: "drive",
 };
 
 describe("SharedLinkBadge", () => {

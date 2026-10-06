@@ -237,7 +237,7 @@ pub const fn pill_filmed(platform: Platform) -> bool {
 }
 
 /// The pill's one-time line where it is filmed. Two short lines, sized for
-/// the 340 pt pill.
+/// the 380 pt pill.
 pub const PILL_FILMED_NOTE: &str = "These controls show in screen recordings. They stay small; point at them to use them.";
 
 /// How a capture starts: Hippius's overlay, or (a screenshot on Wayland)

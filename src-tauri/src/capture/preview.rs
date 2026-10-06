@@ -52,6 +52,10 @@ pub enum FailureReason {
     Offline,
     /// The plan's storage is full: upgrade, not retry.
     StorageFull,
+    /// Nobody has said where captures go yet: the file is kept on this
+    /// machine and uploads once a folder is chosen. Not a failure, so the
+    /// card waits rather than alarms, and its button asks for the folder.
+    NeedsFolder,
     Other,
 }
 
@@ -107,6 +111,9 @@ pub struct CardActions {
     /// Open the storage plans in the main window: the upload failed because
     /// the plan is full, which Retry alone cannot fix.
     pub upgrade: bool,
+    /// Open the screenshot in the editor: a screenshot in the drive, with a
+    /// file here to read, and no link being made from the unedited picture.
+    pub edit: bool,
 }
 
 /// Everything the card shows, plus what its buttons need.
@@ -156,6 +163,13 @@ pub struct PreviewCard {
     /// if the capture drive was changed since. Never sent to the card.
     #[serde(skip)]
     pub destination: CaptureDestination,
+    /// No drive could be set up yet, so the capture was kept in a folder on
+    /// this computer (`capture::setup`): Retry sets the drive up again
+    /// rather than sending to `destination`, the file is the user's to keep
+    /// (no Discard) and can be revealed, and the card is not brought back on
+    /// the next capture, which makes its own attempt. Never sent to the card.
+    #[serde(skip)]
+    pub kept_locally: bool,
 }
 
 /// The sync engine's row for a capture delivered through a synced folder.
@@ -291,15 +305,18 @@ impl PreviewCard {
         let in_drive = matches!(self.status, PreviewStatus::Uploaded { .. } | PreviewStatus::Syncing { .. });
         let has_link = self.share_url.is_some();
         let retryable = matches!(self.status, PreviewStatus::Failed { retryable: true, .. });
+        let kept_here = self.kept_locally && matches!(self.status, PreviewStatus::Failed { .. });
         CardActions {
             retry: retryable,
-            discard: retryable,
+            // A capture kept in the user's own folder is theirs, not a temp
+            // copy to throw away.
+            discard: retryable && !kept_here,
             copy_link: has_link,
             // The link is made from a file on this machine: the synced copy,
             // or the temp copy kept for exactly this.
             mint_link: in_drive && !has_link && self.placed_path.is_some() && self.link != LinkState::Creating,
             revoke_link: has_link && self.share_token.is_some(),
-            reveal: !self.remote && in_drive && self.placed_path.is_some(),
+            reveal: !self.remote && (in_drive || kept_here) && self.placed_path.is_some(),
             upgrade: matches!(
                 self.status,
                 PreviewStatus::Failed {
@@ -307,6 +324,11 @@ impl PreviewCard {
                     ..
                 }
             ),
+            edit: self.kind == CaptureKind::Screenshot
+                && in_drive
+                && self.placed_path.is_some()
+                && self.link != LinkState::Creating
+                && super::editor::EditableFormat::from_name(&self.file_name).is_some(),
         }
     }
 
@@ -330,7 +352,7 @@ impl PreviewCard {
     /// not lose it (it comes back on the next capture).
     #[must_use]
     pub fn is_parkable(&self) -> bool {
-        self.can_retry()
+        self.can_retry() && !self.kept_locally
     }
 
     /// Whether the card's own temp copy is no longer needed once the card
@@ -341,7 +363,9 @@ impl PreviewCard {
     }
 }
 
-/// The card's path in the drive for a file named `file_name`.
+/// The card's path in the drive for a file named `file_name` in the default
+/// `Captures` folder. A card's own path comes from its destination
+/// ([`CaptureDestination::rel_path`]), since the folder can be changed.
 #[must_use]
 pub fn rel_path_for(file_name: &str) -> String {
     format!("{}/{file_name}", super::naming::CAPTURES_FOLDER)
@@ -370,12 +394,8 @@ mod tests {
             share_token: None,
             file_path: PathBuf::from("/tmp/capture/Recording.mp4"),
             placed_path: None,
-            destination: CaptureDestination {
-                label: "Work".into(),
-                display_name: "Work".into(),
-                owner_ss58: None,
-                folder_hash: None,
-            },
+            destination: CaptureDestination::own("Work", "Work"),
+            kept_locally: false,
         }
         .refreshed()
     }
@@ -525,6 +545,69 @@ mod tests {
         assert_eq!(json["upgrade"], true, "sent as `upgrade`");
     }
 
+    /// A capture kept on this computer because no drive could be set up:
+    /// Retry and Reveal, plus Upgrade for a full plan; never Discard (it is
+    /// the user's file in their own folder), and it is not parked to come
+    /// back, since the next capture tries the setup again itself.
+    #[test]
+    fn a_capture_kept_on_this_computer_offers_retry_and_reveal_not_discard() {
+        let mut c = card(4);
+        c.kept_locally = true;
+        c.placed_path = Some(PathBuf::from("/Users/a/Hippius/Captures/Shot.png"));
+        c.status = PreviewStatus::Failed {
+            message: "Saved on this computer in Hippius › Captures. Upgrade your plan to upload it and get a link.".into(),
+            reason: FailureReason::StorageFull,
+            retryable: true,
+        };
+        let c = c.refreshed();
+        assert!(c.actions.retry && c.actions.reveal && c.actions.upgrade, "{:?}", c.actions);
+        assert!(!c.actions.discard, "{:?}", c.actions);
+        assert!(!c.is_parkable());
+        assert!(!c.settled);
+    }
+
+    /// Edit is offered for a screenshot in the drive with a file here, never
+    /// for a recording, before the file is placed, after a failure, or while
+    /// its link is still being made from the unedited picture.
+    #[test]
+    fn only_a_placed_screenshot_can_be_edited() {
+        let shot = |status: PreviewStatus, placed: bool, link: LinkState| {
+            let mut c = card(4);
+            c.kind = CaptureKind::Screenshot;
+            c.file_name = "Screenshot 2026-10-05 at 10.00.00.png".into();
+            c.placed_path = placed.then(|| PathBuf::from("/Users/x/Hippius/Work/Captures/Shot.png"));
+            c.status = status;
+            c.link = link;
+            c.refreshed().actions.edit
+        };
+        let syncing = PreviewStatus::Syncing {
+            link_copied: true,
+            link_error: None,
+        };
+        let uploaded = PreviewStatus::Uploaded {
+            link_copied: true,
+            link_error: None,
+        };
+        assert!(shot(syncing.clone(), true, LinkState::Public { copied: true }));
+        assert!(shot(uploaded.clone(), true, LinkState::None));
+        assert!(!shot(uploaded.clone(), false, LinkState::None), "no file here to open");
+        assert!(!shot(syncing, true, LinkState::Creating), "the link would be made from the old picture");
+        assert!(!shot(PreviewStatus::Uploading, true, LinkState::None));
+        assert!(!shot(failed(true), true, LinkState::None));
+        let mut recording = card(5);
+        recording.placed_path = Some(PathBuf::from("/x/Captures/Recording.mp4"));
+        recording.status = uploaded;
+        assert!(!recording.refreshed().actions.edit);
+        assert_eq!(
+            serde_json::to_value(CardActions {
+                edit: true,
+                ..CardActions::default()
+            })
+            .unwrap()["edit"],
+            true
+        );
+    }
+
     #[test]
     fn an_outcome_lands_only_on_its_own_card() {
         let done = PreviewStatus::Uploaded {
@@ -568,7 +651,7 @@ mod tests {
                 "linkText": "Public link copied",
                 "actions": {
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
-                    "revokeLink": true, "reveal": true, "upgrade": false
+                    "revokeLink": true, "reveal": true, "upgrade": false, "edit": false
                 },
                 "settled": true
             })

@@ -2,11 +2,11 @@
 //
 // Lifecycle:
 //
-//   `running`  — mint IPC in flight. For a FILE: progress bar + filename
-//                (indeterminate sweep until real progress arrives). For a
-//                FOLDER: a plain spinner — the mint is one metadata POST
-//                with no encrypt/upload phases, so a bar would imply work
-//                that isn't happening.
+//   `running`  — mint IPC in flight. For a FILE or a folder COPY: progress
+//                bar + filename (indeterminate sweep until real progress
+//                arrives). For a FOLDER in a drive: a plain spinner — the
+//                mint is one metadata POST with no encrypt/upload phases, so
+//                a bar would imply work that isn't happening.
 //   `done`     — link is ready. Read-only URL with an inline copy
 //                button, auto-copied to clipboard, Open / Close /
 //                Revoke actions.
@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 import {
   finderShareAtom,
   shareModalFileAtom,
+  type FinderShareState,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
   cancelFinderShare,
@@ -119,6 +120,12 @@ export default function ShareFileModal() {
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
+  // The Finder request whose confirm is in flight, or `null`. A new
+  // right-click replaces the session while that confirm still runs, so its
+  // late result must be dropped (it would replace the new chooser) and the
+  // superseded upload cancelled rather than left running unseen. The name
+  // is kept for the toast that tells the user the old share stopped.
+  const runningFinderRef = useRef<{ id: string; name: string } | null>(null);
 
   // The Finder flow has no `FormattedUserFile`, so fall back to the name the
   // backend sent with the choosing event for the label shown in every state.
@@ -138,8 +145,9 @@ export default function ShareFileModal() {
   // one can be checked by eye, and Finder is merely where that bit us first
   // (a half-downloaded zip minted a truncated link on 2026-08-31).
   //
-  // A folder reports no size in either flow: nothing is uploaded when a folder
-  // share is minted, so a byte count next to it would describe nothing.
+  // An in-drive folder reports no size: nothing is uploaded when its live link
+  // is minted. A Finder folder outside every drive does carry one, because
+  // its copy is uploaded.
   const sourceSizeBytes = target?.file.isFolder
     ? null
     : finderShare?.kind === "choosing"
@@ -149,12 +157,27 @@ export default function ShareFileModal() {
   // path, and the in-app listing carries no equivalent.
   const sourceModifiedSecsAgo =
     finderShare?.kind === "choosing" ? finderShare.modifiedSecsAgo : null;
+  // What kind of folder share this is, as Rust decided it; `null` for a
+  // file. A live link (in a drive, from either entry point) gets the
+  // live-link notice and the minting spinner; a copy gets neither (it is a
+  // snapshot, and its upload has real progress); an unknown one promises
+  // nothing either way.
+  const folderKind = folderKindOf(target?.file.isFolder ?? false, finderShare);
+  const isLiveFolder = folderKind === "live";
+  // Finder folder copies only: Rust measures the folder after the chooser
+  // opens, and may find the share would refuse it.
+  const sizePending =
+    finderShare?.kind === "choosing" && finderShare.sizePending;
+  const refusal =
+    finderShare?.kind === "choosing" ? (finderShare.refusal?.message ?? null) : null;
 
   const close = useCallback(() => {
     // Release a still-parked Finder request (chooser open, or the user bailed).
     // Idempotent server-side: after a confirm mints it the id is already taken,
     // so closing from done/error is a harmless no-op.
     if (finderShare?.kind === "choosing") void cancelFinderShare(finderShare.id);
+    // Already cancelled just above; the session reset must not repeat it.
+    runningFinderRef.current = null;
     setTarget(null);
     setFinderShare(null);
   }, [finderShare, setTarget, setFinderShare]);
@@ -212,18 +235,26 @@ export default function ShareFileModal() {
   const confirmFinder = useCallback(
     async (choice: ShareChoice) => {
       if (finderShare?.kind !== "choosing") return;
-      const { id } = finderShare;
+      const { id, name } = finderShare;
       lastChoiceRef.current = choice;
+      runningFinderRef.current = { id, name };
       setState({ kind: "running" });
       autoCopiedRef.current = false;
+      // Another session took the modal over while this confirm ran.
+      const superseded = () => runningFinderRef.current?.id !== id;
       try {
-        const created = await confirmFinderShare(id, choice, (progress) =>
+        const created = await confirmFinderShare(id, choice, (progress) => {
+          if (superseded()) return;
           setState((prev) =>
             prev.kind === "running" ? { kind: "running", progress } : prev,
-          ),
-        );
+          );
+        });
+        if (superseded()) return;
+        runningFinderRef.current = null;
         setState({ kind: "done", link: created });
       } catch (err) {
+        if (superseded()) return;
+        runningFinderRef.current = null;
         if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
           setFinderShare(null);
           setInsufficient("sharing");
@@ -277,6 +308,16 @@ export default function ShareFileModal() {
   // directly (`FinderShareListener`, a future surface) would bypass it, and
   // the failure mode is showing someone the wrong share link.
   useEffect(() => {
+    // A Finder confirm still running belongs to the session just replaced:
+    // cancel it, and clearing the ref makes its late result a no-op. Its
+    // modal is gone, so a toast is the only word the user gets that the
+    // share stopped (a folder copy may have been uploading for minutes).
+    const running = runningFinderRef.current;
+    if (running !== null && sessionKey !== `finder:${running.id}`) {
+      void cancelFinderShare(running.id);
+      runningFinderRef.current = null;
+      toast.error(`Sharing \u201c${running.name}\u201d was stopped to open the new share.`);
+    }
     setState({ kind: "choosing" });
     autoCopiedRef.current = false;
     lastChoiceRef.current = null;
@@ -342,8 +383,10 @@ export default function ShareFileModal() {
       {state.kind === "choosing" && (
         <ChoosingBody
           filename={filename}
-          isFolder={target?.file.isFolder ?? false}
+          folderKind={folderKind}
           sizeBytes={sourceSizeBytes}
+          sizePending={sizePending}
+          refusal={refusal}
           modifiedSecsAgo={sourceModifiedSecsAgo}
           onConfirm={onConfirmChoice}
           onCancel={close}
@@ -351,7 +394,7 @@ export default function ShareFileModal() {
       )}
 
       {state.kind === "running" &&
-        (target?.file.isFolder ? (
+        (isLiveFolder ? (
           <MintingBody filename={filename} onCancel={close} />
         ) : (
           <RunningBody
@@ -386,6 +429,27 @@ export default function ShareFileModal() {
   );
 }
 
+/**
+ * A folder share's kind: a live link to a folder in a drive, an uploaded
+ * copy of a folder outside every drive, or unknown (Rust could not read the
+ * drive roots, so the chooser promises neither).
+ */
+type FolderKind = "live" | "copy" | "unknown";
+
+/**
+ * The folder kind of the open share, `null` for a file. An in-app folder is
+ * always in a drive; a Finder folder carries Rust's decision.
+ */
+function folderKindOf(
+  inAppFolder: boolean,
+  finderShare: FinderShareState | null,
+): FolderKind | null {
+  if (inAppFolder) return "live";
+  if (finderShare?.kind !== "choosing" || !finderShare.isFolder) return null;
+  if (finderShare.isFolderCopy === null) return "unknown";
+  return finderShare.isFolderCopy ? "copy" : "live";
+}
+
 /** Expiry choices offered in the chooser, in the order they are shown. */
 const TTL_OPTIONS: ReadonlyArray<{ label: string; value: ShareTtl }> = [
   { label: "24 hours", value: "24h" },
@@ -410,16 +474,26 @@ const PASSWORD_MIN_LEN = 8;
  */
 function ChoosingBody({
   filename,
-  isFolder,
+  folderKind,
   sizeBytes,
+  sizePending,
+  refusal,
   modifiedSecsAgo,
   onConfirm,
   onCancel,
 }: {
   filename: string;
-  isFolder: boolean;
+  /** The folder share's kind, or `null` for a file. */
+  folderKind: FolderKind | null;
   /** Source size, when known. `null` renders nothing rather than "0 B". */
   sizeBytes: number | null;
+  /** The size is still being measured (a Finder folder copy). */
+  sizePending: boolean;
+  /**
+   * Rust's sentence for why this share would be refused, shown verbatim;
+   * the confirm stays disabled, since it would fail with the same words.
+   */
+  refusal: string | null;
   /** Seconds since last modification, when known. */
   modifiedSecsAgo: number | null;
   onConfirm: (choice: ShareChoice) => void;
@@ -468,7 +542,7 @@ function ChoosingBody({
         />
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">
           {visibility === "public"
-            ? "Anyone with the link can view and download this file."
+            ? `Anyone with the link can view and download this ${folderKind !== null ? "folder" : "file"}.`
             : "The link can't be opened without this password. Send it separately — it can't be recovered or changed later."}
         </p>
 
@@ -521,7 +595,26 @@ function ChoosingBody({
               {formatBytes(sizeBytes)}
             </span>
           )}
+          {sizeBytes === null && sizePending && (
+            <span className="ml-2 whitespace-nowrap text-grey-40 dark:text-grey-dark-600">
+              Measuring…
+            </span>
+          )}
         </p>
+
+        {refusal !== null && (
+          <>
+            <p role="alert" className="mt-2 text-xs text-red-500">
+              {refusal}
+            </p>
+            {/* Confirm stays disabled, and this chooser never re-measures:
+                the way back is a fresh click once the folder is fixed. */}
+            <p className="mt-1 text-xs text-grey-40 dark:text-grey-dark-600">
+              Once that is fixed, right-click the folder in Finder and choose
+              Share with Hippius again.
+            </p>
+          </>
+        )}
 
         {modifiedSecsAgo !== null &&
           modifiedSecsAgo < RECENTLY_MODIFIED_SECS && (
@@ -531,7 +624,8 @@ function ChoosingBody({
             </p>
           )}
 
-        {isFolder && <FolderShareNotice />}
+        {folderKind === "live" && <FolderShareNotice />}
+        {folderKind === "copy" && <FolderCopyNotice />}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -539,7 +633,7 @@ function ChoosingBody({
           type="button"
           variant="primary"
           size="auto"
-          disabled={passwordTooShort}
+          disabled={passwordTooShort || refusal !== null}
           onClick={() =>
             onConfirm({
               ttl,
@@ -584,6 +678,22 @@ function FolderShareNotice() {
     <p className="mt-3 text-xs text-grey-50 dark:text-grey-dark-600">
       Recipients can browse the folder and download files; the link always
       shows the current contents.
+    </p>
+  );
+}
+
+/**
+ * What the user agrees to when they share a folder from outside their
+ * drives: an uploaded COPY, frozen at share time and deleted with the link.
+ * The opposite promise to `FolderShareNotice`, so the two never render
+ * together.
+ */
+function FolderCopyNotice() {
+  return (
+    <p className="mt-3 text-xs text-grey-50 dark:text-grey-dark-600">
+      Hippius uploads a copy of this folder for the link. Changes you make to
+      the folder later won&apos;t reach it, and the copy is removed when the
+      link expires or you revoke it.
     </p>
   );
 }
