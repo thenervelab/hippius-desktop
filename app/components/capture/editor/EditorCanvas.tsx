@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type Annotation, type Doc, type Point, bounds as boxOf, findAnnotation, handlesFor, isRedaction, rectHandles } from "@/app/lib/capture/editor/model";
-import { type Bounds, type Gesture, type Style, drag, press, release } from "@/app/lib/capture/editor/gesture";
+import { type Bounds, type Gesture, type Style, cursorAt, drag, press, release } from "@/app/lib/capture/editor/gesture";
 import { applyRedactions, drawAnnotation, fontFor } from "@/app/lib/capture/editor/render";
 import { type View, fitView, pannedCenter, toImage, toScreen, zoomOf, zoomedView } from "@/app/lib/capture/editor/view";
 import type { ToolId } from "@/app/lib/capture/editor/model";
@@ -65,6 +65,12 @@ export default function EditorCanvas(props: Props) {
   const box = useRef<HTMLDivElement | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // Where the pointer rests over the picture (picture pixels), so the cursor
+  // can say what a press there will do; null while it is elsewhere.
+  const [hover, setHover] = useState<Point | null>(null);
+  // The cursor a drag started with, kept until release: mid-move the shape
+  // slides out from under the pointer's first position.
+  const [heldCursor, setHeldCursor] = useState<string | null>(null);
   const gesture = useRef<Gesture | null>(null);
   const live = useRef<Doc>(doc);
   live.current = doc;
@@ -227,13 +233,17 @@ export default function EditorCanvas(props: Props) {
     props.onSelect(pressed.selected);
     if (!pressed.gesture) return;
     gesture.current = pressed.gesture;
+    setHeldCursor(cursorAt(tool, live.current, selected, p, bounds.tolerance));
     props.onPreview(pressed.doc);
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = gesture.current;
-    if (!g) return;
+    if (!g) {
+      setHover(at(e));
+      return;
+    }
     props.onPreview(drag(g, live.current, at(e), bounds));
   };
 
@@ -241,6 +251,7 @@ export default function EditorCanvas(props: Props) {
     const g = gesture.current;
     if (!g) return;
     gesture.current = null;
+    setHeldCursor(null);
     const done = release(g, drag(g, live.current, at(e), bounds));
     props.onPreview(null);
     // The drawn, moved or resized annotation stays selected, so a colour
@@ -259,7 +270,8 @@ export default function EditorCanvas(props: Props) {
   // The selection bar sits above the annotation, or below it near the top.
   const picked = tool === "crop" || textEdit ? null : findAnnotation(doc, selected);
   const barAt = picked && props.selectionBar ? selectionAnchor(view, boxOf(picked), size.w) : null;
-  const cursor = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
+  // Held while dragging, so the cursor does not flicker back mid-move.
+  const cursor = textEdit ? "text" : (heldCursor ?? cursorAt(tool, doc, selected, hover, bounds.tolerance));
 
   return (
     <div ref={box} className="relative h-full w-full overflow-hidden" data-testid="editor-canvas-box">
@@ -272,6 +284,7 @@ export default function EditorCanvas(props: Props) {
         onPointerMove={onPointerMove}
         onPointerUp={finish}
         onPointerCancel={finish}
+        onPointerLeave={() => setHover(null)}
       />
       {textEdit && editAt && (
         <textarea

@@ -152,6 +152,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Blur in the screenshot editor now hides text.** Blurred text, even large
+  or bold, can no longer be read through the blur.
+- **Shapes in the screenshot editor can be moved and resized after you draw
+  them.** Drag a selected arrow, box or blur by its middle to move it, or by a
+  corner or end to resize it, without switching to the select tool.
+
 - **Save is always visible in the screenshot editor.** On a wide window the toolbar covered Save and Copy image; they now sit in their own top bar, clear of the Mac's window buttons, and Save offers Save copy or Replace original.
 - **Upload in the menu bar window opens the upload dialog.** It brings Hippius forward with the Upload File dialog open on the page you were on, instead of only switching to Drive.
 

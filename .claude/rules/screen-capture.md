@@ -1144,7 +1144,17 @@ changes?" with Keep editing focused when there are edits). **Blur and
 pixelate are written into the exported pixels** before the PNG is encoded
 (`exportPng`: drawImage, getImageData, `applyRedactions`, putImageData, then
 the drawings), and blur pixelates first so it cannot be deconvolved; the
-on-screen picture runs the same code.
+on-screen picture runs the same code. **Blur is sized by the box, not only the
+picture** (`blurCell`: at least the picture's `redactionBlock`, at most
+`BLUR_CELLS_ACROSS` = 2 cells across the box's short side, capped at 3 blocks),
+because a fixed half-block left bold text readable through it; pinned by the
+`blur hides text` cases in `pixels.test.ts`, which measure contrast one letter
+stroke apart. **The selected annotation's handles and body win over every tool
+but crop and text** (`grabSelected` in `press`): a handle resizes, the body
+moves (anywhere inside a box shape, only on the shaft of an arrow or line, so a
+new arrow can still start beside one), and only a press elsewhere starts a new
+shape; `cursorAt` shows which. Pinned by `a drawing tool and the shape it just
+drew` in `gesture.test.ts`.
 
 **Save is copy or replace, and Rust refuses a save in a drive that names
 neither** (`requested_mode`, header `x-editor-save-mode`), so a page that did
