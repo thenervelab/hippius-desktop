@@ -31,6 +31,7 @@ import {
   Folder,
   FolderOpen,
   Pencil,
+  PenLine,
   FolderInput,
   Users,
 } from "lucide-react";
@@ -112,6 +113,8 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { failedRowMenuItem } from "./failedRowMenu";
 import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
+import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
+import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
 import { entryKey } from "../highlightEntry";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -1067,6 +1070,33 @@ const FilesTable: FC<FilesTableProps> = memo(
                   itemTitle: "View",
                   onItemClick: () =>
                     handleSetSelectedFile(file, previewSiblings),
+                  disabled: itemDeleting,
+                },
+              ]
+            : []),
+          // The screenshot editor, for a PNG or JPEG in an own drive synced
+          // here (Rust checks again and opens its window).
+          ...(offersImageEditor({
+            name: file.name,
+            isFolder: Boolean(file.isFolder),
+            label: file.label,
+            cloudOnly: isCloudOnlyRow(file),
+            memberDrive: isMemberDriveLabel(file.label, memberDriveLabels),
+          })
+            ? [
+                {
+                  icon: <PenLine className="size-4" />,
+                  itemTitle: "Edit image",
+                  onItemClick: () => {
+                    if (!file.label) return;
+                    openFileInEditor(
+                      file.label,
+                      resolveRelativePath(
+                        parentSubFolderPath ?? normalizedSubfolderPath,
+                        file.actualFileName || file.name,
+                      ),
+                    ).catch((error) => toast.error(tauriErrorMessage(error)));
+                  },
                   disabled: itemDeleting,
                 },
               ]

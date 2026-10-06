@@ -69,6 +69,11 @@ pub struct CameraState {
     /// on): the page closes its own stream and shows a placeholder, so the
     /// device has one owner.
     pub recorder_owns_camera: bool,
+    /// The recording pill offers the camera menu (another camera mid-
+    /// recording): `live_controls::camera_controls`.
+    pub switch_from_pill: bool,
+    /// The recording pill offers the bubble's sizes mid-recording.
+    pub resize_from_pill: bool,
 }
 
 /// Whether a capture in `phase` is recording, or about to (the countdown is
@@ -204,6 +209,64 @@ pub enum Filmed {
     Display { area: Frame, usable: Frame },
     /// A drawn area, or a window's frame.
     Region(Frame),
+}
+
+impl Filmed {
+    /// Where a bubble may sit and still be filmed whole: the display's
+    /// usable part (not under the Dock or the taskbar), or the region.
+    #[must_use]
+    pub const fn bounds(self) -> Frame {
+        match self {
+            Self::Display { usable, .. } => usable,
+            Self::Region(region) => region,
+        }
+    }
+}
+
+/// A full-size bubble mid-recording: the stage's 16:9 proportions, centred
+/// in what is filmed (`bounds`). Unlike [`frame`] there is no capture bar to
+/// keep clear of, and a drawn area or a window gets a frame sized to it.
+#[must_use]
+pub fn full_in(bounds: Frame) -> Frame {
+    let width = (bounds.width * STAGE_SHARE)
+        .min(STAGE_MAX_WIDTH)
+        .min(bounds.height * STAGE_SHARE * 16.0 / 9.0)
+        .max(MIN_BUBBLE * 16.0 / 9.0)
+        .min(bounds.width)
+        .round();
+    let height = (width * 9.0 / 16.0).round().min(bounds.height);
+    Frame {
+        x: (bounds.x + (bounds.width - width) / 2.0).round(),
+        y: (bounds.y + (bounds.height - height) / 2.0).round(),
+        width,
+        height,
+    }
+}
+
+/// The bubble's new frame when the pill changes its size mid-recording, so
+/// the file follows: the camera window is filmed, and it is resized inside
+/// what is filmed (`bounds`, [`Filmed::bounds`]) so none of it is cut.
+///
+/// Going full: [`full_in`]. Going round: from where the bubble was before
+/// it went full (`before_full`), else from where it is, anchored as
+/// [`resize_bubble`] anchors it (a bubble in a corner stays there). A round
+/// bubble that is not inside what is filmed (dragged out of it) comes back
+/// to the bottom-left corner of it.
+#[must_use]
+pub fn resized_while_recording(current: Frame, from: CameraSize, to: CameraSize, before_full: Option<Frame>, bounds: Frame) -> Frame {
+    let Some(side) = bubble_side(to) else {
+        return full_in(bounds);
+    };
+    let anchor = if from == CameraSize::Full {
+        before_full.unwrap_or(current)
+    } else {
+        current
+    };
+    if within(anchor, bounds) {
+        resize_bubble(anchor, side, bounds)
+    } else {
+        bubble_in_area(to, bounds)
+    }
 }
 
 /// Where the bubble has to go when Record is pressed so it is in the video,
@@ -354,6 +417,71 @@ mod tests {
         height: 1050.0,
     };
     const PILL: (f64, f64) = (340.0, 60.0);
+
+    /// Mid-recording sizes stay inside what is filmed, so the file shows the
+    /// whole bubble at its new size: a bubble in the corner grows from the
+    /// corner, full size is a 16:9 frame centred in the filmed area, and
+    /// leaving full size goes back to where the bubble was.
+    #[test]
+    fn a_bubble_resized_mid_recording_stays_inside_what_is_filmed() {
+        let area = Frame {
+            x: 300.0,
+            y: 200.0,
+            width: 900.0,
+            height: 600.0,
+        };
+        let small = bubble_in_area(CameraSize::Small, area);
+        let large = resized_while_recording(small, CameraSize::Small, CameraSize::Large, None, area);
+        assert!((large.width - LARGE_BUBBLE_SIZE).abs() < 1e-9 && (large.height - LARGE_BUBBLE_SIZE).abs() < 1e-9);
+        assert!((large.x - small.x).abs() < 1e-9, "kept in the left corner");
+        assert!((large.y + large.height - (small.y + small.height)).abs() < 1e-9, "grew upward");
+        assert!(within(large, area));
+
+        let full = resized_while_recording(large, CameraSize::Large, CameraSize::Full, None, area);
+        assert!(within(full, area), "{full:?}");
+        assert!((full.width / full.height - 16.0 / 9.0).abs() < 0.01);
+        assert!(((full.x + full.width / 2.0) - (area.x + area.width / 2.0)).abs() <= 1.0, "centred");
+        assert!(full.width > large.width, "full is bigger than round");
+
+        let back = resized_while_recording(full, CameraSize::Full, CameraSize::Large, Some(large), area);
+        assert_eq!(back, large, "back where it was before full");
+
+        // Dragged out of the area: comes back into its corner.
+        let outside = Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
+        };
+        let moved = resized_while_recording(outside, CameraSize::Small, CameraSize::Large, None, area);
+        assert!(within(moved, area), "{moved:?}");
+    }
+
+    /// A small area or window still gets a usable full frame, never one
+    /// larger than itself.
+    #[test]
+    fn full_size_fits_a_small_filmed_area() {
+        let tiny = Frame {
+            x: 10.0,
+            y: 10.0,
+            width: 320.0,
+            height: 200.0,
+        };
+        let f = full_in(tiny);
+        assert!(within(f, tiny), "{f:?}");
+        let display = Filmed::Display {
+            area: Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            usable: WORK,
+        };
+        let f = full_in(display.bounds());
+        assert!(within(f, WORK));
+        assert!(f.width <= STAGE_MAX_WIDTH);
+    }
 
     fn overlaps(a: &Frame, b: &Frame) -> bool {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height

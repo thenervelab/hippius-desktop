@@ -60,7 +60,8 @@ const ACTION_SECONDARY_CLASS =
  * same affordance: the format has no renderer, the file is over its byte cap,
  * the bytes could not be read, or the renderer rejected the file as corrupt.
  * `onOpenExternally` is added only where a system viewer genuinely helps (the
- * Linux PDF path).
+ * Linux PDF and video paths). `openExternallyPending` shows that button
+ * disabled while a cloud-only file is still being fetched for it.
  */
 export function PreviewFallback({
   title,
@@ -68,6 +69,8 @@ export function PreviewFallback({
   file,
   handleFileDownload,
   onOpenExternally,
+  openExternallyLabel = "Open with System Viewer",
+  openExternallyPending = false,
   icon,
 }: {
   title: string;
@@ -75,8 +78,11 @@ export function PreviewFallback({
   file: FormattedUserFile;
   handleFileDownload: (file: FormattedUserFile, polkadotAddress: string) => void;
   onOpenExternally?: () => void;
+  openExternallyLabel?: string;
+  openExternallyPending?: boolean;
   icon?: React.ReactNode;
 }) {
+  const offersExternal = Boolean(onOpenExternally) || openExternallyPending;
   const { polkadotAddress } = useWalletAuth();
 
   return (
@@ -97,21 +103,27 @@ export function PreviewFallback({
       ) : (
         <div className="mb-6" />
       )}
-      <div className="flex flex-row flex-nowrap gap-3">
-        {onOpenExternally ? (
+      <div className="flex flex-row flex-wrap justify-center gap-3">
+        {offersExternal ? (
           <button
             type="button"
             onClick={onOpenExternally}
-            className={ACTION_PRIMARY_CLASS}
+            disabled={!onOpenExternally}
+            aria-busy={openExternallyPending || undefined}
+            className={cn(ACTION_PRIMARY_CLASS, !onOpenExternally && "cursor-wait opacity-60")}
           >
-            <ExternalLink className="size-5" />
-            <span>Open with System Viewer</span>
+            {onOpenExternally ? (
+              <ExternalLink className="size-5" />
+            ) : (
+              <Loader2 className="size-5 animate-spin motion-reduce:animate-none" />
+            )}
+            <span>{openExternallyLabel}</span>
           </button>
         ) : null}
         <button
           type="button"
           onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
-          className={onOpenExternally ? ACTION_SECONDARY_CLASS : ACTION_PRIMARY_CLASS}
+          className={offersExternal ? ACTION_SECONDARY_CLASS : ACTION_PRIMARY_CLASS}
         >
           <Icons.DocumentDownload className="size-5" />
           <span>Download File</span>

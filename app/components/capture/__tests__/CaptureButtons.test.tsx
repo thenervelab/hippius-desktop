@@ -90,7 +90,8 @@ describe("CaptureButtons", () => {
       ["Capture entire screen", "screen"],
     ] as const) {
       await openMenu("Screenshot");
-      fireEvent.click(screen.getByRole("menuitem", { name: item }));
+      // The area item also carries the shortcut's keys in its name.
+      fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(`^${item}`) }));
       await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_start", { kind: "screenshot", mode }));
     }
   });
@@ -108,7 +109,9 @@ describe("CaptureButtons", () => {
     }
   });
 
-  it("lists the modes, a separator, then the capture bar with its shortcut and the drive", async () => {
+  // The shortcut takes an area screenshot in one step (no bar), so its keys
+  // are on "Capture an area", not on "Open capture bar".
+  it("lists the modes, a separator, then the capture bar and the drive, with the shortcut on the area item", async () => {
     renderWith();
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_get_shortcut"));
     const menu = await openMenu("Screenshot");
@@ -117,10 +120,11 @@ describe("CaptureButtons", () => {
       "Capture a window",
       "Capture entire screen",
       "Open capture bar",
-      "Change capture drive…",
+      "Captures folder…",
     ]);
     expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(1);
-    expect(screen.getByRole("menuitem", { name: /Open capture bar/ })).toHaveTextContent("⇧⌘2");
+    expect(screen.getByRole("menuitem", { name: /^Capture an area/ })).toHaveTextContent("⇧⌘2");
+    expect(screen.getByRole("menuitem", { name: /Open capture bar/ })).not.toHaveTextContent("⇧⌘2");
 
     // Drawn on its own background in both themes: the shared menu's base is
     // `bg-popover`, a token this theme does not define.
@@ -136,11 +140,11 @@ describe("CaptureButtons", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_start", { kind: "recording", mode: null }));
   });
 
-  it("changes the capture drive from either menu", async () => {
+  it("opens the captures folder dialog from either menu", async () => {
     const { store } = renderWith();
     await openMenu("Record");
-    fireEvent.click(screen.getByRole("menuitem", { name: "Change capture drive…" }));
-    expect(store.get(captureDialogAtom)).toEqual({ kind: "destination", resume: null });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Captures folder…" }));
+    expect(store.get(captureDialogAtom)).toEqual({ kind: "captureDrive" });
   });
 
   // Windows groundwork: Rust says which modes each kind has on this platform.
@@ -261,7 +265,7 @@ describe("CaptureButtons where the desktop's own tool chooses (Wayland)", () => 
   it("offers one Screenshot item that hands the choice to the desktop, and says so", async () => {
     renderWith({ recording: false, surfaces: WAYLAND });
     const menu = await openMenu("Screenshot");
-    expect(itemNames()).toEqual([SYSTEM_PICKER_LABEL, "Change capture drive…"]);
+    expect(itemNames()).toEqual([SYSTEM_PICKER_LABEL, "Captures folder…"]);
     expect(menu).toHaveTextContent(WAYLAND.systemPickerNote!);
     // No capture bar to open: there is no Hippius overlay on Wayland.
     expect(screen.queryByRole("menuitem", { name: /capture bar/i })).toBeNull();

@@ -64,7 +64,8 @@
         "capture-overlay",
         "capture-controls",
         "capture-preview",
-        "capture-camera"
+        "capture-camera",
+        "capture-editor"
       ],
       "dangerousDisableAssetCspModification": [
         "style-src"

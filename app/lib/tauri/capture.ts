@@ -74,6 +74,8 @@ export interface CaptureOptions {
   lastMode: CaptureMode;
   /** Mint a public link after upload and copy it (default true). Off = filed only; the card can still make one. */
   copyLink: boolean;
+  /** Open that link in the browser too, as Zight does (default true). Only when a link was made. */
+  openLink: boolean;
   /** Recording countdown: 0, 3 or 5 seconds (default 3; anything else reads as 3). */
   recordCountdownSecs: number;
 }
@@ -158,6 +160,11 @@ export interface CaptureOverlayContext extends RecordingAvailability, CaptureSur
   destination: CaptureDestination | null;
   /** The area already drawn, on this display or another; at start, the last area drawn on the bar's display. */
   pending: CaptureSelection | null;
+  /**
+   * The shortcut's one-step area screenshot (Rust's `capture::instant`): no
+   * bar and nothing drawn in advance; releasing the drag takes the shot.
+   */
+  instant: boolean;
 }
 
 /** `capture_pending_changed`. `rect` is the held area (null when cleared), so every overlay mirrors Rust. */
@@ -192,7 +199,31 @@ export interface CaptureCameraState {
    * has one owner.
    */
   recorderOwnsCamera: boolean;
+  /** The pill offers the camera menu mid-recording (Rust's `live_controls::camera_controls`). */
+  switchFromPill: boolean;
+  /** The pill offers the bubble's sizes mid-recording. */
+  resizeFromPill: boolean;
 }
+
+/**
+ * `capture_microphone_state`: the live recording's microphone, for the pill.
+ * Mirrors Rust's `live_controls::MicrophoneState`; Rust decides what may be offered.
+ */
+export interface CaptureMicrophoneState {
+  /** The recording records a microphone at all. */
+  recorded: boolean;
+  /** Muted: the file carries silence in its place until unmuted. */
+  muted: boolean;
+  /** The microphone recorded now (the helper's id); null = the system default. */
+  deviceId: string | null;
+  /** The pill shows the mute button. */
+  canMute: boolean;
+  /** The pill shows the microphone menu. */
+  canSwitch: boolean;
+}
+
+/** To the pill: the recording's microphone changed. */
+export const MICROPHONE_STATE_EVENT = "capture_microphone_state";
 
 /** A camera or microphone the bar's pickers offer. Mirrors Rust's `recording::MediaDevice`. */
 export interface CaptureDevice {
@@ -254,14 +285,8 @@ export interface ShareArt {
   items: ShareArtItem[];
 }
 
-/** A drive "Save to" offers; `remote` means not synced on this machine. */
-export interface CaptureDestinationChoice {
-  label: string;
-  remote: boolean;
-}
-
 /** Why an upload failed, for the card's next step. Mirrors Rust's `FailureReason`. */
-export type CaptureFailureReason = "offline" | "storageFull" | "other";
+export type CaptureFailureReason = "offline" | "storageFull" | "needsFolder" | "other";
 
 /**
  * Where a capture's upload is, on its preview card. Mirrors Rust's `PreviewStatus`.
@@ -296,6 +321,8 @@ export interface CapturePreviewActions {
   reveal: boolean;
   /** Open the storage plans: the upload failed because the plan is full. */
   upgrade: boolean;
+  /** Open the screenshot in the editor. Absent from an older backend = no. */
+  edit?: boolean;
 }
 
 /** The preview card in the corner. Mirrors Rust's `PreviewCard`. */
@@ -322,12 +349,14 @@ export interface CapturePreviewCard {
   settled?: boolean;
 }
 
-/** `capture_show_in_folder`: open this drive's Captures folder. */
+/** `capture_show_in_folder`: where to show the capture. */
 export interface CaptureShowInFolder {
   label: string;
   remote: boolean;
   subfolder: string;
   fileName: string;
+  /** In the captures drive: the Captures page shows it, not Drive. */
+  capturesDrive?: boolean;
 }
 
 export interface CaptureShortcutSetting {
@@ -350,7 +379,31 @@ export interface CaptureDestination {
   displayName: string;
   ownerSs58?: string;
   folderHash?: string;
+  /** The folder in the drive, from its root; empty for the captures drive, which keeps them at its root. */
+  folder?: string;
 }
+
+/** A folder the captures drive is, or would be, made of. Mirrors Rust's `setup::Location`. */
+export interface CaptureDriveLocation {
+  path: string;
+  /** "Documents › Hippius Captures", or the whole path outside the home folder. */
+  place: string;
+  /** What macOS will ask first, in Rust's words; absent when it will not ask. */
+  permissionNote?: string | null;
+}
+
+/** Where the account's captures drive stands. Mirrors Rust's `CaptureDriveStatus`. */
+export type CaptureDriveStatus =
+  | { state: "ready"; label: string; name: string; remote: boolean; location?: CaptureDriveLocation | null }
+  /** Nothing chosen yet; `waiting` captures are kept on this computer until then. */
+  | { state: "needsSetup"; suggested: CaptureDriveLocation; waiting: number }
+  /** A folder was chosen but its drive could not be added yet; `message` is Rust's. */
+  | { state: "pending"; location: CaptureDriveLocation; message: string };
+
+/** Rust asks the main window where captures go (a capture is waiting). */
+export const CAPTURE_DRIVE_SETUP_NEEDED_EVENT = "capture_drive_setup_needed";
+/** The captures drive was set up, moved, or its folder chosen. */
+export const CAPTURE_DRIVE_CHANGED_EVENT = "capture_drive_changed";
 
 export interface CaptureDelivered {
   fileName: string;
@@ -418,7 +471,7 @@ export interface CaptureFailed {
 // `capture_preview_changed` → `CapturePreviewCard | null`,
 // `capture_show_in_folder` → `CaptureShowInFolder`,
 // `capture_open_plans` → nothing (the card's Upgrade),
-// `capture_shortcut_pressed` → nothing,
+// `capture_shortcut_pressed` → `CaptureShortcutStart`,
 // `capture_camera_state` → `CaptureCameraState`,
 // `capture_cameras` → `CaptureDevice[]`,
 // `capture_mic_level` → `number` (the bar's microphone meter, 0 to 1),
@@ -426,11 +479,18 @@ export interface CaptureFailed {
 // `capture_share_art` → `ShareArt` (the bar's overlay only),
 // `capture_camera_hover` → `boolean` (the camera window only).
 
+/** `capture_shortcut_pressed`: what the shortcut starts, passed on to `startCapture` as is. */
+export interface CaptureShortcutStart {
+  instant: boolean;
+}
+
 /**
  * Open the capture bar. `kind` and `mode` preselect it (a menu item); left
- * out, it opens on what was used last.
+ * out, it opens on what was used last. `instant` (the shortcut) is the
+ * one-step area screenshot instead; Rust decides what that is here.
  */
-export function startCapture(kind?: CaptureKind, mode?: CaptureMode): Promise<void> {
+export function startCapture(kind?: CaptureKind, mode?: CaptureMode, instant?: boolean): Promise<void> {
+  if (instant) return invoke("capture_start", { kind: null, mode: null, instant: true });
   return invoke("capture_start", { kind: kind ?? null, mode: mode ?? null });
 }
 
@@ -462,12 +522,16 @@ export function saveCaptureOptions(options: CaptureOptions): Promise<CaptureSave
   return invoke("capture_set_options", { options });
 }
 
-export function getCaptureDestinationChoices(): Promise<CaptureDestinationChoice[]> {
-  return invoke("capture_destination_choices");
-}
-
 export function getCapturePreview(): Promise<CapturePreviewCard | null> {
   return invoke("capture_preview_context");
+}
+
+/**
+ * The pointer over the card's window, in CSS pixels from its top left, or
+ * null. macOS sends no hover to the card's window, which is never key.
+ */
+export function getCapturePreviewPointer(): Promise<[number, number] | null> {
+  return invoke("capture_preview_pointer");
 }
 
 export function copyCapturePreviewLink(): Promise<void> {
@@ -511,6 +575,11 @@ export function upgradeFromCapturePreview(): Promise<void> {
   return invoke("capture_preview_upgrade");
 }
 
+/** Edit on the card: the screenshot opens in the editor window. */
+export function editCapturePreview(): Promise<void> {
+  return invoke("capture_preview_edit");
+}
+
 /** Register the saved system-wide shortcut (called when the app mounts). */
 export function syncCaptureShortcut(): Promise<void> {
   return invoke("capture_sync_shortcut");
@@ -537,6 +606,15 @@ export function getCaptureControlsContext(): Promise<CaptureControlsContext> {
   return invoke("capture_controls_context");
 }
 
+/**
+ * The bar's overlay holds the bar on its display (`held` true) or lets it
+ * follow the pointer to another display again. Held while a countdown, a
+ * capture, a drag or the share picker would be lost if the bar moved.
+ */
+export function holdCaptureBar(held: boolean): Promise<void> {
+  return invoke("capture_hold_bar", { held });
+}
+
 /** The pill's "Start now" while it counts down after the desktop's dialog. */
 export function skipCaptureCountdown(): Promise<void> {
   return invoke("capture_skip_countdown");
@@ -549,6 +627,12 @@ export interface CaptureAreaContext {
   /** The stream's own size in pixels (what the area is recorded in). */
   streamWidth: number;
   streamHeight: number;
+  /**
+   * The area to show already drawn, as fractions (0..1) of the picture:
+   * the last area recorded, else a centred half of the screen (Rust's
+   * `area_pick::initial_area`). The page only scales it onto the picture.
+   */
+  initialArea?: LogicalRect | null;
 }
 
 export function getCaptureAreaContext(): Promise<CaptureAreaContext> {
@@ -633,6 +717,37 @@ export interface CaptureDeviceLost {
 /** Hide or show the camera bubble mid-recording; resolves to whether it shows now. */
 export function toggleCaptureCamera(): Promise<boolean> {
   return invoke("capture_camera_toggle");
+}
+
+/** The pill's first read of the recording's microphone. */
+export function getCaptureMicrophoneState(): Promise<CaptureMicrophoneState> {
+  return invoke("capture_microphone_state");
+}
+
+/** Mute (true) or unmute the microphone mid-recording; the file keeps one continuous audio track. */
+export function muteCaptureMicrophone(muted: boolean): Promise<CaptureMicrophoneState> {
+  return invoke("capture_microphone_mute", { muted });
+}
+
+/** Record another microphone (null = the system default) from now on, without stopping. */
+export function switchCaptureMicrophone(device: string | null): Promise<CaptureMicrophoneState> {
+  return invoke("capture_microphone_switch", { device });
+}
+
+/** Show another camera (null = the default) mid-recording; the camera window opens it. */
+export function switchCaptureCamera(device: string | null): Promise<void> {
+  return invoke("capture_camera_switch", { device });
+}
+
+/** Where a pill menu opens. Mirrors Rust's `PillMenu`. */
+export interface CapturePillMenu {
+  /** Above the pill (it grew upward), else below it. */
+  above: boolean;
+}
+
+/** A pill menu opens or closes: Rust grows the pill's window to hold it, and shrinks it back. */
+export function setCaptureControlsMenu(open: boolean): Promise<CapturePillMenu> {
+  return invoke("capture_controls_menu", { open });
 }
 
 /** The bubble's size strip: Rust saves it and glides the window to its new frame. */
@@ -721,17 +836,23 @@ export function relaunchForScreenRecording(): Promise<void> {
   return invoke("capture_relaunch_for_permission");
 }
 
-export function getCaptureDestination(): Promise<CaptureDestination | null> {
-  return invoke("capture_get_destination");
+/** Where the captures drive stands (`setup::capture_drive_status`). */
+export function getCaptureDriveStatus(): Promise<CaptureDriveStatus> {
+  return invoke("capture_drive_status");
 }
 
-export function setCaptureDestination(destination: CaptureDestination): Promise<void> {
-  return invoke("capture_set_destination", { destination });
+/** Where the captures drive would go for a folder picked in the system's picker, checked by Rust. */
+export function getCaptureDriveLocation(folder: string): Promise<CaptureDriveLocation> {
+  return invoke("capture_drive_location", { folder });
 }
 
-/** `capture_start` refused because no drive has been chosen yet. */
-export function isCaptureDestinationUnset(error: unknown): boolean {
-  return isNotReady(error, "CAPTURE_DESTINATION_UNSET");
+/**
+ * Make the captures drive in `folder` (as picked; null = Rust's suggested
+ * place), or move it there. Rust sends what was waiting for it and answers
+ * the new status; a folder it cannot use is refused with its sentence.
+ */
+export function createCaptureDrive(folder: string | null): Promise<CaptureDriveStatus> {
+  return invoke("capture_drive_create", { folder });
 }
 
 /** `capture_start` refused because macOS has not granted Screen Recording. */

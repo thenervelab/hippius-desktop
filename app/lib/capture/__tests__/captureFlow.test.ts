@@ -4,10 +4,6 @@ import { classifyCaptureRefusal } from "@/app/lib/capture/captureFlow";
 const notReady = (subkind: string, message = "irrelevant") => ({ kind: "NotReady", subkind, message });
 
 describe("classifyCaptureRefusal", () => {
-  it("sends a missing drive to the drive picker", () => {
-    expect(classifyCaptureRefusal(notReady("CAPTURE_DESTINATION_UNSET"))).toEqual({ next: "choose-destination" });
-  });
-
   it("sends a missing macOS permission to the permission explainer", () => {
     expect(classifyCaptureRefusal(notReady("SCREEN_RECORDING_PERMISSION"))).toEqual({ next: "grant-permission" });
   });
@@ -16,8 +12,8 @@ describe("classifyCaptureRefusal", () => {
   // dialog into a bare toast, and an unrelated NotReady must not open one.
   it("matches the subkind, not the message", () => {
     expect(
-      classifyCaptureRefusal(notReady("CAPTURE_DESTINATION_UNSET", "Something else entirely")),
-    ).toEqual({ next: "choose-destination" });
+      classifyCaptureRefusal(notReady("SCREEN_RECORDING_PERMISSION", "Something else entirely")),
+    ).toEqual({ next: "grant-permission" });
     expect(classifyCaptureRefusal(notReady("SYNC_SETUP", "Choose where your captures should be saved first."))).toEqual({
       next: "show-error",
       message: "Choose where your captures should be saved first.",

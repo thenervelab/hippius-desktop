@@ -1,4 +1,5 @@
-//! The system-wide shortcut that opens the capture bar from any app.
+//! The system-wide shortcut: a one-step area screenshot from any app
+//! (`capture::instant`), and a second press stops a recording.
 //!
 //! One shortcut, default Cmd+Shift+2 on macOS and Ctrl+Shift+2 on Windows and
 //! Linux: next to macOS's own Cmd+Shift+3/4/5/6 and unused by the system. The
@@ -23,7 +24,8 @@
 //! It toggles, decided here ([`action_for`]): a second press stops a running
 //! recording, or closes the bar while choosing. Otherwise it emits
 //! [`SHORTCUT_EVENT`] and the main window's `CaptureHost` starts the capture
-//! the same way the Capture button does, so a missing drive or permission is
+//! ([`ShortcutStart`]: the instant area screenshot) through the same start as
+//! the Capture button, so a missing drive or permission is
 //! answered by the same dialogs. Signed out, there is no `CaptureHost`, so it
 //! brings Hippius forward to sign in instead of doing nothing.
 
@@ -66,6 +68,18 @@ pub fn action_for(phase: CapturePhase, signed_in: bool) -> ShortcutAction {
 
 pub const DEFAULT_SHORTCUT: &str = "CommandOrControl+Shift+2";
 pub const SHORTCUT_EVENT: &str = "capture_shortcut_pressed";
+
+/// What [`SHORTCUT_EVENT`] asks the main window to start, passed on as is
+/// to `capture_start`: the one-step area screenshot (`capture::instant`),
+/// never the capture bar, which the Screenshot and Record buttons open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ShortcutStart {
+    pub instant: bool,
+}
+
+impl ShortcutStart {
+    pub const PRESSED: Self = Self { instant: true };
+}
 
 const KEY: &str = "capture_shortcut_v1";
 /// Stored for "turned off", so it is told apart from "never set" (the default).
@@ -370,6 +384,16 @@ mod tests {
     use super::*;
 
     use crate::capture::session::{CaptureKind, CaptureMode};
+
+    /// The press asks the main window for the one-step area screenshot; the
+    /// frontend passes `instant` straight on to `capture_start`.
+    #[test]
+    fn a_press_asks_for_the_instant_screenshot() {
+        assert_eq!(
+            serde_json::to_value(ShortcutStart::PRESSED).unwrap(),
+            serde_json::json!({ "instant": true })
+        );
+    }
 
     #[test]
     fn the_shortcut_toggles_what_is_running() {

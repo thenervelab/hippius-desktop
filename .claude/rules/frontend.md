@@ -189,7 +189,7 @@ The grid supplies the Sheets chrome — a formula bar (address + `fx` + value), 
 
 ### Failure posture
 
-`PreviewFallback` (`PreviewState.tsx`) is the one error surface and **always carries Download**. It covers four causes the user cannot distinguish: no renderer, over cap, unreadable, corrupt. `onOpenExternally` is added only where a system viewer genuinely helps — the Linux PDF path, which is preserved exactly (WebKitGTK has no PDF viewer, so Linux goes straight to the handoff rather than a blank frame). **Legacy `.doc`/`.xls`/`.ppt`/OpenDocument are recognised but reported as unsupported** with their own message; they are not OOXML and must never be mislabelled as previewable.
+`PreviewFallback` (`PreviewState.tsx`) is the one error surface and **always carries Download**. It covers four causes the user cannot distinguish: no renderer, over cap, unreadable, corrupt. `onOpenExternally` is added only where a system viewer genuinely helps: the Linux PDF path, which is preserved exactly (WebKitGTK has no PDF viewer, so Linux goes straight to the handoff rather than a blank frame), and the Linux video path: Rust's `get_platform_info.supportsInAppVideo` is false there (a screen recording played as a black frame with a spinner), so `VideoPreviewBody` offers "Open in your video player" (the cached local copy, so a cloud-only file is fetched first) and Download instead of the player. **Legacy `.doc`/`.xls`/`.ppt`/OpenDocument are recognised but reported as unsupported** with their own message; they are not OOXML and must never be mislabelled as previewable.
 
 ### Adding a format
 

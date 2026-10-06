@@ -3,7 +3,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Camera, ChevronDown, Settings2 } from "lucide-react";
+import { Camera, ChevronDown, FolderOpen, Image as ImageIcon, PencilLine, Settings2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +31,12 @@ import {
   SYSTEM_PICKER_LABEL,
 } from "@/app/components/capture/CaptureButtons";
 import { TRAY_CAPTURE_DRIVE_EVENT, TRAY_CAPTURE_EVENT } from "@/app/lib/tray/trayWindowActions";
+import {
+  annotateChosenImage,
+  annotateLatestScreenshot,
+  getLatestScreenshot,
+  type LatestScreenshot,
+} from "@/app/lib/tauri/captureEditor";
 import { trayCaptureView } from "./trayCaptureView";
 
 /**
@@ -48,6 +54,9 @@ import { trayCaptureView } from "./trayCaptureView";
  * (`TRAY_CAPTURE_EVENT` → `CaptureHost` → `useStartCapture` → `capture_start`),
  * so the popover is never in the shot and a first capture still gets the
  * drive picker or the permission explainer, which are main-window dialogs.
+ *
+ * Annotate opens a picture in the screenshot editor: the latest screenshot
+ * or one picked in the system's file dialog (see `AnnotateButton`).
  */
 export default function TrayCaptureRow() {
   // undefined = asking Rust, null = it could not say.
@@ -101,6 +110,7 @@ export default function TrayCaptureRow() {
         />
       )}
       {record.state === "disabled" && <UnavailableRecordButton reason={record.reason} />}
+      <AnnotateButton />
     </div>
   );
 }
@@ -129,6 +139,8 @@ function Glyph({ children }: { children: ReactNode }) {
 }
 
 const HALF = "h-10 min-w-0 text-[14px] font-medium tracking-[-0.28px]";
+/** A button's body: three share the row, so the padding is kept tight. */
+const BODY = "justify-start gap-1.5 px-2.5";
 
 function SplitCaptureButton({
   kind,
@@ -154,14 +166,14 @@ function SplitCaptureButton({
   }, [open]);
 
   return (
-    <div className="flex min-w-0 flex-1">
+    <div className="flex min-w-0 flex-auto">
       <Button
         type="button"
         variant="subtle"
         size="auto"
         title={title}
         onClick={() => void captureFromTray(kind)}
-        className={cn(HALF, "flex-1 justify-start gap-2 rounded-r-none px-3")}
+        className={cn(HALF, BODY, "flex-1 rounded-r-none")}
       >
         <Glyph>{glyph}</Glyph>
         <span className="min-w-0 truncate">{label}</span>
@@ -176,7 +188,7 @@ function SplitCaptureButton({
             title={`${label} options`}
             className={cn(
               HALF,
-              "w-9 shrink-0 rounded-l-none border-l border-[rgba(0,0,0,0.08)] dark:border-white/10",
+              "w-8 shrink-0 rounded-l-none border-l border-[rgba(0,0,0,0.08)] dark:border-white/10",
             )}
           >
             <ChevronDown aria-hidden className="size-3.5 shrink-0 opacity-60" />
@@ -204,7 +216,7 @@ function SplitCaptureButton({
 function UnavailableRecordButton({ reason }: { reason: string }) {
   const reasonId = useId();
   return (
-    <div className="flex min-w-0 flex-1">
+    <div className="flex min-w-0 flex-auto">
       <Button
         type="button"
         variant="subtle"
@@ -215,7 +227,8 @@ function UnavailableRecordButton({ reason }: { reason: string }) {
         title={reason}
         className={cn(
           HALF,
-          "flex-1 cursor-not-allowed justify-start gap-2 px-3 opacity-50 active:translate-y-0 active:scale-100",
+          BODY,
+          "flex-1 cursor-not-allowed opacity-50 active:translate-y-0 active:scale-100",
         )}
       >
         <Glyph>
@@ -230,11 +243,115 @@ function UnavailableRecordButton({ reason }: { reason: string }) {
   );
 }
 
-/** Two pills where the buttons will be, while Rust is asked. */
+export const ANNOTATE_LABEL = "Annotate";
+export const ANNOTATE_LATEST_LABEL = "Latest screenshot";
+export const ANNOTATE_CHOOSE_LABEL = "Choose image…";
+
+/**
+ * Annotate: open a picture in the screenshot editor. With a latest
+ * screenshot (Rust's answer, asked again whenever the popover gets focus,
+ * so it is current each time it opens) the button opens a small menu,
+ * "Latest screenshot" and "Choose image…"; with none it goes straight to the
+ * file dialog. Rust shows the dialog, decides where the edit is saved, and
+ * tells the user when nothing could be opened (the popover is gone by then).
+ */
+function AnnotateButton() {
+  const [latest, setLatest] = useState<LatestScreenshot | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const ask = () => {
+      getLatestScreenshot()
+        .then((l) => live && setLatest(l ?? null))
+        .catch(() => live && setLatest(null));
+    };
+    ask();
+    window.addEventListener("focus", ask);
+    return () => {
+      live = false;
+      window.removeEventListener("focus", ask);
+    };
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener("blur", close);
+    return () => window.removeEventListener("blur", close);
+  }, [open]);
+
+  const body = (
+    <>
+      <Glyph>
+        <PencilLine aria-hidden className="size-4" />
+      </Glyph>
+      <span className="min-w-0 truncate">{ANNOTATE_LABEL}</span>
+    </>
+  );
+  const className = cn(HALF, BODY, "shrink-0");
+  const title = "Edit a screenshot or picture";
+
+  if (!latest) {
+    return (
+      <Button
+        type="button"
+        variant="subtle"
+        size="auto"
+        title={title}
+        onClick={() => void annotateFromTray("choose")}
+        className={className}
+      >
+        {body}
+      </Button>
+    );
+  }
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="subtle" size="auto" title={title} className={className}>
+          {body}
+          <ChevronDown aria-hidden className="size-3.5 shrink-0 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      {/* Named by its trigger ("Annotate"), which Radix links. */}
+      <DropdownMenuContent align="end" className={CONTENT_CLASSES}>
+        <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => void annotateFromTray("latest")}>
+          <ImageIcon aria-hidden className="size-4 shrink-0" />
+          <span className="flex min-w-0 flex-col">
+            {ANNOTATE_LATEST_LABEL}
+            <span className="max-w-[14rem] truncate text-[12px] font-normal opacity-60">{latest.fileName}</span>
+          </span>
+        </DropdownMenuItem>
+        <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => void annotateFromTray("choose")}>
+          <FolderOpen aria-hidden className="size-4 shrink-0" />
+          {ANNOTATE_CHOOSE_LABEL}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Hide the popover, then let Rust open the picture: the dialog and the
+ * editor must not sit under an always-on-top popover. "Latest" falls back
+ * to the dialog when the screenshot has gone since the menu was drawn.
+ */
+async function annotateFromTray(source: "latest" | "choose") {
+  try {
+    await invoke("hide_tray_panel");
+    if (source === "latest" && (await annotateLatestScreenshot())) return;
+    await annotateChosenImage();
+  } catch (error) {
+    // Rust has already told the user, in a notification.
+    console.error("[TrayPanel] Failed to open a picture to annotate:", error);
+  }
+}
+
+/** Three pills where the buttons will be, while Rust is asked. */
 function TrayCaptureRowSkeleton() {
   const bar = "h-10 flex-1 rounded-[12px] bg-[rgba(0,0,0,0.08)] dark:bg-white/10";
   return (
     <div aria-hidden data-testid="tray-capture-skeleton" className="flex animate-pulse gap-2 px-5 pt-3">
+      <span className={bar} />
       <span className={bar} />
       <span className={bar} />
     </div>

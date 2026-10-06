@@ -56,11 +56,12 @@ fn a_recording_never_swallows_the_popover_click() {
 #[test]
 fn the_popover_is_kept_out_of_a_recording() {
     let body = fn_body(&read("src/tray/panel.rs"), "fn toggle_panel(");
-    let protect = body
-        .find("set_content_protected(recording)")
-        .expect("content protection follows the recording");
+    let decide = body
+        .find("OwnWindow::TrayPopover { recording }")
+        .expect("content protection is decided by own_windows from the recording");
+    let protect = body.find("set_content_protected(protect)").expect("and applied to the popover");
     let show = body.find("win.show()").expect("the panel is shown");
-    assert!(protect < show, "protection is set before the panel appears");
+    assert!(decide < protect && protect < show, "protection is set before the panel appears");
 }
 
 /// Above the capture card at every show, so a card shown later cannot cover it.
@@ -130,4 +131,29 @@ fn the_context_menu_never_sits_on_the_status_item() {
     );
     let hook = std::fs::read_to_string(format!("{}/../app/lib/hooks/useTraySync.ts", env!("CARGO_MANIFEST_DIR"))).expect("read useTraySync.ts");
     assert!(hook.contains("invoke(\"tray_menu_attached\")"), "the page reports every menu it attaches");
+}
+
+/// The popover's "Copy link" is a registered command that mints only through
+/// the Share dialog's two funnels, so the storage gate, the share-origin row
+/// (the Drive's "Shared" badge) and the owner wrap apply to it unchanged. A
+/// third, private mint path would skip them silently.
+#[test]
+fn the_popover_copy_link_mints_through_the_share_dialog_funnels() {
+    let main = read("src/main.rs");
+    assert!(
+        main.contains("crate::shares::quick_link::copy_file_share_link,"),
+        "copy_file_share_link must be registered"
+    );
+    let quick = read("src/shares/quick_link.rs");
+    let mint = fn_body(&quick, "async fn mint(");
+    assert!(mint.contains("share_synced_file("), "a file on disk is shared from disk");
+    assert!(
+        mint.contains("create_remote_share_inner("),
+        "a cloud-only file is shared like the dialog shares it"
+    );
+    assert!(!mint.contains(".create_share("), "no direct hcfs mint around the gated funnels");
+    // Rust writes the clipboard: the popover may have lost focus by the time
+    // a link is made, and a webview clipboard write then fails.
+    let command = fn_body(&quick, "pub async fn copy_file_share_link(");
+    assert!(command.contains("app.clipboard().write_text("), "the link is copied in Rust");
 }

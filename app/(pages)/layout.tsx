@@ -15,6 +15,7 @@ import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
 import RenameDialog from "@/components/page-sections/drive/RenameDialog";
 import NewFolderDialog from "@/components/page-sections/drive/NewFolderDialog";
 import CaptureHost from "@/components/capture/CaptureHost";
+import TrayFileActionHost from "@/components/tray/TrayFileActionHost";
 import AppContextMenu from "@/components/ui/context-menu/AppContextMenu";
 import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
@@ -46,6 +47,8 @@ export default function ProtectedLayout({
           <RenameDialog />
           <NewFolderDialog />
           <CaptureHost />
+          {/* Runs the tray popover's file actions (view, share, rename...). */}
+          <TrayFileActionHost />
           {/* Replaces the WebView's Back / Reload / Inspect Element menu.
             Yields to the row and card menus, which handle their own
             right-clicks. */}

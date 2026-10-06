@@ -26,7 +26,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::bar::{self, CameraShape, CameraSize, CaptureOptions};
 use super::camera::{self, CameraState};
-use super::destination::{self, CaptureDestination, DestinationChoice};
+use super::destination::{self, CaptureDestination};
 use super::preview::{LinkState, PreviewCard, PreviewStatus};
 use super::recording::{self, Microphone, RecordOptions, Recorder};
 use super::screenshot::Selection;
@@ -71,6 +71,9 @@ pub const CAMERA_HOVER_EVENT: &str = "capture_camera_hover";
 /// A sound source went away mid-recording and the recording goes on without
 /// it (`DeviceLost`): the pill says so in Rust's words.
 pub const DEVICE_LOST_EVENT: &str = "capture_device_lost";
+/// To the pill: the recording's microphone changed (muted, unmuted, another
+/// device, or a recording started or ended): `live_controls::MicrophoneState`.
+pub const MICROPHONE_STATE_EVENT: &str = "capture_microphone_state";
 /// To the pill: seconds left before a recording begins (Wayland counts down
 /// there, after the desktop's dialog), or `null` once it has.
 pub const PILL_COUNTDOWN_EVENT: &str = "capture_pill_countdown";
@@ -110,16 +113,23 @@ const PREVIEW_HEIGHT: f64 = 330.0;
 /// Gap between the card and the display's bottom-right corner.
 const PREVIEW_MARGIN: f64 = 16.0;
 /// The recording pill's window, in logical points.
-const CONTROLS_WIDTH: f64 = 340.0;
+const CONTROLS_WIDTH: f64 = 380.0;
 const CONTROLS_HEIGHT: f64 = 60.0;
 /// Gap between the pill and the bottom of the usable area.
 const CONTROLS_MARGIN: f64 = 24.0;
 /// How often the displays are checked while a capture is open.
 const DISPLAY_WATCH_EVERY: std::time::Duration = std::time::Duration::from_millis(1500);
+/// How often the pointer's display is read while the bar is up. Two checks
+/// on another display move the bar (`bar::bar_follow`), so it follows within
+/// half a second without jumping as the pointer crosses a display.
+const BAR_FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
 /// A card follows the sync engine's row for at most this long.
 const SYNC_FOLLOW_LIMIT: std::time::Duration = std::time::Duration::from_hours(2);
 
-const MAIN_WINDOW_LABEL: &str = "main";
+pub(super) const MAIN_WINDOW_LABEL: &str = "main";
+/// One display frame and a little: time for the window server to drop a
+/// card that was just ordered out, before the screen is read.
+const CARD_GONE_SETTLE: std::time::Duration = std::time::Duration::from_millis(32);
 
 /// Whether this build can capture screenshots at all: macOS and Windows
 /// through xcap, Linux through x11rb on X11 and the desktop's screenshot
@@ -152,7 +162,7 @@ fn recorder_opens_camera(shape: Option<CameraShape>) -> bool {
 
 /// A lock that survives a panic elsewhere: a poisoned recorder lock must not
 /// make the recorder unreachable (it would keep recording until quit).
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(super) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -184,6 +194,9 @@ pub struct CaptureState {
     /// Whether it was also the key window: only then does it come back to
     /// the front. A window merely open behind other apps goes back behind.
     main_was_focused: AtomicBool,
+    /// This session is the shortcut's one-step area screenshot
+    /// ([`super::instant`]): no bar, no area drawn in advance, no timer.
+    instant: AtomicBool,
     /// The app that was frontmost when the capture started (its process id),
     /// handed the keyboard back when the overlays close.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -208,13 +221,19 @@ pub struct CaptureState {
     work_areas: Mutex<HashMap<u32, LogicalArea>>,
     /// Which display watch is current (see `spawn_display_watch`).
     display_watch: AtomicU64,
+    /// Which bar follow is current (see `spawn_bar_follow`).
+    bar_follow: AtomicU64,
+    /// The bar's overlay holds the bar on its display: a countdown, a capture
+    /// in flight, a drag or the share picker would be lost if it moved
+    /// (`capture_hold_bar`).
+    bar_held: AtomicBool,
     /// The area drawn so far, on whichever display, for the Capture button.
     pending: Mutex<Option<Selection>>,
     /// A still of the selection taken as a recording starts: its card's
     /// picture only when the saved file gives none (`poster::pick`).
     poster: Mutex<Option<String>>,
     /// The card in the corner, if one is showing.
-    preview: Mutex<Option<PreviewCard>>,
+    pub(super) preview: Mutex<Option<PreviewCard>>,
     /// A failed capture whose card was closed: it comes back on the next
     /// capture, so a capture that did not upload is never silently lost.
     parked: Mutex<Option<PreviewCard>>,
@@ -258,15 +277,31 @@ pub struct CaptureState {
     /// The pill's "Start now" during a countdown after the desktop's dialog
     /// (`count_down_in_pill`).
     countdown_skip: AtomicBool,
+    /// The picture open in the screenshot editor, if any (`editor.rs`).
+    pub(super) editor: Mutex<Option<super::editor::EditorSession>>,
+    /// Numbers editor sessions, so a save meant for a replaced one is refused.
+    pub(super) editor_seq: AtomicU64,
     /// A Wayland area being drawn on the chosen monitor's picture
     /// (`draw_area`): the picture, the step, and where the drawn area goes.
     area_pick: Mutex<Option<AreaPick>>,
+    /// The live recording's microphone: muted, and which device
+    /// (`live_controls`). Reset at every start and ending.
+    live_microphone: Mutex<super::live_controls::LiveMicrophone>,
+    /// A pill menu is open and the pill's window has grown for it: whether
+    /// above the pill (`live_controls::pill_with_menu`).
+    pill_menu: Mutex<Option<bool>>,
+    /// The monitor a Wayland area's stream covers, in GDK's layout (and its
+    /// scale), when the compositor said which (`fill_stream_monitor`): where
+    /// the pill must stay out of the area.
+    area_monitor: Mutex<Option<(super::area_pick::MonitorBox, f64)>>,
 }
 
 /// A Wayland area recording between the desktop's dialog and its crop.
 struct AreaPick {
     step: super::area_pick::AreaStep,
     still: recording::protocol::StreamStill,
+    /// The area drawn when the picture comes up (`area_pick::initial_area`).
+    initial: Option<recording::protocol::StreamCrop>,
     /// Taken once, by the first area that maps onto the picture.
     chosen: Option<tokio::sync::oneshot::Sender<recording::protocol::StreamCrop>>,
 }
@@ -282,6 +317,22 @@ impl CaptureState {
 
     fn take_recorder(&self) -> Option<Box<dyn Recorder>> {
         lock(&self.recorder).take()
+    }
+
+    /// The camera the recording keeps (`None` before Record, or without one).
+    /// Read through here, once per use: a second `lock` of the same mutex in
+    /// one statement waits on the first guard, which lives to the end of the
+    /// statement, and that thread never wakes. It once did exactly that in
+    /// `camera_state_for`, on every capture: Record then hung for good
+    /// (no pill, no bubble, the bar gone) until Escape.
+    fn recording_camera(&self) -> Option<CameraShape> {
+        *lock(&self.recording_camera)
+    }
+
+    /// The pill's camera menu and size choices (`live_controls::camera_controls`).
+    fn pill_camera_controls(&self, phase: CapturePhase, hidden: bool, support: super::live_controls::LiveSupport) -> (bool, bool) {
+        let camera = self.recording_camera();
+        super::live_controls::camera_controls(phase, camera, hidden, recorder_opens_camera(camera), support)
     }
 
     fn stop_ticks(&self) {
@@ -551,6 +602,7 @@ fn write_tray_menu(app: &AppHandle, write: super::tray_recording_menu::MenuWrite
         return;
     };
     listen_to_recording_menu(app);
+    tracing::info!(?glyph, "tray: the recording's menu goes on the icon");
     let items: Vec<MenuItem<tauri::Wry>> = items_for(glyph)
         .into_iter()
         .filter_map(|item| MenuItem::with_id(app, item.id, item.text, true, None::<&str>).ok())
@@ -569,46 +621,96 @@ fn write_tray_menu(app: &AppHandle, write: super::tray_recording_menu::MenuWrite
 /// The app-wide menu listener for the recording's tray items, added once
 /// (Tauri keeps every listener added, so adding one per write would run
 /// each click many times). Other menus' items are ignored by id.
+///
+/// Added at start-up (`main.rs` setup), before any recording's menu exists,
+/// and again (a no-op) by the first menu write: it used to be added only
+/// inside that first write, which runs from a posted main-thread task. Each
+/// click is logged with what it did, so a click that changes nothing still
+/// leaves a line in `~/.hippius/logs`, and is read against the session's
+/// phase now ([`tray_recording_menu::effect_for`]), never against the menu
+/// it came from, which can be a beat behind.
+///
+/// [`tray_recording_menu::effect_for`]: super::tray_recording_menu::effect_for
 #[cfg(target_os = "linux")]
-fn listen_to_recording_menu(app: &AppHandle) {
-    use super::tray_recording_menu::{Action, action_for};
+pub fn listen_to_recording_menu(app: &AppHandle) {
     static LISTENING: std::sync::Once = std::sync::Once::new();
     LISTENING.call_once(|| {
         app.on_menu_event(|app, event| {
-            let Some(action) = action_for(event.id().0.as_str()) else {
+            let Some(action) = super::tray_recording_menu::action_for(event.id().0.as_str()) else {
                 return;
             };
-            let app = app.clone();
-            match action {
-                Action::ShowControls => {
-                    if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
-                        show_without_focus(&w);
-                    }
-                }
-                Action::Stop => {
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = stop_inner(&app).await {
-                            tracing::warn!(error = %e, "tray menu: stop refused");
-                        }
-                    });
-                }
-                Action::Pause => {
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = capture_pause(app).await {
-                            tracing::warn!(error = %e, "tray menu: pause refused");
-                        }
-                    });
-                }
-                Action::Resume => {
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = capture_resume(app).await {
-                            tracing::warn!(error = %e, "tray menu: resume refused");
-                        }
-                    });
-                }
-            }
+            on_recording_menu_item(app, action);
         });
+        tracing::info!("tray: listening for the recording menu's items");
     });
+}
+
+/// One click on the recording's tray menu (Linux), carried out on the
+/// session exactly as the pill's buttons are: the same commands.
+#[cfg(target_os = "linux")]
+fn on_recording_menu_item(app: &AppHandle, action: super::tray_recording_menu::Action) {
+    use super::tray_recording_menu::{Effect, effect_for};
+    let phase = app.state::<AppState>().capture.current();
+    let effect = effect_for(action, phase);
+    tracing::info!(?action, ?effect, "tray: recording menu item clicked");
+    let app = app.clone();
+    match effect {
+        Effect::Ignore => {}
+        Effect::ShowControls => {
+            if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
+                bring_controls_back(&w);
+            } else {
+                tracing::warn!("tray menu: no recording controls to show");
+            }
+        }
+        Effect::OpenMain => {
+            if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                bring_main_forward(&main);
+                // The user took the app back: the recording's end leaves it
+                // up, as when it gets the keyboard (which a desktop's focus
+                // stealing prevention may withhold from a tray click).
+                on_main_window_focused(&app);
+            } else {
+                tracing::warn!("tray menu: no main window to open");
+            }
+        }
+        Effect::Stop => {
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = stop_inner(&app).await {
+                    tracing::warn!(error = %e, "tray menu: stop refused");
+                }
+            });
+        }
+        Effect::Pause => {
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = capture_pause(app).await {
+                    tracing::warn!(error = %e, "tray menu: pause refused");
+                }
+            });
+        }
+        Effect::Resume => {
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = capture_resume(app).await {
+                    tracing::warn!(error = %e, "tray menu: resume refused");
+                }
+            });
+        }
+    }
+}
+
+/// "Show recording controls": the pill back on screen even when it is
+/// already "visible" but minimised or covered, which a plain show (a no-op
+/// on a shown window) left as it was, so the item looked dead.
+#[cfg(target_os = "linux")]
+fn bring_controls_back(window: &tauri::WebviewWindow) {
+    let _ = window.unminimize();
+    if window.is_visible().unwrap_or(false) {
+        // Raise without taking the keyboard from the app being recorded.
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_always_on_top(true);
+    } else {
+        show_without_focus(window);
+    }
 }
 
 /// A left click on the tray icon, received by `tray::panel` before it opens
@@ -627,6 +729,70 @@ pub fn on_tray_click(app: &AppHandle, signed_in: bool) -> TrayClickRoute {
         }
     }
     route
+}
+
+/// The Dock icon was clicked (macOS "reopen"). The main window comes
+/// forward unless it is already up ([`super::own_windows::reopen_shows_main`]):
+/// during a recording it is hidden and the pill is a visible window, so
+/// AppKit's own "has visible windows" left the Dock icon doing nothing.
+pub fn on_app_reopen(app: &AppHandle) {
+    let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return;
+    };
+    let visible = main.is_visible().unwrap_or(false);
+    let minimized = main.is_minimized().unwrap_or(false);
+    let state = app.state::<AppState>();
+    let phase = state.capture.current();
+    if super::own_windows::reopen_shows_main(phase, visible, minimized) {
+        tracing::info!(visible, minimized, "dock: the main window comes forward");
+        bring_main_forward(&main);
+    } else if super::own_windows::choosing_or_taking(phase) {
+        // The overlays stay in front and keep the keyboard.
+        focus_active_ui(app, &state.capture);
+    }
+}
+
+/// Hippius became the active app (macOS; `activation::watch`). During a
+/// recording with the main window hidden, Cmd+Tab to Hippius shows it
+/// ([`super::own_windows::activation_shows_main`]); a click on the pill or
+/// the card, or the tray popover taking focus, does not.
+#[cfg(target_os = "macos")]
+pub fn on_app_activated(app: &AppHandle) {
+    let phase = app.state::<AppState>().capture.current();
+    if !super::own_windows::recording_on(phase) {
+        return;
+    }
+    let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return;
+    };
+    let main_visible = main.is_visible().unwrap_or(false);
+    let popover_visible = app
+        .get_webview_window(crate::tray::panel::PANEL_LABEL)
+        .is_some_and(|w| w.is_visible().unwrap_or(false));
+    let mouse_down = super::activation::mouse_down();
+    if super::own_windows::activation_shows_main(phase, main_visible, mouse_down, popover_visible) {
+        tracing::info!("switched to Hippius during a recording: the main window comes forward");
+        bring_main_forward(&main);
+    }
+}
+
+/// The main window got the keyboard. During a recording that is the user
+/// taking it back (Dock, Cmd+Tab, the tray's Open Hippius): the recording's
+/// end then leaves it where it is and keeps the keyboard in Hippius, instead
+/// of pushing it behind or handing focus to the app the capture began from.
+pub fn on_main_window_focused(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if super::own_windows::focus_keeps_main(state.capture.current()) {
+        state.capture.restore_main.store(false, Ordering::SeqCst);
+        state.capture.main_was_focused.store(false, Ordering::SeqCst);
+        lock(&state.capture.previous_app).take();
+    }
+}
+
+fn bring_main_forward(main: &tauri::WebviewWindow) {
+    let _ = main.unminimize();
+    let _ = main.show();
+    let _ = main.set_focus();
 }
 
 fn transition_error(e: TransitionError) -> AppError {
@@ -776,6 +942,36 @@ fn show_behind(window: &tauri::WebviewWindow) {
     }
 }
 
+/// The main window's system window number (macOS), read on the main thread
+/// without blocking it: a recording films it while leaving the rest of
+/// Hippius out (`own_windows`). `None` if it cannot be read in time.
+#[cfg(target_os = "macos")]
+async fn main_window_number(app: &AppHandle) -> Option<u32> {
+    use objc::{msg_send, sel, sel_impl};
+    let main = app.get_webview_window(MAIN_WINDOW_LABEL)?;
+    let target = main.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    main.run_on_main_thread(move || {
+        let n = target.ns_window().ok().map(|ns_window| {
+            let ns_window = ns_window.cast::<objc::runtime::Object>();
+            // SAFETY: this window's live NSWindow, read on the main thread;
+            // `windowNumber` only returns an integer.
+            let n: isize = unsafe { msg_send![ns_window, windowNumber] };
+            n
+        });
+        let _ = tx.send(n);
+    })
+    .ok()?;
+    let n = tokio::time::timeout(std::time::Duration::from_millis(300), rx).await.ok()?.ok()??;
+    u32::try_from(n).ok().filter(|n| *n > 0)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::unused_async)]
+async fn main_window_number(_app: &AppHandle) -> Option<u32> {
+    None
+}
+
 /// The frontmost app when it is not Hippius (its process id).
 #[cfg(target_os = "macos")]
 async fn frontmost_other_app(app: &AppHandle) -> Option<i32> {
@@ -854,16 +1050,23 @@ fn close_controls(app: &AppHandle) {
 /// with the capture bar on the one under the pointer.
 ///
 /// `kind` and `mode` preselect the bar (a Capture menu item, the tray); left
-/// out, the bar opens on whatever was used last.
+/// out, the bar opens on whatever was used last. `instant` (the shortcut)
+/// is the one-step area screenshot instead ([`super::instant`]): no bar, the
+/// pointer a crosshair at once, the shot taken when the drag ends.
 ///
 /// Refusals are structured so the UI can answer each one:
-/// `NotReady(CaptureDestinationUnset)` → the drive picker,
 /// `NotReady(ScreenRecordingPermission)` → the permission explainer (which
 /// asks macOS through `capture_request_permission`; asking here as well put
 /// two dialogs on screen at once).
 /// A capture already in progress is brought forward, not refused.
 #[tauri::command]
-pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, kind: Option<CaptureKind>, mode: Option<CaptureMode>) -> Result<()> {
+pub async fn capture_start(
+    state: tauri::State<'_, AppState>,
+    app: AppHandle,
+    kind: Option<CaptureKind>,
+    mode: Option<CaptureMode>,
+    instant: Option<bool>,
+) -> Result<()> {
     if !capture_supported() {
         return Err(AppError::Validation("Screen capture isn't available on this system yet.".into()));
     }
@@ -875,22 +1078,33 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
     }
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
+    // No question about where captures go: the first capture sets its own
+    // destination up (`setup::ensure`). Started now, while the user chooses
+    // what to capture, so a drive made for it is ready by the time the file
+    // is; delivery waits for the same setup, never a second one.
     if destination::load(pool, &account_id).await?.is_none() {
-        return Err(AppError::NotReady(NotReadyKind::CaptureDestinationUnset));
+        let app = app.clone();
+        let account_id = account_id.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = super::setup::ensure(&app, &account_id).await {
+                tracing::warn!(error = %e, "capture setup could not start; the capture will try again");
+            }
+        });
     }
     if !super::permissions::screen_capture_granted() {
         return Err(AppError::NotReady(NotReadyKind::ScreenRecordingPermission));
     }
 
     let mut options = bar::load_options(pool).await?.for_system(camera_only_supported());
-    let kind = match kind {
-        Some(k) => k,
-        // Last time was a recording on a Mac that has since lost the helper.
-        None if options.last_kind == CaptureKind::Recording && !recording_ok => CaptureKind::Screenshot,
-        None => options.last_kind,
-    };
     let surfaces = super::support::surfaces();
-    let mode = super::support::offered_mode(&surfaces, kind, mode.unwrap_or(options.last_mode));
+    let choice = super::instant::start_choice(
+        &surfaces,
+        instant.unwrap_or(false),
+        (kind, mode),
+        (options.last_kind, options.last_mode),
+        recording_ok,
+    );
+    let (kind, mode) = (choice.kind, choice.mode);
     let plan = super::support::start_plan(&surfaces, kind);
 
     match advance(&app, &state.capture, CaptureEvent::Start { kind, mode }) {
@@ -901,7 +1115,8 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
         }
         Err(e) => return Err(e),
     }
-    if (options.last_kind, options.last_mode) != (kind, mode) {
+    state.capture.instant.store(choice.instant, Ordering::SeqCst);
+    if choice.remember {
         options.last_kind = kind;
         options.last_mode = mode;
         if let Err(e) = bar::save_options(pool, options.clone()).await {
@@ -963,6 +1178,7 @@ pub async fn capture_start(state: tauri::State<'_, AppState>, app: AppHandle, ki
     // The panel is no display's overlay: nothing for the watch to follow.
     if plan != super::support::StartPlan::Panel {
         spawn_display_watch(app.clone());
+        spawn_bar_follow(app.clone());
     }
     Ok(())
 }
@@ -991,12 +1207,19 @@ async fn open_capture_ui(app: &AppHandle, state: &CaptureState, areas: &bar::Rem
     }
     let host = bar::bar_display(&displays, cursor_point(app, &displays));
     let host_display = displays.iter().find(|d| Some(d.id) == host).cloned();
-    *lock(&state.pending) = host_display.as_ref().and_then(|d| remembered_area(areas, d));
+    // An instant shot starts with nothing drawn: the user drags a new area.
+    let instant = state.instant.load(Ordering::SeqCst);
+    *lock(&state.pending) = if instant {
+        None
+    } else {
+        host_display.as_ref().and_then(|d| remembered_area(areas, d))
+    };
     *lock(&state.bar_display) = host_display;
+    state.bar_held.store(false, Ordering::SeqCst);
     lock(&state.displays).clone_from(&displays);
     refresh_work_areas(app, state, &displays).await;
     for display in &displays {
-        open_overlay(app, display, Some(display.id) == host).await?;
+        open_overlay(app, display, Some(display.id) == host, instant).await?;
     }
     Ok(())
 }
@@ -1021,7 +1244,7 @@ async fn open_panel(app: &AppHandle, state: &CaptureState) -> Result<()> {
         let _ = stale.destroy();
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
-    let window = build_overlay(app, &label, &display)?;
+    let window = build_overlay(app, &label, &display, false)?;
     let _ = window.set_size(tauri::LogicalSize::new(PANEL_SIZE.0, PANEL_SIZE.1));
     let _ = window.center();
     window
@@ -1103,18 +1326,18 @@ fn list_displays_blocking() -> Result<Vec<DisplayTarget>> {
 /// The overlay for `display`. Only the one hosting the bar takes the
 /// keyboard: focusing every overlay left the last one focused, which was not
 /// necessarily the bar's, and on Windows each focus could inject an Alt press.
-async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool) -> Result<()> {
+async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool, instant: bool) -> Result<()> {
     let label = format!("{OVERLAY_LABEL_PREFIX}{}", display.id);
     // A previous session's overlay may still be on its way out.
     if let Some(stale) = app.get_webview_window(&label) {
         let _ = stale.destroy();
     }
-    let window = if let Ok(w) = build_overlay(app, &label, display) {
+    let window = if let Ok(w) = build_overlay(app, &label, display, instant) {
         w
     } else {
         // The label frees once the event loop has destroyed the old one.
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        build_overlay(app, &label, display)?
+        build_overlay(app, &label, display, instant)?
     };
     // Content protection is asked for, not promised: on Windows it is
     // `SetWindowDisplayAffinity`, whose failure tao discards. Read it back;
@@ -1170,13 +1393,15 @@ fn cover_whole_display(window: &tauri::WebviewWindow) {
 #[cfg(not(target_os = "linux"))]
 fn cover_whole_display(_window: &tauri::WebviewWindow) {}
 
-fn build_overlay(app: &AppHandle, label: &str, display: &DisplayTarget) -> Result<tauri::WebviewWindow> {
+fn build_overlay(app: &AppHandle, label: &str, display: &DisplayTarget, instant: bool) -> Result<tauri::WebviewWindow> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
     // Same split as the tray panel: the dev server serves `/capture-overlay`,
-    // the static export only `capture-overlay.html`.
+    // the static export only `capture-overlay.html`. `instant` lets the page
+    // show the crosshair before its context has loaded.
     let route = if cfg!(dev) { "capture-overlay" } else { "capture-overlay.html" };
-    let url = WebviewUrl::App(format!("{route}?display={}", display.id).into());
+    let instant = if instant { "&instant=1" } else { "" };
+    let url = WebviewUrl::App(format!("{route}?display={}{instant}", display.id).into());
     WebviewWindowBuilder::new(app, label, url)
         .title("Hippius capture")
         .decorations(false)
@@ -1190,6 +1415,13 @@ fn build_overlay(app: &AppHandle, label: &str, display: &DisplayTarget) -> Resul
         // none; WDA_EXCLUDEFROMCAPTURE on Windows), so the screenshot is of
         // the screen, not of the dimmed selection UI over it.
         .content_protected(true)
+        // Only the overlay hosting the bar is focused, and Hippius is often
+        // not the active app when the shortcut opens it. Without this the
+        // press on an overlay that is not the key window only brings it
+        // forward and never reaches the page, so a drag outside the area
+        // drew nothing and the area stayed where it was. macOS only; the
+        // other platforms deliver that press already.
+        .accept_first_mouse(true)
         .visible(false)
         .build()
         .map_err(|e| AppError::Other(format!("Could not open the capture overlay: {e}")))
@@ -1224,7 +1456,13 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             .skip_taskbar(true)
             .always_on_top(true)
             .visible_on_all_workspaces(true)
-            .content_protected(true)
+            // Out of the recording. On macOS the helper leaves it out itself,
+            // so it stays visible to other apps' screen sharing
+            // (`own_windows`); Windows can only protect it.
+            .content_protected(super::own_windows::content_protected(
+                super::rollout::current_platform(),
+                super::own_windows::OwnWindow::Pill,
+            ))
             .focused(false)
             // Pause and Stop answer the first click, like the card's buttons.
             .accept_first_mouse(true)
@@ -1247,6 +1485,8 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             };
             let frame = pill_clear_of_area(&state.capture, &d, area).unwrap_or(usual);
             place(&window, frame, area.scale);
+            // Placed at its own size: a menu left open last time is gone.
+            lock(&state.capture.pill_menu).take();
         }
     }
     if show {
@@ -1276,6 +1516,48 @@ fn pill_clear_of_area(state: &CaptureState, bar: &DisplayTarget, work: LogicalAr
         height: rect.height,
     };
     camera::pill_outside(work.frame(), recorded, (CONTROLS_WIDTH, CONTROLS_HEIGHT), CONTROLS_MARGIN)
+}
+
+/// A Wayland area recording: put the pill outside the area just drawn
+/// ([`camera::pill_outside`] on the monitor the stream covers, mapped by
+/// [`super::area_pick::area_on_monitor`]); with no room anywhere, the
+/// monitor's bottom centre. Only where the pill is filmed and the monitor
+/// is known. A compositor that places windows itself (GNOME's own Wayland
+/// session ignores an app's window position) keeps it where it put it.
+fn place_pill_clear_of_stream_area(app: &AppHandle, area: recording::protocol::StreamCrop, stream: (u32, u32)) {
+    if !super::support::pill_filmed(super::rollout::current_platform()) {
+        return;
+    }
+    let Some((monitor, scale)) = *lock(&app.state::<AppState>().capture.area_monitor) else {
+        tracing::info!("capture area: the stream's monitor is unknown; the pill stays where the desktop put it");
+        return;
+    };
+    let Some(window) = app.get_webview_window(CONTROLS_LABEL) else {
+        return;
+    };
+    let frame = pill_frame_for_stream_area(monitor, area, stream);
+    tracing::info!(?frame, "capture area: the pill goes outside the recorded area");
+    place(&window, frame, scale);
+}
+
+/// Where the pill goes for a Wayland area: outside the area on its monitor
+/// (below, above, beside), else the monitor's bottom centre.
+fn pill_frame_for_stream_area(monitor: super::area_pick::MonitorBox, area: recording::protocol::StreamCrop, stream: (u32, u32)) -> camera::Frame {
+    let screen = camera::Frame {
+        x: monitor.x,
+        y: monitor.y,
+        width: monitor.width,
+        height: monitor.height,
+    };
+    let bottom_centre = camera::Frame {
+        x: screen.x + (screen.width - CONTROLS_WIDTH) / 2.0,
+        y: screen.y + screen.height - CONTROLS_HEIGHT - CONTROLS_MARGIN,
+        width: CONTROLS_WIDTH,
+        height: CONTROLS_HEIGHT,
+    };
+    super::area_pick::area_on_monitor(area, stream, monitor)
+        .and_then(|recorded| camera::pill_outside(screen, recorded, (CONTROLS_WIDTH, CONTROLS_HEIGHT), CONTROLS_MARGIN))
+        .unwrap_or(bottom_centre)
 }
 
 /// Take the pill off screen at once (Stop), before the file is closed.
@@ -1649,7 +1931,8 @@ async fn apply_display_change(app: &AppHandle, now: &[DisplayTarget], change: &b
     if selecting {
         let host = lock(&state.capture.bar_display).as_ref().map(|d| d.id);
         for display in now.iter().filter(|d| change.added.contains(&d.id)) {
-            if let Err(e) = open_overlay(app, display, false).await {
+            let instant = state.capture.instant.load(Ordering::SeqCst);
+            if let Err(e) = open_overlay(app, display, false, instant).await {
                 tracing::warn!(error = %e, "no overlay for a display plugged in mid-capture");
             }
         }
@@ -1663,6 +1946,71 @@ async fn apply_display_change(app: &AppHandle, now: &[DisplayTarget], change: &b
             }
         }
     }
+}
+
+// ── The bar following the pointer ──────────────────────────────────────────
+
+/// Move the bar to the display the pointer is on while the user is choosing,
+/// as macOS's own capture bar follows the active display. The bar is chosen
+/// once, under the pointer, when the capture starts; without this it stayed
+/// there when the user went on to another display. Every display already has
+/// its overlay, so only which one draws the bar changes. One follow at a
+/// time; it ends when the choosing does.
+fn spawn_bar_follow(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let generation = state.capture.bar_follow.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(BAR_FOLLOW_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut seen_before = None;
+        loop {
+            interval.tick().await;
+            let state = app.state::<AppState>();
+            if state.capture.bar_follow.load(Ordering::SeqCst) != generation || !matches!(state.capture.current(), CapturePhase::Selecting { .. }) {
+                break;
+            }
+            let displays = lock(&state.capture.displays).clone();
+            let under_pointer = bar::display_under(&displays, cursor_point(&app, &displays));
+            let bar = lock(&state.capture.bar_display).as_ref().map(|d| d.id);
+            let held = state.capture.bar_held.load(Ordering::SeqCst);
+            if let Some(target) = bar::bar_follow(bar, under_pointer, seen_before, held)
+                && let Some(display) = displays.into_iter().find(|d| d.id == target)
+            {
+                move_bar(&app, &state.capture, display);
+            }
+            seen_before = under_pointer;
+        }
+    });
+}
+
+/// Hand the bar to `display`'s overlay. Skipped while that overlay is not up
+/// yet (a display plugged in a moment ago): the next check tries again.
+fn move_bar(app: &AppHandle, state: &CaptureState, display: DisplayTarget) {
+    let Some(overlay) = app.get_webview_window(&format!("{OVERLAY_LABEL_PREFIX}{}", display.id)) else {
+        return;
+    };
+    // The card waiting hidden goes to the bar's display too, where the
+    // capture it will show is being chosen; one already showing stays put.
+    if let Some(card) = app.get_webview_window(PREVIEW_LABEL)
+        && !card.is_visible().unwrap_or(true)
+    {
+        let area = work_area(state, &display);
+        place(&card, card_frame(area), area.scale);
+    }
+    *lock(&state.bar_display) = Some(display);
+    // The overlays re-read their context: the new one draws the bar, the old
+    // one stops. The pill, still hidden, is placed on the bar's display when
+    // it comes on screen (`open_controls`).
+    state.rebroadcast(|e| emit_phase(app, e));
+    // The keyboard goes with the bar: Return, Escape and Space act on it.
+    let _ = overlay.set_focus();
+}
+
+/// The bar's overlay holds the bar on its display (`held` true) or lets it
+/// follow the pointer again (false): see [`spawn_bar_follow`].
+#[tauri::command]
+pub fn capture_hold_bar(state: tauri::State<'_, AppState>, held: bool) {
+    state.capture.bar_held.store(held, Ordering::SeqCst);
 }
 
 // ── Choosing ────────────────────────────────────────────────────────────────
@@ -1705,6 +2053,9 @@ pub struct OverlayContext {
     /// The area already drawn, on this display or another. At the start of a
     /// capture it is the area last drawn on the bar's display, fitted to it.
     pub pending: Option<Selection>,
+    /// The shortcut's one-step area screenshot ([`super::instant`]): the page
+    /// draws no bar and takes the shot when the drag ends.
+    pub instant: bool,
 }
 
 #[tauri::command]
@@ -1729,13 +2080,15 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
     };
     let hosts_bar = lock(&state.capture.bar_display).as_ref().is_some_and(|d| d.id == display_id);
     let pending = *lock(&state.capture.pending);
+    let instant = state.capture.instant.load(Ordering::SeqCst);
     Ok(OverlayContext {
         mode,
         display_id,
         kind,
         windows,
         hosts_bar,
-        countdown_secs: super::support::countdown_secs(&surfaces, options.countdown_secs(kind), kind),
+        countdown_secs: super::instant::countdown_secs(instant, super::support::countdown_secs(&surfaces, options.countdown_secs(kind), kind)),
+        instant,
         camera_filmed: options.camera_filmed(kind, mode),
         options,
         recording_available: recording::recording_supported(),
@@ -1776,13 +2129,17 @@ pub async fn capture_set_mode(state: tauri::State<'_, AppState>, app: AppHandle,
         return Err(AppError::Validation(why.line().into()));
     }
     advance(&app, &state.capture, CaptureEvent::SetMode { kind, mode })?;
-    let pool = state.pool()?;
-    let options = CaptureOptions {
-        last_kind: kind,
-        last_mode: mode,
-        ..bar::load_options(pool).await?
-    };
-    bar::save_options(pool, options).await?;
+    // Space during an instant shot is not a choice made on the bar: the bar
+    // opens where the user left it next time.
+    if super::instant::remembers_mode_switch(state.capture.instant.load(Ordering::SeqCst)) {
+        let pool = state.pool()?;
+        let options = CaptureOptions {
+            last_kind: kind,
+            last_mode: mode,
+            ..bar::load_options(pool).await?
+        };
+        bar::save_options(pool, options).await?;
+    }
     // The pill is only for recordings; a hidden one left from a switch to a
     // screenshot would come back on the wrong display later.
     match kind {
@@ -1941,13 +2298,6 @@ pub async fn capture_set_options(state: tauri::State<'_, AppState>, app: AppHand
         camera_filmed: options.camera_filmed(kind, mode),
         options,
     })
-}
-
-/// The drives "Save to" offers: this account's own, synced here or not.
-#[tauri::command]
-pub async fn capture_destination_choices(state: tauri::State<'_, AppState>) -> Result<Vec<DestinationChoice>> {
-    let account_id = state.current_account_id()?;
-    destination::choices(state.pool()?, &account_id).await
 }
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
@@ -2170,6 +2520,8 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     let clear = state.capture.ui_in_grabs.load(Ordering::SeqCst);
     if clear {
         clear_screen_for_grab(app).await;
+    } else if super::own_windows::hide_card_for_screenshot(super::rollout::current_platform()) {
+        hide_card_for_grab(app).await;
     }
     let taken = take_screenshot(selection, clear).await;
     restore_main_window(app, &state.capture);
@@ -2301,16 +2653,26 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     } else {
         None
     };
+    // macOS leaves Hippius out of a screen or area recording in the helper,
+    // all but the main window (filmed like any app if the user brings it
+    // into the picture) and the bubble (`own_windows`).
+    let own_windows_filmed = if super::own_windows::recorder_leaves_app_out(super::rollout::current_platform()) {
+        super::own_windows::filmed_own_windows(main_window_number(app).await, filmed_camera_window(&state.capture))
+    } else {
+        Vec::new()
+    };
     let options = RecordOptions {
         microphone: saved.microphone && recording::microphone_supported(),
         microphone_device: saved.microphone_device.clone(),
         show_clicks: saved.show_clicks && recording::show_clicks_supported(),
         system_audio: saved.system_audio && surfaces.system_audio,
         camera_window: filmed_camera_window(&state.capture),
+        own_windows_filmed,
         restore_token,
         pick_area: camera.is_none() && super::support::picks_area_after_dialog(&surfaces, selection),
         camera,
     };
+    let microphone_device = options.microphone_device.clone();
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     *lock(&state.capture.recording_dir) = Some(dir.clone());
     let name = super::naming::capture_file_name(CaptureKind::Recording, chrono::Local::now().naive_local());
@@ -2362,6 +2724,7 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         recorder = count_down_in_pill(app, recorder, count).await?;
     }
 
+    let recorded_microphone = recorder.microphone();
     if let Err(orphan) = state.capture.adopt_recorder(recorder, |e| emit_phase(app, e)) {
         // Cancelled (or ended) while the recorder was starting. It must not
         // keep recording the screen with no pill and nothing to stop it.
@@ -2371,6 +2734,8 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         end_camera(app).await;
         return Ok(());
     }
+    // Every recording (a restart too) starts heard, on the device it opened.
+    set_live_microphone(app, super::live_controls::LiveMicrophone::started(recorded_microphone, microphone_device));
     // The main window stays hidden until the recording ends: it would be in
     // the video, and it would take the keyboard from the app being recorded.
     if let Err(e) = open_controls(app, true) {
@@ -2394,8 +2759,20 @@ async fn draw_area(app: &AppHandle, recorder: Box<dyn Recorder>, still: recordin
     let state = app.state::<AppState>();
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     let placement = still.placement;
+    let stream = (still.width, still.height);
+    // The last area recorded comes back drawn; the first time, a centred
+    // half of the screen (`area_pick::initial_area`).
+    let remembered = match state.pool() {
+        Ok(pool) => bar::load_areas(pool)
+            .await
+            .ok()
+            .and_then(|areas| areas.get(&super::area_pick::REMEMBERED_AREA_ID).copied()),
+        Err(_) => None,
+    };
+    *lock(&state.capture.area_monitor) = None;
     *lock(&state.capture.area_pick) = Some(AreaPick {
         step: next(AreaStep::Choosing, AreaEvent::StillArrived).unwrap_or(AreaStep::Drawing),
+        initial: super::area_pick::initial_area(remembered, stream),
         still,
         chosen: Some(tx),
     });
@@ -2449,6 +2826,20 @@ async fn draw_area(app: &AppHandle, recorder: Box<dyn Recorder>, still: recordin
             return Err(AppError::Other(recording::protocol::PICKER_CANCELLED.into()));
         }
     };
+    if let Ok(pool) = state.pool() {
+        let kept = super::geometry::LogicalRect {
+            x: f64::from(area.x),
+            y: f64::from(area.y),
+            width: f64::from(area.width),
+            height: f64::from(area.height),
+        };
+        if let Err(e) = bar::remember_area(pool, super::area_pick::REMEMBERED_AREA_ID, kept).await {
+            tracing::debug!(error = %e, "could not remember the recorded area");
+        }
+    }
+    // The pill goes outside the area where the desktop lets a window be
+    // placed (it is filmed on Linux), before the first cropped picture.
+    place_pill_clear_of_stream_area(app, area, stream);
     // The selection window is in the stream until the compositor has
     // taken it down; the first cropped picture must not show it.
     tokio::time::sleep(super::linux_x11::COMPOSITOR_SETTLE * 2).await;
@@ -2516,7 +2907,16 @@ fn fill_stream_monitor(window: &tauri::WebviewWindow, placement: Option<recordin
                 }
             })
             .collect();
-        match (super::area_pick::monitor_for(placement, &monitors), WidgetExt::screen(&gtk_window)) {
+        let index = super::area_pick::monitor_for(placement, &monitors);
+        // Kept for the pill: it is placed outside the area on this monitor
+        // once the area is drawn (`place_pill_clear_of_stream_area`).
+        if let Some(i) = index
+            && let (Some(m), Some(gdk_monitor)) = (monitors.get(i), display.monitor(i32::try_from(i).unwrap_or(0)))
+        {
+            let scale = f64::from(gdk_monitor.scale_factor().max(1));
+            *lock(&target.app_handle().state::<AppState>().capture.area_monitor) = Some((*m, scale));
+        }
+        match (index, WidgetExt::screen(&gtk_window)) {
             (Some(index), Some(screen)) => gtk_window.fullscreen_on_monitor(&screen, i32::try_from(index).unwrap_or(0)),
             _ => gtk_window.fullscreen(),
         }
@@ -2539,6 +2939,9 @@ pub struct AreaContext {
     pub picture: String,
     pub stream_width: u32,
     pub stream_height: u32,
+    /// The area to show already drawn, as fractions of the picture: the
+    /// last one recorded, else a centred half of the screen.
+    pub initial_area: Option<super::area_pick::PictureFraction>,
 }
 
 /// The area window's picture, while an area is being drawn.
@@ -2550,6 +2953,9 @@ pub fn capture_area_context(state: tauri::State<'_, AppState>) -> Result<AreaCon
             picture: format!("data:image/jpeg;base64,{}", pick.still.jpeg),
             stream_width: pick.still.width,
             stream_height: pick.still.height,
+            initial_area: pick
+                .initial
+                .and_then(|area| super::area_pick::fraction_of(area, (pick.still.width, pick.still.height))),
         }),
         _ => Err(AppError::Validation("No area is waiting to be drawn.".into())),
     }
@@ -2763,6 +3169,27 @@ async fn clear_screen_for_grab(app: &AppHandle) {
     }
 }
 
+/// A card left on screen by an earlier capture (or a failed one brought
+/// back) is not content protected on macOS (`own_windows`), so it goes
+/// before the screen is read. `is_visible` answers through the event loop,
+/// after the hide, so the window is ordered out when it says false; one
+/// more frame lets the window server drop it. The new capture's card shows
+/// once the picture is taken.
+async fn hide_card_for_grab(app: &AppHandle) {
+    let Some(card) = app.get_webview_window(PREVIEW_LABEL) else {
+        return;
+    };
+    if !card.is_visible().unwrap_or(false) {
+        return;
+    }
+    let _ = card.hide();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+    while card.is_visible().unwrap_or(false) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(CARD_GONE_SETTLE).await;
+}
+
 /// Whether the system will keep `window` out of screen captures, read back
 /// from the window itself: `GetWindowDisplayAffinity` must say
 /// `WDA_EXCLUDEFROMCAPTURE` on Windows. macOS's `sharingType = none` holds
@@ -2868,14 +3295,18 @@ fn capture_blocking(_selection: Selection) -> Result<image::RgbaImage> {
 /// done, so it said "Preparing upload" through the whole upload and the mint.
 ///
 /// A card goes to the drive it names (Retry included), even if the capture
-/// drive was changed since.
+/// drive was changed since. A card opened before the captures drive was set
+/// up (the first capture) asks `setup::ensure` instead, and so does its
+/// Retry while there is none; such a capture is kept on this computer
+/// meanwhile (`keep_here`), never lost, and the user is asked where captures
+/// go when nobody has said.
 async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>) {
     let state = app.state::<AppState>();
     let started_ms = chrono::Utc::now().timestamp_millis();
     let card_destination = card_id.and_then(|id| {
         lock(&state.capture.preview)
             .as_ref()
-            .filter(|c| c.id == id)
+            .filter(|c| c.id == id && !c.kept_locally)
             .map(|c| c.destination.clone())
     });
     let outcome = async {
@@ -2883,32 +3314,58 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
         let pool = state.pool()?;
         let destination = match card_destination {
             Some(d) => d,
-            None => destination::load(pool, &account_id)
-                .await?
-                .ok_or(AppError::NotReady(NotReadyKind::CaptureDestinationUnset))?,
+            None => match super::setup::ensure(app, &account_id).await? {
+                super::setup::Ensured::Ready(d) => {
+                    if let Some(id) = card_id {
+                        adopt_destination(app, &account_id, id, &d).await;
+                    }
+                    d
+                }
+                super::setup::Ensured::Kept(kept) => return Ok(Delivery::KeptHere(kept)),
+            },
         };
-        let mint_link = bar::load_options(pool).await.map_or(true, |o| o.copy_link);
+        let (mint_link, open_link) = bar::load_options(pool).await.map_or((true, true), |o| (o.copy_link, o.open_link));
         let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
-        Ok::<_, AppError>((account_id, destination, mint_link, placed))
+        Ok::<_, AppError>(Delivery::Placed {
+            account_id,
+            destination,
+            mint_link,
+            open_link,
+            placed,
+        })
     }
     .await;
 
     match outcome {
-        Ok((account_id, destination, mint_link, placed)) => {
+        Ok(Delivery::KeptHere(kept)) => keep_here(app, path, card_id, &kept).await,
+        Ok(Delivery::Placed {
+            account_id,
+            destination,
+            mint_link,
+            open_link,
+            placed,
+        }) => {
             announce_placed(app, card_id, &destination, &placed, mint_link, started_ms);
             let minted = if mint_link {
                 super::deliver::link_for(&state, &account_id, &destination, &placed).await
             } else {
                 super::deliver::Minted::default()
             };
-            let delivered = super::deliver::Delivered::from_parts(&placed, &minted, &destination.display_name);
+            let delivered = super::deliver::Delivered::from_parts(&placed, &minted, &destination);
             let copied = copy_link_to_clipboard(app, delivered.share_url.as_deref());
+            if open_link {
+                open_link_in_browser(app, delivered.share_url.as_deref());
+            }
             // The upload landed (or, synced, the file is in the drive's own
             // folder), so the temp copy has served its purpose, unless a
             // direct upload still needs it to make a link later.
-            let keep = super::deliver::keep_temp_after_upload(delivered.via_sync, delivered.share_url.is_some());
-            if !keep && let Some(dir) = path.parent() {
-                let _ = std::fs::remove_dir_all(dir);
+            let editable = card_id.is_some() && super::editor::EditableFormat::from_name(&delivered.file_name).is_some();
+            let keep = super::deliver::keep_temp_after_upload(delivered.via_sync, delivered.share_url.is_some(), editable);
+            if !keep {
+                // Only ever the capture's own temp folder: a capture sent
+                // from the folder it was kept in on this computer is in the
+                // user's drive folder, which holds their other captures.
+                remove_temp_dir(path);
             }
             let _ = app.emit(DELIVERED_EVENT, &delivered);
             let shown = card_id.is_some_and(|id| announce_link(app, &state.capture, id, &delivered, copied, keep));
@@ -2942,15 +3399,155 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
     }
 }
 
-fn notify(app: &AppHandle, title: String, body: String) {
+/// A picture edited from the tray's Annotate, outside every drive, filed
+/// as a new screenshot: the card shows it and it is delivered exactly like
+/// a fresh capture (`editor::save_as_new_capture`).
+pub(super) async fn deliver_as_new_screenshot(app: &AppHandle, path: &Path, thumbnail: Option<String>) {
+    let card_id = open_preview(app, CaptureKind::Screenshot, path, thumbnail).await;
+    let (app, path) = (app.clone(), path.to_path_buf());
+    tauri::async_runtime::spawn(async move {
+        deliver_and_announce(&app, &path, card_id).await;
+    });
+}
+
+/// Where [`deliver_and_announce`] got to.
+enum Delivery {
+    /// In the drive (or on its way through the sync engine).
+    Placed {
+        account_id: String,
+        destination: CaptureDestination,
+        mint_link: bool,
+        open_link: bool,
+        placed: super::deliver::Placed,
+    },
+    /// No captures drive yet: keep it on this computer.
+    KeptHere(super::setup::Kept),
+}
+
+/// A card opened before its drive existed takes the drive setup chose: its
+/// name, whether it is synced here, and where Retry sends it from now on.
+async fn adopt_destination(app: &AppHandle, account_id: &str, id: u64, chosen: &CaptureDestination) {
+    let state = app.state::<AppState>();
+    let remote = match state.pool() {
+        Ok(pool) => !destination::is_local(pool, account_id, &chosen.label).await,
+        Err(_) => true,
+    };
+    update_card(app, &state.capture, id, |card| {
+        card.drive_label.clone_from(&chosen.label);
+        card.drive_name.clone_from(&chosen.display_name);
+        card.rel_path = chosen.rel_path(&card.file_name);
+        card.remote = remote;
+        card.destination = chosen.clone();
+        card.kept_locally = false;
+    });
+}
+
+/// No captures drive for this capture yet: keep it where `kept` says (the
+/// chosen folder, or Hippius's own while nobody has chosen) and say so, with
+/// what to do next. Never a dead end: the card offers Retry and Reveal (and
+/// Upgrade for a full plan), the next capture tries again, and when nobody
+/// has said where captures go the main window asks.
+async fn keep_here(app: &AppHandle, path: &Path, card_id: Option<u64>, kept_as: &super::setup::Kept) {
+    let state = app.state::<AppState>();
+    let kept = tauri::async_runtime::spawn_blocking({
+        let (dir, path) = (kept_as.dir.clone(), path.to_path_buf());
+        move || super::deliver::keep_in_folder(&dir, &path)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("capture keep task failed: {e}")))
+    .and_then(|r| r);
+    let kept = match kept {
+        Ok(kept) => {
+            remove_temp_dir(path);
+            kept
+        }
+        Err(e) => {
+            // Not even a local folder: the temp copy stays for Retry.
+            tracing::warn!(error = %e, "capture could not be kept in the drive folder; left where it was");
+            path.to_path_buf()
+        }
+    };
+    let message = kept_as.message.clone();
+    let reason = kept_as.reason;
+    let file_name = kept.file_name().map(|n| n.to_string_lossy().into_owned());
+    let shown = card_id.is_some_and(|id| {
+        update_card(app, &state.capture, id, |card| {
+            card.status = PreviewStatus::Failed {
+                message: message.clone(),
+                reason,
+                retryable: true,
+            };
+            if !kept_as.place.is_empty() {
+                card.drive_name.clone_from(&kept_as.place);
+            }
+            card.remote = false;
+            card.kept_locally = true;
+            if let Some(name) = &file_name {
+                card.file_name.clone_from(name);
+            }
+            card.placed_path = (kept != path).then(|| kept.clone());
+            card.file_path.clone_from(&kept);
+        })
+    });
+    let _ = app.emit(
+        FAILED_EVENT,
+        FailedPayload {
+            message: message.clone(),
+            card_showing: shown,
+        },
+    );
+    if !shown {
+        notify(app, "Capture saved on this computer".into(), message);
+    }
+    if kept_as.ask {
+        super::setup::ask_for_location(app);
+    }
+}
+
+/// The captures drive was just set up (or its folder chosen): send the
+/// capture the card is keeping on this computer, as Retry does, link and
+/// all. Returns its file, which the caller then leaves for this delivery.
+pub(super) fn redeliver_kept_card(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let state = app.state::<AppState>();
+    let card = {
+        let mut g = lock(&state.capture.preview);
+        let card = g.as_ref().filter(|c| c.kept_locally && c.can_retry()).cloned()?;
+        let uploading = PreviewCard {
+            status: PreviewStatus::Uploading,
+            ..card
+        }
+        .refreshed();
+        *g = Some(uploading.clone());
+        uploading
+    };
+    let _ = app.emit(PREVIEW_EVENT, Some(&card));
+    let file = card.file_path.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        deliver_and_announce(&app, &card.file_path, Some(card.id)).await;
+    });
+    Some(file)
+}
+
+pub(super) fn notify(app: &AppHandle, title: String, body: String) {
     use tauri_plugin_notification::NotificationExt;
     if let Err(e) = app.notification().builder().title(title).body(body).show() {
         tracing::warn!(error = %e, "capture notification not shown");
     }
 }
 
+/// Open a capture's new link in the default browser, as Zight does. Best
+/// effort: the link is already on the clipboard and on the card.
+fn open_link_in_browser(app: &AppHandle, url: Option<&str>) {
+    use tauri_plugin_opener::OpenerExt;
+    let Some(url) = url else { return };
+    if let Err(e) = app.opener().open_url(url, None::<&str>) {
+        tracing::warn!(error = %e, "capture link not opened in the browser");
+    }
+}
+
 /// Put `url` on the clipboard; whether it got there.
-fn copy_link_to_clipboard(app: &AppHandle, url: Option<&str>) -> bool {
+pub(super) fn copy_link_to_clipboard(app: &AppHandle, url: Option<&str>) -> bool {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     let Some(url) = url else { return false };
     match app.clipboard().write_text(url.to_string()) {
@@ -2976,7 +3573,7 @@ fn announce_placed(
 ) {
     let Some(id) = card_id else { return };
     let state = app.state::<AppState>();
-    let rel_path = super::preview::rel_path_for(&placed.file_name);
+    let rel_path = destination.rel_path(&placed.file_name);
     update_card(app, &state.capture, id, |card| {
         card.status = if placed.via_sync {
             PreviewStatus::Syncing {
@@ -3464,18 +4061,6 @@ pub async fn capture_relaunch_for_permission(state: tauri::State<'_, AppState>, 
     Ok(())
 }
 
-#[tauri::command]
-pub async fn capture_get_destination(state: tauri::State<'_, AppState>) -> Result<Option<CaptureDestination>> {
-    let account_id = state.current_account_id()?;
-    destination::load(state.pool()?, &account_id).await
-}
-
-#[tauri::command]
-pub async fn capture_set_destination(state: tauri::State<'_, AppState>, destination: CaptureDestination) -> Result<()> {
-    let account_id = state.current_account_id()?;
-    destination::save(state.pool()?, &account_id, &destination).await
-}
-
 // ── The preview card ────────────────────────────────────────────────────────
 
 /// Show the card for a capture that is about to upload. Returns its id, or
@@ -3485,15 +4070,23 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
     let state = app.state::<AppState>();
     let account_id = state.current_account_id().ok()?;
     let pool = state.pool().ok()?;
-    let destination = destination::load(pool, &account_id).await.ok().flatten()?;
-    let remote = !destination::is_local(pool, &account_id, &destination.label).await;
+    // No destination yet: this is the first capture, and delivery sets one
+    // up (`setup::ensure`). The card opens at once all the same, naming the
+    // drive that would be made; delivery puts the real one on it.
+    let stored = destination::load(pool, &account_id).await.ok().flatten();
+    let awaiting_setup = stored.is_none();
+    let destination = stored.unwrap_or_else(|| {
+        let name = super::naming::DEFAULT_DRIVE_NAME;
+        CaptureDestination::own(name, name)
+    });
+    let remote = !awaiting_setup && !destination::is_local(pool, &account_id, &destination.label).await;
     let file_name = path.file_name()?.to_str()?.to_string();
 
     let id = state.capture.preview_seq.fetch_add(1, Ordering::SeqCst) + 1;
     let card = PreviewCard {
         id,
         kind,
-        rel_path: super::preview::rel_path_for(&file_name),
+        rel_path: destination.rel_path(&file_name),
         file_name,
         drive_label: destination.label.clone(),
         drive_name: destination.display_name.clone(),
@@ -3509,6 +4102,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         file_path: path.to_path_buf(),
         placed_path: None,
         destination,
+        kept_locally: awaiting_setup,
     }
     .refreshed();
     let replaced = lock(&state.capture.preview).replace(card.clone());
@@ -3529,7 +4123,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
 
 /// Change card `id`, if it is still the card on screen, and tell the card.
 /// Returns whether a card window is there to show it.
-fn update_card(app: &AppHandle, state: &CaptureState, id: u64, change: impl FnOnce(&mut PreviewCard)) -> bool {
+pub(super) fn update_card(app: &AppHandle, state: &CaptureState, id: u64, change: impl FnOnce(&mut PreviewCard)) -> bool {
     let updated = {
         let mut guard = lock(&state.preview);
         let Some(card) = guard.as_mut().filter(|c| c.id == id) else {
@@ -3627,8 +4221,13 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
         .skip_taskbar(true)
         .always_on_top(true)
         .visible_on_all_workspaces(true)
-        // Out of any later screenshot or recording, like the bar itself.
-        .content_protected(true)
+        // Out of any later screenshot or recording. On macOS by other means
+        // (the helper leaves the app out, a screenshot hides a visible card
+        // first), so it shows in other apps' screen sharing (`own_windows`).
+        .content_protected(super::own_windows::content_protected(
+            super::rollout::current_platform(),
+            super::own_windows::OwnWindow::Card,
+        ))
         // A card is information, not a dialog: typing carries on in the app
         // the user was in.
         .focused(false)
@@ -3651,6 +4250,45 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
 #[tauri::command]
 pub fn capture_preview_context(state: tauri::State<'_, AppState>) -> Option<PreviewCard> {
     lock(&state.capture.preview).clone()
+}
+
+/// Where the pointer is over the card's window, in its CSS pixels from the
+/// top left (it may be outside the window). The card asks while its
+/// auto-hide timer runs: macOS sends no hover to a window that is not key,
+/// and the card never is, so hovering it would not hold it there.
+/// Not async, so it runs on the main thread, where AppKit is read.
+#[tauri::command]
+pub fn capture_preview_pointer(app: AppHandle) -> Option<(f64, f64)> {
+    let window = app.get_webview_window(PREVIEW_LABEL)?;
+    pointer_in_window(&app, &window)
+}
+
+#[cfg(target_os = "macos")]
+fn pointer_in_window(_app: &AppHandle, window: &tauri::WebviewWindow) -> Option<(f64, f64)> {
+    use cocoa::foundation::{NSPoint, NSRect};
+    use objc::{msg_send, sel, sel_impl};
+
+    let ns_window = window.ns_window().ok()?.cast::<objc::runtime::Object>();
+    // SAFETY: `ns_window` is this window's live NSWindow; both are reads, on
+    // the main thread (a sync command). The point is in window points from
+    // the bottom left, the content view's height turns it top down.
+    unsafe {
+        let p: NSPoint = msg_send![ns_window, mouseLocationOutsideOfEventStream];
+        let view: *mut objc::runtime::Object = msg_send![ns_window, contentView];
+        if view.is_null() {
+            return None;
+        }
+        let frame: NSRect = msg_send![view, frame];
+        Some((p.x, frame.size.height - p.y))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pointer_in_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Option<(f64, f64)> {
+    let cursor = app.cursor_position().ok()?;
+    let at = window.inner_position().ok()?;
+    let scale = window.scale_factor().ok()?;
+    Some(((cursor.x - f64::from(at.x)) / scale, (cursor.y - f64::from(at.y)) / scale))
 }
 
 /// The card on screen, if its buttons allow `allowed`.
@@ -3774,9 +4412,12 @@ struct ShowInFolderPayload {
     remote: bool,
     subfolder: String,
     file_name: String,
+    /// The capture is in the captures drive (at its root): the Captures page
+    /// shows it, rather than Drive.
+    captures_drive: bool,
 }
 
-/// Show in folder: bring Hippius forward on the drive's Captures folder.
+/// Show in folder: bring Hippius forward where the capture is.
 #[tauri::command]
 pub fn capture_preview_show_in_folder(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
     let card = lock(&state.capture.preview)
@@ -3788,7 +4429,8 @@ pub fn capture_preview_show_in_folder(state: tauri::State<'_, AppState>, app: Ap
         ShowInFolderPayload {
             label: card.drive_label,
             remote: card.remote,
-            subfolder: super::naming::CAPTURES_FOLDER.to_string(),
+            captures_drive: card.destination.folder.is_empty() && !card.kept_locally,
+            subfolder: card.destination.folder.clone(),
             file_name: card.file_name,
         },
     );
@@ -3979,7 +4621,7 @@ pub fn on_shortcut(app: &AppHandle) {
     let signed_in = state.current_account_id().is_ok();
     match shortcut::action_for(state.capture.current(), signed_in) {
         ShortcutAction::Start => {
-            let _ = app.emit(shortcut::SHORTCUT_EVENT, ());
+            let _ = app.emit(shortcut::SHORTCUT_EVENT, shortcut::ShortcutStart::PRESSED);
         }
         ShortcutAction::Stop => {
             let app = app.clone();
@@ -4151,6 +4793,16 @@ async fn recording_bubble_frame(app: &AppHandle, phase: CapturePhase, shape: Opt
     if !recording_starts || shape != Some(CameraShape::Bubble) {
         return None;
     }
+    let (filmed, scale) = filmed_now(app).await?;
+    let current = app.get_webview_window(CAMERA_LABEL).and_then(|w| current_camera_frame(&w));
+    camera::bubble_for_recording(current, size, filmed).map(|f| (f, scale))
+}
+
+/// What the recording films, in the camera window's global points, with the
+/// scale to place a window there: the area, the window's frame now, or the
+/// recorded display. `None` when it cannot be said (no selection, a Wayland
+/// area, a window recording that leaves the bubble out).
+async fn filmed_now(app: &AppHandle) -> Option<(camera::Filmed, f64)> {
     let state = app.state::<AppState>();
     let selection = (*lock(&state.capture.selection))?;
     let display_of = |id: u32| lock(&state.capture.displays).iter().find(|d| d.id == id).cloned();
@@ -4193,8 +4845,7 @@ async fn recording_bubble_frame(app: &AppHandle, phase: CapturePhase, shape: Opt
             (camera::Filmed::Region(frame), scale)
         }
     };
-    let current = app.get_webview_window(CAMERA_LABEL).and_then(|w| current_camera_frame(&w));
-    camera::bubble_for_recording(current, size, filmed).map(|f| (f, scale))
+    Some((filmed, scale))
 }
 
 /// What the camera page and the pill are told: the shape, the chosen camera
@@ -4218,6 +4869,7 @@ async fn camera_state_for(app: &AppHandle, shape: Option<CameraShape>, hidden: b
         (_, None) => false,
     };
     let recording = camera::is_recording(phase);
+    let (switch_from_pill, resize_from_pill) = state.capture.pill_camera_controls(phase, hidden, live_support());
     CameraState {
         shape,
         hidden,
@@ -4229,6 +4881,8 @@ async fn camera_state_for(app: &AppHandle, shape: Option<CameraShape>, hidden: b
         // Camera only on Wayland: the recorder opens the camera from Record
         // on, so the stage page lets go of it (one owner per device).
         recorder_owns_camera: recording && recorder_opens_camera(shape),
+        switch_from_pill,
+        resize_from_pill,
     }
 }
 
@@ -4256,6 +4910,13 @@ async fn end_camera(app: &AppHandle) {
     let state = app.state::<AppState>();
     lock(&state.capture.recording_camera).take();
     state.capture.camera_hidden.store(false, Ordering::SeqCst);
+    // The pill's device menus may have started the device watch.
+    if !matches!(state.capture.current(), CapturePhase::Selecting { .. }) {
+        super::device_watch::stop();
+    }
+    if *lock(&state.capture.live_microphone) != super::live_controls::LiveMicrophone::default() {
+        set_live_microphone(app, super::live_controls::LiveMicrophone::default());
+    }
     sync_camera(app).await;
 }
 
@@ -4641,6 +5302,14 @@ pub async fn capture_camera_set_size(app: AppHandle, size: CameraSize) -> Result
     let camera_state = camera_state_for(&app, shape, hidden, &options).await;
     let _ = app.emit(CAMERA_STATE_EVENT, camera_state);
 
+    if super::live_controls::is_live(state.capture.current()) {
+        // From the pill: the bubble is filmed, so the file follows the
+        // window. Only a bubble changes size; the stage is the recording.
+        if previous != size && *lock(&state.capture.recording_camera) == Some(CameraShape::Bubble) {
+            resize_bubble_while_recording(&app, previous, size, hidden).await;
+        }
+        return Ok(size);
+    }
     // Only a bubble changes size; the camera-only stage is the recording.
     if shape != Some(CameraShape::Bubble) || previous == size {
         return Ok(size);
@@ -4671,6 +5340,183 @@ pub async fn capture_camera_set_size(app: AppHandle, size: CameraSize) -> Result
     };
     set_camera_frame(&window, target, scale, true);
     Ok(size)
+}
+
+/// The pill's size choice mid-recording: the bubble's window is resized
+/// inside what is filmed (`camera::resized_while_recording`), so the camera
+/// in the file changes size with it. A hidden bubble is resized too, without
+/// the glide, so it comes back at the size the pill shows.
+async fn resize_bubble_while_recording(app: &AppHandle, previous: CameraSize, size: CameraSize, hidden: bool) {
+    let state = app.state::<AppState>();
+    let Some(window) = app.get_webview_window(CAMERA_LABEL) else {
+        return;
+    };
+    let Some(current) = current_camera_frame(&window) else {
+        return;
+    };
+    let bounds = match filmed_now(app).await {
+        Some((filmed, scale)) => Some((filmed.bounds(), scale)),
+        None => bar_work_area(app),
+    };
+    let Some((bounds, scale)) = bounds else {
+        return;
+    };
+    let before_full = *lock(&state.capture.bubble_frame);
+    if size == CameraSize::Full && previous != CameraSize::Full {
+        *lock(&state.capture.bubble_frame) = Some(current);
+    }
+    let target = camera::resized_while_recording(current, previous, size, before_full, bounds);
+    set_camera_frame(&window, target, scale, !hidden);
+}
+
+/// The live controls this platform's pill offers (`live_controls`).
+fn live_support() -> super::live_controls::LiveSupport {
+    super::live_controls::support_for(super::rollout::current_platform())
+}
+
+/// Keep the recording's microphone and tell the pill.
+fn set_live_microphone(app: &AppHandle, mic: super::live_controls::LiveMicrophone) {
+    let state = app.state::<AppState>();
+    let now = mic.state(live_support());
+    *lock(&state.capture.live_microphone) = mic;
+    let _ = app.emit_to(CONTROLS_LABEL, MICROPHONE_STATE_EVENT, now);
+}
+
+/// The pill's first read of the recording's microphone.
+#[tauri::command]
+pub fn capture_microphone_state(state: tauri::State<'_, AppState>) -> super::live_controls::MicrophoneState {
+    lock(&state.capture.live_microphone).state(live_support())
+}
+
+/// Ask the recorder for a microphone change, then keep and announce it.
+/// The recorder answers first: a refused switch (the microphone went away)
+/// leaves the old one recording and the pill showing it.
+async fn change_microphone(app: &AppHandle, action: super::live_controls::MicrophoneAction) -> Result<super::live_controls::MicrophoneState> {
+    use super::live_controls::{MicrophoneAction, MicrophoneStep};
+    let state = app.state::<AppState>();
+    let step = lock(&state.capture.live_microphone)
+        .plan(state.capture.current(), live_support(), &action)
+        .map_err(|line| AppError::Validation(line.into()))?;
+    if step == MicrophoneStep::AskRecorder {
+        let asked = action.clone();
+        with_recorder(app, move |r| match asked {
+            MicrophoneAction::Mute(muted) => r.set_microphone_muted(muted),
+            MicrophoneAction::Switch(device) => r.switch_microphone(device),
+        })
+        .await?;
+    }
+    let mut mic = lock(&state.capture.live_microphone).clone();
+    mic.apply(&action);
+    let now = mic.state(live_support());
+    set_live_microphone(app, mic);
+    Ok(now)
+}
+
+/// The pill's microphone button: mute (`true`) or unmute mid-recording.
+/// Muted, the recording keeps one continuous audio track with silence in
+/// place of the microphone; system audio goes on.
+#[tauri::command]
+pub async fn capture_microphone_mute(app: AppHandle, muted: bool) -> Result<super::live_controls::MicrophoneState> {
+    change_microphone(&app, super::live_controls::MicrophoneAction::Mute(muted)).await
+}
+
+/// The pill's microphone menu: record `device` (`None` = the system
+/// default) from now on, without stopping. Saved as the bar's choice too,
+/// so the next recording starts on it.
+#[tauri::command]
+pub async fn capture_microphone_switch(app: AppHandle, device: Option<String>) -> Result<super::live_controls::MicrophoneState> {
+    let device = device.filter(|d| !d.trim().is_empty());
+    let now = change_microphone(&app, super::live_controls::MicrophoneAction::Switch(device.clone())).await?;
+    let state = app.state::<AppState>();
+    if let Ok(pool) = state.pool()
+        && let Ok(mut options) = bar::load_options(pool).await
+        && options.microphone_device != device
+    {
+        options.microphone_device = device;
+        if bar::save_options(pool, options.clone()).await.is_ok() {
+            let _ = app.emit(OPTIONS_EVENT, options.normalized());
+        }
+    }
+    Ok(now)
+}
+
+/// The pill's camera menu: show `device` (`None` = the default camera) in
+/// the camera window from now on, mid-recording. The window is what is
+/// filmed, so the recording goes on and shows the other camera once the page
+/// has opened it. Saved as the bar's choice too.
+#[tauri::command]
+pub async fn capture_camera_switch(app: AppHandle, device: Option<String>) -> Result<()> {
+    let state = app.state::<AppState>();
+    let recording_camera = *lock(&state.capture.recording_camera);
+    super::live_controls::camera_switch(
+        state.capture.current(),
+        recording_camera,
+        recorder_opens_camera(recording_camera),
+        live_support(),
+    )
+    .map_err(|line| AppError::Validation(line.into()))?;
+    let device = device.filter(|d| !d.trim().is_empty());
+    let pool = state.pool()?;
+    let mut options = bar::load_options(pool).await?;
+    if options.camera_device != device {
+        options.camera_device = device;
+        bar::save_options(pool, options.clone()).await?;
+        let _ = app.emit(OPTIONS_EVENT, options.normalized());
+    }
+    sync_camera(&app).await;
+    Ok(())
+}
+
+/// Where the pill's menu opens (`capture_controls_menu`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PillMenu {
+    pub above: bool,
+}
+
+/// A pill menu opens (`open`) or closes: the pill's window grows to hold it
+/// (above the pill, or below it near the top of the screen) and shrinks
+/// back, the pill itself staying put. The window is content protected, so
+/// the menu is never in the video.
+#[tauri::command]
+pub async fn capture_controls_menu(app: AppHandle, open: bool) -> Result<PillMenu> {
+    let state = app.state::<AppState>();
+    let window = app
+        .get_webview_window(CONTROLS_LABEL)
+        .ok_or_else(|| AppError::Validation(super::live_controls::NOT_RECORDING.into()))?;
+    let current = current_camera_frame(&window).ok_or_else(|| AppError::Other("The recording controls have no frame.".into()))?;
+    let mut menu = lock(&state.capture.pill_menu);
+    match (open, *menu) {
+        (true, Some(above)) => Ok(PillMenu { above }),
+        (true, None) => {
+            let (work, scale) = work_area_at(&state.capture, current).unwrap_or((current, 1.0));
+            let (grown, above) = super::live_controls::pill_with_menu(current, work, super::live_controls::MENU_HEIGHT);
+            *menu = Some(above);
+            set_camera_frame(&window, grown, scale, false);
+            Ok(PillMenu { above })
+        }
+        (false, Some(above)) => {
+            let scale = work_area_at(&state.capture, current).map_or(1.0, |(_, scale)| scale);
+            let back = super::live_controls::pill_without_menu(current, CONTROLS_HEIGHT, above);
+            *menu = None;
+            set_camera_frame(&window, back, scale, false);
+            Ok(PillMenu { above })
+        }
+        (false, None) => Ok(PillMenu { above: true }),
+    }
+}
+
+/// The usable area (and its scale) of the display under `frame`'s centre.
+fn work_area_at(state: &CaptureState, frame: camera::Frame) -> Option<(camera::Frame, f64)> {
+    let (cx, cy) = (frame.x + frame.width / 2.0, frame.y + frame.height / 2.0);
+    let displays = lock(&state.displays).clone();
+    let display = displays
+        .iter()
+        .find(|d| display_area(d).frame().contains(cx, cy))
+        .cloned()
+        .or_else(|| lock(&state.bar_display).clone())?;
+    let area = work_area(state, &display);
+    Some((area.frame(), area.scale))
 }
 
 /// The × on the bubble's strip. While choosing it turns the camera off (the
@@ -5201,5 +6047,98 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v, serde_json::json!({ "message": "x", "cardShowing": true }));
+    }
+
+    /// A Wayland area recording: the pill goes just below the area when it
+    /// fits on the monitor, else above it, else beside it, and only with no
+    /// room anywhere at the monitor's bottom centre. Never inside the area:
+    /// the pill is filmed on Linux.
+    #[test]
+    fn the_pill_stays_out_of_a_wayland_area() {
+        use crate::capture::area_pick::MonitorBox;
+        use crate::capture::recording::protocol::StreamCrop;
+        let monitor = MonitorBox {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let inside = |f: camera::Frame, a: camera::Frame| f.x < a.x + a.width && f.x + f.width > a.x && f.y < a.y + a.height && f.y + f.height > a.y;
+        let on_screen = |f: camera::Frame| f.x >= 0.0 && f.y >= 0.0 && f.x + f.width <= 1920.0 && f.y + f.height <= 1080.0;
+        // The centred half on a 2x stream: below it, centred under it.
+        let area = StreamCrop {
+            x: 960,
+            y: 540,
+            width: 1920,
+            height: 1080,
+        };
+        let below = pill_frame_for_stream_area(monitor, area, (3840, 2160));
+        assert_eq!((below.x, below.y), ((1920.0 - CONTROLS_WIDTH) / 2.0, 270.0 + 540.0 + CONTROLS_MARGIN));
+        // Down to the bottom edge: above it.
+        let low = StreamCrop {
+            x: 400,
+            y: 600,
+            width: 800,
+            height: 480,
+        };
+        let above = pill_frame_for_stream_area(monitor, low, (1920, 1080));
+        assert_eq!((above.y,), (600.0 - CONTROLS_MARGIN - CONTROLS_HEIGHT,));
+        // As tall as the screen: beside it.
+        let tall = StreamCrop {
+            x: 0,
+            y: 0,
+            width: 1200,
+            height: 1080,
+        };
+        let beside = pill_frame_for_stream_area(monitor, tall, (1920, 1080));
+        assert!(beside.x >= 1200.0);
+        for (a, f) in [(area, below), (low, above), (tall, beside)] {
+            let recorded = crate::capture::area_pick::area_on_monitor(a, if a == area { (3840, 2160) } else { (1920, 1080) }, monitor).unwrap();
+            assert!(!inside(f, recorded), "{f:?} is inside {recorded:?}");
+            assert!(on_screen(f), "{f:?} is off screen");
+        }
+        // The whole screen leaves no room: the usual bottom centre.
+        let whole = StreamCrop {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let fallback = pill_frame_for_stream_area(monitor, whole, (1920, 1080));
+        assert_eq!(
+            (fallback.x, fallback.y),
+            ((1920.0 - CONTROLS_WIDTH) / 2.0, 1080.0 - CONTROLS_HEIGHT - CONTROLS_MARGIN)
+        );
+    }
+
+    /// Every camera state the bubble and the pill are sent reads the
+    /// recording's camera. It used to lock that mutex twice in one
+    /// statement, so the first capture of a run hung its thread for good
+    /// holding the lock, and Record (which sets the recording's camera) then
+    /// waited forever: no pill, no bubble, only Escape. Run on its own
+    /// thread with a deadline, so a regression fails instead of hanging.
+    #[test]
+    fn the_pill_camera_controls_read_the_recording_camera_without_waiting_on_themselves() {
+        use crate::capture::live_controls::support_for;
+        use crate::capture::rollout::Platform;
+        let state = Arc::new(starting());
+        *lock(&state.recording_camera) = Some(CameraShape::Bubble);
+        let live = CapturePhase::Recording {
+            elapsed_secs: 3,
+            microphone: true,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = Arc::clone(&state);
+        std::thread::spawn(move || {
+            let _ = tx.send(reader.pill_camera_controls(live, false, support_for(Platform::MacOs)));
+        });
+        let controls = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading the recording's camera deadlocked");
+        assert_eq!(controls, (true, true), "a live bubble on macOS: switch and resize from the pill");
+        // The lock is free again: Record and the recording's end can take it.
+        assert!(state.recording_camera.try_lock().is_ok());
+        // Hidden, the bubble keeps its camera menu but offers no sizes.
+        assert_eq!(state.pill_camera_controls(live, true, support_for(Platform::MacOs)), (true, false));
     }
 }

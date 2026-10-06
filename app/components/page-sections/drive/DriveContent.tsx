@@ -35,6 +35,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
+import { useDriveRoute } from "./driveRoute";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -155,6 +156,8 @@ const DriveContent: FC<DriveContentProps> = ({
   // Same handoff for `RenameDialog` (also mounted at the layout level).
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { requireUploadRoom } = useCreditCheck();
+  // The page's own empty state for a pinned drive's root (Captures).
+  const { pinned, emptyState: pinnedEmptyState } = useDriveRoute();
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -490,6 +493,9 @@ const DriveContent: FC<DriveContentProps> = ({
       (!filteredData.length && !searchTerm && activeFilters.length === 0) ||
       error
     ) {
+      if (pinned && pinnedEmptyState && !error && !currentSubfolderPath) {
+        return <>{pinnedEmptyState}</>;
+      }
       return (
         <>
           <FilesNoEntriesFound
