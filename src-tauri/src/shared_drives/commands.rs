@@ -3507,7 +3507,7 @@ pub async fn add_shared_drive(
     if preparing.mark_preparing(&label) {
         sync.emit_snapshot(true);
     }
-    if let Err(e) = crate::sync::lifecycle::initialize_sync_inner(app.clone(), ctx.account_id.clone(), label.clone(), None, true, false, None).await {
+    if let Err(e) = crate::sync::lifecycle::initialize_sync_inner(app.clone(), ctx.account_id.clone(), label.clone(), None, true, None).await {
         if preparing.clear(&label) {
             sync.emit_snapshot(true);
         }

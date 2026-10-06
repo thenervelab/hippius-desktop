@@ -549,6 +549,53 @@ fn resume_drive_clears_paused_under_commit_lock() {
     );
 }
 
+/// Static pin: starting a drive must not be gated on the credit balance.
+///
+/// Drive storage is paid for by a plan, and every Free-plan account carries a
+/// $0 balance. A balance <= 0 gate in either init funnel refused to start
+/// sync for every Free user: the drive was listed but never ran, and read as
+/// "Syncing" forever. The plan's allowance is enforced where bytes are
+/// committed (`require_eligible`, then the server's 402), not here.
+///
+/// The pin covers the whole file, not just the two funnel bodies: the gate
+/// that shipped lived in a private helper the funnel called, which a
+/// body-only check would not have seen.
+#[test]
+fn sync_init_is_not_gated_on_the_credit_balance() {
+    let src = lifecycle_src();
+    for needle in ["/api/billing/credits/balance/", "CreditBalanceResponse", "billing::credits::"] {
+        assert!(
+            !src.contains(needle),
+            "sync/drive/lifecycle.rs must not read the credit balance (found `{needle}`): \
+             Free-plan accounts have a $0 balance and would never start syncing"
+        );
+    }
+}
+
+/// Static pin: when `add_local_sync_folder` fails to start the drive it just
+/// persisted, it must give that drive a status. The row survives the failed
+/// init, so without one the drive sits in its bootstrap-Active state and
+/// shows "Syncing" forever while the only trace of the failure is a toast.
+#[test]
+fn add_local_sync_folder_flags_a_failed_init() {
+    let src = lifecycle_src();
+    let body = fn_body(&src, "pub async fn add_local_sync_folder(");
+
+    let init_idx = body
+        .find("initialize_sync_inner(")
+        .expect("add_local_sync_folder must start the drive through initialize_sync_inner");
+    let status_idx = body
+        .find("init_failure_status(")
+        .expect("add_local_sync_folder must derive a status for a failed init");
+    let emit_idx = body
+        .find("emit_drive_status(")
+        .expect("add_local_sync_folder must emit the failed drive's status");
+    assert!(
+        init_idx < status_idx && status_idx < emit_idx,
+        "the failure status must be derived from the init's error and then emitted"
+    );
+}
+
 #[tokio::test]
 async fn cached_status_falls_through_when_label_missing() {
     // Negative case: a cache that has an entry for one label must not

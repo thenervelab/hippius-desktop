@@ -148,6 +148,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Folders sync on the Free plan.** A new folder no longer stays on "Syncing" forever when your account has no credits, and a folder that cannot start syncing now says why instead.
+
 - **The camera options in the recording controls now appear as soon as a recording starts.** You can change the camera bubble's size or switch to another camera (your iPhone too) mid-recording, and pointing at the bubble no longer shows a pause button that did nothing and ended up in the video.
 
 - **The storage card reads cleanly when you are over your plan.** The amount
