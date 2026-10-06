@@ -267,13 +267,19 @@ describe("the popover's tiles", () => {
 });
 
 describe("the Upload tile", () => {
-  it("opens the main window's Drive page, like the empty state's button", async () => {
+  it("brings the main window forward with its Upload File dialog, not the Drive page", async () => {
     tauri.onInvoke("capture_support", () => support());
     render(<Tiles />);
     fireEvent.click(await screen.findByRole("button", { name: "Upload, or drop files" }));
-    await waitFor(() => expect(tauri.event.emit).toHaveBeenCalledWith("hippius:tray-open-files", {}));
+    await waitFor(() => expect(tauri.event.emit).toHaveBeenCalledWith("hippius:tray-open-upload", {}));
     expect(main.show).toHaveBeenCalled();
-    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("hide_tray_panel"));
+    expect(main.setFocus).toHaveBeenCalled();
+    expect(tauri.event.emit).not.toHaveBeenCalledWith("hippius:tray-open-files", expect.anything());
+    // The popover is out of the way before the dialog is asked for.
+    const hide = tauri.core.invoke.mock.invocationCallOrder[
+      tauri.core.invoke.mock.calls.findIndex(([c]) => c === "hide_tray_panel")
+    ];
+    expect(hide).toBeLessThan(tauri.event.emit.mock.invocationCallOrder[0]);
   });
 
   it("lights up while files are dragged over the popover, and hands a drop to the main window", async () => {

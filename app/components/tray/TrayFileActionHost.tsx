@@ -65,15 +65,18 @@ export default function TrayFileActionHost() {
   const memberDriveLabels = useMemberDriveLabels();
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
 
-  const [previewFile, setPreviewFile] = useState<FormattedUserFile | null>(
-    null,
-  );
+  // The file on screen and the list its arrows and thumbnail rail walk:
+  // the popover tab it was opened from, else the file alone.
+  const [preview, setPreview] = useState<{
+    file: FormattedUserFile;
+    list: FormattedUserFile[];
+  } | null>(null);
   const [fileToDelete, setFileToDelete] = useState<FormattedUserFile | null>(
     null,
   );
 
   const handle = useCallback(
-    ({ action, file }: TrayFileActionRequest) => {
+    ({ action, file, siblings }: TrayFileActionRequest) => {
       switch (action) {
         case "show-in-drive": {
           const at = trayDriveLocation(file);
@@ -84,7 +87,7 @@ export default function TrayFileActionHost() {
           return;
         }
         case "preview":
-          setPreviewFile(file);
+          setPreview({ file, list: siblings ?? [file] });
           return;
         case "download":
           void downloadFile(file, polkadotAddress ?? "");
@@ -140,25 +143,30 @@ export default function TrayFileActionHost() {
     };
   }, []);
 
-  const closePreview = useCallback(() => setPreviewFile(null), []);
+  const closePreview = useCallback(() => setPreview(null), []);
+  const navigatePreview = useCallback(
+    (file: FormattedUserFile) =>
+      setPreview((current) => (current ? { ...current, file } : current)),
+    [],
+  );
   const closeDelete = useCallback(() => setFileToDelete(null), []);
 
   return (
     <>
-      {previewFile && (
+      {preview && (
         // `FileViewerLayout` reads the file selection context; a scoped
         // provider keeps this viewer's selection apart from the Drive page's.
         <FileSelectionProvider>
           <UnifiedMediaDialog
-            file={previewFile}
-            allFiles={[previewFile]}
+            file={preview.file}
+            allFiles={preview.list}
             onCloseClicked={closePreview}
-            onNavigate={setPreviewFile}
+            onNavigate={navigatePreview}
             handleFileDownload={(file, address) =>
               void downloadFile(file, address)
             }
             onDelete={(file) => {
-              setPreviewFile(null);
+              setPreview(null);
               setFileToDelete(file);
             }}
           />

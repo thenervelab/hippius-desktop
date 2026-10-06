@@ -46,9 +46,26 @@ vi.mock("@/app/contexts/FileSelectionContext", () => ({
   FileSelectionProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock("@/app/components/page-sections/drive/file-preview", () => ({
-  UnifiedMediaDialog: ({ file }: { file: FormattedUserFile }) => (
+  UnifiedMediaDialog: ({
+    file,
+    allFiles,
+    onNavigate,
+  }: {
+    file: FormattedUserFile;
+    allFiles: FormattedUserFile[];
+    onNavigate: (f: FormattedUserFile) => void;
+  }) => (
     <div role="dialog" aria-label="viewer">
-      {file.name}
+      <span data-testid="viewer-file">{file.name}</span>
+      <ul aria-label="viewer list">
+        {allFiles.map((f) => (
+          <li key={f.name}>
+            <button type="button" onClick={() => onNavigate(f)}>
+              {f.name}
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   ),
 }));
@@ -159,6 +176,30 @@ describe("tray file actions in the main window", () => {
     mount();
     await send({ action: "preview", file: file() });
     expect(screen.getByRole("dialog", { name: "viewer" })).toHaveTextContent("report.pdf");
+  });
+
+  it("walks the popover tab the file was opened from", async () => {
+    mount();
+    const a = file({ name: "a.png", actualFileName: "a.png" });
+    const b = file({ name: "b.png", actualFileName: "b.png" });
+    await send({ action: "preview", file: b, siblings: [a, b] });
+    expect(screen.getByTestId("viewer-file")).toHaveTextContent("b.png");
+    const list = screen.getByRole("list", { name: "viewer list" });
+    expect(list).toHaveTextContent("a.png");
+    expect(list).toHaveTextContent("b.png");
+    // Moving to another file keeps the same list.
+    act(() => screen.getByRole("button", { name: "a.png" }).click());
+    expect(screen.getByTestId("viewer-file")).toHaveTextContent("a.png");
+    expect(screen.getByRole("list", { name: "viewer list" })).toHaveTextContent("b.png");
+  });
+
+  it("shows the file alone when the list it came with does not hold it", async () => {
+    mount();
+    const a = file({ name: "a.png", actualFileName: "a.png" });
+    await send({ action: "preview", file: file(), siblings: [a] });
+    const list = screen.getByRole("list", { name: "viewer list" });
+    expect(list).toHaveTextContent("report.pdf");
+    expect(list).not.toHaveTextContent("a.png");
   });
 
   it("asks before deleting", async () => {
