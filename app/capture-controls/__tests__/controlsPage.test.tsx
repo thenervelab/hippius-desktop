@@ -311,6 +311,18 @@ describe("the camera mid-recording", () => {
     expect(screen.queryByRole("button", { name: "Hide camera" })).toBeNull();
   });
 
+  // The pill first hears the camera at Record, before the recording runs,
+  // when Rust offers no camera menu; Rust sends it again once recording.
+  it("offers the camera menu once Rust says the recording runs", async () => {
+    withCamera({ ...BUBBLE, switchFromPill: false, resizeFromPill: false });
+    await screen.findByRole("button", { name: "Hide camera" });
+    expect(screen.queryByRole("button", { name: "Camera options" })).toBeNull();
+    await act(() => tauri.emitEvent("capture_camera_state", BUBBLE));
+    fireEvent.click(await screen.findByRole("button", { name: "Camera options" }));
+    expect(await screen.findByRole("menuitemradio", { name: "Large" })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitemradio", { name: /iPhone Camera/ })).toBeInTheDocument();
+  });
+
   it("offers no camera menu where Rust offers none", async () => {
     withCamera({ ...BUBBLE, switchFromPill: false, resizeFromPill: false });
     await screen.findByRole("button", { name: "Hide camera" });

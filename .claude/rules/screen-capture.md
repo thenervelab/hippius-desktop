@@ -477,7 +477,10 @@ hovered or focused button in its own `role="tooltip"` label. The `<video>` is
 mirrored, so WebKit's start-playback button (shown on a paused or not yet
 playing video) was a backwards triangle on the bubble; CSS cannot remove
 WebKit's modern controls, so the video is `opacity-0` until `playing` (and
-again on `pause`), and the page calls `play()` itself.
+again on `pause`), and the page calls `play()` itself. The video is
+`pointer-events-none` (`VIDEO_TAKES_NO_POINTER`): WebKit drew a pause button
+over a hovered picture mid-recording, dead (the click began a drag) and
+filmed; the frame behind it is the drag region, and pause is the pill's.
 **The camera page is sized by its window, never by the video**: its root
 is `fixed inset-0` and the frame's shape is `cameraFrameShape` (round:
 `aspect-square`, capped at the window's height; full and stage: fill with
@@ -668,8 +671,13 @@ opened (`LiveMicrophone::started`), every ending to nothing (`end_camera`,
 which also stops the device watch the menus start); a switch keeps the
 mute. Both switches are saved as the bar's choice too. The camera is
 switched by the camera page reopening it by name (only that page may call
-`getUserMedia`; a short freeze in the video), refused where the recorder
-holds the camera (Wayland camera only). A bubble resized mid-recording is
+`getUserMedia`; a short freeze in the video), asking again with `exact`
+when WebKit opened another camera for the `ideal` id (`openedAnotherCamera`),
+refused where the recorder holds the camera (Wayland camera only). The
+pill's camera menu is on only while live, and the camera state sent at
+Record is still `Capturing`, so `begin_recording` sends it again after
+`adopt_recorder` (`announce_camera`); without it the pill had no camera
+menu (pinned in `capture_wiring.rs`). A bubble resized mid-recording is
 fitted inside what is filmed (`filmed_now`, `camera::resized_while_recording`:
 full = `full_in`, the stage's 16:9 proportions centred in the filmed area,
 no bar block to keep clear of; back to round = where it was before full),

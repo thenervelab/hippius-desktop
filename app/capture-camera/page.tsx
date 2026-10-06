@@ -21,13 +21,16 @@ import {
   camerasAreNamed,
   camerasFrom,
   cameraCloseLabel,
+  exactCameraConstraints,
   MUTE_RECOVERY_MS,
   nextRoundSize,
+  openedAnotherCamera,
   resolveCameraId,
   shouldReopenMuted,
   showsPlaceholder,
   sizeControls,
   stripShown,
+  VIDEO_TAKES_NO_POINTER,
   videoConstraints,
   type RoundSize,
   type SizeIcon,
@@ -57,7 +60,10 @@ import {
  * a video that is paused or not playing yet) came out as a backwards
  * triangle on the bubble. CSS cannot remove WebKit's modern media controls,
  * so the video stays invisible until it is actually playing, and the page
- * starts playback itself. Until then, and while the camera is muted, the
+ * starts playback itself. For the same reason the video never takes the
+ * pointer: WebKit drew a pause button over a hovered picture, which did
+ * nothing (the click began a window drag) and was filmed. The frame behind
+ * it is the drag region; pause is the pill's. Until then, and while the camera is muted, the
  * bubble shows a "starting" placeholder rather than black.
  *
  * This page must be the only one capturing: WebKit mutes every other page's
@@ -251,6 +257,22 @@ export default function CaptureCameraPage() {
         }
         wanted = named;
       }
+      // Asked for by id, another camera opened: ask for that one exactly.
+      // Refused (it went away meanwhile), the camera that opened is kept.
+      if (wanted && openedAnotherCamera(wanted, s.getVideoTracks()[0]?.getSettings?.().deviceId)) {
+        const exact = await media
+          .getUserMedia({ video: exactCameraConstraints(wanted), audio: false })
+          .catch(() => null);
+        if (stale()) {
+          exact?.getTracks().forEach((t) => t.stop());
+          s.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        if (exact) {
+          s.getTracks().forEach((t) => t.stop());
+          s = exact;
+        }
+      }
       install(s, wanted ?? "default");
       void setCaptureCameras(camerasFrom(after)).catch(() => undefined);
     };
@@ -374,7 +396,6 @@ export default function CaptureCameraPage() {
         ) : (
           <video
             ref={videoRef}
-            data-tauri-drag-region
             autoPlay
             muted
             playsInline
@@ -389,7 +410,10 @@ export default function CaptureCameraPage() {
             onEmptied={() => setPlaying(false)}
             data-playing={playing}
             // Mirrored, as every camera preview is: moving left moves left.
-            className={`h-full w-full -scale-x-100 object-cover transition-opacity duration-150 motion-reduce:transition-none ${
+            // Never under the pointer (`VIDEO_TAKES_NO_POINTER`): WebKit drew
+            // its own pause button over a hovered video, which did nothing
+            // and was filmed. The frame behind it is the drag region.
+            className={`${VIDEO_TAKES_NO_POINTER} h-full w-full -scale-x-100 object-cover transition-opacity duration-150 motion-reduce:transition-none ${
               placeholder ? "opacity-0" : "opacity-100"
             }`}
           />

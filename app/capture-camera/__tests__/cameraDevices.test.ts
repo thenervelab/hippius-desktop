@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   camerasAreNamed,
   camerasFrom,
+  exactCameraConstraints,
   MUTE_RECOVERY_TRIES,
+  openedAnotherCamera,
   resolveCameraId,
   shouldReopenMuted,
   showsPlaceholder,
@@ -45,6 +47,23 @@ describe("videoConstraints", () => {
 
   it("asks for the default camera when none is chosen", () => {
     expect(videoConstraints(null).deviceId).toBeUndefined();
+  });
+});
+
+describe("a camera that opened instead of the chosen one", () => {
+  it("is another camera only when one was asked for and WebKit names a different one", () => {
+    expect(openedAnotherCamera("cam2", "cam1")).toBe(true);
+    expect(openedAnotherCamera("cam2", "cam2")).toBe(false);
+    // The default was asked for: any camera is it.
+    expect(openedAnotherCamera(null, "cam1")).toBe(false);
+    // WebKit did not say which opened: keep it.
+    expect(openedAnotherCamera("cam2", undefined)).toBe(false);
+  });
+
+  it("is replaced by asking for the chosen camera and no other, at the same size", () => {
+    const exact = exactCameraConstraints("cam2");
+    expect(exact.deviceId).toEqual({ exact: "cam2" });
+    expect({ ...exact, deviceId: undefined }).toEqual({ ...videoConstraints(null), deviceId: undefined });
   });
 });
 

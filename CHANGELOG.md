@@ -144,6 +144,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The camera options in the recording controls now appear as soon as a recording starts.** You can change the camera bubble's size or switch to another camera (your iPhone too) mid-recording, and pointing at the bubble no longer shows a pause button that did nothing and ended up in the video.
 - **Drag anywhere outside the area to start a new one.** When choosing an
   area for a screenshot or recording, the first drag outside the current area
   now draws a fresh one on a Mac, instead of doing nothing until you clicked
