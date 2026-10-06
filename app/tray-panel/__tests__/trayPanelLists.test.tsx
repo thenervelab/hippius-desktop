@@ -50,7 +50,7 @@ const READY: TrayCaptureView = {
 };
 const capture = vi.hoisted(() => ({ view: null as TrayCaptureView | null }));
 vi.mock("../useTrayCaptureView", () => ({
-  useTrayCaptureView: () => ({ view: capture.view, shortcut: [] }),
+  useTrayCaptureView: () => ({ view: capture.view, shortcut: { screenshot: [], record: [] } }),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({

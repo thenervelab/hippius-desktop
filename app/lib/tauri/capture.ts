@@ -97,6 +97,21 @@ export type CaptureSelectionUi = "overlay" | "systemPicker";
 export type CaptureShortcutVia = "plugin" | "portal" | "desktopSettings";
 
 /**
+ * How one shortcut works here. Mirrors Rust's `ShortcutSupport`.
+ * `unavailableMessage`: where Hippius cannot set the shortcut itself, Rust's line for what to do instead.
+ * `command`: with `desktopSettings`, the command a shortcut in the desktop's own keyboard settings runs.
+ */
+export interface CaptureShortcutSupport {
+  supported: boolean;
+  via: CaptureShortcutVia;
+  unavailableMessage: string | null;
+  command?: string | null;
+}
+
+/** Which system-wide shortcut. Mirrors Rust's `ShortcutKind`. */
+export type CaptureShortcutKind = "screenshot" | "record";
+
+/**
  * What this platform's capture surfaces may offer (Rust's `support::Surfaces`),
  * flattened into `capture_support` and the overlay context. Rust decides; the
  * frontend never checks the platform.
@@ -121,7 +136,13 @@ export interface CaptureSurfaces {
    * `unavailableMessage`: where Hippius cannot set the shortcut itself, Rust's line for what to do instead.
    * `command`: with `desktopSettings`, the command a shortcut in the desktop's own keyboard settings runs.
    */
-  shortcut: { supported: boolean; via: CaptureShortcutVia; unavailableMessage: string | null; command?: string | null };
+  shortcut: CaptureShortcutSupport;
+  /**
+   * The Record shortcut's route: the screenshot one's, except on Wayland, where it is always a
+   * shortcut the user adds in the desktop's keyboard settings (`<app> --record`). Absent from an
+   * older backend, which has no Record shortcut.
+   */
+  recordShortcut?: CaptureShortcutSupport;
   /** With the system picker, Rust's line saying the desktop's own tool chooses what is captured. */
   systemPickerNote: string | null;
   /** Which Linux session this is; null off Linux. */
@@ -479,9 +500,13 @@ export interface CaptureFailed {
 // `capture_share_art` → `ShareArt` (the bar's overlay only),
 // `capture_camera_hover` → `boolean` (the camera window only).
 
-/** `capture_shortcut_pressed`: what the shortcut starts, passed on to `startCapture` as is. */
+/**
+ * `capture_shortcut_pressed`: what the shortcut starts, passed on to `startCapture` as is:
+ * the instant screenshot, or (the Record shortcut) the bar on `kind`.
+ */
 export interface CaptureShortcutStart {
   instant: boolean;
+  kind?: CaptureKind;
 }
 
 /**
@@ -580,18 +605,24 @@ export function editCapturePreview(): Promise<void> {
   return invoke("capture_preview_edit");
 }
 
-/** Register the saved system-wide shortcut (called when the app mounts). */
+/** Register both saved system-wide shortcuts (called when the app mounts). */
 export function syncCaptureShortcut(): Promise<void> {
   return invoke("capture_sync_shortcut");
 }
 
-export function getCaptureShortcut(): Promise<CaptureShortcutSetting> {
-  return invoke("capture_get_shortcut");
+/** The screenshot shortcut (`kind` left out, as Rust reads it), or the Record one. */
+export function getCaptureShortcut(kind: CaptureShortcutKind = "screenshot"): Promise<CaptureShortcutSetting> {
+  return kind === "screenshot" ? invoke("capture_get_shortcut") : invoke("capture_get_shortcut", { kind });
 }
 
-/** Change the shortcut; `null` turns it off. Refused if another app holds it. */
-export function setCaptureShortcut(accelerator: string | null): Promise<void> {
-  return invoke("capture_set_shortcut", { accelerator });
+/**
+ * Change a shortcut; `null` turns it off. Refused (Rust's sentence) if another app holds it,
+ * or if the other shortcut already has those keys.
+ */
+export function setCaptureShortcut(accelerator: string | null, kind: CaptureShortcutKind = "screenshot"): Promise<void> {
+  return kind === "screenshot"
+    ? invoke("capture_set_shortcut", { accelerator })
+    : invoke("capture_set_shortcut", { accelerator, kind });
 }
 
 /** What the pill needs besides the phase. Mirrors Rust's `ControlsContext`. */

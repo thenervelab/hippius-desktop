@@ -116,7 +116,7 @@ export function SaveDialog({
               Remember my choice
             </label>
             {remember && (
-              <p className="mt-1 pl-6 text-[12px] text-grey-60">You can change this in Settings, under Capture.</p>
+              <p className="mt-1 pl-6 text-[12px] text-grey-60">You can change this in Settings, under Screenshots &amp; Recording.</p>
             )}
             {error && (
               <p role="alert" className="mt-3 text-[13px] text-[#FF6B60]">

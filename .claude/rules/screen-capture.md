@@ -7,6 +7,7 @@ paths:
   - "app/capture-preview/**"
   - "app/capture-area/**"
   - "app/components/page-sections/settings/EditedImageSetting.tsx"
+  - "app/components/page-sections/settings/Capture*.tsx"
   - "app/components/capture/**"
   - "app/components/page-sections/captures/**"
   - "app/components/page-sections/drive/driveRoute.tsx"
@@ -771,7 +772,20 @@ product decision. A refusal
 names another copy of Hippius when one is running (`shortcut::held_message`,
 from NSWorkspace's running apps by bundle id or name; Windows says the plain
 sentence). A saved shortcut that did not register at start-up is kept in
-`CaptureState.shortcut_problem` and shown by Settings (`ShortcutSetting.problem`).
+`CaptureState.shortcut_problems[kind]` and shown by Settings (`ShortcutSetting.problem`).
+**Two shortcuts** (`ShortcutKind`, IPC param `kind`, absent = screenshot):
+Record defaults to `CommandOrControl+Alt+Shift+2`, stored
+`capture_record_shortcut_v1`; a press emits `ShortcutStart { instant: false,
+kind: "recording" }` (the bar on Record, on the last mode) and toggles like
+the screenshot one (`on_shortcut_of`). The plugin's one handler tells them
+apart by the keys (`kind_pressed` over `REGISTERED`); `apply` unregisters only
+that kind's keys, never `unregister_all`. `check_not_taken` refuses one the
+other's keys before anything registers; `resolve` makes a never-set Record
+off when the screenshot already has its default's keys (upgrade). Record is
+registered only where `recording_supported()`. On Wayland Record is never
+bound by the portal: `support::record_shortcut_for` says `desktopSettings`
+with `<exe> --record` (`cli::argv_requests_record` → `on_record_shortcut`).
+Pinned by `shortcut::tests` and `capture_wiring::the_record_shortcut_is_wired_like_the_screenshot_one`.
 
 **Delivery is local-first for a drive synced here**: the file is moved into
 `<local root>/<folder>` (the root for the captures drive; `free_name` never
@@ -1137,7 +1151,7 @@ neither** (`requested_mode`, header `x-editor-save-mode`), so a page that did
 not ask can never write over a file. The page asks in `SaveDialog` ("Save as
 a copy" first and selected, "Replace the original", "Remember my choice"),
 unless the user's `SavePreference` (`user_preferences` key
-`capture_editor_save_mode`, also Settings › Capture, `EditedImageSetting`)
+`capture_editor_save_mode`, also Settings › Screenshots & Recording, `EditedImageSetting`)
 says which. The option descriptions are Rust's (`copy_note`, `replace_note`):
 the public-link warning only when the file has a link (`drive_shared`, read
 at open). **A copy** (`save_copy`) is a new file beside the original:
@@ -1220,7 +1234,12 @@ trigger, so no menu opens. The reason is `capture_support.recordingUnavailable`
 disable it. The capture bar's Record modes and Settings show the same line. The tray popover has its labelled Capture button
 (`TrayCaptureButton`, opens the bar on the last mode; its slot is held while
 support is asked). Mode names and icons come from `app/lib/capture/modes.ts`.
-Settings › Sync & Storage has the Capture card (shortcut, captures folder). Pinned by
+Settings › Screenshots & Recording (section `capture`, after Sync & Storage,
+shown where `SCREEN_CAPTURE_ENABLED` and `captureSupportedAtom`) holds every
+capture setting: `CaptureShortcutSetting` per kind, the captures folder,
+`EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
+recording countdown, system audio, read fresh through `capture_get_options`
+before each `capture_set_options`). Pinned by
 `CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`,
 `drive/__tests__/recentFilesCapture.test.tsx`
 and `tests/capture_wiring.rs` (content protection, focus, capabilities, every

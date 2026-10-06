@@ -674,19 +674,52 @@ fn signing_out_ends_the_capture_and_the_shortcut() {
     let cleared = body.find("auth_logout_internal(").expect("logout_full clears the session");
     assert!(ended < cleared, "the capture ends before the session is cleared");
     let end = fn_body(&read("src/capture/commands.rs"), "pub async fn end_for_logout(");
-    assert!(end.contains("cancel_inner(") && end.contains("shortcut::apply(app, None)"));
+    assert!(end.contains("cancel_inner("));
+    assert!(
+        end.contains("for kind in ShortcutKind::ALL") && end.contains("shortcut::apply(app, kind, None)"),
+        "both shortcuts are let go at sign-out"
+    );
 }
 
-/// The shortcut toggles, decided in Rust; it no longer only emits.
+/// The shortcuts toggle, decided in Rust; they no longer only emit. The
+/// plugin's one handler tells the two apart by the keys pressed.
 #[test]
 fn the_shortcut_is_handled_in_rust() {
     let src = read("src/capture/shortcut.rs");
     let plugin = fn_body(&src, "pub fn plugin(");
-    assert!(plugin.contains("on_shortcut(app)"), "the handler must go through commands::on_shortcut");
-    let on = fn_body(&read("src/capture/commands.rs"), "pub fn on_shortcut(");
+    assert!(plugin.contains("kind_pressed(&registered(), shortcut)"));
+    assert!(
+        plugin.contains("on_shortcut_of(app, kind)"),
+        "the handler must go through commands::on_shortcut_of"
+    );
+    let commands = read("src/capture/commands.rs");
+    let on = fn_body(&commands, "pub fn on_shortcut_of(");
     for action in ["stop_inner(", "cancel_inner(", "SHORTCUT_EVENT", "show_main_window("] {
-        assert!(on.contains(action), "on_shortcut must handle {action}");
+        assert!(on.contains(action), "on_shortcut_of must handle {action}");
     }
+    assert!(fn_body(&commands, "pub fn on_shortcut(").contains("on_shortcut_of(app, ShortcutKind::Screenshot)"));
+    assert!(fn_body(&commands, "pub fn on_record_shortcut(").contains("on_shortcut_of(app, ShortcutKind::Record)"));
+}
+
+/// Both shortcuts are registered at start-up, each with its own problem
+/// line; a change refuses the other one's keys before anything is
+/// registered; and `hippius --record` (a Wayland desktop's own shortcut)
+/// reaches the Record shortcut's action without showing the main window.
+#[test]
+fn the_record_shortcut_is_wired_like_the_screenshot_one() {
+    let commands = read("src/capture/commands.rs");
+    let sync = fn_body(&commands, "pub async fn capture_sync_shortcut(");
+    assert!(sync.contains("shortcut::load_both(") && sync.contains("for kind in ShortcutKind::ALL"));
+    let set = fn_body(&commands, "pub async fn capture_set_shortcut(");
+    let checked = set.find("shortcut::check_not_taken(").expect("the other one's keys are refused");
+    let applied = set.find("shortcut::apply(&app, kind, next)").expect("the new keys are registered");
+    let saved = set.find("shortcut::save(pool, kind, next)").expect("then saved");
+    assert!(checked < applied && applied < saved);
+    let main = read("src/main.rs");
+    let record = main.find("crate::cli::argv_requests_record(&argv)").expect("--record is handled");
+    let shown = main.find("window.unminimize()").expect("the plain second launch shows the window");
+    assert!(record < shown, "--record returns before the main window is shown");
+    assert!(main.contains("crate::capture::commands::on_record_shortcut(app);"));
 }
 
 /// Old capture temp folders are cleared at launch, off the start-up path.
@@ -1622,8 +1655,10 @@ fn a_wayland_area_is_remembered_and_keeps_the_pill_out() {
 #[test]
 fn the_shortcut_starts_the_instant_area_screenshot() {
     let src = read("src/capture/commands.rs");
-    let on = fn_body(&src, "pub fn on_shortcut(");
-    assert!(on.contains("shortcut::ShortcutStart::PRESSED"), "the press says what to start");
+    let on = fn_body(&src, "pub fn on_shortcut_of(");
+    assert!(on.contains("kind.start()"), "the press says what to start");
+    let kinds = fn_body(&read("src/capture/shortcut.rs"), "pub const fn start(");
+    assert!(kinds.contains("Self::Screenshot => ShortcutStart::PRESSED"));
     let start = fn_body(&src, "pub async fn capture_start(");
     assert!(start.contains("instant::start_choice("), "Rust decides what an instant start is");
     assert!(start.contains("state.capture.instant.store(choice.instant"));

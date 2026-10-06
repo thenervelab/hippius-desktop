@@ -17,6 +17,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **A keyboard shortcut for screen recording.** Press Option-Shift-Command-2 (Ctrl+Alt+Shift+2 on Windows and Linux) from any app to open the capture bar ready to record, and press it again to stop. Change it or turn it off in Settings.
+- **Screenshots & Recording settings in one place.** Both shortcuts, where captures are saved, what happens after a capture and the recording countdown now have their own tab in Settings.
 - **Open a file straight from the menu bar.** Click a screenshot, recording or any file you can preview in the menu bar list and it opens in the Hippius viewer, ready to flip through the rest of that list.
 - **A menu in the menu bar window.** The three dots at the top right show your balance with Top up, your plan and how much of it you use, and take you to Hippius, your captures folder, Settings, Help & Support or Quit, with keyboard shortcuts.
 - **Mute your microphone during a screen recording.** The recording carries on and stays in sync; it is silent until you unmute. On a Mac.

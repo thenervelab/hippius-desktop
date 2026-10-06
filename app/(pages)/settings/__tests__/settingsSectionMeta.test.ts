@@ -72,3 +72,28 @@ describe("the Billing tooltip links to the docs", () => {
     expect(readFileSync(doc, "utf8")).toContain("slug: /use/desktop/billing");
   });
 });
+
+/**
+ * Every capture setting lives in its own section now, not at the bottom of
+ * Sync & Storage, behind the same capture flag as its sidebar entry.
+ */
+describe("the Screenshots & Recording section", () => {
+  it("has a heading and a guide of its own, with no em dashes", () => {
+    const capture = meta.slice(meta.indexOf("[CAPTURE_SETTINGS_SECTION]: {"), meta.indexOf("appearance: {"));
+    expect(capture).toContain('title: "Screenshots & Recording"');
+    expect(capture).toContain("tooltip:");
+    expect(capture).not.toContain("—");
+  });
+
+  it("renders the capture settings there, behind the capture flag, and not under Sync & Storage", () => {
+    expect(page).toContain("{SCREEN_CAPTURE_ENABLED && section === CAPTURE_SETTINGS_SECTION && <CaptureSettings />}");
+    const syncStart = page.indexOf('{section === "sync" && (');
+    const sync = page.slice(syncStart, page.indexOf("</>", syncStart));
+    expect(sync).not.toContain("<CaptureSettings");
+    expect(page.match(/<CaptureSettings \/>/g)).toHaveLength(1);
+  });
+
+  it("is reachable by its query string only while the capture flag is on", () => {
+    expect(page).toMatch(/captureEnabled: SCREEN_CAPTURE_ENABLED,/);
+  });
+});

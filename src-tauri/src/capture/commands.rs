@@ -32,7 +32,7 @@ use super::recording::{self, Microphone, RecordOptions, Recorder};
 use super::screenshot::Selection;
 use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, TransitionError, transition};
 use super::share;
-use super::shortcut::{self, ShortcutAction, ShortcutSetting};
+use super::shortcut::{self, ShortcutAction, ShortcutKind, ShortcutSetting};
 use super::targets::{DisplayTarget, WindowTarget};
 use super::tray_status::{self, TrayClickRoute, TrayText};
 use crate::app_state::AppState;
@@ -185,9 +185,10 @@ pub struct CaptureState {
     tray_seq: AtomicU64,
     /// What the tray was last given, so it is written only when that changes.
     tray_last: Mutex<Option<TrayText>>,
-    /// Why the saved shortcut could not be registered at start-up, for
-    /// Settings (`ShortcutSetting::problem`); cleared once one registers.
-    shortcut_problem: Mutex<Option<String>>,
+    /// Why each saved shortcut (screenshot, Record; `ShortcutKind::index`)
+    /// could not be registered at start-up, for Settings
+    /// (`ShortcutSetting::problem`); cleared once that one registers.
+    shortcut_problems: Mutex<[Option<String>; 2]>,
     /// Whether the main window was on screen when the capture started, so it
     /// comes back only if it was there to begin with.
     restore_main: AtomicBool,
@@ -4503,21 +4504,30 @@ pub fn capture_preview_retry(state: tauri::State<'_, AppState>, app: AppHandle) 
 
 // ── The system-wide shortcut ────────────────────────────────────────────────
 
-/// Register the saved shortcut. Called when the signed-in app mounts; a
+/// Register both saved shortcuts. Called when the signed-in app mounts; a
 /// shortcut another app took since is logged, not raised, so start-up never
 /// fails over it (Settings says so when the user looks).
 #[tauri::command]
 pub async fn capture_sync_shortcut(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
-    let accelerator = shortcut::load(state.pool()?).await?;
-    let problem = match shortcut::apply(&app, accelerator.as_deref()) {
-        Ok(()) => None,
-        Err(e) => {
-            tracing::warn!(error = %e, "capture shortcut not registered");
-            Some(shortcut_problem_text(&e))
-        }
-    };
-    *lock(&state.capture.shortcut_problem) = problem;
+    let in_force = shortcut::load_both(state.pool()?).await?;
+    let mut problems: [Option<String>; 2] = [None, None];
+    for kind in ShortcutKind::ALL {
+        problems[kind.index()] = register_shortcut(&app, kind, in_force[kind.index()].as_deref());
+    }
+    *lock(&state.capture.shortcut_problems) = problems;
     Ok(())
+}
+
+/// Register `accelerator` as the shortcut of `kind`, answering why it did
+/// not register (Rust's sentence for Settings), or `None`. The Record
+/// shortcut is held only where this computer can record: keys that open a
+/// bar which then refuses would be taken from every other app for nothing.
+fn register_shortcut(app: &AppHandle, kind: ShortcutKind, accelerator: Option<&str>) -> Option<String> {
+    let accelerator = accelerator.filter(|_| kind != ShortcutKind::Record || recording::recording_supported());
+    shortcut::apply(app, kind, accelerator).err().map(|e| {
+        tracing::warn!(error = %e, ?kind, "capture shortcut not registered");
+        shortcut_problem_text(&e)
+    })
 }
 
 /// Rust's sentence for a shortcut that did not register, as Settings shows it.
@@ -4528,11 +4538,20 @@ fn shortcut_problem_text(e: &AppError) -> String {
     }
 }
 
+/// What Settings shows for the shortcut of `kind` (the screenshot one when
+/// left out, as older callers mean).
 #[tauri::command]
-pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>) -> Result<ShortcutSetting> {
-    let route = super::support::surfaces().shortcut.via;
-    let portal = route == super::support::ShortcutVia::Portal;
-    let problem = lock(&state.capture.shortcut_problem)
+pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>, kind: Option<ShortcutKind>) -> Result<ShortcutSetting> {
+    let kind = kind.unwrap_or_default();
+    let surfaces = super::support::surfaces();
+    let route = match kind {
+        ShortcutKind::Screenshot => surfaces.shortcut.via,
+        ShortcutKind::Record => surfaces.record_shortcut.via,
+    };
+    // Only the screenshot shortcut is ever bound through the portal, and
+    // only it can be added to GNOME's settings for the user.
+    let portal = kind == ShortcutKind::Screenshot && route == super::support::ShortcutVia::Portal;
+    let problem = lock(&state.capture.shortcut_problems)[kind.index()]
         .clone()
         .or_else(|| portal.then(super::shortcut_portal::problem).flatten());
     let desktop_trigger = if portal { super::shortcut_portal::trigger() } else { None };
@@ -4542,14 +4561,14 @@ pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>) -> Result<S
             super::shortcut_portal::status(),
             super::shortcut_portal::PortalStatus::Available { configurable: true }
         );
-    let added_to_desktop = if route == super::support::ShortcutVia::DesktopSettings {
+    let added_to_desktop = if kind == ShortcutKind::Screenshot && route == super::support::ShortcutVia::DesktopSettings {
         desktop_shortcut_added().await
     } else {
         None
     };
     Ok(ShortcutSetting {
-        accelerator: shortcut::load(state.pool()?).await?,
-        default_accelerator: shortcut::DEFAULT_SHORTCUT.to_string(),
+        accelerator: shortcut::load(state.pool()?, kind).await?,
+        default_accelerator: kind.default_accelerator().to_string(),
         problem,
         desktop_trigger,
         can_change_in_desktop,
@@ -4591,7 +4610,7 @@ pub async fn capture_configure_shortcut(app: AppHandle) -> Result<()> {
 /// when it is off, runs `hippius --capture`.
 #[tauri::command]
 pub async fn capture_add_desktop_shortcut(state: tauri::State<'_, AppState>) -> Result<()> {
-    let accelerator = shortcut::load(state.pool()?)
+    let accelerator = shortcut::load(state.pool()?, ShortcutKind::Screenshot)
         .await?
         .unwrap_or_else(|| shortcut::DEFAULT_SHORTCUT.to_string());
     #[cfg(target_os = "linux")]
@@ -4605,30 +4624,64 @@ pub async fn capture_add_desktop_shortcut(state: tauri::State<'_, AppState>) -> 
     }
 }
 
-/// Change the shortcut (`None` turns it off). Registered before it is saved,
-/// so a shortcut another app holds is refused and the old one stays.
+/// Change the shortcut of `kind` (the screenshot one when left out; `None`
+/// turns it off). The other shortcut's keys are refused
+/// (`shortcut::check_not_taken`). Registered before it is saved, so a
+/// shortcut another app holds is refused and the old one stays.
 #[tauri::command]
-pub async fn capture_set_shortcut(state: tauri::State<'_, AppState>, app: AppHandle, accelerator: Option<String>) -> Result<()> {
+pub async fn capture_set_shortcut(
+    state: tauri::State<'_, AppState>,
+    app: AppHandle,
+    accelerator: Option<String>,
+    kind: Option<ShortcutKind>,
+) -> Result<()> {
+    let kind = kind.unwrap_or_default();
     let pool = state.pool()?;
-    let previous = shortcut::load(pool).await?;
+    let before = shortcut::load_both(pool).await?;
+    let previous = before[kind.index()].clone();
     let next = accelerator.as_deref().map(str::trim).filter(|a| !a.is_empty());
-    if let Err(e) = shortcut::apply(&app, next) {
-        let _ = shortcut::apply(&app, previous.as_deref());
+    shortcut::check_not_taken(kind, next, before[kind.other().index()].as_deref())?;
+    if let Err(e) = shortcut::apply(&app, kind, next) {
+        let _ = shortcut::apply(&app, kind, previous.as_deref());
         return Err(e);
     }
-    lock(&state.capture.shortcut_problem).take();
-    shortcut::save(pool, next).await
+    lock(&state.capture.shortcut_problems)[kind.index()] = None;
+    shortcut::save(pool, kind, next).await?;
+    // A Record shortcut never set follows the screenshot's (`shortcut::
+    // resolve`): moving the screenshot off the Record default's keys turns
+    // the Record default on now, not at the next launch.
+    let other = kind.other();
+    let after = shortcut::load(pool, other).await?;
+    if after != before[other.index()] {
+        let problem = register_shortcut(&app, other, after.as_deref());
+        lock(&state.capture.shortcut_problems)[other.index()] = problem;
+    }
+    Ok(())
 }
 
-/// A press of the system-wide shortcut. It toggles (`shortcut::action_for`):
-/// Stop and Cancel run here; Start goes through the main window so its
-/// refusals reach the same dialogs as the Capture button.
+/// A press of the screenshot shortcut (the plugin's handler goes through
+/// [`on_shortcut_of`]; this is the portal's and `hippius --capture`'s).
 pub fn on_shortcut(app: &AppHandle) {
+    on_shortcut_of(app, ShortcutKind::Screenshot);
+}
+
+/// A press of the Record shortcut from outside the plugin
+/// (`hippius --record`, a Wayland desktop's own shortcut).
+pub fn on_record_shortcut(app: &AppHandle) {
+    on_shortcut_of(app, ShortcutKind::Record);
+}
+
+/// A press of a system-wide shortcut. Both toggle the same way
+/// (`shortcut::action_for`): Stop and Cancel run here; Start goes through
+/// the main window with what `kind` starts (`ShortcutKind::start`: the
+/// instant screenshot, or the bar on Record), so its refusals reach the
+/// same dialogs as the Capture button.
+pub fn on_shortcut_of(app: &AppHandle, kind: ShortcutKind) {
     let state = app.state::<AppState>();
     let signed_in = state.current_account_id().is_ok();
     match shortcut::action_for(state.capture.current(), signed_in) {
         ShortcutAction::Start => {
-            let _ = app.emit(shortcut::SHORTCUT_EVENT, shortcut::ShortcutStart::PRESSED);
+            let _ = app.emit(shortcut::SHORTCUT_EVENT, kind.start());
         }
         ShortcutAction::Stop => {
             let app = app.clone();
@@ -4671,8 +4724,10 @@ pub async fn end_for_logout(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
         let _ = w.close();
     }
-    if let Err(e) = shortcut::apply(app, None) {
-        tracing::warn!(error = %e, "capture shortcut not unregistered at sign-out");
+    for kind in ShortcutKind::ALL {
+        if let Err(e) = shortcut::apply(app, kind, None) {
+            tracing::warn!(error = %e, ?kind, "capture shortcut not unregistered at sign-out");
+        }
     }
 }
 
