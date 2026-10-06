@@ -152,6 +152,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Files in Recent Files open right after they upload.** A file you just
+  uploaded used to say it couldn't be previewed until you left the page and
+  came back, and after a big upload some older files stayed stuck at the top
+  of the list.
+
 - **Blur in the screenshot editor now hides text.** Blurred text, even large
   or bold, can no longer be read through the blur.
 - **Shapes in the screenshot editor can be moved and resized after you draw
