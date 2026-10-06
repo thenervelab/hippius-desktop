@@ -120,7 +120,7 @@ use crate::sync::lifecycle::{
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
-use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files_in_drive};
+use crate::sync::recent_uploads::{get_recent_captures, get_recent_uploads, search_files, search_files_in_drive};
 use crate::sync::rekey_probe::probe_rekey_recovery;
 use crate::sync::remote::{
     cache_remote_file, download_remote_file, folder_grant_stats, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped,
@@ -417,6 +417,8 @@ fn main() {
             list_sync_folder_grouped,
             get_recent_files,
             get_recent_uploads,
+            get_recent_captures,
+            crate::tray::thumbnail::get_tray_thumbnail,
             search_files,
             get_user_files,
             filter_file_entries,

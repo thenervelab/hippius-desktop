@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getTraySyncSummary } from "../traySyncSummary";
+import { getTraySyncLine, getTraySyncSummary } from "../traySyncSummary";
 import {
   EMPTY_SNAPSHOT,
   type FileProgress,
@@ -209,5 +209,69 @@ describe("getTraySyncSummary", () => {
       snap({ totalFiles: 1, actualTotal: 1, overallPercent: 140, effectiveInProgress: true }),
     );
     expect(out?.percent).toBe(100);
+  });
+});
+
+describe("getTraySyncLine", () => {
+  it("reads All synced when idle, and when a session finished", () => {
+    expect(getTraySyncLine(EMPTY_SNAPSHOT)).toMatchObject({ tone: "synced", text: "All synced" });
+    const done = getTraySyncLine(
+      snap({
+        totalFiles: 3,
+        actualTotal: 3,
+        syncedCount: 3,
+        overallPercent: 100,
+        effectiveCompleted: true,
+        widgetVisible: true,
+      }),
+    );
+    expect(done).toMatchObject({ tone: "synced", text: "All synced", detail: "3 of 3 files synced" });
+  });
+
+  it("counts the files still to go and the percent while uploading", () => {
+    const line = getTraySyncLine(
+      snap({
+        totalFiles: 5,
+        actualTotal: 5,
+        syncedCount: 2,
+        failedFiles: 1,
+        overallPercent: 64,
+        effectiveInProgress: true,
+        widgetVisible: true,
+      }),
+    );
+    // 5 planned, 2 done, 1 failed: 2 still to go.
+    expect(line).toMatchObject({ tone: "active", text: "Uploading 2 · 64%", percent: 64 });
+  });
+
+  it("says Preparing before a plan is known, never 'Uploading 0'", () => {
+    expect(
+      getTraySyncLine(snap({ widgetState: "preparing", preparingScannedFiles: 10 })),
+    ).toMatchObject({ tone: "active", text: "Preparing…", detail: "10 files scanned" });
+    expect(
+      getTraySyncLine(snap({ totalFiles: 0, actualTotal: 0, effectiveInProgress: true, widgetVisible: true })),
+    ).toMatchObject({ tone: "active", text: "Preparing…" });
+  });
+
+  it("puts a failure first, with the count, and the shared reason in the detail", () => {
+    const line = getTraySyncLine(
+      snap({
+        totalFiles: 3,
+        actualTotal: 3,
+        syncedCount: 1,
+        failedFiles: 2,
+        statusVariant: "error",
+        widgetVisible: true,
+        files: [errorFile("a.txt", "Out of credits"), errorFile("b.txt", "Out of credits")],
+      }),
+    );
+    expect(line).toMatchObject({ tone: "failed", text: "2 failed" });
+    expect(line.detail).toContain("Out of credits");
+  });
+
+  it("still reads as a failure when the engine reports one without a file count", () => {
+    expect(
+      getTraySyncLine(snap({ totalFiles: 1, actualTotal: 1, statusVariant: "error", widgetVisible: true })),
+    ).toMatchObject({ tone: "failed", text: "Sync failed" });
   });
 });

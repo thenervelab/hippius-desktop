@@ -6,6 +6,7 @@ import {
   within,
   waitFor,
   configure,
+  cleanup,
 } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
@@ -23,6 +24,7 @@ const main = {
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invoke(...args),
+  convertFileSrc: (path: string) => `asset://localhost/${path}`,
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   emit: (...args: unknown[]) => emit(...(args as [])),
@@ -31,7 +33,16 @@ vi.mock("@tauri-apps/api/window", () => ({
   Window: { getByLabel: vi.fn(() => Promise.resolve(main)) },
 }));
 
+// Edit (the screenshot editor) ships behind the capture flag.
+const flags = vi.hoisted(() => ({ capture: true }));
+vi.mock("@/app/lib/featureFlags", () => ({
+  get SCREEN_CAPTURE_ENABLED() {
+    return flags.capture;
+  },
+}));
+
 import TrayUploadRow from "../TrayUploadRow";
+import { resetTrayThumbnails } from "../useTrayThumbnail";
 
 const ACCOUNT = "5CPQ46eGx7nRkTyY2pV9wH3aLmZcQ1uS8bDfJ4kN6tWqFdJ";
 
@@ -57,10 +68,23 @@ function row(overrides: Partial<UploadFeedItem> = {}): UploadFeedItem {
   };
 }
 
-function renderRow(item: UploadFeedItem = row()) {
+/** A screenshot in the captures drive, on this computer. */
+function screenshot(overrides: Partial<UploadFeedItem> = {}): UploadFeedItem {
+  return row({
+    name: "Screenshot 2026-10-06 at 10.00.00.png",
+    actualFileName: "Screenshot 2026-10-06 at 10.00.00.png",
+    size: 1_700_000,
+    createdAt: Date.now() - 5 * 60 * 1000,
+    source: "/Users/me/Captures/Screenshot 2026-10-06 at 10.00.00.png",
+    label: "Captures",
+    ...overrides,
+  });
+}
+
+function renderRow(item: UploadFeedItem = row(), isCapture = false) {
   return render(
     <ul>
-      <TrayUploadRow item={item} accountId={ACCOUNT} />
+      <TrayUploadRow item={item} accountId={ACCOUNT} isCapture={isCapture} />
     </ul>,
   );
 }
@@ -69,44 +93,174 @@ beforeEach(() => {
   invoke.mockReset();
   invoke.mockResolvedValue(undefined);
   emit.mockClear();
+  resetTrayThumbnails();
+  flags.capture = true;
 });
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("hover quick actions", () => {
-  it("names every icon button and gives it a tooltip", () => {
-    renderRow();
+describe("hover actions", () => {
+  it("are Copy link, Edit and the menu on a screenshot", () => {
+    renderRow(screenshot(), true);
     const quick = screen.getByTestId("tray-row-quick-actions");
-    const buttons = within(quick).getAllByRole("button");
-    expect(buttons.map((b) => b.getAttribute("title"))).toEqual([
-      "Show in Hippius",
-      "Copy link",
-      "View",
+    expect(within(quick).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Copy link: Screenshot 2026-10-06 at 10.00.00.png",
+      "Edit: Screenshot 2026-10-06 at 10.00.00.png",
     ]);
+    // Copy link is the primary one, in brand blue, and says what it does.
+    const copy = within(quick).getByRole("button", { name: /^Copy link/ });
+    expect(copy).toHaveTextContent("Copy link");
+    expect(copy.className).toContain("bg-primary-50");
     expect(
-      within(quick).getByRole("button", { name: "Copy link: report.pdf" }),
+      screen.getByRole("button", { name: "More actions for Screenshot 2026-10-06 at 10.00.00.png" }),
     ).toBeInTheDocument();
   });
 
-  it("are laid out while hidden, so hovering never moves the row", () => {
-    // Hidden by opacity, not removed: the row keeps its height and the size
-    // does not shift when the pointer arrives. Reachable by keyboard too.
-    renderRow();
+  it("offer Edit on pictures only", () => {
+    renderRow(row());
+    expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy link: report.pdf" })).toBeInTheDocument();
+    cleanup();
+
+    renderRow(screenshot({ name: "clip.mp4", actualFileName: "clip.mp4" }), true);
+    expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
+    cleanup();
+
+    // A picture with no copy on this computer cannot be edited in place.
+    renderRow(screenshot({ source: "" }), true);
+    expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
+    cleanup();
+
+    // Nor where the lane has no screenshot editor.
+    flags.capture = false;
+    renderRow(screenshot(), true);
+    expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
+  });
+
+  it("take no room until the pointer or the keyboard arrives", () => {
+    // Zero width while hidden, so the name has the row; still in the tab
+    // order, and focus inside the row opens them.
+    renderRow(screenshot(), true);
     const quick = screen.getByTestId("tray-row-quick-actions");
+    expect(quick.className).toContain("max-w-0");
     expect(quick.className).toContain("opacity-0");
-    expect(quick.className).toContain("group-hover:opacity-100");
+    expect(quick.className).toContain("group-hover:max-w-[180px]");
     expect(quick.className).toContain("group-focus-within:opacity-100");
   });
 
-  it("are only the folder button while a file uploads", () => {
+  it("are not offered while a file uploads; its progress is", () => {
     renderRow(
       row({ feedStatus: "uploading", syncStatus: "uploading", progressPercent: 40 }),
     );
-    const quick = screen.getByTestId("tray-row-quick-actions");
-    expect(within(quick).getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByTestId("tray-row-quick-actions")).not.toBeInTheDocument();
     expect(screen.getByText("40%")).toBeInTheDocument();
+  });
+
+  it("Edit hides the popover, then opens that file in the editor", async () => {
+    renderRow(screenshot(), true);
+    fireEvent.click(screen.getByRole("button", { name: /^Edit:/ }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("capture_editor_open_file", {
+        label: "Captures",
+        relativePath: "Screenshot 2026-10-06 at 10.00.00.png",
+      }),
+    );
+    const names = invoke.mock.calls.map(([name]) => name);
+    expect(names.indexOf("hide_tray_panel")).toBeLessThan(names.indexOf("capture_editor_open_file"));
+  });
+});
+
+describe("row subtitle", () => {
+  it("reads Screenshot or Recording for a capture, with size and time", () => {
+    renderRow(screenshot(), true);
+    expect(screen.getByText("Screenshot · 1.7 MB · 5m ago")).toBeInTheDocument();
+    cleanup();
+    renderRow(
+      screenshot({ name: "Recording.mp4", actualFileName: "Recording.mp4", size: 20_200_000 }),
+      true,
+    );
+    expect(screen.getByText("Recording · 20.2 MB · 5m ago")).toBeInTheDocument();
+  });
+
+  it("reads the file's type for anything else", () => {
+    renderRow();
+    expect(screen.getByText("PDF · 15.3 MB · 2d ago")).toBeInTheDocument();
+  });
+});
+
+describe("row thumbnail", () => {
+  it("shows the picture Rust made for a screenshot", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "get_tray_thumbnail"
+        ? Promise.resolve({ path: "/Users/me/.hippius/thumbnail-cache/x.jpg", kind: "image", durationSecs: null })
+        : Promise.resolve(undefined),
+    );
+    renderRow(screenshot(), true);
+    const img = await screen.findByTestId("tray-row-thumbnail");
+    expect(img).toHaveAttribute("src", "asset://localhost//Users/me/.hippius/thumbnail-cache/x.jpg");
+    expect(screen.queryByTestId("tray-row-icon")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tray-row-play")).not.toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("get_tray_thumbnail", {
+      accountId: ACCOUNT,
+      label: "Captures",
+      fileId: "ab".repeat(32),
+      arionHash: "content-hash",
+      source: "/Users/me/Captures/Screenshot 2026-10-06 at 10.00.00.png",
+      fileName: "Screenshot 2026-10-06 at 10.00.00.png",
+      size: 1_700_000,
+    });
+  });
+
+  it("marks a recording's frame with a play badge and its length", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "get_tray_thumbnail"
+        ? Promise.resolve({ path: "/t/v.jpg", kind: "video", durationSecs: 42.4 })
+        : Promise.resolve(undefined),
+    );
+    renderRow(screenshot({ name: "Recording.mp4", actualFileName: "Recording.mp4" }), true);
+    await screen.findByTestId("tray-row-thumbnail");
+    expect(screen.getByTestId("tray-row-play")).toBeInTheDocument();
+    expect(screen.getByText("0:42")).toBeInTheDocument();
+  });
+
+  it("keeps the file-type icon when there is no picture", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "get_tray_thumbnail" ? Promise.resolve(null) : Promise.resolve(undefined),
+    );
+    renderRow();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_tray_thumbnail", expect.anything()));
+    expect(screen.getByTestId("tray-row-icon")).toBeInTheDocument();
+    expect(screen.queryByTestId("tray-row-thumbnail")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the icon when the picture cannot load or be made", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "get_tray_thumbnail"
+        ? Promise.resolve({ path: "/t/gone.jpg", kind: "image", durationSecs: null })
+        : Promise.resolve(undefined),
+    );
+    renderRow(screenshot(), true);
+    fireEvent.error(await screen.findByTestId("tray-row-thumbnail"));
+    expect(screen.getByTestId("tray-row-icon")).toBeInTheDocument();
+    cleanup();
+
+    resetTrayThumbnails();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "get_tray_thumbnail" ? Promise.reject({ kind: "Hcfs", message: "offline" }) : Promise.resolve(undefined),
+    );
+    renderRow(screenshot(), true);
+    await waitFor(() => expect(warn).toHaveBeenCalled());
+    expect(screen.getByTestId("tray-row-icon")).toBeInTheDocument();
+    warn.mockRestore();
+  });
+
+  it("does not ask for a picture of a file still on its way", () => {
+    renderRow(row({ feedStatus: "uploading", syncStatus: "uploading", progressPercent: 10 }));
+    expect(invoke).not.toHaveBeenCalledWith("get_tray_thumbnail", expect.anything());
+    expect(screen.getByTestId("tray-row-icon")).toBeInTheDocument();
   });
 });
 
@@ -118,7 +272,7 @@ describe("copy link", () => {
         : Promise.resolve(undefined),
     );
     renderRow();
-    expect(screen.getByText("2d ago")).toBeInTheDocument();
+    expect(screen.getByText("PDF · 15.3 MB · 2d ago")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy link: report.pdf" }));
     expect(await screen.findByText("Link copied")).toBeInTheDocument();
@@ -128,7 +282,7 @@ describe("copy link", () => {
       relativePath: "Work/report.pdf",
       fileId: null,
     });
-    await waitFor(() => expect(screen.getByText("2d ago")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("PDF · 15.3 MB · 2d ago")).toBeInTheDocument());
   });
 
   it("sends the server id for a file with no copy on this computer", async () => {
@@ -158,13 +312,15 @@ describe("copy link", () => {
 
   it("does not start a second link while the first is being made", async () => {
     let resolve: (v: unknown) => void = () => {};
-    invoke.mockImplementation(() => new Promise((r) => (resolve = r)));
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "copy_file_share_link" ? new Promise((r) => (resolve = r)) : Promise.resolve(null),
+    );
     renderRow();
     const button = screen.getByRole("button", { name: "Copy link: report.pdf" });
     fireEvent.click(button);
     expect(await screen.findByText("Getting link…")).toBeInTheDocument();
     fireEvent.click(button);
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === "copy_file_share_link")).toHaveLength(1);
     resolve({ status: "copied", url: "u", reused: true });
     await screen.findByText("Link copied");
   });
@@ -191,9 +347,18 @@ describe("row menu", () => {
     expect(document.activeElement).toHaveTextContent("View");
   });
 
+  it("offers Edit image in the menu for a picture", () => {
+    renderRow(screenshot(), true);
+    fireEvent.click(
+      screen.getByRole("button", { name: "More actions for Screenshot 2026-10-06 at 10.00.00.png" }),
+    );
+    expect(menuItems()).toContain("Edit image");
+    expect(menuItems().indexOf("Edit image")).toBe(menuItems().indexOf("View") + 1);
+  });
+
   it("opens the same menu on right click", () => {
     renderRow();
-    fireEvent.contextMenu(screen.getByText("15.34 MB"));
+    fireEvent.contextMenu(screen.getByText("PDF · 15.3 MB · 2d ago"));
     expect(screen.getByRole("menu", { name: "Actions for report.pdf" })).toBeInTheDocument();
   });
 
