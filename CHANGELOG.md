@@ -24,6 +24,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The screenshot editor opens inside the Hippius window and keeps your original.** It covers the page you were on with the picture front and centre and one toolbar, and Save now offers to keep a copy beside the original (the default) or replace it; you can set your choice in Settings.
 - **The screenshot shortcut takes a screenshot in one step.** Press the
   capture shortcut (Cmd+Shift+2 on a Mac), drag over any part of the screen
   and let go: the screenshot is saved and its link copied straight away, with

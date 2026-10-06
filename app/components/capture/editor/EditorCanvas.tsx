@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type Annotation, type Doc, type Point, bounds as boxOf, findAnnotation, handlesFor, isRedaction, rectHandles } from "@/app/lib/capture/editor/model";
 import { type Bounds, type Gesture, type Style, drag, press, release } from "@/app/lib/capture/editor/gesture";
 import { applyRedactions, drawAnnotation, fontFor } from "@/app/lib/capture/editor/render";
-import { type View, fitView, toImage, toScreen } from "@/app/lib/capture/editor/view";
+import { type View, fitView, pannedCenter, toImage, toScreen, zoomOf, zoomedView } from "@/app/lib/capture/editor/view";
 import type { ToolId } from "@/app/lib/capture/editor/model";
 
 /** Space around the picture inside the canvas area, in points. */
@@ -32,6 +32,18 @@ interface Props {
   ratio: number | null;
   block: number;
   textEdit: TextEdit | null;
+  /** Picture pixels per screen pixel; null fits the picture in the box. */
+  zoom: number | null;
+  /** The picture point in the middle of the box while zoomed; null centres it. */
+  center: Point | null;
+  /** The zoom on screen now (fitted or chosen), for the zoom pill. */
+  onScale: (zoom: number) => void;
+  /** The view moved (a scroll while zoomed): the new middle of the box. */
+  onPan: (center: Point) => void;
+  /** A pinch or Ctrl/Cmd + wheel: one zoom step in (1) or out (-1). */
+  onZoomStep: (direction: 1 | -1) => void;
+  /** Shown next to the selected annotation (its colour, thickness, delete). */
+  selectionBar: React.ReactNode;
   /** The document to show mid-drag; null when the drag is over. */
   onPreview: (doc: Doc | null) => void;
   /** A finished change: one undo step. */
@@ -49,7 +61,7 @@ interface Props {
  * exported, by running the same pixel code over a copy of the picture.
  */
 export default function EditorCanvas(props: Props) {
-  const { image, imageW, imageH, doc, selected, tool, style, ratio, block, textEdit } = props;
+  const { image, imageW, imageH, doc, selected, tool, style, ratio, block, textEdit, zoom, center, onScale, onPan, onZoomStep } = props;
   const box = useRef<HTMLDivElement | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -73,7 +85,34 @@ export default function EditorCanvas(props: Props) {
     () => (tool === "crop" || !doc.crop ? { x: 0, y: 0, w: imageW, h: imageH } : doc.crop),
     [tool, doc.crop, imageW, imageH],
   );
-  const view: View = useMemo(() => fitView(region, size.w, size.h, PADDING, dpr), [region, size.w, size.h, dpr]);
+  const view: View = useMemo(
+    () => (zoom === null ? fitView(region, size.w, size.h, PADDING, dpr) : zoomedView(region, size.w, size.h, zoom, dpr, center)),
+    [region, size.w, size.h, dpr, zoom, center],
+  );
+  const shownZoom = zoomOf(view, dpr);
+  useEffect(() => {
+    if (size.w > 0) onScale(shownZoom);
+  }, [shownZoom, size.w, onScale]);
+
+  // The wheel: a pinch (or Ctrl/Cmd + wheel) zooms; a plain scroll moves a
+  // zoomed picture. Not passive, so the page behind never scrolls instead.
+  const wheel = useRef({ view, zoomed: zoom !== null, size, onPan, onZoomStep });
+  wheel.current = { view, zoomed: zoom !== null, size, onPan, onZoomStep };
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const w = wheel.current;
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        if (Math.abs(e.deltaY) >= 1) w.onZoomStep(e.deltaY < 0 ? 1 : -1);
+        return;
+      }
+      if (w.zoomed) w.onPan(pannedCenter(w.view, w.size.w, w.size.h, e.deltaX, e.deltaY));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   // The picture with its redactions, rebuilt only when a redaction changes.
   const redactionKey = JSON.stringify(doc.annotations.filter(isRedaction));
@@ -104,6 +143,20 @@ export default function EditorCanvas(props: Props) {
     ctx.clearRect(0, 0, c.width, c.height);
     const s = view.scale * dpr;
     ctx.setTransform(s, 0, 0, s, (view.offsetX - view.region.x * view.scale) * dpr, (view.offsetY - view.region.y * view.scale) * dpr);
+    // A soft shadow under the picture, so it lifts off the dark backdrop.
+    // Only the shadow is painted: the fill itself is clipped away, so a
+    // picture with transparent corners (a window shot) shows the backdrop.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(view.region.x - imageW, view.region.y - imageH, view.region.w + imageW * 2, view.region.h + imageH * 2);
+    ctx.rect(view.region.x, view.region.y, view.region.w, view.region.h);
+    ctx.clip("evenodd");
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 28 * dpr;
+    ctx.shadowOffsetY = 6 * dpr;
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(view.region.x, view.region.y, view.region.w, view.region.h);
+    ctx.restore();
     ctx.save();
     ctx.beginPath();
     ctx.rect(view.region.x, view.region.y, view.region.w, view.region.h);
@@ -203,6 +256,9 @@ export default function EditorCanvas(props: Props) {
   }, [editing]);
 
   const editAt = textEdit ? toScreen(view, textEdit.at) : null;
+  // The selection bar sits above the annotation, or below it near the top.
+  const picked = tool === "crop" || textEdit ? null : findAnnotation(doc, selected);
+  const barAt = picked && props.selectionBar ? selectionAnchor(view, boxOf(picked), size.w) : null;
   const cursor = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
 
   return (
@@ -246,8 +302,36 @@ export default function EditorCanvas(props: Props) {
           }}
         />
       )}
+      {barAt && (
+        <div
+          className="absolute z-10"
+          style={{ left: barAt.x, top: barAt.y, transform: barAt.above ? "translate(-50%, -100%)" : "translate(-50%, 0)" }}
+          data-testid="selection-bar-anchor"
+        >
+          {props.selectionBar}
+        </div>
+      )}
     </div>
   );
+}
+
+/** Room the selection bar needs above an annotation, in points. */
+const BAR_ROOM = 52;
+/** How near the box's sides the bar's middle may come, in points. */
+const BAR_HALF = 120;
+
+/**
+ * Where the selection bar goes for an annotation's picture `r`: centred
+ * over it, 10 points above, or below it when there is no room above; kept
+ * inside the box sideways.
+ */
+export function selectionAnchor(view: View, r: { x: number; y: number; w: number; h: number }, boxW: number): { x: number; y: number; above: boolean } {
+  const topLeft = toScreen(view, { x: r.x, y: r.y });
+  const bottomRight = toScreen(view, { x: r.x + r.w, y: r.y + r.h });
+  const mid = (topLeft.x + bottomRight.x) / 2;
+  const x = boxW > BAR_HALF * 2 ? Math.max(BAR_HALF, Math.min(boxW - BAR_HALF, mid)) : boxW / 2;
+  const above = topLeft.y - 10 >= BAR_ROOM;
+  return { x, y: above ? topLeft.y - 10 : bottomRight.y + 10, above };
 }
 
 function drawHandles(ctx: CanvasRenderingContext2D, points: Point[], px: number) {

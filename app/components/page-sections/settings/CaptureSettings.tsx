@@ -32,6 +32,7 @@ import {
 } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { isLinuxPlatform } from "@/app/lib/utils/isMacPlatform";
+import EditedImageSetting from "./EditedImageSetting";
 
 const ROW =
   "flex flex-wrap items-center justify-between gap-4 rounded-[8px] border border-grey-dark-100 bg-white px-4 py-3 dark:border-black-300 dark:bg-black-600";
@@ -50,7 +51,8 @@ const KBD =
  * shortcut portal binds it (`portal`); and where neither can, Rust's line
  * with the command to bind in the desktop's keyboard settings, which Hippius
  * adds itself on GNOME (`desktopSettings`). Where the desktop's own tool
- * takes screenshots (Wayland), a row says so.
+ * takes screenshots (Wayland), a row says so. The last row is what the
+ * screenshot editor's Save does (ask, keep a copy, or replace).
  */
 export default function CaptureSettings() {
   const supported = useAtomValue(captureSupportedAtom);
@@ -356,6 +358,8 @@ export default function CaptureSettings() {
           {drive?.state === "ready" ? "Change" : drive?.state === "pending" ? "Try again" : "Set up"}
         </Button>
       </div>
+
+      <EditedImageSetting rowClassName={ROW} />
 
       {recordingNote && (
         <div className={ROW}>

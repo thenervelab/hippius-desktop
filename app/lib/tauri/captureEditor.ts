@@ -3,8 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 /**
  * The screenshot editor's IPC (`src-tauri/src/capture/editor.rs`). Rust owns
  * the file, its upload and its link; the editor only sends the flattened
- * picture. Pictures travel as raw bytes, never JSON arrays.
+ * picture and says how to save it. Pictures travel as raw bytes, never JSON
+ * arrays.
  */
+
+/** How a picture in a drive is saved. Mirrors Rust's `SaveMode`. */
+export type SaveMode = "copy" | "replace";
+
+/** The user's saved choice for Save. Mirrors Rust's `SavePreference`. */
+export type SavePreference = "ask" | SaveMode;
 
 /** What the editor shows about the open picture. Mirrors Rust's `EditorContext`. */
 export interface EditorContext {
@@ -12,20 +19,44 @@ export interface EditorContext {
   fileName: string;
   driveName: string;
   mime: string;
-  /** Rust's line about what Save does (and to the link). */
+  /** A file in a drive (copy or replace), or a picked picture (new capture). */
+  saveKind: "inDrive" | "newCapture";
+  /** Rust's line about what Save does, for a picked picture. */
   saveNote: string;
+  /** Rust's line for "Save as a copy". */
+  copyNote: string;
+  /** Rust's line for "Replace the original", with the link warning when it applies. */
+  replaceNote: string;
+  hasPublicLink: boolean;
+  savePreference: SavePreference;
 }
 
+/** Mirrors Rust's `SaveOutcome`. */
 export interface SaveOutcome {
+  title: string;
   message: string;
+  fileName: string;
+  /** "Copy link" can be offered (`copySavedLink`). */
+  offerLink: boolean;
 }
 
-/** Sent when the window's close button is pressed; the page decides. */
-export const EDITOR_CLOSE_REQUESTED_EVENT = "capture_editor_close_requested";
+/** Mirrors Rust's `shares::quick_link::QuickLinkOutcome`. */
+export type CopyLinkOutcome =
+  | { status: "copied"; url: string; reused: boolean }
+  | { status: "failed"; message: string };
+
+/**
+ * Sent to the main window (with the session's id) when a picture is open in
+ * the editor; the window shows it over the page. Rust's `OPEN_EVENT`.
+ */
+export const EDITOR_OPEN_EVENT = "capture_editor_open";
 
 /** The header that names the session a save or copy is for. */
 const SESSION_HEADER = "x-editor-session";
+/** The header that says how to save a picture in a drive. */
+const SAVE_MODE_HEADER = "x-editor-save-mode";
 
+/** The open picture, or null when nothing is open. */
 export function getEditorContext(): Promise<EditorContext | null> {
   return invoke("capture_editor_context");
 }
@@ -35,20 +66,40 @@ export async function getEditorImage(): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("capture_editor_image");
 }
 
-export function saveEditedImage(session: number, png: Uint8Array): Promise<SaveOutcome> {
-  return invoke("capture_editor_save", png, { headers: { [SESSION_HEADER]: String(session) } });
+/**
+ * Save the flattened picture. `mode` is required for a picture in a drive
+ * and ignored for a picked one (always a new capture).
+ */
+export function saveEditedImage(session: number, png: Uint8Array, mode?: SaveMode): Promise<SaveOutcome> {
+  const headers: Record<string, string> = { [SESSION_HEADER]: String(session) };
+  if (mode) headers[SAVE_MODE_HEADER] = mode;
+  return invoke("capture_editor_save", png, { headers });
 }
 
 export function copyEditedImage(png: Uint8Array): Promise<void> {
   return invoke("capture_editor_copy", png);
 }
 
-/** Cancel: nothing is written and the window goes. */
-export function closeEditor(): Promise<void> {
-  return invoke("capture_editor_close");
+/** Close, Cancel or Discard: nothing is written and the session is forgotten. */
+export function closeEditor(session: number): Promise<void> {
+  return invoke("capture_editor_close", { session });
 }
 
-/** "Edit image" on a Drive file. Rust checks the file and opens the window. */
+/** The user's saved choice for Save (Settings, and the dialog's "Remember my choice"). */
+export function getSavePreference(): Promise<SavePreference> {
+  return invoke("capture_editor_save_preference");
+}
+
+export function setSavePreference(preference: SavePreference): Promise<void> {
+  return invoke("capture_editor_set_save_preference", { preference });
+}
+
+/** "Copy link" after a save: Rust copies the saved picture's link, or says why not. */
+export function copySavedLink(): Promise<CopyLinkOutcome> {
+  return invoke("capture_editor_copy_saved_link");
+}
+
+/** "Edit image" on a Drive file. Rust checks the file and shows the editor. */
 export function openFileInEditor(label: string, relativePath: string): Promise<void> {
   return invoke("capture_editor_open_file", { label, relativePath });
 }
