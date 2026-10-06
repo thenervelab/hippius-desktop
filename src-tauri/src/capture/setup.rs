@@ -685,13 +685,15 @@ mod tests {
     /// uses it.
     #[test]
     fn a_picked_folder_gets_hippius_captures_inside_it() {
+        // A path is only absolute from a drive letter on Windows.
+        let root = PathBuf::from(if cfg!(windows) { r"C:\" } else { "/" });
         assert_eq!(
-            folder_for_choice(Path::new("/Users/a/Pictures")).unwrap(),
-            PathBuf::from("/Users/a/Pictures/Hippius Captures")
+            folder_for_choice(&root.join("Users/a/Pictures")).unwrap(),
+            root.join("Users/a/Pictures/Hippius Captures")
         );
         assert_eq!(
-            folder_for_choice(Path::new("/Volumes/Ext/Hippius Captures")).unwrap(),
-            PathBuf::from("/Volumes/Ext/Hippius Captures")
+            folder_for_choice(&root.join("Volumes/Ext/Hippius Captures")).unwrap(),
+            root.join("Volumes/Ext/Hippius Captures")
         );
         assert!(matches!(folder_for_choice(Path::new("Pictures")), Err(AppError::Validation(_))));
     }
