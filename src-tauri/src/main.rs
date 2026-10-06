@@ -329,6 +329,11 @@ fn main() {
                 crate::capture::commands::on_shortcut(app);
                 return;
             }
+            // `hippius --record`: the Record shortcut, bound the same way.
+            if crate::cli::argv_requests_record(&argv) {
+                crate::capture::commands::on_record_shortcut(app);
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(e) = window.unminimize() {
                     debug!("Failed to unminimize window: {e}");

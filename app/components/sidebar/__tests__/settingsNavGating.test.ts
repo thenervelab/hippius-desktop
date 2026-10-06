@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  CAPTURE_SETTINGS_SECTION,
   DEFAULT_SETTINGS_SECTION,
   filterSettingsNavItems,
   resolveSettingsSection,
@@ -119,6 +120,40 @@ describe("resolveSettingsSection", () => {
   it("defaults when no section is named", () => {
     expect(resolveSettingsSection(null, allOn)).toBe(DEFAULT_SETTINGS_SECTION);
     expect(resolveSettingsSection(undefined, allOn)).toBe(DEFAULT_SETTINGS_SECTION);
+  });
+});
+
+/**
+ * Screenshots & Recording shows where the capture cards would: the capture
+ * flag on AND Rust saying this computer captures. Its section must not be
+ * reachable by query string where the flag is off, or the page would show
+ * its heading above nothing.
+ */
+describe("the Screenshots & Recording entry", () => {
+  const items = [{ section: "sync" }, { section: CAPTURE_SETTINGS_SECTION }, { section: "security" }];
+  const base = { vpnEnabled: true, walletEnabled: true, apiTokenEnabled: true };
+
+  it("is shown only when capture is on and works here", () => {
+    expect(filterSettingsNavItems(items, { ...base, captureEnabled: true }).map((i) => i.section)).toEqual([
+      "sync",
+      CAPTURE_SETTINGS_SECTION,
+      "security",
+    ]);
+    expect(filterSettingsNavItems(items, { ...base, captureEnabled: false }).map((i) => i.section)).toEqual([
+      "sync",
+      "security",
+    ]);
+    // Not said to be on is off.
+    expect(filterSettingsNavItems(items, base).map((i) => i.section)).toEqual(["sync", "security"]);
+  });
+
+  it("is reachable by query string only when capture is on", () => {
+    expect(resolveSettingsSection(CAPTURE_SETTINGS_SECTION, { ...base, captureEnabled: true })).toBe(
+      CAPTURE_SETTINGS_SECTION,
+    );
+    expect(resolveSettingsSection(CAPTURE_SETTINGS_SECTION, { ...base, captureEnabled: false })).toBe(
+      DEFAULT_SETTINGS_SECTION,
+    );
   });
 });
 

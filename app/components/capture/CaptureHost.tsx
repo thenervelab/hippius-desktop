@@ -95,9 +95,10 @@ export default function CaptureHost() {
       // A capture is waiting for the user to say where captures go. Rust has
       // brought this window forward and kept the capture safe meanwhile.
       listen(CAPTURE_DRIVE_SETUP_NEEDED_EVENT, () => setDialog({ kind: "captureDrive" })),
-      // The system-wide shortcut: what Rust says it starts (the one-step area screenshot).
+      // The system-wide shortcuts: what Rust says each starts (the one-step
+      // area screenshot, or the capture bar on Record).
       listen<CaptureShortcutStart>("capture_shortcut_pressed", (e) =>
-        void startCapture(undefined, undefined, e.payload?.instant ?? false),
+        void startCapture(e.payload?.kind, undefined, e.payload?.instant ?? false),
       ),
       listen<CaptureShowInFolder>("capture_show_in_folder", (e) => {
         const file = e.payload.fileName || undefined;

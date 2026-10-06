@@ -170,4 +170,12 @@ describe("filterNavSections", () => {
     // Billing sits with them rather than above them.
     expect(labels.indexOf("Billing")).toBeGreaterThan(labels.indexOf("Notifications"));
   });
+
+  // Every capture setting has its own tab, right after Sync & Storage,
+  // where they used to sit at the bottom.
+  it("puts Screenshots & Recording right after Sync & Storage", () => {
+    const labels = settingsNavItems.map((i) => i.label);
+    expect(labels.indexOf("Screenshots & Recording")).toBe(labels.indexOf("Sync & Storage") + 1);
+    expect(settingsNavItems.find((i) => i.label === "Screenshots & Recording")?.section).toBe("capture");
+  });
 });
