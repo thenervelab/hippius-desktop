@@ -575,7 +575,7 @@ export function upgradeFromCapturePreview(): Promise<void> {
   return invoke("capture_preview_upgrade");
 }
 
-/** Edit on the card: the screenshot opens in the editor window. */
+/** Edit on the card: the main window comes forward with the screenshot open in its editor. */
 export function editCapturePreview(): Promise<void> {
   return invoke("capture_preview_edit");
 }

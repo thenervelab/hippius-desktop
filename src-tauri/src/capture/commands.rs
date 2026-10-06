@@ -281,6 +281,8 @@ pub struct CaptureState {
     pub(super) editor: Mutex<Option<super::editor::EditorSession>>,
     /// Numbers editor sessions, so a save meant for a replaced one is refused.
     pub(super) editor_seq: AtomicU64,
+    /// Where the editor's last save went, for the main window's "Copy link".
+    pub(super) editor_saved: Mutex<Option<super::editor::SavedEdit>>,
     /// A Wayland area being drawn on the chosen monitor's picture
     /// (`draw_area`): the picture, the step, and where the drawn area goes.
     area_pick: Mutex<Option<AreaPick>>,
@@ -4449,7 +4451,7 @@ pub fn capture_preview_upgrade(state: tauri::State<'_, AppState>, app: AppHandle
     Ok(())
 }
 
-fn show_main_window(app: &AppHandle) {
+pub(super) fn show_main_window(app: &AppHandle) {
     if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let _ = main.unminimize();
         let _ = main.show();

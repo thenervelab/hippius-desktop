@@ -1,32 +1,42 @@
-//! The screenshot editor: crop, redact and annotate a screenshot, then put
-//! the edited picture back where the screenshot was.
+//! The screenshot editor: crop, redact and annotate a screenshot, then save
+//! the edited picture as a copy beside it or over it.
 //!
-//! `app/capture-editor` draws and edits the pixels; everything that decides
-//! where they go is here. Rust opens the editor (from the capture card or a
-//! Drive file's menu), hands it the picture, takes the flattened PNG back,
-//! checks it, writes it over the file (the sync engine uploads the change,
-//! or it is uploaded again to a drive only on the server) and settles the
-//! share link.
+//! The editor is a full-screen layer inside the main window
+//! (`app/components/capture/editor`), not a window of its own: every way in
+//! (the capture card, the tray's Annotate, Drive's "Edit image") stores the
+//! session here, brings the main window forward and tells it
+//! [`OPEN_EVENT`]. The page draws and edits the pixels; everything that
+//! decides where they go is here. Rust hands it the picture, takes the
+//! flattened PNG back, checks it and writes it.
 //!
-//! **The link.** A file share is a snapshot: hcfs re-encrypts a COPY of the
-//! file under the link's own key, and there is no call that swaps that copy's
-//! bytes. So an edited capture cannot keep its old URL. The capture card's
-//! link is replaced: a new link is made from the edited file and copied, and
-//! the old one is revoked, because the usual reason to edit a screenshot is
-//! to hide something, and a link that still served the unedited picture would
-//! leak exactly that. The old link is revoked even when the new one cannot be
-//! made. A file opened from Drive may carry links with a password or an
-//! expiry this device cannot recreate, so those are left alone and the user
-//! is told they still show the earlier picture.
+//! **Copy or replace.** A picture in a drive is saved either as a copy
+//! (`<name> (edited).<ext>` beside it, numbered when taken, see
+//! [`unique_copy_name`]): a new file with a link of its own, the original
+//! and its links untouched; or over the original (the sync engine uploads
+//! the change, or it is uploaded again to a drive only on the server). The
+//! page asks which, unless the user chose to be asked no more
+//! ([`SavePreference`], kept in `user_preferences`).
+//!
+//! **The link, on replace.** A file share is a snapshot: hcfs re-encrypts a
+//! COPY of the file under the link's own key, and there is no call that
+//! swaps that copy's bytes. So an edited capture cannot keep its old URL.
+//! The capture card's link is replaced: a new link is made from the edited
+//! file and copied, and the old one is revoked, because the usual reason to
+//! edit a screenshot is to hide something, and a link that still served the
+//! unedited picture would leak exactly that. The old link is revoked even
+//! when the new one cannot be made. A file opened from Drive may carry
+//! links with a password or an expiry this device cannot recreate, so those
+//! are left alone and the user is told before saving that they still show
+//! the earlier picture.
 //!
 //! **Annotate from the tray.** The popover's Annotate button opens the latest
 //! screenshot or a picture the user picks in the system's file dialog. Rust
 //! shows the dialog itself and reads only the file it answered with, so no
 //! IPC ever names a path to read. A picked file inside one of the user's
-//! own drives synced here is edited in place exactly like Drive's "Edit
-//! image"; any other file is never written: Save files the edited picture
-//! as a NEW screenshot in the capture drive (card, upload and link as for a
-//! fresh capture), so the user's original outside Hippius stays as it was.
+//! own drives synced here is edited exactly like Drive's "Edit image"; any
+//! other file is never written: Save files the edited picture as a NEW
+//! screenshot in the capture drive (card, upload and link as for a fresh
+//! capture), so the user's original outside Hippius stays as it was.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -37,16 +47,20 @@ use super::destination::CaptureDestination;
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 
-/// The editor window's label (and its capability's only window).
-pub const EDITOR_LABEL: &str = "capture-editor";
-
-/// Sent to the editor when its window's close button is pressed, so a page
-/// with unsaved changes can ask first. The window is not closed by the OS.
-pub const CLOSE_REQUESTED_EVENT: &str = "capture_editor_close_requested";
+/// Sent to the main window when a picture is open in the editor (the
+/// session's id): the window shows the editor over whatever page is up and
+/// asks for [`capture_editor_context`].
+pub const OPEN_EVENT: &str = "capture_editor_open";
 
 /// The header the page names its session with, so a save meant for a picture
 /// that has since been replaced is refused rather than written over another.
 const SESSION_HEADER: &str = "x-editor-session";
+
+/// The header that says how a picture in a drive is saved ([`SaveMode`]).
+const SAVE_MODE_HEADER: &str = "x-editor-save-mode";
+
+/// The `user_preferences` key for [`SavePreference`].
+pub const SAVE_PREFERENCE_KEY: &str = "capture_editor_save_mode";
 
 /// Largest picture the editor takes or gives back, per side. Well above any
 /// display (an 8K screen is 7680 wide), and a bound on the decode's memory.
@@ -117,6 +131,9 @@ pub enum SaveTarget {
 #[derive(Debug, Clone)]
 pub struct EditorSession {
     pub id: u64,
+    /// The account that opened it: another account signed in on this
+    /// computer never sees (or saves) it.
+    pub account_id: String,
     pub origin: EditorOrigin,
     pub file_name: String,
     pub drive_label: String,
@@ -127,10 +144,93 @@ pub struct EditorSession {
     pub target: SaveTarget,
     /// The link the card made, when it had one as the editor opened.
     pub share_token: Option<String>,
+    /// A Drive file that had a share link as the editor opened: replacing
+    /// it leaves that link on the earlier picture, which the page says.
+    pub drive_shared: bool,
     /// The file as it was read, so the editor never reads a half-written
     /// file and a card closing meanwhile (which removes a temp copy) does
     /// not take the picture away.
     pub original: std::sync::Arc<Vec<u8>>,
+}
+
+/// How a picture in a drive is saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SaveMode {
+    /// A new file beside the original ([`unique_copy_name`]); the original
+    /// and its links are untouched.
+    Copy,
+    /// Over the original, as the editor always did.
+    Replace,
+}
+
+impl SaveMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "copy" => Some(Self::Copy),
+            "replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+
+/// What Save does without asking: the user's "Remember my choice", also
+/// changeable in Settings. Anything unknown in storage reads as `Ask`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SavePreference {
+    #[default]
+    Ask,
+    Copy,
+    Replace,
+}
+
+impl SavePreference {
+    #[must_use]
+    pub fn parse(stored: Option<&str>) -> Self {
+        match stored.map(str::trim) {
+            Some("copy") => Self::Copy,
+            Some("replace") => Self::Replace,
+            _ => Self::Ask,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Copy => "copy",
+            Self::Replace => "replace",
+        }
+    }
+}
+
+/// What a save writes: `None` for a picked picture (always a new capture,
+/// whatever the page says), else the mode the page named. A picture in a
+/// drive with no mode is refused rather than guessed, so a page that did
+/// not ask can never replace a file.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] for a missing or unknown mode.
+pub fn requested_mode(target: &SaveTarget, header: Option<&str>) -> Result<Option<SaveMode>> {
+    if *target == SaveTarget::NewCapture {
+        return Ok(None);
+    }
+    header
+        .and_then(SaveMode::parse)
+        .map(Some)
+        .ok_or_else(|| AppError::Validation("Choose whether to save a copy or replace the original.".into()))
+}
+
+/// How the page offers Save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SaveKind {
+    /// A file in a drive: save a copy or replace it.
+    InDrive,
+    /// A picked picture outside the drives: "Save to Captures", nothing else.
+    NewCapture,
 }
 
 /// What the editor page is told about the picture.
@@ -141,25 +241,46 @@ pub struct EditorContext {
     pub file_name: String,
     pub drive_name: String,
     pub mime: &'static str,
-    /// Rust's sentence about what Save does to the link, shown by Save.
+    pub save_kind: SaveKind,
+    /// Rust's sentence about what Save does, shown for a picked picture's
+    /// "Save to Captures".
     pub save_note: String,
+    /// What "Save as a copy" does, naming the copy, in Rust's words.
+    pub copy_note: String,
+    /// What "Replace the original" does, in Rust's words (with the link
+    /// warning when the file has a public link).
+    pub replace_note: String,
+    /// The file has a link that a replace takes from, or leaves on, the
+    /// earlier picture.
+    pub has_public_link: bool,
+    /// The user's saved choice ([`SAVE_PREFERENCE_KEY`]).
+    pub save_preference: SavePreference,
 }
 
 impl EditorSession {
     #[must_use]
-    pub fn context(&self) -> EditorContext {
+    pub fn context(&self, save_preference: SavePreference) -> EditorContext {
+        let card_link = self.share_token.is_some();
         EditorContext {
             session: self.id,
             file_name: self.file_name.clone(),
             drive_name: self.drive_name.clone(),
             mime: self.format.mime(),
-            save_note: save_note(self.origin, self.share_token.is_some()).to_string(),
+            save_kind: if self.target == SaveTarget::NewCapture {
+                SaveKind::NewCapture
+            } else {
+                SaveKind::InDrive
+            },
+            save_note: save_note(self.origin, card_link).to_string(),
+            copy_note: copy_note(&self.file_name),
+            replace_note: replace_note(self.origin, &self.file_name, card_link, self.drive_shared),
+            has_public_link: card_link || self.drive_shared,
+            save_preference,
         }
     }
 }
 
-/// The line beside Save, so the user knows before saving what happens to
-/// the link.
+/// The line about what Save does to the file and its link.
 #[must_use]
 pub fn save_note(origin: EditorOrigin, has_card_link: bool) -> &'static str {
     match (origin, has_card_link) {
@@ -167,6 +288,32 @@ pub fn save_note(origin: EditorOrigin, has_card_link: bool) -> &'static str {
         (EditorOrigin::Card { .. }, false) => "Saving replaces the screenshot in your drive.",
         (EditorOrigin::Drive, _) => "Saving replaces the file in your drive.",
         (EditorOrigin::Picked, _) => "Your original stays as it is. Saving uploads an edited copy, like a screenshot.",
+    }
+}
+
+/// What "Save as a copy" does. The name is the first one tried; a taken
+/// one is numbered at save time.
+#[must_use]
+pub fn copy_note(file_name: &str) -> String {
+    format!(
+        "Adds \"{}\" next to the original. The original, and any link to it, stay as they are.",
+        edited_copy_name(file_name)
+    )
+}
+
+/// What "Replace the original" does, said before the user commits: the
+/// card's link is replaced (see the module note); a Drive file's links stay
+/// on the earlier picture.
+#[must_use]
+pub fn replace_note(origin: EditorOrigin, file_name: &str, has_card_link: bool, drive_shared: bool) -> String {
+    match origin {
+        EditorOrigin::Card { .. } if has_card_link => {
+            format!("Overwrites {file_name}. It gets a new link, and the old link stops working.")
+        }
+        EditorOrigin::Drive if drive_shared => {
+            format!("Overwrites {file_name}. Its public link will show the old image until it is shared again.")
+        }
+        EditorOrigin::Card { .. } | EditorOrigin::Drive | EditorOrigin::Picked => format!("Overwrites {file_name}."),
     }
 }
 
@@ -338,21 +485,112 @@ pub fn replace_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     written
 }
 
-/// The editor window's size for a picture of `width` x `height` pixels at
-/// `scale`, in logical points: the picture at its natural size plus the
-/// toolbars, inside `max` (the screen's usable area), never below the
-/// smallest window the toolbar fits in.
+// ── Save as a copy ──────────────────────────────────────────────────────────
+
+/// Most numbered names tried before falling back to a random suffix; a
+/// folder with this many edited copies of one picture is not a real case,
+/// but the search must end.
+const MAX_NUMBERED_COPIES: u32 = 9_999;
+
+/// The `n`th name for an edited copy: `<name> (edited).<ext>` first, then
+/// `<name> (edited 2).<ext>` and so on.
 #[must_use]
-pub fn window_size(width: u32, height: u32, scale: f64, max: (f64, f64)) -> (f64, f64) {
-    const CHROME_W: f64 = 48.0;
-    const CHROME_H: f64 = 140.0;
-    const MIN: (f64, f64) = (720.0, 520.0);
-    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
-    let want_w = f64::from(width) / scale + CHROME_W;
-    let want_h = f64::from(height) / scale + CHROME_H;
-    let cap_w = (max.0 * 0.9).max(MIN.0);
-    let cap_h = (max.1 * 0.9).max(MIN.1);
-    (want_w.clamp(MIN.0, cap_w).round(), want_h.clamp(MIN.1, cap_h).round())
+pub fn numbered_copy_name(original: &str, n: u32) -> String {
+    let (stem, ext) = copy_name_parts(original);
+    if n <= 1 {
+        format!("{stem} (edited).{ext}")
+    } else {
+        format!("{stem} (edited {n}).{ext}")
+    }
+}
+
+/// The first edited-copy name that `taken` does not claim. `taken` is asked
+/// about the bare name (the caller decides what is taken: a file in the
+/// folder, a name the server lists).
+#[must_use]
+pub fn unique_copy_name(original: &str, taken: impl Fn(&str) -> bool) -> String {
+    (1..=MAX_NUMBERED_COPIES)
+        .map(|n| numbered_copy_name(original, n))
+        .find(|name| !taken(name))
+        .unwrap_or_else(|| {
+            let (stem, ext) = copy_name_parts(original);
+            let suffix = uuid::Uuid::new_v4().simple().to_string();
+            format!("{stem} (edited {}).{ext}", &suffix[..8])
+        })
+}
+
+/// A sibling's path in the drive: `rel_path` with its last part replaced by
+/// `name` (`Captures/Shot.png` + `Shot (edited).png`).
+#[must_use]
+pub fn sibling_rel_path(rel_path: &str, name: &str) -> String {
+    match rel_path.trim_matches('/').rsplit_once('/') {
+        Some((parent, _)) if !parent.is_empty() => format!("{parent}/{name}"),
+        _ => name.to_string(),
+    }
+}
+
+/// Write `bytes` as a NEW file beside `original`, under the first free
+/// edited-copy name, and return its path. Like [`replace_atomically`] it is
+/// staged in a hidden file the sync engine never lists and moved into place
+/// whole, but the move never overwrites: a name taken in the meantime (by
+/// another save, or the sync engine bringing a file down) moves on to the
+/// next number. The original is never opened for writing.
+///
+/// # Errors
+///
+/// The I/O error; the staging file is removed.
+pub fn write_beside(original: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let dir = original.parent().ok_or_else(|| std::io::Error::other("the file has no folder"))?;
+    let name = original
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| std::io::Error::other("the file has no usable name"))?;
+    let mut staging = tempfile::Builder::new()
+        .prefix(".hippius-incoming-capture-")
+        .suffix(".part")
+        .tempfile_in(dir)?;
+    staging.write_all(bytes)?;
+    staging.as_file().sync_all()?;
+    let mut attempts = 0;
+    loop {
+        let target = dir.join(unique_copy_name(name, |candidate| dir.join(candidate).exists()));
+        match staging.persist_noclobber(&target) {
+            Ok(_) => return Ok(target),
+            Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists && attempts < 5 => {
+                attempts += 1;
+                staging = e.file;
+            }
+            // A folder that cannot hard-link (exFAT, some network shares)
+            // refuses the no-clobber move itself: the name was free a
+            // moment ago, so a plain move is the fallback. Dropping the temp
+            // file on any other error removes the staging copy.
+            Err(e) if e.error.kind() != std::io::ErrorKind::AlreadyExists && !target.exists() => {
+                return e.file.persist(&target).map(|_| target).map_err(|e| e.error);
+            }
+            Err(e) => return Err(e.error),
+        }
+    }
+}
+
+/// The parts of an edited copy's name: the stem with characters a Windows
+/// drive cannot hold made `-` (the copy goes into a drive any of the user's
+/// machines may sync), and the extension as it was.
+fn copy_name_parts(original: &str) -> (String, &str) {
+    // Split by hand, not with `Path`: the same on every platform.
+    let (stem, ext) = original.rsplit_once('.').unwrap_or((original, "png"));
+    let stem = if stem.trim().is_empty() { "Picture" } else { stem };
+    let clean: String = stem
+        .chars()
+        .map(|c| {
+            if matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|' | '/' | '\\') || c.is_control() {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    (clean.trim().to_string(), ext)
 }
 
 // ── Annotate from the tray ──────────────────────────────────────────────────
@@ -380,26 +618,13 @@ pub fn locate_in_drives(file: &Path, roots: &[(String, PathBuf)]) -> Option<(Str
         .map(|(_, label, rel)| (label, rel))
 }
 
-/// What the new screenshot made from a picked picture is called: its name
-/// with " (edited)" before the extension, so it reads as the user's picture.
-/// Characters a Windows drive cannot hold become `-`, since the copy is
-/// uploaded into a drive any of the user's machines may sync.
+/// What an edited copy is first called: its name with " (edited)" before
+/// the extension, so it reads as the user's picture. The new screenshot made
+/// from a picked picture takes this name; a copy beside a drive file takes
+/// the first free one ([`unique_copy_name`]).
 #[must_use]
 pub fn edited_copy_name(original: &str) -> String {
-    // Split by hand, not with `Path`: the same on every platform.
-    let (stem, ext) = original.rsplit_once('.').unwrap_or((original, "png"));
-    let stem = if stem.trim().is_empty() { "Picture" } else { stem };
-    let clean: String = stem
-        .chars()
-        .map(|c| {
-            if matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|' | '/' | '\\') || c.is_control() {
-                '-'
-            } else {
-                c
-            }
-        })
-        .collect();
-    format!("{} (edited).{ext}", clean.trim())
+    numbered_copy_name(original, 1)
 }
 
 /// The newest picture the editor can open among a folder's files (name,
@@ -439,6 +664,7 @@ pub async fn capture_preview_edit(state: tauri::State<'_, AppState>, app: AppHan
         .clone()
         .filter(|c| c.actions.edit)
         .ok_or_else(|| AppError::Validation("This capture can't be edited right now.".into()))?;
+    let account_id = state.current_account_id()?;
     refuse_if_open(&app)?;
     let placed = card
         .placed_path
@@ -456,6 +682,7 @@ pub async fn capture_preview_edit(state: tauri::State<'_, AppState>, app: AppHan
     };
     let session = EditorSession {
         id: next_session_id(&state),
+        account_id,
         origin: EditorOrigin::Card { card_id: card.id },
         file_name: card.file_name.clone(),
         drive_label: card.drive_label.clone(),
@@ -464,6 +691,7 @@ pub async fn capture_preview_edit(state: tauri::State<'_, AppState>, app: AppHan
         format,
         target,
         share_token: card.share_token.clone(),
+        drive_shared: false,
         original: std::sync::Arc::new(original),
     };
     open_with(&app, session)
@@ -503,25 +731,44 @@ pub async fn capture_editor_open_file(state: tauri::State<'_, AppState>, app: Ap
         .flatten()
         .filter(|d| d.label == label)
         .map_or_else(|| label.clone(), |d| d.display_name);
+    let rel_path = relative_path.trim_start_matches(['/', '\\']).replace('\\', "/");
+    // Whether a link already shows this file, so Replace can say before
+    // saving that it will keep showing the earlier picture.
+    let owner = crate::auth::account_key::account_key(&account_id);
+    let drive_shared = crate::shares::origin::is_shared(pool, &owner, &label, &rel_path).await.unwrap_or(false);
     let session = EditorSession {
         id: next_session_id(&state),
+        account_id,
         origin: EditorOrigin::Drive,
         file_name,
         drive_label: label,
         drive_name,
-        rel_path: relative_path.trim_start_matches(['/', '\\']).replace('\\', "/"),
+        rel_path,
         format,
         target: SaveTarget::Local(path),
         share_token: None,
+        drive_shared,
         original: std::sync::Arc::new(original),
     };
     open_with(&app, session)
 }
 
-/// What the editor page shows about the picture; `None` once it is closed.
+/// What the editor page shows about the picture; `None` when nothing is
+/// open, or what is open was opened by another account (it is then
+/// forgotten, so it can never be saved into the wrong account's drive).
 #[tauri::command]
-pub fn capture_editor_context(state: tauri::State<'_, AppState>) -> Option<EditorContext> {
-    lock(&state.capture.editor).as_ref().map(EditorSession::context)
+pub async fn capture_editor_context(state: tauri::State<'_, AppState>) -> Result<Option<EditorContext>> {
+    let account_id = state.current_account_id().ok();
+    let session = {
+        let mut open = lock(&state.capture.editor);
+        if open.as_ref().is_some_and(|s| Some(&s.account_id) != account_id.as_ref()) {
+            open.take();
+        }
+        open.clone()
+    };
+    let Some(session) = session else { return Ok(None) };
+    let preference = read_save_preference(state.pool()?).await;
+    Ok(Some(session.context(preference)))
 }
 
 /// The picture's bytes, raw (a JSON array would be several times its size).
@@ -534,19 +781,79 @@ pub fn capture_editor_image(state: tauri::State<'_, AppState>) -> Result<tauri::
     Ok(tauri::ipc::Response::new(bytes.as_ref().clone()))
 }
 
-/// The outcome of Save, for the editor.
+async fn read_save_preference(pool: &sqlx::SqlitePool) -> SavePreference {
+    let stored = crate::utils::preferences::get_user_preference_internal(pool, SAVE_PREFERENCE_KEY)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "editor save preference not read; asking");
+            None
+        });
+    SavePreference::parse(stored.as_deref())
+}
+
+/// The user's choice for Save: ask each time, or always save a copy, or
+/// always replace. Settings shows and changes it.
+#[tauri::command]
+pub async fn capture_editor_save_preference(state: tauri::State<'_, AppState>) -> Result<SavePreference> {
+    Ok(read_save_preference(state.pool()?).await)
+}
+
+/// The save dialog's "Remember my choice", and Settings' control.
+#[tauri::command]
+pub async fn capture_editor_set_save_preference(state: tauri::State<'_, AppState>, preference: SavePreference) -> Result<()> {
+    crate::utils::preferences::save_user_preference_internal(state.pool()?, SAVE_PREFERENCE_KEY, preference.as_str()).await
+}
+
+/// Where the last save went, kept for the main window's "Copy link" after
+/// the editor has closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SavedEdit {
+    /// A link already made from the edited picture (the card's new link).
+    Link(String),
+    /// A file in a drive synced here, linked through the quick-link path.
+    File { label: String, rel_path: String },
+}
+
+/// What "Copy link" after a save can copy: the card's new link when one was
+/// made; else, for a file in a drive synced here, a link made (or reused)
+/// from the file on disk. Nothing for a file whose links still show the
+/// earlier picture (a reused link would be one of them), for one only on
+/// the server (there is no copy here to link), or when the link could not
+/// be settled.
+#[must_use]
+pub fn saved_link(local: bool, link: LinkResult, new_url: Option<&str>, label: &str, rel_path: &str) -> Option<SavedEdit> {
+    match (link, new_url) {
+        (LinkResult::Replaced { .. }, Some(url)) => Some(SavedEdit::Link(url.to_string())),
+        (LinkResult::Unchanged, _) if local => Some(SavedEdit::File {
+            label: label.to_string(),
+            rel_path: rel_path.to_string(),
+        }),
+        _ => None,
+    }
+}
+
+/// The outcome of Save, for the main window's toast.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveOutcome {
+    /// "Saved" or "Saved a copy".
+    pub title: String,
+    /// Rust's sentence about the file and its link.
     pub message: String,
+    /// The name the picture was saved under.
+    pub file_name: String,
+    /// "Copy link" is offered ([`capture_editor_copy_saved_link`]).
+    pub offer_link: bool,
 }
 
-/// Save: the editor's flattened PNG (the raw request body) replaces the
-/// file, which is uploaded again, and the link is settled (see the module
-/// note). The editor closes itself on success.
+/// Save: the editor's flattened PNG (the raw request body) is written as a
+/// copy beside the file or over it ([`SAVE_MODE_HEADER`]), or, for a picked
+/// picture, as a new screenshot. On replace the link is settled (see the
+/// module note). The editor closes itself on success.
 #[tauri::command]
 pub async fn capture_editor_save(state: tauri::State<'_, AppState>, app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<SaveOutcome> {
     let session = session_for(&state, &request)?;
+    let mode = requested_mode(&session.target, request.headers().get(SAVE_MODE_HEADER).and_then(|v| v.to_str().ok()))?;
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err(AppError::Validation(NOT_A_PICTURE.into()));
     };
@@ -556,8 +863,12 @@ pub async fn capture_editor_save(state: tauri::State<'_, AppState>, app: AppHand
     let (encoded, rgba) = tokio::task::spawn_blocking(move || prepare_edited(&bytes, format))
         .await
         .map_err(|e| AppError::Other(format!("editor save task failed: {e}")))??;
-    if session.target == SaveTarget::NewCapture {
+    lock(&state.capture.editor_saved).take();
+    let Some(mode) = mode else {
         return save_as_new_capture(&app, &session, encoded, &rgba).await;
+    };
+    if mode == SaveMode::Copy {
+        return save_copy(&state, &app, &account_id, &session, &encoded).await;
     }
 
     // The card's link as it is NOW: it may have been made after the editor
@@ -601,7 +912,7 @@ pub async fn capture_editor_save(state: tauri::State<'_, AppState>, app: AppHand
 
     let message = saved_message(link);
     let thumbnail = super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(rgba)).ok();
-    let shown = card_id.is_some_and(|id| {
+    if let Some(id) = card_id {
         update_card(&app, &state.capture, id, |card| {
             if thumbnail.is_some() {
                 card.thumbnail.clone_from(&thumbnail);
@@ -619,15 +930,156 @@ pub async fn capture_editor_save(state: tauri::State<'_, AppState>, app: AppHand
                 }
                 None => {}
             }
-        })
-    });
-    // The card says what happened to the link when it is there; otherwise a
-    // notification does, but only when there is more to say than "saved".
-    if !shown && link != LinkResult::Unchanged {
-        super::commands::notify(&app, "Screenshot saved".into(), message.clone());
+        });
     }
-    tracing::info!(session = session.id, "screenshot edited and saved");
-    Ok(SaveOutcome { message })
+    // The main window's toast says what happened; the card shows its link.
+    let saved = saved_link(
+        matches!(session.target, SaveTarget::Local(_)),
+        link,
+        new_link.as_ref().map(|(url, ..)| url.as_str()),
+        &session.drive_label,
+        &session.rel_path,
+    );
+    let offer_link = saved.is_some();
+    *lock(&state.capture.editor_saved) = saved;
+    tracing::info!(session = session.id, "screenshot edited and saved over the original");
+    Ok(SaveOutcome {
+        title: "Saved".into(),
+        message,
+        file_name: session.file_name.clone(),
+        offer_link,
+    })
+}
+
+/// "Save as a copy": the edited picture becomes a new file beside the
+/// original (same folder, first free edited-copy name); the original, its
+/// card and its links are not touched.
+async fn save_copy(state: &AppState, app: &AppHandle, account_id: &str, session: &EditorSession, encoded: &[u8]) -> Result<SaveOutcome> {
+    let (name, local) = match &session.target {
+        SaveTarget::Local(path) => {
+            let (path, bytes) = (path.clone(), encoded.to_vec());
+            let written = tokio::task::spawn_blocking(move || write_beside(&path, &bytes))
+                .await
+                .map_err(|e| AppError::Other(format!("editor write task failed: {e}")))?
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "edited copy not written");
+                    AppError::Validation("The copy couldn't be saved. Check the drive's folder is still there.".into())
+                })?;
+            nudge_sync(app);
+            let name = written
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or_else(|| edited_copy_name(&session.file_name), str::to_string);
+            (name, true)
+        }
+        SaveTarget::Remote { destination, .. } => (upload_remote_copy(state, app, account_id, session, destination, encoded).await?, false),
+        SaveTarget::NewCapture => return Err(AppError::Other("a picked picture is saved as a new screenshot".into())),
+    };
+    let saved = local.then(|| SavedEdit::File {
+        label: session.drive_label.clone(),
+        rel_path: sibling_rel_path(&session.rel_path, &name),
+    });
+    let offer_link = saved.is_some();
+    *lock(&state.capture.editor_saved) = saved;
+    tracing::info!(session = session.id, "screenshot edited and saved as a copy");
+    Ok(SaveOutcome {
+        title: "Saved a copy".into(),
+        message: format!("Saved as \"{name}\" next to the original."),
+        file_name: name,
+        offer_link,
+    })
+}
+
+/// A copy of a capture in a drive that is only on the server: uploaded into
+/// the same folder under the first edited-copy name the server does not
+/// list there. Returns the name.
+async fn upload_remote_copy(
+    state: &AppState,
+    app: &AppHandle,
+    account_id: &str,
+    session: &EditorSession,
+    destination: &CaptureDestination,
+    encoded: &[u8],
+) -> Result<String> {
+    let folder = sibling_rel_path(&session.rel_path, "");
+    let folder = folder.trim_end_matches('/').to_lowercase();
+    // Best effort: a listing that fails leaves the numbered names unchecked,
+    // and the first one is used.
+    let taken: std::collections::HashSet<String> =
+        match crate::sync::remote::list_remote_folder_files_inner(state, account_id, &destination.label).await {
+            Ok(files) => files
+                .into_iter()
+                .filter_map(|f| {
+                    let path = f.path.trim_matches('/').to_lowercase();
+                    let parent = path.rsplit_once('/').map_or("", |(p, _)| p).to_string();
+                    (parent == folder).then_some(f.name.to_lowercase())
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "remote folder not listed; the copy's name is not checked");
+                std::collections::HashSet::new()
+            }
+        };
+    let name = unique_copy_name(&session.file_name, |candidate| taken.contains(&candidate.to_lowercase()));
+    let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
+    let file = dir.join(&name);
+    let (to, bytes) = (file.clone(), encoded.to_vec());
+    let written = tokio::task::spawn_blocking(move || std::fs::write(&to, &bytes))
+        .await
+        .map_err(|e| AppError::Other(format!("editor write task failed: {e}")))?;
+    let source = file.to_str().map(str::to_string);
+    let failure = match (written, source) {
+        (Err(e), _) => Some(AppError::from(e)),
+        (Ok(()), None) => Some(AppError::Other("Capture path is not valid UTF-8".into())),
+        (Ok(()), Some(source)) => match crate::sync::remote_upload::upload_files_to_remote_folder_inner(
+            state,
+            app.clone(),
+            account_id,
+            &destination.label,
+            destination.upload_folder(),
+            &[source],
+            destination.owner_ss58.clone(),
+            destination.folder_hash.clone(),
+        )
+        .await
+        {
+            Ok(failures) => failures.into_iter().next().map(|f| AppError::Other(f.error)),
+            Err(e) => Some(e),
+        },
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(e) = failure {
+        tracing::warn!(error = %e, "edited copy not uploaded");
+        return Err(AppError::Validation(super::deliver::failure_copy(&e)));
+    }
+    Ok(name)
+}
+
+/// "Copy link" on the toast after a save: the card's new link, or a link
+/// for the saved file made (or reused) through the tray's quick-link path.
+/// A failure is an outcome with Rust's sentence, as for the tray.
+#[tauri::command]
+pub async fn capture_editor_copy_saved_link(
+    state: tauri::State<'_, AppState>,
+    app: AppHandle,
+) -> Result<crate::shares::quick_link::QuickLinkOutcome> {
+    use crate::shares::quick_link::QuickLinkOutcome;
+    let saved = lock(&state.capture.editor_saved).clone();
+    match saved {
+        Some(SavedEdit::Link(url)) => {
+            if super::commands::copy_link_to_clipboard(&app, Some(&url)) {
+                Ok(QuickLinkOutcome::Copied { url, reused: true })
+            } else {
+                Ok(QuickLinkOutcome::Failed {
+                    message: "The link couldn't be copied. Try again.".into(),
+                })
+            }
+        }
+        Some(SavedEdit::File { label, rel_path }) => crate::shares::quick_link::copy_file_share_link(state, app, label, rel_path, None).await,
+        None => Ok(QuickLinkOutcome::Failed {
+            message: "There is no link to copy for this picture.".into(),
+        }),
+    }
 }
 
 /// Copy: the editor's flattened PNG (the raw request body) on the clipboard
@@ -651,14 +1103,14 @@ pub async fn capture_editor_copy(app: AppHandle, request: tauri::ipc::Request<'_
         })
 }
 
-/// Cancel, or the window's close button once the page agreed: the editor
-/// goes and its picture is forgotten. Nothing is written.
+/// Cancel, Close or Discard: the editor goes and its picture is forgotten.
+/// Nothing is written. Only the session the page names: a page closing late
+/// never drops a picture opened since.
 #[tauri::command]
-pub fn capture_editor_close(state: tauri::State<'_, AppState>, app: AppHandle) {
-    lock(&state.capture.editor).take();
-    if let Some(w) = app.get_webview_window(EDITOR_LABEL) {
-        // `destroy`, not `close`: close asks the page again (see `open_with`).
-        let _ = w.destroy();
+pub fn capture_editor_close(state: tauri::State<'_, AppState>, session: u64) {
+    let mut open = lock(&state.capture.editor);
+    if open.as_ref().is_some_and(|s| s.id == session) {
+        open.take();
     }
 }
 
@@ -666,12 +1118,12 @@ fn next_session_id(state: &AppState) -> u64 {
     state.capture.editor_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
 }
 
-/// One picture at a time: an open editor is brought forward and the new
+/// One picture at a time: the open one is brought forward again and the new
 /// one refused, so unsaved changes are never thrown away by another click.
 fn refuse_if_open(app: &AppHandle) -> Result<()> {
-    if let Some(w) = app.get_webview_window(EDITOR_LABEL) {
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+    let open = lock(&app.state::<AppState>().capture.editor).as_ref().map(|s| s.id);
+    if let Some(id) = open {
+        show_in_main_window(app, id);
         return Err(AppError::Validation(
             "Another picture is open in the editor. Save or cancel it first.".into(),
         ));
@@ -705,60 +1157,36 @@ fn session_for(state: &AppState, request: &tauri::ipc::Request<'_>) -> Result<Ed
         .ok_or_else(|| AppError::Validation("This picture is no longer open in the editor.".into()))
 }
 
-/// Store the session and show its window.
+/// Store the session and show it in the main window.
 fn open_with(app: &AppHandle, session: EditorSession) -> Result<()> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(session.original.as_slice()))
-        .with_guessed_format()
-        .ok()
-        .and_then(|r| r.into_dimensions().ok())
-        .unwrap_or((1280, 800));
-    let title = format!("Edit {}", session.file_name);
-    let state = app.state::<AppState>();
-    *lock(&state.capture.editor) = Some(session);
-
-    let monitor = app
-        .get_webview_window(super::commands::MAIN_WINDOW_LABEL)
-        .and_then(|m| m.current_monitor().ok().flatten())
-        .or_else(|| app.primary_monitor().ok().flatten());
-    let (scale, max) = monitor.map_or((2.0, (1440.0, 900.0)), |m| {
-        let s = m.scale_factor();
-        let size = m.size().to_logical::<f64>(s);
-        (s, (size.width, size.height))
-    });
-    let (width, height) = window_size(w, h, scale, max);
-    let route = if cfg!(dev) { "capture-editor" } else { "capture-editor.html" };
-    let built = WebviewWindowBuilder::new(app, EDITOR_LABEL, WebviewUrl::App(route.into()))
-        .title(title)
-        .inner_size(width, height)
-        .min_inner_size(720.0, 520.0)
-        .resizable(true)
-        .center()
-        .focused(true)
-        .build();
-    let window = match built {
-        Ok(w) => w,
-        Err(e) => {
-            lock(&state.capture.editor).take();
-            return Err(AppError::Other(format!("Could not open the editor: {e}")));
-        }
-    };
-    let handle = app.clone();
-    window.on_window_event(move |event| match event {
-        // The page decides: it asks first when there are unsaved changes,
-        // then calls `capture_editor_close`.
-        tauri::WindowEvent::CloseRequested { api, .. } => {
-            api.prevent_close();
-            let _ = handle.emit_to(EDITOR_LABEL, CLOSE_REQUESTED_EVENT, ());
-        }
-        tauri::WindowEvent::Destroyed => {
-            lock(&handle.state::<AppState>().capture.editor).take();
-        }
-        _ => {}
-    });
-    let _ = window.set_focus();
+    let id = session.id;
+    *lock(&app.state::<AppState>().capture.editor) = Some(session);
+    show_in_main_window(app, id);
     Ok(())
+}
+
+/// The editor is a layer of the main window: the window comes forward
+/// (unminimized, shown, focused) and is told which session to show. The
+/// tray popover goes first, so it never sits over the editor.
+fn show_in_main_window(app: &AppHandle, session: u64) {
+    if let Err(e) = crate::tray::panel::hide_tray_panel(app.clone()) {
+        tracing::debug!(error = %e, "tray popover not hidden for the editor");
+    }
+    super::commands::show_main_window(app);
+    if let Err(e) = app.emit_to(super::commands::MAIN_WINDOW_LABEL, OPEN_EVENT, session) {
+        tracing::warn!(error = %e, "the main window was not told to show the editor");
+    }
+}
+
+/// Start a sync round for a file just written in a drive synced here. Not
+/// awaited: it runs a whole round (see `deliver::place`).
+fn nudge_sync(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::sync::control::trigger_sync_now(app).await {
+            tracing::warn!(error = %e, "edited screenshot saved; sync not nudged");
+        }
+    });
 }
 
 /// Where the edited picture went.
@@ -780,13 +1208,7 @@ async fn write_edited(state: &AppState, app: &AppHandle, account_id: &str, sessi
                     tracing::warn!(error = %e, "edited screenshot not written");
                     AppError::Validation("The screenshot couldn't be saved. Check the drive's folder is still there.".into())
                 })?;
-            // Not awaited: it runs a whole sync round (see `deliver::place`).
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = crate::sync::control::trigger_sync_now(app).await {
-                    tracing::warn!(error = %e, "edited screenshot saved; sync not nudged");
-                }
-            });
+            nudge_sync(app);
             Ok(Written {
                 link_source: super::deliver::LinkSource::Synced {
                     label: session.drive_label.clone(),
@@ -1065,6 +1487,7 @@ async fn open_picked(state: &tauri::State<'_, AppState>, app: &AppHandle, accoun
         .map_or_else(|| super::naming::DEFAULT_DRIVE_NAME.to_string(), |d| d.display_name);
     let session = EditorSession {
         id: next_session_id(state),
+        account_id: account_id.to_string(),
         origin: EditorOrigin::Picked,
         file_name,
         drive_label: String::new(),
@@ -1073,6 +1496,7 @@ async fn open_picked(state: &tauri::State<'_, AppState>, app: &AppHandle, accoun
         format,
         target: SaveTarget::NewCapture,
         share_token: None,
+        drive_shared: false,
         original: std::sync::Arc::new(original),
     };
     open_with(app, session)
@@ -1100,8 +1524,12 @@ async fn save_as_new_capture(app: &AppHandle, session: &EditorSession, encoded: 
     let thumbnail = super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(rgba.clone())).ok();
     super::commands::deliver_as_new_screenshot(app, &path, thumbnail).await;
     tracing::info!(session = session.id, "picked picture edited and saved as a new screenshot");
+    // The new screenshot's card makes, copies and shows its link.
     Ok(SaveOutcome {
+        title: "Saved to Captures".into(),
         message: format!("Saved as {name} in {}. Your original is unchanged.", session.drive_name),
+        file_name: name,
+        offer_link: false,
     })
 }
 
@@ -1254,39 +1682,179 @@ mod tests {
         assert!(!save_note(EditorOrigin::Drive, false).contains("link"));
     }
 
-    #[test]
-    fn the_window_fits_the_picture_inside_the_screen() {
-        // A small Retina shot: natural size plus chrome, never under the minimum.
-        assert_eq!(window_size(400, 300, 2.0, (1512.0, 982.0)), (720.0, 520.0));
-        // A whole Retina screen: capped at 90% of the screen.
-        let (w, h) = window_size(3024, 1964, 2.0, (1512.0, 982.0));
-        assert!(w <= 1512.0 * 0.9 + 0.5 && h <= 982.0 * 0.9 + 0.5, "{w}x{h}");
-        // A medium shot at 1x is shown at its size.
-        assert_eq!(window_size(900, 500, 1.0, (1920.0, 1080.0)), (948.0, 640.0));
-        // A bad scale does not divide by zero.
-        assert_eq!(window_size(900, 500, 0.0, (1920.0, 1080.0)), (948.0, 640.0));
-    }
-
-    #[test]
-    fn the_context_names_the_session_and_the_format() {
-        let session = EditorSession {
+    fn session(origin: EditorOrigin, target: SaveTarget) -> EditorSession {
+        EditorSession {
             id: 7,
-            origin: EditorOrigin::Card { card_id: 2 },
+            account_id: "acct".into(),
+            origin,
             file_name: "Shot.png".into(),
             drive_label: "Work".into(),
             drive_name: "Work".into(),
             rel_path: "Captures/Shot.png".into(),
             format: EditableFormat::Png,
-            target: SaveTarget::Local(PathBuf::from("/x/Captures/Shot.png")),
-            share_token: Some("t".into()),
+            target,
+            share_token: None,
+            drive_shared: false,
             original: std::sync::Arc::new(Vec::new()),
-        };
-        let ctx = session.context();
+        }
+    }
+
+    #[test]
+    fn the_context_names_the_session_and_the_format() {
+        let mut card = session(
+            EditorOrigin::Card { card_id: 2 },
+            SaveTarget::Local(PathBuf::from("/x/Captures/Shot.png")),
+        );
+        card.share_token = Some("t".into());
+        let ctx = card.context(SavePreference::Copy);
         assert_eq!(ctx.session, 7);
         assert_eq!(ctx.mime, "image/png");
-        assert!(ctx.save_note.contains("link"));
+        assert_eq!(ctx.save_kind, SaveKind::InDrive);
+        assert!(ctx.has_public_link);
+        assert_eq!(ctx.save_preference, SavePreference::Copy);
+        assert!(ctx.copy_note.contains("\"Shot (edited).png\""), "{}", ctx.copy_note);
         let json = serde_json::to_value(&ctx).unwrap();
-        assert!(json.get("fileName").is_some() && json.get("saveNote").is_some());
+        for key in ["fileName", "saveKind", "copyNote", "replaceNote", "hasPublicLink", "savePreference"] {
+            assert!(json.get(key).is_some(), "{key} on the wire");
+        }
+        assert_eq!(json["saveKind"], "inDrive");
+        assert_eq!(json["savePreference"], "copy");
+    }
+
+    /// A picked picture has no original to replace: the page offers only
+    /// "Save to Captures".
+    #[test]
+    fn a_picked_picture_is_offered_only_save_to_captures() {
+        let ctx = session(EditorOrigin::Picked, SaveTarget::NewCapture).context(SavePreference::Replace);
+        assert_eq!(ctx.save_kind, SaveKind::NewCapture);
+        assert!(!ctx.has_public_link);
+        assert_eq!(serde_json::to_value(&ctx).unwrap()["saveKind"], "newCapture");
+    }
+
+    /// The link warning is said only where the file has a public link; a
+    /// file without one gets the neutral line.
+    #[test]
+    fn replace_warns_about_the_link_only_when_there_is_one() {
+        assert_eq!(
+            replace_note(EditorOrigin::Drive, "Shot.png", false, true),
+            "Overwrites Shot.png. Its public link will show the old image until it is shared again."
+        );
+        assert_eq!(replace_note(EditorOrigin::Drive, "Shot.png", false, false), "Overwrites Shot.png.");
+        assert_eq!(
+            replace_note(EditorOrigin::Card { card_id: 1 }, "Shot.png", false, false),
+            "Overwrites Shot.png."
+        );
+        assert!(replace_note(EditorOrigin::Card { card_id: 1 }, "Shot.png", true, false).contains("old link stops working"));
+        let mut drive = session(EditorOrigin::Drive, SaveTarget::Local(PathBuf::from("/x/Shot.png")));
+        assert!(!drive.context(SavePreference::Ask).has_public_link);
+        drive.drive_shared = true;
+        let ctx = drive.context(SavePreference::Ask);
+        assert!(ctx.has_public_link && ctx.replace_note.contains("public link"));
+        for note in [ctx.replace_note, ctx.copy_note] {
+            assert!(!note.contains('\u{2014}'), "no em dash in user copy");
+        }
+    }
+
+    /// A page that did not say how to save can never replace a file; a
+    /// picked picture is always a new capture whatever the page says.
+    #[test]
+    fn a_save_in_a_drive_must_name_its_mode() {
+        let local = SaveTarget::Local(PathBuf::from("/x/Shot.png"));
+        assert_eq!(requested_mode(&local, Some("copy")).unwrap(), Some(SaveMode::Copy));
+        assert_eq!(requested_mode(&local, Some("replace")).unwrap(), Some(SaveMode::Replace));
+        for bad in [None, Some(""), Some("Replace"), Some("overwrite")] {
+            assert!(matches!(requested_mode(&local, bad), Err(AppError::Validation(_))), "{bad:?}");
+        }
+        assert_eq!(requested_mode(&SaveTarget::NewCapture, Some("replace")).unwrap(), None);
+        assert_eq!(requested_mode(&SaveTarget::NewCapture, None).unwrap(), None);
+    }
+
+    #[test]
+    fn the_saved_choice_reads_back_and_anything_unknown_asks() {
+        for p in [SavePreference::Ask, SavePreference::Copy, SavePreference::Replace] {
+            assert_eq!(SavePreference::parse(Some(p.as_str())), p);
+            // The IPC's wire form is the stored form.
+            assert_eq!(serde_json::to_value(p).unwrap(), p.as_str());
+        }
+        assert_eq!(SavePreference::parse(None), SavePreference::Ask);
+        assert_eq!(SavePreference::parse(Some("always")), SavePreference::Ask);
+        assert_eq!(SavePreference::default(), SavePreference::Ask);
+    }
+
+    #[test]
+    fn copies_are_numbered_from_the_second() {
+        assert_eq!(numbered_copy_name("Shot.png", 1), "Shot (edited).png");
+        assert_eq!(numbered_copy_name("Shot.png", 2), "Shot (edited 2).png");
+        assert_eq!(numbered_copy_name("a|b.JPG", 3), "a-b (edited 3).JPG");
+        let taken = ["Shot (edited).png", "Shot (edited 2).png"];
+        assert_eq!(unique_copy_name("Shot.png", |n| taken.contains(&n)), "Shot (edited 3).png");
+        assert_eq!(unique_copy_name("Shot.png", |_| false), "Shot (edited).png");
+        // A gap is filled rather than skipped past.
+        assert_eq!(unique_copy_name("Shot.png", |n| n == "Shot (edited).png"), "Shot (edited 2).png");
+        // Even a folder where every number is taken gets a name, of the same kind.
+        let last = unique_copy_name("Shot.png", |_| true);
+        assert!(last.starts_with("Shot (edited ") && last.ends_with(").png"), "{last}");
+    }
+
+    #[test]
+    fn a_copy_sits_in_the_originals_folder() {
+        assert_eq!(sibling_rel_path("Captures/Shot.png", "Shot (edited).png"), "Captures/Shot (edited).png");
+        assert_eq!(sibling_rel_path("a/b/c.png", "c (edited).png"), "a/b/c (edited).png");
+        assert_eq!(sibling_rel_path("Shot.png", "Shot (edited).png"), "Shot (edited).png");
+        assert_eq!(sibling_rel_path("/Shot.png", "x.png"), "x.png");
+    }
+
+    /// The copy is a new file beside the original, numbered past the names
+    /// already there; the original keeps its bytes and no staging file stays.
+    #[test]
+    fn a_copy_is_written_beside_the_original_and_never_over_a_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = tmp.path().join("Shot.png");
+        std::fs::write(&original, b"original").unwrap();
+        let first = write_beside(&original, b"edit one").unwrap();
+        assert_eq!(first, tmp.path().join("Shot (edited).png"));
+        let second = write_beside(&original, b"edit two").unwrap();
+        assert_eq!(second, tmp.path().join("Shot (edited 2).png"));
+        assert_eq!(std::fs::read(&original).unwrap(), b"original");
+        assert_eq!(std::fs::read(&first).unwrap(), b"edit one");
+        assert_eq!(std::fs::read(&second).unwrap(), b"edit two");
+        let names: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 3, "no staging file left: {names:?}");
+    }
+
+    #[test]
+    fn a_copy_into_a_missing_folder_fails_and_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(write_beside(&tmp.path().join("gone").join("Shot.png"), b"x").is_err());
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    /// "Copy link" after a save: the card's new link as it is; a file synced
+    /// here through the quick-link path; never a link that still shows the
+    /// earlier picture, and nothing for a file only on the server.
+    #[test]
+    fn copy_link_is_offered_only_for_a_link_to_the_saved_picture() {
+        let replaced = LinkResult::Replaced {
+            copied: true,
+            old_revoked: true,
+        };
+        assert_eq!(
+            saved_link(true, replaced, Some("https://x/s/1"), "Work", "Captures/Shot.png"),
+            Some(SavedEdit::Link("https://x/s/1".into()))
+        );
+        assert_eq!(
+            saved_link(true, LinkResult::Unchanged, None, "Work", "a/Shot.png"),
+            Some(SavedEdit::File {
+                label: "Work".into(),
+                rel_path: "a/Shot.png".into()
+            })
+        );
+        assert_eq!(saved_link(false, LinkResult::Unchanged, None, "Work", "a/Shot.png"), None);
+        assert_eq!(saved_link(true, LinkResult::Stale, None, "Work", "a/Shot.png"), None);
+        assert_eq!(saved_link(true, LinkResult::NotMade { old_revoked: true }, None, "Work", "a.png"), None);
     }
 
     fn roots() -> Vec<(String, PathBuf)> {
