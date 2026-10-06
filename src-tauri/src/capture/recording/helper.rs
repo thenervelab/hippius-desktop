@@ -25,7 +25,9 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use super::protocol::{CropCommand, HelperEvent, Incoming, SimpleCommand, StartCommand, StreamCrop, StreamStill, parse_event};
+use super::protocol::{
+    CropCommand, HelperEvent, Incoming, SimpleCommand, StartCommand, StreamCrop, StreamStill, SwitchMicrophoneCommand, parse_event,
+};
 use super::{MediaDevice, RecordOptions, Recorder};
 use crate::capture::screenshot::Selection;
 use crate::error::{AppError, Result};
@@ -41,6 +43,9 @@ const READY_WITHIN: Duration = Duration::from_secs(5);
 const START_WITHIN: Duration = Duration::from_secs(30);
 /// Pause, resume and cancel answer at once.
 const COMMAND_WITHIN: Duration = Duration::from_secs(5);
+/// Switching the microphone: the recorder waits up to 3 s for a device it has
+/// not discovered yet, then the stream reopens it.
+const SWITCH_WITHIN: Duration = Duration::from_secs(15);
 /// Finishing the file of a long recording.
 const STOP_WITHIN: Duration = Duration::from_mins(2);
 
@@ -503,6 +508,26 @@ impl Recorder for HelperRecorder {
         self.area_still.take()
     }
 
+    fn set_microphone_muted(&mut self, muted: bool) -> Result<()> {
+        if !self.microphone {
+            return Err(AppError::Validation("This recording has no microphone.".into()));
+        }
+        if muted {
+            self.command("mute", |e| matches!(e, HelperEvent::Muted), COMMAND_WITHIN)
+        } else {
+            self.command("unmute", |e| matches!(e, HelperEvent::Unmuted), COMMAND_WITHIN)
+        }
+    }
+
+    fn switch_microphone(&mut self, device: Option<String>) -> Result<()> {
+        if !self.microphone {
+            return Err(AppError::Validation("This recording has no microphone.".into()));
+        }
+        let id = self.next_id();
+        self.write_cmd(&SwitchMicrophoneCommand::new(id, device))?;
+        self.wait(id, |e| matches!(e, HelperEvent::MicrophoneSwitched), SWITCH_WITHIN).map(|_| ())
+    }
+
     fn crop(&mut self, area: StreamCrop) -> Result<()> {
         if !self.awaiting_crop {
             return Err(AppError::Other("This recording is not waiting for an area.".into()));
@@ -751,6 +776,91 @@ mod tests {
         .err()
         .expect("refused");
         assert!(err.to_string().contains("exited unexpectedly"), "{err}");
+    }
+
+    /// Mute, unmute and a microphone switch go to the recorder as their own
+    /// commands and wait for their own replies; a refusal (a microphone
+    /// that is not connected) comes back as the recorder's words, and the
+    /// recording goes on. A recording without a microphone asks nothing.
+    #[test]
+    fn the_microphone_controls_round_trip_through_the_recorder() {
+        use crate::capture::recording::protocol::{self, Command, parse_command};
+        use std::io::{BufRead, Write};
+
+        let (from_child, mut child_out) = std::io::pipe().unwrap();
+        let (child_in, to_child) = std::io::pipe().unwrap();
+        let child = thread::spawn(move || {
+            let mut lines = std::io::BufReader::new(child_in).lines();
+            writeln!(child_out, "{}", protocol::ready_line()).unwrap();
+            let mut heard = Vec::new();
+            while let Some(Ok(line)) = lines.next() {
+                let command = parse_command(&line).unwrap();
+                let reply = match &command {
+                    Command::Start(start) => protocol::started_line(Some(start.id), (640, 360), None),
+                    Command::Mute { id, muted: true } => protocol::ok_line("muted", *id, None),
+                    Command::Mute { id, muted: false } => protocol::ok_line("unmuted", *id, None),
+                    Command::SwitchMicrophone { id, device: Some(d) } if d == "gone" => {
+                        protocol::error_line("That microphone is not connected.", *id)
+                    }
+                    Command::SwitchMicrophone { id, .. } => protocol::ok_line("microphone_switched", *id, None),
+                    other => panic!("unexpected {other:?}"),
+                };
+                heard.push(command);
+                writeln!(child_out, "{reply}").unwrap();
+            }
+            heard
+        });
+        let options = RecordOptions {
+            microphone: true,
+            ..RecordOptions::default()
+        };
+        let mut recorder = HelperRecorder::begin(None, Box::new(to_child), from_child, PathBuf::from("/tmp/m.mp4"), true, |id| {
+            StartCommand::from_selection(id, Selection::Screen { display_id: 0 }, Path::new("/tmp/m.mp4"), options)
+        })
+        .expect("started");
+        recorder.set_microphone_muted(true).expect("muted");
+        recorder.set_microphone_muted(false).expect("unmuted");
+        recorder.switch_microphone(Some("usb-1".into())).expect("switched");
+        let refused = recorder.switch_microphone(Some("gone".into())).unwrap_err();
+        assert!(refused.to_string().contains("not connected"), "{refused}");
+        recorder.switch_microphone(None).expect("back to the default");
+        drop(recorder);
+        let heard = child.join().unwrap();
+        assert_eq!(
+            heard[1..],
+            [
+                Command::Mute { id: Some(2), muted: true },
+                Command::Mute { id: Some(3), muted: false },
+                Command::SwitchMicrophone {
+                    id: Some(4),
+                    device: Some("usb-1".into())
+                },
+                Command::SwitchMicrophone {
+                    id: Some(5),
+                    device: Some("gone".into())
+                },
+                Command::SwitchMicrophone { id: Some(6), device: None },
+            ]
+        );
+
+        let (_, stdin) = std::io::pipe().unwrap();
+        let mut silent = HelperRecorder {
+            child: None,
+            stdin: Some(Box::new(stdin)),
+            events: mpsc::channel().1,
+            shared: Arc::new(Shared::default()),
+            next_id: 0,
+            output: PathBuf::from("/tmp/s.mp4"),
+            microphone: false,
+            running_since: None,
+            accumulated: Duration::ZERO,
+            paused: false,
+            area_still: None,
+            awaiting_crop: false,
+        };
+        assert!(silent.set_microphone_muted(true).is_err());
+        assert!(silent.switch_microphone(None).is_err());
+        assert_eq!(silent.next_id, 0, "nothing was sent");
     }
 
     /// A Wayland area: `start` is answered with the monitor's picture, the

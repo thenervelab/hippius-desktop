@@ -81,6 +81,25 @@ describe("SharePicker", () => {
     expect(onChoose).toHaveBeenCalledWith({ tab: "screen", id: 1 });
   });
 
+  // Return the moment the pick is drawn, before React has run the passive
+  // effects: a MutationObserver callback is a microtask, ahead of them. A key
+  // listener re-bound in a `useEffect` still held the render with no pick.
+  it("shares the bar's screen on a Return pressed as soon as it is picked", async () => {
+    const onChoose = vi.fn();
+    const observer = new MutationObserver(() => {
+      if (!document.querySelector('[role="option"][aria-selected="true"]')) return;
+      observer.disconnect();
+      fireEvent.keyDown(window, { key: "Enter" });
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    try {
+      render(<SharePicker kind="screenshot" firstTab="screen" barDisplayId={1} onChoose={onChoose} onClose={vi.fn()} />);
+      await waitFor(() => expect(onChoose).toHaveBeenCalledWith({ tab: "screen", id: 1 }));
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   it("closes on Escape and tells Rust to stop taking pictures", async () => {
     const onClose = vi.fn();
     const { findByRole, unmount } = render(
@@ -120,6 +139,28 @@ describe("SharePicker", () => {
     expect(getByRole("option", { name: /Notes/ })).toHaveFocus();
     fireEvent.keyDown(window, { key: "ArrowDown" });
     expect(getByRole("option", { name: /Notes/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  // An arrow pressed the moment the list draws: the effects of that render
+  // are still pending, and must not take the move's focus request for the
+  // first pick.
+  it("moves focus to the new pick on an arrow pressed as soon as the list appears", async () => {
+    const observer = new MutationObserver(() => {
+      if (!document.querySelector('[role="option"][aria-selected="true"]')) return;
+      observer.disconnect();
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    try {
+      const { findByRole } = render(
+        <SharePicker kind="screenshot" firstTab="window" barDisplayId={1} onChoose={vi.fn()} onClose={vi.fn()} />,
+      );
+      const inbox = await findByRole("option", { name: /Inbox/ });
+      await waitFor(() => expect(inbox).toHaveAttribute("aria-selected", "true"));
+      expect(inbox).toHaveFocus();
+    } finally {
+      observer.disconnect();
+    }
   });
 
   it("switches tabs with the arrow keys on the tab strip", async () => {

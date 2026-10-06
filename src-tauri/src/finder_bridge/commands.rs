@@ -52,22 +52,30 @@ pub async fn hcfs_finder_confirm_share(
             .take_finder_share(&request_id)
             .ok_or_else(|| AppError::NotFound("This share request has expired. Right-click the file and choose Share with Hippius again.".into()))?;
         let progress = crate::shares::commands::share_progress_forwarder(on_progress);
-        // Register a cancel handle and run the mint inside a `select!` against it,
-        // so a `hcfs_finder_cancel_share` (the modal's Cancel button) DROPS the
-        // mint future and aborts its in-flight upload rather than letting a large
-        // outside-file / folder-zip upload run to completion unseen (illu L2). The
-        // guard removes the handle when this scope ends — on success, error,
-        // cancel, OR the command future being dropped (window closed mid-upload).
+        // Register a cancel handle and hand it to the mint. Most mints are
+        // dropped when it fires (`dispatch::until_cancelled`); an outside
+        // folder's upload takes it cooperatively so it can abort the
+        // half-built link on the server. The guard removes the handle when
+        // this scope ends — on success, error or cancel.
+        //
+        // Closing the window does NOT end it. Tauri 2 runs an async command
+        // as a detached task (`InvokeResolver::respond_async` spawns it on
+        // `tauri::async_runtime`), so the mint runs to completion and its
+        // reply goes to a webview that is gone; on macOS the main window is
+        // only hidden anyway. The future is dropped only when the runtime
+        // shuts down at process exit, which the guard also covers.
         let cancel = state.register_finder_mint(&request_id);
         let _guard = FinderMintGuard {
             state: state.inner(),
             request_id: &request_id,
         };
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(AppError::Validation("Share cancelled.".into())),
-            minted = crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, ttl, choice, Some(progress)) => minted,
-        }
+        let mint = crate::finder_bridge::dispatch::FinderMint {
+            ttl,
+            choice,
+            progress: Some(progress),
+            cancel,
+        };
+        crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, mint).await
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -82,9 +90,10 @@ pub async fn hcfs_finder_confirm_share(
 /// RAII teardown for an in-flight Finder mint: drops the cancel handle registered
 /// by [`hcfs_finder_confirm_share`] when the mint scope ends — whether it
 /// completes, errors, is cancelled, or the whole command future is dropped
-/// (window closed mid-upload). Paired begin/end teardown via `Drop` is the
-/// cancellation-safe way to run cleanup on every exit path (RfR ch. 8
-/// §Cancellation; axiom `rust_quality_71_drop_order`).
+/// (only at process exit: Tauri detaches async commands from the webview).
+/// Paired begin/end teardown via `Drop` is the cancellation-safe way to run
+/// cleanup on every exit path (RfR ch. 8 §Cancellation; axiom
+/// `rust_quality_71_drop_order`).
 #[cfg(any(unix, windows))]
 struct FinderMintGuard<'a> {
     state: &'a AppState,

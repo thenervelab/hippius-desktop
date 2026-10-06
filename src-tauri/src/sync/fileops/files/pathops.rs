@@ -1,9 +1,10 @@
 //! Shared, leaf-level path helpers for the files submodules: containment
 //! check (`ensure_within`), sync-relative name derivation
-//! (`derive_relative_name`), recursive copy (`copy_dir_recursive`), and the
-//! engine's hidden-name rule (`is_engine_hidden_name`). Kept in a
+//! (`derive_relative_name`), recursive copy (`copy_dir_recursive`), the
+//! engine's hidden-name rule (`is_engine_hidden_name`), and the child filter
+//! every tree upload shares (`visible_children`, `pub(crate)`). Kept in a
 //! dependency-free leaf so the sibling submodules form a DAG rather than an
-//! `add` <-> `resolve` cycle. All are `pub(super)`, reached via
+//! `add` <-> `resolve` cycle. The rest are `pub(super)`, reached via
 //! `super::pathops::<helper>`.
 
 use crate::error::Result;
@@ -33,6 +34,93 @@ use std::path::{Path, PathBuf};
 // synced locally produce one file set.
 pub(in crate::sync::fileops) fn is_engine_hidden_name(name: &OsStr) -> bool {
     name.to_str().is_some_and(|n| n.starts_with('.'))
+}
+
+/// What a visible directory child is.
+#[derive(Debug)]
+pub(crate) enum VisibleKind {
+    Dir,
+    /// A regular file and its length when it was listed.
+    File {
+        size: u64,
+    },
+    /// Listed, but its type could not be read (a folder that can be listed
+    /// but not entered, a lost privacy grant). A share must refuse it by
+    /// name; a drive upload skips it, since its files are independent.
+    Unreadable {
+        error: std::io::Error,
+    },
+    /// A file or folder whose name is not valid UTF-8. Wire paths are
+    /// strings, so it has no spelling there; `VisibleEntry::name` carries
+    /// the lossy form for a message. APFS stores only UTF-8, so on macOS
+    /// this never occurs.
+    NotText,
+}
+
+/// One child of a directory that an upload of the tree carries.
+#[derive(Debug)]
+pub(crate) struct VisibleEntry {
+    /// UTF-8 name; lossy for [`VisibleKind::NotText`] only.
+    pub name: String,
+    pub path: PathBuf,
+    pub kind: VisibleKind,
+}
+
+/// The children of `dir` that an upload of the tree carries, in `read_dir`
+/// order.
+///
+/// One definition for every walk that uploads a local tree (a folder upload
+/// into a drive, a folder shared as an uploaded copy), so each holds the
+/// file set the engine would sync:
+/// - dot-names are skipped ([`is_engine_hidden_name`]);
+/// - symlinks and special files are skipped: `DirEntry::metadata` does not
+///   follow links, so a link is neither file nor dir, which also keeps a
+///   link cycle from ever being walked;
+/// - an entry that vanished between `read_dir` and its stat (`NotFound`) is
+///   skipped; any other stat failure is reported as
+///   [`VisibleKind::Unreadable`], so a caller that must not lose an item
+///   silently can refuse it by name;
+/// - a non-UTF-8 name is reported as [`VisibleKind::NotText`].
+///
+/// At most `limit` children are returned: listing stops there, so a caller
+/// that refuses past a count does not stat a million-entry folder first.
+///
+/// # Errors
+///
+/// The `read_dir` of `dir` itself, or an error reading its next entry
+/// (that is the directory failing to list, and no name exists to report).
+/// The caller decides whether an unreadable directory is skippable (drive
+/// upload) or fatal (a share must not silently drop a subfolder).
+pub(crate) fn visible_children(dir: &Path, limit: usize) -> std::io::Result<Vec<VisibleEntry>> {
+    let mut children = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        if children.len() >= limit {
+            break;
+        }
+        let entry = entry?;
+        let name = entry.file_name();
+        if is_engine_hidden_name(&name) {
+            continue;
+        }
+
+        let kind = match entry.metadata() {
+            Ok(meta) if meta.is_dir() => VisibleKind::Dir,
+            Ok(meta) if meta.is_file() => VisibleKind::File { size: meta.len() },
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => VisibleKind::Unreadable { error },
+        };
+        let (name, kind) = match name.to_str() {
+            Some(name) => (name.to_owned(), kind),
+            None => (name.to_string_lossy().into_owned(), VisibleKind::NotText),
+        };
+        children.push(VisibleEntry {
+            name,
+            path: entry.path(),
+            kind,
+        });
+    }
+    Ok(children)
 }
 
 /// Engine-owned names that must never appear in Drive: the `.hippius`
@@ -94,6 +182,19 @@ pub(super) async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Re
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    /// Listing stops at the limit, so a capped walk never stats the rest of
+    /// a huge folder.
+    #[test]
+    fn visible_children_stops_at_the_limit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for i in 0..5 {
+            std::fs::write(dir.path().join(format!("f{i}")), b"x").expect("file");
+        }
+
+        assert_eq!(visible_children(dir.path(), 2).expect("list").len(), 2);
+        assert_eq!(visible_children(dir.path(), usize::MAX).expect("list").len(), 5);
+    }
 
     #[test]
     fn strips_sync_path_prefix() {

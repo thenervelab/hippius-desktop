@@ -1097,7 +1097,7 @@ fn the_capture_runtime_jobs_run_the_built_recorder_for_capture_prs_only() {
         );
     }
     let linux = jobs.get("capture-runtime-linux").expect("linux runtime job");
-    assert!(linux.script.contains("xvfb-run") && linux.script.contains("module-null-sink"));
+    assert!(linux.script.contains("scripts/with-xvfb.sh") && linux.script.contains("module-null-sink"));
     assert!(
         ci.contains("echo \"capture_runtime=true\" >> \"$GITHUB_OUTPUT\""),
         "the changes job sets the gate"

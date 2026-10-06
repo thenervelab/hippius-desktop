@@ -23,9 +23,10 @@ import VideoPlayerError from "./VideoPlayerError";
 // which is available regardless of the `withGlobalTauri` setting)
 const isTauri = isTauriRuntime();
 
-// Platform info loaded from Rust. Linux must not be rejected as a platform:
-// WebKitGTK delegates media playback to GStreamer, so supported files should
-// reach the media element and only fall back after a real decoder error.
+// Platform info loaded from Rust. The file viewer does not mount this player
+// on Linux at all (`supportsInAppVideo` is false there: WebKitGTK showed a
+// recording as a black frame; see `VideoPreviewBody`). Elsewhere a file
+// reaches the media element and only falls back after a real decoder error.
 let _unsupportedEngine = false;
 if (isTauri) {
   import("@tauri-apps/api/core").then(({ invoke }) =>

@@ -36,3 +36,18 @@ export function driveFolderRoute(label: string, remote: boolean, subfolder?: str
   if (openFile) params.set("openFile", openFile);
   return `/files?${params.toString()}`;
 }
+
+/** The Captures page, which shows the captures drive. */
+export const CAPTURES_ROUTE = "/captures";
+
+/**
+ * The Captures page pointing out one capture ("Show in folder" on a capture's
+ * card). The same params as `driveFolderRoute`, read by the same Drive
+ * container, which the Captures page pins to the captures drive.
+ */
+export function capturesRoute(label: string, remote: boolean, openFile?: string): string {
+  const params = new URLSearchParams({ openLabel: label });
+  if (remote) params.set("openRemote", "1");
+  if (openFile) params.set("openFile", openFile);
+  return `${CAPTURES_ROUTE}?${params.toString()}`;
+}

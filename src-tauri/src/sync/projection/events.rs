@@ -53,6 +53,45 @@ pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
 /// returned. Without this event a folder the user just deleted keeps rendering
 /// as a `pending` row until some unrelated refresh. Payload: [`LabelPayload`].
 pub const FOLDER_ENTITIES_CHANGED: &str = "hcfs_folder_entities_changed";
+/// A drive's mass-delete hold began or changed (side, count, empty root).
+/// Payload: [`MassDeleteHoldPayload`]. Emitted only on a change, never on
+/// hcfs's per-cycle repeat; see `sync::mass_delete_hold`.
+pub const MASS_DELETE_HELD: &str = "hcfs_mass_delete_held";
+/// Gated companion to [`MASS_DELETE_HELD`]: Rust saved the episode's one
+/// notification, so the UI refreshes the bell. Not sent when the account
+/// turned Files notifications off. Payload: [`LabelPayload`].
+pub const MASS_DELETE_HELD_NOTIFY: &str = "hcfs_mass_delete_held_notify";
+/// Rust saved the notification for a Finder folder share cancelled after
+/// its link was made, whose link could not be revoked
+/// (`notifications::credits::create_cancelled_share_link_live_notification`),
+/// so the UI refreshes the bell. No payload. Not sent when the account
+/// turned Files notifications off.
+pub const CANCELLED_SHARE_LINK_LIVE_NOTIFY: &str = "hcfs_cancelled_share_link_live_notify";
+/// Rust saved a "Drive Disconnected" notification (the drive folder's disk
+/// is not mounted; once per episode), so the UI refreshes the bell. Not
+/// sent when the account turned Files notifications off. Payload:
+/// [`LabelPayload`].
+pub const DRIVE_DISCONNECTED_NOTIFY: &str = "hcfs_drive_disconnected_notify";
+/// A side's hold ended: a cycle completed without it (removed, restored, or
+/// the files came back). Payload: [`MassDeleteSidePayload`].
+pub const MASS_DELETE_CLEARED: &str = "hcfs_mass_delete_cleared";
+/// A cycle applied a requested restore. Payload: [`MassDeleteRestoredPayload`].
+pub const MASS_DELETE_RESTORED: &str = "hcfs_mass_delete_restored";
+/// A cycle refused a requested restore; the hold stands. Emitted once per
+/// reason per episode. Payload: [`MassDeleteRestoreRefusedPayload`].
+pub const MASS_DELETE_RESTORE_REFUSED: &str = "hcfs_mass_delete_restore_refused";
+/// hcfs is refusing a drive's empty server listing because this device still
+/// has its files; the prompt began or its count changed. Payload:
+/// [`EmptyRemotePayload`]. Emitted only on a change, never on hcfs's
+/// per-retry repeat; see `sync::empty_remote`.
+pub const EMPTY_REMOTE_HELD: &str = "hcfs_empty_remote_held";
+/// Gated companion to [`EMPTY_REMOTE_HELD`]: Rust saved the episode's one
+/// notification, so the UI refreshes the bell. Not sent when the account
+/// turned Files notifications off. Payload: [`LabelPayload`].
+pub const EMPTY_REMOTE_NOTIFY: &str = "hcfs_empty_remote_notify";
+/// A drive's empty-listing prompt ended: a cycle accepted a listing, the
+/// drive stopped, or it was removed. Payload: [`LabelPayload`].
+pub const EMPTY_REMOTE_CLEARED: &str = "hcfs_empty_remote_cleared";
 /// Emitted when the backend detects credentials are invalid and re-login is needed.
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
 /// Emitted when `AuthInfo` has been fully populated post-login (mnemonic
@@ -180,6 +219,75 @@ pub use hcfs_client::engine::SHARED_DRIVE_REVOKED_MARKER;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The large-delete prompt reads these keys; a rename silently blanks the
+    /// banner (there is no codegen across the IPC boundary).
+    #[test]
+    fn mass_delete_payloads_pin_their_wire_keys() {
+        use hcfs_client::sync::{MassDeleteSide, RestoreRefusal};
+
+        let hold = MassDeleteHoldPayload {
+            label: "photos".into(),
+            side: MassDeleteSide::Server.as_str(),
+            state: crate::sync::mass_delete_hold::HoldPhase::Restoring.as_str(),
+            count: 150,
+            synced_count: 200,
+            empty_root: true,
+            can_restore: false,
+            title: "t".into(),
+            body: vec!["b".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&hold).unwrap(),
+            serde_json::json!({
+                "label": "photos", "side": "server", "state": "restoring", "count": 150,
+                "syncedCount": 200, "emptyRoot": true, "canRestore": false, "title": "t", "body": ["b"]
+            })
+        );
+
+        let cleared = MassDeleteSidePayload {
+            label: "photos".into(),
+            side: "local",
+        };
+        assert_eq!(
+            serde_json::to_value(&cleared).unwrap(),
+            serde_json::json!({ "label": "photos", "side": "local" })
+        );
+
+        let restored = MassDeleteRestoredPayload {
+            label: "photos".into(),
+            side: "server",
+            restored: 1,
+            pending: 2,
+            skipped: 3,
+        };
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::json!({ "label": "photos", "side": "server", "restored": 1, "pending": 2, "skipped": 3 })
+        );
+
+        let refused = MassDeleteRestoreRefusedPayload::new("photos".into(), MassDeleteSide::Server, RestoreRefusal::InsufficientSpace { needed: 42 });
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap(),
+            serde_json::json!({ "label": "photos", "side": "server", "reason": "insufficient_space", "neededBytes": 42 })
+        );
+    }
+
+    #[test]
+    fn mass_delete_event_names_are_pinned() {
+        assert_eq!(MASS_DELETE_HELD, "hcfs_mass_delete_held");
+        assert_eq!(MASS_DELETE_HELD_NOTIFY, "hcfs_mass_delete_held_notify");
+        assert_eq!(DRIVE_DISCONNECTED_NOTIFY, "hcfs_drive_disconnected_notify");
+        assert_eq!(MASS_DELETE_CLEARED, "hcfs_mass_delete_cleared");
+        assert_eq!(MASS_DELETE_RESTORED, "hcfs_mass_delete_restored");
+        assert_eq!(MASS_DELETE_RESTORE_REFUSED, "hcfs_mass_delete_restore_refused");
+    }
+
+    /// The UI listens by this exact string to refresh the bell.
+    #[test]
+    fn cancelled_share_link_live_notify_name_is_pinned() {
+        assert_eq!(CANCELLED_SHARE_LINK_LIVE_NOTIFY, "hcfs_cancelled_share_link_live_notify");
+    }
 
     /// Catches upstream string drift when bumping the `hcfs-client` git rev.
     #[test]
@@ -603,6 +711,161 @@ mod tests {
         assert!(!reason.contains("http"), "leaked URL: {reason}");
     }
 
+    /// hcfs refuses a file it will not sync as things stand (a case/Unicode
+    /// path collision, an unreadable local file, no room on disk for the
+    /// download) and reports the refusal ONCE per revision. Its message is
+    /// written for engineers; Rust maps each typed refusal to copy a
+    /// non-engineer can act on, and hcfs's text stays in the logs.
+    #[test]
+    fn upstream_refusals_get_rust_authored_copy() {
+        use hcfs_client::engine::events::FileFailureKind;
+        use hcfs_client::sync::SyncError;
+
+        let errors = [
+            SyncError::PathCollision {
+                path: "Photos/Beach.JPG".to_string(),
+            },
+            SyncError::LocalUnreadable("permission denied or I/O error".to_string()),
+            SyncError::InsufficientDiskSpace {
+                needed: 5 * 1024 * 1024 * 1024,
+                available: 1024 * 1024,
+            },
+        ];
+        for error in errors {
+            let (kind, status) = FileFailureKind::classify(&error);
+            assert_eq!(status, None, "a refusal is local; no HTTP status");
+
+            let payload = FileFailureKindPayload::from(&kind);
+            let wire = serde_json::to_value(&payload).expect("serialize");
+            assert_eq!(wire["kind"], "refused", "{error:?} must reach the FE as a refusal");
+
+            let reason = payload.display_reason();
+            assert_eq!(wire["reason"], reason.as_str(), "the persisted reason is the copy shown");
+            assert_ne!(reason, error.to_string(), "hcfs's own words stay in the logs");
+            assert!(!reason.starts_with("Not synced:"), "{reason}");
+            assert!(!payload.is_transient(), "a refusal never resolves itself: {reason}");
+            assert!(!is_transient_reason(&reason));
+            let lower = reason.to_lowercase();
+            assert!(!lower.contains("retry") && !lower.contains("try again"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn each_refusal_says_what_to_do() {
+        use hcfs_client::engine::events::FileFailureKind;
+        use hcfs_client::sync::SyncError;
+
+        let copy = |error: SyncError| FileFailureKindPayload::from(&FileFailureKind::classify(&error).0).display_reason();
+
+        let collision = copy(SyncError::PathCollision {
+            path: "Photos/Beach.JPG".to_string(),
+        });
+        assert!(collision.contains("“Beach.JPG”"), "names the file: {collision}");
+        assert!(collision.contains("Rename one of them"), "{collision}");
+        assert!(!collision.contains("Unicode"), "no engineering terms: {collision}");
+
+        let unreadable = copy(SyncError::LocalUnreadable("Permission denied (os error 13)".to_string()));
+        assert!(unreadable.contains("couldn't read this file"), "{unreadable}");
+        assert!(!unreadable.contains("os error"), "{unreadable}");
+
+        let disk = copy(SyncError::InsufficientDiskSpace {
+            needed: 5 * 1024 * 1024 * 1024,
+            available: 1024 * 1024,
+        });
+        assert!(disk.contains("Free up space"), "{disk}");
+        assert!(!disk.contains("GiB"), "{disk}");
+    }
+
+    /// A refusal hcfs adds later, whose text this build does not know, still
+    /// reads as a refusal the user must act on, never as hcfs's own words.
+    #[test]
+    fn an_unknown_refusal_gets_the_fallback_copy() {
+        use hcfs_client::engine::events::FileFailureKind;
+
+        let kind = FileFailureKind::Refused {
+            reason: "Not synced: some future reason".to_string(),
+        };
+        assert_eq!(FileFailureKindPayload::from(&kind).display_reason(), REFUSED_FALLBACK_REASON);
+    }
+
+    #[test]
+    fn a_blank_refusal_reason_falls_back_to_non_retry_copy() {
+        let blank = FileFailureKindPayload::Refused { reason: "  ".to_string() };
+        assert_eq!(blank.display_reason(), REFUSED_FALLBACK_REASON);
+        let lower = REFUSED_FALLBACK_REASON.to_lowercase();
+        assert!(!lower.contains("retry") && !lower.contains("try again"), "{REFUSED_FALLBACK_REASON}");
+    }
+
+    /// The FE tells an unmounted drive from a generic failure by `kind`,
+    /// never by matching the copy.
+    #[test]
+    fn sync_error_kind_wire_strings_are_pinned() {
+        assert_eq!(serde_json::to_value(SyncErrorKind::Generic).unwrap(), "generic");
+        assert_eq!(serde_json::to_value(SyncErrorKind::RootNotMounted).unwrap(), "rootNotMounted");
+        assert_eq!(serde_json::to_value(SyncErrorKind::EmptyRemote).unwrap(), "emptyRemote");
+    }
+
+    #[test]
+    fn suspicious_empty_remote_is_recognised_with_its_count() {
+        use hcfs_client::sync::SyncError;
+
+        for count in [1, 12, 1_234_567] {
+            let error = SyncError::SuspiciousEmptyRemote { synced_count: count }.to_string();
+            assert_eq!(suspicious_empty_remote_count(&error), Some(count), "{error}");
+        }
+    }
+
+    #[test]
+    fn other_errors_are_not_read_as_an_empty_remote() {
+        use hcfs_client::sync::SyncError;
+
+        let real = SyncError::SuspiciousEmptyRemote { synced_count: 12 }.to_string();
+        for error in [
+            format!("Sync failed: {real}"),
+            format!("{real} (retrying)"),
+            real.replace("12", "twelve"),
+            real.replace("12", ""),
+            real.replace("12", "-1"),
+            SyncError::RootNotMounted { path: String::new() }.to_string(),
+            String::new(),
+        ] {
+            assert_eq!(suspicious_empty_remote_count(&error), None, "{error}");
+        }
+    }
+
+    #[test]
+    fn empty_remote_payload_pins_its_wire_keys() {
+        let payload = EmptyRemotePayload {
+            label: "photos".into(),
+            synced_count: 12,
+            can_confirm: false,
+            title: "t".into(),
+            body: vec!["b".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&payload).unwrap(),
+            serde_json::json!({ "label": "photos", "syncedCount": 12, "canConfirm": false, "title": "t", "body": ["b"] })
+        );
+        assert_eq!(EMPTY_REMOTE_HELD, "hcfs_empty_remote_held");
+        assert_eq!(EMPTY_REMOTE_NOTIFY, "hcfs_empty_remote_notify");
+        assert_eq!(EMPTY_REMOTE_CLEARED, "hcfs_empty_remote_cleared");
+    }
+
+    #[test]
+    fn empty_remote_copy_says_nothing_was_deleted() {
+        assert!(EMPTY_REMOTE_MESSAGE.contains("Nothing was deleted"));
+        let lower = EMPTY_REMOTE_MESSAGE.to_lowercase();
+        assert!(!lower.contains("suspicious") && !lower.contains("connection"), "{EMPTY_REMOTE_MESSAGE}");
+    }
+
+    #[test]
+    fn root_not_mounted_copy_says_reconnect_and_nothing_synced() {
+        assert_eq!(
+            ROOT_NOT_MOUNTED_MESSAGE,
+            "Your Hippius folder looks disconnected. Reconnect the disk; nothing was synced."
+        );
+    }
+
     #[test]
     fn display_reason_other_uses_message_or_falls_back_when_blank() {
         let with_msg = FileFailureKindPayload::Other {
@@ -788,9 +1051,10 @@ mod tests {
                 label: "d".to_string(),
                 error: "e".to_string(),
                 retry_in_secs: 0,
-                consecutive_failures: 0
+                consecutive_failures: 0,
+                kind: SyncErrorKind::Generic,
             }),
-            expect_keys(&["label", "error", "retry_in_secs", "consecutive_failures"]),
+            expect_keys(&["label", "error", "retry_in_secs", "consecutive_failures", "kind"]),
             "SyncErrorPayload"
         );
         assert_eq!(
@@ -920,6 +1184,143 @@ pub struct LabelPayload {
     pub label: String,
 }
 
+/// A drive's mass-delete hold, for the [`MASS_DELETE_HELD`] event and for
+/// `get_mass_delete_holds` hydration (one shape, so the banner reads both).
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteHoldPayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` (files missing here) or `"local"` (missing from Hippius).
+    pub side: &'static str,
+    /// `"held"` (waiting for the user) or `"restoring"`.
+    pub state: &'static str,
+    /// Files the hold covers: the count the commands must be called with.
+    pub count: usize,
+    /// The synced baseline the count was measured against.
+    pub synced_count: usize,
+    /// The drive folder has no visible entries (server side only).
+    pub empty_root: bool,
+    /// False for a local-side hold on a shared drive this account is a
+    /// member of: hcfs refuses that restore, so the prompt hides it.
+    pub can_restore: bool,
+    /// The banner's title, written by Rust: the same words the persisted
+    /// notification opens with (`mass_delete_hold::hold_text`).
+    pub title: String,
+    /// The banner's lines under the title, written by Rust.
+    pub body: Vec<String>,
+}
+
+impl From<&crate::sync::mass_delete_hold::LabeledHold> for MassDeleteHoldPayload {
+    fn from(hold: &crate::sync::mass_delete_hold::LabeledHold) -> Self {
+        let text = crate::sync::mass_delete_hold::hold_text(&hold.label, hold.side, hold.entry, hold.can_restore);
+        Self {
+            label: hold.label.clone(),
+            side: hold.side.as_str(),
+            state: hold.entry.phase.as_str(),
+            count: hold.entry.count,
+            synced_count: hold.entry.synced_count,
+            empty_root: hold.entry.empty_root,
+            can_restore: hold.can_restore,
+            title: text.title,
+            body: text.body,
+        }
+    }
+}
+
+/// A drive whose empty server listing hcfs is refusing, for the
+/// [`EMPTY_REMOTE_HELD`] event and for `get_empty_remote_drives` hydration
+/// (one shape, so the banner reads both).
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmptyRemotePayload {
+    /// The drive label.
+    pub label: String,
+    /// How many synced files this device still has for the drive.
+    pub synced_count: usize,
+    /// Whether this account may confirm the drive is empty: false on a
+    /// shared drive this account is a member of, where hcfs refuses it.
+    pub can_confirm: bool,
+    /// The banner's title, written by Rust: the same words the persisted
+    /// notification opens with (`empty_remote::empty_remote_text`).
+    pub title: String,
+    /// The banner's lines under the title, written by Rust.
+    pub body: Vec<String>,
+}
+
+impl EmptyRemotePayload {
+    /// The payload for `label`'s prompt.
+    #[must_use]
+    pub fn new(label: &str, entry: crate::sync::empty_remote::EmptyRemoteEntry) -> Self {
+        let text = crate::sync::empty_remote::empty_remote_text(label, entry);
+        Self {
+            label: label.to_string(),
+            synced_count: entry.synced_count,
+            can_confirm: entry.can_confirm,
+            title: text.title,
+            body: text.body,
+        }
+    }
+}
+
+/// [`MASS_DELETE_CLEARED`]: which side's hold ended.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteSidePayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` or `"local"`.
+    pub side: &'static str,
+}
+
+/// [`MASS_DELETE_RESTORED`]: what a cycle put back.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteRestoredPayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` or `"local"`.
+    pub side: &'static str,
+    /// Files back and in sync.
+    pub restored: usize,
+    /// Files whose transfer started but did not finish; later cycles go on.
+    pub pending: usize,
+    /// Files that no longer looked deleted, left to ordinary sync.
+    pub skipped: usize,
+}
+
+/// [`MASS_DELETE_RESTORE_REFUSED`]: why a restore did not run.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MassDeleteRestoreRefusedPayload {
+    /// The drive label.
+    pub label: String,
+    /// `"server"` or `"local"`.
+    pub side: &'static str,
+    /// hcfs's stable reason name (`"insufficient_space"`).
+    pub reason: &'static str,
+    /// Bytes the restore needs, for an `insufficient_space` refusal.
+    pub needed_bytes: Option<u64>,
+}
+
+impl MassDeleteRestoreRefusedPayload {
+    /// Build from hcfs's refusal. `RestoreRefusal` is `#[non_exhaustive]`:
+    /// a future reason still carries its name, just no byte count.
+    #[must_use]
+    pub fn new(label: String, side: hcfs_client::sync::MassDeleteSide, refusal: hcfs_client::sync::RestoreRefusal) -> Self {
+        let needed_bytes = match refusal {
+            hcfs_client::sync::RestoreRefusal::InsufficientSpace { needed } => Some(needed),
+            _ => None,
+        };
+        Self {
+            label,
+            side: side.as_str(),
+            reason: refusal.as_str(),
+            needed_bytes,
+        }
+    }
+}
+
 /// Payload for `DRIVE_STATUS_CHANGED`. Carries the full drive entry
 /// (label, basename, on-disk path, new status) so the frontend can
 /// update its per-drive status map without re-fetching
@@ -994,9 +1395,80 @@ impl SyncCompletedPayload {
 #[derive(Serialize, Clone)]
 pub struct SyncErrorPayload {
     pub label: String,
+    /// User-facing reason. For [`SyncErrorKind::RootNotMounted`] this is
+    /// [`ROOT_NOT_MOUNTED_MESSAGE`], not hcfs's own text.
     pub error: String,
     pub retry_in_secs: u64,
     pub consecutive_failures: i64,
+    /// What kind of failure this is, for the FE to branch on instead of
+    /// matching `error`.
+    pub kind: SyncErrorKind,
+}
+
+/// The structured kind of a cycle-level sync failure ([`SyncErrorPayload`]).
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncErrorKind {
+    /// Any failure without a dedicated surface; `error` says what failed.
+    Generic,
+    /// The drive folder's disk or share is not mounted, so hcfs refused the
+    /// whole cycle before planning: nothing was uploaded, downloaded or
+    /// deleted. Resolves itself once the disk is back.
+    RootNotMounted,
+    /// hcfs refused an empty server listing because this device still has
+    /// the drive's files (`SyncError::SuspiciousEmptyRemote`): nothing was
+    /// deleted, and the drive waits for the owner's answer
+    /// ([`EMPTY_REMOTE_HELD`]).
+    EmptyRemote,
+}
+
+/// User copy for a cycle hcfs refused because the server listing came back
+/// empty while this device still has the drive's files. hcfs's own text
+/// names the mechanism ("Suspicious empty remote response"); this says what
+/// happened and that nothing was deleted.
+pub const EMPTY_REMOTE_MESSAGE: &str = if cfg!(target_os = "macos") {
+    "Hippius has no files for this drive, but this Mac still has them. Nothing was deleted; sync is on hold."
+} else {
+    "Hippius has no files for this drive, but this computer still has them. Nothing was deleted; sync is on hold."
+};
+
+/// The synced count of hcfs's `SyncError::SuspiciousEmptyRemote`, when
+/// `error` is exactly that error's Display.
+///
+/// Matched against the upstream Display built from the upstream type, with
+/// only the count free, so a reworded upstream message falls through to the
+/// generic path instead of being half-matched; pinned in
+/// `tests/hcfs_contract.rs`.
+pub fn suspicious_empty_remote_count(error: &str) -> Option<usize> {
+    // A sentinel count no real drive reaches splits the template into the
+    // text before and after the number.
+    const SENTINEL: usize = usize::MAX;
+    let template = hcfs_client::sync::SyncError::SuspiciousEmptyRemote { synced_count: SENTINEL }.to_string();
+    let (prefix, suffix) = template.split_once(&SENTINEL.to_string())?;
+
+    let count = error.strip_prefix(prefix)?.strip_suffix(suffix)?;
+    if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    count.parse().ok()
+}
+
+/// User copy for a cycle hcfs refused because the drive folder's volume is
+/// not mounted (`SyncError::RootNotMounted`). hcfs's own text ("not the
+/// volume it was …") describes the mechanism; this says what to do and that
+/// nothing was touched, which is what a user with an unplugged disk needs.
+pub const ROOT_NOT_MOUNTED_MESSAGE: &str = "Your Hippius folder looks disconnected. Reconnect the disk; nothing was synced.";
+
+/// Whether a cycle error string is hcfs's `SyncError::RootNotMounted`.
+///
+/// Exact equality with the upstream Display, built from the upstream type so
+/// it cannot drift. hcfs keeps the path out of that message (its engine
+/// classifies errors by substring, and a folder named `Backup401` must not
+/// read as an auth failure), so every drive's refusal reads the same; an hcfs
+/// change that interpolated the path would fail
+/// `classify_sync_error_routes_an_unmounted_root_to_its_own_path`.
+pub fn is_root_not_mounted_error(error: &str) -> bool {
+    error == hcfs_client::sync::SyncError::RootNotMounted { path: String::new() }.to_string()
 }
 
 /// Emitted when conflicts need user review.
@@ -1053,6 +1525,27 @@ pub struct SyncStartedPayload {
     pub remote_delete_files: Vec<String>,
 }
 
+impl SyncStartedPayload {
+    /// A start whose plan is not known yet (a reviewed sync, whose plan is
+    /// computed inside the sync): every count zero and every list empty,
+    /// so a listener reading the plan fields gets an empty plan rather
+    /// than `undefined`.
+    #[must_use]
+    pub fn without_plan(label: String) -> Self {
+        Self {
+            label,
+            uploads: 0,
+            downloads: 0,
+            local_deletes: 0,
+            remote_deletes: 0,
+            upload_files: Vec::new(),
+            download_files: Vec::new(),
+            local_delete_files: Vec::new(),
+            remote_delete_files: Vec::new(),
+        }
+    }
+}
+
 /// Emitted when the backend detects credentials are invalid and re-login is needed.
 #[derive(Serialize, Clone)]
 pub struct AuthRequiredPayload {
@@ -1085,6 +1578,7 @@ pub struct FilesFailedRepeatedlyPayload {
 /// {"kind":"serverError","status":500}
 /// {"kind":"network"}
 /// {"kind":"gone"}
+/// {"kind":"refused","reason":"Not synced: could not be read (…)"}
 /// {"kind":"other","message":"unrecognised upload failure"}
 /// ```
 #[derive(Serialize, Clone, Debug)]
@@ -1128,6 +1622,18 @@ pub enum FileFailureKindPayload {
     /// the file after two attempts and stops trying, so a user told to wait
     /// would wait forever. This is the one failure class that needs a person.
     Undecryptable,
+    /// hcfs will not sync this file as things stand and says why: its path
+    /// collides with another on this filesystem, it cannot be read, or there
+    /// is no room on the disk to download it. Mirrors upstream
+    /// `FileFailureKind::Refused`.
+    ///
+    /// Unlike [`Self::Undecryptable`] the fix is the user's own (rename,
+    /// unlock, free space), and `reason` is hcfs's message, which names the
+    /// file and says what to do, so it is shown verbatim. hcfs reports a
+    /// refusal once per revision rather than every cycle, which is why the
+    /// persisted row outlives clean cycles (see
+    /// `failure_repo::clear_retryable_failures_for_label`).
+    Refused { reason: String },
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
     Other { message: String },
@@ -1182,6 +1688,90 @@ const GONE_DISPLAY_REASON: &str = "File disappeared before upload — will retry
 /// retry copy every other reason uses would promise something that will
 /// never happen. Must stay word-identical to the FE's `undecryptable` case.
 const UNDECRYPTABLE_DISPLAY_REASON: &str = "Can't be decrypted on this device — needs to be re-uploaded or removed.";
+
+/// Shown for a refusal whose upstream reason is blank. Never expected (hcfs
+/// always explains a refusal), but a row must not render an empty reason.
+/// Like the undecryptable copy it promises no retry: the next cycle will not
+/// change the outcome. Must stay word-identical to the FE's
+/// `REFUSED_FALLBACK_MESSAGE` (pinned by `tests/failure_copy_parity.rs`).
+const REFUSED_FALLBACK_REASON: &str = "Not synced. This file needs your attention before it can sync.";
+
+/// One hcfs refusal message, split around the value it interpolates: a
+/// message is that refusal when it starts with `prefix` and ends with
+/// `suffix`, and the text between is the value.
+struct RefusalTemplate {
+    /// Everything before the interpolated value.
+    prefix: String,
+    /// Everything after it.
+    suffix: String,
+}
+
+impl RefusalTemplate {
+    /// The template of hcfs's message, from two renderings of the same
+    /// refusal with different values: what they share at each end is the
+    /// fixed text. Built from the upstream type, so it follows hcfs's
+    /// wording instead of copying it.
+    fn from_renderings(a: &str, b: &str) -> Self {
+        let prefix_len = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
+        let max_suffix = a.len().min(b.len()) - prefix_len;
+        let suffix_len = a.bytes().rev().zip(b.bytes().rev()).take(max_suffix).take_while(|(x, y)| x == y).count();
+        Self {
+            prefix: a[..prefix_len].to_string(),
+            suffix: a[a.len() - suffix_len..].to_string(),
+        }
+    }
+
+    /// The interpolated value, when `message` is this refusal.
+    fn value<'a>(&self, message: &'a str) -> Option<&'a str> {
+        message.strip_prefix(self.prefix.as_str())?.strip_suffix(self.suffix.as_str())
+    }
+}
+
+/// hcfs's `PathCollision`, `LocalUnreadable` and `InsufficientDiskSpace`
+/// messages, the three refusals `FileFailureKind::classify` reports.
+static REFUSAL_TEMPLATES: std::sync::LazyLock<[RefusalTemplate; 3]> = std::sync::LazyLock::new(|| {
+    use hcfs_client::sync::SyncError;
+    let collision = |path: &str| SyncError::PathCollision { path: path.to_string() }.to_string();
+    let unreadable = |why: &str| SyncError::LocalUnreadable(why.to_string()).to_string();
+    let disk = |bytes: u64| {
+        SyncError::InsufficientDiskSpace {
+            needed: bytes,
+            available: bytes,
+        }
+        .to_string()
+    };
+    [
+        RefusalTemplate::from_renderings(&collision("\u{1}"), &collision("\u{2}")),
+        RefusalTemplate::from_renderings(&unreadable("\u{1}"), &unreadable("\u{2}")),
+        RefusalTemplate::from_renderings(&disk(0), &disk(u64::MAX)),
+    ]
+});
+
+/// The user's copy for one of hcfs's refusal messages: what happened to the
+/// file and what to do, without hcfs's engineering terms. A refusal this
+/// build does not recognise (one hcfs added since) gets
+/// [`REFUSED_FALLBACK_REASON`], never hcfs's own text.
+fn refusal_copy(message: &str) -> String {
+    let [collision, unreadable, disk] = &*REFUSAL_TEMPLATES;
+    if let Some(path) = collision.value(message) {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        return format!(
+            "“{name}” wasn't synced: another file here has the same name apart from capital letters or accents. \
+             Rename one of them and both sync."
+        );
+    }
+    if unreadable.value(message).is_some() {
+        return "Hippius couldn't read this file. Check that it isn't locked or open in another app; \
+                it syncs once it can be read."
+            .to_string();
+    }
+    if disk.value(message).is_some() {
+        return "Not downloaded yet: the disk that holds your Hippius folder is nearly full. \
+                Free up space and it downloads on the next sync."
+            .to_string();
+    }
+    REFUSED_FALLBACK_REASON.to_string()
+}
 
 /// Whether a snapshot row's authored `error` reason describes a self-resolving
 /// failure (see [`FileFailureKindPayload::is_transient`]).
@@ -1347,6 +1937,14 @@ impl FileFailureKindPayload {
             Self::Network => NETWORK_DISPLAY_REASON.to_string(),
             Self::Gone => GONE_DISPLAY_REASON.to_string(),
             Self::Undecryptable => UNDECRYPTABLE_DISPLAY_REASON.to_string(),
+            Self::Refused { reason } => {
+                let trimmed = reason.trim();
+                if trimmed.is_empty() {
+                    REFUSED_FALLBACK_REASON.to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            }
             // `Other` already carries upstream display text; fall back to a
             // generic line when it's empty/whitespace so the row never shows a
             // blank reason. Network-shaped leftovers (reqwest Display, nested
@@ -1405,6 +2003,12 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // gives it one free retry and then quarantines it, so the honest
             // copy says a person has to act — not "will retry".
             K::Decryption { .. } => Self::Undecryptable,
+            // hcfs's refusal message is written for engineers; the user gets
+            // Rust's own copy (`refusal_copy`), and hcfs's words stay in the
+            // per-file debug log the failure callback writes.
+            K::Refused { reason } => Self::Refused {
+                reason: refusal_copy(reason),
+            },
             // Carve the mid-upload-modification case out of the upstream
             // catch-all before it reaches `Other` — it is self-resolving and
             // must not be presented as a crypto fault. See

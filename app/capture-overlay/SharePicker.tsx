@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2, Monitor } from "lucide-react";
 import {
@@ -124,8 +124,11 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
   const dialogRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<Partial<Record<ShareTab, HTMLButtonElement | null>>>({});
-  // A keyboard move asks for focus to follow the pick once it is drawn.
-  const focusPick = useRef(false);
+  // A keyboard move asks for focus to follow the pick it made once that pick
+  // is drawn. It names the pick, not just "a move happened": an effect still
+  // pending from an earlier render (the list arriving) would otherwise take
+  // the request and focus its own pick instead.
+  const focusPick = useRef<SharePick | null>(null);
 
   // The list now, pictures as they come; stop the pictures on close.
   useEffect(() => {
@@ -181,12 +184,19 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
   }, [pickedHere, onChoose]);
 
   useEffect(() => {
-    if (!focusPick.current || !pickedHere) return;
-    focusPick.current = false;
+    const wanted = focusPick.current;
+    if (!wanted || !pickedHere || wanted.tab !== pickedHere.tab || wanted.id !== pickedHere.id) return;
+    focusPick.current = null;
     listRef.current?.querySelector<HTMLElement>(`[data-tile-id="${pickedHere.id}"]`)?.focus();
   }, [pickedHere]);
 
-  useEffect(() => {
+  // The key handler is re-made each render and published in a layout effect;
+  // the window listener is bound once and calls whichever is current. A
+  // listener re-bound in a passive effect kept the render with no pick until
+  // React got round to that effect, so a Return right after the list drew
+  // shared nothing.
+  const keyHandler = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  useLayoutEffect(() => {
     const columns = () => {
       const list = listRef.current;
       if (!list) return 1;
@@ -210,7 +220,7 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
         first.focus();
       }
     };
-    const onKey = (e: KeyboardEvent) => {
+    keyHandler.current = (e: KeyboardEvent) => {
       if (e.key === "Tab") {
         trapTab(e);
         return;
@@ -241,12 +251,17 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
       const next = gridStep(e.key, at, ids.length, columns());
       if (next === null) return;
       e.preventDefault();
-      focusPick.current = true;
-      setPick({ tab, id: ids[next] });
+      const moved = { tab, id: ids[next] };
+      focusPick.current = moved;
+      setPick(moved);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   });
+
+  useEffect(() => {
+    const listener = (e: KeyboardEvent) => keyHandler.current(e);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
 
   const verb = kind === "recording" ? "record" : "capture";
 

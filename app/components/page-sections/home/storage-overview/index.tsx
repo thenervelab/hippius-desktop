@@ -237,9 +237,18 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
               two surfaces cannot drift apart. */}
           {view === "usage" && overview && (
             <>
-              <div className="flex items-end justify-between gap-3">
+              {/* Wraps rather than squeezes. Over the plan the aside is a
+                  sentence ("617.82 GB over your plan"), not a percent, and on
+                  one fixed row it broke the figure across two lines and ran
+                  into "used". Now the figure never breaks, the sentence is
+                  smaller than the figure, and it drops to its own line,
+                  still on the right, when the card is too narrow. */}
+              <div
+                data-testid="storage-usage-row"
+                className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1"
+              >
                 <div className="flex items-end gap-1 min-w-0">
-                  <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
+                  <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white whitespace-nowrap">
                     {usedDisplay?.kind === "pending"
                       ? "Updating…"
                       : overview.usedDisplay}
@@ -249,8 +258,12 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
                   </span>
                 </div>
                 <span
+                  data-testid="storage-usage-aside"
                   className={cn(
-                    "font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] whitespace-nowrap",
+                    "ml-auto font-mono font-medium whitespace-nowrap",
+                    overview.overDisplay
+                      ? "text-[14px] leading-[20px] tracking-[-0.56px] pb-[3px]"
+                      : "text-[24px] leading-[30px] tracking-[-0.96px]",
                     toneStyle.label,
                   )}
                 >

@@ -67,7 +67,12 @@ describe("a direct upload", () => {
   });
 
   it("says it failed; Rust's reason is on its own line", () => {
-    expect(cardView(card(failed()), null, [])).toMatchObject({ failed: true, done: false, text: "Couldn't upload" });
+    expect(cardView(card(failed()), null, [])).toMatchObject({ failed: true, waiting: false, done: false, text: "Couldn't upload" });
+  });
+
+  it("waits, not fails, while nobody has chosen where captures go", () => {
+    const waiting = card({ state: "failed", message: "Kept", reason: "needsFolder", retryable: true });
+    expect(cardView(waiting, null, [])).toMatchObject({ failed: true, waiting: true, text: "Waiting for a folder" });
   });
 });
 

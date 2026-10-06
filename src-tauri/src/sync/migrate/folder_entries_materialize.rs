@@ -49,7 +49,8 @@ use crate::auth::account_key::account_key;
 use crate::error::Result;
 use crate::sync::config::get_sync_path_for_label;
 use crate::sync::folder_entries_backfill::{build_one_shot_client, is_folder_entries_backfilled, read_cached_dir_set, walk_on_disk_dir_set};
-use crate::sync::folder_entries_reconcile::{ReconcileOutcome, reconcile_with_on_disk};
+use crate::sync::folder_entries_reconcile::{FolderHoldGate, FolderJobDrive, ReconcileOutcome, delete_cached_folder_entries, reconcile_with_on_disk};
+use crate::sync::mass_delete_hold::{FolderRestores, MassDeleteHoldState};
 use crate::sync::mnemonic::folder_hash;
 use sqlx::sqlite::SqlitePool;
 use std::collections::BTreeSet;
@@ -90,6 +91,22 @@ impl MaterializePlan {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.to_create.is_empty() && self.to_remove.is_empty()
+    }
+
+    /// The part of the plan a held mass delete lets through. A server-side
+    /// hold (files missing here, possibly an unmounted folder) creates
+    /// nothing until a restore has proven the folder mounted
+    /// ([`FolderHoldGate::creates_held`]); a local-side hold (files missing
+    /// from the server, possibly a truncated listing) removes nothing.
+    #[must_use]
+    pub(crate) fn held_back(mut self, gate: FolderHoldGate) -> Self {
+        if gate.creates_held() {
+            self.to_create.clear();
+        }
+        if gate.local_held {
+            self.to_remove.clear();
+        }
+        self
     }
 }
 
@@ -324,31 +341,18 @@ async fn resolve_backfilled_sync_root(pool: &SqlitePool, owner: &str, account_id
 /// Network / client-config errors become `Ok(RetryLater)`; only DB-layer errors
 /// surface as `Err(AppError)`.
 async fn materialize_with_on_disk(
-    pool: &SqlitePool,
-    account_id: &str,
-    owner: &str,
-    label: &str,
+    drive: FolderJobDrive<'_>,
     root: &Path,
     on_disk: &BTreeSet<String>,
+    gate: FolderHoldGate,
 ) -> Result<MaterializeOutcome> {
-    let client = match build_one_shot_client(pool, account_id, label).await {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(label = %label, error = %e, "materialize: could not build HCFS client; will retry next eligible cycle");
-            return Ok(MaterializeOutcome::RetryLater);
-        }
-    };
-    let fhash = folder_hash(label);
-    let server: BTreeSet<String> = match client.list_folder_entries(account_id, &fhash).await {
-        Ok(paths) => paths.into_iter().collect(),
-        Err(e) => {
-            warn!(label = %label, error = %e, "materialize: list_folder_entries failed; will retry next eligible cycle");
-            return Ok(MaterializeOutcome::RetryLater);
-        }
+    let label = drive.label;
+    let Some(server) = fetch_server_dir_set(drive, "materialize").await else {
+        return Ok(MaterializeOutcome::RetryLater);
     };
 
-    let cache = read_cached_dir_set(pool, owner, label).await?;
-    let plan = compute_materialize_plan(&server, on_disk, &cache);
+    let cache = read_cached_dir_set(drive.pool, drive.owner, label).await?;
+    let plan = compute_materialize_plan(&server, on_disk, &cache).held_back(gate);
     if plan.is_empty() {
         return Ok(MaterializeOutcome::NoChanges);
     }
@@ -363,6 +367,199 @@ async fn materialize_with_on_disk(
     };
     info!(label = %label, created, removed, "materialize: applied directory plan");
     Ok(MaterializeOutcome::Materialized { created, removed })
+}
+
+/// The drive's current server folder-entity set, or `None` (logged) when the
+/// client cannot be built or the listing fails: the caller retries next
+/// eligible cycle. `step` names the caller in the log line.
+async fn fetch_server_dir_set(drive: FolderJobDrive<'_>, step: &'static str) -> Option<BTreeSet<String>> {
+    let label = drive.label;
+    let client = match build_one_shot_client(drive.pool, drive.account_id, label).await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(label = %label, step, error = %e, "folder-entity sync: could not build HCFS client; will retry next eligible cycle");
+            return None;
+        }
+    };
+    match client.list_folder_entries(drive.account_id, &folder_hash(label)).await {
+        Ok(paths) => Some(paths.into_iter().collect()),
+        Err(e) => {
+            warn!(label = %label, step, error = %e, "folder-entity sync: list_folder_entries failed; will retry next eligible cycle");
+            None
+        }
+    }
+}
+
+/// The folder hold gate for a drive, read from hcfs's held record without
+/// the drive's lock (`sync::mass_delete_hold::read_recorded_holds`).
+///
+/// An unreadable record, or a config dir that cannot be resolved, closes
+/// both sides: hcfs rewrites the record on its next cycle, and until then a
+/// gate that cannot tell must not delete anything.
+pub(crate) async fn read_folder_hold_gate(root: &Path, config_dir: Option<PathBuf>, label: &str) -> FolderHoldGate {
+    let Some(config_dir) = config_dir else {
+        warn!(label = %label, "folder-entity sync: no config dir for the hold check; holding folder changes");
+        return FolderHoldGate::CLOSED;
+    };
+    match crate::sync::mass_delete_hold::read_recorded_holds(root.to_path_buf(), config_dir).await {
+        Ok(holds) => FolderHoldGate::from_holds(&holds),
+        Err(e) => {
+            warn!(label = %label, error = %e, "folder-entity sync: unreadable mass-delete record; holding folder changes");
+            FolderHoldGate::CLOSED
+        }
+    }
+}
+
+/// The gate after checking the walk itself: an empty drive folder whose
+/// folders are cached holds every removal and every create (see
+/// [`gate_for_walk`]). Logs the first such run of an episode; the folder
+/// job runs every cycle while the folder stays away.
+async fn guard_empty_walk(drive: FolderJobDrive<'_>, root: &Path, on_disk: &BTreeSet<String>, gate: FolderHoldGate) -> Result<FolderHoldGate> {
+    let mut gone = false;
+    if on_disk.is_empty() && !read_cached_dir_set(drive.pool, drive.owner, drive.label).await?.is_empty() {
+        // Blocking: an unplugged network share can stall `read_dir`.
+        let root = root.to_path_buf();
+        gone = tokio::task::spawn_blocking(move || crate::sync::mass_delete_hold::root_looks_empty(&root))
+            .await
+            .unwrap_or(true);
+    }
+    let guarded = gate_for_walk(gate, on_disk, gone);
+    let empty_walk = guarded != gate;
+    if note_empty_walk(drive.label, empty_walk) {
+        warn!(
+            label = %drive.label,
+            "folder-entity sync: the drive folder walks as empty but its folders are cached; holding folder changes until it is back"
+        );
+    }
+    Ok(guarded)
+}
+
+/// Whether this run starts an empty-walk episode for `label` (the log
+/// line's once-per-episode latch); a walk that finds folders ends it.
+fn note_empty_walk(label: &str, empty_walk: bool) -> bool {
+    static EMPTY_WALKS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::LazyLock::new(Default::default);
+    // Poison only loses the log latch; the gate itself does not read it.
+    let mut labels = EMPTY_WALKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if empty_walk {
+        labels.insert(label.to_string())
+    } else {
+        labels.remove(label);
+        false
+    }
+}
+
+/// The hold gate for a run whose walk found `on_disk`. Pure.
+///
+/// An unmounted disk or an evicted cloud folder walks as an empty tree.
+/// hcfs holds that only when the drive has files to hold; a drive of empty
+/// folders, or one below hcfs's threshold, reaches here with the gate open,
+/// and reconcile would unregister every cached folder from the server
+/// (removing them on every other device) while materialize recreated the
+/// server's folders on the parent disk. `folder_gone` is that shape: no
+/// directory walked, folders cached for the drive, and no visible entry in
+/// the drive folder at all (a drive whose folders were deleted but whose
+/// files remain is not it). Then both sides are held
+/// ([`FolderHoldGate::CLOSED`]). The cost: deleting the last folder of an
+/// otherwise empty drive waits until something is in the drive again.
+#[must_use]
+pub(crate) fn gate_for_walk(gate: FolderHoldGate, on_disk: &BTreeSet<String>, folder_gone: bool) -> FolderHoldGate {
+    if on_disk.is_empty() && folder_gone {
+        FolderHoldGate::CLOSED
+    } else {
+        gate
+    }
+}
+
+/// The trigger for the folder job after a completed cycle of `label`.
+///
+/// Routine upkeep is throttled ([`FolderEntitySyncTrigger::PerCycle`]), but
+/// a restore hcfs applied owes its empty folders now, beside the files it
+/// just put back: while one is owed the run is forced. It stays owed until
+/// the job has applied it, so a run the throttle or a failure skipped is
+/// retried on the next completion, not 30 s later.
+#[must_use]
+pub(crate) fn completion_trigger(holds: &MassDeleteHoldState, label: &str) -> FolderEntitySyncTrigger {
+    if holds.folder_restores(label).any() {
+        FolderEntitySyncTrigger::Forced
+    } else {
+        FolderEntitySyncTrigger::PerCycle
+    }
+}
+
+/// The cached folder rows to forget after an applied restore, so the folder
+/// job puts the drive's empty folders back the way the restore put its
+/// files back. Pure.
+///
+/// - Server side (files downloaded back here): `(cache ∩ server) \ disk`.
+///   Kept in the cache, reconcile would read these as removed here and
+///   unregister them once the hold lifts; forgotten, materialize recreates
+///   them (`server \ disk`).
+/// - Local side (files uploaded back): `(cache ∩ disk) \ server`. Kept,
+///   materialize would remove them as dropped by the server; forgotten,
+///   reconcile re-registers them (`disk \ cache`). This cannot tell a
+///   folder the listing lost from one another device deliberately deleted
+///   while the hold stood: both are on disk here and missing from the
+///   server, so a local restore puts the deliberately deleted one back too.
+///   That matches the files (the restore re-uploads every held file,
+///   including ones deleted elsewhere on purpose); the user chose to keep
+///   this device's copy of everything.
+///
+/// Sorted, without duplicates.
+#[must_use]
+pub(crate) fn folder_rows_to_forget(
+    restores: FolderRestores,
+    cache: &BTreeSet<String>,
+    server: &BTreeSet<String>,
+    disk: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut rows = BTreeSet::new();
+    for path in cache {
+        let restored_here = restores.server && server.contains(path) && !disk.contains(path);
+        let restored_there = restores.local && disk.contains(path) && !server.contains(path);
+        if restored_here || restored_there {
+            rows.insert(path.clone());
+        }
+    }
+    rows.into_iter().collect()
+}
+
+/// Apply the folder restores the drive owes (set when hcfs reported a
+/// restore it applied), then acknowledge them. Runs before
+/// reconcile so both halves see the forgotten rows. A failed server listing
+/// keeps them owed for the next run; a refused restore never set them.
+async fn restore_held_folders(holds: &MassDeleteHoldState, drive: FolderJobDrive<'_>, on_disk: &BTreeSet<String>) -> Result<()> {
+    let restores = holds.folder_restores(drive.label);
+    if !restores.any() {
+        return Ok(());
+    }
+    let Some(server) = fetch_server_dir_set(drive, "restore").await else {
+        return Ok(());
+    };
+
+    let sides = restores.sides();
+    let forgotten = forget_restored_folder_rows(drive, sides, &server, on_disk).await?;
+    holds.ack_folder_restores(drive.label, restores);
+    info!(
+        label = %drive.label,
+        server = sides.server,
+        local = sides.local,
+        folders = forgotten,
+        "folder-entity sync: restoring the folders of a restored mass delete"
+    );
+    Ok(())
+}
+
+/// Forget the cache rows [`folder_rows_to_forget`] picks; returns how many.
+async fn forget_restored_folder_rows(
+    drive: FolderJobDrive<'_>,
+    restores: FolderRestores,
+    server: &BTreeSet<String>,
+    on_disk: &BTreeSet<String>,
+) -> Result<usize> {
+    let cache = read_cached_dir_set(drive.pool, drive.owner, drive.label).await?;
+    let rows = folder_rows_to_forget(restores, &cache, server, on_disk);
+    delete_cached_folder_entries(drive.pool, drive.owner, drive.label, &rows).await?;
+    Ok(rows.len())
 }
 
 /// Run the materialize half STANDALONE for one drive (gate + root + single walk
@@ -383,7 +580,14 @@ pub async fn materialize_folder_entries_for_drive(state: &AppState, account_id: 
             let Some(on_disk) = walk_on_disk_dir_set(root.clone(), label).await else {
                 return Ok(MaterializeOutcome::RetryLater);
             };
-            materialize_with_on_disk(&pool, account_id, &owner, label, &root, &on_disk).await
+            let gate = read_folder_hold_gate(&root, crate::sync::mnemonic::config_dir_for_folder(account_id, label).ok(), label).await;
+            let drive = FolderJobDrive {
+                pool: &pool,
+                account_id,
+                owner: &owner,
+                label,
+            };
+            materialize_with_on_disk(drive, &root, &on_disk, gate).await
         }
     }
 }
@@ -452,14 +656,33 @@ pub async fn run_folder_entity_sync_for_drive(state: &AppState, account_id: &str
         return Ok(FolderEntitySyncOutcome::RetryLater);
     };
 
+    let drive = FolderJobDrive {
+        pool: &pool,
+        account_id,
+        owner: &owner,
+        label,
+    };
+
+    // 0. A held mass delete holds its side's folder deletions too (hcfs holds
+    //    files only), and a restore hcfs applied puts its folders back. This
+    //    covers a deliberate in-app folder delete during a hold as well: the
+    //    forced run reaches the same gate, so the delete waits for the
+    //    prompt's answer like every other one.
+    let gate = read_folder_hold_gate(&root, crate::sync::mnemonic::config_dir_for_folder(account_id, label).ok(), label).await;
+    let gate = guard_empty_walk(drive, &root, &on_disk, gate).await?;
+    if gate.any() {
+        debug!(label = %label, ?gate, "folder-entity sync: a mass delete is held; its side's folder changes wait");
+    }
+    restore_held_folders(&state.mass_delete_holds, drive, &on_disk).await?;
+
     // 1. Push local truth up: register new dirs, unregister locally-removed ones,
     //    updating the server + cache. Runs to completion before step 2.
-    let reconcile = reconcile_with_on_disk(&pool, account_id, &owner, label, &on_disk).await?;
+    let reconcile = reconcile_with_on_disk(drive, &on_disk, gate).await?;
     // 2. Pull server truth down over the NOW-CONSISTENT server set: a folder the
     //    user deleted locally was just unregistered above, so the fresh
     //    list_folder_entries materialize fetches no longer lists it → it is not
     //    re-created on disk.
-    let materialize = materialize_with_on_disk(&pool, account_id, &owner, label, &root, &on_disk).await?;
+    let materialize = materialize_with_on_disk(drive, &root, &on_disk, gate).await?;
     Ok(FolderEntitySyncOutcome::Ran { reconcile, materialize })
 }
 
@@ -471,7 +694,8 @@ pub(crate) enum FolderEntitySyncTrigger {
     /// per [`MIN_FOLDER_ENTITY_SYNC_INTERVAL`] per drive.
     PerCycle,
     /// A user action already removed a directory from disk
-    /// (`crate::sync::files::delete_files`). Bypasses the interval because
+    /// (`crate::sync::files::delete_files`), or a restore hcfs applied owes
+    /// its empty folders ([`completion_trigger`]). Bypasses the interval because
     /// deleting a folder can produce NO file work at all — hcfs-client ends that
     /// cycle `NoChanges`, which emits no `SyncCompleted`, so the routine trigger
     /// may never fire and the folder would stay registered on the server (and
@@ -1024,5 +1248,329 @@ mod tests {
                 proptest::prop_assert!(joined.starts_with(root));
             }
         }
+    }
+}
+
+/// The folder job under a held mass delete: what each half may apply, and
+/// how an applied restore puts the empty folders back. Pure where the
+/// decision is made, real SQLite for the cache rows, and hcfs's own record
+/// format for the lock-free gate read; the network halves are the live
+/// lane's.
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+    use crate::sync::folder_entries_reconcile::compute_dir_delta;
+    use crate::sync::mass_delete_hold::CycleSource;
+    use hcfs_client::sync::{HeldMassDelete, HoldState, MassDeleteSide};
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    fn set(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    const SERVER_HELD: FolderHoldGate = FolderHoldGate {
+        server_held: true,
+        local_held: false,
+        server_restoring: false,
+    };
+
+    const LOCAL_HELD: FolderHoldGate = FolderHoldGate {
+        server_held: false,
+        local_held: true,
+        server_restoring: false,
+    };
+
+    /// An unmounted or evicted drive folder scans as an empty tree. Without
+    /// the gate, reconcile unregisters every folder from the server and
+    /// materialize recreates the tree on the parent disk.
+    #[test]
+    fn an_empty_root_under_a_server_hold_neither_unregisters_nor_creates() {
+        let folders = set(&["Trips", "Trips/2024", "Work"]);
+        let disk = BTreeSet::new();
+
+        let open = compute_dir_delta(&disk, &folders);
+        assert_eq!(open.to_unregister.len(), 3, "the hazard: every folder would be unregistered");
+
+        let delta = SERVER_HELD.gate_delta(compute_dir_delta(&disk, &folders));
+        assert!(delta.to_unregister.is_empty(), "the server keeps its folders while files are held");
+
+        let plan = compute_materialize_plan(&folders, &disk, &folders).held_back(SERVER_HELD);
+        assert!(plan.to_create.is_empty(), "nothing is created under a folder that may be unmounted");
+    }
+
+    #[test]
+    fn a_server_hold_still_registers_new_folders() {
+        let delta = SERVER_HELD.gate_delta(compute_dir_delta(&set(&["New"]), &BTreeSet::new()));
+        assert_eq!(delta.to_register, vec!["New".to_string()]);
+    }
+
+    /// A truncated listing omits folders as well as files; materialize must
+    /// not remove this device's empty folders on its word.
+    #[test]
+    fn a_local_hold_removes_nothing() {
+        let folders = set(&["Empty"]);
+        let plan = compute_materialize_plan(&BTreeSet::new(), &folders, &folders);
+        assert_eq!(plan.to_remove, vec!["Empty".to_string()], "the hazard");
+        assert!(plan.held_back(LOCAL_HELD).to_remove.is_empty());
+
+        let created = compute_materialize_plan(&set(&["FromServer"]), &BTreeSet::new(), &BTreeSet::new()).held_back(LOCAL_HELD);
+        assert_eq!(created.to_create, vec!["FromServer".to_string()], "a local hold does not stop creates");
+    }
+
+    /// The user chose Remove: hcfs lifts the hold, the gate opens, and the
+    /// folder deletions go through like any other.
+    #[test]
+    fn confirm_lifts_the_gate_and_folders_are_removed() {
+        let gate = FolderHoldGate::from_holds(&[]);
+        assert_eq!(gate, FolderHoldGate::OPEN);
+
+        let folders = set(&["Trips"]);
+        let delta = gate.gate_delta(compute_dir_delta(&BTreeSet::new(), &folders));
+        assert_eq!(delta.to_unregister, vec!["Trips".to_string()], "server side: removed from Hippius");
+
+        let plan = compute_materialize_plan(&BTreeSet::new(), &folders, &folders).held_back(gate);
+        assert_eq!(plan.to_remove, vec!["Trips".to_string()], "local side: removed from this device");
+    }
+
+    #[test]
+    fn held_and_restoring_both_close_their_side() {
+        let held = |side, state| HeldMassDelete {
+            side,
+            state,
+            count: 150,
+            synced_count: 200,
+            held_at: 1,
+        };
+
+        assert_eq!(FolderHoldGate::from_holds(&[held(MassDeleteSide::Server, HoldState::Held)]), SERVER_HELD);
+        assert_eq!(
+            FolderHoldGate::from_holds(&[held(MassDeleteSide::Local, HoldState::Restoring)]),
+            LOCAL_HELD,
+            "the gate stays closed until the cycle after a restore"
+        );
+    }
+
+    /// The cycle that applied a server-side restore downloaded files into
+    /// the drive folder, so the folder is proven mounted: its folder run may
+    /// recreate the empty folders (otherwise they wait a whole extra cycle
+    /// for the record to drop the side). Unregistering still waits.
+    #[test]
+    fn a_restoring_server_side_recreates_folders_but_unregisters_nothing() {
+        let restoring = FolderHoldGate::from_holds(&[HeldMassDelete {
+            side: MassDeleteSide::Server,
+            state: HoldState::Restoring,
+            count: 150,
+            synced_count: 200,
+            held_at: 1,
+        }]);
+        let folders = set(&["Trips", "Trips/Empty"]);
+        let disk = BTreeSet::new();
+
+        let delta = restoring.gate_delta(compute_dir_delta(&disk, &folders));
+        assert!(delta.to_unregister.is_empty(), "restoring is still held for unregisters");
+
+        let plan = compute_materialize_plan(&folders, &disk, &BTreeSet::new()).held_back(restoring);
+        assert_eq!(plan.to_create, vec!["Trips".to_string(), "Trips/Empty".to_string()]);
+
+        let held = compute_materialize_plan(&folders, &disk, &BTreeSet::new()).held_back(SERVER_HELD);
+        assert!(held.to_create.is_empty(), "a plain hold still creates nothing");
+    }
+
+    /// Files missing here were downloaded back. The empty folders beside
+    /// them are forgotten from the cache, so reconcile does not unregister
+    /// them and materialize recreates them.
+    #[test]
+    fn a_server_restore_recreates_the_empty_folders() {
+        let server = set(&["Trips", "Trips/Empty", "Kept"]);
+        let cache = server.clone();
+        let disk = set(&["Kept"]);
+        let restores = FolderRestores { server: true, local: false };
+
+        let forget = folder_rows_to_forget(restores, &cache, &server, &disk);
+        assert_eq!(forget, vec!["Trips".to_string(), "Trips/Empty".to_string()]);
+
+        let cache: BTreeSet<String> = cache.into_iter().filter(|p| !forget.contains(p)).collect();
+        let delta = compute_dir_delta(&disk, &cache);
+        assert!(delta.to_unregister.is_empty(), "a restored folder is not deleted from the server");
+        let plan = compute_materialize_plan(&server, &disk, &cache);
+        assert_eq!(plan.to_create, vec!["Trips".to_string(), "Trips/Empty".to_string()]);
+    }
+
+    /// Files missing from the server were uploaded back. The empty folders
+    /// the server lost are forgotten, so reconcile registers them again and
+    /// materialize does not remove them.
+    #[test]
+    fn a_local_restore_re_registers_the_empty_folders() {
+        let disk = set(&["Lost", "Kept"]);
+        let cache = disk.clone();
+        let server = set(&["Kept"]);
+        let restores = FolderRestores { server: false, local: true };
+
+        let forget = folder_rows_to_forget(restores, &cache, &server, &disk);
+        assert_eq!(forget, vec!["Lost".to_string()]);
+
+        let cache: BTreeSet<String> = cache.into_iter().filter(|p| !forget.contains(p)).collect();
+        assert_eq!(compute_dir_delta(&disk, &cache).to_register, vec!["Lost".to_string()]);
+        assert!(compute_materialize_plan(&server, &disk, &cache).to_remove.is_empty());
+    }
+
+    /// A refused restore never sets the flag, so nothing is forgotten and
+    /// the folders keep waiting with the files.
+    #[test]
+    fn a_refused_restore_forgets_nothing() {
+        let all = set(&["A", "B"]);
+        assert!(folder_rows_to_forget(FolderRestores::default(), &all, &all, &BTreeSet::new()).is_empty());
+        assert!(folder_rows_to_forget(FolderRestores::default(), &all, &BTreeSet::new(), &all).is_empty());
+    }
+
+    #[tokio::test]
+    async fn forgetting_drops_exactly_the_restored_rows() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+        let owner = "owner-key";
+        let rows: Vec<String> = ["Trips", "Kept", "Other"].iter().map(|s| (*s).to_string()).collect();
+        crate::sync::folder_entries_backfill::cache_folder_entries(&pool, owner, "docs", &rows)
+            .await
+            .expect("seed cache");
+        crate::sync::folder_entries_backfill::cache_folder_entries(&pool, owner, "photos", &rows)
+            .await
+            .expect("seed another drive");
+
+        let drive = FolderJobDrive {
+            pool: &pool,
+            account_id: "acct",
+            owner,
+            label: "docs",
+        };
+        let restores = FolderRestores { server: true, local: false };
+        let forgotten = forget_restored_folder_rows(drive, restores, &set(&["Trips", "Kept"]), &set(&["Kept", "Other"]))
+            .await
+            .expect("forget");
+
+        assert_eq!(forgotten, 1);
+        assert_eq!(read_cached_dir_set(&pool, owner, "docs").await.expect("read"), set(&["Kept", "Other"]));
+        assert_eq!(
+            read_cached_dir_set(&pool, owner, "photos").await.expect("read"),
+            set(&["Trips", "Kept", "Other"]),
+            "another drive's rows are untouched"
+        );
+    }
+
+    /// The server listing the restore needs fails (here: no session to
+    /// build a client from). Nothing is forgotten and the restore stays
+    /// owed, so the next run puts the folders back.
+    #[tokio::test]
+    async fn a_failed_listing_keeps_the_restore_owed() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+        let owner = "owner-key";
+        crate::sync::folder_entries_backfill::cache_folder_entries(&pool, owner, "docs", &["Trips".to_string()])
+            .await
+            .expect("seed cache");
+
+        let holds = MassDeleteHoldState::new();
+        holds.begin_cycle("docs", CycleSource::Engine);
+        holds.record_restored("docs", MassDeleteSide::Server, 5);
+        holds.finish_cycle("docs", CycleSource::Engine);
+
+        let drive = FolderJobDrive {
+            pool: &pool,
+            account_id: "acct",
+            owner,
+            label: "docs",
+        };
+        restore_held_folders(&holds, drive, &BTreeSet::new())
+            .await
+            .expect("a failed listing is not an error");
+
+        assert!(holds.folder_restores("docs").sides().server, "still owed for the next run");
+        assert_eq!(
+            read_cached_dir_set(&pool, owner, "docs").await.expect("read"),
+            set(&["Trips"]),
+            "nothing forgotten without the server set"
+        );
+    }
+
+    /// The folder job runs at most every 30 s after a cycle. A restore hcfs
+    /// just applied must not wait for that: its files are back now, and its
+    /// empty folders should be too. The run after a completed cycle is
+    /// forced while a restore is owed, and throttled again once acked.
+    #[test]
+    fn an_owed_folder_restore_forces_the_next_run() {
+        let holds = MassDeleteHoldState::new();
+        assert_eq!(completion_trigger(&holds, "docs"), FolderEntitySyncTrigger::PerCycle);
+
+        holds.begin_cycle("docs", CycleSource::Engine);
+        holds.record_restored("docs", MassDeleteSide::Local, 5);
+        holds.finish_cycle("docs", CycleSource::Engine);
+        assert_eq!(completion_trigger(&holds, "docs"), FolderEntitySyncTrigger::Forced);
+
+        let owed = holds.folder_restores("docs");
+        holds.ack_folder_restores("docs", owed);
+        assert_eq!(completion_trigger(&holds, "docs"), FolderEntitySyncTrigger::PerCycle);
+    }
+
+    /// An unmounted or evicted drive folder walks as empty. With folders
+    /// cached for it and nothing at all in the folder, that is the shape of
+    /// a folder that is not there, not of a user who deleted every folder,
+    /// so no removal may follow from it, whatever hcfs's record says (a
+    /// drive of empty folders has no files for hcfs to hold).
+    #[test]
+    fn an_empty_walk_over_a_cached_drive_holds_every_removal() {
+        let empty = BTreeSet::new();
+        assert_eq!(gate_for_walk(FolderHoldGate::OPEN, &empty, true), FolderHoldGate::CLOSED);
+        assert_eq!(
+            gate_for_walk(FolderHoldGate::OPEN, &empty, false),
+            FolderHoldGate::OPEN,
+            "nothing cached, or files still in the folder: the folders were deleted, not lost"
+        );
+        assert_eq!(
+            gate_for_walk(FolderHoldGate::OPEN, &set(&["Trips"]), true),
+            FolderHoldGate::OPEN,
+            "a walk that found folders is trusted"
+        );
+        assert_eq!(
+            gate_for_walk(SERVER_HELD, &set(&["Trips"]), true),
+            SERVER_HELD,
+            "hcfs's own hold still applies"
+        );
+    }
+
+    /// The gate reads hcfs's own record lock-free, and fails closed on one
+    /// it cannot parse.
+    #[tokio::test]
+    async fn the_gate_reads_hcfs_record_and_fails_closed() {
+        let root = tempfile::tempdir().expect("root");
+        let config = tempfile::tempdir().expect("config");
+        assert_eq!(
+            read_folder_hold_gate(root.path(), Some(config.path().into()), "docs").await,
+            FolderHoldGate::OPEN
+        );
+
+        let ids = vec![format!("{:064x}", 1)];
+        let record = serde_json::json!([{ "side": "server", "state": "restoring", "synced_count": 20, "held_at": 1, "ids": ids }]);
+        std::fs::write(config.path().join("mass_delete_held.json"), record.to_string()).expect("write record");
+        assert_eq!(
+            read_folder_hold_gate(root.path(), Some(config.path().into()), "docs").await,
+            FolderHoldGate {
+                server_restoring: true,
+                ..SERVER_HELD
+            }
+        );
+
+        std::fs::write(config.path().join("mass_delete_held.json"), b"not json").expect("corrupt record");
+        assert_eq!(
+            read_folder_hold_gate(root.path(), Some(config.path().into()), "docs").await,
+            FolderHoldGate::CLOSED
+        );
+        assert_eq!(read_folder_hold_gate(root.path(), None, "docs").await, FolderHoldGate::CLOSED);
     }
 }

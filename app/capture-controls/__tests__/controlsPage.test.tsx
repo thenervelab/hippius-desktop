@@ -23,6 +23,8 @@ const NO_CAMERA = {
   recording: true,
   cameraFilmed: true,
   recorderOwnsCamera: false,
+  switchFromPill: false,
+  resizeFromPill: false,
 };
 const called = (cmd: string) => tauri.core.invoke.mock.calls.some(([c]) => c === cmd);
 
@@ -156,13 +158,196 @@ describe("restarting a recording", () => {
   });
 });
 
-describe("the pill offers no microphone mute", () => {
-  // The recording helper has no command to mute mid-recording.
-  it("shows the microphone as a status, not a button", async () => {
-    setup({ phase: "recording", elapsedSecs: 3, microphone: true, seq: 1 });
+describe("the microphone mid-recording", () => {
+  const MIC = { recorded: true, muted: false, deviceId: null, canMute: true, canSwitch: true };
+  const MICS = [
+    { id: "BuiltInMicrophoneDevice", name: "MacBook Pro Microphone", isDefault: true },
+    { id: "usb-1", name: "Yeti Stereo Microphone", isDefault: false },
+  ];
+  const withMic = (elapsedSecs = 3): CapturePhaseEvent => ({ phase: "recording", elapsedSecs, microphone: true, seq: 1 });
+  const argsOf = (cmd: string) => tauri.core.invoke.mock.calls.filter(([c]) => c === cmd).map(([, a]) => a);
+
+  beforeEach(() => {
+    tauri.onInvoke("capture_controls_menu", () => ({ above: true }));
+    tauri.onInvoke("capture_microphones", () => MICS);
+  });
+
+  it("mutes and unmutes from the pill, in Rust's state", async () => {
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    tauri.onInvoke("capture_microphone_mute", (a) => ({ ...MIC, muted: (a as { muted: boolean }).muted }));
+    setup(withMic());
+    const mute = await screen.findByRole("button", { name: "Mute microphone" });
+    expect(mute).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(mute);
+    const unmute = await screen.findByRole("button", { name: "Unmute microphone" });
+    expect(unmute).toHaveAttribute("aria-pressed", "true");
+    expect(argsOf("capture_microphone_mute")).toEqual([{ muted: true }]);
+    fireEvent.click(unmute);
+    expect(await screen.findByRole("button", { name: "Mute microphone" })).toBeInTheDocument();
+    expect(argsOf("capture_microphone_mute")).toEqual([{ muted: true }, { muted: false }]);
+  });
+
+  // Windows and Linux recorders have no mute yet: Rust says so, and the
+  // microphone stays a status, never a button that does nothing.
+  it("shows the microphone as a status where Rust offers no mute", async () => {
+    tauri.onInvoke("capture_microphone_state", () => ({ ...MIC, canMute: false, canSwitch: false }));
+    setup(withMic());
     await screen.findByRole("button", { name: "Stop recording" });
     expect(screen.getByRole("img", { name: "Recording the microphone" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /mute/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose a microphone" })).toBeNull();
+  });
+
+  it("follows Rust's state when it arrives as an event", async () => {
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    setup(withMic());
+    await screen.findByRole("button", { name: "Mute microphone" });
+    await act(() => tauri.emitEvent("capture_microphone_state", { ...MIC, muted: true }));
+    expect(screen.getByRole("button", { name: "Unmute microphone" })).toBeInTheDocument();
+  });
+
+  it("switches to another microphone from its menu, then closes it", async () => {
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    tauri.onInvoke("capture_microphone_switch", (a) => ({ ...MIC, deviceId: (a as { device: string }).device }));
+    setup(withMic());
+    const trigger = await screen.findByRole("button", { name: "Choose a microphone" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    fireEvent.click(trigger);
+    const menu = await screen.findByRole("menu", { name: "Choose a microphone" });
+    const yeti = await screen.findByRole("menuitemradio", { name: /Yeti Stereo Microphone/ });
+    // The default is the one recorded now.
+    expect(screen.getByRole("menuitemradio", { name: /MacBook Pro Microphone/ })).toHaveAttribute("aria-checked", "true");
+    expect(argsOf("capture_controls_menu")).toEqual([{ open: true }]);
+    fireEvent.click(yeti);
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(menu).not.toBeInTheDocument();
+    expect(argsOf("capture_microphone_switch")).toEqual([{ device: "usb-1" }]);
+    expect(argsOf("capture_controls_menu")).toEqual([{ open: true }, { open: false }]);
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("keeps the menu open with Rust's line when a microphone is refused", async () => {
+    const line = "That microphone is not connected.";
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    tauri.onInvoke("capture_microphone_switch", () => {
+      throw { kind: "Other", message: line };
+    });
+    setup(withMic());
+    fireEvent.click(await screen.findByRole("button", { name: "Choose a microphone" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Yeti Stereo Microphone/ }));
+    expect(await screen.findByText(line)).toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "Choose a microphone" })).toBeInTheDocument();
+  });
+
+  it("closes the menu on Escape and gives focus back to its button", async () => {
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    setup(withMic());
+    const trigger = await screen.findByRole("button", { name: "Choose a microphone" });
+    fireEvent.click(trigger);
+    const first = await screen.findByRole("menuitemradio", { name: /MacBook Pro Microphone/ });
+    await waitFor(() => expect(first).toHaveFocus());
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitemradio", { name: /Yeti Stereo Microphone/ })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(trigger).toHaveFocus();
+    // Escape on the pill never throws the recording away.
+    expect(called("capture_cancel")).toBe(false);
+  });
+
+  it("opens the menu below the pill when Rust grew the window downward", async () => {
+    tauri.onInvoke("capture_controls_menu", () => ({ above: false }));
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    setup(withMic());
+    fireEvent.click(await screen.findByRole("button", { name: "Choose a microphone" }));
+    const menu = await screen.findByRole("menu", { name: "Choose a microphone" });
+    const pill = screen.getByRole("group", { name: "Recording controls" });
+    expect(pill.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("the camera mid-recording", () => {
+  const CAMERAS = [
+    { id: "1F06", name: "FaceTime HD Camera", isDefault: true },
+    { id: "9160", name: "Ahmad's iPhone Camera", isDefault: false },
+  ];
+  const BUBBLE = { ...NO_CAMERA, shape: "bubble", switchFromPill: true, resizeFromPill: true };
+  const argsOf = (cmd: string) => tauri.core.invoke.mock.calls.filter(([c]) => c === cmd).map(([, a]) => a);
+
+  function withCamera(camera: object) {
+    tauri.onInvoke("capture_controls_menu", () => ({ above: true }));
+    tauri.onInvoke("capture_cameras", () => CAMERAS);
+    tauri.onInvoke("capture_camera_set_size", (a) => (a as { size: string }).size);
+    tauri.onInvoke("capture_camera_switch", () => null);
+    tauri.onInvoke("capture_state", () => recording(4));
+    tauri.onInvoke("capture_camera_context", () => camera);
+    return render(<CaptureControlsPage />);
+  }
+
+  it("changes the bubble's size from the pill", async () => {
+    withCamera(BUBBLE);
+    fireEvent.click(await screen.findByRole("button", { name: "Camera options" }));
+    await screen.findByRole("menu", { name: "Camera options" });
+    expect(screen.getByRole("menuitemradio", { name: "Small" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Full size" }));
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(argsOf("capture_camera_set_size")).toEqual([{ size: "full" }]);
+  });
+
+  it("switches the camera from the pill", async () => {
+    withCamera({ ...BUBBLE, deviceId: "1F06", deviceName: "FaceTime HD Camera" });
+    fireEvent.click(await screen.findByRole("button", { name: "Camera options" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /iPhone Camera/ }));
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(argsOf("capture_camera_switch")).toEqual([{ device: "9160" }]);
+  });
+
+  // The stage is the recording: it can switch camera but has no size to change.
+  it("offers the stage a camera menu without sizes", async () => {
+    withCamera({ ...NO_CAMERA, shape: "stage", size: "full", switchFromPill: true, resizeFromPill: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Camera options" }));
+    await screen.findByRole("menuitemradio", { name: /FaceTime HD Camera/ });
+    expect(screen.queryByRole("menuitemradio", { name: "Small" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide camera" })).toBeNull();
+  });
+
+  // The pill first hears the camera at Record, before the recording runs,
+  // when Rust offers no camera menu; Rust sends it again once recording.
+  it("offers the camera menu once Rust says the recording runs", async () => {
+    withCamera({ ...BUBBLE, switchFromPill: false, resizeFromPill: false });
+    await screen.findByRole("button", { name: "Hide camera" });
+    expect(screen.queryByRole("button", { name: "Camera options" })).toBeNull();
+    await act(() => tauri.emitEvent("capture_camera_state", BUBBLE));
+    fireEvent.click(await screen.findByRole("button", { name: "Camera options" }));
+    expect(await screen.findByRole("menuitemradio", { name: "Large" })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitemradio", { name: /iPhone Camera/ })).toBeInTheDocument();
+  });
+
+  it("offers no camera menu where Rust offers none", async () => {
+    withCamera({ ...BUBBLE, switchFromPill: false, resizeFromPill: false });
+    await screen.findByRole("button", { name: "Hide camera" });
+    expect(screen.queryByRole("button", { name: "Camera options" })).toBeNull();
+  });
+
+  // The grown window must not stay over the app the user turned to.
+  it("closes an open menu when the pill loses focus", async () => {
+    withCamera(BUBBLE);
+    fireEvent.click(await screen.findByRole("button", { name: "Camera options" }));
+    await screen.findByRole("menu");
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    expect(screen.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(argsOf("capture_controls_menu")).toEqual([{ open: true }, { open: false }]));
+  });
+
+  it("closes an open menu when the recording ends", async () => {
+    withCamera(BUBBLE);
+    fireEvent.click(await screen.findByRole("button", { name: "Camera options" }));
+    await screen.findByRole("menu");
+    await act(() => tauri.emitEvent("capture_state_changed", { phase: "finalizing", seq: 9 }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(argsOf("capture_controls_menu")).toEqual([{ open: true }, { open: false }]));
   });
 });
 

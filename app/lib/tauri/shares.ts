@@ -50,6 +50,12 @@ export interface ServerCapabilities {
    * "coming soon".
    */
   folder_grant_writes?: boolean;
+  /**
+   * Folder links whose files are uploaded as a copy (Finder shares of a
+   * folder outside every drive). Read by Rust only; listed so the type
+   * matches the wire.
+   */
+  upload_folder_shares?: boolean;
 }
 
 /**
@@ -100,8 +106,9 @@ export interface FinderShareChoosing {
   id: string;
   name: string;
   /**
-   * Size of the clicked file when it was right-clicked. `null` for a folder
-   * (nothing is uploaded at mint time) or an unreadable stat.
+   * Size of the clicked file when it was right-clicked. `null` for every
+   * folder and for an unreadable stat; an outside folder's copy is measured
+   * after the chooser opens and arrives in {@link FinderShareFacts}.
    *
    * Shown in the chooser. A file that has not finished downloading is
    * indistinguishable from a smaller file at every level below this one, so
@@ -111,6 +118,42 @@ export interface FinderShareChoosing {
   sizeBytes: number | null;
   /** Seconds since the file was last modified; `null` when unreadable. */
   modifiedSecsAgo: number | null;
+  /**
+   * The clicked path is a folder. Without `isFolderCopy` it is in a drive
+   * and gets a live link: the chooser words it as a folder and the wait is
+   * a spinner, since the mint is one request with nothing to upload.
+   */
+  isFolder: boolean;
+  /**
+   * The clicked folder is outside every drive, so confirming uploads a COPY
+   * of it (removed when the link ends) instead of minting a live link.
+   * Decided in Rust; the chooser only says so. `null` when Rust could not
+   * read the drive roots: the chooser then shows neither notice.
+   */
+  isFolderCopy: boolean | null;
+}
+
+/**
+ * The share's refusal of a folder, as Rust's `AppError` crosses IPC. The
+ * message is a sentence written for the user and is shown verbatim.
+ */
+export interface ShareRefusal {
+  kind: string;
+  message: string;
+}
+
+/**
+ * Payload of `finder:share-facts`, the follow-up to `finder:share-choosing`
+ * for a folder uploaded as a copy: the chooser opens first, and this brings
+ * what Rust's scan of the folder found. Rust emits it only while `id` is the
+ * latest click.
+ */
+export interface FinderShareFacts {
+  id: string;
+  /** Bytes the copy would upload; `null` if refused or not measured in time. */
+  sizeBytes: number | null;
+  /** Why the share would refuse this folder; `null` when it would not. */
+  refusal: ShareRefusal | null;
 }
 
 /** Phase of an in-flight share creation. */
@@ -267,6 +310,12 @@ export async function listShares(): Promise<ShareSummary[]> {
 }
 
 /**
+ * Where a folder link's contents come from. Rust chooses the key (from the
+ * server's listing), so the FE never decides this itself.
+ */
+export type FolderShareOrigin = "drive" | "uploadedCopy";
+
+/**
  * One row of the owner's folder-share listing.
  *
  * The server returns `tokenHash` (blake3 hex of the plaintext token) only —
@@ -286,7 +335,7 @@ export async function listShares(): Promise<ShareSummary[]> {
 export interface FolderShareSummary {
   tokenHash: string;
   folderHash: string;
-  /** `""` means the share covers the whole drive. */
+  /** `""` means the share covers the whole drive (on a drive row). */
   pathPrefix: string;
   displayName: string;
   /** RFC 3339 timestamp. */
@@ -313,6 +362,13 @@ export interface FolderShareSummary {
    * coincides with `shareUrl` being `null`.
    */
   isPrivate: boolean | null;
+  /**
+   * `"uploadedCopy"` for a folder shared from outside every drive: its files
+   * were uploaded for the link, so it has no drive identity (`folderHash`
+   * and `pathPrefix` are `""`), never badges a drive folder, and does not
+   * follow later changes to the folder.
+   */
+  source: FolderShareOrigin;
 }
 
 /**
@@ -450,3 +506,10 @@ export async function cancelFinderShare(requestId: string): Promise<void> {
 export async function generateSharePassword(): Promise<string> {
   return invoke<string>("hcfs_generate_share_password");
 }
+
+/**
+ * Rust saved a notification for a Finder folder share cancelled after its
+ * link was made, whose link could not be revoked: refresh the bell. Rust's
+ * `events::CANCELLED_SHARE_LINK_LIVE_NOTIFY`; no payload.
+ */
+export const CANCELLED_SHARE_LINK_LIVE_NOTIFY = "hcfs_cancelled_share_link_live_notify";

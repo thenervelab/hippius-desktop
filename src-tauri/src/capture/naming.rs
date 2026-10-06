@@ -4,8 +4,18 @@ use chrono::NaiveDateTime;
 
 use super::session::CaptureKind;
 
-/// The folder, inside the destination drive, that captures are filed under.
+/// The folder captures were filed in inside another drive, before captures
+/// had a drive of their own. Captures taken then are still in folders of this
+/// name, and stay there.
 pub const CAPTURES_FOLDER: &str = "Captures";
+
+/// The folder on disk the captures drive is made of, and so the drive's
+/// name wherever drives are listed: in Documents unless the user chooses
+/// another place, where it is made inside the folder they picked.
+pub const CAPTURES_DIR_NAME: &str = "Hippius Captures";
+
+/// What a card calls the captures drive before it exists.
+pub const DEFAULT_DRIVE_NAME: &str = CAPTURES_DIR_NAME;
 
 /// The file name for a capture taken at `at` (local time).
 ///

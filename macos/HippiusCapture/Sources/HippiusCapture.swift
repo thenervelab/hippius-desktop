@@ -12,6 +12,11 @@ import ScreenCaptureKit
 /// echoed on their reply. Events:
 ///   {"ok":true,"event":"ready"}
 ///   {"ok":true,"event":"started"|"paused"|"resumed"|"stopped"|"cancelled","id":n}
+///   {"ok":true,"event":"muted"|"unmuted"|"microphone_switched","id":n}
+///     mid-recording microphone controls: `mute` and `unmute` write silence
+///     in place of the microphone (the one audio track keeps running), and
+///     `switch_microphone` with `microphoneDeviceId` (absent = the system
+///     default) records another microphone from now on.
 ///   {"ok":false,"error":"...","id":n}
 ///   {"ok":false,"event":"stream_stopped","error":"...","saved":bool}
 ///     unprompted: the stream ended on its own and the file was finished
@@ -287,16 +292,23 @@ func watchDevices() {
 /// which is also what the bar shows when the chosen device is not listed.
 func resolveMicrophone(_ id: String?) -> String? {
     guard let id, !id.isEmpty else { return nil }
+    if microphoneConnected(id) { return id }
+    fputs("microphone \(id) is not connected; recording the default microphone\n", stderr)
+    return nil
+}
+
+/// Whether microphone `id` is listed, waiting up to 3 s for one that this
+/// process has not discovered yet (a Continuity microphone arrives late).
+func microphoneConnected(_ id: String) -> Bool {
     let present = { listMicrophones().contains { $0.id == id } }
-    if present() { return id }
+    if present() { return true }
     let watch = DeviceWatch()
     let deadline = Date(timeIntervalSinceNow: 3)
     while Date() < deadline {
         RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
-        if present() { return withExtendedLifetime(watch) { id } }
+        if present() { return withExtendedLifetime(watch) { true } }
     }
-    fputs("microphone \(id) is not connected; recording the default microphone\n", stderr)
-    return nil
+    return false
 }
 
 private func coreAudioProperty(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
@@ -467,6 +479,16 @@ final class Runner: @unchecked Sendable {
             guard let live = current() else { return reply(Self.notRecording) }
             live.resume()
             reply(["ok": true, "event": "resumed"])
+        case "mute", "unmute":
+            // Mid-recording mute: the microphone keeps running and its
+            // samples are written as silence, so the file's one audio track
+            // stays continuous and in step with the picture.
+            guard let live = current() else { return reply(Self.notRecording) }
+            guard live.recordsMicrophone else { return reply(Self.noMicrophone) }
+            live.setMicrophoneMuted(cmd == "mute")
+            reply(["ok": true, "event": cmd == "mute" ? "muted" : "unmuted"])
+        case "switch_microphone":
+            switchMicrophone(obj, reply: reply)
         case "stop":
             stop(reply: reply)
         case "cancel":
@@ -478,6 +500,7 @@ final class Runner: @unchecked Sendable {
     }
 
     private static let notRecording: [String: Any] = ["ok": false, "error": "not recording"]
+    private static let noMicrophone: [String: Any] = ["ok": false, "error": "This recording has no microphone."]
 
     private func current() -> RecordSession? {
         lock.lock()
@@ -518,6 +541,28 @@ final class Runner: @unchecked Sendable {
             reply(["ok": false, "error": error.localizedDescription])
         case nil:
             reply(["ok": false, "error": "start did not complete"])
+        }
+    }
+
+    /// `switch_microphone`: record `microphoneDeviceId` (absent or empty =
+    /// the system default) from now on, in the same stream and file. A
+    /// microphone that is not connected is refused and the current one
+    /// keeps recording. The mixer covers the moment the stream changes
+    /// device with silence, placed by timestamp, so nothing drifts.
+    private func switchMicrophone(_ obj: [String: Any], reply: ([String: Any]) -> Void) {
+        guard let live = current() else { return reply(Self.notRecording) }
+        guard live.recordsMicrophone else { return reply(Self.noMicrophone) }
+        let wanted = (obj["microphoneDeviceId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        if let wanted, !microphoneConnected(wanted) {
+            return reply(["ok": false, "error": "That microphone is not connected."])
+        }
+        switch pumpUntilDone(timeout: 10, { try await live.switchMicrophone(to: wanted) }) {
+        case .success?:
+            reply(["ok": true, "event": "microphone_switched"])
+        case .failure(let error)?:
+            reply(["ok": false, "error": error.localizedDescription])
+        case nil:
+            reply(["ok": false, "error": "The microphone did not switch in time."])
         }
     }
 
@@ -597,6 +642,12 @@ struct StartOptions {
     /// The camera bubble's window, filmed with a window recording: that
     /// records one window only, so the bubble is added to it by number.
     let cameraWindowId: UInt32?
+    /// A screen or area recording leaves the app's own windows out (the pill,
+    /// the card, the tray popover, any window opened later), all but these:
+    /// the main window and the camera bubble. Done here, not with
+    /// `sharingType = .none`, which would hide them from every other app's
+    /// screen sharing too.
+    let ownWindowsFilmed: [UInt32]
 
     init?(_ obj: [String: Any]) {
         guard let output = obj["output"] as? String, !output.isEmpty else { return nil }
@@ -604,6 +655,7 @@ struct StartOptions {
         microphone = (obj["microphone"] as? Bool) ?? false
         systemAudio = (obj["systemAudio"] as? Bool) ?? false
         cameraWindowId = intU32(obj["cameraWindowId"])
+        ownWindowsFilmed = (obj["ownWindowsFilmed"] as? [Any])?.compactMap { intU32($0) } ?? []
         showClicks = (obj["showClicks"] as? Bool) ?? false
         microphoneDeviceId = obj["microphoneDeviceId"] as? String
         displayId = intU32(obj["displayId"])
@@ -650,6 +702,27 @@ let stageInset: CGFloat = 12
 /// The longest edge a recording is encoded at. A 5K or 6K display is scaled
 /// down to this, so the file stays a size people can upload and share.
 let maxLongEdge = 3840
+
+/// A filter for `display` that leaves out the app that started this helper
+/// (its parent: Hippius), every window of it, those opened later included,
+/// except `filming` (the main window, the camera bubble). ScreenCaptureKit
+/// applies this to this recording only; other apps' screen sharing still
+/// sees Hippius. Hidden windows are listed too (`onScreenWindowsOnly`
+/// false): the main window may be hidden at the start and shown later. With
+/// the app not found, nothing is left out.
+func withoutOwnWindows(display: SCDisplay, filming: [UInt32]) async throws -> SCContentFilter {
+    let all = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+    let parent = getppid()
+    guard let app = all.applications.first(where: { $0.processID == parent }) else {
+        FileHandle.standardError.write(Data("the app's own windows are not listed; nothing is left out\n".utf8))
+        return SCContentFilter(display: display, excludingWindows: [])
+    }
+    let wanted = Set(filming)
+    let kept = all.windows.filter { wanted.contains($0.windowID) }
+    // Every object of the filter from the one listing.
+    let screen = all.displays.first(where: { $0.displayID == display.displayID }) ?? display
+    return SCContentFilter(display: screen, excludingApplications: [app], exceptingWindows: kept)
+}
 
 /// Pixels to points: the display's backing scale (2 on Retina).
 func pixelScale(_ filter: SCContentFilter, displayID: CGDirectDisplayID?) -> CGFloat {
@@ -820,8 +893,11 @@ final class AudioMixer {
         Int64((offset.seconds * sampleRate).rounded())
     }
 
-    /// Mix `buffer` from `source` in at `frame`.
-    func add(_ buffer: CMSampleBuffer, from source: Source, at frame: Int64) {
+    /// Mix `buffer` from `source` in at `frame`. A `silent` buffer (the
+    /// microphone while muted) is placed and counted exactly like any other,
+    /// at zero gain: the track keeps its timing and the other source is not
+    /// held back waiting for it.
+    func add(_ buffer: CMSampleBuffer, from source: Source, at frame: Int64, silent: Bool = false) {
         guard var track = tracks[source], let pcm = Self.floatStereo48k(buffer, track: &track) else { return }
         var start = frame
         if let next = track.next, abs(frame - next) <= Self.resyncSlack {
@@ -838,7 +914,7 @@ final class AudioMixer {
         track.next = max(track.next ?? 0, start + frames)
         tracks[source] = track
         guard skip < frames, let channels = pcm.floatChannelData else { return }
-        let gain = source == .microphone ? Self.microphoneGain : Self.systemGain
+        let gain: Float = silent ? 0 : (source == .microphone ? Self.microphoneGain : Self.systemGain)
         let from = Int(start + skip - flushed)
         let count = Int(frames - skip)
         if left.count < from + count {
@@ -989,6 +1065,11 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private let audioInput: AVAssetWriterInput?
     /// Mixes what goes into `audioInput`; used on `writerQueue` only.
     private let mixer: AudioMixer?
+    /// The stream records a microphone (macOS 15+, asked for at start).
+    let recordsMicrophone: Bool
+    /// The stream's configuration, kept to switch the microphone in place
+    /// (`updateConfiguration`).
+    private let configuration: SCStreamConfiguration
     private let outputURL: URL
     private let onDeath: DeathHandler
     let width: Int
@@ -1006,6 +1087,12 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     /// Finished pauses, in host time. Cut out of the timeline: a sample is
     /// moved earlier by the length of every pause that ended before it.
     private var gaps: [(start: CMTime, end: CMTime)] = []
+    /// Host time the microphone was muted; nil while it is heard.
+    private var mutedAt: CMTime?
+    /// Finished mutes, in host time. A microphone buffer captured inside one
+    /// is written as silence (by its capture time, not when it arrives, so
+    /// the words just before the click are kept).
+    private var muteSpans: [(start: CMTime, end: CMTime)] = []
     private var lastVideo: CMSampleBuffer?
     private var lastVideoTime = CMTime.invalid
     /// Where the file's timeline starts (the first frame, retimed); audio is
@@ -1065,7 +1152,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
                 guard let first = content.displays.first else { throw CaptureError.noDisplay }
                 display = first
             }
-            filter = SCContentFilter(display: display, excludingWindows: [])
+            filter = try await withoutOwnWindows(display: display, filming: options.ownWindowsFilmed)
             scale = pixelScale(filter, displayID: display.displayID)
             bounds = CGRect(x: 0, y: 0, width: display.width, height: display.height)
             region = bounds
@@ -1185,6 +1272,8 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             videoInput: videoInput,
             audioInput: audioInput,
             mixer: sources.isEmpty ? nil : AudioMixer(sources: sources),
+            recordsMicrophone: sources.contains(.microphone),
+            configuration: config,
             outputURL: options.outputURL,
             width: width,
             height: height,
@@ -1216,6 +1305,8 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         videoInput: AVAssetWriterInput,
         audioInput: AVAssetWriterInput?,
         mixer: AudioMixer?,
+        recordsMicrophone: Bool,
+        configuration: SCStreamConfiguration,
         outputURL: URL,
         width: Int,
         height: Int,
@@ -1225,6 +1316,8 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         self.videoInput = videoInput
         self.audioInput = audioInput
         self.mixer = mixer
+        self.recordsMicrophone = recordsMicrophone
+        self.configuration = configuration
         self.outputURL = outputURL
         self.width = width
         self.height = height
@@ -1245,6 +1338,39 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
                 pausedAt = nil
             }
         }
+    }
+
+    /// Mute or unmute the microphone from now on (host time).
+    func setMicrophoneMuted(_ muted: Bool) {
+        writerQueue.sync {
+            let now = hostNow()
+            if muted {
+                if mutedAt == nil { mutedAt = now }
+            } else if let start = mutedAt {
+                muteSpans.append((start, now))
+                mutedAt = nil
+            }
+        }
+    }
+
+    /// Whether a microphone buffer captured at `pts` (host time) falls in a
+    /// mute. Called on `writerQueue`.
+    private func microphoneMuted(at pts: CMTime) -> Bool {
+        if let start = mutedAt, CMTimeCompare(pts, start) >= 0 { return true }
+        return muteSpans.contains { CMTimeCompare(pts, $0.start) >= 0 && CMTimeCompare(pts, $0.end) < 0 }
+    }
+
+    /// Record another microphone (nil = the system default) in the running
+    /// stream. ScreenCaptureKit reopens the device; buffers stop for a
+    /// moment and resume on their own timestamps, and the mixer fills the
+    /// gap with silence.
+    func switchMicrophone(to id: String?) async throws {
+        guard let stream else { throw CaptureError.writerFailed("The recording is not running.") }
+        guard #available(macOS 15.0, *) else {
+            throw CaptureError.writerFailed("Switching the microphone needs macOS 15 or later.")
+        }
+        configuration.microphoneCaptureDeviceID = id
+        try await stream.updateConfiguration(configuration)
     }
 
     /// Stop the stream and finish the file. Safe to call more than once and
@@ -1387,7 +1513,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         case .audio:
             mixAudio(sampleBuffer, from: .system, at: placed.time)
         case .microphone:
-            mixAudio(sampleBuffer, from: .microphone, at: placed.time)
+            mixAudio(sampleBuffer, from: .microphone, at: placed.time, silent: microphoneMuted(at: pts))
         @unknown default:
             break
         }
@@ -1396,11 +1522,11 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     /// Hand a system audio or microphone buffer to the mixer, placed on the
     /// file's timeline (already moved earlier by every pause before it), then
     /// write whatever the mixer has ready.
-    private func mixAudio(_ sampleBuffer: CMSampleBuffer, from source: AudioMixer.Source, at time: CMTime) {
+    private func mixAudio(_ sampleBuffer: CMSampleBuffer, from source: AudioMixer.Source, at time: CMTime, silent: Bool = false) {
         // Sound starts with the first picture.
         guard sessionStarted, let mixer else { return }
         let frame = AudioMixer.frame(at: time - sessionStart)
-        mixer.add(sampleBuffer, from: source, at: frame)
+        mixer.add(sampleBuffer, from: source, at: frame, silent: silent)
         writeMixedAudio(final: false)
     }
 

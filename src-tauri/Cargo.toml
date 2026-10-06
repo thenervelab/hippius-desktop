@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.7-beta.1"
+version = "0.6.7-beta.2"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -128,7 +128,10 @@ tauri-plugin-dialog = "2.6.0"
 # OS notifications for team chat messages (preference-gated in `chat::notify`).
 tauri-plugin-notification = "2"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
-rand = "0.8"
+# Wallet and account mnemonics take their entropy from `rand::rngs::SysRng`
+# (the OS CSPRNG) in `auth::mnemonic`, so this is the newest rand rather
+# than the 0.8 line bip39 2.x still pulls in for hcfs-client/subxt-signer.
+rand = "=0.10.3"
 tauri-plugin-process = "2"
 which = "4.4"
 hostname = "0.4"
@@ -140,7 +143,13 @@ hkdf = "0.12"
 # through the chat stack; `static_secrets` lets the KAT inject its secret.
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 argon2 = "0.5"
-bip39 = { version = "2.2", features = ["rand"] }
+# No `rand` feature: `auth::mnemonic` fills the entropy itself and calls
+# `Mnemonic::from_entropy`, so bip39 never picks the RNG. hcfs-client and
+# subxt-signer keep their own bip39 2.x; phrases cross as strings.
+# `zeroize` wipes a `Mnemonic`'s words on drop. A separate major does not
+# share 2.x's features, so it must be asked for here; `auth::mnemonic`
+# fails to compile without it.
+bip39 = { version = "=3.0.0", features = ["zeroize"] }
 zxcvbn = { version = "3", default-features = false }
 keyring = { version = "3", default-features = false, features = [
     "apple-native",
@@ -215,14 +224,32 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # totals change above is already what the deployed server sends, whatever
 # this pin says.
 #
+# Now at hcfs main 1f8dc76 (#550, hcfs-client 0.1.10). It brings the client
+# hardening #499..#513: `SyncEvent::MassDeleteHeld` (one side's deletes held
+# when they would remove most of a drive or the root looks empty; nothing on
+# that side is deleted until the user answers), `FileFailureKind::Refused`
+# (a path collision, an unreadable file or a download with no room on disk:
+# only the user can fix it), verified downloads (`RemoteFileInfo` gains the
+# revision it was listed at) and a `downloaded_<file id>` matcher that needs
+# the full 64-hex id. Then the Camera Uploads fields on `RemoteFileEntry`
+# (#524); folder links whose files are uploaded as a copy (#547,
+# `create_upload_folder_share`, `FolderShareListItem::source`; the owner
+# listing sends "" for an upload row's folder_hash/path_prefix); and #550,
+# which lets a held mass delete be restored instead of removed
+# (`DriveManager::restore_mass_delete` / `confirm_mass_delete` /
+# `held_mass_deletes`, a typed `MassDeleteRequestError`,
+# `SyncEvent::MassDeleteRestored` / `MassDeleteRestoreRefused`) and fails a
+# whole cycle with `SyncError::RootNotMounted` when a mounted drive folder is
+# gone. The desktop must answer a hold, or such deletes never propagate.
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "9b3d3635d1d2c665b7b657ac3c50fce77ba7f318" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1f8dc76c7ae713b9d83fac7e464f1903db5ba09d" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "9b3d3635d1d2c665b7b657ac3c50fce77ba7f318" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1f8dc76c7ae713b9d83fac7e464f1903db5ba09d" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

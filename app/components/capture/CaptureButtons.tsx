@@ -33,7 +33,7 @@ export const SCREENSHOT_LABEL = "Screenshot";
 export const RECORD_LABEL = "Record";
 export const RECORD_TOOLTIP = "Record your screen";
 export const OPEN_BAR_LABEL = "Open capture bar";
-export const CHANGE_DRIVE_LABEL = "Change capture drive…";
+export const CHANGE_DRIVE_LABEL = "Captures folder…";
 /** The one Screenshot item where the desktop's own tool chooses (Wayland). */
 export const SYSTEM_PICKER_LABEL = "Take a screenshot…";
 
@@ -203,7 +203,7 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
       </DropdownMenuItem>
       {surfaces?.systemPickerNote && <p className={NOTE_CLASSES}>{surfaces.systemPickerNote}</p>}
       <DropdownMenuSeparator className={SEPARATOR_CLASSES} />
-      <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => setDialog({ kind: "destination", resume: null })}>
+      <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => setDialog({ kind: "captureDrive" })}>
         <Settings2 aria-hidden className="size-4 shrink-0" />
         {CHANGE_DRIVE_LABEL}
       </DropdownMenuItem>
@@ -215,10 +215,13 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
     <DropdownMenuContent align="start" aria-label={name} className={CONTENT_CLASSES}>
       {offeredModes(kind, modes).map((mode) => {
         const ModeIcon = MODE_ICON[mode];
+        // The shortcut takes an area screenshot in one step, so its keys sit on that item.
+        const keys = kind === "screenshot" && mode === "area" ? shortcut : [];
         return (
           <DropdownMenuItem key={mode} className={ITEM_CLASSES} onSelect={() => void startCapture(kind, mode)}>
             <ModeIcon aria-hidden className="size-4 shrink-0" />
-            {modeLabel(kind, mode)}
+            <span className="flex-1">{modeLabel(kind, mode)}</span>
+            <ShortcutKeys keys={keys} className="ml-4" />
           </DropdownMenuItem>
         );
       })}
@@ -226,10 +229,9 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
       {/* The bar on this kind, on its last mode: from here the bar can switch to anything. */}
       <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => void startCapture(kind)}>
         <PanelBottom aria-hidden className="size-4 shrink-0" />
-        <span className="flex-1">{OPEN_BAR_LABEL}</span>
-        <ShortcutKeys keys={shortcut} className="ml-4" />
+        {OPEN_BAR_LABEL}
       </DropdownMenuItem>
-      <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => setDialog({ kind: "destination", resume: null })}>
+      <DropdownMenuItem className={ITEM_CLASSES} onSelect={() => setDialog({ kind: "captureDrive" })}>
         <Settings2 aria-hidden className="size-4 shrink-0" />
         {CHANGE_DRIVE_LABEL}
       </DropdownMenuItem>

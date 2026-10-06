@@ -4,6 +4,8 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
 import cn from "@/app/lib/utils/cn";
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
+import MassDeleteBanner from "@/components/ui/MassDeleteBanner";
+import EmptyRemoteBanner from "@/components/ui/EmptyRemoteBanner";
 import MigrationBanner from "@/components/ui/MigrationBanner";
 import CreditsExhaustedBanner from "@/components/billing/CreditsExhaustedBanner";
 import OfflineBanner from "@/components/ui/OfflineBanner";
@@ -100,6 +102,8 @@ export default function ResponsiveContent({
         <div className="sticky top-0 z-30 px-4">
           <OfflineBanner />
           <ConflictsBanner />
+          <MassDeleteBanner />
+          <EmptyRemoteBanner />
           <MigrationBanner />
           <CreditsExhaustedBanner />
           {/* `SyncReauthRequiredAlert` auto-renders null unless Rust's

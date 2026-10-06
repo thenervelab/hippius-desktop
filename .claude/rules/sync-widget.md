@@ -82,6 +82,10 @@ The sidebar/tray row renders `FileProgress.error`, which Rust authors in `FileFa
 
 The FE `failureMessage()` for persisted Drive-table badges must stay word-aligned with `display_reason`. **Do not tell the user to check their connection.**
 
+## Large-delete holds atom
+
+`massDeleteHoldsAtom` (`syncAtoms.ts`) changes only through the pure reducers in `app/lib/massDelete/holds.ts` (Rust owns the hold; the atom adds presentation state only) and `resetSyncSession` empties it, so a previous account's banner never shows. Pinned by `holds.test.ts` and `resetSyncSession.test.ts`; the banner itself is in `frontend.md`.
+
 ## Review Changes dialog state ownership
 
 The resolution map lives in `ConflictBannerRow`, NOT in `StagedChangesDialog` — the dialog is a controlled presentation component (`resolutions` + `onResolutionsChange`).

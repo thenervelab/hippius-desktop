@@ -47,6 +47,36 @@ export function videoConstraints(deviceId: string | null): MediaTrackConstraints
 }
 
 /**
+ * What to ask for when `videoConstraints` opened another camera than the one
+ * chosen: that camera and no other. `ideal` is only a preference, which
+ * WebKit may weigh against the size and frame rate and lose, so a camera
+ * switched from the pill could keep showing the camera from before.
+ */
+export function exactCameraConstraints(deviceId: string): MediaTrackConstraints {
+  return { ...videoConstraints(null), deviceId: { exact: deviceId } };
+}
+
+/**
+ * Whether the stream that opened is another camera than the one asked for
+ * (`wanted`, a webview `deviceId`; null = the default, which any camera is).
+ * Unknown when WebKit does not say which one opened: then it is kept.
+ */
+export function openedAnotherCamera(wanted: string | null, opened: string | undefined): boolean {
+  return !!wanted && !!opened && opened !== wanted;
+}
+
+/**
+ * The class that keeps the camera picture from ever being under the pointer.
+ * WebKit draws its own media controls over a hovered <video>, even one
+ * without the `controls` attribute: a pause button showed on the bubble, on
+ * some hovers and not others (a window that is not key gets hover only now
+ * and then), did nothing when clicked (the click started a window drag), and
+ * was filmed. The bubble's own controls are the pill's; the frame behind the
+ * picture is what is dragged.
+ */
+export const VIDEO_TAKES_NO_POINTER = "pointer-events-none";
+
+/**
  * The webview's `deviceId` for the camera the bar chose. The bar lists the
  * system's cameras, whose ids the webview never uses, so the camera is found
  * by the id first (a choice from an older build, or the webview's own list)

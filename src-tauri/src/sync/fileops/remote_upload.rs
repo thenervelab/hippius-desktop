@@ -47,6 +47,7 @@ const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
+use crate::sync::files::pathops::{VisibleKind, visible_children};
 use crate::sync::identity::DriveIdentity;
 
 /// One file's position in a remote upload, as the widget renders it.
@@ -615,51 +616,86 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
 struct PlannedUpload {
     source: std::path::PathBuf,
     parent: String,
+    /// Length when the walk listed it. The gate total and the queued rows
+    /// read this rather than stat every file again on the async runtime.
+    size: u64,
 }
 
-/// Depth cap, mirroring the local add walk's defence against symlink
-/// cycles. It bounds the pending-directory stack, not the file count.
-const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = 64;
+/// Most segments a wire path may have (`hcfs_shared::path_validator`'s
+/// depth rule, which counts the file itself). The walk measures each folder
+/// by its full wire path, upload target included, so no planned file is
+/// one the server refuses for depth. Symlinks are never followed
+/// (`visible_children`), so this is not a cycle guard: it refuses a tree
+/// too deep to address rather than walking it to the end.
+const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = hcfs_shared::path_validator::MAX_DEPTH;
 
 /// Flatten a folder into the files to upload and the wire folder each
 /// belongs in.
 ///
 /// Pure apart from reading the directory tree, so the path arithmetic —
 /// the part that decides where a file LANDS on the server — is testable
-/// without a server. Hidden names are skipped for the same reason the
-/// engine skips them, so a folder uploaded here and the same folder synced
-/// locally produce the same file set.
-fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
+/// without a server. Hidden names and symlinks are skipped by
+/// `pathops::visible_children`, the rule every tree upload shares, so a
+/// folder uploaded here and the same folder synced locally produce the
+/// same file set. Children it reports as unreadable or as non-UTF-8 are
+/// skipped too.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] naming the first folder whose wire path leaves
+/// no room for a file under [`REMOTE_FOLDER_WALK_MAX_DEPTH`]. Refused rather
+/// than skipped: a silently partial upload is what this used to do.
+fn plan_folder_upload(root: &Path, wire_parent: &str) -> Result<Vec<PlannedUpload>> {
     let Some(folder_name) = root.file_name().and_then(|n| n.to_str()) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let base = wire_relative_path(wire_parent, folder_name);
+    let base_depth = base.split('/').count();
+    if base_depth >= REMOTE_FOLDER_WALK_MAX_DEPTH {
+        return Err(too_deep(root, folder_name, root));
+    }
 
     let mut planned = Vec::new();
-    let mut stack = vec![(root.to_path_buf(), base)];
-    while let Some((dir, parent)) = stack.pop() {
-        if stack.len() > REMOTE_FOLDER_WALK_MAX_DEPTH {
-            break;
-        }
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if super::files::pathops::is_engine_hidden_name(&name) {
-                continue;
-            }
-            let Ok(meta) = entry.metadata() else { continue };
-            let Some(name) = name.to_str() else { continue };
-            if meta.is_dir() {
-                stack.push((entry.path(), wire_relative_path(&parent, name)));
-            } else if meta.is_file() {
-                planned.push(PlannedUpload {
-                    source: entry.path(),
+    // Each entry carries its wire path's segment count: the stack's length
+    // is how many folders are waiting, which a wide folder makes large.
+    let mut stack = vec![(root.to_path_buf(), base, base_depth)];
+    while let Some((dir, parent, depth)) = stack.pop() {
+        // An unreadable subfolder is skipped here (the other files still
+        // upload and the result lists per-file failures); a share instead
+        // treats it as fatal.
+        let Ok(children) = visible_children(&dir, usize::MAX) else { continue };
+        for child in children {
+            match child.kind {
+                // A file inside the child would take `depth + 2` segments.
+                VisibleKind::Dir if depth + 2 > REMOTE_FOLDER_WALK_MAX_DEPTH => {
+                    return Err(too_deep(root, folder_name, &child.path));
+                }
+                VisibleKind::Dir => stack.push((child.path, wire_relative_path(&parent, &child.name), depth + 1)),
+                VisibleKind::File { size } => planned.push(PlannedUpload {
+                    source: child.path,
                     parent: parent.clone(),
-                });
+                    size,
+                }),
+                // Skipped as an unreadable folder is: the rest still upload.
+                // A non-UTF-8 name has no wire spelling (and never occurs
+                // on APFS).
+                VisibleKind::Unreadable { .. } | VisibleKind::NotText => {}
             }
         }
     }
-    planned
+    Ok(planned)
+}
+
+/// The refusal for a folder past the depth cap, named from the uploaded
+/// folder down so the user can find it.
+fn too_deep(root: &Path, folder_name: &str, dir: &Path) -> AppError {
+    let inside = dir.strip_prefix(root).unwrap_or(dir);
+    AppError::Validation(format!(
+        "\u{201c}{}\u{201d} is nested too deeply to upload: a drive holds files at most \
+         {REMOTE_FOLDER_WALK_MAX_DEPTH} levels deep. Upload a folder closer to it, or move it \
+         higher up.",
+        Path::new(folder_name).join(inside).display()
+    ))
 }
 
 /// Upload a whole folder into a drive this device does not sync.
@@ -699,7 +735,7 @@ pub async fn upload_folder_to_remote_folder(
         move || plan_folder_upload(&root, &parent)
     })
     .await
-    .map_err(|e| AppError::Other(format!("Could not read that folder: {e}")))?;
+    .map_err(|e| AppError::Other(format!("Could not read that folder: {e}")))??;
 
     if planned.is_empty() {
         return Err(AppError::Validation("That folder has no files to upload.".into()));
@@ -710,7 +746,7 @@ pub async fn upload_folder_to_remote_folder(
     // what the pre-flight asks about.
     let identity = crate::sync::fileops::remote::upload_target_identity(pool, &account_id, &label, owner_ss58, folder_hash).await?;
 
-    let total_bytes: u64 = planned.iter().filter_map(|p| std::fs::metadata(&p.source).ok()).map(|m| m.len()).sum();
+    let total_bytes: u64 = planned.iter().map(|p| p.size).sum();
     crate::billing::eligibility::require_eligible_for_drive(
         state.inner(),
         &account_id,
@@ -740,7 +776,7 @@ pub async fn upload_folder_to_remote_folder(
             file_name: name.to_string(),
             label: label.clone(),
             bytes_transferred: 0,
-            total_bytes: std::fs::metadata(&item.source).map_or(0, |m| m.len()),
+            total_bytes: item.size,
             status: "pending".into(),
             error: None,
         });
@@ -829,12 +865,28 @@ mod tests {
         std::fs::write(root.join("2024").join("b.jpg"), b"b").expect("nested file");
 
         let mut planned: Vec<String> = plan_folder_upload(&root, "")
+            .expect("plan")
             .into_iter()
             .map(|p| wire_relative_path(&p.parent, p.source.file_name().unwrap().to_str().unwrap()))
             .collect();
         planned.sort();
 
         assert_eq!(planned, vec!["Photos/2024/b.jpg", "Photos/a.jpg"]);
+    }
+
+    /// Each planned file carries the length the walk listed, which is what
+    /// the eligibility gate totals: no second stat per file.
+    #[test]
+    fn a_folder_upload_carries_each_file_size() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(root.join("2024")).expect("nested dir");
+        std::fs::write(root.join("a.jpg"), b"abc").expect("root file");
+        std::fs::write(root.join("2024").join("b.jpg"), vec![0u8; 1_000]).expect("nested file");
+
+        let mut sizes: Vec<u64> = plan_folder_upload(&root, "").expect("plan").iter().map(|p| p.size).collect();
+        sizes.sort_unstable();
+        assert_eq!(sizes, vec![3, 1_000]);
     }
 
     /// Uploading into a subfolder nests under it rather than replacing it.
@@ -845,7 +897,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("dir");
         std::fs::write(root.join("a.jpg"), b"a").expect("file");
 
-        let planned = plan_folder_upload(&root, "Archive/2023");
+        let planned = plan_folder_upload(&root, "Archive/2023").expect("plan");
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].parent, "Archive/2023/Photos");
     }
@@ -861,9 +913,111 @@ mod tests {
         std::fs::write(root.join(".git").join("config"), b"x").expect("file in hidden dir");
         std::fs::write(root.join("a.jpg"), b"a").expect("visible file");
 
-        let planned = plan_folder_upload(&root, "");
+        let planned = plan_folder_upload(&root, "").expect("plan");
         assert_eq!(planned.len(), 1, "only the visible file is uploaded");
         assert_eq!(planned[0].source.file_name().unwrap(), "a.jpg");
+    }
+
+    /// A symlink is never uploaded: it is neither a file nor a directory to
+    /// the walk, which is also what keeps a link cycle out of it.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_upload_skips_symlinks() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("a.jpg"), b"a").expect("file");
+        std::os::unix::fs::symlink(root.join("a.jpg"), root.join("link.jpg")).expect("file link");
+        std::os::unix::fs::symlink(&root, root.join("loop")).expect("dir link");
+
+        let planned = plan_folder_upload(&root, "").expect("plan");
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].source.file_name().unwrap(), "a.jpg");
+    }
+
+    /// A wide folder is not a deep one: more subfolders than the depth cap,
+    /// side by side, all upload. The cap used to be checked against the
+    /// count of folders waiting to be walked, so this uploaded only the
+    /// files at the top.
+    #[test]
+    fn a_folder_upload_with_many_subfolders_plans_every_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        for i in 0..70 {
+            let sub = root.join(format!("sub-{i:02}"));
+            std::fs::create_dir_all(&sub).expect("subfolder");
+            std::fs::write(sub.join("a.jpg"), b"a").expect("file");
+        }
+
+        let planned = plan_folder_upload(&root, "").expect("plan");
+        assert_eq!(planned.len(), 70);
+    }
+
+    /// The deepest file the walk plans has a wire path the server's depth
+    /// rule accepts (it counts the upload target and the file itself); a
+    /// folder one level deeper is refused, naming it, rather than planned
+    /// into uploads the server would refuse one by one.
+    #[test]
+    fn a_folder_upload_refuses_a_tree_past_the_depth_cap_naming_it() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Deep");
+        // "Archive/Deep" + 61 folders + the file = 64 segments.
+        let at_cap = root.join(vec!["d"; REMOTE_FOLDER_WALK_MAX_DEPTH - 3].join("/"));
+        std::fs::create_dir_all(&at_cap).expect("deep folders");
+        std::fs::write(at_cap.join("a.txt"), b"a").expect("deepest file");
+        let planned = plan_folder_upload(&root, "Archive").expect("the deepest valid file is allowed");
+        assert_eq!(planned.len(), 1);
+        let wire = wire_relative_path(&planned[0].parent, "a.txt");
+        assert_eq!(hcfs_shared::path_validator::validate(&wire), Ok(()), "{wire}");
+
+        std::fs::create_dir_all(at_cap.join("too-deep")).expect("one level more");
+        let err = plan_folder_upload(&root, "Archive").err().expect("one level more is refused");
+        let AppError::Validation(message) = err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(message.contains("/d/too-deep\u{201d}"), "{message}");
+        assert!(message.starts_with("\u{201c}Deep/d/"), "{message}");
+        assert!(message.contains("at most 64 levels deep"), "{message}");
+    }
+
+    /// An upload target already at the depth cap leaves no room for a file.
+    #[test]
+    fn a_folder_upload_into_a_target_at_the_depth_cap_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("a.jpg"), b"a").expect("file");
+        let target = vec!["t"; REMOTE_FOLDER_WALK_MAX_DEPTH - 1].join("/");
+
+        let err = plan_folder_upload(&root, &target).err().expect("no room for a file");
+        assert!(matches!(err, AppError::Validation(_)), "{err:?}");
+    }
+
+    /// Unlike a share, a drive upload carries on past what it cannot read:
+    /// the files are independent and the rest still upload. A folder that
+    /// can be listed but not entered leaves its children out, nothing else.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_upload_skips_children_it_cannot_examine() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(root.join("locked/inner")).expect("dirs");
+        std::fs::write(root.join("a.jpg"), b"a").expect("root file");
+        std::fs::write(root.join("locked/b.jpg"), b"b").expect("locked file");
+        let locked = root.join("locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o400)).expect("chmod");
+        // Root ignores permissions; the case is unobservable there.
+        let examinable_anyway = std::fs::symlink_metadata(locked.join("b.jpg")).is_ok();
+        let planned = plan_folder_upload(&root, "").expect("plan");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("restore");
+        if examinable_anyway {
+            return;
+        }
+
+        let names: Vec<_> = planned.iter().map(|p| p.source.file_name().unwrap().to_owned()).collect();
+        assert_eq!(names, vec!["a.jpg"]);
     }
 
     /// An empty ciphertext must not declare a zero-chunk session, which

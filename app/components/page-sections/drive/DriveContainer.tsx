@@ -113,6 +113,7 @@ import { resolvePendingFolder, shouldOpenFromUrl, type PendingFolder } from "./o
 import { invoke } from "@tauri-apps/api/core";
 import { HIGHLIGHT_OPEN_LIMIT_MS, type HighlightRequest } from "./highlightEntry";
 import { useDriveHighlight } from "./useDriveHighlight";
+import { useDriveRoute } from "./driveRoute";
 
 /**
  * Rows per page in the browsed file list.
@@ -208,10 +209,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   //   specific folder. Starts TRUE and is no longer persisted — opening
   //   the app, or clicking Drive, always lands on the full list rather
   //   than wherever the last session happened to end.
+  //
+  // A page that pins this container to one drive (the Captures page) opens
+  // straight into it and never shows the folder list.
+  const { basePath, pinned } = useDriveRoute();
   const [activeSyncFolderLabel, setActiveSyncFolderLabel] = useState<
     string | null
-  >(null);
-  const [isOnLocalView, setIsOnLocalView] = useState(true);
+  >(() => (pinned && !pinned.remote ? pinned.label : null));
+  const [isOnLocalView, setIsOnLocalView] = useState(!pinned);
   // Tracks whether the saved label has been hydrated, so the bootstrap
   // / fallback effects don't fight each other on first mount.
   const [activeFolderHydrated, setActiveFolderHydrated] = useState(false);
@@ -221,7 +226,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // The reconcile effect below must not treat such a label as "removed" and
   // bounce the user back to the first folder — the bug where syncing a 2nd
   // folder dropped the user onto the 1st. Cleared once the list catches up.
-  const pendingActiveLabelRef = useRef<string | null>(null);
+  // A pinned drive just set up is in the same position until the list has it.
+  const pendingActiveLabelRef = useRef<string | null>(
+    pinned && !pinned.remote ? pinned.label : null,
+  );
 
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -461,7 +469,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     () => new Map(),
   );
   const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(
-    null,
+    () => (pinned?.remote ? pinned.label : null),
   );
   const isRemoteRoot =
     !isRecentFiles && !isNested && !isOnLocalView && Boolean(activeRemoteLabel);
@@ -1519,12 +1527,25 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // nested mode immediately. Same for the sync-folder breadcrumb segment
   // and the deeper nested-segment jumps below.
   const handleNavigateToLocalView = useCallback(() => {
+    if (pinned) {
+      // A pinned page has no folder list: "back to all folders" is the
+      // pinned drive's root.
+      if (pinned.remote) {
+        setActiveRemoteLabel(pinned.label);
+      } else {
+        setActiveSyncFolderLabel(pinned.label);
+        setActiveRemoteLabel(null);
+      }
+      setIsOnLocalView(false);
+      if (isNested) router.push(basePath);
+      return;
+    }
     setIsOnLocalView(true);
     setActiveRemoteLabel(null);
     if (isNested) {
-      router.push("/files");
+      router.push(basePath);
     }
-  }, [isNested, router]);
+  }, [isNested, router, pinned, basePath]);
 
   // Click on the top-level sync folder segment (e.g. "MyDrive" in
   // Local > MyDrive > Photos > 2024). Pops the user back to that drive's
@@ -1535,16 +1556,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         // Back to the REMOTE drive's root: state-based (no nested URL).
         setActiveRemoteLabel(label);
         setIsOnLocalView(false);
-        router.push("/files");
+        router.push(basePath);
         return;
       }
       pendingActiveLabelRef.current = label;
       setActiveSyncFolderLabel(label);
       setActiveRemoteLabel(null);
       setIsOnLocalView(false);
-      router.push("/files");
+      router.push(basePath);
     },
-    [router],
+    [router, basePath],
   );
 
   // Click on an intermediate nested segment. Rebuilds the URL so we
@@ -1560,9 +1581,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       params.set("subFolderPath", subPathTo);
       if (urlFolderSource) params.set("folderSource", urlFolderSource);
       if (urlMainReqHash) params.set("mainReqHash", urlMainReqHash);
-      router.push(`/files?${params.toString()}`);
+      router.push(`${basePath}?${params.toString()}`);
     },
-    [router, urlFolderSource, urlMainReqHash],
+    [router, urlFolderSource, urlMainReqHash, basePath],
   );
 
   // Switch the active sync folder from a click on a LocalFoldersSection
@@ -1640,10 +1661,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const navReclick = useAtomValue(navReclickAtom);
   const lastHandledReclick = useRef(0);
   useEffect(() => {
-    if (!shouldHandleReclick(navReclick, "/files", lastHandledReclick.current)) return;
+    if (!shouldHandleReclick(navReclick, basePath, lastHandledReclick.current)) return;
     lastHandledReclick.current = navReclick!.nonce;
     handleNavigateToLocalView();
-  }, [navReclick, handleNavigateToLocalView]);
+  }, [navReclick, handleNavigateToLocalView, basePath]);
 
   // Open a folder this page was navigated to WITH — the handover from
   // Settings, where clicking a row used to land on the folder list and
@@ -1684,8 +1705,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     } else {
       handleSelectFolderFromCards(urlOpenLabel);
     }
-    router.replace("/files");
+    router.replace(basePath);
   }, [
+    basePath,
     urlOpenLabel,
     urlOpenRemote,
     urlOpenSubfolder,
@@ -2020,6 +2042,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // The chosen fallback IS persisted so it stays stable across sessions.
   useEffect(() => {
     if (isRecentFiles) return;
+    // A pinned page shows its own drive whatever the list says.
+    if (pinned) return;
     if (!activeFolderHydrated) return;
     if (syncFolderLabels.length === 0) return;
     if (
@@ -2047,6 +2071,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setActiveSyncFolderLabel(fallback);
   }, [
     isRecentFiles,
+    pinned,
     activeFolderHydrated,
     syncFolderLabels,
     activeSyncFolderLabel,
@@ -2422,6 +2447,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 folderUploadInitialPath={folderUploadInitialPath}
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
+                // A pinned page has no folder list for the root crumb to open.
+                hideBreadcrumbRoot={Boolean(pinned)}
                 openDriveLabel={openDriveLabel}
                 browsedSharedDrive={browsedSharedDrive}
                 isReadOnlyDrive={!openDriveCanWrite}

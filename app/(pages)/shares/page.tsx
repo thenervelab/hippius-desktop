@@ -83,12 +83,12 @@ import { cn } from "@/lib/utils";
 import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import {
   activeShareRowId,
-  folderSharePathLabel,
   folderShareRowPlan,
   mergeActiveShareRows,
   pickHistoryRowDisplay,
   type ActiveShareRow,
 } from "./shareRowDisplay";
+import FolderShareScope from "@/app/(pages)/shares/FolderShareScope";
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
@@ -795,14 +795,12 @@ function ActiveNameCell({ row }: { row: ShareSummary }) {
 }
 
 /**
- * Name cell for a folder-share row: display name on top, the shared subtree
- * underneath — `""` is the whole drive and renders the console's idiom for
- * it. Dead rows keep their name readable; the dead state itself lives in the
- * Expires column.
+ * Name cell for a folder-share row: display name on top, the scope line
+ * underneath (the shared subtree, "Whole drive", "Folder link", or "Uploaded
+ * copy"; see `folderShareScope`). Dead rows keep their name readable; the
+ * dead state itself lives in the Expires column.
  */
 function FolderNameCell({ row }: { row: FolderShareSummary }) {
-  const pathLabel = folderSharePathLabel(row.pathPrefix);
-
   return (
     <div className="flex items-center gap-2 min-w-0 max-w-[260px]">
       <FolderIcon className="size-3.5 shrink-0 text-primary-50" />
@@ -811,12 +809,7 @@ function FolderNameCell({ row }: { row: FolderShareSummary }) {
           name={row.displayName}
           textClassName="text-xs font-medium text-grey-20 dark:text-grey-dark-200"
         />
-        <span
-          className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600"
-          title={pathLabel}
-        >
-          {pathLabel}
-        </span>
+        <FolderShareScope row={row} />
       </div>
     </div>
   );

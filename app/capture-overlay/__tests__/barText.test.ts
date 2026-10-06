@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  instantHint,
   barGroups,
   barHint,
   chooseLabel,
@@ -28,6 +29,7 @@ const OPTIONS: CaptureOptions = {
   lastKind: "recording",
   lastMode: "screen",
   copyLink: true,
+  openLink: true,
   recordCountdownSecs: 3,
 };
 
@@ -177,5 +179,24 @@ describe("the panel's line (the desktop's dialog chooses)", () => {
     );
     // Camera only asks no dialog: the recorder opens the camera itself.
     expect(panelHint("screen", "Enter", true)).toBe("Press Record or Enter to record your camera");
+  });
+});
+
+describe("the shortcut's one-step screenshot line", () => {
+  it("says to drag, how to move the area, and how to get out", () => {
+    expect(instantHint("area", true)).toBe(
+      "Drag to capture an area. Hold Space to move it, press Space for a window, Esc to cancel",
+    );
+    expect(instantHint("area", false)).toBe("Drag to capture an area. Hold Space to move it, Esc to cancel");
+  });
+
+  it("says how to get back to an area from window mode", () => {
+    expect(instantHint("window", true)).toBe("Click a window to capture it. Space to drag an area, Esc to cancel");
+  });
+
+  it("uses no em dash", () => {
+    for (const line of [instantHint("area", true), instantHint("area", false), instantHint("window", true)]) {
+      expect(line).not.toContain("\u2014");
+    }
   });
 });

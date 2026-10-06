@@ -6,7 +6,7 @@
 #   scripts/capture-runtime-check.sh [libtest filter...]
 #
 # Used by ci.yml's capture-runtime-windows (Git Bash) and capture-runtime-linux
-# (under xvfb-run) jobs; it runs the same on a Windows or Linux dev machine.
+# (under scripts/with-xvfb.sh) jobs; it runs the same on a Windows or Linux dev machine.
 # The caller sets the environment the tests read:
 #   HIPPIUS_CAPTURE_RUNTIME_REQUIRE=1  what the job installs must be present
 #   HIPPIUS_CAPTURE_RUNTIME_AUDIO=1    an audio server with a default output runs
