@@ -1255,7 +1255,13 @@ shown where `SCREEN_CAPTURE_ENABLED` and `captureSupportedAtom`) holds every
 capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`
-before each `capture_set_options`). Pinned by
+before each `capture_set_options`). Layout, in that order: the shortcuts as
+side-by-side tiles (`layout="tile"`, keys at `ShortcutKeys` size `lg`), the
+captures folder row (with "Show in Finder" / "Show in folder" through
+`reveal_drive_in_finder` only for a drive synced here), the options as a grid
+of cards (`layout="cards"`, `@container` columns so they follow the tab's
+width), then `EditedImageSetting`; each setting's icon sits in a
+`SettingIcon` chip. Pinned by
 `CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`,
 `drive/__tests__/recentFilesCapture.test.tsx`
 and `tests/capture_wiring.rs` (content protection, focus, capabilities, every

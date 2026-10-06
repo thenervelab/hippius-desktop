@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Keyboard } from "lucide-react";
+import { Camera, CircleDot, Keyboard } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,7 @@ import {
   UNSUPPORTED_SHORTCUT_KEY,
 } from "@/app/lib/capture/shortcutLabel";
 import ShortcutKeys from "@/app/components/capture/ShortcutKeys";
+import { SettingIcon } from "./SettingIcon";
 import {
   addCaptureDesktopShortcut,
   configureCaptureShortcut,
@@ -65,11 +66,17 @@ export default function CaptureShortcutSetting({
   kind,
   support,
   rowClassName,
+  layout = "row",
 }: {
   kind: CaptureShortcutKind;
   /** Rust's route for this shortcut here; null until Rust has answered (the key recorder). */
   support: CaptureShortcutSupport | null;
   rowClassName: string;
+  /**
+   * `tile`: the Settings tab's side-by-side card, the keys drawn large under
+   * the name, the buttons below. `row`: one line, the keys at its end.
+   */
+  layout?: "row" | "tile";
 }) {
   const copy = COPY[kind];
   // Rust's line where Hippius cannot set the shortcut itself (Wayland
@@ -275,6 +282,76 @@ export default function CaptureShortcutSetting({
   const problem = recording ? null : (setting?.problem ?? null);
   const isDefault = setting ? setting.accelerator === setting.defaultAccelerator : true;
 
+  const prompt = mac
+    ? "Press the new shortcut, with Command, Control or Option. Esc cancels."
+    : isLinuxPlatform()
+      ? "Press the new shortcut, with Ctrl, Alt or Super. Esc cancels."
+      : "Press the new shortcut, with Ctrl, Alt or the Windows key. Esc cancels.";
+  const keysShown =
+    recording && held ? (
+      <span aria-live="polite">
+        <ShortcutKeys keys={acceleratorKeys(held, mac)} size={layout === "tile" ? "lg" : "md"} />
+      </span>
+    ) : recording ? (
+      <span aria-live="polite" className={`${KBD} animate-pulse motion-reduce:animate-none`}>
+        Waiting…
+      </span>
+    ) : current ? (
+      <ShortcutKeys keys={current} size={layout === "tile" ? "lg" : "md"} />
+    ) : (
+      <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
+    );
+  const buttons = (
+    <>
+      <Button
+        variant="defaultStable"
+        size="sm"
+        onClick={() => {
+          setError(null);
+          setRecording((r) => !r);
+        }}
+      >
+        {recording ? "Cancel" : "Change"}
+      </Button>
+      {!recording && !isDefault && (
+        <Button variant="defaultStable" size="sm" onClick={() => void save(setting?.defaultAccelerator ?? null)}>
+          Reset
+        </Button>
+      )}
+      {!recording && current && (
+        <Button variant="defaultStable" size="sm" onClick={() => void save(null)}>
+          Turn off
+        </Button>
+      )}
+    </>
+  );
+
+  if (layout === "tile") {
+    const TileIcon = kind === "record" ? CircleDot : Camera;
+    return (
+      <div role="group" aria-label={copy.title} className={rowClassName}>
+        <div className="flex min-w-0 items-start gap-3">
+          <SettingIcon tone={kind === "record" ? "record" : "brand"}>
+            <TileIcon className="size-[18px]" strokeWidth={2} />
+          </SettingIcon>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-grey-10 dark:text-white">{copy.title}</p>
+            <p className="mt-0.5 text-[13px] leading-snug text-[#7D7D7D] dark:text-grey-dark-600">
+              {recording ? prompt : copy.does}
+            </p>
+          </div>
+        </div>
+        <div className="flex min-h-10 items-center">{keysShown}</div>
+        {(error ?? problem) && (
+          <p role="alert" className="text-sm text-error-50">
+            {error ?? problem}
+          </p>
+        )}
+        <div className="mt-auto flex flex-wrap items-center gap-2">{buttons}</div>
+      </div>
+    );
+  }
+
   return (
     <div role="group" aria-label={copy.title} className={rowClassName}>
       <div className="flex min-w-0 items-start gap-3">
@@ -282,13 +359,7 @@ export default function CaptureShortcutSetting({
         <div className="min-w-0">
           <p className="text-sm font-medium text-grey-10 dark:text-white">{copy.title}</p>
           <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-            {recording
-              ? mac
-                ? "Press the new shortcut, with Command, Control or Option. Esc cancels."
-                : isLinuxPlatform()
-                  ? "Press the new shortcut, with Ctrl, Alt or Super. Esc cancels."
-                  : "Press the new shortcut, with Ctrl, Alt or the Windows key. Esc cancels."
-              : copy.does}
+            {recording ? prompt : copy.does}
           </p>
           {(error ?? problem) && (
             <p role="alert" className="mt-1 text-sm text-error-50">
@@ -298,39 +369,8 @@ export default function CaptureShortcutSetting({
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {recording && held ? (
-          <span aria-live="polite">
-            <ShortcutKeys keys={acceleratorKeys(held, mac)} size="md" />
-          </span>
-        ) : recording ? (
-          <span aria-live="polite" className={`${KBD} animate-pulse motion-reduce:animate-none`}>
-            Waiting…
-          </span>
-        ) : current ? (
-          <ShortcutKeys keys={current} size="md" />
-        ) : (
-          <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
-        )}
-        <Button
-          variant="defaultStable"
-          size="sm"
-          onClick={() => {
-            setError(null);
-            setRecording((r) => !r);
-          }}
-        >
-          {recording ? "Cancel" : "Change"}
-        </Button>
-        {!recording && !isDefault && (
-          <Button variant="defaultStable" size="sm" onClick={() => void save(setting?.defaultAccelerator ?? null)}>
-            Reset
-          </Button>
-        )}
-        {!recording && current && (
-          <Button variant="defaultStable" size="sm" onClick={() => void save(null)}>
-            Turn off
-          </Button>
-        )}
+        {keysShown}
+        {buttons}
       </div>
     </div>
   );

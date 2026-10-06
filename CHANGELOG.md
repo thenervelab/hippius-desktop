@@ -32,6 +32,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **A clearer Screenshots & Recording settings page.** The two shortcuts are
+  shown as large keys at the top, the capture folder can be opened from the
+  page, and the other choices are laid out as cards you can scan at a glance.
+
 - **The screenshot editor opens inside the Hippius window and keeps your original.** It covers the page you were on with the picture front and centre and one toolbar, and Save now offers to keep a copy beside the original (the default) or replace it; you can set your choice in Settings.
 
 - **A tidier menu bar window.** Screenshot, Record and Upload sit side by side at the top (drop files on the window to upload them), your captures and all your files are a tab apart, sync status is one short line, and every file shows a small picture of itself with Copy link and Edit a hover away.
