@@ -1110,10 +1110,18 @@ undo, `gesture.ts` press/drag/release per tool, `view.ts` crop, fit and zoom,
 `pixels.ts`, `render.ts`) drawn on one canvas, hand-rolled rather than Konva
 or Fabric (no dependency, React 19.2 here and react-konva 19.3 wants 19.3).
 Layout: dark chrome on fixed tokens in both themes (`bg-black-600` backdrop,
-`black-primary-bg` pills, active tool `bg-primary-50`); Close + file name top
-left, ONE floating pill toolbar top centre (`EditorToolbar`: every tool, a
-colour dot opening colour and thickness, undo, redo; its own row below `lg`),
-Copy image + Save top right, a selection bar beside the selected annotation
+`black-primary-bg` pills, active tool `bg-primary-50`); a top bar
+(`editor-top-bar`, `TITLEBAR_BAND_H_54` tall, `titlebarClearanceClass` so the
+macOS traffic lights of the overlay title bar have their 80px; the bar and the
+name are `data-tauri-drag-region`, buttons never) with Close + file name left
+and `SaveActions` right (Copy image, then a split Save: the main part saves by
+the preference and is labelled by `saveLabel`, the chevron offers Save copy and
+Replace original; with "Ask" both open `SaveDialog` on the picked way via
+`initialMode`); the actions are `shrink-0` so the name truncates first. ONE
+floating pill toolbar (`EditorToolbar`: every tool, a colour dot opening colour
+and thickness, undo, redo) on its OWN row below the bar, centred, scrolling
+sideways when narrow: it used to be absolutely centred over the bar, where it
+covered Copy image and Save on any window `lg` or wider. Then a selection bar beside the selected annotation
 (`SelectionBar`, positioned by `selectionAnchor`), and the zoom pill
 (`ZoomPill`, 100% = one picture pixel per screen pixel) at the bottom. Keys
 are handled on the layer and never reach the page (`stopPropagation`); Esc

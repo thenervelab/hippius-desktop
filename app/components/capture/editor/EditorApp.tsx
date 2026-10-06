@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Copy, Loader, X } from "lucide-react";
+import { X } from "lucide-react";
 import {
   closeEditor,
   copyEditedImage,
@@ -35,10 +35,12 @@ import { exportPng } from "@/app/lib/capture/editor/render";
 import { PALETTE, SIZES, type SizeId, commandFor } from "@/app/lib/capture/editor/shortcuts";
 import { ASPECT_PRESETS, ZOOM_LEVELS, fitCropToRatio, nextZoom, redactionBlock, resolveRatio, strokeUnit } from "@/app/lib/capture/editor/view";
 import { isMacPlatform } from "@/app/lib/utils/isMacPlatform";
+import { TITLEBAR_BAND_H_54, titlebarClearanceClass } from "@/app/lib/utils/platformChrome";
+import { cn } from "@/lib/utils";
 import EditorCanvas, { type TextEdit } from "./EditorCanvas";
 import EditorToolbar, { CropBar, ICON_BUTTON } from "./EditorToolbar";
-import { SelectionBar, ZoomPill } from "./EditorChrome";
-import { DiscardDialog, PRIMARY, SECONDARY, SaveDialog } from "./EditorDialogs";
+import { SaveActions, SelectionBar, ZoomPill } from "./EditorChrome";
+import { DiscardDialog, SECONDARY, SaveDialog } from "./EditorDialogs";
 import EditorSkeleton from "./EditorSkeleton";
 
 interface Loaded {
@@ -87,8 +89,8 @@ interface Props {
 
 /**
  * The screenshot editor, a full-screen layer over the main window's page:
- * Close and the file's name, one floating toolbar, Copy image and Save; the
- * picture fills the rest. Rust handed it the picture and takes the
+ * a top bar (Close and the file's name, then Copy image and Save), the
+ * floating toolbar on its own row under it, and the picture in the rest. Rust handed it the picture and takes the
  * flattened PNG back; what happens to the file and its link is Rust's, and
  * the save dialog says it in Rust's words before the user commits.
  *
@@ -112,6 +114,8 @@ export default function EditorApp({ onClose }: Props) {
   const [status, setStatus] = useState<Status>(null);
   const [styleOpen, setStyleOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
+  // The way the save dialog opens on: a copy, unless Replace was picked.
+  const [dialogMode, setDialogMode] = useState<SaveMode>("copy");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const [zoom, setZoom] = useState<number | null>(null);
@@ -254,14 +258,24 @@ export default function EditorApp({ onClose }: Props) {
     }
   };
 
-  /** Save…: straight to Captures for a picked picture, by the saved choice, or ask. */
-  const save = () => {
+  /**
+   * Save: straight to Captures for a picked picture. Otherwise `mode` is a
+   * way picked in the Save menu and none is the main button (or the key),
+   * which saves the remembered way. While the preference is "Ask" both open
+   * the dialog, on the way picked (a copy by default), so the user reads
+   * Rust's note about links before anything is written.
+   */
+  const save = (mode?: SaveMode) => {
     if (!context || busy || !dirty) return;
     if (textEdit) finishTyping(false);
     if (context.saveKind === "newCapture") return void runSave(undefined, false);
-    if (context.savePreference !== "ask") return void runSave(context.savePreference, false);
-    setSaveError(null);
-    setSaveOpen(true);
+    if (context.savePreference === "ask") {
+      setDialogMode(mode ?? "copy");
+      setSaveError(null);
+      setSaveOpen(true);
+      return;
+    }
+    void runSave(mode ?? context.savePreference, false);
   };
 
   const copy = async () => {
@@ -289,6 +303,11 @@ export default function EditorApp({ onClose }: Props) {
     const target = e.target instanceof Element ? e.target : null;
     if (saveOpen || confirmClose) return;
     if (target?.closest("textarea, input")) return;
+    // An open menu (the Save menu) keeps its own keys: arrows, Return, letters.
+    if (target?.closest('[role="menu"]')) {
+      e.stopPropagation();
+      return;
+    }
     const cmd = commandFor(e, isMac);
     // Every key stays in the editor: the page underneath has shortcuts too.
     e.stopPropagation();
@@ -371,68 +390,70 @@ export default function EditorApp({ onClose }: Props) {
             ) : (
               <>
                 <Dialog.Title className="sr-only">Edit {context.fileName}</Dialog.Title>
-                <header className="relative flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3 sm:px-4">
-                  <div className="flex min-w-0 flex-1 items-center gap-2 lg:max-w-[calc(50%-18rem)]">
+                {/*
+                  The top bar. On macOS the window's traffic lights float
+                  over this band (overlay title bar), so it starts after
+                  the same inset the file viewer and the app's title bar
+                  leave, and it is the band's height. The bar and the name
+                  are drag regions so the window still moves from here; a
+                  button never is, so no click is taken from it. The
+                  actions on the right never shrink: the name gives way
+                  first, and the tools have a row of their own below.
+                */}
+                <header
+                  data-tauri-drag-region
+                  data-testid="editor-top-bar"
+                  className={cn("flex w-full shrink-0 select-none items-center gap-3 pr-3 sm:pr-4", TITLEBAR_BAND_H_54, titlebarClearanceClass(isMac))}
+                >
+                  <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-2">
                     <button type="button" onClick={requestClose} disabled={busy === "save"} className={ICON_BUTTON} aria-label="Close (Esc)" title="Close (Esc)">
                       <X aria-hidden className="size-[18px]" />
                     </button>
-                    <p className="min-w-0 truncate text-[13px] font-medium text-grey-100" title={context.fileName}>
+                    <p data-tauri-drag-region className="min-w-0 truncate text-[13px] font-medium text-grey-100" title={context.fileName}>
                       {context.fileName}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2 lg:order-last">
-                    <button
-                      type="button"
-                      onClick={() => void copy()}
-                      disabled={busy !== null}
-                      className={SECONDARY}
-                      aria-label="Copy image"
-                      title={`Copy image (${modKey}C)`}
-                    >
-                      <Copy aria-hidden className="size-4" />
-                      <span className="hidden sm:inline">Copy image</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={save}
-                      disabled={busy !== null || !dirty}
-                      className={PRIMARY}
-                      title={dirty ? `${saveLabel(context)} (${modKey}S)` : "Nothing to save yet"}
-                    >
-                      {busy === "save" && !saveOpen && <Loader aria-hidden className="size-4 animate-spin motion-reduce:animate-none" />}
-                      {saveLabel(context)}
-                    </button>
-                  </div>
-                  {/* Top centre on a wide window; its own row on a narrow one. */}
-                  <div className="flex w-full flex-col items-center gap-2 lg:absolute lg:left-1/2 lg:top-3 lg:w-auto lg:-translate-x-1/2">
-                    <EditorToolbar
-                      tool={tool}
-                      onTool={chooseTool}
-                      color={color}
-                      size={sizeId}
-                      styleOpen={styleOpen}
-                      onStyleOpen={setStyleOpen}
-                      onColor={onColor}
-                      onSize={onSize}
-                      canUndo={history.past.length > 0}
-                      canRedo={history.future.length > 0}
-                      onUndo={doUndo}
-                      onRedo={doRedo}
-                      modKey={modKey}
-                    />
-                    {tool === "crop" && (
-                      <CropBar
-                        aspect={aspect}
-                        onAspect={onAspect}
-                        hasCrop={history.present.crop !== null}
-                        onReset={() => commitDoc({ ...history.present, crop: null }, null)}
-                        onDone={() => setTool("select")}
-                      />
-                    )}
-                  </div>
+                  <SaveActions
+                    context={context}
+                    dirty={dirty}
+                    busy={busy !== null}
+                    showSpinner={busy === "save" && !saveOpen}
+                    modKey={modKey}
+                    onCopy={() => void copy()}
+                    onSave={save}
+                  />
                 </header>
+                {/* The tools on their own row under the bar, centred; the
+                    pill scrolls sideways on a narrow window rather than
+                    covering the bar or the picture. */}
+                <div data-testid="editor-tools-row" className="flex w-full shrink-0 flex-col items-center gap-2 px-3 pb-2 sm:px-4">
+                  <EditorToolbar
+                    tool={tool}
+                    onTool={chooseTool}
+                    color={color}
+                    size={sizeId}
+                    styleOpen={styleOpen}
+                    onStyleOpen={setStyleOpen}
+                    onColor={onColor}
+                    onSize={onSize}
+                    canUndo={history.past.length > 0}
+                    canRedo={history.future.length > 0}
+                    onUndo={doUndo}
+                    onRedo={doRedo}
+                    modKey={modKey}
+                  />
+                  {tool === "crop" && (
+                    <CropBar
+                      aspect={aspect}
+                      onAspect={onAspect}
+                      hasCrop={history.present.crop !== null}
+                      onReset={() => commitDoc({ ...history.present, crop: null }, null)}
+                      onDone={() => setTool("select")}
+                    />
+                  )}
+                </div>
 
-                <div className={`relative min-h-0 flex-1 ${tool === "crop" ? "lg:mt-12" : ""}`}>
+                <div className="relative min-h-0 flex-1">
                   <div className="absolute inset-x-0 bottom-16 top-0">
                     <EditorCanvas
                       image={loaded.image}
@@ -516,6 +537,7 @@ export default function EditorApp({ onClose }: Props) {
                   replaceNote={context.replaceNote}
                   busy={busy === "save"}
                   error={saveError}
+                  initialMode={dialogMode}
                   onCancel={() => setSaveOpen(false)}
                   onSave={(mode, remember) => void runSave(mode, remember)}
                 />
@@ -528,12 +550,3 @@ export default function EditorApp({ onClose }: Props) {
     </Dialog.Root>
   );
 }
-
-/** The Save button says what it will do. */
-export function saveLabel(context: EditorContext): string {
-  if (context.saveKind === "newCapture") return "Save to Captures";
-  if (context.savePreference === "copy") return "Save copy";
-  if (context.savePreference === "replace") return "Save";
-  return "Save…";
-}
-

@@ -16,7 +16,9 @@ const SCRIM = "fixed inset-0 z-[1001] bg-[#000]/50";
 /**
  * "Save…": save a copy (the default, first) or replace the original, and
  * whether to stop asking. The descriptions are Rust's sentences, so the
- * warning about a public link is said only when the file has one.
+ * warning about a public link is said only when the file has one. It opens
+ * on `initialMode`: a copy from the main button, or the way the user picked
+ * in the Save menu.
  */
 export function SaveDialog({
   open,
@@ -27,8 +29,10 @@ export function SaveDialog({
   error,
   onCancel,
   onSave,
+  initialMode = "copy",
 }: {
   open: boolean;
+  initialMode?: SaveMode;
   fileName: string;
   copyNote: string;
   replaceNote: string;
@@ -39,15 +43,16 @@ export function SaveDialog({
 }) {
   const [mode, setMode] = useState<SaveMode>("copy");
   const [remember, setRemember] = useState(false);
-  const copyRadio = useRef<HTMLInputElement | null>(null);
+  const radios = useRef<Partial<Record<SaveMode, HTMLInputElement | null>>>({});
 
-  // Every opening starts on the safe choice, unremembered.
+  // Every opening starts on the choice it was opened for (the safe one
+  // unless the user picked Replace), unremembered.
   useEffect(() => {
     if (open) {
-      setMode("copy");
+      setMode(initialMode);
       setRemember(false);
     }
-  }, [open]);
+  }, [open, initialMode]);
 
   const option = (value: SaveMode, title: string, note: string) => (
     <label
@@ -56,7 +61,9 @@ export function SaveDialog({
       }`}
     >
       <input
-        ref={value === "copy" ? copyRadio : undefined}
+        ref={(el) => {
+          radios.current[value] = el;
+        }}
         type="radio"
         name="editor-save-mode"
         value={value}
@@ -80,7 +87,7 @@ export function SaveDialog({
           aria-describedby={undefined}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            copyRadio.current?.focus();
+            radios.current[initialMode]?.focus();
           }}
         >
           <Dialog.Title className="text-[16px] font-semibold">Save your edits</Dialog.Title>

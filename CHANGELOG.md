@@ -17,6 +17,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Open a file straight from the menu bar.** Click a screenshot, recording or any file you can preview in the menu bar list and it opens in the Hippius viewer, ready to flip through the rest of that list.
+- **A menu in the menu bar window.** The three dots at the top right show your balance with Top up, your plan and how much of it you use, and take you to Hippius, your captures folder, Settings, Help & Support or Quit, with keyboard shortcuts.
 - **Mute your microphone during a screen recording.** The recording carries on and stays in sync; it is silent until you unmute. On a Mac.
 - **Switch microphone or camera during a screen recording.** Pick another one from the recording controls without stopping. On a Mac; camera switching works on Windows too.
 - **Change the camera bubble's size during a screen recording.** Small, large or full size, and the saved video changes with it. On a Mac and Windows.
@@ -147,6 +149,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Overview and Drive, for free and paid plans — uploads are paused.
 
 ### Fixed
+
+- **Save is always visible in the screenshot editor.** On a wide window the toolbar covered Save and Copy image; they now sit in their own top bar, clear of the Mac's window buttons, and Save offers Save copy or Replace original.
+- **Upload in the menu bar window opens the upload dialog.** It brings Hippius forward with the Upload File dialog open on the page you were on, instead of only switching to Drive.
 
 - **Folders sync on the Free plan.** A new folder no longer stays on "Syncing" forever when your account has no credits, and a folder that cannot start syncing now says why instead.
 

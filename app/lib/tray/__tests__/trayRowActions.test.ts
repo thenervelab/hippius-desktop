@@ -17,6 +17,7 @@ import {
   parseTrayFileActionRequest,
   runsInMainWindow,
   trayDriveLocation,
+  trayRowOpensViewer,
 } from "../trayRowActions";
 import { RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 
@@ -227,5 +228,44 @@ describe("cross-window request", () => {
     expect(parseTrayFileActionRequest({ action: "rename" })).toBeNull();
     expect(parseTrayFileActionRequest(null)).toBeNull();
     expect(parseTrayFileActionRequest("rename")).toBeNull();
+  });
+
+  it("keeps the viewer's list only when it holds the file, and drops nameless entries", () => {
+    const file = row({ name: "b.png", actualFileName: "Shots/b.png" });
+    const other = row({ name: "a.png", actualFileName: "Shots/a.png" });
+    expect(
+      parseTrayFileActionRequest({ action: "preview", file, siblings: [other, { name: "" }, file] }),
+    ).toEqual({ action: "preview", file, siblings: [other, file] });
+    // Same name in another drive is another file.
+    expect(
+      parseTrayFileActionRequest({ action: "preview", file, siblings: [other, { ...file, label: "Work" }] }),
+    ).toEqual({ action: "preview", file });
+    expect(parseTrayFileActionRequest({ action: "preview", file, siblings: "nope" })).toEqual({
+      action: "preview",
+      file,
+    });
+  });
+});
+
+describe("opening a row in the viewer", () => {
+  it("opens a finished picture, recording or document the viewer can show", () => {
+    expect(trayRowOpensViewer(row({ name: "shot.png" }))).toBe(true);
+    expect(trayRowOpensViewer(row({ name: "clip.mp4" }))).toBe(true);
+    expect(trayRowOpensViewer(row())).toBe(true);
+    // Cloud-only rows open too: the viewer fetches them.
+    expect(trayRowOpensViewer(row({ name: "shot.png", source: "" }))).toBe(true);
+  });
+
+  it("does not open a file on its way, a folder or a type the viewer cannot show", () => {
+    expect(trayRowOpensViewer(row({ name: "shot.png", feedStatus: "uploading" }))).toBe(false);
+    expect(trayRowOpensViewer(row({ name: "shot.png", feedStatus: "failed" }))).toBe(false);
+    expect(trayRowOpensViewer(row({ name: "Photos", isFolder: true }))).toBe(false);
+    expect(trayRowOpensViewer(row({ name: "archive.zip" }))).toBe(false);
+  });
+
+  it("is the same rule as the menu's View", () => {
+    for (const item of [row(), row({ name: "archive.zip" }), row({ feedStatus: "uploading" })]) {
+      expect(ids(item).includes("preview")).toBe(trayRowOpensViewer(item));
+    }
   });
 });
