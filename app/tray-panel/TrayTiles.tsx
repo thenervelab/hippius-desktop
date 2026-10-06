@@ -31,7 +31,7 @@ import { TRAY_CAPTURE_DRIVE_EVENT, TRAY_CAPTURE_EVENT } from "@/app/lib/tray/tra
 import { annotateChosenImage } from "@/app/lib/tauri/captureEditor";
 import type { TrayCaptureView } from "./trayCaptureView";
 import type { TrayShortcuts } from "./useTrayCaptureView";
-import { openMainFiles, uploadDroppedPaths } from "./trayMainWindow";
+import { openMainUpload, uploadDroppedPaths } from "./trayMainWindow";
 
 export const ANNOTATE_IMAGE_LABEL = "Annotate an image…";
 export const UPLOAD_LABEL = "Upload";
@@ -54,9 +54,11 @@ export const UPLOAD_HINT = "or drop files";
  * is never in the shot and a first capture still gets the drive picker or
  * the permission explainer, which are main-window dialogs.
  *
- * Upload opens the Drive page in the main window, like the empty state's
- * button. Files dropped anywhere on the popover go to the main window's
- * upload dialog (`uploadDroppedPaths`); the tile lights up while they hover.
+ * Upload brings the main window forward with its "Upload File" dialog open
+ * over the page it is on (`openMainUpload`), the dialog the Drive's Upload
+ * button opens. Files dropped anywhere on the popover go to that dialog
+ * too, already filled in (`uploadDroppedPaths`); the tile lights up while
+ * they hover.
  */
 export default function TrayTiles({ view, shortcut }: { view: TrayCaptureView; shortcut: TrayShortcuts }) {
   const dragging = useDropOnPanel();
@@ -276,7 +278,7 @@ function UploadTile({ dragging, wide = false }: { dragging: boolean; wide?: bool
       type="button"
       aria-label={`${UPLOAD_LABEL}, ${UPLOAD_HINT}`}
       title="Upload files to Hippius"
-      onClick={() => void openMainFiles()}
+      onClick={() => void openMainUpload()}
       data-dragging={dragging || undefined}
       className={cn(
         TILE,

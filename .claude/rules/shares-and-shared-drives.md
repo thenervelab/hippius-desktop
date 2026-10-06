@@ -219,7 +219,7 @@ the write succeeds, in the wrong drive.
 
 ### Member init skips
 
-All inside `initialize_sync_inner`, gated on `identity.is_member`, each with an intent comment: the credits pre-gate (the OWNER pays; the server 402 stays the backstop — `add_shared_drive` has no eligibility gate for the same reason), `ensure_derived_mnemonic` (land mine 1), `spawn_folder_registration` (server rejects a member registering the owner's folder), `spawn_default_recovery_binding`, and both backfills — which STAMP their flags rather than merely skipping, so the per-cycle folder-entity sync (gated on the backfill flag) needs its OWN member gate; that gate is load-bearing, not belt-and-suspenders. Pinned by `tests/shared_drive_wiring.rs` (guard-site counts) and the mock-server suite `tests/shared_drive_server_mock.rs`.
+All inside `initialize_sync_inner`, gated on `identity.is_member`, each with an intent comment: `ensure_derived_mnemonic` (land mine 1), `spawn_folder_registration` (server rejects a member registering the owner's folder), `spawn_default_recovery_binding`, and both backfills — which STAMP their flags rather than merely skipping, so the per-cycle folder-entity sync (gated on the backfill flag) needs its OWN member gate; that gate is load-bearing, not belt-and-suspenders. Pinned by `tests/shared_drive_wiring.rs` (guard-site counts) and the mock-server suite `tests/shared_drive_server_mock.rs`.
 
 ### Revocation
 

@@ -98,7 +98,7 @@ const REPORT = file("report.pdf");
 function rowNames() {
   return within(screen.getByRole("tabpanel"))
     .queryAllByRole("listitem")
-    .map((li) => li.querySelector("p")?.getAttribute("title"));
+    .map((li) => li.querySelector("[data-testid=tray-row-name]")?.getAttribute("title"));
 }
 
 beforeEach(() => {
