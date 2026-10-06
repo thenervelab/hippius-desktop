@@ -144,6 +144,20 @@ describe("Wayland's area selection", () => {
     expect(screen.getByTestId("capture-area-selection")).toHaveStyle({ left: "10px", top: "70px" });
   });
 
+  // Same rule as the overlay: a click is a drag too short to be an area, so
+  // it leaves the area that was there rather than a zero-size frame.
+  it("keeps the area on a click outside it", async () => {
+    const surface = await setup({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 });
+    await screen.findByTestId("capture-area-selection");
+    drag(surface, [100, 100], [100, 100]);
+    expect(screen.getByTestId("capture-area-selection")).toHaveStyle({
+      left: "480px",
+      top: "330px",
+      width: "960px",
+      height: "540px",
+    });
+  });
+
   it("starts with nothing drawn when Rust has no area", async () => {
     await setup(null);
     expect(screen.queryByTestId("capture-area-selection")).toBeNull();

@@ -198,6 +198,18 @@ fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
     );
 }
 
+/// An overlay that is not the key window (any display but the bar's, or all
+/// of them while another app is active) would spend the first press on
+/// focusing itself, so a drag to draw a new area did nothing at all.
+#[test]
+fn the_overlay_answers_the_first_press() {
+    let src = read("src/capture/commands.rs");
+    assert!(
+        fn_body(&src, "fn build_overlay(").contains(".accept_first_mouse(true)"),
+        "a press on an overlay must reach the page even when the overlay is not focused"
+    );
+}
+
 /// The preview card floats over whatever the user captures next, and it is
 /// information, not a dialog: it must stay out of captures and must not take
 /// the keyboard from the app the user is typing in.

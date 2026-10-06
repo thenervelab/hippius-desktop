@@ -144,6 +144,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Drag anywhere outside the area to start a new one.** When choosing an
+  area for a screenshot or recording, the first drag outside the current area
+  now draws a fresh one on a Mac, instead of doing nothing until you clicked
+  again.
+
 - **Hippius can be opened during a screen recording.** Clicking its Dock
   icon or switching to it with Cmd+Tab now brings the app up while you
   record.

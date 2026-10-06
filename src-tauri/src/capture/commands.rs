@@ -1392,6 +1392,13 @@ fn build_overlay(app: &AppHandle, label: &str, display: &DisplayTarget, instant:
         // none; WDA_EXCLUDEFROMCAPTURE on Windows), so the screenshot is of
         // the screen, not of the dimmed selection UI over it.
         .content_protected(true)
+        // Only the overlay hosting the bar is focused, and Hippius is often
+        // not the active app when the shortcut opens it. Without this the
+        // press on an overlay that is not the key window only brings it
+        // forward and never reaches the page, so a drag outside the area
+        // drew nothing and the area stayed where it was. macOS only; the
+        // other platforms deliver that press already.
+        .accept_first_mouse(true)
         .visible(false)
         .build()
         .map_err(|e| AppError::Other(format!("Could not open the capture overlay: {e}")))

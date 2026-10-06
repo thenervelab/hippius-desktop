@@ -1064,3 +1064,70 @@ describe("the shortcut's one-step area screenshot", () => {
     expect(screen.queryByRole("toolbar", { name: "Capture" })).toBeNull();
   });
 });
+
+// The area already drawn is AREA (100,100 400x300). As in macOS's ⌘⇧5: a
+// press outside it starts a new one, inside moves it, on a handle resizes it.
+describe("drawing over an area that is already there", () => {
+  const at = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0 });
+  const handedOver = () =>
+    tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_set_pending").map(([, args]) => args);
+  const drag = (el: HTMLElement, from: [number, number], to: [number, number]) => {
+    fireEvent.pointerDown(el, at(...from));
+    fireEvent.pointerMove(el, at(...to));
+    fireEvent.pointerUp(el, at(...to));
+  };
+  const surface = async () => {
+    const { container } = setup();
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(screen.getByText("400 × 300")).toBeInTheDocument();
+    return container.firstElementChild as HTMLElement;
+  };
+
+  it("replaces the area with a new one dragged outside it", async () => {
+    const el = await surface();
+    drag(el, [600, 500], [800, 700]);
+    expect(handedOver()).toEqual([
+      { selection: { target: "area", displayId: 1, rect: { x: 600, y: 500, width: 200, height: 200 } } },
+    ]);
+    expect(screen.getByText("200 × 200")).toBeInTheDocument();
+    expect(screen.queryByText("400 × 300")).toBeNull();
+  });
+
+  it("shows only the new area while it is being dragged", async () => {
+    const el = await surface();
+    fireEvent.pointerDown(el, at(600, 500));
+    fireEvent.pointerMove(el, at(700, 560));
+    expect(screen.getByText("100 × 60")).toBeInTheDocument();
+    expect(screen.queryByText("400 × 300")).toBeNull();
+  });
+
+  it("moves the area when the drag starts inside it", async () => {
+    const el = await surface();
+    drag(el, [300, 250], [350, 280]);
+    expect(handedOver()).toEqual([
+      { selection: { target: "area", displayId: 1, rect: { x: 150, y: 130, width: 400, height: 300 } } },
+    ]);
+    expect(screen.getByText("400 × 300")).toBeInTheDocument();
+  });
+
+  it("resizes the area when the drag starts on a handle", async () => {
+    const el = await surface();
+    // The bottom-right handle, pressed a few points off its centre.
+    drag(el, [503, 404], [600, 450]);
+    expect(handedOver()).toEqual([
+      { selection: { target: "area", displayId: 1, rect: { x: 100, y: 100, width: 500, height: 350 } } },
+    ]);
+    expect(screen.getByText("500 × 350")).toBeInTheDocument();
+  });
+
+  // A click is a drag too short to be an area, and that already keeps what
+  // was drawn: a stray click must not throw away a carefully framed area.
+  it("keeps the area on a click outside it, with no zero-size frame", async () => {
+    const el = await surface();
+    fireEvent.pointerDown(el, at(800, 700));
+    fireEvent.pointerUp(el, at(800, 700));
+    expect(handedOver()).toEqual([]);
+    expect(screen.getByText("400 × 300")).toBeInTheDocument();
+    expect(screen.queryByText("0 × 0")).toBeNull();
+  });
+});
