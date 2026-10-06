@@ -63,6 +63,13 @@ const CAPTURE_CAMERA_ROUTE = "/capture-camera";
 const CAPTURE_AREA_ROUTE = "/capture-area";
 
 /**
+ * The screenshot editor (`app/capture-editor`), a window Rust opens from the
+ * capture card or a Drive file's menu. Same provider rules as the overlay:
+ * it talks to Rust over `invoke` and needs no auth stack.
+ */
+const CAPTURE_EDITOR_ROUTE = "/capture-editor";
+
+/**
  * Top-level shell that decides which provider tree to mount based on the
  * window we are running in.
  *
@@ -87,7 +94,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     pathname?.startsWith(CAPTURE_CONTROLS_ROUTE) ||
     pathname?.startsWith(CAPTURE_PREVIEW_ROUTE) ||
     pathname?.startsWith(CAPTURE_CAMERA_ROUTE) ||
-    pathname?.startsWith(CAPTURE_AREA_ROUTE)
+    pathname?.startsWith(CAPTURE_AREA_ROUTE) ||
+    pathname?.startsWith(CAPTURE_EDITOR_ROUTE)
   ) {
     // The popover skips the app providers but still mounts the theme
     // provider so it follows the System/Light/Dark preference (shared

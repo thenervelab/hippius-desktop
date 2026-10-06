@@ -19,12 +19,15 @@ import {
   UNSUPPORTED_SHORTCUT_KEY,
 } from "@/app/lib/capture/shortcutLabel";
 import ShortcutKeys from "@/app/components/capture/ShortcutKeys";
+import { listen } from "@tauri-apps/api/event";
 import {
   addCaptureDesktopShortcut,
+  CAPTURE_DRIVE_CHANGED_EVENT,
   configureCaptureShortcut,
-  getCaptureDestination,
+  getCaptureDriveStatus,
   getCaptureShortcut,
   setCaptureShortcut,
+  type CaptureDriveStatus,
   type CaptureShortcutSetting,
 } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
@@ -37,7 +40,8 @@ const KBD =
 
 /**
  * Screen capture settings: the system-wide shortcut that opens the capture
- * bar, and the drive captures are saved to. Rust validates and registers the
+ * bar, and where the captures drive is (asked on the first capture, moved
+ * here). Rust validates and registers the
  * shortcut (`capture::shortcut`); this only records the keys and shows what
  * Rust answered. Hidden where capture is not available. On a Mac whose build
  * or macOS cannot record, a third row says so in Rust's words. The shortcut
@@ -64,18 +68,25 @@ export default function CaptureSettings() {
   // The modifiers held so far while recording ("Shift+Command"), drawn live.
   const [held, setHeld] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [driveName, setDriveName] = useState<string | null>(null);
+  const [drive, setDrive] = useState<CaptureDriveStatus | null>(null);
   const mac = isMacPlatform();
 
   const reload = useCallback(() => {
     getCaptureShortcut().then(setSetting).catch(() => setSetting(null));
-    getCaptureDestination()
-      .then((d) => setDriveName(d?.displayName ?? null))
-      .catch(() => setDriveName(null));
+    getCaptureDriveStatus()
+      .then(setDrive)
+      .catch(() => setDrive(null));
   }, []);
 
   useEffect(() => {
     if (SCREEN_CAPTURE_ENABLED && supported) reload();
+  }, [supported, reload]);
+
+  // Set up or moved elsewhere (the dialog, a first capture): show where now.
+  useEffect(() => {
+    if (!SCREEN_CAPTURE_ENABLED || !supported) return;
+    const unlisten = listen(CAPTURE_DRIVE_CHANGED_EVENT, () => reload());
+    return () => void unlisten.then((fn) => fn()).catch(() => undefined);
   }, [supported, reload]);
 
   const save = useCallback(
@@ -228,7 +239,7 @@ export default function CaptureSettings() {
             <div className="min-w-0">
               <p className="text-sm font-medium text-grey-10 dark:text-white">Capture shortcut</p>
               <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-                Opens the capture bar from any app. Your desktop keeps this shortcut and may ask you to confirm it.
+                Takes a screenshot from any app and copies its link. Your desktop keeps this shortcut and may ask you to confirm it.
               </p>
               {(error ?? setting?.problem) && (
                 <p role="alert" className="mt-1 text-sm text-error-50">
@@ -280,7 +291,7 @@ export default function CaptureSettings() {
                     : isLinuxPlatform()
                       ? "Press the new shortcut, with Ctrl, Alt or Super. Esc cancels."
                       : "Press the new shortcut, with Ctrl, Alt or the Windows key. Esc cancels."
-                  : "Opens the capture bar from any app, to take a screenshot or start a recording."}
+                  : "From any app: drag over an area to screenshot it and copy its link. Press it during a recording to stop."}
               </p>
               {(error ?? problem) && (
                 <p role="alert" className="mt-1 text-sm text-error-50">
@@ -331,20 +342,18 @@ export default function CaptureSettings() {
         <div className="flex min-w-0 items-start gap-3">
           <Camera className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
           <div className="min-w-0">
-            <p className="text-sm font-medium text-grey-10 dark:text-white">Capture drive</p>
-            <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-              {driveName
-                ? `Screenshots and recordings are saved to ${driveName} › Captures, and a share link is copied.`
-                : "Choose the drive screenshots and recordings are saved to."}
+            <p className="text-sm font-medium text-grey-10 dark:text-white">Capture folder</p>
+            <p data-testid="capture-destination-line" className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+              {captureDriveLine(drive)}
             </p>
           </div>
         </div>
         <Button
           variant="defaultStable"
           size="sm"
-          onClick={() => setDialog({ kind: "destination", resume: null })}
+          onClick={() => setDialog({ kind: "captureDrive" })}
         >
-          {driveName ? "Change" : "Choose"}
+          {drive?.state === "ready" ? "Change" : drive?.state === "pending" ? "Try again" : "Set up"}
         </Button>
       </div>
 
@@ -363,4 +372,16 @@ export default function CaptureSettings() {
       )}
     </div>
   );
+}
+
+/** The Capture folder row's sentence for where the captures drive stands. */
+export function captureDriveLine(drive: CaptureDriveStatus | null): string {
+  if (!drive) return "Screenshots and recordings are kept in a Hippius Captures folder of their own.";
+  if (drive.state === "ready") {
+    return drive.location
+      ? `Screenshots and recordings are saved in ${drive.location.place}, backed up as a drive, and a share link is copied.`
+      : `Screenshots and recordings are saved in your ${drive.name} drive, and a share link is copied.`;
+  }
+  if (drive.state === "pending") return drive.message;
+  return `Your first capture asks where to keep them, with ${drive.suggested.place} suggested. You can set it up now.`;
 }

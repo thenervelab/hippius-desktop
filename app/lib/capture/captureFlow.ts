@@ -1,10 +1,7 @@
 import { atom } from "jotai";
-import type { CaptureKind, CaptureMode, CaptureSurfaces } from "@/app/lib/tauri/capture";
+import type { CaptureSurfaces } from "@/app/lib/tauri/capture";
 import type { SupportedModes } from "./modes";
-import {
-  isCaptureDestinationUnset,
-  isScreenRecordingPermissionMissing,
-} from "@/app/lib/tauri/capture";
+import { isScreenRecordingPermissionMissing } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 /**
@@ -12,20 +9,11 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
  * start a capture — the Drive header, the tray, the shortcut — lands the user
  * in the same dialog, mounted once by `CaptureHost`.
  *
- * The destination dialog carries the capture it interrupted (`resume`), so
- * choosing a drive carries straight on into it instead of making the user
- * start over. `kind` and `mode` are left out when the bar was opening on
- * whatever was used last; `resume` is null when the dialog was opened only to
- * change the drive.
+ * `captureDrive` is where captures go: set up on the first capture (Rust
+ * asks, with the capture kept safe meanwhile) and moved from Settings, the
+ * Captures page and the Capture menus.
  */
-export interface CaptureResume {
-  kind?: CaptureKind;
-  mode?: CaptureMode;
-}
-
-export type CaptureDialog =
-  | { kind: "destination"; resume: CaptureResume | null }
-  | { kind: "permission" };
+export type CaptureDialog = { kind: "captureDrive" } | { kind: "permission" };
 
 export const captureDialogAtom = atom<CaptureDialog | null>(null);
 
@@ -60,7 +48,6 @@ export const capturePermissionPaneAtom = atom<string | null>(null);
 
 /** What `capture_start`'s refusal asks the UI to do next. */
 export type CaptureRefusal =
-  | { next: "choose-destination" }
   | { next: "grant-permission" }
   | { next: "show-error"; message: string };
 
@@ -71,7 +58,6 @@ export type CaptureRefusal =
  * vanish without a dialog.
  */
 export function classifyCaptureRefusal(error: unknown): CaptureRefusal {
-  if (isCaptureDestinationUnset(error)) return { next: "choose-destination" };
   if (isScreenRecordingPermissionMissing(error)) return { next: "grant-permission" };
   return { next: "show-error", message: errorMessage(error) };
 }

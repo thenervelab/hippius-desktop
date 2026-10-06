@@ -5,6 +5,7 @@ import { getFileIcon } from "@/lib/utils/fileTypeUtils";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { useDriveRoute } from "@/components/page-sections/drive/driveRoute";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
 import { Video } from "lucide-react";
 import { Icons } from "@/components/ui";
@@ -332,6 +333,8 @@ const NameCell: FC<NameCellProps> = ({
 }) => {
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
+  // A folder opens on the page this list is on (Drive, or Captures).
+  const driveRoute = useDriveRoute();
   // Folder rows never carry their own sync state — the badge only renders
   // for files, so skip the snapshot subscription work for folders.
   const live = useFileLiveProgress(actualName, rawName, label);
@@ -387,7 +390,7 @@ const NameCell: FC<NameCellProps> = ({
   );
 
   const folderUrl = {
-    pathname: "/files",
+    pathname: driveRoute.basePath,
     query: {
       mainFolderCid: effectiveMainFolderHash ?? "",
       folderCid: arionHash ?? "",

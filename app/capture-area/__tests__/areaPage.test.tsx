@@ -28,11 +28,12 @@ if (typeof window.PointerEvent === "undefined") {
 const SHOWN = { x: 0, y: 60, width: 1920, height: 1080 };
 const called = (cmd: string) => tauri.core.invoke.mock.calls.filter(([c]) => c === cmd);
 
-async function setup() {
+async function setup(initialArea: { x: number; y: number; width: number; height: number } | null = null) {
   tauri.onInvoke("capture_area_context", () => ({
     picture: "data:image/jpeg;base64,AAAA",
     streamWidth: 3840,
     streamHeight: 2160,
+    initialArea,
   }));
   tauri.onInvoke("capture_area_choose", () => null);
   tauri.onInvoke("capture_cancel", () => null);
@@ -116,6 +117,51 @@ describe("Wayland's area selection", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Record" })));
     expect(await screen.findByText("Drag to select an area to record.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Record" })).toHaveAttribute("aria-disabled", "false");
+  });
+
+  // Rust's area (the last one recorded, else a centred half) is drawn
+  // when the picture comes in, so Record works at once; the user can still
+  // move it or draw another.
+  it("shows Rust's preselected area ready to record", async () => {
+    await setup({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 });
+    const selection = await screen.findByTestId("capture-area-selection");
+    expect(selection).toHaveStyle({ left: "480px", top: "330px", width: "960px", height: "540px" });
+    expect(screen.getByText(/Press Record or .* to start/)).toBeInTheDocument();
+    const record = screen.getByRole("button", { name: "Record" });
+    expect(record).toHaveAttribute("aria-disabled", "false");
+    fireEvent.click(record);
+    await waitFor(() => expect(called("capture_area_choose")).toHaveLength(1));
+    expect(called("capture_area_choose")[0][1]).toEqual({
+      drawn: { x: 480, y: 330, width: 960, height: 540 },
+      shown: SHOWN,
+    });
+  });
+
+  it("lets the user draw another area over the preselected one", async () => {
+    const surface = await setup({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 });
+    await screen.findByTestId("capture-area-selection");
+    drag(surface, [10, 70], [300, 300]);
+    expect(screen.getByTestId("capture-area-selection")).toHaveStyle({ left: "10px", top: "70px" });
+  });
+
+  // Same rule as the overlay: a click is a drag too short to be an area, so
+  // it leaves the area that was there rather than a zero-size frame.
+  it("keeps the area on a click outside it", async () => {
+    const surface = await setup({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 });
+    await screen.findByTestId("capture-area-selection");
+    drag(surface, [100, 100], [100, 100]);
+    expect(screen.getByTestId("capture-area-selection")).toHaveStyle({
+      left: "480px",
+      top: "330px",
+      width: "960px",
+      height: "540px",
+    });
+  });
+
+  it("starts with nothing drawn when Rust has no area", async () => {
+    await setup(null);
+    expect(screen.queryByTestId("capture-area-selection")).toBeNull();
+    expect(screen.getByText("Drag to choose the area to record")).toBeInTheDocument();
   });
 
   it("keeps the bar's own presses from starting an area underneath", async () => {

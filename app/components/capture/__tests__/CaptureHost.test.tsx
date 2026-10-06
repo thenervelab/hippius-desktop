@@ -27,7 +27,7 @@ vi.mock("@/app/lib/tray/trayWindowActions", async (importOriginal) => ({
   openAppWindow: h.openAppWindow,
 }));
 vi.mock("@/app/lib/featureFlags", () => ({ SCREEN_CAPTURE_ENABLED: true }));
-vi.mock("../CaptureDestinationDialog", () => ({ default: () => null }));
+vi.mock("../CaptureDriveDialog", () => ({ default: () => null }));
 vi.mock("../CapturePermissionDialog", () => ({ default: () => null }));
 
 import CaptureHost from "../CaptureHost";
@@ -102,6 +102,30 @@ describe("CaptureHost", () => {
     expect(h.push).toHaveBeenCalledWith("/files?openLabel=Work&openSubfolder=Captures&openFile=a.png");
   });
 
+  // A capture in the captures drive is shown where captures live.
+  it("shows a capture in the captures drive on the Captures page", async () => {
+    mountHost();
+    await act(() =>
+      tauri.emitEvent("capture_show_in_folder", {
+        label: "Hippius Captures",
+        remote: false,
+        subfolder: "",
+        fileName: "a.png",
+        capturesDrive: true,
+      }),
+    );
+    expect(h.push).toHaveBeenCalledWith("/captures?openLabel=Hippius+Captures&openFile=a.png");
+  });
+
+  // Rust kept a capture safe and brought this window forward: ask where
+  // captures go.
+  it("asks where captures go when Rust says a capture is waiting", async () => {
+    const store = mountHost();
+    await act(() => tauri.emitEvent("capture_drive_setup_needed", null));
+    await waitFor(() => expect(store.get(captureDialogAtom)).toEqual({ kind: "captureDrive" }));
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_start", expect.anything());
+  });
+
   it("refreshes the file lists when a capture lands, and says when one failed", async () => {
     mountHost();
     await act(() => tauri.emitEvent("capture_delivered", { fileName: "a.png" }));
@@ -123,8 +147,12 @@ describe("CaptureHost", () => {
     expect(h.push).toHaveBeenCalledWith("/settings?section=billing");
   });
 
-  it("starts a capture from the shortcut and the tray, on the last mode or the asked one", async () => {
+  // The shortcut is the one-step area screenshot: Rust's payload says so and
+  // is passed straight on; the tray opens the bar.
+  it("starts the shortcut's one-step screenshot, and the tray's capture on the last mode or the asked one", async () => {
     mountHost();
+    await act(() => tauri.emitEvent("capture_shortcut_pressed", { instant: true }));
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: null, mode: null, instant: true });
     await act(() => tauri.emitEvent("capture_shortcut_pressed", null));
     expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: null, mode: null });
     await act(() => tauri.emitEvent("hippius:tray-capture", { kind: "screenshot", mode: "area" }));
@@ -138,10 +166,10 @@ describe("CaptureHost", () => {
     expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: "recording", mode: null });
   });
 
-  it("opens the capture drive picker, in front, for the tray's Change capture drive", async () => {
+  it("opens the captures folder dialog, in front, for the tray's Captures folder", async () => {
     const store = mountHost();
     await act(() => tauri.emitEvent("hippius:tray-capture-drive", {}));
-    await waitFor(() => expect(store.get(captureDialogAtom)).toEqual({ kind: "destination", resume: null }));
+    await waitFor(() => expect(store.get(captureDialogAtom)).toEqual({ kind: "captureDrive" }));
     expect(h.openAppWindow).toHaveBeenCalled();
     expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_start", expect.anything());
   });
@@ -154,16 +182,6 @@ describe("useStartCapture's answer to a refusal", () => {
     const { result } = renderHook(() => useStartCapture(), { wrapper });
     return { store, start: result.current };
   }
-
-  it("brings the app forward and asks for a drive, resuming the same capture after", async () => {
-    tauri.onInvoke("capture_start", () => {
-      throw { kind: "NotReady", subkind: "CAPTURE_DESTINATION_UNSET", message: "Choose a drive" };
-    });
-    const { store, start } = hook();
-    await act(() => start("recording", "window"));
-    expect(h.openAppWindow).toHaveBeenCalled();
-    expect(store.get(captureDialogAtom)).toEqual({ kind: "destination", resume: { kind: "recording", mode: "window" } });
-  });
 
   it("brings the app forward and explains the macOS permission", async () => {
     tauri.onInvoke("capture_start", () => {

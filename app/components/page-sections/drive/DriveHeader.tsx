@@ -125,6 +125,8 @@ interface DriveHeaderProps {
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
   breadcrumbSegments?: BreadcrumbSegment[];
   onBreadcrumbLocalClick?: () => void;
+  /** No "Drive" root crumb: the page is pinned to one drive (Captures). */
+  hideBreadcrumbRoot?: boolean;
   /**
    * The drive currently open, by local label. Drives the header's shared
    * badge and its way in to managing access, so standing inside a drive says
@@ -211,6 +213,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   isReadOnlyDrive = false,
   browsedSharedDrive = null,
   onBreadcrumbLocalClick,
+  hideBreadcrumbRoot = false,
   isNested = false,
   nestedFolderName = null,
   nestedSubfolderPath = null,
@@ -511,6 +514,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               <SyncFolderBreadcrumb
                 segments={breadcrumbSegments}
                 onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
+                hideRoot={hideBreadcrumbRoot}
                 className="mt-0 mb-0"
               />
               <DriveSharingHeaderMark

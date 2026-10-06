@@ -1,5 +1,6 @@
 //! Shared utility modules.
 
+pub mod app_id;
 pub mod app_location;
 pub mod bookmarks;
 pub mod display_email;

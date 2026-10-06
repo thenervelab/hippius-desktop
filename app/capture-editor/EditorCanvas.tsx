@@ -1,0 +1,275 @@
+"use client";
+
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type Annotation, type Doc, type Point, bounds as boxOf, findAnnotation, handlesFor, isRedaction, rectHandles } from "@/app/lib/capture/editor/model";
+import { type Bounds, type Gesture, type Style, drag, press, release } from "@/app/lib/capture/editor/gesture";
+import { applyRedactions, drawAnnotation, fontFor } from "@/app/lib/capture/editor/render";
+import { type View, fitView, toImage, toScreen } from "@/app/lib/capture/editor/view";
+import type { ToolId } from "@/app/lib/capture/editor/model";
+
+/** Space around the picture inside the canvas area, in points. */
+const PADDING = 24;
+/** How near the pointer must be to grab something, in screen points. */
+const GRAB_PT = 8;
+const HANDLE_PT = 5;
+
+export interface TextEdit {
+  id: string | null;
+  at: Point;
+  text: string;
+  color: string;
+  size: number;
+}
+
+interface Props {
+  image: CanvasImageSource;
+  imageW: number;
+  imageH: number;
+  doc: Doc;
+  selected: string | null;
+  tool: ToolId;
+  style: Style;
+  ratio: number | null;
+  block: number;
+  textEdit: TextEdit | null;
+  /** The document to show mid-drag; null when the drag is over. */
+  onPreview: (doc: Doc | null) => void;
+  /** A finished change: one undo step. */
+  onCommit: (doc: Doc, selected: string | null) => void;
+  onSelect: (id: string | null) => void;
+  onStartText: (edit: { id: string | null; at: Point }) => void;
+  onTextChange: (text: string) => void;
+  onTextDone: (cancelled: boolean) => void;
+}
+
+/**
+ * The picture and what is drawn on it, on one canvas sized to its box at the
+ * screen's pixel density. Pointer events become picture points for the pure
+ * gesture functions; blur and pixelate are shown exactly as they will be
+ * exported, by running the same pixel code over a copy of the picture.
+ */
+export default function EditorCanvas(props: Props) {
+  const { image, imageW, imageH, doc, selected, tool, style, ratio, block, textEdit } = props;
+  const box = useRef<HTMLDivElement | null>(null);
+  const canvas = useRef<HTMLCanvasElement | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const gesture = useRef<Gesture | null>(null);
+  const live = useRef<Doc>(doc);
+  live.current = doc;
+  const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // The whole picture while cropping (to see what is left out), else the crop.
+  const region = useMemo(
+    () => (tool === "crop" || !doc.crop ? { x: 0, y: 0, w: imageW, h: imageH } : doc.crop),
+    [tool, doc.crop, imageW, imageH],
+  );
+  const view: View = useMemo(() => fitView(region, size.w, size.h, PADDING, dpr), [region, size.w, size.h, dpr]);
+
+  // The picture with its redactions, rebuilt only when a redaction changes.
+  const redactionKey = JSON.stringify(doc.annotations.filter(isRedaction));
+  const base = useMemo(() => {
+    if (typeof document === "undefined") return null;
+    const c = document.createElement("canvas");
+    c.width = imageW;
+    c.height = imageH;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(image, 0, 0);
+    const redactions = JSON.parse(redactionKey) as Doc["annotations"];
+    if (redactions.length > 0) {
+      const px = ctx.getImageData(0, 0, imageW, imageH);
+      applyRedactions(px, { annotations: redactions, crop: null }, { x: 0, y: 0 }, block);
+      ctx.putImageData(px, 0, 0);
+    }
+    return c;
+  }, [image, imageW, imageH, redactionKey, block]);
+
+  useEffect(() => {
+    const c = canvas.current;
+    const ctx = c?.getContext("2d");
+    if (!c || !ctx || size.w === 0) return;
+    c.width = Math.round(size.w * dpr);
+    c.height = Math.round(size.h * dpr);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+    const s = view.scale * dpr;
+    ctx.setTransform(s, 0, 0, s, (view.offsetX - view.region.x * view.scale) * dpr, (view.offsetY - view.region.y * view.scale) * dpr);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(view.region.x, view.region.y, view.region.w, view.region.h);
+    ctx.clip();
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(base ?? image, 0, 0);
+    for (const a of doc.annotations) {
+      // The text being typed is drawn by the field over it, not twice.
+      if (textEdit?.id && a.id === textEdit.id) continue;
+      drawAnnotation(ctx, a);
+    }
+    ctx.restore();
+    const px = 1 / view.scale;
+    if (tool === "crop" && doc.crop) {
+      const r = doc.crop;
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.beginPath();
+      ctx.rect(0, 0, imageW, imageH);
+      ctx.rect(r.x, r.y, r.w, r.h);
+      ctx.fill("evenodd");
+      ctx.strokeStyle = "#FFFFFF";
+      ctx.lineWidth = 1.5 * px;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      // Thirds, as every crop tool shows.
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = px;
+      for (let i = 1; i < 3; i++) {
+        ctx.beginPath();
+        ctx.moveTo(r.x + (r.w * i) / 3, r.y);
+        ctx.lineTo(r.x + (r.w * i) / 3, r.y + r.h);
+        ctx.moveTo(r.x, r.y + (r.h * i) / 3);
+        ctx.lineTo(r.x + r.w, r.y + (r.h * i) / 3);
+        ctx.stroke();
+      }
+      ctx.restore();
+      drawHandles(ctx, rectHandles(r).map((h) => h.at), px);
+    }
+    const current = tool === "crop" ? null : findAnnotation(doc, selected);
+    if (current && !textEdit) {
+      const handles = handlesFor(current);
+      if (handles.length > 0) drawHandles(ctx, handles.map((h) => h.at), px);
+      else outline(ctx, current, px);
+    }
+  }, [base, image, doc, selected, tool, view, size, dpr, imageW, imageH, textEdit]);
+
+  const bounds: Bounds = { imageW, imageH, tolerance: GRAB_PT / view.scale, ratio };
+  const at = (e: React.PointerEvent) => {
+    const rect = canvas.current?.getBoundingClientRect();
+    return toImage(view, { x: e.clientX - (rect?.left ?? 0), y: e.clientY - (rect?.top ?? 0) });
+  };
+
+  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0 || textEdit) return;
+    const p = at(e);
+    const pressed = press(tool, live.current, selected, p, style, bounds);
+    if (pressed.text) {
+      // Keep the press from moving focus: the text field it opens takes it,
+      // and a focus change after would blur (and end) the field at once.
+      e.preventDefault();
+      props.onStartText(pressed.text);
+      return;
+    }
+    if (pressed.commit) {
+      props.onCommit(pressed.doc, pressed.selected);
+      return;
+    }
+    props.onSelect(pressed.selected);
+    if (!pressed.gesture) return;
+    gesture.current = pressed.gesture;
+    props.onPreview(pressed.doc);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const g = gesture.current;
+    if (!g) return;
+    props.onPreview(drag(g, live.current, at(e), bounds));
+  };
+
+  const finish = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const g = gesture.current;
+    if (!g) return;
+    gesture.current = null;
+    const done = release(g, drag(g, live.current, at(e), bounds));
+    props.onPreview(null);
+    // The drawn, moved or resized annotation stays selected, so a colour
+    // picked next applies to it.
+    if (done) props.onCommit(done, "id" in g ? g.id : tool === "crop" ? null : selected);
+  };
+
+  // Focus the field once it is on screen, after the press that opened it.
+  const textField = useRef<HTMLTextAreaElement | null>(null);
+  const editing = textEdit !== null;
+  useLayoutEffect(() => {
+    if (editing) textField.current?.focus();
+  }, [editing]);
+
+  const editAt = textEdit ? toScreen(view, textEdit.at) : null;
+  const cursor = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
+
+  return (
+    <div ref={box} className="relative h-full w-full overflow-hidden" data-testid="editor-canvas-box">
+      <canvas
+        ref={canvas}
+        aria-label="Screenshot being edited"
+        role="img"
+        style={{ width: size.w, height: size.h, cursor, touchAction: "none" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={finish}
+        onPointerCancel={finish}
+      />
+      {textEdit && editAt && (
+        <textarea
+          ref={textField}
+          aria-label="Text"
+          value={textEdit.text}
+          onChange={(e) => props.onTextChange(e.target.value)}
+          onBlur={() => props.onTextDone(false)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") {
+              e.preventDefault();
+              props.onTextDone(true);
+            } else if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              props.onTextDone(false);
+            }
+          }}
+          rows={Math.max(1, textEdit.text.split("\n").length)}
+          className="absolute resize-none overflow-hidden whitespace-pre border border-dashed border-[#3167DD] bg-transparent p-0 leading-[1.25] outline-none"
+          style={{
+            left: editAt.x,
+            top: editAt.y,
+            color: textEdit.color,
+            font: fontFor(textEdit.size * view.scale),
+            minWidth: 40,
+            width: `${Math.max(4, ...textEdit.text.split("\n").map((l) => l.length + 2))}ch`,
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function drawHandles(ctx: CanvasRenderingContext2D, points: Point[], px: number) {
+  ctx.save();
+  for (const p of points) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, HANDLE_PT * px, 0, Math.PI * 2);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fill();
+    ctx.lineWidth = 1.5 * px;
+    ctx.strokeStyle = "#3167DD";
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function outline(ctx: CanvasRenderingContext2D, a: Annotation, px: number) {
+  const r = boxOf(a);
+  ctx.save();
+  ctx.setLineDash([4 * px, 3 * px]);
+  ctx.lineWidth = 1.5 * px;
+  ctx.strokeStyle = "#3167DD";
+  ctx.strokeRect(r.x - 4 * px, r.y - 4 * px, r.w + 8 * px, r.h + 8 * px);
+  ctx.restore();
+}

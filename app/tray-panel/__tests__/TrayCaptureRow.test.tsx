@@ -55,6 +55,7 @@ beforeEach(() => {
   tauri.reset();
   flags.capture = true;
   tauri.onInvoke("hide_tray_panel", () => null);
+  tauri.onInvoke("capture_annotate_latest", () => null);
 });
 
 /** Each `invoke`/`emit` call's place in the overall call order. */
@@ -120,7 +121,7 @@ describe("the popover's capture row", () => {
     fireEvent.keyDown(await screen.findByRole("button", { name: "Record options" }), { key: "Enter" });
     const menu = await screen.findByRole("menu", { name: "Record options" });
     const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
-    expect(items).toEqual(["Record an area", "Record a window", "Record entire screen", "Change capture drive…"]);
+    expect(items).toEqual(["Record an area", "Record a window", "Record entire screen", "Captures folder…"]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Record a window" }));
     await waitFor(() =>
       expect(tauri.event.emit).toHaveBeenCalledWith("hippius:tray-capture", { kind: "recording", mode: "window" }),
@@ -139,16 +140,16 @@ describe("the popover's capture row", () => {
     expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
       "Capture an area",
       "Capture entire screen",
-      "Change capture drive…",
+      "Captures folder…",
     ]);
   });
 
-  it("sends Change capture drive to the main window's picker", async () => {
+  it("sends Captures folder to the main window's dialog", async () => {
     tauri.onInvoke("capture_support", () => support());
     render(<TrayCaptureRow />);
     fireEvent.keyDown(await screen.findByRole("button", { name: "Screenshot options" }), { key: "Enter" });
     await screen.findByRole("menu", { name: "Screenshot options" });
-    fireEvent.click(screen.getByRole("menuitem", { name: "Change capture drive…" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Captures folder…" }));
     await waitFor(() => expect(tauri.event.emit).toHaveBeenCalledWith("hippius:tray-capture-drive", {}));
     expect(tauri.event.emit).not.toHaveBeenCalledWith("hippius:tray-capture", expect.anything());
   });
@@ -176,5 +177,105 @@ describe("the popover's capture row", () => {
     expect(screen.queryByRole("button", { name: "Record options" })).not.toBeInTheDocument();
     fireEvent.click(record);
     expect(tauri.event.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("the popover's Annotate button", () => {
+  /** The button once Rust's latest screenshot made it a menu trigger. */
+  const annotateMenuButton = () =>
+    waitFor(() => {
+      const button = screen.getByRole("button", { name: "Annotate" });
+      expect(button).toHaveAttribute("aria-haspopup", "menu");
+      return button;
+    });
+  const SHOT = { fileName: "Screenshot 2026-10-05 at 10.00.00.png" };
+
+  it("sits next to Screenshot and Record, and goes straight to the file dialog with no screenshot", async () => {
+    tauri.onInvoke("capture_support", () => support());
+    tauri.onInvoke("capture_annotate_pick", () => true);
+    render(<TrayCaptureRow />);
+    const group = await screen.findByRole("group", { name: "Screen capture" });
+    const annotate = await screen.findByRole("button", { name: "Annotate" });
+    expect(group).toContainElement(annotate);
+    expect(annotate).not.toHaveAttribute("aria-haspopup");
+    fireEvent.click(annotate);
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_annotate_pick"));
+    // The popover goes first, so the dialog and the editor are never under it.
+    expect(order(tauri.core.invoke, "hide_tray_panel")).toBeLessThan(order(tauri.core.invoke, "capture_annotate_pick"));
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_annotate_open_latest");
+  });
+
+  it("offers the latest screenshot or another picture when there is one", async () => {
+    tauri.onInvoke("capture_support", () => support());
+    tauri.onInvoke("capture_annotate_latest", () => SHOT);
+    tauri.onInvoke("capture_annotate_open_latest", () => true);
+    render(<TrayCaptureRow />);
+    const annotate = await annotateMenuButton();
+    fireEvent.keyDown(annotate, { key: "Enter" });
+    await screen.findByRole("menu", { name: "Annotate" });
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((el) => el.textContent)).toEqual([`Latest screenshot${SHOT.fileName}`, "Choose image…"]);
+    fireEvent.click(items[0]);
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_annotate_open_latest"));
+    expect(order(tauri.core.invoke, "hide_tray_panel")).toBeLessThan(
+      order(tauri.core.invoke, "capture_annotate_open_latest"),
+    );
+    // The page names no file: Rust decides which screenshot is the latest.
+    const call = tauri.core.invoke.mock.calls.find(([name]) => name === "capture_annotate_open_latest");
+    expect(call).toEqual(["capture_annotate_open_latest"]);
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_annotate_pick");
+  });
+
+  it("opens the file dialog from Choose image…", async () => {
+    tauri.onInvoke("capture_support", () => support());
+    tauri.onInvoke("capture_annotate_latest", () => SHOT);
+    tauri.onInvoke("capture_annotate_pick", () => false);
+    render(<TrayCaptureRow />);
+    const annotate = await annotateMenuButton();
+    fireEvent.keyDown(annotate, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Choose image…" }));
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_annotate_pick"));
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_annotate_open_latest");
+  });
+
+  it("falls back to the file dialog when the latest screenshot has gone meanwhile", async () => {
+    tauri.onInvoke("capture_support", () => support());
+    tauri.onInvoke("capture_annotate_latest", () => SHOT);
+    tauri.onInvoke("capture_annotate_open_latest", () => false);
+    tauri.onInvoke("capture_annotate_pick", () => true);
+    render(<TrayCaptureRow />);
+    const annotate = await annotateMenuButton();
+    fireEvent.keyDown(annotate, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Latest screenshot/ }));
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_annotate_pick"));
+  });
+
+  it("asks Rust again for the latest screenshot each time the popover gets focus", async () => {
+    tauri.onInvoke("capture_support", () => support());
+    let latest: typeof SHOT | null = null;
+    tauri.onInvoke("capture_annotate_latest", () => latest);
+    render(<TrayCaptureRow />);
+    const annotate = await screen.findByRole("button", { name: "Annotate" });
+    expect(annotate).not.toHaveAttribute("aria-haspopup");
+    latest = SHOT;
+    fireEvent.focus(window);
+    await annotateMenuButton();
+  });
+
+  it("is not there where Screenshot is not", async () => {
+    tauri.onInvoke("capture_support", () => support({ supported: false, recording: false }));
+    const { container } = render(<TrayCaptureRow />);
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_annotate_latest");
+  });
+
+  it("stays quiet in the popover when Rust could not open the picture (Rust notifies)", async () => {
+    tauri.onInvoke("capture_support", () => support());
+    tauri.onInvoke("capture_annotate_pick", () => Promise.reject({ kind: "Validation", message: "nope" }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    render(<TrayCaptureRow />);
+    fireEvent.click(await screen.findByRole("button", { name: "Annotate" }));
+    await waitFor(() => expect(error).toHaveBeenCalled());
+    error.mockRestore();
   });
 });

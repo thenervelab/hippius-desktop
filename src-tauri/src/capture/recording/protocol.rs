@@ -10,12 +10,15 @@
 //!
 //! Commands (app to recorder), each with an `id` the reply echoes:
 //! `{"cmd":"start","id":1,"output":"…","displayId":…,"windowId":…,"crop":…,
-//! "systemAudio":…,"cameraWindowId":…}`,
-//! `pause`, `resume`, `stop`, `cancel`, and (the Rust child only, a Wayland
-//! area) `crop`. Closing stdin means "finish the file and keep it".
+//! "systemAudio":…,"cameraWindowId":…,"ownWindowsFilmed":[…]}`,
+//! `pause`, `resume`, `stop`, `cancel`, the mid-recording microphone
+//! controls `mute`, `unmute` and
+//! `{"cmd":"switch_microphone","id":n,"microphoneDeviceId":…}` (absent = the
+//! system default), and (the Rust child only, a Wayland area) `crop`.
+//! Closing stdin means "finish the file and keep it".
 //!
 //! Events (recorder to app): `{"ok":true,"event":"ready"}` once, then
-//! `{"ok":true,"event":"started"|"paused"|"resumed"|"stopped"|"cancelled","id":n}`
+//! `{"ok":true,"event":"started"|"paused"|"resumed"|"stopped"|"cancelled"|"muted"|"unmuted"|"microphone_switched","id":n}`
 //! or `{"ok":false,"error":"…","id":n}`; a `start` with `pickArea` is
 //! answered `area_still` (the stream's first picture) and the `crop` that
 //! follows is answered `started`. And the unprompted
@@ -28,7 +31,8 @@ use super::RecordOptions;
 use crate::capture::screenshot::Selection;
 use crate::error::{AppError, Result};
 
-/// A command without arguments: `pause`, `resume`, `stop`, `cancel`.
+/// A command without arguments: `pause`, `resume`, `stop`, `cancel`, `mute`,
+/// `unmute`.
 #[derive(Debug, Serialize)]
 pub struct SimpleCommand {
     pub cmd: &'static str,
@@ -75,6 +79,12 @@ pub struct StartCommand {
     /// A window recording also films this window (the camera bubble).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_window_id: Option<u32>,
+    /// A screen or area recording leaves the app's own windows out, all but
+    /// these (the main window, the bubble). Only the Swift helper reads it
+    /// (ScreenCaptureKit's `excludingApplications`); left off the wire when
+    /// empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub own_windows_filmed: Vec<u32>,
     /// Wayland: the ScreenCast portal's restore token from an earlier
     /// recording, so the desktop can bring the same monitor back without its
     /// dialog. Only the Rust child reads it; left off the wire when absent.
@@ -96,6 +106,29 @@ pub struct StartCommand {
     /// wire when false so the Swift helper never sees it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub synthetic: bool,
+}
+
+/// `switch_microphone`: record another microphone from now on, in the same
+/// file. `microphoneDeviceId` is the key `start` uses; absent = the system
+/// default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchMicrophoneCommand {
+    pub cmd: &'static str,
+    pub id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub microphone_device_id: Option<String>,
+}
+
+impl SwitchMicrophoneCommand {
+    #[must_use]
+    pub fn new(id: u64, device: Option<String>) -> Self {
+        Self {
+            cmd: "switch_microphone",
+            id,
+            microphone_device_id: device.filter(|d| !d.is_empty()),
+        }
+    }
 }
 
 /// An area inside a display, in the display's own units (points on macOS,
@@ -195,19 +228,24 @@ impl StartCommand {
             show_clicks: options.show_clicks,
             system_audio: options.system_audio,
             camera_window_id: None,
+            own_windows_filmed: Vec::new(),
             restore_token: options.restore_token.clone(),
             pick_area: false,
             camera: options.camera.clone(),
             synthetic: false,
         };
         match selection {
-            Selection::Screen { display_id } => cmd.display_id = Some(display_id),
+            Selection::Screen { display_id } => {
+                cmd.display_id = Some(display_id);
+                cmd.own_windows_filmed.clone_from(&options.own_windows_filmed);
+            }
             Selection::Window { window_id } => {
                 cmd.window_id = Some(window_id);
                 cmd.camera_window_id = options.camera_window.filter(|id| *id != window_id);
             }
             Selection::Area { display_id, rect } => {
                 cmd.display_id = Some(display_id);
+                cmd.own_windows_filmed.clone_from(&options.own_windows_filmed);
                 cmd.crop = Some(CropRect {
                     x: rect.x,
                     y: rect.y,
@@ -234,6 +272,12 @@ pub enum HelperEvent {
     Resumed,
     Stopped,
     Cancelled,
+    /// The microphone is written as silence from now on (`mute`).
+    Muted,
+    /// The microphone is heard again (`unmute`).
+    Unmuted,
+    /// `switch_microphone` took effect.
+    MicrophoneSwitched,
     Error(String),
     /// Unprompted: the recording ended on its own; the file is finished
     /// (`saved`) with what it had.
@@ -326,6 +370,9 @@ pub fn parse_event(line: &str) -> std::result::Result<Incoming, String> {
             Some("resumed") => HelperEvent::Resumed,
             Some("stopped") => HelperEvent::Stopped,
             Some("cancelled") => HelperEvent::Cancelled,
+            Some("muted") => HelperEvent::Muted,
+            Some("unmuted") => HelperEvent::Unmuted,
+            Some("microphone_switched") => HelperEvent::MicrophoneSwitched,
             other => return Err(format!("unknown helper event: {other:?}")),
         }
     };
@@ -339,14 +386,38 @@ pub fn parse_event(line: &str) -> std::result::Result<Incoming, String> {
 // ── The recorder's side ─────────────────────────────────────────────────────
 
 /// A command as the recorder reads it.
+// One command per stdin line, read once and handled: `Start`'s size costs
+// nothing, and boxing it would only add an allocation to every match.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Start(StartCommand),
-    Pause { id: Option<u64> },
-    Resume { id: Option<u64> },
-    Stop { id: Option<u64> },
-    Cancel { id: Option<u64> },
-    Crop { id: Option<u64>, area: StreamCrop },
+    Pause {
+        id: Option<u64>,
+    },
+    Resume {
+        id: Option<u64>,
+    },
+    Stop {
+        id: Option<u64>,
+    },
+    Cancel {
+        id: Option<u64>,
+    },
+    Crop {
+        id: Option<u64>,
+        area: StreamCrop,
+    },
+    /// `mute` (`muted: true`) or `unmute`.
+    Mute {
+        id: Option<u64>,
+        muted: bool,
+    },
+    /// `switch_microphone`; `device` absent = the system default.
+    SwitchMicrophone {
+        id: Option<u64>,
+        device: Option<String>,
+    },
 }
 
 /// Why a command line could not be read, with the id to answer it on when
@@ -389,6 +460,16 @@ pub fn parse_command(line: &str) -> std::result::Result<Command, BadCommand> {
         "resume" => Ok(Command::Resume { id }),
         "stop" => Ok(Command::Stop { id }),
         "cancel" => Ok(Command::Cancel { id }),
+        "mute" => Ok(Command::Mute { id, muted: true }),
+        "unmute" => Ok(Command::Mute { id, muted: false }),
+        "switch_microphone" => Ok(Command::SwitchMicrophone {
+            id,
+            device: value
+                .get("microphoneDeviceId")
+                .and_then(serde_json::Value::as_str)
+                .filter(|d| !d.is_empty())
+                .map(str::to_string),
+        }),
         "crop" => serde_json::from_value::<StreamCrop>(value.clone())
             .ok()
             .filter(|a| a.width > 0 && a.height > 0)
@@ -514,6 +595,7 @@ mod tests {
                 show_clicks: true,
                 system_audio: true,
                 camera_window: Some(99),
+                own_windows_filmed: vec![12, 99],
                 restore_token: None,
                 pick_area: false,
                 camera: None,
@@ -530,8 +612,10 @@ mod tests {
         assert_eq!(v["showClicks"], true);
         assert_eq!(v["microphoneDeviceId"], "BuiltInMicrophoneDevice");
         assert_eq!(v["systemAudio"], true);
-        // The screen and area filters film every window, the bubble included.
+        // The screen and area filters film every other app's window; of
+        // Hippius's own, only these (the main window, the bubble).
         assert!(v.get("cameraWindowId").is_none());
+        assert_eq!(v["ownWindowsFilmed"], serde_json::json!([12, 99]));
         // The child's test pattern and the portal token never reach the
         // Swift helper.
         assert!(v.get("synthetic").is_none(), "{v}");
@@ -578,6 +662,28 @@ mod tests {
         assert!(v.get("cameraWindowId").is_none());
         let v = serde_json::to_value(StartCommand::from_selection(1, window, Path::new("/tmp/o.mp4"), options(None)).unwrap()).unwrap();
         assert!(v.get("cameraWindowId").is_none());
+    }
+
+    /// Only a screen or area recording carries the app windows it films: a
+    /// window recording films one window, and with nothing to name the key
+    /// stays off the wire (the Swift helper then leaves all of Hippius out).
+    #[test]
+    fn only_screen_and_area_recordings_name_the_app_windows_they_film() {
+        let options = RecordOptions {
+            own_windows_filmed: vec![5],
+            ..RecordOptions::default()
+        };
+        let line =
+            |selection| serde_json::to_value(StartCommand::from_selection(1, selection, Path::new("/tmp/o.mp4"), options.clone()).unwrap()).unwrap();
+        assert_eq!(line(Selection::Screen { display_id: 1 })["ownWindowsFilmed"], serde_json::json!([5]));
+        assert!(line(Selection::Window { window_id: 42 }).get("ownWindowsFilmed").is_none());
+        let none = serde_json::to_value(
+            StartCommand::from_selection(1, Selection::Screen { display_id: 1 }, Path::new("/tmp/o.mp4"), RecordOptions::default()).unwrap(),
+        )
+        .unwrap();
+        assert!(none.get("ownWindowsFilmed").is_none(), "{none}");
+        let cmd = StartCommand::from_selection(1, Selection::Screen { display_id: 1 }, Path::new("/tmp/o.mp4"), options.clone()).unwrap();
+        assert_eq!(parse_command(&serde_json::to_string(&cmd).unwrap()), Ok(Command::Start(cmd)));
     }
 
     /// The camera and system-audio fields survive the trip to the child too.
@@ -657,6 +763,55 @@ mod tests {
         // Not an error, though it carries the device's reason.
         let lost = parse_event(&device_lost_line("microphone", "the device went away")).unwrap();
         assert_eq!((lost.id, lost.event), (None, HelperEvent::DeviceLost { device: "microphone".into() }));
+    }
+
+    /// The mid-recording microphone commands, as the Swift helper reads
+    /// them (`case "mute", "unmute"`, `case "switch_microphone"` and the
+    /// `microphoneDeviceId` key `start` uses too), and its replies.
+    #[test]
+    fn the_microphone_controls_speak_the_helpers_words() {
+        let mute = serde_json::to_string(&SimpleCommand { cmd: "mute", id: 4 }).unwrap();
+        assert_eq!(mute, r#"{"cmd":"mute","id":4}"#);
+        assert_eq!(parse_command(&mute), Ok(Command::Mute { id: Some(4), muted: true }));
+        assert_eq!(
+            parse_command(r#"{"cmd":"unmute","id":5}"#),
+            Ok(Command::Mute { id: Some(5), muted: false })
+        );
+
+        let switch = serde_json::to_string(&SwitchMicrophoneCommand::new(6, Some("usb-1".into()))).unwrap();
+        assert_eq!(switch, r#"{"cmd":"switch_microphone","id":6,"microphoneDeviceId":"usb-1"}"#);
+        assert_eq!(
+            parse_command(&switch),
+            Ok(Command::SwitchMicrophone {
+                id: Some(6),
+                device: Some("usb-1".into())
+            })
+        );
+        // The default microphone travels as no id at all, never "".
+        let default = serde_json::to_string(&SwitchMicrophoneCommand::new(7, Some(String::new()))).unwrap();
+        assert_eq!(default, r#"{"cmd":"switch_microphone","id":7}"#);
+        assert_eq!(parse_command(&default), Ok(Command::SwitchMicrophone { id: Some(7), device: None }));
+
+        for (line, event) in [
+            (r#"{"ok":true,"event":"muted","id":4}"#, HelperEvent::Muted),
+            (r#"{"ok":true,"event":"unmuted","id":5}"#, HelperEvent::Unmuted),
+            (r#"{"id":6,"event":"microphone_switched","ok":true}"#, HelperEvent::MicrophoneSwitched),
+        ] {
+            assert_eq!(parse_event(line).unwrap().event, event, "{line}");
+        }
+        let refused = parse_event(r#"{"error":"That microphone is not connected.","id":6,"ok":false}"#).unwrap();
+        assert_eq!(refused.event, HelperEvent::Error("That microphone is not connected.".into()));
+
+        let swift = include_str!("../../../../macos/HippiusCapture/Sources/HippiusCapture.swift");
+        for literal in [
+            r#"case "mute", "unmute":"#,
+            r#"cmd == "mute" ? "muted" : "unmuted""#,
+            r#"case "switch_microphone":"#,
+            r#"obj["microphoneDeviceId"] as? String"#,
+            r#""event": "microphone_switched""#,
+        ] {
+            assert!(swift.contains(literal), "HippiusCapture.swift no longer says `{literal}`");
+        }
     }
 
     /// The child answers bad input in the Swift helper's words.
