@@ -124,6 +124,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The storage card reads cleanly when you are over your plan.** The amount
+  over no longer overlaps the storage figure; it sits on its own line when
+  the card is narrow.
+
 - **Uploads that keep failing no longer fill your disk.** Hippius now clears
   the temporary copy of a file whose upload has been failing for a day, even
   if it has retried many times since.
