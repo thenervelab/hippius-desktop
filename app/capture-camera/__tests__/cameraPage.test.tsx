@@ -424,4 +424,75 @@ describe("a camera switched mid-recording", () => {
     // No size strip appears: it would be filmed.
     expect(screen.queryByRole("toolbar", { name: "Camera size" })).toBeNull();
   });
+
+  // `ideal` is a preference WebKit may trade for the size it also asks for:
+  // the bubble kept the camera from before, so the switch did nothing.
+  it("asks for the chosen camera exactly when another one opened", async () => {
+    getUserMedia.mockImplementation(async (constraints: MediaStreamConstraints) => {
+      const video = constraints.video as MediaTrackConstraints;
+      const exact = (video.deviceId as ConstrainDOMStringParameters | undefined)?.exact;
+      const opened = typeof exact === "string" ? exact : "web-facetime";
+      const track = { muted: false, readyState: "live", stop: vi.fn(), getSettings: () => ({ deviceId: opened }), addEventListener: vi.fn() };
+      return { getTracks: () => [track], getVideoTracks: () => [track] };
+    });
+    setup({ ...RECORDING, deviceId: "9160", deviceName: "Ahmad's iPhone Camera" });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    expect(getUserMedia.mock.calls[1][0].video.deviceId).toEqual({ exact: "web-phone" });
+    const first = (await getUserMedia.mock.results[0].value).getVideoTracks()[0];
+    expect(first.stop).toHaveBeenCalled();
+  });
+
+  it("keeps the camera that opened when the chosen one is refused", async () => {
+    getUserMedia.mockImplementation(async (constraints: MediaStreamConstraints) => {
+      const video = constraints.video as MediaTrackConstraints;
+      if ((video.deviceId as ConstrainDOMStringParameters | undefined)?.exact) throw new Error("OverconstrainedError");
+      const track = { muted: false, readyState: "live", stop: vi.fn(), getSettings: () => ({ deviceId: "web-facetime" }), addEventListener: vi.fn() };
+      return { getTracks: () => [track], getVideoTracks: () => [track] };
+    });
+    const { container } = setup({ ...RECORDING, deviceId: "9160", deviceName: "Ahmad's iPhone Camera" });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    const first = await getUserMedia.mock.results[0].value;
+    await waitFor(() => expect(container.querySelector("video")?.srcObject).toBe(first));
+    expect(first.getVideoTracks()[0].stop).not.toHaveBeenCalled();
+  });
+});
+
+// WebKit drew its own pause button over the hovered picture: it did nothing
+// when clicked and was filmed. The bubble offers no control of its own while
+// recording; the pill has Pause.
+describe("the camera picture under the pointer", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    const stream = { getTracks: () => [], getVideoTracks: () => [] };
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: vi.fn(async () => []),
+        getUserMedia: vi.fn(async () => stream),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+  });
+
+  it("never takes the pointer, so WebKit draws no media controls on it, and the frame still drags", async () => {
+    const { container } = setup(RECORDING);
+    const video = await waitFor(() => {
+      const v = container.querySelector("video");
+      expect(v).not.toBeNull();
+      return v!;
+    });
+    expect(video.className.split(/\s+/)).toContain("pointer-events-none");
+    expect(video).not.toHaveAttribute("controls");
+    expect(video).not.toHaveAttribute("data-tauri-drag-region");
+    expect(screen.getByTestId("camera-frame")).toHaveAttribute("data-tauri-drag-region");
+  });
+
+  it("shows no control on a hovered bubble while recording", async () => {
+    setup(RECORDING);
+    await screen.findByTestId("camera-frame");
+    await act(() => tauri.emitEvent("capture_camera_hover", true));
+    fireEvent.mouseEnter(screen.getByTestId("camera-window"));
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
 });

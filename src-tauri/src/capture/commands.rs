@@ -2738,6 +2738,11 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     }
     // Every recording (a restart too) starts heard, on the device it opened.
     set_live_microphone(app, super::live_controls::LiveMicrophone::started(recorded_microphone, microphone_device));
+    // The pill's camera menu (sizes, another camera) is offered only once the
+    // recording runs (`live_controls::camera_controls`), and the last camera
+    // state it heard was sent at Record, when it was still `Capturing`: without
+    // this the pill never offered the bubble's sizes or another camera.
+    announce_camera(app).await;
     // The main window stays hidden until the recording ends: it would be in
     // the video, and it would take the keyboard from the app being recorded.
     if let Err(e) = open_controls(app, true) {
@@ -5224,11 +5229,28 @@ async fn camera_window_id(_app: &AppHandle) -> Option<u32> {
 /// The camera page's first read: the shape to draw and the device to open.
 #[tauri::command]
 pub async fn capture_camera_context(app: AppHandle) -> Result<CameraState> {
+    current_camera_state(&app).await
+}
+
+/// The camera state now, for the window as it is (nothing is moved).
+async fn current_camera_state(app: &AppHandle) -> Result<CameraState> {
     let state = app.state::<AppState>();
     let options = bar::load_options(state.pool()?).await?.for_system(camera_only_supported());
     let shape = *lock(&state.capture.camera_shape);
     let hidden = state.capture.camera_hidden.load(Ordering::SeqCst);
-    Ok(camera_state_for(&app, shape, hidden, &options).await)
+    Ok(camera_state_for(app, shape, hidden, &options).await)
+}
+
+/// Tell the camera page and the pill the camera state again, for a change
+/// that moves no window: the phase reaching `Recording`, which turns on the
+/// pill's camera menu (`live_controls::camera_controls`).
+async fn announce_camera(app: &AppHandle) {
+    match current_camera_state(app).await {
+        Ok(camera_state) => {
+            let _ = app.emit(CAMERA_STATE_EVENT, camera_state);
+        }
+        Err(e) => tracing::debug!(error = %e, "camera state not announced"),
+    }
 }
 
 /// The camera page found these cameras (its own `deviceId`s). The bar lists
@@ -6142,5 +6164,32 @@ mod tests {
         assert!(state.recording_camera.try_lock().is_ok());
         // Hidden, the bubble keeps its camera menu but offers no sizes.
         assert_eq!(state.pill_camera_controls(live, true, support_for(Platform::MacOs)), (true, false));
+    }
+
+    /// The camera state sent at Record (`Capturing`) offers the pill no
+    /// camera menu, and the one for `Recording` does, so the state must be
+    /// sent again once the recorder is adopted (`announce_camera` in
+    /// `begin_recording`, pinned in `capture_wiring.rs`). It was not, and
+    /// the pill never offered the bubble's sizes or another camera.
+    #[test]
+    fn the_pill_camera_menu_turns_on_only_once_the_recording_runs() {
+        use crate::capture::live_controls::support_for;
+        use crate::capture::rollout::Platform;
+        let state = starting();
+        *lock(&state.recording_camera) = Some(CameraShape::Bubble);
+        let mac = support_for(Platform::MacOs);
+        let at_record = CapturePhase::Capturing {
+            kind: CaptureKind::Recording,
+        };
+        assert_eq!(state.pill_camera_controls(at_record, false, mac), (false, false));
+        let calls = Arc::new(Calls::default());
+        let Ok(running) = state.adopt_recorder(FakeRecorder::boxed(&calls), quiet) else {
+            panic!("the recorder is adopted while starting");
+        };
+        assert_eq!(
+            state.pill_camera_controls(running, false, mac),
+            (true, true),
+            "the state the pill hears after adopt differs from the one sent at Record"
+        );
     }
 }

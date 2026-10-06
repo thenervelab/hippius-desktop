@@ -1558,6 +1558,22 @@ fn a_camera_switched_mid_recording_goes_through_the_camera_window() {
     assert!(!body.contains("with_recorder("), "the recorder never opens the bubble's camera");
 }
 
+/// The pill's camera menu (the bubble's sizes, another camera) is offered
+/// only while the recording runs, so the camera state is sent again once the
+/// recorder is adopted. The last one before that was sent at Record, while
+/// still `Capturing`, and offered nothing: the pill had no camera menu at all.
+#[test]
+fn the_pill_hears_the_camera_state_once_the_recording_runs() {
+    let src = read("src/capture/commands.rs");
+    let begin = fn_body(&src, "async fn begin_recording(");
+    let adopted = begin.find("adopt_recorder(").expect("the recorder is adopted");
+    let announced = begin.find("announce_camera(app)").expect("the camera state is sent once recording");
+    assert!(adopted < announced, "sent after the phase is Recording");
+    let announce = fn_body(&src, "async fn announce_camera(");
+    assert!(announce.contains("CAMERA_STATE_EVENT"));
+    assert!(fn_body(&src, "async fn current_camera_state(").contains("camera_state_for("));
+}
+
 /// Linux's recording tray menu (Stop, Pause, Show recording controls) is
 /// answered by ONE app-wide listener, added at start-up before any
 /// recording's menu exists, and every click goes through the phase-aware
