@@ -152,6 +152,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **Save is always visible in the screenshot editor.** On a wide window the toolbar covered Save and Copy image; they now sit in their own top bar, clear of the Mac's window buttons, and Save offers Save copy or Replace original.
 - **Upload in the menu bar window opens the upload dialog.** It brings Hippius forward with the Upload File dialog open on the page you were on, instead of only switching to Drive.
+
+- **Folders sync on the Free plan.** A new folder no longer stays on "Syncing" forever when your account has no credits, and a folder that cannot start syncing now says why instead.
+
 - **The camera options in the recording controls now appear as soon as a recording starts.** You can change the camera bubble's size or switch to another camera (your iPhone too) mid-recording, and pointing at the bubble no longer shows a pause button that did nothing and ended up in the video.
 
 - **The storage card reads cleanly when you are over your plan.** The amount

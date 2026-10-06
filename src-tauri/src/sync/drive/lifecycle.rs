@@ -96,11 +96,10 @@ pub async fn setup_and_init_sync(
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
-    // Enforce credit eligibility at the IPC boundary before any upload starts
-    // (audit M-4 — parity with `add_local_sync_folder`; this path previously
-    // relied only on `initialize_sync_inner`'s documented fail-open pre-init
-    // balance check). Price by the recursive byte sum of the label's configured
-    // folder when one is set, else fall back to the static FolderSync threshold.
+    // Enforce the plan's storage allowance at the IPC boundary before any
+    // upload starts (audit M-4 — parity with `add_local_sync_folder`). Price
+    // by the recursive byte sum of the label's configured folder when one is
+    // set, else fall back to the static FolderSync threshold.
     let bytes = match crate::sync::config::get_sync_path_for_label(pool, &account_id, &label).await {
         Ok(p) if !p.is_empty() => crate::sync::files::sum_regular_file_bytes(std::path::Path::new(&p)).await,
         _ => 0,
@@ -136,7 +135,7 @@ pub async fn setup_and_init_sync(
     }
 
     // 3. Initialize sync
-    initialize_sync_inner(app, account_id, label, mnemonic, true, false, None).await
+    initialize_sync_inner(app, account_id, label, mnemonic, true, None).await
 }
 
 /// Add a local folder to sync in one step.
@@ -156,14 +155,13 @@ pub async fn add_local_sync_folder(
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
-    // Enforce credit eligibility at the IPC boundary, priced by the
-    // recursive byte sum of the folder's CURRENT contents — those bytes
-    // are about to be uploaded by the sync engine on first init.
-    // A user setting up sync on a 100 GB folder with $0.10 of credits
-    // would silently 402 every file otherwise. The byte-sum walk
-    // ignores permission-denied subdirs so the gate under-charges
-    // rather than rejecting a legitimate "I have access to most of
-    // this" setup. See `crate::billing::eligibility::thresholds`.
+    // Enforce the plan's storage allowance at the IPC boundary, priced by
+    // the recursive byte sum of the folder's CURRENT contents — those bytes
+    // are about to be uploaded by the sync engine on first init. A user
+    // setting up sync on a 100 GB folder on a 10 GB plan would silently 402
+    // every file otherwise. The byte-sum walk ignores permission-denied
+    // subdirs so the gate under-charges rather than rejecting a legitimate
+    // "I have access to most of this" setup.
     let bytes = crate::sync::files::sum_regular_file_bytes(std::path::Path::new(&path)).await;
     crate::billing::eligibility::require_eligible(
         &state,
@@ -219,9 +217,20 @@ pub async fn add_local_sync_folder(
     // preparing override we just set: init can fail before any terminal sync
     // event fires, which would otherwise pin the widget on "Preparing sync…" for
     // the full watchdog timeout after a failed add.
-    if let Err(e) = initialize_sync_inner(app, account_id, label.clone(), mnemonic, true, false, None).await {
+    //
+    // The `sync_paths` row is already persisted, so the drive stays listed
+    // after a failed init. Flag it with an `Error` status: without one it sits
+    // in its bootstrap-Active state and reads as "Syncing" forever, while the
+    // only trace of the failure is the dialog's transient toast.
+    // `path` is exactly what `set_sync_path_internal` stored (it canonicalizes
+    // only for its overlap check), so the event matches the `sync_paths` row.
+    if let Err(e) = initialize_sync_inner(app.clone(), account_id, label.clone(), mnemonic, true, None).await {
+        warn!(label = %label, error = %e, "Initializing the added sync folder failed");
         if preparing.clear(&label) {
             sync.emit_snapshot(true);
+        }
+        if let Some(status) = init_failure_status(&e, "Failed to start syncing") {
+            crate::sync::status::emit_drive_status(&app, &label, &path, status);
         }
         return Err(e);
     }
@@ -241,7 +250,7 @@ pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: S
         use tauri::Manager;
         app.state::<crate::app_state::AppState>().require_session_account(&account_id)?
     };
-    initialize_sync_inner(app, account_id, label, existing_mnemonic, true, false, None).await
+    initialize_sync_inner(app, account_id, label, existing_mnemonic, true, None).await
 }
 
 /// Stop the existing drive with the given label, discard its pending activity
@@ -1172,9 +1181,10 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// Core init logic. When `start_loop` is false the caller is responsible for
 /// starting the sync loop after all drives have been registered (batch restore).
 ///
-/// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
-/// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
-/// checks once before its per-drive loop to avoid N redundant requests).
+/// Starting a drive is not gated on the credit balance. Drive storage is paid
+/// for by a plan, and a Free plan carries a $0 balance by design: the plan's
+/// allowance is checked where bytes are committed (`require_eligible` in the
+/// add/upload IPCs, then hcfs-server's per-request 402).
 ///
 /// `lifecycle_snapshot` is the drive-lifecycle epoch this init commits
 /// against. Callers that pre-clear `is_paused` under the label's commit
@@ -1192,7 +1202,6 @@ pub(crate) async fn initialize_sync_inner(
     label: String,
     existing_mnemonic: Option<String>,
     start_loop: bool,
-    skip_credits_check: bool,
     lifecycle_snapshot: Option<u64>,
 ) -> Result<InitSyncResult> {
     use tauri::Manager;
@@ -1244,17 +1253,6 @@ pub(crate) async fn initialize_sync_inner(
     let identity = lookup_drive_identity(pool, &account_id, &label)
         .await?
         .ok_or(crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncSetup))?;
-
-    // Validate user has credits/balance before allowing sync.
-    // This is skipped when the caller has already performed the check (e.g.
-    // `auto_init_sync` checks once before iterating all drives).
-    //
-    // Member drives skip it outright: storage on a shared drive bills the
-    // OWNER, so the member's own balance is irrelevant here, and the server's
-    // per-request 402 stays the authoritative backstop either way.
-    if !skip_credits_check && !identity.is_member {
-        require_credits_before_init(&app_state, &pool_owned).await?;
-    }
 
     teardown_previous_drive(sync, &label).await;
 
@@ -1718,19 +1716,22 @@ fn teardown_account(explicit: Option<String>, current: Option<String>) -> Option
     explicit.or(current)
 }
 
-/// Decide whether a fetched credit balance should BLOCK sync.
+/// The status a drive should show after [`initialize_sync_inner`] failed.
 ///
-/// A balance that parses to `<= 0.0` blocks; a positive balance allows. An
-/// UNPARSEABLE balance is INCONCLUSIVE and must NOT block (returns `false`):
-/// the previous `parse().ok()).unwrap_or(0.0)` treated any value f64 couldn't
-/// parse — a currency suffix like "10.00 USD", a localized "1.000,00", or a
-/// future API format change — as zero, locking paying users out of sync. Fail
-/// open on "unknown"; block only on a definitively non-positive balance.
-fn balance_blocks_sync(raw_balance: Option<&str>) -> bool {
-    match raw_balance.and_then(|s| s.trim().parse::<f64>().ok()) {
-        Some(balance) => balance <= 0.0,
-        None => false,
+/// `NotReady` failures return `None`. Most of them (mnemonic not yet
+/// recoverable, signing key missing, config missing) have their own retry
+/// path (the FE auth-ready listener, the reauth banner, a user resume);
+/// `SupersededByPause` means a pause or removal won, and that already set the
+/// drive's status. Either way an `Error` would wrongly render the drive as
+/// stopped. Every other failure returns an `Error` carrying `context` and the
+/// cause, so the drive visibly stops instead of reading as "Syncing".
+pub(crate) fn init_failure_status(err: &crate::error::AppError, context: &str) -> Option<crate::sync::drive_status::DriveStatus> {
+    if matches!(err, crate::error::AppError::NotReady(_)) {
+        return None;
     }
+    Some(crate::sync::drive_status::DriveStatus::Error {
+        message: format!("{context}: {err}"),
+    })
 }
 
 /// Remove a drive for the session's current account.
@@ -1742,48 +1743,6 @@ fn balance_blocks_sync(raw_balance: Option<&str>) -> bool {
 #[tauri::command]
 pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     remove_drive_for_account(app, label, None).await
-}
-
-/// The credits pre-gate of [`initialize_sync_inner`]: refuse to start a
-/// drive's sync when the account's balance is known to be exhausted.
-///
-/// Fail-open on anything but a known-exhausted balance (see the error arm),
-/// and nothing to check without a session account.
-///
-/// # Errors
-///
-/// [`crate::error::AppError::Validation`] when the balance blocks sync.
-async fn require_credits_before_init(app_state: &crate::app_state::AppState, pool: &sqlx::SqlitePool) -> Result<()> {
-    let Ok(account) = app_state.current_session_account() else {
-        return Ok(());
-    };
-    let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool.clone());
-    match client
-        .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
-        .await
-    {
-        Ok(resp) => {
-            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-            if balance_blocks_sync(resp.balance.as_deref()) {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
-            }
-        }
-        // Fail-open on a transport/HTTP/parse error: this pre-init gate is a
-        // best-effort proactive check. The gated upload IPCs each call the
-        // fail-closed `require_eligible`, and the per-file 402 path is the
-        // authoritative backstop, so a server blip here must not block sync.
-        // Log it so the skipped check is observable instead of silently dropped.
-        Err(e) => {
-            tracing::warn!(
-                account = %account,
-                error = %e,
-                "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)"
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Tear down a drive: cancel any in-flight sync, drop it from the in-memory
@@ -2241,24 +2200,24 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
     // or a stale `Error`) while the DB already says `is_paused=false`.
     // The FE would then read a stale entry from `get_all_drive_statuses`
     // on its next mount/bootstrap.
-    match initialize_sync_inner(
-        app.clone(),
-        account_id.clone(),
-        label.clone(),
-        mnemonic,
-        true,
-        false,
-        Some(resume_snapshot),
-    )
-    .await
-    {
+    match initialize_sync_inner(app.clone(), account_id.clone(), label.clone(), mnemonic, true, Some(resume_snapshot)).await {
         Ok(_) => {
             info!("Resumed drive '{}'", label);
             Ok(())
         }
         Err(e) => {
             warn!(label = %label, error = %e, "Resume failed");
-            if matches!(e, crate::error::AppError::NotReady(_)) {
+            if let Some(status) = init_failure_status(&e, "Failed to resume") {
+                // Non-recoverable: emit `Error` so the FE surfaces a
+                // retry affordance and the drive visibly flags the
+                // failure.
+                let drive_path = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
+                    .await
+                    .ok()
+                    .and_then(|paths| paths.into_iter().find(|p| p.label == label).map(|p| p.path))
+                    .unwrap_or_default();
+                crate::sync::status::emit_drive_status(&app, &label, &drive_path, status);
+            } else {
                 // Recoverable precondition (mnemonic unavailable,
                 // signing key missing, etc.) — don't emit `Error`,
                 // but we MUST prune any lingering cache entry for
@@ -2277,23 +2236,6 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
                 if let Ok(mut cache) = app_state.drive_status_cache.lock() {
                     cache.remove(&label);
                 }
-            } else {
-                // Non-recoverable: emit `Error` so the FE surfaces a
-                // retry affordance and the drive visibly flags the
-                // failure.
-                let drive_path = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-                    .await
-                    .ok()
-                    .and_then(|paths| paths.into_iter().find(|p| p.label == label).map(|p| p.path))
-                    .unwrap_or_default();
-                crate::sync::status::emit_drive_status(
-                    &app,
-                    &label,
-                    &drive_path,
-                    crate::sync::drive_status::DriveStatus::Error {
-                        message: format!("Failed to resume: {e}"),
-                    },
-                );
             }
             Err(e)
         }
@@ -2405,7 +2347,7 @@ impl Drop for AutoInitGuard {
 #[expect(
     clippy::too_many_lines,
     reason = "Linear auto-init pipeline — concurrency guard, migration check, mnemonic persistence, path fetch, \
-              scope expansion, HCFS config check, paused emit, mnemonic resolution, credits check, init loop. \
+              scope expansion, HCFS config check, paused emit, mnemonic resolution, init loop. \
               Splitting fragments the early-return error paths and obscures the ordering constraint between \
               the paused-emit loop and the init loop (FE listener relies on that order)."
 )]
@@ -2628,34 +2570,7 @@ async fn auto_init_sync_inner(
         },
     };
 
-    // 8. Check credits once before the drive loop — balance doesn't change
-    // between drives, so a single HTTP round-trip is sufficient.  If the
-    // check fails we return early; individual `initialize_sync_inner` calls
-    // below will skip the check via `skip_credits_check = true`.
-    if let Ok(account) = state.current_session_account() {
-        let pool_owned = state.pool()?.clone();
-        let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
-        match client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
-            .await
-        {
-            Ok(resp) => {
-                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-                if balance_blocks_sync(resp.balance.as_deref()) {
-                    return Err(crate::error::AppError::Validation(
-                        "Insufficient credits. Please add credits to your account before syncing.".into(),
-                    ));
-                }
-            }
-            // Fail-open on transport/HTTP/parse error (per-drive init + per-file
-            // 402 are the authoritative backstops), but log the skipped check.
-            Err(e) => {
-                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed in auto_init; proceeding");
-            }
-        }
-    }
-
-    // 9. Initialize each path with the pre-resolved mnemonic. Passing
+    // 8. Initialize each path with the pre-resolved mnemonic. Passing
     //    `Some(..)` guarantees every drive takes the `existing_mnemonic`
     //    branch of `initialize_sync_inner` and never touches the auth
     //    lock fallback — fan-out is fully deterministic even if the
@@ -2674,7 +2589,7 @@ async fn auto_init_sync_inner(
         let label = sp.label.clone();
         let mnemonic = resolved_mnemonic.as_str().to_owned();
         async move {
-            let result = initialize_sync_inner(app, account_id, label.clone(), Some(mnemonic), true, true, None).await;
+            let result = initialize_sync_inner(app, account_id, label.clone(), Some(mnemonic), true, None).await;
             (label, result)
         }
     });
@@ -2693,23 +2608,11 @@ async fn auto_init_sync_inner(
             }
             Err(e) => {
                 warn!(label = %label, error = %e, "Failed to init sync");
-                // Only emit `Error` for non-recoverable failures.
-                // `NotReady(*)` errors (mnemonic unavailable, signing
-                // key missing, config missing, etc.) have their own
-                // retry paths via the FE auth-ready listener or
-                // user-initiated resume — leave the drive in its
-                // bootstrap-Active state so the FE doesn't render it
-                // as "paused" via the widened `kind !== "active"`
-                // check while the retry is in flight.
-                if !matches!(e, crate::error::AppError::NotReady(_)) {
-                    crate::sync::status::emit_drive_status(
-                        &app,
-                        &sp.label,
-                        &sp.path,
-                        crate::sync::drive_status::DriveStatus::Error {
-                            message: format!("Failed to initialize: {e}"),
-                        },
-                    );
+                // `NotReady` failures leave the drive in its
+                // bootstrap-Active state for their retry path; see
+                // `init_failure_status`.
+                if let Some(status) = init_failure_status(&e, "Failed to initialize") {
+                    crate::sync::status::emit_drive_status(&app, &sp.label, &sp.path, status);
                 }
             }
         }
@@ -3264,36 +3167,26 @@ mod tests {
         );
     }
 
-    // balance_blocks_sync must block only on a definitively non-positive value.
+    // A failed init with no automatic retry path must flag the drive, with the
+    // cause in the message: the "stuck on Syncing" report was a drive whose
+    // init failed and that was never given a status.
     #[test]
-    fn balance_blocks_sync_only_on_nonpositive() {
-        assert!(balance_blocks_sync(Some("0")));
-        assert!(balance_blocks_sync(Some("0.0")));
-        assert!(balance_blocks_sync(Some("-5")));
-        assert!(!balance_blocks_sync(Some("5")));
-        assert!(!balance_blocks_sync(Some("0.5")));
+    fn init_failure_status_flags_unrecoverable_failures_with_the_cause() {
+        let err = crate::error::AppError::Validation("folder is unreadable".into());
+        assert_eq!(
+            init_failure_status(&err, "Failed to start syncing"),
+            Some(crate::sync::drive_status::DriveStatus::Error {
+                message: "Failed to start syncing: folder is unreadable".into(),
+            })
+        );
     }
 
-    // The regression: an unparseable balance (currency suffix, localized decimal,
-    // format change, empty, or absent) is INCONCLUSIVE and must NOT block — the
-    // old unwrap_or(0.0) treated these as zero and locked paying users out.
+    // NotReady has its own retry path; an Error status would render the drive
+    // as stopped while that retry is in flight.
     #[test]
-    fn balance_blocks_sync_treats_unparseable_as_inconclusive() {
-        assert!(!balance_blocks_sync(Some("1000.00 USD")));
-        assert!(!balance_blocks_sync(Some("1.000,00")));
-        assert!(!balance_blocks_sync(Some("")));
-        assert!(!balance_blocks_sync(Some("   ")));
-        assert!(!balance_blocks_sync(None));
-    }
-
-    // f64::from_str accepts "NaN"/"inf"/"-inf". Pin the resulting decisions:
-    // NaN <= 0.0 is false (IEEE-754, every NaN comparison is false) so NaN fails
-    // OPEN (no block — inconclusive); -inf is non-positive so it blocks; +inf allows.
-    #[test]
-    fn balance_blocks_sync_handles_float_specials() {
-        assert!(!balance_blocks_sync(Some("NaN")));
-        assert!(!balance_blocks_sync(Some("inf")));
-        assert!(balance_blocks_sync(Some("-inf")));
+    fn init_failure_status_leaves_not_ready_to_its_retry_path() {
+        let err = crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncSetup);
+        assert_eq!(init_failure_status(&err, "Failed to start syncing"), None);
     }
 
     #[test]
