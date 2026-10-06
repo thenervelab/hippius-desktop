@@ -292,6 +292,23 @@ pub fn display_under(displays: &[DisplayTarget], cursor: Option<(f64, f64)>) -> 
         .map(|d| d.id)
 }
 
+/// Where the bar moves while the user is choosing, if anywhere: to the
+/// display the pointer is on, as macOS's own capture bar follows the active
+/// display.
+///
+/// `under_pointer` is this check's display and `seen_before` the previous
+/// check's, so the bar only moves once the pointer has stayed on another
+/// display for two checks in a row: crossing a display on the way somewhere
+/// else does not drag the bar along. `held` is the bar's overlay saying the
+/// bar must stay (a countdown, a capture in flight, a drag, the share
+/// picker), since moving it then would drop what the user is doing. A pointer
+/// on no display (between displays of different heights) moves nothing.
+#[must_use]
+pub fn bar_follow(bar: Option<u32>, under_pointer: Option<u32>, seen_before: Option<u32>, held: bool) -> Option<u32> {
+    let target = under_pointer?;
+    (!held && Some(target) != bar && seen_before == Some(target)).then_some(target)
+}
+
 /// How the displays changed while a capture was open.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DisplayChange {
@@ -404,6 +421,41 @@ mod tests {
         assert_eq!(bar_display(&displays, Some((99_999.0, 0.0))), Some(1));
         assert_eq!(bar_display(&[display(7, 0, 0, 10, 10, false)], None), Some(7));
         assert_eq!(bar_display(&[], Some((0.0, 0.0))), None);
+    }
+
+    #[test]
+    fn the_bar_follows_the_pointer_to_another_display_once_it_stays_there() {
+        // First sight of the other display: not yet, the pointer may be passing through.
+        assert_eq!(bar_follow(Some(1), Some(2), Some(1), false), None);
+        // Still there on the next check: the bar moves.
+        assert_eq!(bar_follow(Some(1), Some(2), Some(2), false), Some(2));
+        // Back on the bar's display, or never left it: nothing moves.
+        assert_eq!(bar_follow(Some(1), Some(1), Some(2), false), None);
+        assert_eq!(bar_follow(Some(1), Some(1), Some(1), false), None);
+    }
+
+    #[test]
+    fn a_held_bar_or_an_unknown_pointer_stays_put() {
+        // A countdown, a drag or the share picker holds the bar where it is.
+        assert_eq!(bar_follow(Some(1), Some(2), Some(2), true), None);
+        // The pointer on no display, or not read at all.
+        assert_eq!(bar_follow(Some(1), None, Some(2), false), None);
+        assert_eq!(bar_follow(Some(1), None, None, false), None);
+        // A bar with no display yet goes where the pointer settled.
+        assert_eq!(bar_follow(None, Some(3), Some(3), false), Some(3));
+    }
+
+    #[test]
+    fn the_follow_reads_the_pointer_in_the_displays_own_space() {
+        // A display left of and above the primary (negative origin, as macOS
+        // and Windows both report it): the pointer there is found on it, and
+        // one point right of its edge is on the primary.
+        let displays = [display(1, 0, 0, 1440, 900, true), display(2, -1920, -180, 1920, 1080, false)];
+        let on = |p: (f64, f64)| display_under(&displays, Some(p));
+        assert_eq!(bar_follow(Some(1), on((-1.0, 0.0)), on((-500.0, 400.0)), false), Some(2));
+        assert_eq!(bar_follow(Some(2), on((0.0, 0.0)), on((1439.0, 899.0)), false), Some(1));
+        // Below the shorter primary, beside the taller display: on neither.
+        assert_eq!(on((100.0, 950.0)), None);
     }
 
     #[test]

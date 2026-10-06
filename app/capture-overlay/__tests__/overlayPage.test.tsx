@@ -78,6 +78,7 @@ function setup(over: Partial<CaptureOverlayContext> = {}) {
   tauri.onInvoke("capture_cameras", () => []);
   tauri.onInvoke("capture_microphones", () => []);
   tauri.onInvoke("capture_set_pending", () => null);
+  tauri.onInvoke("capture_hold_bar", () => null);
   tauri.onInvoke("capture_cancel", () => null);
   tauri.onInvoke("capture_confirm", (args) => confirm(args));
   return render(<CaptureOverlayPage />);
@@ -172,6 +173,28 @@ describe("the capture overlay's keyboard", () => {
     expect(items[items.length - 1]).toHaveFocus();
     fireEvent.keyDown(window, { key: "ArrowDown" });
     expect(items[0]).toHaveFocus();
+  });
+
+  // Rust moves the bar to the display the pointer settles on, unless the
+  // bar's overlay holds it: a countdown would be lost on the way.
+  it("holds the bar on its display while counting down, and lets it follow again after", async () => {
+    setup({ countdownSecs: 3 });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    const holds = () =>
+      tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_hold_bar").map(([, args]) => args);
+    await waitFor(() => expect(holds()).toEqual([{ held: false }]));
+    fireEvent.keyDown(window, { key: "Enter" });
+    await waitFor(() => expect(holds().at(-1)).toEqual({ held: true }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(holds().at(-1)).toEqual({ held: false }));
+  });
+
+  it("does not hold a bar it does not draw", async () => {
+    setup({ hostsBar: false });
+    await waitFor(() => expect(called("capture_overlay_context")).toBe(true));
+    // Let the context land and the page's effects run.
+    await act(async () => {});
+    expect(called("capture_hold_bar")).toBe(false);
   });
 
   it("stops only the countdown on Escape", async () => {

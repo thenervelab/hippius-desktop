@@ -717,6 +717,7 @@ fn main() {
             crate::capture::commands::capture_set_shortcut,
             crate::capture::commands::capture_configure_shortcut,
             crate::capture::commands::capture_skip_countdown,
+            crate::capture::commands::capture_hold_bar,
             crate::capture::commands::capture_area_context,
             crate::capture::commands::capture_area_choose,
             crate::capture::commands::capture_controls_context,

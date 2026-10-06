@@ -1822,3 +1822,41 @@ fn the_double_lock_scan_finds_a_double_lock() {
     assert_eq!(locked_fields("let camera = *lock(&self.recording_camera)"), ["recording_camera"]);
     assert!(locked_fields("guard.try_lock(&x); unlock(&y)").is_empty());
 }
+
+/// The bar follows the pointer to another display while the user chooses,
+/// as macOS's own capture bar does. Each part fails without an error: a
+/// follow never spawned leaves the bar on the display the capture started
+/// on; one that outlives the choosing keeps reading the pointer for nothing;
+/// a move that does not rebroadcast changes Rust's mind but no overlay's;
+/// and a bar that is not held moves away mid-countdown.
+#[test]
+fn the_bar_follows_the_pointer_to_another_display() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    assert!(
+        start.contains("spawn_display_watch(app.clone());\n        spawn_bar_follow(app.clone());"),
+        "the follow runs beside the display watch, never for the Wayland panel"
+    );
+    let follow = fn_body(&src, "fn spawn_bar_follow(");
+    assert!(
+        follow.contains("CapturePhase::Selecting { .. }") && follow.contains("break;"),
+        "the follow ends with the choosing"
+    );
+    assert!(
+        follow.contains("bar::bar_follow(") && follow.contains("bar_held"),
+        "the move is bar::bar_follow's decision, and a held bar stays"
+    );
+    let moved = fn_body(&src, "fn move_bar(");
+    assert!(
+        moved.contains("rebroadcast(") && moved.contains("set_focus()"),
+        "the overlays hear the move"
+    );
+    assert!(
+        fn_body(&src, "async fn open_capture_ui(").contains("bar_held.store(false"),
+        "a hold from an earlier capture does not pin this one's bar"
+    );
+    let main = read("src/main.rs");
+    assert!(main.contains("crate::capture::commands::capture_hold_bar,"));
+    let page = read("../app/capture-overlay/page.tsx");
+    assert!(page.contains("holdCaptureBar(holdsBar)"), "the bar's overlay holds the bar");
+}

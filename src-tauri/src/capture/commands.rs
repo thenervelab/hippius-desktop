@@ -119,6 +119,10 @@ const CONTROLS_HEIGHT: f64 = 60.0;
 const CONTROLS_MARGIN: f64 = 24.0;
 /// How often the displays are checked while a capture is open.
 const DISPLAY_WATCH_EVERY: std::time::Duration = std::time::Duration::from_millis(1500);
+/// How often the pointer's display is read while the bar is up. Two checks
+/// on another display move the bar (`bar::bar_follow`), so it follows within
+/// half a second without jumping as the pointer crosses a display.
+const BAR_FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
 /// A card follows the sync engine's row for at most this long.
 const SYNC_FOLLOW_LIMIT: std::time::Duration = std::time::Duration::from_hours(2);
 
@@ -217,6 +221,12 @@ pub struct CaptureState {
     work_areas: Mutex<HashMap<u32, LogicalArea>>,
     /// Which display watch is current (see `spawn_display_watch`).
     display_watch: AtomicU64,
+    /// Which bar follow is current (see `spawn_bar_follow`).
+    bar_follow: AtomicU64,
+    /// The bar's overlay holds the bar on its display: a countdown, a capture
+    /// in flight, a drag or the share picker would be lost if it moved
+    /// (`capture_hold_bar`).
+    bar_held: AtomicBool,
     /// The area drawn so far, on whichever display, for the Capture button.
     pending: Mutex<Option<Selection>>,
     /// A still of the selection taken as a recording starts: its card's
@@ -1157,6 +1167,7 @@ pub async fn capture_start(
     // The panel is no display's overlay: nothing for the watch to follow.
     if plan != super::support::StartPlan::Panel {
         spawn_display_watch(app.clone());
+        spawn_bar_follow(app.clone());
     }
     Ok(())
 }
@@ -1193,6 +1204,7 @@ async fn open_capture_ui(app: &AppHandle, state: &CaptureState, areas: &bar::Rem
         host_display.as_ref().and_then(|d| remembered_area(areas, d))
     };
     *lock(&state.bar_display) = host_display;
+    state.bar_held.store(false, Ordering::SeqCst);
     lock(&state.displays).clone_from(&displays);
     refresh_work_areas(app, state, &displays).await;
     for display in &displays {
@@ -1923,6 +1935,71 @@ async fn apply_display_change(app: &AppHandle, now: &[DisplayTarget], change: &b
             }
         }
     }
+}
+
+// ── The bar following the pointer ──────────────────────────────────────────
+
+/// Move the bar to the display the pointer is on while the user is choosing,
+/// as macOS's own capture bar follows the active display. The bar is chosen
+/// once, under the pointer, when the capture starts; without this it stayed
+/// there when the user went on to another display. Every display already has
+/// its overlay, so only which one draws the bar changes. One follow at a
+/// time; it ends when the choosing does.
+fn spawn_bar_follow(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let generation = state.capture.bar_follow.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(BAR_FOLLOW_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut seen_before = None;
+        loop {
+            interval.tick().await;
+            let state = app.state::<AppState>();
+            if state.capture.bar_follow.load(Ordering::SeqCst) != generation || !matches!(state.capture.current(), CapturePhase::Selecting { .. }) {
+                break;
+            }
+            let displays = lock(&state.capture.displays).clone();
+            let under_pointer = bar::display_under(&displays, cursor_point(&app, &displays));
+            let bar = lock(&state.capture.bar_display).as_ref().map(|d| d.id);
+            let held = state.capture.bar_held.load(Ordering::SeqCst);
+            if let Some(target) = bar::bar_follow(bar, under_pointer, seen_before, held)
+                && let Some(display) = displays.into_iter().find(|d| d.id == target)
+            {
+                move_bar(&app, &state.capture, display);
+            }
+            seen_before = under_pointer;
+        }
+    });
+}
+
+/// Hand the bar to `display`'s overlay. Skipped while that overlay is not up
+/// yet (a display plugged in a moment ago): the next check tries again.
+fn move_bar(app: &AppHandle, state: &CaptureState, display: DisplayTarget) {
+    let Some(overlay) = app.get_webview_window(&format!("{OVERLAY_LABEL_PREFIX}{}", display.id)) else {
+        return;
+    };
+    // The card waiting hidden goes to the bar's display too, where the
+    // capture it will show is being chosen; one already showing stays put.
+    if let Some(card) = app.get_webview_window(PREVIEW_LABEL)
+        && !card.is_visible().unwrap_or(true)
+    {
+        let area = work_area(state, &display);
+        place(&card, card_frame(area), area.scale);
+    }
+    *lock(&state.bar_display) = Some(display);
+    // The overlays re-read their context: the new one draws the bar, the old
+    // one stops. The pill, still hidden, is placed on the bar's display when
+    // it comes on screen (`open_controls`).
+    state.rebroadcast(|e| emit_phase(app, e));
+    // The keyboard goes with the bar: Return, Escape and Space act on it.
+    let _ = overlay.set_focus();
+}
+
+/// The bar's overlay holds the bar on its display (`held` true) or lets it
+/// follow the pointer again (false): see [`spawn_bar_follow`].
+#[tauri::command]
+pub fn capture_hold_bar(state: tauri::State<'_, AppState>, held: bool) {
+    state.capture.bar_held.store(held, Ordering::SeqCst);
 }
 
 // ── Choosing ────────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import {
   confirmCapture,
   getCaptureCameraContext,
   getCaptureOverlayContext,
+  holdCaptureBar,
   refreshCaptureWindows,
   selectCapture,
   setCaptureMode,
@@ -409,6 +410,17 @@ export default function CaptureOverlayPage() {
       window.removeEventListener("keyup", release);
     };
   }, []);
+
+  // Rust moves the bar to whichever display the pointer settles on. The
+  // overlay drawing it holds it here while moving it would lose what the
+  // user is doing: a countdown or capture under way, a drag, the share
+  // picker. Only the bar's overlay says so; the others have nothing to hold.
+  const hostsBar = context?.hostsBar === true;
+  const holdsBar = countdown !== null || inFlight || drag !== null || picker !== null;
+  useEffect(() => {
+    if (!hostsBar) return;
+    void holdCaptureBar(holdsBar).catch(() => undefined);
+  }, [hostsBar, holdsBar]);
 
   if (!context || displayId === null) {
     // The shortcut's shot: the crosshair is there from the first frame.

@@ -606,6 +606,15 @@ export function getCaptureControlsContext(): Promise<CaptureControlsContext> {
   return invoke("capture_controls_context");
 }
 
+/**
+ * The bar's overlay holds the bar on its display (`held` true) or lets it
+ * follow the pointer to another display again. Held while a countdown, a
+ * capture, a drag or the share picker would be lost if the bar moved.
+ */
+export function holdCaptureBar(held: boolean): Promise<void> {
+  return invoke("capture_hold_bar", { held });
+}
+
 /** The pill's "Start now" while it counts down after the desktop's dialog. */
 export function skipCaptureCountdown(): Promise<void> {
   return invoke("capture_skip_countdown");
