@@ -111,6 +111,23 @@ fn the_undecryptable_copy_promises_no_retry_in_either_language() {
     );
 }
 
+/// The refusal fallback is the one refusal copy authored on both sides (each
+/// known refusal's copy is Rust's alone, `refusal_copy`, persisted as the
+/// row's message), and like the undecryptable copy it must not promise a
+/// retry: hcfs reports a refusal once per revision.
+#[test]
+fn the_refusal_fallback_matches_and_promises_no_retry() {
+    let reason = rust_const("REFUSED_FALLBACK_REASON");
+    assert_eq!(ts_const("REFUSED_FALLBACK_MESSAGE"), reason, "both sides must phrase it identically");
+    let lowered = reason.to_lowercase();
+    assert!(!lowered.contains("retry") && !lowered.contains("try again"), "{reason}");
+    assert!(
+        FILE_FAILURE_TS.contains("\"refused\""),
+        "app/lib/types/fileFailure.ts must name the kind, or the FE switch \
+         degrades it to the generic `other` branch"
+    );
+}
+
 /// A kind the Rust side can emit but the FE union does not name falls through
 /// to the FE's `default` branch and reads as the generic line — which is how
 /// the `Decryption` bump regressed in the first place.

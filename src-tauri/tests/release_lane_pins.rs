@@ -557,7 +557,7 @@ fn no_lane_publishes_before_verifying_the_artifacts() {
 /// only point of control is ahead of the upload, in the same script.
 ///
 /// A staging DMG that looks complete and is not costs testers days — the same
-/// reasoning that makes the lane stamp ` - NO FINDER EXTENSION` onto the release
+/// reasoning that makes the lane stamp ` - NO FINDER EXTENSION OR RECORDING` onto the release
 /// name when it builds without notarization creds.
 #[test]
 fn staging_verifies_before_it_uploads() {
@@ -669,5 +669,452 @@ fn the_frontend_reads_the_same_channel_variable_rust_does() {
         config.contains("RELEASE_CHANNEL:"),
         "next.config.ts must expose the channel to the bundle as RELEASE_CHANNEL, which is the \
          name app/lib/buildChannel.ts reads"
+    );
+}
+
+/// Non-comment lines of a shell script, trimmed.
+fn code_lines(script: &str) -> Vec<&str> {
+    script
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
+
+fn position_of(lines: &[&str], needle: &str) -> Option<usize> {
+    lines.iter().position(|line| line.contains(needle))
+}
+
+/// The screen-recording helper is not a Tauri artifact: every macOS release
+/// job must build it, universal, before finalizing.
+///
+/// A release app looks for `Contents/MacOS/HippiusCapture` and nowhere else,
+/// and without it the app hides every Record action and lists no cameras or
+/// microphones. Nothing errors and nothing is annotated; testers only notice
+/// that "recording is missing". The build step runs before the long Tauri
+/// build so a Swift error fails the job in seconds; the finalize script
+/// builds it again (cached) and embeds that.
+#[test]
+fn every_macos_release_job_builds_the_recording_helper() {
+    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
+        let jobs = workflow_jobs(lane);
+        let finalizer = only_job_running(&jobs, "macos/finalize-macos-release.sh", lane);
+        let lines = code_lines(&jobs[&finalizer].script);
+
+        let build = position_of(&lines, "macos/build-capture-helper.sh --universal").unwrap_or_else(|| {
+            panic!(
+                "{lane}'s {finalizer} job never runs `macos/build-capture-helper.sh --universal`, so its \
+                 macOS build ships with no screen recording"
+            )
+        });
+        let finalize = position_of(&lines, "macos/finalize-macos-release.sh").expect("the finalize step runs");
+        assert!(
+            build < finalize,
+            "{lane} builds the recording helper only after finalizing, when nothing embeds it any more"
+        );
+    }
+}
+
+/// The finalize script embeds and signs the helper BEFORE the step that
+/// re-signs the app last; embedding it afterwards would break the app's seal
+/// and fail notarization. Signing needs the hardened runtime, a secure
+/// timestamp and the helper's own entitlements, of which `audio-input` is
+/// the silent one: without it a signed build records a silent microphone.
+#[test]
+fn the_recording_helper_is_embedded_and_signed_before_the_app_is_sealed() {
+    let finalize = repo_file("../macos/finalize-macos-release.sh");
+    let lines = code_lines(&finalize);
+    let built = position_of(&lines, "build-capture-helper.sh\" --universal").expect("finalize builds the universal helper");
+    let embedded = position_of(&lines, "embed-capture-helper.sh").expect("finalize embeds the helper");
+    let sealed = position_of(&lines, "embed-finder-extension.sh").expect("finalize embeds the extension and re-signs the app");
+    assert!(built < embedded && embedded < sealed, "helper: build, embed, then the app is re-signed");
+
+    let embed = repo_file("../macos/embed-capture-helper.sh");
+    assert!(embed.contains("entitlements=\"${script_dir}/CaptureHelper.entitlements\""));
+    let signing = embed.split("codesign --force").nth(1).expect("embed-capture-helper.sh signs the helper");
+    for flag in ["--options runtime", "--timestamp", "--entitlements \"${entitlements}\""] {
+        assert!(signing.contains(flag), "the release signing of the helper lacks {flag}");
+    }
+    // The local build's opt-out of the secure timestamp must never reach a
+    // release: a helper without one fails notarization.
+    for path in [
+        "../macos/finalize-macos-release.sh",
+        "../.github/workflows/tauri-build.yml",
+        "../.github/workflows/tauri-beta.yml",
+        "../.github/workflows/tauri-staging.yml",
+    ] {
+        assert!(
+            !repo_file(path).contains("HIPPIUS_CODESIGN_TIMESTAMP"),
+            "{path} must not skip the helper's secure timestamp"
+        );
+    }
+
+    let entitlements = repo_file("../macos/CaptureHelper.entitlements");
+    let squashed: String = entitlements.split_whitespace().collect();
+    assert!(
+        squashed.contains("<key>com.apple.security.device.audio-input</key><true/>"),
+        "the helper must be allowed the microphone"
+    );
+    assert!(
+        !entitlements.contains("allow-jit"),
+        "the helper runs no JIT; keep its entitlements minimal"
+    );
+}
+
+/// `verify-macos-artifacts.sh` must open the helper in both artifacts, or a
+/// release without recording publishes as quietly as v0.5.0 did without its
+/// Finder extension.
+#[test]
+fn the_artifact_check_fails_without_the_recording_helper() {
+    let verify = repo_file("../macos/verify-macos-artifacts.sh");
+    let bundle_checks = verify
+        .split("check_app_bundle() {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .expect("verify-macos-artifacts.sh has check_app_bundle");
+    assert!(
+        code_lines(bundle_checks).iter().any(|line| line.starts_with("check_capture_helper ")),
+        "check_app_bundle no longer checks the recording helper"
+    );
+    let helper_checks = verify
+        .split("check_capture_helper() {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .expect("verify-macos-artifacts.sh defines check_capture_helper");
+    for needle in [
+        "Contents/MacOS/HippiusCapture",
+        "check_universal",
+        "com.apple.security.device.audio-input",
+        "(runtime)",
+        "Timestamp=",
+    ] {
+        assert!(helper_checks.contains(needle), "check_capture_helper no longer checks {needle}");
+    }
+}
+
+/// A release build must not probe the CI checkout path `CARGO_MANIFEST_DIR`
+/// bakes in; a stray file there would be executed. Only debug builds look in
+/// the Swift package.
+#[test]
+fn a_release_build_looks_for_the_recording_helper_only_inside_the_app() {
+    let recorder = repo_file("src/capture/recording/macos.rs");
+    assert!(
+        recorder.contains("#[cfg(not(debug_assertions))]\n    let dev_package: Option<PathBuf> = None;"),
+        "helper_path must not look outside the app bundle in release builds"
+    );
+}
+
+/// Per-platform capture readiness lives in `capture::rollout`, one floor per
+/// (platform, feature). Production must enable exactly the rows marked
+/// production: a staging-only row that leaked into a production build shows
+/// a half-ready platform to every user, and nothing else would notice.
+#[test]
+fn production_enables_only_the_capture_rows_marked_production() {
+    use tauri_project_lib::capture::rollout::{Feature, Platform, enabled, floor};
+    use tauri_project_lib::release_channel::ReleaseChannel;
+
+    for platform in Platform::ALL {
+        for feature in Feature::ALL {
+            let marked_production = floor(platform, feature) == Some(ReleaseChannel::Production);
+            assert_eq!(
+                enabled(ReleaseChannel::Production, platform, feature),
+                marked_production,
+                "{platform:?} {feature:?}: production must follow the row's floor"
+            );
+            let marked_beta_or_later = matches!(floor(platform, feature), Some(ReleaseChannel::Beta | ReleaseChannel::Production));
+            assert_eq!(
+                enabled(ReleaseChannel::Beta, platform, feature),
+                marked_beta_or_later,
+                "{platform:?} {feature:?}: beta must follow the row's floor"
+            );
+        }
+    }
+}
+
+/// An unsigned Windows binary that records the screen and the microphone is
+/// what SmartScreen and Defender look at hardest. Windows recording may reach
+/// production only once the installer is signed (a certificate thumbprint or
+/// a sign command in `tauri.conf.json`).
+#[test]
+fn windows_recording_reaches_production_only_with_a_signed_installer() {
+    use tauri_project_lib::capture::rollout::{Feature, Platform, floor};
+    use tauri_project_lib::release_channel::ReleaseChannel;
+
+    let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
+    let windows = &config["bundle"]["windows"];
+    let signed = !windows["certificateThumbprint"].is_null() || windows.get("signCommand").is_some_and(|c| !c.is_null());
+    if floor(Platform::Windows, Feature::Recording) == Some(ReleaseChannel::Production) {
+        assert!(signed, "Windows recording is marked production but the Windows installer is not signed");
+    }
+}
+
+/// Screen capture carries most of the app's `cfg(windows)` code, and only the
+/// release workflow builds on Windows otherwise. The Windows lane must deny
+/// warnings over every target, run the capture tests, and run for any PR
+/// that touches capture, whatever its base.
+#[test]
+fn the_windows_lane_runs_clippy_and_the_capture_tests_for_capture_prs() {
+    let jobs = workflow_jobs("ci.yml");
+    let windows = jobs.get("rust-windows").expect("ci.yml has a rust-windows job");
+    assert!(
+        windows.script.contains("cargo clippy --all-targets -- -D warnings"),
+        "rust-windows must run clippy over every target with warnings denied"
+    );
+    assert!(
+        windows.script.contains("cargo test --lib \"capture::\""),
+        "rust-windows must run the capture unit tests"
+    );
+    let ci = repo_file("../.github/workflows/ci.yml");
+    assert!(
+        ci.contains("needs.changes.outputs.capture == 'true'"),
+        "rust-windows must run for PRs that touch src-tauri/src/capture/**"
+    );
+    assert!(
+        ci.contains("grep -qE '^src-tauri/src/capture/'"),
+        "the changes job must detect a capture change"
+    );
+}
+
+/// Linux recording links GStreamer (gstreamer-rs), so every Linux build
+/// needs its development files: a lane without them fails at `pkg-config`
+/// only when it next builds, which for production is the release itself.
+/// The recorder's encoders and parsers are the distro's plugins, which the
+/// deb only RECOMMENDS: a minimal system still installs Hippius and is told
+/// which packages to add (`codecsMissing`).
+#[test]
+fn every_linux_build_has_gstreamer_and_the_deb_recommends_its_plugins() {
+    const DEV: [&str; 2] = ["libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev"];
+    let setup = repo_file("../.github/actions/rust-ci-setup/action.yml");
+    for package in DEV {
+        assert!(setup.contains(package), "rust-ci-setup must install {package}");
+    }
+    // The release lanes install from one script, which CI also runs on the
+    // same ubuntu-22.04 image (`release-deps-linux`). On that image
+    // libgstreamer1.0-dev needs libunwind-dev, which clashes with the
+    // preinstalled libunwind-14-dev unless it is asked for by name first.
+    let script = repo_file("../scripts/install-linux-release-deps.sh");
+    for package in DEV {
+        assert!(script.contains(package), "the Linux release script must install {package}");
+    }
+    let unwind = script
+        .find("install -y libunwind-dev")
+        .expect("the script installs libunwind-dev by name");
+    assert!(script[unwind..].contains(DEV[0]), "libunwind-dev must be installed before GStreamer");
+    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
+        let text = repo_file(&format!("../.github/workflows/{lane}"));
+        assert!(
+            text.contains("bash scripts/install-linux-release-deps.sh"),
+            "{lane}'s Linux leg must use the shared script"
+        );
+        assert!(!text.contains("libwebkit2gtk-4.1-dev"), "{lane} must not keep its own package list");
+    }
+    assert!(
+        workflow_jobs("ci.yml")
+            .get("release-deps-linux")
+            .is_some_and(|job| job.script.contains("bash scripts/install-linux-release-deps.sh")),
+        "CI must install the release packages on the release image"
+    );
+    let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
+    let deb = &config["bundle"]["linux"]["deb"];
+    let recommends: Vec<&str> = deb["recommends"]
+        .as_array()
+        .expect("deb recommends")
+        .iter()
+        .filter_map(|r| r.as_str())
+        .collect();
+    for plugin in [
+        "gstreamer1.0-pipewire",
+        "gstreamer1.0-plugins-base",
+        "gstreamer1.0-plugins-good",
+        "gstreamer1.0-plugins-bad",
+        "gstreamer1.0-plugins-ugly",
+        "gstreamer1.0-libav",
+    ] {
+        assert!(recommends.contains(&plugin), "the deb must recommend {plugin}");
+    }
+    let depends = deb["depends"].as_array().expect("deb depends");
+    assert!(
+        !depends.iter().any(|d| d.as_str().is_some_and(|d| d.contains("gstreamer"))),
+        "GStreamer plugins are recommended, never required"
+    );
+}
+
+/// Staging also builds an `.rpm`, so Fedora can be tested from an artifact
+/// (the capture plan's Linux checklist); beta and production ship the
+/// `.deb` alone. The rpm, like the deb, only RECOMMENDS the GStreamer
+/// plugins and the portal, in Fedora's names.
+#[test]
+fn only_staging_builds_an_rpm_and_it_recommends_fedoras_plugins() {
+    let staging = repo_file("../.github/workflows/tauri-staging.yml");
+    assert!(staging.contains("args: '--bundles deb,rpm'"), "staging builds deb and rpm");
+    for lane in ["tauri-beta.yml", "tauri-build.yml"] {
+        let text = repo_file(&format!("../.github/workflows/{lane}"));
+        assert!(!text.contains("rpm"), "{lane} must not build an rpm");
+    }
+    let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
+    let rpm = &config["bundle"]["linux"]["rpm"];
+    let recommends: Vec<&str> = rpm["recommends"]
+        .as_array()
+        .expect("rpm recommends")
+        .iter()
+        .filter_map(|r| r.as_str())
+        .collect();
+    for package in [
+        "gstreamer1-plugins-good",
+        "gstreamer1-plugin-openh264",
+        "gstreamer1-plugins-bad-free",
+        "gstreamer1-plugin-libav",
+        "pipewire-gstreamer",
+    ] {
+        assert!(recommends.contains(&package), "the rpm must recommend {package}");
+    }
+    assert!(rpm.get("depends").is_none_or(|d| !d.to_string().contains("gstreamer")));
+}
+
+/// The Linux lane runs the recorder's real GStreamer writer (the ignored
+/// self-tests), with the plugins it needs installed first.
+#[test]
+fn the_linux_lane_runs_the_recorder_against_real_gstreamer() {
+    let jobs = workflow_jobs("ci.yml");
+    let linux = jobs.get("rust-linux-test").expect("ci.yml has a rust-linux-test job");
+    assert!(linux.script.contains("gstreamer1.0-plugins-ugly") && linux.script.contains("gstreamer1.0-libav"));
+    assert!(linux.script.contains("cargo test --lib capture::recorder_child::linux -- --ignored"));
+}
+
+/// Each Rust lane runs clippy and the tests as two parallel jobs, and the
+/// lane's own name (`rust-linux`, `rust-macos`) is what branch rules
+/// require. That job must wait for both halves and run even when one fails
+/// (`!cancelled()`): a required check that is SKIPPED counts as passed, so
+/// without it a failing clippy or test half would merge green.
+#[test]
+fn each_required_rust_lane_waits_for_its_clippy_and_test_halves() {
+    let jobs = workflow_jobs("ci.yml");
+    let ci = repo_file("../.github/workflows/ci.yml");
+    let document: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    for lane in ["rust-linux", "rust-macos"] {
+        let clippy = format!("{lane}-clippy");
+        let test = format!("{lane}-test");
+        let gate = jobs.get(lane).unwrap_or_else(|| panic!("ci.yml has a {lane} job"));
+        assert!(
+            gate.needs.contains(&clippy) && gate.needs.contains(&test) && gate.needs.iter().any(|n| n == "changes"),
+            "{lane} waits for the changes gate, {clippy} and {test}"
+        );
+        assert_eq!(
+            document["jobs"][lane]["if"].as_str(),
+            Some("${{ !cancelled() }}"),
+            "{lane} must run when a half fails"
+        );
+        assert!(gate.script.contains("exit 1"), "{lane} fails when a half did not pass");
+        assert!(
+            jobs.get(&clippy)
+                .unwrap_or_else(|| panic!("ci.yml has a {clippy} job"))
+                .script
+                .contains("cargo clippy --all-targets -- -D warnings"),
+            "{clippy} runs clippy over every target with warnings denied"
+        );
+        let test_job = jobs.get(&test).unwrap_or_else(|| panic!("ci.yml has a {test} job"));
+        assert!(
+            test_job.script.lines().any(|line| line.trim() == "cargo test"),
+            "{test} runs the whole test suite"
+        );
+        assert_eq!(
+            document["jobs"][clippy.as_str()]["if"],
+            document["jobs"][test.as_str()]["if"],
+            "{clippy} and {test} run on exactly the same events"
+        );
+    }
+}
+
+/// Rust caches are saved only by a push to a lane branch. A PR's cache is
+/// readable by that PR alone, yet it counts against the repo's 10 GB cap and
+/// evicted the lanes' caches, which left every later PR cold.
+#[test]
+fn rust_caches_are_saved_only_from_lane_pushes() {
+    const LANE_PUSH: &str =
+        "github.event_name == 'push' && (github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/main')";
+    let setup = repo_file("../.github/actions/rust-ci-setup/action.yml");
+    assert!(
+        setup.contains(&format!("save-if: ${{{{ inputs.save-cache == 'true' && {LANE_PUSH} }}}}")),
+        "rust-ci-setup saves only from a lane push"
+    );
+    let ci = repo_file("../.github/workflows/ci.yml");
+    let document: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    for (name, body) in document["jobs"].as_mapping().expect("ci.yml jobs") {
+        for step in body["steps"].as_sequence().into_iter().flatten() {
+            if !step["uses"].as_str().is_some_and(|uses| uses.starts_with("swatinem/rust-cache@")) {
+                continue;
+            }
+            let save_if = step["with"]["save-if"].as_str().unwrap_or_default();
+            assert!(
+                save_if == "false" || save_if == format!("${{{{ {LANE_PUSH} }}}}"),
+                "{name:?}'s rust-cache must save only from a lane push, or never: {save_if:?}"
+            );
+        }
+    }
+}
+
+/// The capture runtime jobs run the BUILT recorder child on real Windows and
+/// Linux runners through the script that fails on "0 tests executed", only
+/// for PRs that can change the child, and never on an unrelated PR (a job
+/// that is skipped there must not be one anything waits on). Each failure
+/// here is silent: a dropped `--ignored` or a lost gate keeps CI green while
+/// the runtime evidence quietly stops.
+#[test]
+fn the_capture_runtime_jobs_run_the_built_recorder_for_capture_prs_only() {
+    let jobs = workflow_jobs("ci.yml");
+    let ci = repo_file("../.github/workflows/ci.yml");
+    let document: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    for name in ["capture-runtime-windows", "capture-runtime-linux"] {
+        let job = jobs.get(name).unwrap_or_else(|| panic!("ci.yml has a {name} job"));
+        assert!(job.needs.iter().any(|n| n == "changes"), "{name} waits for the changes gate");
+        assert!(
+            job.script.contains("cargo test --test capture_recorder_runtime --no-run") && job.script.contains("scripts/capture-runtime-check.sh"),
+            "{name} builds the app binary and runs the runtime checks through the script"
+        );
+        let body = &document["jobs"][name];
+        assert_eq!(
+            body["if"].as_str(),
+            Some("github.event_name == 'pull_request' && needs.changes.outputs.capture_runtime == 'true'"),
+            "{name} runs only for PRs that touch what the recorder child is built from"
+        );
+        let env_of = |key: &str| {
+            body["steps"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .filter_map(|step| step["env"][key].as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            env_of("HIPPIUS_CAPTURE_RUNTIME_REQUIRE"),
+            vec!["1"],
+            "{name} turns a missing setup into a failure"
+        );
+        assert_eq!(
+            env_of("CAPTURE_RUNTIME_MIN_TESTS"),
+            vec!["8"],
+            "{name} expects every runtime test to execute"
+        );
+    }
+    let linux = jobs.get("capture-runtime-linux").expect("linux runtime job");
+    assert!(linux.script.contains("scripts/with-xvfb.sh") && linux.script.contains("module-null-sink"));
+    assert!(
+        ci.contains("echo \"capture_runtime=true\" >> \"$GITHUB_OUTPUT\""),
+        "the changes job sets the gate"
+    );
+    let script = repo_file("../scripts/capture-runtime-check.sh");
+    assert!(script.contains("--ignored") && script.contains("CAPTURE_RUNTIME_MIN_TESTS") && script.contains("RUNTIME-SKIP:"));
+    // The test file's count: every test in it is #[ignore]d, and the jobs
+    // expect all of them to run.
+    let tests = repo_file("tests/capture_recorder_runtime.rs");
+    assert_eq!(
+        tests.matches("#[test]").count(),
+        8,
+        "update CAPTURE_RUNTIME_MIN_TESTS in ci.yml with the test count"
+    );
+    assert_eq!(
+        tests.matches("#[ignore = \"").count(),
+        8,
+        "every runtime check is #[ignore]d, so plain `cargo test` stays hermetic"
     );
 }

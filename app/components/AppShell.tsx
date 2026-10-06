@@ -1,22 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
-import { Suspense } from "react";
-import { Toaster } from "sonner";
-import NextTopLoader from "nextjs-toploader";
-import Providers from "@/components/providers";
-import { AppThemeProvider, useAppTheme } from "@/app/lib/theme-context";
-import { WalletAuthProvider } from "@/app/lib/wallet-auth-context";
-import PreAuthProvider from "@/app/components/auth/PreAuthProvider";
-import PageLoader from "@/app/components/PageLoader";
-import { NavigationLoaderProvider } from "@/app/lib/hooks/useNavigationLoader";
-import UpdateChecker from "@/components/updater/UpdateChecker";
-import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
-import DeepLinkListener from "@/app/components/auth/DeepLinkListener";
-import TranslocationGuard from "@/app/components/TranslocationGuard";
-import FinderExtensionGuard from "@/app/components/FinderExtensionGuard";
-import ZoomController from "@/app/components/ZoomController";
-import SplashWrapper from "./splash-screen-v2";
+import { AppThemeProvider } from "@/app/lib/theme-context";
+
+/**
+ * The full app tree lives in its own chunk. A static import here put it in
+ * the root layout's chunk graph, so every window (the tray popover and each
+ * capture window, one overlay per display) parsed about 1.4 MB of script it
+ * never ran. Rendered on the server as well (the default), so the main
+ * window's prerendered HTML and hydration are unchanged.
+ */
+const FullAppShell = dynamic(() => import("./FullAppShell"));
 
 /**
  * Route prefix served inside the borderless system-tray popover window.
@@ -36,34 +31,36 @@ const TRAY_PANEL_ROUTE = "/tray-panel";
 const E2E_ROUTE = "/e2e";
 
 /**
- * Toaster that follows the user's resolved theme rather than the OS
- * (`theme="system"` reads prefers-color-scheme directly, which diverges
- * when the user forces Light/Dark in settings). The Tailwind `dark:`
- * classNames below already track the `.dark` class; passing the resolved
- * theme keeps sonner's own data-theme defaults (borders, close button)
- * in agreement. Must render inside the Jotai provider tree.
+ * The screen-capture selection overlay (`app/capture-overlay`), one window
+ * per display opened by Rust. Like the tray panel it must not boot the app:
+ * it only draws a selection and reports it over `invoke`, and a second auth
+ * stack per display would be both slow and wrong.
  */
-function ThemedToaster() {
-  const { resolvedTheme } = useAppTheme();
+const CAPTURE_OVERLAY_ROUTE = "/capture-overlay";
 
-  return (
-    <Toaster
-      position="top-center"
-      theme={resolvedTheme}
-      className="toaster-auth-aware"
-      toastOptions={{
-        style: { fontFamily: "var(--font-geist-sans)" },
-        classNames: {
-          toast:
-            "border-[#e3e3e3] bg-white text-[#0a0a0a] dark:border-[#494949] dark:bg-[#1e1e1e] dark:text-white",
-          title: "text-[#0a0a0a] dark:text-white",
-          description: "text-[#6c6c6c] dark:text-[#a0a0a0]",
-          icon: "text-[#0a0a0a] dark:text-white",
-        },
-      }}
-    />
-  );
-}
+/**
+ * The floating recording control bar (`app/capture-controls`). Same provider
+ * rules as the overlay: no auth stack, theme only.
+ */
+const CAPTURE_CONTROLS_ROUTE = "/capture-controls";
+
+/**
+ * The capture preview card (`app/capture-preview`), in a screen corner after
+ * a capture. Same provider rules as the overlay: no auth stack, theme only.
+ */
+const CAPTURE_PREVIEW_ROUTE = "/capture-preview";
+
+/**
+ * The camera bubble / camera-only stage (`app/capture-camera`), filmed with
+ * the screen while recording. Same provider rules as the overlay.
+ */
+const CAPTURE_CAMERA_ROUTE = "/capture-camera";
+
+/**
+ * Wayland's area selection (`app/capture-area`): the chosen monitor's
+ * picture to draw the area to record on. Same provider rules as the overlay.
+ */
+const CAPTURE_AREA_ROUTE = "/capture-area";
 
 /**
  * Top-level shell that decides which provider tree to mount based on the
@@ -83,7 +80,15 @@ function ThemedToaster() {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  if (pathname?.startsWith(TRAY_PANEL_ROUTE) || pathname?.startsWith(E2E_ROUTE)) {
+  if (
+    pathname?.startsWith(TRAY_PANEL_ROUTE) ||
+    pathname?.startsWith(E2E_ROUTE) ||
+    pathname?.startsWith(CAPTURE_OVERLAY_ROUTE) ||
+    pathname?.startsWith(CAPTURE_CONTROLS_ROUTE) ||
+    pathname?.startsWith(CAPTURE_PREVIEW_ROUTE) ||
+    pathname?.startsWith(CAPTURE_CAMERA_ROUTE) ||
+    pathname?.startsWith(CAPTURE_AREA_ROUTE)
+  ) {
     // The popover skips the app providers but still mounts the theme
     // provider so it follows the System/Light/Dark preference (shared
     // via localStorage) and tracks live OS theme changes. It uses the
@@ -92,36 +97,5 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return <AppThemeProvider>{children}</AppThemeProvider>;
   }
 
-  return (
-    <Providers>
-      <AppThemeProvider>
-        <WalletAuthProvider>
-          <UpdateChecker>
-            <PreAuthProvider>
-              <NextTopLoader color="#3167DD" showSpinner={false} />
-              <NavigationLoaderProvider>
-                <TrayNavigationListener />
-                {/* Global so an OAuth callback is handled on ANY route,
-                 *  not only while the login page is mounted (audit M-3). */}
-                <DeepLinkListener />
-                <TranslocationGuard />
-                <FinderExtensionGuard />
-                <ZoomController />
-                <SplashWrapper preventClose={false}>
-                  <Suspense fallback={<PageLoader ringFill="once" />}>
-                    <div className="flex min-h-screen h-screen">{children}</div>
-                  </Suspense>
-                </SplashWrapper>
-
-                {/* Toast styling mirrors hippius-web's SonnerToaster setup:
-                 *  explicit dark-mode classNames so the toast doesn't stay
-                 *  light-themed when the app is in dark mode. */}
-                <ThemedToaster />
-              </NavigationLoaderProvider>
-            </PreAuthProvider>
-          </UpdateChecker>
-        </WalletAuthProvider>
-      </AppThemeProvider>
-    </Providers>
-  );
+  return <FullAppShell>{children}</FullAppShell>;
 }

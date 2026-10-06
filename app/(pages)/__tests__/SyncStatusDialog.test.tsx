@@ -9,6 +9,7 @@ import {
 } from "@/lib/test-utils/syncSnapshotFactory";
 import { EMPTY_SNAPSHOT } from "@/lib/types/syncSnapshot";
 import { syncEngineHealthAtom } from "@/lib/store/syncAtoms";
+import { OPEN_DRIVE_FOLDER_EVENT, type OpenDriveFolderDetail } from "@/app/lib/drive/openDriveFolder";
 
 // Mock Tauri APIs (not available in test environment)
 vi.mock("@tauri-apps/api/core", () => ({
@@ -82,6 +83,44 @@ function renderWithJotai(
 }
 
 describe("SyncStatusDialog", () => {
+  it("opens the folder a queued file lives in, from its row", () => {
+    const files = [
+      makeFileProgress("Recording.mp4", {
+        label: "Work",
+        path: "Captures/2026/Recording.mp4",
+        status: "inProgress",
+        progressPercent: 30,
+        totalBytes: 1000,
+      }),
+    ];
+    const opened: string[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent<OpenDriveFolderDetail>).detail.url);
+    window.addEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
+    try {
+      renderWithJotai(<SyncStatusDialog snapshot={makeSnapshot(files)} open={true} />);
+      fireEvent.click(screen.getByTestId("sync-status-toggle"));
+      fireEvent.click(screen.getByRole("button", { name: "Show Recording.mp4 in its folder" }));
+    } finally {
+      window.removeEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
+    }
+    expect(opened).toHaveLength(1);
+    const params = new URLSearchParams(opened[0].split("?")[1]);
+    expect(params.get("openLabel")).toBe("Work");
+    // The whole path to the file's folder, not just the first level.
+    expect(params.get("openSubfolder")).toBe("Captures/2026");
+    // And the file itself, so the folder opens with its row pointed out.
+    expect(params.get("openFile")).toBe("Recording.mp4");
+    // No drive status here means the drive is not synced on this machine.
+    expect(params.get("openRemote")).toBe("1");
+  });
+
+  it("offers no Show in folder on a deleted file's row", () => {
+    const files = [makeFileProgress("gone.txt", { label: "Work", path: "gone.txt", action: "remote_delete", status: "completed", progressPercent: 100 })];
+    renderWithJotai(<SyncStatusDialog snapshot={makeSnapshot(files)} open={true} />);
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
+    expect(screen.queryByRole("button", { name: /in its folder/ })).not.toBeInTheDocument();
+  });
+
   it("renders nothing when snapshot is empty and not active", () => {
     const { container } = renderWithJotai(
       <SyncStatusDialog

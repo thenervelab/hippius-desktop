@@ -14,6 +14,7 @@ const h = await vi.hoisted(async () => {
   const { makeTauriMock } = await import("@/app/lib/test-utils/tauriMock");
   return {
     tauri: makeTauriMock(),
+    refreshUnread: vi.fn(),
     state: {
       polkadotAddress: "5poll" as string | null,
       oauthSession: null as { substrateAddress?: string } | null,
@@ -36,16 +37,27 @@ vi.mock("@/components/page-sections/notifications/notificationStore", async (imp
   const { atom } = await import("jotai");
   return {
     ...actual,
-    refreshUnreadCountAtom: atom(null, () => {}),
+    refreshUnreadCountAtom: atom(null, () => {
+      h.refreshUnread();
+    }),
     refreshEnabledTypesAtom: atom(null, () => {}),
   };
 });
-const { tauri, state } = h;
+const { tauri, state, refreshUnread } = h;
 
 import { useFilesNotification } from "@/lib/hooks/useFilesNotification";
 import { enabledNotificationTypesAtom } from "@/components/page-sections/notifications/notificationStore";
 
 const AGGREGATION_MS = 10_000;
+
+/** The rows Rust saves itself; the hook only refreshes the bell for them,
+ *  whatever the account or the enabled types. */
+const RUST_SAVED_EVENTS = [
+  "hcfs_mass_delete_held_notify",
+  "hcfs_drive_disconnected_notify",
+  "hcfs_cancelled_share_link_live_notify",
+  "hcfs_empty_remote_notify",
+];
 
 interface CompletedOverrides {
   files_uploaded?: number;
@@ -103,6 +115,7 @@ function syncNotificationCalls() {
 beforeEach(() => {
   vi.useFakeTimers();
   tauri.reset();
+  refreshUnread.mockClear();
   tauri.onInvoke("create_sync_notification", () => undefined);
   state.polkadotAddress = "5poll";
   state.oauthSession = null;
@@ -112,18 +125,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function listenedEvents(): unknown[] {
+  return tauri.event.listen.mock.calls.map((c) => c[0]);
+}
+
 describe("useFilesNotification — gating", () => {
-  it("registers no listeners when Files notifications are disabled", async () => {
+  it("registers only the refreshes for Rust-saved rows when Files notifications are disabled", async () => {
     mount(false);
     await flushRegistration();
-    expect(tauri.event.listen).not.toHaveBeenCalled();
+    expect(listenedEvents()).toEqual(RUST_SAVED_EVENTS);
   });
 
-  it("registers no listeners when there is no account address", async () => {
+  it("registers only the refreshes for Rust-saved rows when there is no account address", async () => {
     state.polkadotAddress = null;
     mount(true);
     await flushRegistration();
-    expect(tauri.event.listen).not.toHaveBeenCalled();
+    expect(listenedEvents()).toEqual(RUST_SAVED_EVENTS);
   });
 });
 
@@ -231,6 +248,32 @@ describe("useFilesNotification — failure path", () => {
     expect((calls[0]?.[1] as { fileCount?: number }).fileCount).toBeUndefined();
   });
 
+  // An unplugged disk is not a failed sync. Rust saves its own "Drive
+  // Disconnected" row (`create_files_notification`, its title pinned there)
+  // and says so; the hook only refreshes the bell, and never writes a
+  // "Sync Failed" row for it.
+  it("leaves an unplugged disk's notification to Rust and refreshes the bell", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_drive_disconnected_notify", { label: "photos" });
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
+  });
+
+  // A refused empty listing is the safety check holding, not a failed sync:
+  // Rust saves its own "Drive Empty on Hippius" row once per episode.
+  it("leaves an empty drive's notification to Rust and refreshes the bell", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_empty_remote_notify", { label: "photos" });
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to the 'default' label when the failure payload omits it", async () => {
     mount(true);
     await flushRegistration();
@@ -303,5 +346,62 @@ describe("useFilesNotification — folder restored", () => {
       await tauri.emitEvent("hcfs_folder_restored_notify", { label: "photos" });
     });
     expect(syncNotificationCalls()).toHaveLength(0);
+  });
+});
+
+const HELD_NOTIFY = { label: "Photos" };
+
+// Rust saves the held-delete notification itself, once per episode, for the
+// account whose drive it is and only when that account has Files
+// notifications on (`create_mass_delete_held_notification`). The hook never
+// saves it; it only refreshes the bell when Rust says a row was added.
+describe("useFilesNotification — mass delete held", () => {
+  it("refreshes the bell without saving a notification itself", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_mass_delete_held_notify", HELD_NOTIFY);
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
+  });
+
+  // Rust raises it once per episode, often from the first cycle after
+  // launch: the bell must refresh even before the session is restored.
+  it("refreshes the bell before the account or the enabled types are known", async () => {
+    state.polkadotAddress = null;
+    mount(false);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_mass_delete_held_notify", HELD_NOTIFY);
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores the ungated hold event", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_mass_delete_held", { label: "Photos", side: "server", count: 150 });
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+  });
+});
+
+// Rust saves this row when a Finder folder share is cancelled after its link
+// was made and the link could not be revoked
+// (`create_cancelled_share_link_live_notification`); the share modal is closed
+// by then, so the bell is the only place the user hears of it.
+describe("useFilesNotification — cancelled share whose link is still live", () => {
+  it("refreshes the bell without saving a notification itself", async () => {
+    state.polkadotAddress = null;
+    mount(false);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_cancelled_share_link_live_notify", null);
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+    expect(refreshUnread).toHaveBeenCalledTimes(1);
   });
 });

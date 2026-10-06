@@ -3,6 +3,8 @@ import {
   pendingConflictsAtom,
   failedFilesAtom,
   creditsExhaustedAtom,
+  massDeleteHoldsAtom,
+  emptyRemoteDrivesAtom,
   syncEngineHealthAtom,
   DEFAULT_SYNC_ENGINE_HEALTH,
 } from "@/lib/store/syncAtoms";
@@ -21,7 +23,7 @@ import {
  * unmounting the listener components does NOT clear the atom values — they
  * survive into the next account's session. Without this reset the previous
  * account's drive statuses, repeatedly-failed-files modal, pending conflicts,
- * credits-exhausted banner, sync-engine health, and stale-metadata banners all
+ * credits-exhausted banner, large-delete prompt, sync-engine health, and stale-metadata banners all
  * leak across an account switch.
  *
  * `driveStatusesLoadedAtom` is reset to `false` specifically so
@@ -37,6 +39,8 @@ export function resetSyncSession(): void {
   appStore.set(pendingConflictsAtom, new Map());
   appStore.set(failedFilesAtom, null);
   appStore.set(creditsExhaustedAtom, null);
+  appStore.set(massDeleteHoldsAtom, new Map());
+  appStore.set(emptyRemoteDrivesAtom, new Map());
   appStore.set(syncEngineHealthAtom, DEFAULT_SYNC_ENGINE_HEALTH);
   appStore.set(driveStatusesAtom, new Map());
   appStore.set(driveStatusesLoadedAtom, false);

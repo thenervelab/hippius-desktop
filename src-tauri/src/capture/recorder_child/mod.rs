@@ -1,0 +1,867 @@
+//! The recorder child: the app's own executable started as
+//! `Hippius --capture-recorder`, speaking the Swift helper's protocol
+//! ([`crate::capture::recording::protocol`]) on stdin and stdout.
+//!
+//! Windows and Linux record here rather than in the app, so an encoder or a
+//! capture driver that crashes takes this process and not the app, and the
+//! file it was writing survives. `main` branches into [`run`] before Tauri's
+//! builder, so no window, tray, single-instance or deep-link handler starts
+//! in it.
+//!
+//! Shared by every platform: the command loop, the pause timeline
+//! ([`timeline`]), the sizing rules shared with the Swift helper ([`sizing`],
+//! [`plan`]), the frame pacing ([`pacing`]), the one-track audio mixer
+//! ([`mixer`], [`pcm`]), the BGRA to NV12 conversion ([`frame`]), the writer
+//! thread's logic ([`pipeline`]) and a test pattern ([`synthetic`]) written
+//! through a stand-in writer. A platform recorder is a [`Live`] recording:
+//! Windows' is [`windows`] (Windows.Graphics.Capture, WASAPI, Media
+//! Foundation), Linux's is [`linux`] (X11 or the ScreenCast portal,
+//! PulseAudio / PipeWire, GStreamer), both writing through [`pipeline`]
+//! (Linux's through the shared [`writer_loop`]). Where no recorder exists, a
+//! `start` for a real screen is refused with the same line
+//! `recording_unavailable` gives. `--meter` ([`meter`]) is the bar's
+//! microphone level on Linux.
+//!
+//! Rules kept from the Swift helper: every reply echoes its command's `id`;
+//! closing stdin FINISHES the file and keeps it (the app died); only `cancel`
+//! deletes; a recording that ends on its own says `stream_stopped` with
+//! `saved` after finishing the file.
+
+pub mod frame;
+#[cfg(target_os = "linux")]
+pub mod linux;
+pub mod linux_plan;
+pub mod meter;
+pub mod mixer;
+pub mod overlay;
+pub mod pacing;
+pub mod pcm;
+pub mod pipeline;
+pub mod plan;
+pub mod poster;
+pub mod sizing;
+pub mod sources;
+pub mod still;
+pub mod synthetic;
+pub mod timeline;
+pub mod watch;
+#[cfg(windows)]
+pub mod windows;
+pub mod writer_loop;
+
+use std::io::{BufRead, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::JoinHandle;
+use std::time::Instant;
+
+use crate::capture::recording::protocol::{self, Command, StartCommand};
+use timeline::Timeline;
+
+/// The flag `main` looks for.
+pub const RECORDER_FLAG: &str = "--capture-recorder";
+
+/// The capture clock: microseconds since the child started. Every source
+/// stamps its samples on it, and pause and resume are read from it, so the
+/// timeline compares like with like.
+#[derive(Debug, Clone, Copy)]
+pub struct Clock(Instant);
+
+impl Clock {
+    #[must_use]
+    pub fn start() -> Self {
+        Self(Instant::now())
+    }
+
+    #[must_use]
+    pub fn now(&self) -> u64 {
+        u64::try_from(self.0.elapsed().as_micros()).unwrap_or(u64::MAX)
+    }
+}
+
+/// One piece of a recording, stamped on the capture clock.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Sample {
+    /// A picture. The synthetic source only says where its bar is.
+    Video { time: u64, bar_x: u32 },
+    /// Mono 48 kHz PCM.
+    Audio { time: u64, samples: Vec<f32> },
+}
+
+/// Where placed samples go. Times are already retimed and start at zero.
+pub trait SampleWriter: Send {
+    /// # Errors
+    /// The writer failed and will take nothing more.
+    fn video(&mut self, time: u64, bar_x: u32) -> std::result::Result<(), String>;
+    /// # Errors
+    /// The writer failed and will take nothing more.
+    fn audio(&mut self, time: u64, samples: &[f32]) -> std::result::Result<(), String>;
+    /// Finish the file at `end` (the last frame is held until then).
+    ///
+    /// # Errors
+    /// The file could not be finished.
+    fn finish(self: Box<Self>, end: u64) -> std::result::Result<(), String>;
+}
+
+/// The stand-in writer: one text line per sample, then the end time. What a
+/// real encoder would be handed, readable in a test.
+pub struct TextWriter {
+    out: std::io::BufWriter<std::fs::File>,
+}
+
+impl TextWriter {
+    /// # Errors
+    /// The output file could not be created.
+    pub fn create(path: &std::path::Path) -> std::result::Result<Self, String> {
+        let file = std::fs::File::create(path).map_err(|e| format!("could not create the recording: {e}"))?;
+        Ok(Self {
+            out: std::io::BufWriter::new(file),
+        })
+    }
+}
+
+impl SampleWriter for TextWriter {
+    fn video(&mut self, time: u64, bar_x: u32) -> std::result::Result<(), String> {
+        writeln!(self.out, "video {time} bar={bar_x}").map_err(|e| e.to_string())
+    }
+
+    fn audio(&mut self, time: u64, samples: &[f32]) -> std::result::Result<(), String> {
+        writeln!(self.out, "audio {time} n={}", samples.len()).map_err(|e| e.to_string())
+    }
+
+    fn finish(mut self: Box<Self>, end: u64) -> std::result::Result<(), String> {
+        writeln!(self.out, "end {end}").and_then(|()| self.out.flush()).map_err(|e| e.to_string())
+    }
+}
+
+/// Where the child's protocol lines go (stdout, or a pipe in tests). Shared
+/// with the capture threads, which say `stream_stopped` themselves.
+pub type Output = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// Write one protocol line and flush it: the app reads line by line.
+pub fn emit(out: &Output, line: &str) {
+    let mut out = out.lock().unwrap_or_else(PoisonError::into_inner);
+    let _ = writeln!(out, "{line}").and_then(|()| out.flush());
+}
+
+/// What a running capture thread hands back when it ends.
+struct Captured {
+    writer: Box<dyn SampleWriter>,
+    first: Option<u64>,
+    last_video: Option<u64>,
+}
+
+/// A recording in progress, whatever records it.
+pub trait Live: Send {
+    /// Start a pause now: later samples move back by it, those inside it
+    /// are dropped.
+    fn pause(&self);
+    fn resume(&self);
+    /// Stop capturing and finish the file.
+    ///
+    /// # Errors
+    /// Nothing was captured, or the file could not be finished.
+    fn finish(self: Box<Self>) -> std::result::Result<(), String>;
+    /// Stop capturing and throw the file away.
+    fn cancel(self: Box<Self>);
+    /// The ScreenCast portal's token for restoring this choice next time
+    /// (Wayland), said with `started`.
+    fn restore_token(&self) -> Option<String> {
+        None
+    }
+    /// Mute or unmute the microphone mid-recording. No platform recorder
+    /// here has it yet; the app does not offer it where this refuses
+    /// (`support::live_controls`).
+    ///
+    /// # Errors
+    /// This recorder cannot.
+    fn set_microphone_muted(&self, muted: bool) -> std::result::Result<(), String> {
+        let _ = muted;
+        Err(crate::capture::recording::LIVE_MICROPHONE_UNSUPPORTED.into())
+    }
+    /// Record another microphone from now on, as [`Self::set_microphone_muted`].
+    ///
+    /// # Errors
+    /// This recorder cannot.
+    fn switch_microphone(&self, device: Option<String>) -> std::result::Result<(), String> {
+        let _ = device;
+        Err(crate::capture::recording::LIVE_MICROPHONE_UNSUPPORTED.into())
+    }
+}
+
+/// What `start` hands back: the recording and its picture's pixel size.
+pub type Started = (Box<dyn Live>, (u32, u32));
+
+/// What a `start` begins: a recording, or (a Wayland area, `pickArea`) the
+/// chosen monitor's first picture and a recording that waits for its area.
+pub enum Begun {
+    Live(Started),
+    Picking(Box<dyn Picking>, protocol::StreamStill),
+}
+
+/// A recording whose area is still being drawn: the desktop's stream is
+/// open and its pictures are held back; no sound is open and no file
+/// exists until [`Picking::crop`].
+pub trait Picking: Send {
+    /// Record `area` of the stream (its own pixels) from now on.
+    ///
+    /// # Errors
+    /// The stream stopped meanwhile, or the recording could not start.
+    fn crop(self: Box<Self>, area: protocol::StreamCrop) -> std::result::Result<Started, String>;
+    /// Close the stream; nothing was recorded.
+    fn cancel(self: Box<Self>);
+}
+
+/// What the user reads when a platform recorder cannot start for a reason
+/// that is not theirs to fix (an encoder or capture call failed). The detail
+/// is in the log, from the child's stderr.
+pub const START_FAILED: &str = "Recording could not start. Try again, and restart Hippius if it keeps happening.";
+
+/// The line the app shows for a recorder's start failure: Rust's own
+/// sentences (the OS floor, the Media Feature Pack) as they are, anything
+/// else (an HRESULT, an internal message) as [`START_FAILED`].
+#[must_use]
+pub fn start_failure_for_user(detail: &str) -> String {
+    use crate::capture::recording::RecordingUnavailable;
+    let ours = [RecordingUnavailable::OsTooOld, RecordingUnavailable::MediaFeaturePackMissing]
+        .iter()
+        .any(|r| r.message() == detail);
+    if ours { detail.to_string() } else { START_FAILED.to_string() }
+}
+
+/// Start what `cmd` asks for: the test pattern, or this platform's recorder.
+fn start_live(cmd: &StartCommand, out: &Output) -> std::result::Result<Begun, String> {
+    if cmd.synthetic {
+        if cmd.pick_area {
+            // The test pattern's "monitor", for the area flow without a
+            // desktop.
+            let still = protocol::StreamStill {
+                width: synthetic::WIDTH,
+                height: synthetic::HEIGHT,
+                jpeg: String::new(),
+                placement: None,
+            };
+            let picking = SyntheticPick {
+                cmd: cmd.clone(),
+                out: Arc::clone(out),
+            };
+            return Ok(Begun::Picking(Box::new(picking), still));
+        }
+        let (session, size) = Session::start(cmd, out)?;
+        return Ok(Begun::Live((Box::new(session), size)));
+    }
+    #[cfg(windows)]
+    {
+        windows::start(cmd, out).map(Begun::Live)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::start(cmd, out)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        // No screen recorder on this platform (macOS records with the Swift
+        // helper): the app never gets here, and a hand-driven start is
+        // told why.
+        let _ = out;
+        Err(crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message().into())
+    }
+}
+
+/// The test pattern waiting for its area: the crop only sizes the output.
+struct SyntheticPick {
+    cmd: StartCommand,
+    out: Output,
+}
+
+impl Picking for SyntheticPick {
+    fn crop(self: Box<Self>, area: protocol::StreamCrop) -> std::result::Result<Started, String> {
+        let (session, _) = Session::start(&self.cmd, &self.out)?;
+        Ok((Box::new(session), plan::output_size(area.width, area.height)))
+    }
+
+    fn cancel(self: Box<Self>) {}
+}
+
+/// The test pattern's recording.
+struct Session {
+    output: PathBuf,
+    clock: Clock,
+    timeline: Arc<Mutex<Timeline>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<std::result::Result<Captured, String>>>,
+}
+
+impl Session {
+    fn start(cmd: &StartCommand, out: &Output) -> std::result::Result<(Self, (u32, u32)), String> {
+        let output = PathBuf::from(&cmd.output);
+        let writer: Box<dyn SampleWriter> = Box::new(TextWriter::create(&output)?);
+        let clock = Clock::start();
+        let timeline = Arc::new(Mutex::new(Timeline::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = std::thread::spawn({
+            let timeline = Arc::clone(&timeline);
+            let stop = Arc::clone(&stop);
+            let out = Arc::clone(out);
+            move || capture_loop(clock, &timeline, &stop, writer, &out)
+        });
+        let size = sizing::capped(synthetic::WIDTH, synthetic::HEIGHT);
+        Ok((
+            Self {
+                output,
+                clock,
+                timeline,
+                stop,
+                thread: Some(thread),
+            },
+            size,
+        ))
+    }
+
+    fn halt(&mut self) -> std::result::Result<Captured, String> {
+        self.stop.store(true, Ordering::SeqCst);
+        match self.thread.take().map(JoinHandle::join) {
+            Some(Ok(captured)) => captured,
+            Some(Err(_)) => Err("The recorder stopped unexpectedly.".into()),
+            None => Err("not recording".into()),
+        }
+    }
+}
+
+impl Live for Session {
+    fn pause(&self) {
+        let now = self.clock.now();
+        self.timeline.lock().unwrap_or_else(PoisonError::into_inner).pause(now);
+    }
+
+    fn resume(&self) {
+        let now = self.clock.now();
+        self.timeline.lock().unwrap_or_else(PoisonError::into_inner).resume(now);
+    }
+
+    fn finish(mut self: Box<Self>) -> std::result::Result<(), String> {
+        let now = self.clock.now();
+        let captured = self.halt()?;
+        let timeline = self.timeline.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let Some(first) = captured.first else {
+            let _ = std::fs::remove_file(&self.output);
+            return Err("The recording stopped before anything was captured.".into());
+        };
+        let end = timeline.end_time(now, captured.last_video).saturating_sub(first);
+        captured.writer.finish(end)
+    }
+
+    fn cancel(mut self: Box<Self>) {
+        let _ = self.halt();
+        let _ = std::fs::remove_file(&self.output);
+    }
+}
+
+/// Pull samples, drop those inside a pause, move the rest back by the pauses
+/// before them and hand them to the writer, from time zero.
+fn capture_loop(
+    clock: Clock,
+    timeline: &Mutex<Timeline>,
+    stop: &AtomicBool,
+    mut writer: Box<dyn SampleWriter>,
+    out: &Output,
+) -> std::result::Result<Captured, String> {
+    let mut source = synthetic::Synthetic::new(clock);
+    let mut first: Option<u64> = None;
+    let mut last_video: Option<u64> = None;
+    while !stop.load(Ordering::SeqCst) {
+        let sample = source.next_sample();
+        let time = match &sample {
+            Sample::Video { time, .. } | Sample::Audio { time, .. } => *time,
+        };
+        let Some(placed) = timeline.lock().unwrap_or_else(PoisonError::into_inner).place(time) else {
+            continue;
+        };
+        let start = *first.get_or_insert(placed);
+        let at = placed.saturating_sub(start);
+        let written = match &sample {
+            Sample::Video { bar_x, .. } => {
+                last_video = Some(placed);
+                writer.video(at, *bar_x)
+            }
+            Sample::Audio { samples, .. } => writer.audio(at, samples),
+        };
+        if let Err(e) = written {
+            // The writer failed for good: say so now, not at Stop.
+            let _ = writeln!(std::io::stderr(), "writer failed: {e}");
+            emit(out, &protocol::stream_stopped_line(&e, false));
+            return Err(e);
+        }
+    }
+    Ok(Captured { writer, first, last_video })
+}
+
+/// Serve the protocol on `input` and `output` until `input` closes. Returns
+/// once any recording left running has been finished and kept.
+pub fn serve(input: impl BufRead, output: impl Write + Send + 'static) {
+    let out: Output = Arc::new(Mutex::new(Box::new(output)));
+    emit(&out, &protocol::ready_line());
+    let mut session: Option<Box<dyn Live>> = None;
+    // A Wayland area being drawn: the stream is open, nothing is recorded.
+    let mut picking: Option<Box<dyn Picking>> = None;
+    for line in input.lines().map_while(std::result::Result::ok) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match protocol::parse_command(line) {
+            Err(bad) => emit(&out, &protocol::error_line(&bad.error, bad.id)),
+            Ok(Command::Start(cmd)) => {
+                if session.is_some() || picking.is_some() {
+                    emit(&out, &protocol::error_line("already recording", Some(cmd.id)));
+                    continue;
+                }
+                match start_live(&cmd, &out) {
+                    Ok(Begun::Live((live, size))) => {
+                        let token = live.restore_token();
+                        session = Some(live);
+                        emit(&out, &protocol::started_line(Some(cmd.id), size, token.as_deref()));
+                    }
+                    Ok(Begun::Picking(waiting, still)) => {
+                        picking = Some(waiting);
+                        emit(&out, &protocol::area_still_line(Some(cmd.id), &still));
+                    }
+                    Err(e) => emit(&out, &protocol::error_line(&e, Some(cmd.id))),
+                }
+            }
+            Ok(Command::Crop { id, area }) => match picking.take() {
+                Some(waiting) => match waiting.crop(area) {
+                    Ok((live, size)) => {
+                        let token = live.restore_token();
+                        session = Some(live);
+                        emit(&out, &protocol::started_line(id, size, token.as_deref()));
+                    }
+                    Err(e) => emit(&out, &protocol::error_line(&e, id)),
+                },
+                None => emit(&out, &protocol::error_line("not waiting for an area", id)),
+            },
+            Ok(Command::Pause { id }) => match &session {
+                Some(live) => {
+                    live.pause();
+                    emit(&out, &protocol::ok_line("paused", id, None));
+                }
+                None => emit(&out, &protocol::error_line("not recording", id)),
+            },
+            Ok(Command::Resume { id }) => match &session {
+                Some(live) => {
+                    live.resume();
+                    emit(&out, &protocol::ok_line("resumed", id, None));
+                }
+                None => emit(&out, &protocol::error_line("not recording", id)),
+            },
+            Ok(Command::Mute { id, muted }) => match &session {
+                Some(live) => match live.set_microphone_muted(muted) {
+                    Ok(()) => emit(&out, &protocol::ok_line(if muted { "muted" } else { "unmuted" }, id, None)),
+                    Err(e) => emit(&out, &protocol::error_line(&e, id)),
+                },
+                None => emit(&out, &protocol::error_line("not recording", id)),
+            },
+            Ok(Command::SwitchMicrophone { id, device }) => match &session {
+                Some(live) => match live.switch_microphone(device) {
+                    Ok(()) => emit(&out, &protocol::ok_line("microphone_switched", id, None)),
+                    Err(e) => emit(&out, &protocol::error_line(&e, id)),
+                },
+                None => emit(&out, &protocol::error_line("not recording", id)),
+            },
+            Ok(Command::Stop { id }) => match session.take() {
+                Some(live) => match live.finish() {
+                    Ok(()) => emit(&out, &protocol::ok_line("stopped", id, None)),
+                    Err(e) => emit(&out, &protocol::error_line(&e, id)),
+                },
+                None => emit(&out, &protocol::error_line("not recording", id)),
+            },
+            Ok(Command::Cancel { id }) => {
+                if let Some(live) = session.take() {
+                    live.cancel();
+                }
+                if let Some(waiting) = picking.take() {
+                    waiting.cancel();
+                }
+                emit(&out, &protocol::ok_line("cancelled", id, None));
+            }
+        }
+    }
+    // An area never drawn recorded nothing: there is no file to keep.
+    if let Some(waiting) = picking.take() {
+        waiting.cancel();
+    }
+    // stdin closed without a stop: the app is gone. Keep what was recorded;
+    // only an explicit `cancel` deletes.
+    if let Some(live) = session.take() {
+        match live.finish() {
+            Ok(()) => emit(&out, &protocol::ok_line("stopped", None, None)),
+            Err(e) => emit(&out, &protocol::error_line(&e, None)),
+        }
+    }
+}
+
+/// `Hippius --capture-recorder [--list-microphones | --list-cameras |
+/// --probe | --self-test | --poster <video> <seconds>... | --watch-devices |
+/// --meter [deviceId]]`: the one-shot modes print one JSON value and return
+/// (`--poster`: stills from a finished recording, [`poster`]); `--meter`
+/// prints the microphone's level and `--watch-devices` the device lists
+/// ([`watch`]) until stdin closes; otherwise serve the protocol on stdin
+/// and stdout. Returns the process exit code.
+#[must_use]
+pub fn run<I, S>(args: I) -> i32
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let args: Vec<String> = args.into_iter().map(|a| a.as_ref().to_string()).collect();
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    // Before every other flag: the times after `--poster` are free text.
+    #[cfg(windows)]
+    {
+        if has("--poster") {
+            return windows::poster::run(&args);
+        }
+        if has("--watch-devices") {
+            return windows::watch::run();
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if has("--poster") {
+            return linux::poster::run(&args);
+        }
+        if has("--watch-devices") {
+            return linux::watch::run();
+        }
+    }
+    if has("--poster") {
+        // No reader here (macOS reads its files in the Swift helper): no
+        // stills, and the card keeps the start screenshot.
+        return print_line(&poster::empty_line());
+    }
+    if has("--watch-devices") {
+        // Nothing to watch with; the app's watcher sees the child end.
+        return 1;
+    }
+    #[cfg(windows)]
+    {
+        if has("--meter") {
+            return windows::audio::run_meter(meter::device_arg(&args));
+        }
+        if has("--list-cameras") {
+            return print_line(&serde_json::to_string(&windows::devices::list_cameras()).unwrap_or_else(|_| "[]".into()));
+        }
+        if has("--list-microphones") {
+            return print_line(&serde_json::to_string(&windows::devices::list_microphones()).unwrap_or_else(|_| "[]".into()));
+        }
+        if has("--probe") {
+            return print_line(&serde_json::to_string(&windows::probe::probe()).unwrap_or_else(|_| "{}".into()));
+        }
+        if has("--self-test") {
+            let report = windows::self_test::run();
+            let ok = report.ok;
+            let code = print_line(&serde_json::to_string(&report).unwrap_or_else(|_| "{}".into()));
+            return if ok { code } else { 1 };
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if has("--list-microphones") {
+            return print_line(&serde_json::to_string(&linux::devices::list_microphones()).unwrap_or_else(|_| "[]".into()));
+        }
+        if has("--list-cameras") {
+            return print_line(&serde_json::to_string(&linux::devices::list_cameras()).unwrap_or_else(|_| "[]".into()));
+        }
+        if has("--probe") {
+            return print_line(&serde_json::to_string(&linux::probe::probe()).unwrap_or_else(|_| "{}".into()));
+        }
+        if has("--self-test") {
+            let report = linux::self_test::run();
+            let ok = report.ok;
+            let code = print_line(&serde_json::to_string(&report).unwrap_or_else(|_| "{}".into()));
+            return if ok { code } else { 1 };
+        }
+        if has("--meter") {
+            return linux::meter::run(meter::device_arg(&args));
+        }
+    }
+    if has("--list-microphones") || has("--list-cameras") {
+        // No devices where the platform's recorder does not list them (the
+        // camera window names cameras from the webview on Windows).
+        return print_line("[]");
+    }
+    if has("--probe") || has("--self-test") {
+        return print_line(r#"{"ok":false,"error":"not available on this platform"}"#);
+    }
+    if has("--meter") {
+        // No microphone the child can open here: the app's meter stays dark.
+        let _ = print_line(&meter::failed_line("The microphone meter is not available on this system."));
+        return 1;
+    }
+    serve(std::io::stdin().lock(), std::io::stdout());
+    0
+}
+
+/// Print one line on stdout; the exit code says whether it got there.
+fn print_line(line: &str) -> i32 {
+    let mut stdout = std::io::stdout();
+    i32::from(writeln!(stdout, "{line}").and_then(|()| stdout.flush()).is_err())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capture::recording::helper::HelperRecorder;
+    use crate::capture::recording::{RecordOptions, Recorder};
+    use crate::capture::screenshot::Selection;
+    use std::io::BufReader;
+    use std::time::Duration;
+
+    /// The child on one end of two pipes, `HelperRecorder` on the other: the
+    /// exact session the app runs, minus the process.
+    fn wire(dest: &std::path::Path, synthetic: bool) -> (crate::error::Result<HelperRecorder>, JoinHandle<()>) {
+        let (child_in, app_out) = std::io::pipe().unwrap();
+        let (app_in, child_out) = std::io::pipe().unwrap();
+        let child = std::thread::spawn(move || serve(BufReader::new(child_in), child_out));
+        let recorder = HelperRecorder::begin(None, Box::new(app_out), app_in, dest.to_path_buf(), false, |id| {
+            let mut cmd = StartCommand::from_selection(id, Selection::Screen { display_id: 1 }, dest, RecordOptions::default())?;
+            cmd.synthetic = synthetic;
+            Ok(cmd)
+        });
+        (recorder, child)
+    }
+
+    fn lines(path: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(path).unwrap().lines().map(str::to_string).collect()
+    }
+
+    fn end_of(lines: &[String]) -> u64 {
+        lines.last().and_then(|l| l.strip_prefix("end ")).expect("finished").parse().unwrap()
+    }
+
+    /// The child has no mid-recording microphone controls yet: it answers
+    /// them on their own id, in Rust's words, and the recording goes on.
+    /// Never a hang, never a dropped recording.
+    #[test]
+    fn microphone_controls_are_refused_and_the_recording_goes_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("rec.txt");
+        let input = format!(
+            "{}\n{}\n{}\n{}\n{}\n",
+            serde_json::json!({ "cmd": "mute", "id": 1 }),
+            serde_json::json!({ "cmd": "start", "id": 2, "output": dest.to_str().unwrap(), "synthetic": true }),
+            serde_json::json!({ "cmd": "mute", "id": 3 }),
+            serde_json::json!({ "cmd": "switch_microphone", "id": 4, "microphoneDeviceId": "usb-1" }),
+            // Still recording after both refusals: it can be cancelled.
+            serde_json::json!({ "cmd": "cancel", "id": 5 }),
+        );
+        let (mut from_child, child_out) = std::io::pipe().unwrap();
+        serve(BufReader::new(input.as_bytes()), child_out);
+        let mut said = String::new();
+        std::io::Read::read_to_string(&mut from_child, &mut said).unwrap();
+        let events: Vec<_> = said.lines().map(|l| protocol::parse_event(l).unwrap()).collect();
+        let unsupported = || protocol::HelperEvent::Error(crate::capture::recording::LIVE_MICROPHONE_UNSUPPORTED.into());
+        assert_eq!(
+            events.iter().map(|e| (e.id, e.event.clone())).collect::<Vec<_>>(),
+            [
+                (None, protocol::HelperEvent::Ready),
+                (Some(1), protocol::HelperEvent::Error("not recording".into())),
+                (Some(2), protocol::HelperEvent::Started),
+                (Some(3), unsupported()),
+                (Some(4), unsupported()),
+                (Some(5), protocol::HelperEvent::Cancelled),
+            ]
+        );
+    }
+
+    #[test]
+    fn start_pause_resume_stop_leaves_a_file_with_the_pause_cut_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("rec.txt");
+        let (recorder, child) = wire(&dest, true);
+        let mut recorder: Box<dyn Recorder> = Box::new(recorder.expect("started"));
+        std::thread::sleep(Duration::from_millis(300));
+        recorder.pause().unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        recorder.resume().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let path = recorder.stop().expect("stopped");
+        child.join().unwrap();
+
+        assert_eq!(path, dest);
+        let lines = lines(&dest);
+        assert!(lines.iter().any(|l| l.starts_with("video ")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.starts_with("audio ")));
+        // 0.6 s recorded; the 0.4 s pause is not in the file.
+        let end = end_of(&lines);
+        assert!((450_000..=900_000).contains(&end), "end at {end} us");
+        // No two frames further apart than a frame and a bit: the pause left
+        // no hole.
+        let frames: Vec<u64> = lines
+            .iter()
+            .filter_map(|l| l.strip_prefix("video ")?.split(' ').next()?.parse().ok())
+            .collect();
+        let widest = frames.windows(2).map(|w| w[1] - w[0]).max().unwrap();
+        assert!(widest < 150_000, "a {widest} us hole in the video");
+    }
+
+    #[test]
+    fn cancel_deletes_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("rec.txt");
+        let (recorder, child) = wire(&dest, true);
+        let recorder: Box<dyn Recorder> = Box::new(recorder.expect("started"));
+        std::thread::sleep(Duration::from_millis(150));
+        recorder.cancel().unwrap();
+        child.join().unwrap();
+        assert!(!dest.exists());
+    }
+
+    /// The app died: its end of stdin closed. The child finishes the file
+    /// and keeps it.
+    #[test]
+    fn stdin_closing_finishes_and_keeps_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("rec.txt");
+        let (child_in, mut app_out) = std::io::pipe().unwrap();
+        let (app_in, child_out) = std::io::pipe().unwrap();
+        let child = std::thread::spawn(move || serve(BufReader::new(child_in), child_out));
+        let start = serde_json::json!({ "cmd": "start", "id": 1, "output": dest, "synthetic": true });
+        writeln!(app_out, "{start}").unwrap();
+        let mut replies = BufReader::new(app_in).lines();
+        assert_eq!(replies.next().unwrap().unwrap(), protocol::ready_line());
+        let started = protocol::parse_event(&replies.next().unwrap().unwrap()).unwrap();
+        assert_eq!(started.event, protocol::HelperEvent::Started);
+        std::thread::sleep(Duration::from_millis(200));
+        drop(app_out);
+        child.join().unwrap();
+        let last = protocol::parse_event(&replies.next().unwrap().unwrap()).unwrap();
+        assert_eq!(last.event, protocol::HelperEvent::Stopped);
+        assert!(end_of(&lines(&dest)) > 0);
+    }
+
+    /// A real screen is not recorded where no recorder has landed: the start
+    /// is refused with the line the app shows. On Windows and Linux the
+    /// recorder is real, and display 1 is no monitor (a test runner has no
+    /// desktop): refused all the same. Either way no file is left behind.
+    #[test]
+    fn a_real_start_that_cannot_record_is_refused_and_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("rec.mp4");
+        let (recorder, child) = wire(&dest, false);
+        let err = recorder.err().expect("refused");
+        if !cfg!(any(windows, target_os = "linux")) {
+            assert_eq!(
+                err.to_string(),
+                crate::capture::recording::RecordingUnavailable::UnsupportedPlatform.message()
+            );
+        }
+        child.join().unwrap();
+        assert!(!dest.exists());
+    }
+
+    /// A start failure never shows the user an HRESULT; Rust's own lines
+    /// pass through.
+    #[test]
+    fn a_start_failure_reads_as_plain_words() {
+        use crate::capture::recording::RecordingUnavailable;
+        assert_eq!(
+            start_failure_for_user("The screen could not be captured: 0x80070005 Access is denied."),
+            START_FAILED
+        );
+        assert_eq!(start_failure_for_user("creating the video encoder: 0xC00D36B4"), START_FAILED);
+        for line in [
+            RecordingUnavailable::OsTooOld.message(),
+            RecordingUnavailable::MediaFeaturePackMissing.message(),
+        ] {
+            assert_eq!(start_failure_for_user(line), line);
+        }
+        assert!(!START_FAILED.contains('\u{2014}'));
+    }
+
+    /// The helper's replies to a command that makes no sense now.
+    #[test]
+    fn commands_without_a_recording_are_refused_by_id() {
+        let (child_in, mut app_out) = std::io::pipe().unwrap();
+        let (app_in, child_out) = std::io::pipe().unwrap();
+        let child = std::thread::spawn(move || serve(BufReader::new(child_in), child_out));
+        app_out.write_all(b"{\"cmd\":\"pause\",\"id\":4}\n").unwrap();
+        app_out.write_all(b"{\"cmd\":\"stop\",\"id\":5}\n").unwrap();
+        app_out.write_all(b"{\"cmd\":\"cancel\",\"id\":6}\n").unwrap();
+        writeln!(app_out, "garbage").unwrap();
+        drop(app_out);
+        child.join().unwrap();
+        let replies: Vec<String> = BufReader::new(app_in).lines().map(Result::unwrap).collect();
+        assert_eq!(
+            replies,
+            vec![
+                protocol::ready_line(),
+                protocol::error_line("not recording", Some(4)),
+                protocol::error_line("not recording", Some(5)),
+                protocol::ok_line("cancelled", Some(6), None),
+                protocol::error_line("malformed command", None),
+            ]
+        );
+    }
+
+    /// A Wayland area through the real serve loop: `start` with `pickArea`
+    /// is answered with the monitor's picture, nothing is written until the
+    /// `crop`, which is answered `started` at the area's size; a crop with
+    /// no area waiting is refused, and a cancel while drawing leaves no file.
+    #[test]
+    fn an_area_is_drawn_on_the_streams_picture_before_anything_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("area.txt");
+        let (child_in, app_out) = std::io::pipe().unwrap();
+        let (app_in, child_out) = std::io::pipe().unwrap();
+        let child = std::thread::spawn(move || serve(BufReader::new(child_in), child_out));
+        let options = RecordOptions {
+            pick_area: true,
+            ..RecordOptions::default()
+        };
+        let mut recorder = HelperRecorder::begin(None, Box::new(app_out), app_in, dest.clone(), false, |id| {
+            let mut cmd = StartCommand::from_selection(id, Selection::Screen { display_id: 0 }, &dest, options)?;
+            cmd.synthetic = true;
+            Ok(cmd)
+        })
+        .expect("the picture first");
+        let still = recorder.take_area_still().expect("a still");
+        assert_eq!((still.width, still.height), (synthetic::WIDTH, synthetic::HEIGHT));
+        assert!(!dest.exists(), "no file while the area is drawn");
+        recorder
+            .crop(protocol::StreamCrop {
+                x: 10,
+                y: 10,
+                width: 401,
+                height: 300,
+            })
+            .expect("started");
+        std::thread::sleep(Duration::from_millis(150));
+        let path = Box::new(recorder).stop().expect("stopped");
+        child.join().unwrap();
+        assert!(end_of(&lines(&path)) > 0);
+
+        let (child_in, mut app_out) = std::io::pipe().unwrap();
+        let (app_in, child_out) = std::io::pipe().unwrap();
+        let child = std::thread::spawn(move || serve(BufReader::new(child_in), child_out));
+        let gone = dir.path().join("gone.txt");
+        app_out
+            .write_all(b"{\"cmd\":\"crop\",\"id\":2,\"x\":0,\"y\":0,\"width\":10,\"height\":10}\n")
+            .unwrap();
+        let start = serde_json::json!({ "cmd": "start", "id": 3, "output": gone, "synthetic": true, "pickArea": true });
+        writeln!(app_out, "{start}").unwrap();
+        app_out.write_all(b"{\"cmd\":\"cancel\",\"id\":4}\n").unwrap();
+        drop(app_out);
+        child.join().unwrap();
+        let replies: Vec<String> = BufReader::new(app_in).lines().map(Result::unwrap).collect();
+        assert_eq!(replies[1], protocol::error_line("not waiting for an area", Some(2)));
+        assert!(matches!(
+            protocol::parse_event(&replies[2]).unwrap().event,
+            protocol::HelperEvent::AreaStill(_)
+        ));
+        assert_eq!(replies[3], protocol::ok_line("cancelled", Some(4), None));
+        assert_eq!(replies.len(), 4, "nothing to finish at the end: {replies:?}");
+        assert!(!gone.exists());
+    }
+}

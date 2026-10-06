@@ -1,4 +1,4 @@
-import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
+import type { FileFailureKind, FileFailureRecord } from "@/app/lib/types/fileFailure";
 
 /**
  * Copy for a ciphertext this device's key cannot open.
@@ -10,6 +10,17 @@ import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
  */
 export const UNDECRYPTABLE_MESSAGE =
   "Can't be decrypted on this device — needs to be re-uploaded or removed.";
+
+/**
+ * Copy for a refused row with no reason. Not expected (hcfs always explains a
+ * refusal), but a row must never render blank. Promises no retry: a refusal
+ * stands until the user changes something.
+ *
+ * Must stay word-identical to Rust's `REFUSED_FALLBACK_REASON`. Pinned by
+ * `src-tauri/tests/failure_copy_parity.rs`.
+ */
+export const REFUSED_FALLBACK_MESSAGE =
+  "Not synced. This file needs your attention before it can sync.";
 
 /**
  * HTTP 402 / storage-quota denial (not typed credits `insufficientBalance`).
@@ -74,6 +85,12 @@ export function failureMessage(rec: FileFailureRecord): string {
       // retry wording every other case uses would promise something that
       // never happens.
       return UNDECRYPTABLE_MESSAGE;
+    case "refused":
+      // Rust's copy for hcfs's typed refusal (`refusal_copy`), persisted as
+      // the row's message: what happened and what to do (rename, make
+      // readable, free up space). Rust's `display_reason` passes the same
+      // text through, so both paths agree.
+      return rec.message?.trim() || REFUSED_FALLBACK_MESSAGE;
     case "other":
     default: {
       // `other` carries display text; fall back to a generic line if absent or
@@ -105,21 +122,42 @@ export function failureMessage(rec: FileFailureRecord): string {
  * does, offering the affordance is offering something that cannot work.
  */
 export function isRetryableFailure(kind: FileFailureRecord["kind"]): boolean {
-  return kind !== "undecryptable";
+  // `refused` is the same shape for a different reason: hcfs reports a
+  // refusal once per revision, so a retry would clear the row and the next
+  // cycle would refuse the file again without saying so. Only the user's own
+  // change (rename, unlock, free space) releases it.
+  return kind !== "undecryptable" && kind !== "refused";
 }
 
 /**
- * Whether an authored failure reason describes something a retry can fix.
+ * Whether a Sync Issues dialog entry describes something a retry can fix.
  *
- * The reason-string sibling of {@link isRetryableFailure}, for surfaces that
- * receive `FailedFileInfo` (which carries `error` text but no typed `kind`).
- * Matching authored copy — never server text — is the same approach Rust
- * takes in `is_gone_reason` / `is_transient_reason`.
- *
- * Plumbing the typed kind through the `hcfs_failed_files` payload would be
- * better and is a separate change; until then this keeps the modal from
- * offering a button that cannot work.
+ * Decides by `kind` (Rust names it from hcfs's typed failure) whenever it is
+ * known: a refusal's `error` is hcfs's own text and cannot be matched. Only an
+ * entry with no kind falls back to the authored undecryptable copy, the one
+ * non-retryable reason whose wording this app controls.
  */
-export function isRetryableReason(reason: string | null): boolean {
-  return reason?.trim() !== UNDECRYPTABLE_MESSAGE;
+export function isRetryableFailedFile(file: {
+  kind?: FileFailureKind | null;
+  error: string | null;
+}): boolean {
+  if (file.kind) return isRetryableFailure(file.kind);
+  return file.error?.trim() !== UNDECRYPTABLE_MESSAGE;
+}
+
+/**
+ * The action a failed Drive row offers for its saved failure.
+ *
+ * - `retry` for a kind a retry can fix, and for a row with no saved failure
+ *   (a live failure from this cycle, not yet persisted).
+ * - `dismiss` for a refusal: retrying cannot change hcfs's verdict, so the
+ *   user can only acknowledge it (or fix the file, which clears it).
+ * - `null` for an undecryptable file: neither works, and the copy says what
+ *   does.
+ */
+export function failedRowAction(
+  failure: Pick<FileFailureRecord, "kind"> | null | undefined,
+): "retry" | "dismiss" | null {
+  if (!failure || isRetryableFailure(failure.kind)) return "retry";
+  return failure.kind === "refused" ? "dismiss" : null;
 }

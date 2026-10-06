@@ -1,24 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import dynamic from "next/dynamic";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Window } from "@tauri-apps/api/window";
 import { Upload, Check, AlertCircle } from "lucide-react";
 import "./tray-panel.css";
+import TrayTiles from "./TrayTiles";
+import TrayUploadRow, { ProgressRing } from "./TrayUploadRow";
+import { openMainFiles, revealMain } from "./trayMainWindow";
+import { useTrayCaptureView } from "./useTrayCaptureView";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
+import { getTraySyncLine } from "@/app/lib/tray/traySyncSummary";
 import {
-  getTraySyncSummary,
-  type TraySyncTone,
-} from "@/app/lib/tray/traySyncSummary";
+  DEFAULT_TRAY_TAB,
+  readTrayTab,
+  saveTrayTab,
+  type TrayTab,
+} from "@/app/lib/tray/trayTab";
 import type { SyncSnapshot } from "@/app/lib/types/syncSnapshot";
-import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
+import {
+  dedupKey,
+  type UploadFeedItem,
+} from "@/app/lib/upload-feed/mergeUploadFeed";
 import { groupUploadFeed } from "@/app/lib/upload-feed/groupUploadFeed";
-import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
-import { getFileIcon, DIRECTORY_SUFFIX } from "@/app/lib/utils/fileTypeUtils";
-import { formatBytes } from "@/app/lib/utils/formatBytes";
-import { formatUploadedDate } from "@/app/lib/utils/formatUploadedDate";
 import Button from "@/app/components/ui/button";
 import HippiusLogo from "@/app/components/ui/icons/HippiusLogo";
 import Search from "@/app/components/ui/icons/Search";
@@ -59,6 +64,7 @@ export default function TrayPanelPage() {
   const {
     menu,
     feed,
+    captures,
     snapshot,
     blockNumber,
     isConnected,
@@ -66,9 +72,30 @@ export default function TrayPanelPage() {
     chatUnread,
     loading,
   } = useTrayPanelData();
+  const { view: captureView, shortcut } = useTrayCaptureView();
+  // Where capture is off or unsupported there is no Captures tab: the list
+  // is every upload, as before the tabs.
+  const hasCapturesTab = captureView.state !== "hidden";
+  const [chosenTab, setChosenTab] = useState<TrayTab>(DEFAULT_TRAY_TAB);
+  // Read after mount: the static export prerenders without storage, and the
+  // first client render must match it.
+  useEffect(() => setChosenTab(readTrayTab()), []);
+  const tab: TrayTab = hasCapturesTab ? chosenTab : "all";
+  const chooseTab = (next: TrayTab) => {
+    setChosenTab(next);
+    saveTrayTab(next);
+  };
+
+  const list = tab === "captures" ? captures : feed;
+  // A row in the feed that Rust also listed as a capture reads as a
+  // Screenshot or a Recording there too.
+  const captureKeys = useMemo(
+    () => new Set(captures.map((item) => dedupKey(item))),
+    [captures],
+  );
   // Date-bucketed for the headed list (Today / Yesterday / This Week / …).
   // Live uploading/failed rows carry createdAt=now, so they lead "Today".
-  const groups = groupUploadFeed(feed);
+  const groups = groupUploadFeed(list);
 
   // ⌘/Ctrl+F mirrors clicking the "Search Files" field (`openMainSearch`): the
   // popover has no search of its own, so the shortcut reveals the main window
@@ -119,52 +146,59 @@ export default function TrayPanelPage() {
           unreadCount={unreadCount}
           chatUnread={chatUnread}
         />
+        {/* Screenshot / Record / Upload, above the search field. Only Upload
+            where capture is off or unsupported (see TrayTiles). */}
+        <TrayTiles view={captureView} shortcut={shortcut} />
         <SearchBar />
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-2">
-          <h2 className="py-2 font-geist text-[16px] font-medium leading-8 text-grey-10 dark:text-white">
-            Your Uploads
-          </h2>
+        <div className="flex items-center justify-between gap-3 px-5 pb-1 pt-4">
+          {hasCapturesTab ? (
+            <TabSwitch tab={tab} onChange={chooseTab} />
+          ) : (
+            <h2 className="font-geist text-[14px] font-medium leading-7 text-grey-10 dark:text-white">
+              Your Uploads
+            </h2>
+          )}
+          {/* One line in place of the old sync card; the same summary
+              (`getTraySyncSummary`) said shortly. */}
+          <SyncLine snapshot={snapshot} />
+        </div>
 
-          {/* Live sync-progress summary (percent + status + synced/remaining),
-            mirroring the sidebar sync widget. Renders only while a session is
-            active or just finished; getTraySyncSummary returns null when idle. */}
-          <SyncSummary snapshot={snapshot} />
-
-          {feed.length === 0 && loading ? (
+        <div
+          role={hasCapturesTab ? "tabpanel" : undefined}
+          id={hasCapturesTab ? TAB_PANEL_ID : undefined}
+          aria-labelledby={hasCapturesTab ? tabId(tab) : undefined}
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-2"
+        >
+          {list.length === 0 && loading ? (
             // First load (no data yet): skeleton placeholders instead of the
             // empty state, so a fresh open doesn't flash "No files yet" before the
             // first fetch resolves. The empty state is shown only once loading
-            // settles with a genuinely empty feed (below).
+            // settles with a genuinely empty list (below).
             <UploadRowsSkeleton />
-          ) : feed.length === 0 ? (
-            // Empty state: a single simple rounded card (no graphsheet / guide
-            // lines / corner textures) with copy + the Upload CTA that opens the
-            // Drive page.
-            <div className="flex flex-1 items-center justify-center py-2">
-              {/* Explicit rgba fills/borders, not the arbitrary opacity-modifier
-                form (border-black/[0.08] etc.), which didn't render in light
-                mode here — same fix applied to the footer and credits pill. */}
-              <div className="flex w-full flex-col gap-4 rounded-2xl border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-5 shadow-sm dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
-                <div className="flex flex-col gap-1.5">
-                  <h3 className="font-geist text-[18px] font-medium leading-6 tracking-[-0.54px] text-grey-10 dark:text-white">
-                    No files yet
-                  </h3>
-                  <p className="font-geist text-[14px] leading-5 text-black/50 dark:text-white/50">
-                    Start by uploading a file to see it here.
-                  </p>
-                </div>
-                <Button
-                  variant="primary"
-                  size="auto"
-                  onClick={() => void openMainFiles()}
-                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl text-[15px] font-medium"
-                >
-                  <Upload className="size-4" />
-                  Upload a File
-                </Button>
-              </div>
-            </div>
+          ) : list.length === 0 ? (
+            tab === "captures" ? (
+              <EmptyCard
+                title="No captures yet"
+                body="Take a screenshot or record your screen. It shows up here with its link ready to copy."
+              />
+            ) : (
+              <EmptyCard
+                title="No files yet"
+                body="Start by uploading a file to see it here."
+                action={
+                  <Button
+                    variant="primary"
+                    size="auto"
+                    onClick={() => void openMainFiles()}
+                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl text-[15px] font-medium"
+                  >
+                    <Upload className="size-4" />
+                    Upload a File
+                  </Button>
+                }
+              />
+            )
           ) : (
             // Date-grouped sections. `mergeUploadFeed` order (uploading → failed
             // → completed) is preserved within each bucket, so active rows lead
@@ -176,7 +210,12 @@ export default function TrayPanelPage() {
                 </h3>
                 <ul>
                   {group.items.map((item) => (
-                    <UploadRowItem key={uploadRowKey(item)} item={item} />
+                    <TrayUploadRow
+                      key={uploadRowKey(item)}
+                      item={item}
+                      accountId={menu?.substrateAddress ?? null}
+                      isCapture={tab === "captures" || captureKeys.has(dedupKey(item))}
+                    />
                   ))}
                 </ul>
               </section>
@@ -303,7 +342,7 @@ function SearchBar() {
         <span className="flex min-w-0 items-center gap-2 text-black/30 dark:text-white/30">
           <Search className="size-[18px] shrink-0" />
           <span className="truncate font-geist text-[16px] font-medium leading-5">
-            Search Files
+            Search your files
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-1 font-geist text-[14px] font-medium text-black/30 dark:text-white/30">
@@ -315,73 +354,138 @@ function SearchBar() {
   );
 }
 
-/** Per-tone accent color for the sync summary (matches `StatusLabel`'s tokens
- *  and the sidebar widget). */
-const TRAY_SYNC_TONE_TEXT: Record<TraySyncTone, string> = {
-  active: "text-[#3167DD]",
-  preparing: "text-[#3167DD]",
-  completed: "text-[#04C870]",
-  failed: "text-[#FF6D61]",
-};
+const TAB_PANEL_ID = "tray-files-panel";
+const TABS: { id: TrayTab; label: string }[] = [
+  { id: "captures", label: "Captures" },
+  { id: "all", label: "All files" },
+];
+const tabId = (tab: TrayTab) => `tray-tab-${tab}`;
 
 /**
- * Sync-progress summary shown above the upload list — the popover counterpart
- * of the sidebar's sync widget. Top line: a status icon + overall percent on
- * the left, the status word on the right. Bottom line: synced vs. remaining
- * counts. Renders nothing when there's no active/recent session (the resolver
- * returns null), so the list sits directly under the heading when idle.
+ * "Captures | All files": a segmented control in the search pill's fill.
+ * A real tab list for assistive tech; the arrow keys, Home and End move
+ * between the two (the selected tab is the one in the tab order).
  */
-function SyncSummary({ snapshot }: { snapshot: SyncSnapshot }) {
-  const summary = getTraySyncSummary(snapshot);
-  if (!summary) return null;
-
-  const accent = TRAY_SYNC_TONE_TEXT[summary.tone];
-
+function TabSwitch({
+  tab,
+  onChange,
+}: {
+  tab: TrayTab;
+  onChange: (tab: TrayTab) => void;
+}) {
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const index = TABS.findIndex((t) => t.id === tab);
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % TABS.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + TABS.length) % TABS.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = TABS.length - 1;
+    else return;
+    event.preventDefault();
+    onChange(TABS[next].id);
+    document.getElementById(tabId(TABS[next].id))?.focus();
+  };
   return (
-    <div className="mb-2 mt-1 flex flex-col gap-2 rounded-[12px] border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-3 dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {summary.tone === "completed" ? (
-            <Check className="size-4 shrink-0 text-[#04C870]" strokeWidth={3} />
-          ) : summary.tone === "failed" ? (
-            <AlertCircle className="size-4 shrink-0 text-[#FF6D61]" />
-          ) : (
-            <span className={`flex ${accent}`}>
-              <ProgressRing value={summary.percent} />
-            </span>
-          )}
-          <span
-            className={`font-geist text-[14px] font-semibold leading-none ${accent}`}
+    <div
+      role="tablist"
+      aria-label="Files to show"
+      onKeyDown={onKeyDown}
+      className="flex shrink-0 items-center gap-0.5 rounded-[10px] bg-[#0000000F] p-0.5 dark:bg-white/[0.06]"
+    >
+      {TABS.map(({ id, label }) => {
+        const selected = id === tab;
+        return (
+          <button
+            key={id}
+            id={tabId(id)}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={TAB_PANEL_ID}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(id)}
+            className={`h-7 rounded-[8px] px-3 font-geist text-[13px] font-medium leading-none tracking-[-0.26px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary-50 dark:focus-visible:ring-primary-brand-dark ${
+              selected
+                ? "bg-white text-grey-10 shadow-[0_1px_2px_rgba(0,0,0,0.08)] dark:bg-white/15 dark:text-white"
+                : "text-[rgba(0,0,0,0.5)] hover:text-[rgba(0,0,0,0.8)] dark:text-white/50 dark:hover:text-white/80"
+            }`}
           >
-            {summary.percent}%
-          </span>
-        </div>
-        <span
-          className={`font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px] ${
-            summary.tone === "completed"
-              ? "text-grey-70 dark:text-white/50"
-              : accent
-          }`}
-        >
-          {summary.statusLabel}
-        </span>
-      </div>
-      <span className="font-geist text-[12px] font-medium tracking-[-0.24px] text-grey-70 dark:text-white/50">
-        {summary.detail}
-      </span>
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-/** A single upload row. Layout mirrors the Figma: the file-type icon aligns
- *  with the filename on the top line, and the size sits below — sharing that
- *  bottom line with the right-aligned status, so size and status line up.
- *
- *  Completed rows show the uploaded time (like the search palette the product
- *  liked); in-flight and failed rows show a live status pill (with a progress
- *  ring while uploading). */
-/** First-load placeholder for the upload list — a faint group heading plus a
- *  handful of rows mirroring `UploadRowItem`'s layout (icon + name + meta).
+/** Per-tone colour of the sync line (the sidebar widget's tokens). */
+const SYNC_LINE_TONE = {
+  synced: "text-grey-70 dark:text-white/60",
+  active: "text-[#3167DD] dark:text-primary-brand-dark",
+  failed: "text-[#FF6D61]",
+} as const;
+
+/**
+ * The sync status in one short line beside the tabs: "All synced" with a
+ * green check, "Uploading 2 · 64%" with a ring, or the failures in the
+ * error tone. The fuller sentence is its tooltip and is read out with it.
+ */
+function SyncLine({ snapshot }: { snapshot: SyncSnapshot }) {
+  const line = getTraySyncLine(snapshot);
+  return (
+    <span
+      role="status"
+      data-testid="tray-sync-line"
+      data-tone={line.tone}
+      title={line.detail}
+      className={`flex min-w-0 items-center gap-1.5 font-geist text-[12px] font-medium leading-none tracking-[-0.24px] ${SYNC_LINE_TONE[line.tone]}`}
+    >
+      {line.tone === "synced" ? (
+        <Check className="size-3.5 shrink-0 text-[#04C870]" strokeWidth={3} aria-hidden />
+      ) : line.tone === "failed" ? (
+        <AlertCircle className="size-3.5 shrink-0" aria-hidden />
+      ) : (
+        <ProgressRing value={line.percent} />
+      )}
+      <span className="truncate">{line.text}</span>
+      <span className="sr-only">. {line.detail}</span>
+    </span>
+  );
+}
+
+/** The list's empty state: a single simple rounded card with copy and,
+ *  for All files, the Upload CTA that opens the Drive page. */
+function EmptyCard({
+  title,
+  body,
+  action,
+}: {
+  title: string;
+  body: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-1 items-center justify-center py-2">
+      {/* Explicit rgba fills/borders, not the arbitrary opacity-modifier
+          form (border-black/[0.08] etc.), which didn't render in light
+          mode here (same fix applied to the footer and credits pill). */}
+      <div className="flex w-full flex-col gap-4 rounded-2xl border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-5 shadow-sm dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
+        <div className="flex flex-col gap-1.5">
+          <h3 className="font-geist text-[18px] font-medium leading-6 tracking-[-0.54px] text-grey-10 dark:text-white">
+            {title}
+          </h3>
+          <p className="font-geist text-[14px] leading-5 text-black/50 dark:text-white/50">
+            {body}
+          </p>
+        </div>
+        {action}
+      </div>
+    </div>
+  );
+}
+
+/** First-load placeholder for the upload list: a faint group heading plus a
+ *  handful of rows mirroring the row's layout (thumbnail + name + subtitle).
  *  Uses explicit rgba fills, not `bg-black/x` (dead here: the black palette has
  *  no DEFAULT key, so the modifier renders nothing in light mode). */
 function UploadRowsSkeleton() {
@@ -391,14 +495,11 @@ function UploadRowsSkeleton() {
       <div className={`mb-1 mt-3 h-4 w-16 ${bar}`} />
       <ul>
         {Array.from({ length: 5 }).map((_, i) => (
-          <li key={i} className="flex items-start gap-3 py-2.5">
-            <span className={`h-5 w-4 shrink-0 ${bar}`} />
+          <li key={i} className="flex items-center gap-3 py-2">
+            <span className={`h-[42px] w-16 shrink-0 rounded-[8px] ${bar}`} />
             <div className="min-w-0 flex-1">
               <div className={`h-3.5 w-1/2 ${bar}`} />
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <div className={`h-3 w-16 ${bar}`} />
-                <div className={`h-3 w-12 ${bar}`} />
-              </div>
+              <div className={`mt-2 h-3 w-2/5 ${bar}`} />
             </div>
           </li>
         ))}
@@ -407,174 +508,11 @@ function UploadRowsSkeleton() {
   );
 }
 
-function UploadRowItem({ item }: { item: UploadFeedItem }) {
-  const rawName = item.actualFileName || item.name;
-  const ext = rawName.includes(".") ? (rawName.split(".").pop() ?? null) : null;
-  const fileType = getFileTypeFromExtension(ext);
-  const { icon: Icon, color } = getFileIcon(fileType ?? undefined, false);
-
-  const sizeText =
-    typeof item.size === "number" && item.size > 0
-      ? formatBytes(item.size)
-      : "—";
-  const uploadedText =
-    item.feedStatus === "completed" ? formatUploadedDate(item.createdAt) : null;
-
-  return (
-    <li className="flex items-start gap-3 py-2.5">
-      {/* Icon column is as tall as the filename's line box and centers the
-          icon within it, so the icon lines up with the filename row (not the
-          very top of the list item). */}
-      <span
-        className={`flex h-5 w-4 shrink-0 items-center justify-center ${color}`}
-      >
-        <Icon className="size-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <MiddleEllipsisName name={displayFileName(item.name)} />
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <span className="truncate font-geist text-[12px] font-medium leading-normal tracking-[-0.24px] text-grey-10 dark:text-white">
-            {sizeText}
-          </span>
-          {uploadedText ? (
-            <span className="shrink-0 font-geist text-[12px] font-medium tracking-[-0.24px] text-grey-10 dark:text-white/50">
-              {uploadedText}
-            </span>
-          ) : (
-            <StatusLabel
-              status={item.feedStatus}
-              progress={item.progressPercent}
-            />
-          )}
-        </div>
-      </div>
-    </li>
-  );
-}
-
-/**
- * Center-truncate a filename with PURE CSS — no width measurement, so it is
- * immune to the webfont-load timing that left the canvas-measuring
- * `MiddleTruncatedName` clipping the extension in this provider-free webview.
- *
- * The head span truncates with the browser's own end-ellipsis; the tail span
- * (the last `TAIL_CHARS` — extension plus a little context) is `shrink-0`, so it
- * is always rendered in full. When the whole name fits, head sizes to its
- * content (no `flex-1`), so there's no gap before the tail and it reads as one
- * contiguous string; when it doesn't, only the head shrinks. The native `title`
- * shows the full name on hover.
- */
-function MiddleEllipsisName({ name }: { name: string }) {
-  const TAIL_CHARS = 10;
-  const textClass =
-    "font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white";
-
-  if (name.length <= TAIL_CHARS + 1) {
-    return (
-      <p className={`truncate ${textClass}`} title={name}>
-        {name}
-      </p>
-    );
-  }
-
-  const head = name.slice(0, name.length - TAIL_CHARS);
-  const tail = name.slice(name.length - TAIL_CHARS);
-  return (
-    <p className={`flex min-w-0 ${textClass}`} title={name}>
-      <span className="min-w-0 truncate">{head}</span>
-      <span className="shrink-0 whitespace-pre">{tail}</span>
-    </p>
-  );
-}
-
 /** Stable React key: drive label + relative path keeps a row identity across
  *  the uploading → completed transition (avoids a remount that would restart
  *  the row's transitions). */
 function uploadRowKey(item: UploadFeedItem): string {
   return `${item.label ?? ""}::${item.actualFileName || item.name}`;
-}
-
-/** Small circular progress ring shown beside the "time left" status while a
- *  file is uploading — mirrors the drive page's ring. `value` is 0–100. */
-function ProgressRing({ value }: { value: number }) {
-  const radius = 5;
-  const circumference = 2 * Math.PI * radius;
-  const clamped = Math.max(0, Math.min(100, value));
-  const offset = circumference * (1 - clamped / 100);
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      className="-rotate-90 shrink-0"
-      aria-hidden="true"
-    >
-      <circle
-        cx="6"
-        cy="6"
-        r={radius}
-        fill="none"
-        stroke="currentColor"
-        strokeOpacity="0.25"
-        strokeWidth="2"
-      />
-      <circle
-        cx="6"
-        cy="6"
-        r={radius}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeDasharray={circumference}
-        strokeDashoffset={offset}
-      />
-    </svg>
-  );
-}
-
-/** Color-coded status label (Geist Mono, 10px, uppercase — Figma tokens). The
- *  current backend feed only emits "uploaded"/"deleted"; the other states
- *  (pending/failed/uploading + a time-left ring) are styled for when richer
- *  per-file progress is wired in. */
-function StatusLabel({
-  status,
-  progress,
-}: {
-  status: string;
-  progress?: number | null;
-}) {
-  const base =
-    "shrink-0 font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px]";
-
-  // Uploading: brand-blue progress ring + live percent (falls back to the
-  // "UPLOADING" word before the first percent arrives).
-  if (status === "uploading") {
-    return (
-      <span className={`flex items-center gap-1.5 text-[#3167DD] ${base}`}>
-        <ProgressRing value={progress ?? 0} />
-        {typeof progress === "number"
-          ? `${Math.round(progress)}%`
-          : "UPLOADING"}
-      </span>
-    );
-  }
-
-  const map: Record<string, { label: string; className: string }> = {
-    completed: { label: "UPLOADED", className: "text-[#04C870]" },
-    uploaded: { label: "UPLOADED", className: "text-[#04C870]" },
-    pending: { label: "PENDING", className: "text-[#FEB101]" },
-    failed: { label: "FAILED", className: "text-[#FF6D61]" },
-    deleted: {
-      label: "DELETED",
-      className: "text-black/40 dark:text-white/40",
-    },
-  };
-  const entry = map[status] ?? {
-    label: status.toUpperCase(),
-    className: "text-black/40 dark:text-white/40",
-  };
-  return <span className={`${base} ${entry.className}`}>{entry.label}</span>;
 }
 
 /** Bottom bar: a single rounded box (Figma tokens — 8px gap, 16px radius,
@@ -753,39 +691,7 @@ async function openMainSearch() {
   }
 }
 
-/** Focus the main window and navigate it to the Drive (files) page — used by
- *  the empty-state "Upload a File" CTA. Routing happens in the main window (via
- *  `TrayNavigationListener`), never in this popover webview. */
-async function openMainFiles() {
-  try {
-    await revealMain();
-    await emit("hippius:tray-open-files", {});
-    await invoke("hide_tray_panel");
-  } catch (error) {
-    console.error("[TrayPanel] Failed to open Drive:", error);
-  }
-}
-
-/** Reveal + focus the `main` window (addressed by label — the popover runs in
- *  its own webview, so `getCurrentWindow()` here is the panel, not main). */
-async function revealMain() {
-  const main = await Window.getByLabel("main");
-  if (!main) return;
-  if (await main.isMinimized()) await main.unminimize();
-  await main.show();
-  await main.setFocus();
-}
-
 // ── Presentation helpers ────────────────────────────────────────────────────
-
-/** Display name for an upload row: strip the internal `.ec_metadata` folder
- *  suffix, but do NOT length-truncate — CSS `truncate` ellipsizes based on the
- *  row's actual available width, so names use the full row before clipping. */
-function displayFileName(rawName: string): string {
-  return rawName.endsWith(DIRECTORY_SUFFIX)
-    ? rawName.slice(0, -DIRECTORY_SUFFIX.length)
-    : rawName;
-}
 
 /** `5cRyFw…Quus`-style short form of a substrate address. */
 function shortenAddress(address: string | null): string {

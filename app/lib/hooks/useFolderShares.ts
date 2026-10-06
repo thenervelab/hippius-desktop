@@ -16,6 +16,10 @@
 // shared, so revoked rows are dropped at index build and expired ones at
 // lookup time (expiry is clock-dependent, the index is cached).
 //
+// Only drive rows are indexed. An uploaded copy (a folder shared from outside
+// every drive) belongs to no drive folder, and a row with no folder hash names
+// none, so neither may badge one.
+//
 // Shares the TanStack Query cache key with the `/shares` page, so every
 // badge instance in a long listing collapses onto ONE request/poll.
 
@@ -49,6 +53,9 @@ function indexKey(folderHash: string, pathPrefix: string): string {
 export function buildFolderShareIndex(rows: FolderShareSummary[]): FolderShareIndex {
   const index: FolderShareIndex = new Map();
   for (const row of rows) {
+    // An uploaded copy is a snapshot with no drive identity: its `""` pair
+    // must never be matched against a drive folder.
+    if (row.source !== "drive" || row.folderHash === "") continue;
     if (row.revokedAt !== null) continue;
     const key = indexKey(row.folderHash, row.pathPrefix);
     const list = index.get(key);

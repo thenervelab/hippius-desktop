@@ -70,6 +70,12 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
     use tauri::Manager;
     info!(account_id = %account_id, "Full logout initiated");
 
+    // 0. Screen capture: cancel a capture still choosing or recording (nobody
+    //    would own its pill, and its upload would fail with no account),
+    //    forget the capture cards, and unregister the shortcut until the
+    //    next sign-in registers it again.
+    crate::capture::commands::end_for_logout(&app).await;
+
     // 1. Stop sync engine
     if let Err(e) = crate::sync::lifecycle::stop_sync(app.clone()).await {
         warn!("stop_sync during logout failed: {e}");

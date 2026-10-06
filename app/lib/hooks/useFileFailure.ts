@@ -22,17 +22,21 @@ export function useDriveFailures(label: string | undefined) {
 }
 
 /**
- * The persisted failure for a single file, matched by basename — mirroring how
- * `useFileLiveProgress` matches rows by name — or `null`. Reads the shared
- * per-drive query, so it adds no extra network cost per row.
+ * The persisted failure for a single file, matched by its drive-relative path
+ * (as Rust keys the row and the row menu looks it up), or `null`. The query is
+ * per drive, so `label` scopes it. Reads the shared per-drive query, so it
+ * adds no extra network cost per row.
+ *
+ * Never by basename: two files with one name in different folders would both
+ * show the first one's failure.
  */
 export function useFileFailure(
   label: string | undefined,
-  fileName: string | undefined,
+  relativePath: string | undefined,
 ): FileFailureRecord | null {
   const { data } = useDriveFailures(label);
-  if (!data || !fileName) return null;
-  return data.find((f) => f.fileName === fileName) ?? null;
+  if (!data || !relativePath) return null;
+  return data.find((f) => f.relativePath === relativePath) ?? null;
 }
 
 /**

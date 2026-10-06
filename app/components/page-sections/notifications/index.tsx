@@ -22,6 +22,8 @@ import { useSearchParams } from "next/navigation";
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
+import { revealHeldDelete } from "@/app/lib/massDelete/notificationLink";
+import { revealEmptyRemote } from "@/app/lib/emptyRemote/notificationLink";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
 import PageHeader from "@/components/ui/page-header";
 
@@ -101,6 +103,10 @@ const Notifications = () => {
   };
 
   const onItemClick = (id: number) => {
+    // A held-delete or empty-drive row also brings back the banner the
+    // user put away ("Decide later", "Keep my files").
+    const buttonLink = items.find((n) => n.id === id)?.buttonLink;
+    if (!revealHeldDelete(buttonLink)) revealEmptyRemote(buttonLink);
     markRead(id).then(refreshUnread);
     setSelectedId(id);
   };

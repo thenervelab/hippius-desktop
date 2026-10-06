@@ -1,6 +1,10 @@
 "use client";
 
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, FolderOpen } from "lucide-react";
+import { driveFolderRoute } from "@/app/lib/routes";
+import { requestOpenDriveFolder } from "@/app/lib/drive/openDriveFolder";
+import { driveStatusesAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { baseNameOf, parentOf } from "@/app/components/page-sections/drive/uploadingHere";
 import React, {
   memo,
   useCallback,
@@ -75,6 +79,8 @@ interface SyncFileItemProps {
    * rather than derived here: the classification is Rust's (the reason string
    * is display copy, not a contract), and the row only joins by path. */
   isRetrying?: boolean;
+  /** Open the folder this file is in, on the Drive page. Absent: no button. */
+  onShowInFolder?: (file: FileProgress) => void;
 }
 
 type SyncFileStatusBadgeVariant =
@@ -285,7 +291,7 @@ function SyncFileStatusBadge({
 }
 
 const SyncFileItem = memo<SyncFileItemProps>(
-  function SyncFileItem({ file, isRetrying = false }) {
+  function SyncFileItem({ file, isRetrying = false, onShowInFolder }) {
     const isCompleted = file.status === "completed";
     const isDeleted =
       isCompleted &&
@@ -329,7 +335,7 @@ const SyncFileItem = memo<SyncFileItemProps>(
 
     return (
       <div className="w-full py-[3px]" data-file-item data-testid="file-item">
-        <div className="flex min-w-0 flex-col gap-[3px]">
+        <div className="flex min-w-0 flex-col gap-[4px]">
           <div className="flex items-center gap-[6px]">
             <div className="flex size-4 shrink-0 items-center justify-center rounded-[4px]">
               <Icon className={cn("size-4", color)} />
@@ -339,6 +345,20 @@ const SyncFileItem = memo<SyncFileItemProps>(
               name={file.fileName}
               className="block min-w-0 flex-1 text-[12px] font-medium leading-none tracking-[-0.24px] text-[#0a0a0a] dark:text-white font-geist"
             />
+            {onShowInFolder && !isDeleted && (
+              <button
+                type="button"
+                aria-label={`Show ${file.fileName} in its folder`}
+                title="Show in folder"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onShowInFolder(file);
+                }}
+                className="-my-0.5 grid size-5 shrink-0 place-items-center rounded-[4px] text-grey-10/50 hover:bg-[#000]/5 hover:text-grey-10 dark:text-white/50 dark:hover:bg-white/10 dark:hover:text-white"
+              >
+                <FolderOpen className="size-3.5" />
+              </button>
+            )}
           </div>
 
           <div className="flex items-end justify-between gap-2 font-geist">
@@ -382,7 +402,8 @@ const SyncFileItem = memo<SyncFileItemProps>(
       previousFile.error === nextFile.error &&
       // Without this the row keeps its stale badge: the file fields are
       // identical across the frame where Rust first flags it as retrying.
-      previous.isRetrying === next.isRetrying
+      previous.isRetrying === next.isRetrying &&
+      previous.onShowInFolder === next.onShowInFolder
     );
   },
 );
@@ -397,6 +418,20 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
+  const driveStatuses = useAtomValue(driveStatusesAtom);
+  // A drive with a status here is synced on this machine; any other drive in
+  // the queue was uploaded straight to the server, which opens remotely.
+  const showInFolder = useCallback(
+    (file: FileProgress) => {
+      if (!file.label) return;
+      const remote = !driveStatuses.has(file.label);
+      // The file's own name too, so the folder opens with its row pointed out.
+      requestOpenDriveFolder(
+        driveFolderRoute(file.label, remote, parentOf(file.path) || undefined, baseNameOf(file.path) || undefined),
+      );
+    },
+    [driveStatuses],
+  );
 
   // Rust flags the errored rows that retry themselves; the row joins by path.
   // A Set (not `.includes`) so a large failing batch stays O(1) per row.
@@ -887,6 +922,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     key={file.path}
                     file={file}
                     isRetrying={retryingPaths.has(file.path)}
+                    onShowInFolder={showInFolder}
                   />
                 ))}
             </div>

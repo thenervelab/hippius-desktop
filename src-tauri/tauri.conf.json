@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hippius",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "identifier": "hippius.com",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -60,7 +60,11 @@
     "security": {
       "capabilities": [
         "default",
-        "tray-panel"
+        "tray-panel",
+        "capture-overlay",
+        "capture-controls",
+        "capture-preview",
+        "capture-camera"
       ],
       "dangerousDisableAssetCspModification": [
         "style-src"
@@ -131,6 +135,16 @@
         "depends": [
           "python3-nautilus"
         ],
+        "recommends": [
+          "xdg-desktop-portal",
+          "xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr",
+          "gstreamer1.0-pipewire",
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-plugins-bad",
+          "gstreamer1.0-plugins-ugly",
+          "gstreamer1.0-libav"
+        ],
         "files": {
           "/usr/share/nautilus-python/extensions/hippius-share.py": "../linux/nautilus-python/hippius-share.py",
           "/usr/share/kio/servicemenus/hippius-share.desktop": "../linux/servicemenus/hippius-share.desktop",
@@ -144,6 +158,17 @@
           "/usr/share/hippius/shell-integration/thunar/uca-snippet.xml": "../linux/thunar/uca-snippet.xml"
         },
         "postInstallScript": "../linux/deb/postinst.sh"
+      },
+      "rpm": {
+        "recommends": [
+          "xdg-desktop-portal",
+          "gstreamer1-plugins-base",
+          "gstreamer1-plugins-good",
+          "gstreamer1-plugins-bad-free",
+          "gstreamer1-plugin-openh264",
+          "gstreamer1-plugin-libav",
+          "pipewire-gstreamer"
+        ]
       }
     }
   }

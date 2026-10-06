@@ -190,3 +190,66 @@ fn the_finder_directory_branch_routes_to_the_mint_funnel() {
         "share_for_path's directory branch must mint through create_folder_share_inner"
     );
 }
+
+/// A Finder share of a folder OUTSIDE every drive uploads a copy through
+/// `share_outside_folder`, and is the ONE branch whose cancel is
+/// cooperative: its token goes into the upload so hcfs-client can abort the
+/// half-built link on the server. Every other branch is dropped on cancel
+/// by `until_cancelled`, which is right for them and wrong for this one,
+/// because a dropped future sends no abort.
+#[test]
+fn the_finder_outside_folder_branch_uploads_a_copy_with_cooperative_cancel() {
+    let source = include_str!("../src/finder_bridge/dispatch.rs");
+    let body = fn_body(source, "async fn share_for_path");
+    assert!(
+        body.contains("share_outside_folder(state, &account_id, request)"),
+        "share_for_path must send an outside folder to share_outside_folder"
+    );
+    let outside_line = body
+        .lines()
+        .find(|l| l.contains("share_outside_folder("))
+        .expect("the outside-folder call");
+    assert!(
+        !outside_line.contains("until_cancelled"),
+        "the outside-folder upload must take the token, not be raced against it"
+    );
+    // On the request literal itself: a bare `cancel,` also matches the
+    // `FinderMint` destructuring above it, so a fresh token here would pass.
+    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flat.contains("OutsideFolderShare { folder: clicked, ttl, choice, progress, cancel, }"),
+        "the outside-folder request must carry the modal's cancel token"
+    );
+    assert_eq!(
+        body.matches("until_cancelled(&cancel,").count(),
+        3,
+        "the in-drive folder, in-drive file and outside file mints stay drop-on-cancel"
+    );
+    assert!(
+        !body.contains("Only folders inside a synced Hippius drive"),
+        "the outside-folder refusal is replaced by the upload"
+    );
+}
+
+/// The confirm command hands the cancel token to the mint instead of racing
+/// the whole mint in a `select!`; a race there would drop the outside-folder
+/// upload before it could abort its link.
+#[test]
+fn the_finder_confirm_hands_the_cancel_token_to_the_mint() {
+    let source = include_str!("../src/finder_bridge/commands.rs");
+    let body = fn_body(source, "pub async fn hcfs_finder_confirm_share");
+    assert!(!body.contains("tokio::select!"), "the confirm must not race the mint against Cancel");
+    assert!(body.contains("FinderMint {"), "the confirm must pass the token inside FinderMint");
+}
+
+/// The chooser's size and the share's scan both go through the stoppable
+/// scan, so a chooser scan past its budget or a cancelled share stops its
+/// walk instead of leaving up to 50,000 stats running on the blocking pool
+/// for nobody.
+#[test]
+fn every_outside_folder_walk_stops_when_dropped() {
+    let dispatch = include_str!("../src/finder_bridge/dispatch.rs");
+    assert!(fn_body(dispatch, "async fn outside_folder_facts").contains("scan_until_dropped("));
+    let funnel = include_str!("../src/shares/outside_folder.rs");
+    assert!(fn_body(funnel, "async fn scan_off_main_thread").contains("scan_until_dropped("));
+}

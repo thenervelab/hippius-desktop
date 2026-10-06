@@ -15,6 +15,64 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-10-06
+
+Folders sync on the Free plan, and Hippius is more careful with your
+files: it asks before a sudden mass delete, says exactly why a file can't
+sync, and no longer fills your disk with uploads that keep failing.
+
+### Added
+
+- **Large deletes wait for you to decide.** When most of a drive suddenly
+  looks deleted, for example because an external disk was unplugged, Hippius
+  deletes nothing and asks you first, with a banner and one notification.
+  Restore files puts everything back, empty folders included; Remove deletes
+  the files once you confirm how many; Decide later keeps them safe until you
+  choose.
+- **A drive that is suddenly empty on Hippius asks before anything here is
+  deleted.** The drive stops syncing and a banner explains it. Keep my files
+  changes nothing; if you own the drive and emptied it on purpose, you can
+  confirm twice to remove the files here too. Members of a shared drive keep
+  their copies.
+- **Share a folder from Finder as a link, even one outside your Hippius
+  drives.** Hippius uploads a copy of the folder for the link, leaving out
+  hidden files and symbolic links. The copy counts toward your storage until
+  the link expires or you revoke it, and Shared Links marks it "Uploaded
+  copy" because later changes to the folder are not in it.
+- **Every upload in the menu bar window has its own menu.** Click the three
+  dots or right click a file to view, download, share, rename or delete it,
+  or find it in Hippius or on your computer, without opening Drive first.
+- **Quick buttons appear when you point at an upload in the menu bar
+  window.** Copy a file's link in one click (a link is made if it has none),
+  jump to its folder in Hippius, or take a look at it.
+
+### Changed
+
+- **The link icon beside a shared file takes you straight to its link.**
+  Shared Links scrolls to that file's row and highlights it.
+
+### Fixed
+
+- **Folders sync on the Free plan.** A new folder no longer stays on
+  "Syncing" forever when your account has no credits, and a folder that
+  cannot start syncing now says why instead.
+- **Opening a folder no longer deletes files in it.** Files whose names start
+  with 'downloaded_', and empty files whose names start with 'file_', were
+  removed when you opened their folder.
+- **A file that can't sync now says why, and stays marked until it's fixed.**
+  If two files' names differ only in capital letters, a file can't be read,
+  or your disk is too full to download it, Hippius names the file and tells
+  you what to do, instead of a vague "Sync failed. Please try again."
+- **A file's sync error shows only on that file.** Two files with the same
+  name in different folders no longer both show the error of one of them.
+- **A disconnected disk is called what it is.** When your Hippius folder is
+  on a disk that isn't plugged in, Hippius says so once and changes nothing,
+  instead of reporting a sync failure on every retry.
+- **Uploads that keep failing no longer fill your disk.** Hippius clears the
+  temporary copy of a file whose upload has been failing for a day.
+- **The storage card reads cleanly when you are over your plan.** The amount
+  over no longer overlaps the storage figure.
+
 ## [0.6.6] - 2026-10-02
 
 A smaller release that tidies up sharing and the menu bar. Folders shared with

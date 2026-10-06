@@ -12,6 +12,21 @@ import {
   type UploadFeedItem,
 } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { useRetainedCompletedUploads } from "@/app/lib/upload-feed/useRetainedCompletedUploads";
+import {
+  applyRemoteUpload,
+  mergeRemoteUploads,
+  type RemoteUploadProgress,
+} from "@/app/lib/remote-upload/remoteUploadFeed";
+import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
+
+/** Mirrors Rust's `RecentCaptures` (`get_recent_captures`). */
+export interface RecentCaptures {
+  /** The drive captures are filed in; null before one is chosen. */
+  label: string | null;
+  files: FormattedUserFile[];
+}
+
+const NO_CAPTURES: RecentCaptures = { label: null, files: [] };
 
 /**
  * Account / credits summary for the tray popover header + footer.
@@ -67,7 +82,14 @@ const MAX_NOT_READY_POLLS = 2;
 export function useTrayPanelData() {
   const [menu, setMenu] = useState<TrayMenuData | null>(null);
   const [recentUploads, setRecentUploads] = useState<FormattedUserFile[]>([]);
+  // The Captures tab: the account's newest screenshots and recordings, as
+  // Rust decides them (the capture folder; `get_recent_captures`).
+  const [recentCaptures, setRecentCaptures] = useState<RecentCaptures>(NO_CAPTURES);
   const [snapshot, setSnapshot] = useState<SyncSnapshot>(EMPTY_SNAPSHOT);
+  // Uploads that go straight to the server (a capture, a file dropped on a
+  // drive not synced here): outside the engine's snapshot, so folded in the
+  // same way the main window's sync widget folds them.
+  const [remoteUploads, setRemoteUploads] = useState<Record<string, RemoteUploadProgress>>({});
   // Latest finalized block + chain connectivity, mirrored from the Rust block
   // subscription's `block_number_updated` broadcast (the same feed the main
   // window's ProfileCard reads). `null` until the first block arrives.
@@ -115,7 +137,7 @@ export function useTrayPanelData() {
       // authorize now" signal, so we defer until it flips true (the next poll).
       if (address && menuData.sessionReady) {
         // Recent uploads + unread are keyed by the active account address.
-        const [uploads, count] = await Promise.all([
+        const [uploads, captures, count] = await Promise.all([
           invoke<FormattedUserFile[]>("get_recent_uploads", {
             accountId: address,
             limit: FEED_LIMIT,
@@ -123,6 +145,16 @@ export function useTrayPanelData() {
             console.error("[TrayPanel] Failed to load recent uploads:", error);
             return [] as FormattedUserFile[];
           }),
+          // Off for this lane: there is no Captures tab to fill.
+          SCREEN_CAPTURE_ENABLED
+            ? invoke<RecentCaptures>("get_recent_captures", {
+                accountId: address,
+                limit: FEED_LIMIT,
+              }).catch((error) => {
+                console.error("[TrayPanel] Failed to load recent captures:", error);
+                return NO_CAPTURES;
+              })
+            : Promise.resolve(NO_CAPTURES),
           invoke<number>("get_unread_count", { userAddress: address }).catch(
             (error) => {
               console.error("[TrayPanel] Failed to load unread count:", error);
@@ -131,6 +163,7 @@ export function useTrayPanelData() {
           ),
         ]);
         setRecentUploads(uploads);
+        setRecentCaptures(captures ?? NO_CAPTURES);
         setUnreadCount(count);
         // We now have authoritative data for this session — drop the skeleton.
         // Deferred until the session-ready branch so the boot gap (address known
@@ -139,6 +172,7 @@ export function useTrayPanelData() {
         setLoading(false);
       } else {
         setRecentUploads([]);
+        setRecentCaptures(NO_CAPTURES);
         setUnreadCount(0);
         // Session not hydrated yet. Keep the skeleton for the boot-gap grace
         // poll, but once a logged-in user has waited past that, stop withholding
@@ -235,6 +269,19 @@ export function useTrayPanelData() {
         console.error("[TrayPanel] snapshot listener failed:", error),
       );
 
+    let unlistenRemote: (() => void) | undefined;
+    void listen<RemoteUploadProgress>("remote_upload_progress", (event) => {
+      setRemoteUploads((current) => applyRemoteUpload(current, event.payload));
+      // A finished upload is in the server list now; pull it in.
+      if (event.payload.status === "completed") void refresh();
+    })
+      .then((un) => {
+        unlistenRemote = un;
+      })
+      .catch((error) =>
+        console.error("[TrayPanel] remote upload listener failed:", error),
+      );
+
     // Chat unread: seed once (the popover is prewarmed before any message
     // arrives, and a count set before this webview listened would be missed),
     // then mirror the broadcast.
@@ -276,13 +323,19 @@ export function useTrayPanelData() {
       unlistenFocus?.();
       unlistenShown?.();
       unlistenSnapshot?.();
+      unlistenRemote?.();
       unlistenChatUnread?.();
       unlistenBlock?.();
     };
   }, [refresh]);
 
+  const liveSnapshot = useMemo(
+    () => mergeRemoteUploads(snapshot, remoteUploads),
+    [snapshot, remoteUploads],
+  );
+
   const retainedCompleted = useRetainedCompletedUploads(
-    snapshot.files,
+    liveSnapshot.files,
     recentUploads,
   );
 
@@ -290,17 +343,31 @@ export function useTrayPanelData() {
     () =>
       mergeUploadFeed({
         recentUploads,
-        snapshotFiles: snapshot.files,
+        snapshotFiles: liveSnapshot.files,
         retainedCompleted,
         limit: FEED_LIMIT,
       }),
-    [recentUploads, snapshot.files, retainedCompleted],
+    [recentUploads, liveSnapshot.files, retainedCompleted],
+  );
+
+  // Completed captures only: a capture still on its way is in `feed` and in
+  // the sync line, and joins this list when Rust lists it (a finished upload
+  // refreshes both).
+  const captures: UploadFeedItem[] = useMemo(
+    () =>
+      mergeUploadFeed({
+        recentUploads: recentCaptures.files,
+        snapshotFiles: [],
+        limit: FEED_LIMIT,
+      }),
+    [recentCaptures.files],
   );
 
   return {
     menu,
     feed,
-    snapshot,
+    captures,
+    snapshot: liveSnapshot,
     blockNumber,
     isConnected,
     unreadCount,

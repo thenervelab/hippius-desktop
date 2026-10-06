@@ -345,6 +345,9 @@ pub(crate) fn crypto_to_err(e: hcfs_client::mnemonic_blob::MnemonicBlobError) ->
             warn!(error = %e, "AEAD tag mismatch decrypting recovery blob");
             AppError::Validation("Wrong passphrase.".into())
         }
+        // Raised before any crypto runs, on the passphrase the user just
+        // typed: theirs to fix, so a validation message, not a crypto fault.
+        E::PassphraseTooShort { min } => AppError::Validation(format!("Passphrase must be at least {min} characters.")),
         _ => AppError::Crypto(e.to_string()),
     }
 }
@@ -371,6 +374,29 @@ pub(crate) async fn tests_support_make_hcfs_config_pool() -> sqlx::SqlitePool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Recovery-blob crypto errors ────────────────────────────────────
+
+    /// hcfs refuses to seal under a passphrase shorter than its minimum.
+    /// That is the user's input to fix, so it must reach the UI as a
+    /// validation message naming the minimum, not a crypto fault.
+    #[test]
+    fn a_too_short_passphrase_is_a_validation_error_naming_the_minimum() {
+        use hcfs_client::mnemonic_blob::{MIN_PASSPHRASE_CHARS, seal_mnemonic};
+
+        let short = "a".repeat(MIN_PASSPHRASE_CHARS - 1);
+        let err = seal_mnemonic(TEST_SEAL_MNEMONIC, &short, TEST_SEAL_SS58)
+            .map_err(crypto_to_err)
+            .unwrap_err();
+
+        let AppError::Validation(message) = &err else {
+            panic!("expected a validation error, got {err:?}");
+        };
+        assert!(message.contains(&MIN_PASSPHRASE_CHARS.to_string()), "{message}");
+    }
+
+    const TEST_SEAL_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const TEST_SEAL_SS58: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 
     // ── Passphrase scoring ─────────────────────────────────────────────
 

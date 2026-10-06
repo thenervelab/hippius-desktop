@@ -22,6 +22,10 @@
 // always carry a real filename.
 
 import type { FolderShareSummary, ShareSummary } from "@/app/lib/tauri/shares";
+import {
+  fileShareRowId,
+  folderShareRowId,
+} from "@/app/lib/utils/sharesPageLink";
 
 const CONSOLE_ORIGIN_LABEL = "Created from the console";
 
@@ -56,8 +60,8 @@ export type ActiveShareRow =
  *  across the kind prefix, and a foreign folder row has no token at all. */
 export function activeShareRowId(row: ActiveShareRow): string {
   return row.kind === "file"
-    ? `file:${row.file.shareToken}`
-    : `folder:${row.folder.tokenHash}`;
+    ? fileShareRowId(row.file.shareToken)
+    : folderShareRowId(row.folder.tokenHash);
 }
 
 /**
@@ -81,9 +85,49 @@ export function mergeActiveShareRows(
   });
 }
 
-/** `""` shares the whole drive — render the console's idiom for it. */
-export function folderSharePathLabel(pathPrefix: string): string {
-  return pathPrefix === "" ? "Whole drive" : pathPrefix;
+/** Scope line of an uploaded-copy row (console parity). */
+export const UPLOADED_COPY_LABEL = "Uploaded copy";
+
+/** What the uploaded-copy label leaves out: the link is a snapshot. */
+export const UPLOADED_COPY_TOOLTIP =
+  "A copy uploaded when the link was created. Later changes to the folder are not included.";
+
+/** Scope line of a drive row whose share covers the drive root. */
+export const WHOLE_DRIVE_LABEL = "Whole drive";
+
+/**
+ * Scope line of a drive row that names no drive folder. Neutral on purpose:
+ * it claims neither the whole drive nor a copy.
+ */
+export const FOLDER_LINK_LABEL = "Folder link";
+
+/** The fields of a folder row that decide its scope line. */
+export type ScopedFolderRow = Pick<FolderShareSummary, "source" | "folderHash" | "pathPrefix">;
+
+/** What the scope line shows, and what it adds beyond what it shows. */
+export interface FolderShareScopeText {
+  /** The visible line under the row's name. */
+  label: string;
+  /** More than the label says; absent when the label is the whole answer. */
+  description?: string;
+}
+
+/**
+ * The line under a folder row's name: an uploaded copy says so; a drive
+ * link shows its subtree, `""` being the whole drive (console idiom).
+ *
+ * An empty prefix means "whole drive" only on a row that names a drive:
+ * an uploaded copy and a drive row without a folder hash both have one too,
+ * and reading it as the whole drive would tell the user their entire drive
+ * is exposed.
+ */
+export function folderShareScope(row: ScopedFolderRow): FolderShareScopeText {
+  if (row.source === "uploadedCopy") {
+    return { label: UPLOADED_COPY_LABEL, description: UPLOADED_COPY_TOOLTIP };
+  }
+  if (row.folderHash === "") return { label: FOLDER_LINK_LABEL };
+  if (row.pathPrefix === "") return { label: WHOLE_DRIVE_LABEL };
+  return { label: row.pathPrefix };
 }
 
 export type FolderShareRowState = "live" | "expired" | "revoked";

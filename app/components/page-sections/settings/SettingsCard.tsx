@@ -6,7 +6,7 @@ interface SettingsCardProps {
   /**
    * Optional element rendered to the right of the header label (e.g. an
    * Edit Name or Sync a Folder button). Sits vertically centered in the
-   * 38px header strip.
+   * header strip (38px tall, taller when the actions wrap).
    */
   headerAction?: React.ReactNode;
   children: React.ReactNode;
@@ -20,7 +20,10 @@ export function SettingsCard({
 }: SettingsCardProps) {
   return (
     <div className="rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
-      <div className="flex h-[38px] w-full items-center justify-between gap-2 px-[12px]">
+      {/* At least 38px, and wraps rather than clips: a header with several
+          actions (the Drive folder list's Capture + upload + sync buttons)
+          drops them under the label on a narrow window. */}
+      <div className="flex min-h-[38px] w-full flex-wrap items-center justify-between gap-x-2 gap-y-1.5 px-[12px] py-[6px]">
         <div className="flex items-center gap-2 min-w-0">
           {icon && (
             <span className="text-primary-40 dark:text-primary-brand-dark flex-shrink-0 inline-flex">
@@ -32,7 +35,7 @@ export function SettingsCard({
           </p>
         </div>
         {headerAction && (
-          <div className="flex-shrink-0 inline-flex items-center">
+          <div className="inline-flex min-w-0 max-w-full items-center">
             {headerAction}
           </div>
         )}

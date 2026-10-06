@@ -18,6 +18,7 @@ import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMar
 import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
+import { sharesPageHref } from "@/app/lib/utils/sharesPageLink";
 import { useThumbnail, evictResolvedThumbnailUrl } from "@/app/lib/hooks/useThumbnail";
 import { useInView } from "@/app/lib/hooks/useInView";
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
@@ -25,6 +26,8 @@ import { useFileSelection } from '@/app/contexts/FileSelectionContext';
 import { useRouter } from "next/navigation";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
+import { entryKey } from "../highlightEntry";
+import { useDriveRoute } from "../driveRoute";
 /** Card thumbnail resolution — shared by the resolve and the evict-on-error. */
 const CARD_THUMB_MAX_DIM = 256;
 
@@ -41,6 +44,8 @@ const FileCard: React.FC<FileCardProps> = ({
   onClick,
   actionMenu,
 }) => {
+  // A folder opens on the page this grid is on (Drive, or Captures).
+  const { basePath } = useDriveRoute();
   const { fileName, fileFormat } = getFilePartsFromFileName(file.name);
   const router = useRouter();
   const { isSelectionMode, isFileSelected, toggleFileSelection } = useFileSelection();
@@ -240,6 +245,8 @@ const FileCard: React.FC<FileCardProps> = ({
   return (
     <div
       ref={cardRef}
+      // "Show in folder" finds the card by this (`highlightEntry.ts`).
+      data-drive-entry={entryKey(file)}
       className={cn(
         "w-full relative border rounded-[5px] overflow-hidden h-[220px] flex flex-col transition-all duration-200",
         // Folder containers use a subtle grey/dark background; files stay white/black-500.
@@ -295,7 +302,7 @@ const FileCard: React.FC<FileCardProps> = ({
                 {displayName}
               </span>
             ) : (
-              <Link href={`/files?folderCid=${file.arionHash}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
+              <Link href={`${basePath}?folderCid=${file.arionHash}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
                 <span
                   className={cn(
                     "text-sm text-grey-20 dark:text-grey-light-100 hover:text-primary-40 transition truncate"
@@ -313,7 +320,7 @@ const FileCard: React.FC<FileCardProps> = ({
               // mints with (`shareTargetFor(file, currentSubfolderPath)`);
               // `subFolderPath` is the same URL param that prop carries.
               folderRelativePath={folderShareRelativePath(file, subFolderPath)}
-              onManageShare={() => router.push("/shares")}
+              onManageShare={(ids) => router.push(sharesPageHref(ids))}
               className="ml-1.5"
             />
             {/* Shared on its own. Compact: the card's name strip is narrow. */}
@@ -345,7 +352,7 @@ const FileCard: React.FC<FileCardProps> = ({
             <SharedLinkBadge
               label={file.label}
               actualName={file.actualFileName}
-              onManageShare={() => router.push("/shares")}
+              onManageShare={(ids) => router.push(sharesPageHref(ids))}
               className="ml-1.5"
             />
           </div>
