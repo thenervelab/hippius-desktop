@@ -663,6 +663,17 @@ fn on_recording_menu_item(app: &AppHandle, action: super::tray_recording_menu::A
                 tracing::warn!("tray menu: no recording controls to show");
             }
         }
+        Effect::OpenMain => {
+            if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                bring_main_forward(&main);
+                // The user took the app back: the recording's end leaves it
+                // up, as when it gets the keyboard (which a desktop's focus
+                // stealing prevention may withhold from a tray click).
+                on_main_window_focused(&app);
+            } else {
+                tracing::warn!("tray menu: no main window to open");
+            }
+        }
         Effect::Stop => {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = stop_inner(&app).await {

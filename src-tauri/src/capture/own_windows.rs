@@ -22,7 +22,9 @@
 //! The user can still bring it back: the Dock icon (macOS sends "reopen",
 //! but the pill counts as a visible window, so the old "no visible windows"
 //! check never showed it), Cmd+Tab (only "did become active" arrives), and
-//! the tray's Open Hippius. Once the user has it, the end of the recording
+//! the tray's Open Hippius (on Linux an item of the recording's own tray
+//! menu, `tray_recording_menu`: a hidden window has no taskbar or dash entry
+//! there and the tray sends no click). Once the user has it, the end of the recording
 //! leaves it where it is and does not hand the keyboard back to the app
 //! that was in front when the capture began.
 
