@@ -144,6 +144,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The storage card reads cleanly when you are over your plan.** The amount
+  over no longer overlaps the storage figure; it sits on its own line when
+  the card is narrow.
+
 - **Drag anywhere outside the area to start a new one.** When choosing an
   area for a screenshot or recording, the first drag outside the current area
   now draws a fresh one on a Mac, instead of doing nothing until you clicked
