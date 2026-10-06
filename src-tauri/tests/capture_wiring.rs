@@ -1674,38 +1674,49 @@ fn hippius_can_be_opened_during_a_recording() {
     assert!(watch.contains("pressedMouseButtons"));
 }
 
-/// The screenshot editor: its own window and capability (core only, listed
-/// in tauri.conf.json, or the page never hears the close button), a page that
-/// boots without the app, every command registered, and a save that writes
-/// the picture BEFORE the link is replaced, revokes the old link, and goes
-/// through the existing upload and share paths rather than a second copy.
+/// The screenshot editor: a layer of the main window, never a window of its
+/// own (no capability, no route, no window builder), opened by Rust telling
+/// the main window after bringing it forward; every command registered; a
+/// replace that writes the picture BEFORE the link is replaced, revokes the
+/// old link, and goes through the existing upload and share paths; and a
+/// copy that never writes over the original.
 #[test]
 fn the_screenshot_editor_is_wired_end_to_end() {
     let editor = read("src/capture/editor.rs");
-    let label = editor
-        .lines()
-        .find(|l| l.contains("pub const EDITOR_LABEL"))
-        .and_then(|l| l.split('"').nth(1))
-        .expect("EDITOR_LABEL");
-    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-editor.json")).expect("capability parses");
-    assert_eq!(capability["windows"], serde_json::json!([label]));
-    for permission in capability["permissions"].as_array().expect("permissions") {
-        assert!(permission.as_str().unwrap_or_default().starts_with("core:"), "{permission}");
-    }
-    let conf: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).expect("conf parses");
     assert!(
-        conf["app"]["security"]["capabilities"]
-            .as_array()
-            .expect("capabilities")
-            .iter()
-            .any(|c| c == label),
-        "the editor's capability must be enabled"
+        !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities/capture-editor.json")
+            .exists(),
+        "the editor has no window, so no capability of its own"
     );
+    let conf = read("tauri.conf.json");
+    assert!(!conf.contains("\"capture-editor\""), "no editor window capability is enabled");
     let shell = read("../app/components/AppShell.tsx");
-    assert!(shell.contains(&format!("\"/{label}\"")), "the editor page boots without the app");
+    assert!(!shell.contains("/capture-editor"), "no editor route boots without the app");
+    assert!(!editor.contains("WebviewWindowBuilder"), "the editor opens in the main window");
+
     let open = fn_body(&editor, "fn open_with(");
-    assert!(open.contains(&format!("\"{label}.html\"")), "the static export's route");
-    assert!(open.contains("api.prevent_close()"), "the page asks before unsaved changes go");
+    assert!(open.contains("show_in_main_window("));
+    let show = fn_body(&editor, "fn show_in_main_window(");
+    assert!(show.contains("hide_tray_panel("), "the popover never sits over the editor");
+    assert!(show.contains("show_main_window(app)"), "the main window comes forward");
+    assert!(show.contains("emit_to(super::commands::MAIN_WINDOW_LABEL, OPEN_EVENT"));
+    let refuse = fn_body(&editor, "fn refuse_if_open(");
+    assert!(refuse.contains("show_in_main_window("), "an open editor is brought back, not replaced");
+    // The main window listens for it, in the signed-in layout.
+    let host = read("../app/components/capture/editor/ScreenshotEditorHost.tsx");
+    assert!(host.contains("EDITOR_OPEN_EVENT"));
+    let ipc = read("../app/lib/tauri/captureEditor.ts");
+    let open_event = editor
+        .lines()
+        .find(|l| l.contains("pub const OPEN_EVENT"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("OPEN_EVENT");
+    assert!(
+        ipc.contains(&format!("EDITOR_OPEN_EVENT = \"{open_event}\"")),
+        "one event name on both sides"
+    );
+    assert!(read("../app/(pages)/layout.tsx").contains("<ScreenshotEditorHost />"));
 
     let main = read("src/main.rs");
     for name in [
@@ -1716,6 +1727,9 @@ fn the_screenshot_editor_is_wired_end_to_end() {
         "capture_editor_save",
         "capture_editor_copy",
         "capture_editor_close",
+        "capture_editor_save_preference",
+        "capture_editor_set_save_preference",
+        "capture_editor_copy_saved_link",
         "capture_annotate_latest",
         "capture_annotate_open_latest",
         "capture_annotate_pick",
@@ -1724,20 +1738,31 @@ fn the_screenshot_editor_is_wired_end_to_end() {
     }
 
     let save = fn_body(&editor, "pub async fn capture_editor_save(");
+    assert!(save.contains("requested_mode("), "a save in a drive names copy or replace");
+    let copy_branch = save.find("save_copy(").expect("save as a copy");
     let written = save.find("write_edited(").expect("the picture is written");
     let replaced = save.find("replace_link(").expect("the link is replaced");
+    assert!(copy_branch < written, "a copy returns before anything is written over the original");
     assert!(written < replaced, "a new link is made from the EDITED file");
     assert!(save.contains("session_for(&state, &request)"), "a save names its session");
+    let copy = fn_body(&editor, "async fn save_copy(");
+    assert!(copy.contains("write_beside("), "a copy is a new file beside the original");
+    assert!(!copy.contains("replace_atomically(") && !copy.contains("replace_link("));
+    let beside = fn_body(&editor, "pub fn write_beside(");
+    assert!(beside.contains("persist_noclobber("), "a copy never overwrites a file");
     let write = fn_body(&editor, "async fn write_edited(");
     assert!(write.contains("replace_atomically("));
     assert!(
         write.contains("upload_files_to_remote_folder_inner("),
         "a remote capture reuses the remote upload"
     );
-    assert!(write.contains("trigger_sync_now("), "a synced capture is uploaded by the engine");
+    assert!(write.contains("nudge_sync("), "a synced capture is uploaded by the engine");
+    assert!(fn_body(&editor, "fn nudge_sync(").contains("trigger_sync_now("));
     let link = fn_body(&editor, "async fn replace_link(");
     assert!(link.contains("super::deliver::mint("), "the capture's own share path");
     assert!(link.contains("hcfs_revoke_share("), "the old link is revoked");
+    let copy_link = fn_body(&editor, "pub async fn capture_editor_copy_saved_link(");
+    assert!(copy_link.contains("quick_link::copy_file_share_link("), "the tray's quick-link path");
 
     // The tray's Annotate: Rust shows the dialog and reads only its answer,
     // so no IPC names a path to read.

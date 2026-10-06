@@ -42,11 +42,16 @@ const ROW_FILES = [
   "app/tray-panel/TrayRowMenu.tsx",
   "app/tray-panel/trayMainWindow.ts",
   "app/lib/tray/trayRowActions.ts",
+  "app/lib/tray/trayRowDisplay.ts",
+  "app/tray-panel/useTrayThumbnail.ts",
+  "app/lib/tray/trayDrop.ts",
   // Helpers the row calls at run time.
   "app/lib/utils/revealFile.ts",
   "app/lib/utils/renameGating.ts",
   "app/lib/utils/cloudOnly.ts",
   "app/lib/utils/filePreviewType.ts",
+  "app/lib/capture/editor/driveEntry.ts",
+  "app/lib/tauri/captureEditor.ts",
 ];
 
 describe("the popover's row actions stay out of the main window's tree", () => {

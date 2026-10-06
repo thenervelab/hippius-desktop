@@ -129,3 +129,62 @@ export function strokeUnit(imageW: number, imageH: number): number {
 export function redactionBlock(imageW: number, imageH: number): number {
   return Math.max(8, Math.round(Math.max(imageW, imageH) / 120));
 }
+
+// ── Zoom ────────────────────────────────────────────────────────────────────
+
+/**
+ * The zoom pill's steps, in picture pixels per screen pixel: 1 is 100%, the
+ * picture at its own size on this screen.
+ */
+export const ZOOM_LEVELS = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
+
+/** The view's zoom in picture pixels per screen pixel (the pill's NN%). */
+export function zoomOf(view: View, devicePixelRatio = 1): number {
+  return view.scale * Math.max(devicePixelRatio, 1);
+}
+
+/** The next step in or out from `current`, always a real change, held to the steps. */
+export function nextZoom(current: number, direction: 1 | -1): number {
+  const eps = 1e-6;
+  if (direction > 0) return ZOOM_LEVELS.find((z) => z > current + eps) ?? ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+  return [...ZOOM_LEVELS].reverse().find((z) => z < current - eps) ?? ZOOM_LEVELS[0];
+}
+
+/**
+ * `center` held where the view stays covered: on an axis where the zoomed
+ * picture is narrower than the box it is centred, else the box never shows
+ * past the picture's edge.
+ */
+export function clampCenter(region: Rect, viewW: number, viewH: number, scale: number, center: Point | null): Point {
+  const clampAxis = (start: number, size: number, box: number, want: number | undefined) => {
+    const half = box / 2 / scale;
+    if (size <= half * 2 || want === undefined) return start + size / 2;
+    return Math.max(start + half, Math.min(start + size - half, want));
+  };
+  return {
+    x: clampAxis(region.x, region.w, viewW, center?.x),
+    y: clampAxis(region.y, region.h, viewH, center?.y),
+  };
+}
+
+/**
+ * `region` at `zoom` picture pixels per screen pixel in a `viewW` x `viewH`
+ * box, with `center` (a picture point) in the middle of the box, clamped by
+ * [`clampCenter`]. `null` centre: the middle of the region.
+ */
+export function zoomedView(region: Rect, viewW: number, viewH: number, zoom: number, devicePixelRatio = 1, center: Point | null = null): View {
+  const scale = zoom / Math.max(devicePixelRatio, 1);
+  const c = clampCenter(region, viewW, viewH, scale, center);
+  return {
+    region,
+    scale,
+    offsetX: viewW / 2 - (c.x - region.x) * scale,
+    offsetY: viewH / 2 - (c.y - region.y) * scale,
+  };
+}
+
+/** The picture point at the middle of the box once the view is moved by (dx, dy) screen points. */
+export function pannedCenter(view: View, viewW: number, viewH: number, dx: number, dy: number): Point {
+  const now = toImage(view, { x: viewW / 2, y: viewH / 2 });
+  return { x: now.x + dx / view.scale, y: now.y + dy / view.scale };
+}

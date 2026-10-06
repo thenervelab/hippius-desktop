@@ -11,6 +11,12 @@ import {
   strokeUnit,
   toImage,
   toScreen,
+  ZOOM_LEVELS,
+  clampCenter,
+  nextZoom,
+  pannedCenter,
+  zoomOf,
+  zoomedView,
 } from "../view";
 
 describe("crop math", () => {
@@ -75,5 +81,44 @@ describe("view mapping", () => {
     expect(strokeUnit(3024, 1964)).toBe(3);
     expect(redactionBlock(400, 300)).toBe(8);
     expect(redactionBlock(3024, 1964)).toBe(25);
+  });
+});
+
+describe("zoom", () => {
+  const region = { x: 0, y: 0, w: 2000, h: 1000 };
+
+  it("reads the fitted view as a zoom, where 100% is one picture pixel per screen pixel", () => {
+    // 2000 px into a 1000 pt box on a Retina screen: 0.5 pt per px, 1 px per device px.
+    expect(zoomOf(fitView(region, 1048, 548, 24, 2), 2)).toBeCloseTo(1);
+    expect(zoomOf(fitView(region, 548, 548, 24, 1), 1)).toBeCloseTo(0.25);
+  });
+
+  it("steps in and out through the levels, always changing, and stops at the ends", () => {
+    expect(nextZoom(1, 1)).toBe(1.5);
+    expect(nextZoom(1, -1)).toBe(0.75);
+    // From an in-between fitted zoom, the next level each way.
+    expect(nextZoom(0.37, 1)).toBe(0.5);
+    expect(nextZoom(0.37, -1)).toBe(0.25);
+    expect(nextZoom(ZOOM_LEVELS[ZOOM_LEVELS.length - 1], 1)).toBe(ZOOM_LEVELS[ZOOM_LEVELS.length - 1]);
+    expect(nextZoom(ZOOM_LEVELS[0], -1)).toBe(ZOOM_LEVELS[0]);
+  });
+
+  it("centres a picture smaller than the box, and never shows past the edge of a larger one", () => {
+    // At 0.1 the 2000 px picture is 200 pt wide in an 800 pt box: centred whatever is asked.
+    const small = zoomedView(region, 800, 600, 0.1, 1, { x: 0, y: 0 });
+    expect(small.offsetX).toBeCloseTo((800 - 200) / 2);
+    // At 2x it is far larger: asking for the top-left corner keeps the box inside the picture.
+    const big = zoomedView(region, 800, 600, 2, 1, { x: 0, y: 0 });
+    expect(big.offsetX).toBeCloseTo(0);
+    expect(big.offsetY).toBeCloseTo(0);
+    const corner = zoomedView(region, 800, 600, 2, 1, { x: 5000, y: 5000 });
+    expect(corner.offsetX + region.w * corner.scale).toBeCloseTo(800);
+    expect(corner.offsetY + region.h * corner.scale).toBeCloseTo(600);
+  });
+
+  it("pans by screen points, so the picture follows the pointer at any zoom", () => {
+    const view = zoomedView(region, 800, 600, 2, 1, { x: 1000, y: 500 });
+    expect(pannedCenter(view, 800, 600, 100, -50)).toEqual({ x: 1050, y: 475 });
+    expect(clampCenter(region, 800, 600, 2, null)).toEqual({ x: 1000, y: 500 });
   });
 });

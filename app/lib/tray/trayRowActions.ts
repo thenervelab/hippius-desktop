@@ -7,6 +7,7 @@ import {
   RENAME_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/renameGating";
 import { normalizeRelPath } from "@/app/lib/utils/relPath";
+import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
 
 /**
  * What the tray popover offers on one upload row: the three-dots menu, the
@@ -23,6 +24,7 @@ import { normalizeRelPath } from "@/app/lib/utils/relPath";
  */
 export type TrayRowActionId =
   | "preview"
+  | "edit"
   | "download"
   | "copy-link"
   | "share"
@@ -146,6 +148,26 @@ export function trayDriveLocation(item: FormattedUserFile): {
   };
 }
 
+/**
+ * Whether the row offers Edit (the screenshot editor): the Drive's own
+ * "Edit image" gate, for a finished upload. The popover cannot read which
+ * drives are shared with the account (a provider-free webview), so a
+ * member drive's picture is offered here and refused by Rust, which checks
+ * every rule again when the editor opens.
+ */
+export function canEditTrayRow(item: UploadFeedItem): boolean {
+  return (
+    item.feedStatus === "completed" &&
+    offersImageEditor({
+      name: item.actualFileName || item.name,
+      isFolder: Boolean(item.isFolder),
+      label: item.label,
+      cloudOnly: isCloudOnlyRow(item),
+      memberDrive: false,
+    })
+  );
+}
+
 /** Whether there is a file on this computer to reveal. */
 export function canRevealTrayRow(item: UploadFeedItem): boolean {
   if (isCloudOnlyRow(item)) return false;
@@ -168,6 +190,9 @@ export function getTrayRowActions(
 
   if (completed && !item.isFolder && isPreviewableFileName(item.name)) {
     actions.push({ id: "preview", label: "View" });
+  }
+  if (canEditTrayRow(item)) {
+    actions.push({ id: "edit", label: "Edit image" });
   }
   if (completed && !item.isFolder && hasDrive(item)) {
     actions.push({ id: "download", label: "Download" });
@@ -208,20 +233,13 @@ export function getTrayRowActions(
 }
 
 /**
- * The hover quick actions under the name, in display order: where the file
- * is, its link, and a look at it. Kept to three so they fit beside the size
- * at the popover's width; everything else is one click away in the menu.
+ * The hover actions at the row's end, in display order: its link (the
+ * primary one) and, for a picture, Edit. Everything else is one click away
+ * in the row's menu.
  */
 export function getTrayQuickActions(item: UploadFeedItem): TrayRowActionId[] {
   const quick: TrayRowActionId[] = [];
-  if (hasDrive(item)) quick.push("show-in-drive");
   if (canLinkTrayRow(item)) quick.push("copy-link");
-  if (
-    item.feedStatus === "completed" &&
-    !item.isFolder &&
-    isPreviewableFileName(item.name)
-  ) {
-    quick.push("preview");
-  }
+  if (canEditTrayRow(item)) quick.push("edit");
   return quick;
 }

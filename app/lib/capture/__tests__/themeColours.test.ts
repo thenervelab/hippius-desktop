@@ -14,10 +14,9 @@ const ROOTS = [
   "app/capture-controls",
   "app/capture-camera",
   "app/capture-preview",
-  "app/capture-editor",
   "app/components/capture",
   "app/lib/capture",
-  "app/tray-panel/TrayCaptureRow.tsx",
+  "app/tray-panel/TrayTiles.tsx",
 ];
 const MISSING = /(?:^|[\s"'`:])(?:bg|text|border|ring|from|to|via|fill|stroke|shadow|outline|divide|placeholder)-black(?:\/[\d.]+)?(?=[\s"'`]|$)/m;
 

@@ -6,7 +6,7 @@ paths:
   - "app/capture-camera/**"
   - "app/capture-preview/**"
   - "app/capture-area/**"
-  - "app/capture-editor/**"
+  - "app/components/page-sections/settings/EditedImageSetting.tsx"
   - "app/components/capture/**"
   - "app/components/page-sections/captures/**"
   - "app/components/page-sections/drive/driveRoute.tsx"
@@ -14,7 +14,7 @@ paths:
   - "src-tauri/src/tray/**"
   - "app/components/page-sections/drive/highlightEntry.ts"
   - "app/components/page-sections/drive/useDriveHighlight.ts"
-  - "app/tray-panel/TrayCaptureRow.tsx"
+  - "app/tray-panel/TrayTiles.tsx"
   - "macos/HippiusCapture/**"
 ---
 
@@ -1082,44 +1082,81 @@ window recording must each finish with a playable file.
 
 ## Screenshot editor
 
-`capture/editor.rs` + `app/capture-editor` (label `capture-editor`, own
-core-only capability, listed in `tauri.conf.json`, provider-free route in
-`AppShell`). Opened by Rust only: the card's Edit (`actions.edit`, decided in
+`capture/editor.rs` + `app/components/capture/editor/`. **The editor is a
+full-screen layer of the main window, never a window of its own** (no
+label, capability, route or `WebviewWindowBuilder`): every way in stores the
+session, then `show_in_main_window` hides the tray popover, brings the main
+window forward (`show_main_window`) and emits `capture_editor_open` (the
+session id) to it. `ScreenshotEditorHost` (mounted in `app/(pages)/layout.tsx`
+next to `CaptureHost`) listens, also asks `capture_editor_context` on mount
+so a reload shows the open picture again, and renders `EditorApp` (its own
+`next/dynamic` chunk) as a Radix modal at `z-[1000]` over whatever page is up,
+so closing leaves the user where they were; focus is trapped and returns on
+close. Ways in: the card's Edit (`actions.edit`, decided in
 `PreviewCard::decide_actions`: a placed PNG/JPEG screenshot whose link is not
-`Creating`; the card's picture opens it, like macOS's thumbnail opens Markup,
-and More has "Edit screenshot") and Drive's "Edit image"
-(`capture_editor_open_file`: own drive synced here, `path_in_drive` plus a
-canonical `starts_with`). One editor at a time: a second open focuses the
-first and is refused, so unsaved edits are never replaced. Rust reads the file
-ONCE into the session (`original`), so a card closing meanwhile (which
-removes a direct upload's temp copy) cannot take the picture away; a direct
-screenshot's temp copy is kept with its card (`keep_temp_after_upload`'s
-`editable`) for exactly this.
+`Creating`; the card's picture opens it, and More has "Edit screenshot"),
+Drive's "Edit image" (`capture_editor_open_file`: own drive synced here,
+`path_in_drive` plus a canonical `starts_with`) and the tray's Annotate. One
+editor at a time: a second open shows the first again and is refused, so
+unsaved edits are never replaced. The session records the account that
+opened it; `capture_editor_context` forgets one opened by another account.
+Rust reads the file ONCE into the session (`original`), so a card closing
+meanwhile (which removes a direct upload's temp copy) cannot take the picture
+away; a direct screenshot's temp copy is kept with its card
+(`keep_temp_after_upload`'s `editable`) for exactly this.
 
 The page is a pure model (`app/lib/capture/editor/`: `model.ts` document and
-undo, `gesture.ts` press/drag/release per tool, `view.ts` crop and fit,
+undo, `gesture.ts` press/drag/release per tool, `view.ts` crop, fit and zoom,
 `pixels.ts`, `render.ts`) drawn on one canvas, hand-rolled rather than Konva
 or Fabric (no dependency, React 19.2 here and react-konva 19.3 wants 19.3).
-**Blur and pixelate are written into the exported pixels** before the PNG is
-encoded (`exportPng`: drawImage, getImageData, `applyRedactions`,
-putImageData, then the drawings), and blur pixelates first so it cannot be
-deconvolved; the on-screen picture runs the same code. Save sends the PNG as
-the raw body with the session in `x-editor-session` (`session_for` refuses
-a stale one); Rust validates it (`decode_checked`: PNG signature, 16384 px a
-side, 200 MiB), re-encodes a JPEG as JPEG, writes it with
-`replace_atomically` (hidden `.hippius-incoming-capture-*.part`, then rename)
-and nudges sync, or re-uploads a remote capture through
-`upload_files_to_remote_folder_inner`. **A file share is a snapshot copy, so
-the link cannot keep its URL**: a card's link is re-minted from the edited
-file (`deliver::mint`) and the old one revoked, even when the new mint fails
-(the usual reason to edit is to hide something); a Drive file's existing
-links are left alone (a password or expiry cannot be recreated here) and the
-outcome says they still show the earlier picture. The window's close button
-is `prevent_close` + `capture_editor_close_requested`; the page asks before
-dropping edits and closes with `capture_editor_close` (`destroy`). Pinned by
+Layout: dark chrome on fixed tokens in both themes (`bg-black-600` backdrop,
+`black-primary-bg` pills, active tool `bg-primary-50`); Close + file name top
+left, ONE floating pill toolbar top centre (`EditorToolbar`: every tool, a
+colour dot opening colour and thickness, undo, redo; its own row below `lg`),
+Copy image + Save top right, a selection bar beside the selected annotation
+(`SelectionBar`, positioned by `selectionAnchor`), and the zoom pill
+(`ZoomPill`, 100% = one picture pixel per screen pixel) at the bottom. Keys
+are handled on the layer and never reach the page (`stopPropagation`); Esc
+steps back: colour panel, selection, crop, then close (asking "Discard
+changes?" with Keep editing focused when there are edits). **Blur and
+pixelate are written into the exported pixels** before the PNG is encoded
+(`exportPng`: drawImage, getImageData, `applyRedactions`, putImageData, then
+the drawings), and blur pixelates first so it cannot be deconvolved; the
+on-screen picture runs the same code.
+
+**Save is copy or replace, and Rust refuses a save in a drive that names
+neither** (`requested_mode`, header `x-editor-save-mode`), so a page that did
+not ask can never write over a file. The page asks in `SaveDialog` ("Save as
+a copy" first and selected, "Replace the original", "Remember my choice"),
+unless the user's `SavePreference` (`user_preferences` key
+`capture_editor_save_mode`, also Settings › Capture, `EditedImageSetting`)
+says which. The option descriptions are Rust's (`copy_note`, `replace_note`):
+the public-link warning only when the file has a link (`drive_shared`, read
+at open). **A copy** (`save_copy`) is a new file beside the original:
+`write_beside` stages a hidden `.hippius-incoming-capture-*.part` and moves it
+with `persist_noclobber` to the first free `unique_copy_name` ("<name>
+(edited).<ext>", then "(edited 2)"...), never touching the original, its
+card or its links; a remote capture's copy is uploaded under a name the
+server does not list in that folder. **A replace** writes with
+`replace_atomically` (hidden staging file, then rename) and nudges sync, or
+re-uploads a remote capture through `upload_files_to_remote_folder_inner`.
+**A file share is a snapshot copy, so the link cannot keep its URL**: on
+replace, a card's link is re-minted from the edited file (`deliver::mint`)
+and the old one revoked, even when the new mint fails (the usual reason to
+edit is to hide something); a Drive file's existing links are left alone (a
+password or expiry cannot be recreated here) and the outcome says they still
+show the earlier picture. Save sends the PNG as the raw body with the session
+in `x-editor-session` (`session_for` refuses a stale one); Rust validates it
+(`decode_checked`: PNG signature, 16384 px a side, 200 MiB) and re-encodes a
+JPEG as JPEG. After a save the host shows Rust's `SaveOutcome` as a toast,
+calls `notifyFilesMutated`, and offers "Copy link" only when `saved_link`
+says there is a link to the SAVED picture (`capture_editor_copy_saved_link`:
+the card's new link, or the tray's quick-link path for a file synced here;
+never a Drive file whose links still show the old picture). Pinned by
 `editor::tests`, `preview::tests::only_a_placed_screenshot_can_be_edited`,
 `capture_wiring::the_screenshot_editor_is_wired_end_to_end`, the
-`app/lib/capture/editor/__tests__` suites and `editorApp.test.tsx`.
+`app/lib/capture/editor/__tests__` suites, `editorApp.test.tsx`,
+`ScreenshotEditorHost.test.tsx` and `EditedImageSetting.test.tsx`.
 
 **Annotate from the tray** (`capture_annotate_*`, editor.rs). "Latest
 screenshot" is decided in Rust each time (`find_latest`): the card still

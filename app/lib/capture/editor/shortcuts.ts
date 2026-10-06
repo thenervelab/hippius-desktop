@@ -36,6 +36,9 @@ export type Command =
   | { type: "delete" }
   | { type: "escape" }
   | { type: "applyCrop" }
+  | { type: "zoomIn" }
+  | { type: "zoomOut" }
+  | { type: "zoomFit" }
   | { type: "nudge"; dx: number; dy: number };
 
 export interface KeyLike {
@@ -60,6 +63,10 @@ export function commandFor(e: KeyLike, isMac: boolean): Command | null {
     // Shift+Cmd+C is CleanShot's "copy screenshot"; plain Cmd+C does the same
     // here, since there is no object clipboard.
     if (key === "c") return { type: "copy" };
+    // The browser's zoom keys: "=" is "+" without Shift on most layouts.
+    if (key === "=" || key === "+") return { type: "zoomIn" };
+    if (key === "-" || key === "_") return { type: "zoomOut" };
+    if (key === "0") return { type: "zoomFit" };
     return null;
   }
   if (e.altKey) return null;

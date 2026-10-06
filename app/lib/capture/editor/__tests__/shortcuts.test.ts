@@ -39,6 +39,16 @@ describe("editor keys", () => {
     expect(commandFor(key("ArrowLeft"), true)).toEqual({ type: "nudge", dx: -1, dy: 0 });
     expect(commandFor(key("ArrowDown", { shiftKey: true }), true)).toEqual({ type: "nudge", dx: 0, dy: 10 });
   });
+
+  it("zooms with the platform's zoom keys, and a bare minus or zero is not a zoom", () => {
+    expect(commandFor(key("=", { metaKey: true }), true)).toEqual({ type: "zoomIn" });
+    expect(commandFor(key("+", { metaKey: true, shiftKey: true }), true)).toEqual({ type: "zoomIn" });
+    expect(commandFor(key("-", { ctrlKey: true }), false)).toEqual({ type: "zoomOut" });
+    expect(commandFor(key("0", { ctrlKey: true }), false)).toEqual({ type: "zoomFit" });
+    expect(commandFor(key("0", { ctrlKey: true }), true)).toBeNull();
+    expect(commandFor(key("-"), true)).toBeNull();
+    expect(commandFor(key("0"), true)).toBeNull();
+  });
 });
 
 describe("Drive's Edit image", () => {

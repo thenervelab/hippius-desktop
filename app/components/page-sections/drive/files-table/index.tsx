@@ -1075,7 +1075,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               ]
             : []),
           // The screenshot editor, for a PNG or JPEG in an own drive synced
-          // here (Rust checks again and opens its window).
+          // here (Rust checks again and opens it over this page).
           ...(offersImageEditor({
             name: file.name,
             isFolder: Boolean(file.isFolder),
