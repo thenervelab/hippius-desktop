@@ -1110,7 +1110,13 @@ close. Ways in: the card's Edit (`actions.edit`, decided in
 `PreviewCard::decide_actions`: a placed PNG/JPEG screenshot whose link is not
 `Creating`; the card's picture opens it, and More has "Edit screenshot"),
 Drive's "Edit image" (`capture_editor_open_file`: own drive synced here,
-`path_in_drive` plus a canonical `starts_with`) and the tray's Annotate. One
+`path_in_drive` plus a canonical `starts_with`; or, when the file is not on
+disk and the caller passes its server `fileId`, `open_remote_file`: own
+drives only (`is_member` refused), downloaded through `cache_remote_file` and
+saved back as `SaveTarget::Remote` into the file's own folder, with an EMPTY
+`temp` so the save never writes the edit into the content-keyed preview
+cache; pinned by `capture_wiring` and `a_server_file_is_split_into_its_folder_and_name`)
+and the tray's Annotate. One
 editor at a time: a second open shows the first again and is refused, so
 unsaved edits are never replaced. The session records the account that
 opened it; `capture_editor_context` forgets one opened by another account.

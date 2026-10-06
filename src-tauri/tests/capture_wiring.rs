@@ -1772,6 +1772,22 @@ fn the_screenshot_editor_is_wired_end_to_end() {
         assert!(main.contains(&format!("crate::capture::editor::{name},")), "{name} must be registered");
     }
 
+    // A Drive file only on the server is edited too: downloaded the viewer's
+    // way, saved back by upload, and never written into the preview cache.
+    let open_file = fn_body(&editor, "pub async fn capture_editor_open_file(");
+    assert!(
+        open_file.contains("open_remote_file("),
+        "a server-only file opens through the remote path"
+    );
+    let remote = fn_body(&editor, "async fn open_remote_file(");
+    assert!(remote.contains("is_member"), "a drive shared with this account is refused");
+    assert!(remote.contains("cache_remote_file("), "downloaded the way the viewer downloads it");
+    assert!(remote.contains("SaveTarget::Remote"), "saved back by upload");
+    assert!(
+        remote.contains("temp: PathBuf::new()"),
+        "a save must not write the edit into the preview cache"
+    );
+
     let save = fn_body(&editor, "pub async fn capture_editor_save(");
     assert!(save.contains("requested_mode("), "a save in a drive names copy or replace");
     let copy_branch = save.find("save_copy(").expect("save as a copy");

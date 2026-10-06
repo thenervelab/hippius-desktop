@@ -20,6 +20,7 @@ import {
   trayRowOpensViewer,
 } from "../trayRowActions";
 import { RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 
 /** A completed server row of a drive synced on this computer, on disk. */
 function row(overrides: Partial<UploadFeedItem> = {}): UploadFeedItem {
@@ -172,8 +173,14 @@ describe("tray row Edit", () => {
     expect(canEditTrayRow(shot({ name: "clip.mp4", actualFileName: "clip.mp4" }))).toBe(false);
   });
 
-  it("is not offered for a picture with no copy here, with no drive, or in flight", () => {
-    expect(canEditTrayRow(shot({ source: "" }))).toBe(false);
+  // Pictures in a remote folder are edited too, by their server id.
+  it("is offered for a picture only on the server when the row has its file id", () => {
+    expect(canEditTrayRow(shot({ source: "" }))).toBe(true);
+  });
+
+  it("is not offered for a picture with no copy here and no file id, with no drive, or in flight", () => {
+    // Marked as only on the server, but with no id to fetch it by.
+    expect(canEditTrayRow(shot({ source: `${REMOTE_SOURCE_PREFIX}Screenshot.png`, fileId: undefined }))).toBe(false);
     expect(canEditTrayRow(shot({ label: undefined }))).toBe(false);
     expect(canEditTrayRow(shot({ feedStatus: "failed" }))).toBe(false);
   });
