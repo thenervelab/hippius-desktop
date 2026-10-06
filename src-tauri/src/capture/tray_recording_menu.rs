@@ -16,6 +16,7 @@
 //! not rebuilt under the pointer. Pure, tested on every OS; `commands.rs`
 //! applies it.
 
+use super::session::CapturePhase;
 use super::tray_status::TrayGlyph;
 
 /// Whether this system swaps the tray menu while recording (Linux only:
@@ -111,6 +112,38 @@ pub fn action_for(id: &str) -> Option<Action> {
     }
 }
 
+/// What the app does for a click on one of the recording's items, given
+/// the phase the session is in when the click arrives. The menu on screen
+/// can be a beat behind the session (opened just before a pause from the
+/// pill, or kept open across the end of the recording), so the item is
+/// read for what the user meant against the phase now: Pause on an already
+/// paused recording and Resume on a running one do nothing rather than
+/// fail, and every item does nothing once no recording runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    Stop,
+    Pause,
+    Resume,
+    /// Bring the pill back on screen (shown if hidden, raised if covered).
+    ShowControls,
+    /// Nothing to do: logged, never an error the user sees.
+    Ignore,
+}
+
+#[must_use]
+pub fn effect_for(action: Action, phase: CapturePhase) -> Effect {
+    let recording = matches!(phase, CapturePhase::Recording { .. });
+    let paused = matches!(phase, CapturePhase::Paused { .. });
+    match action {
+        _ if !recording && !paused => Effect::Ignore,
+        Action::Stop => Effect::Stop,
+        Action::ShowControls => Effect::ShowControls,
+        Action::Pause if recording => Effect::Pause,
+        Action::Resume if paused => Effect::Resume,
+        Action::Pause | Action::Resume => Effect::Ignore,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +193,56 @@ mod tests {
         assert_eq!(action_for(SHOW_ID), Some(Action::ShowControls));
         assert_eq!(action_for("tray-ctx-quit"), None);
         assert_eq!(action_for("tray-ctx-open-hippius"), None);
+    }
+
+    /// Every item reaches the session while a recording runs; a menu a beat
+    /// behind the session never fails or acts twice, and nothing acts once
+    /// the recording is over.
+    #[test]
+    fn each_item_acts_on_the_recording_as_it_is_now() {
+        let recording = CapturePhase::Recording {
+            elapsed_secs: 12,
+            microphone: true,
+        };
+        let paused = CapturePhase::Paused {
+            elapsed_secs: 12,
+            microphone: true,
+        };
+        assert_eq!(effect_for(Action::Stop, recording), Effect::Stop);
+        assert_eq!(effect_for(Action::Stop, paused), Effect::Stop);
+        assert_eq!(effect_for(Action::Pause, recording), Effect::Pause);
+        assert_eq!(effect_for(Action::Resume, paused), Effect::Resume);
+        assert_eq!(effect_for(Action::ShowControls, recording), Effect::ShowControls);
+        assert_eq!(effect_for(Action::ShowControls, paused), Effect::ShowControls);
+        // A stale item: already paused, already running.
+        assert_eq!(effect_for(Action::Pause, paused), Effect::Ignore);
+        assert_eq!(effect_for(Action::Resume, recording), Effect::Ignore);
+        // The recording ended while the menu was open.
+        for phase in [CapturePhase::Idle, CapturePhase::Finalizing] {
+            for action in [Action::Stop, Action::Pause, Action::Resume, Action::ShowControls] {
+                assert_eq!(effect_for(action, phase), Effect::Ignore, "{action:?} in {phase:?}");
+            }
+        }
+    }
+
+    /// The ids the menu is built with are the ids the listener routes, end
+    /// to end: build every item for both states, route its id, and get an
+    /// effect that is not Ignore while recording.
+    #[test]
+    fn every_built_item_routes_to_the_session() {
+        let recording = CapturePhase::Recording {
+            elapsed_secs: 1,
+            microphone: false,
+        };
+        let paused = CapturePhase::Paused {
+            elapsed_secs: 1,
+            microphone: false,
+        };
+        for (glyph, phase) in [(TrayGlyph::Recording, recording), (TrayGlyph::Paused, paused)] {
+            for item in items_for(glyph) {
+                let action = action_for(item.id).expect("a recording item");
+                assert_ne!(effect_for(action, phase), Effect::Ignore, "{} in {glyph:?}", item.id);
+            }
+        }
     }
 }

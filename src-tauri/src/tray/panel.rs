@@ -229,8 +229,9 @@ pub fn toggle_tray_panel(app: AppHandle, rect: Option<TrayIconRect>) -> Result<(
 ///
 /// `recording`: a screen recording is running or paused. The popover still
 /// opens (the menu bar icon must never go dead mid-recording), kept out of
-/// the video by content protection, which is lifted again on the next open
-/// after the recording.
+/// the video: by the macOS helper, which leaves Hippius out, or elsewhere
+/// by content protection, lifted again on the next open after the
+/// recording.
 ///
 /// Runs on the main thread (the tray listener runs on the event loop), which
 /// macOS requires for `show`/`set_position`/`set_focus`.
@@ -283,7 +284,14 @@ fn toggle_panel(app: &AppHandle, rect: Option<TrayIconRect>, recording: bool) ->
     info!("tray panel: show at ({x}, {y}) on work area {work_area:?} x{scale}, recording = {recording}");
     win.set_position(PhysicalPosition::new(x, y))
         .map_err(|e| AppError::Other(format!("failed to position tray panel: {e}")))?;
-    if let Err(e) = win.set_content_protected(recording) {
+    // Mid-recording the popover must stay out of the video. On macOS the
+    // helper leaves Hippius out itself, so the popover is never protected
+    // there and shows in other apps' screen sharing (`own_windows`).
+    let protect = crate::capture::own_windows::content_protected(
+        crate::capture::rollout::current_platform(),
+        crate::capture::own_windows::OwnWindow::TrayPopover { recording },
+    );
+    if let Err(e) = win.set_content_protected(protect) {
         warn!("tray panel content protection: {e}");
     }
     raise_above_capture_surfaces(&win);

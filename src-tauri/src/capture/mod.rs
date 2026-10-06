@@ -3,6 +3,7 @@
 //!
 //! Design and phasing: `docs/plans/2026-09-22-screen-capture.md`.
 
+pub mod activation;
 pub mod area_pick;
 pub mod bar;
 pub mod camera;
@@ -11,11 +12,15 @@ pub mod deliver;
 pub mod desktop_shortcut;
 pub mod destination;
 pub mod device_watch;
+pub mod editor;
 pub mod geometry;
+pub mod instant;
 pub mod linux_portal;
 pub mod linux_x11;
+pub mod live_controls;
 pub mod mic_meter;
 pub mod naming;
+pub mod own_windows;
 pub mod permission_flow;
 pub mod permissions;
 pub mod poster;
@@ -27,6 +32,7 @@ pub mod rollout;
 pub mod screencast_token;
 pub mod screenshot;
 pub mod session;
+pub mod setup;
 pub mod share;
 pub mod shortcut;
 pub mod shortcut_portal;

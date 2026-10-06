@@ -31,7 +31,7 @@ import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
 import { disabledRecordingNote, supportedModesOf } from "@/app/lib/capture/modes";
 import CaptureBar from "./CaptureBar";
 import SharePicker from "./SharePicker";
-import { barHint, LAST_AREA_KEY, panelHint } from "./barText";
+import { barHint, instantHint, LAST_AREA_KEY, panelHint } from "./barText";
 import { isFromControl } from "./keyNav";
 import { selectionFor, type SharePick } from "./sharePickerState";
 import { pollWindows } from "./windowRefresh";
@@ -47,6 +47,7 @@ import {
   moveRect,
   nudgeRect,
   resizeRect,
+  shiftDrag,
   sizeLabel,
   windowAt,
   type Handle,
@@ -79,7 +80,8 @@ const DIM = "rgba(0, 0, 0, 0.38)";
 const FRAME = CAPTURE_ACCENT;
 
 type Drag =
-  | { op: "create"; start: Point; current: Point }
+  // `last`: where the pointer was, for a hold-Space move (`shiftDrag`).
+  | { op: "create"; start: Point; current: Point; last?: Point }
   | { op: "move"; last: Point }
   | { op: "resize"; handle: Handle };
 
@@ -93,6 +95,11 @@ const CURSOR: Record<Handle, string> = {
   e: "ew-resize",
   w: "ew-resize",
 };
+
+/** Rust opened this overlay for the shortcut's one-step screenshot: a crosshair before the context loads. */
+function instantFromLocation(): boolean {
+  return new URLSearchParams(window.location.search).get("instant") === "1";
+}
 
 function displayIdFromLocation(): number | null {
   const raw = new URLSearchParams(window.location.search).get("display");
@@ -121,6 +128,7 @@ const bounds = () => ({ width: window.innerWidth, height: window.innerHeight });
 
 export default function CaptureOverlayPage() {
   const displayId = useMemo(() => (typeof window === "undefined" ? null : displayIdFromLocation()), []);
+  const instantRequested = useMemo(() => (typeof window === "undefined" ? false : instantFromLocation()), []);
   const [context, setContext] = useState<CaptureOverlayContext | null>(null);
   // The area on THIS display; an area on another display empties it.
   const [rect, setRect] = useState<LogicalRect | null>(null);
@@ -145,6 +153,8 @@ export default function CaptureOverlayPage() {
   // The area this overlay last handed to Rust, drawn again when Rust says
   // this display holds the pending area (see `applyPending`).
   const handedOver = useRef<LogicalRect | null>(null);
+  // Space is held while a new area is dragged: the area moves (macOS's ⌘⇧4).
+  const spaceHeld = useRef(false);
   // Where the pointer last was, so a refreshed window list re-picks the hover.
   const lastPoint = useRef<Point | null>(null);
   // What the key handler needs from the latest render, without re-binding.
@@ -152,10 +162,12 @@ export default function CaptureOverlayPage() {
     rect: LogicalRect | null;
     nudge: ((next: LogicalRect) => void) | null;
     dragging: boolean;
+    creating: boolean;
   }>({
     rect: null,
     nudge: null,
     dragging: false,
+    creating: false,
   });
 
   const load = useCallback(async () => {
@@ -164,6 +176,8 @@ export default function CaptureOverlayPage() {
     setContext(ctx);
     if (restored.current) return;
     restored.current = true;
+    // The shortcut's one-step shot starts with nothing drawn.
+    if (ctx.instant) return;
     const pending = ctx.pending;
     if (pending?.target === "area") {
       if (pending.displayId === displayId) {
@@ -353,6 +367,12 @@ export default function CaptureOverlayPage() {
       return;
     }
     if (countdown !== null || inFlightRef.current) return;
+    // Held while a new area is dragged, Space moves the area instead.
+    if (e.key === " " && latest.current.creating) {
+      e.preventDefault();
+      spaceHeld.current = true;
+      return;
+    }
     // Space swaps window and area, as it does in macOS's ⌘⇧4. Not mid-drag,
     // and not with the camera alone (nothing on screen is chosen then).
     if (e.key === " " && context && context.selection !== "systemPicker" && !latest.current.dragging) {
@@ -379,11 +399,21 @@ export default function CaptureOverlayPage() {
   });
   useEffect(() => {
     const listener = (e: KeyboardEvent) => keyHandler.current(e);
+    const release = (e: KeyboardEvent) => {
+      if (e.key === " ") spaceHeld.current = false;
+    };
     window.addEventListener("keydown", listener);
-    return () => window.removeEventListener("keydown", listener);
+    window.addEventListener("keyup", release);
+    return () => {
+      window.removeEventListener("keydown", listener);
+      window.removeEventListener("keyup", release);
+    };
   }, []);
 
-  if (!context || displayId === null) return null;
+  if (!context || displayId === null) {
+    // The shortcut's shot: the crosshair is there from the first frame.
+    return instantRequested ? <div data-testid="capture-instant-pending" className="fixed inset-0" style={{ cursor: "crosshair" }} /> : null;
+  }
   const { kind } = context;
   const cameraOnly = kind === "recording" && cameraShape === "stage";
   // Camera only: the stage is what is recorded, so no area, window or screen
@@ -402,7 +432,13 @@ export default function CaptureOverlayPage() {
       void setCapturePending({ target: "area", displayId, rect: next }).catch(() => undefined);
     }
   };
-  latest.current = { rect: mode === "area" && !drag ? rect : null, nudge: commitArea, dragging: drag !== null };
+  latest.current = {
+    rect: mode === "area" && !drag ? rect : null,
+    nudge: commitArea,
+    dragging: drag !== null,
+    creating: mode === "area" && drag?.op === "create",
+  };
+  const instant = context.instant;
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || counting) return;
@@ -411,7 +447,10 @@ export default function CaptureOverlayPage() {
       const hit = rect ? hitTest(rect, p) : null;
       if (hit === "move") setDrag({ op: "move", last: p });
       else if (hit) setDrag({ op: "resize", handle: hit });
-      else setDrag({ op: "create", start: p, current: p });
+      else {
+        spaceHeld.current = false;
+        setDrag({ op: "create", start: p, current: p, last: p });
+      }
       (e.target as Element).setPointerCapture?.(e.pointerId);
     }
   };
@@ -423,7 +462,13 @@ export default function CaptureOverlayPage() {
     if (counting) return;
     if (mode === "window") setHovered(windowAt(context.windows, p));
     if (mode !== "area" || !drag) return;
-    if (drag.op === "create") setDrag({ ...drag, current: p });
+    if (drag.op === "create") {
+      const last = drag.last ?? drag.current;
+      if (spaceHeld.current) {
+        const moved = shiftDrag(drag.start, drag.current, p.x - last.x, p.y - last.y, bounds());
+        setDrag({ op: "create", ...moved, last: p });
+      } else setDrag({ op: "create", start: drag.start, current: p, last: p });
+    }
     else if (drag.op === "move" && rect) {
       setRect(moveRect(rect, p.x - drag.last.x, p.y - drag.last.y, bounds()));
       setDrag({ op: "move", last: p });
@@ -437,9 +482,20 @@ export default function CaptureOverlayPage() {
     const p = pointFrom(e);
     if (mode === "area" && drag) {
       if (drag.op === "create") {
-        const created = dragRect(drag.start, p);
-        // A click without a drag keeps the area that was there.
-        if (isRealDrag(created)) commitArea(created);
+        // The area as drawn: the pointer, or where a hold-Space move left it.
+        const created = dragRect(drag.start, spaceHeld.current ? drag.current : p);
+        spaceHeld.current = false;
+        if (instant) {
+          // The shortcut's shot: releasing the drag takes it. A click
+          // without a drag does nothing; the crosshair stays.
+          if (isRealDrag(created)) {
+            setRect(created);
+            submitSelection({ target: "area", displayId, rect: created });
+          }
+        } else if (isRealDrag(created)) {
+          // A click without a drag keeps the area that was there.
+          commitArea(created);
+        }
       } else {
         commitArea(rect);
       }
@@ -527,7 +583,6 @@ export default function CaptureOverlayPage() {
           c ? { ...c, options: saved.options, countdownSecs: saved.countdownSecs, cameraFilmed: saved.cameraFilmed } : c,
         )
       }
-      onDestinationSaved={(destination) => setContext((c) => (c ? { ...c, destination } : c))}
     />
   );
 
@@ -652,13 +707,25 @@ export default function CaptureOverlayPage() {
         </button>
       )}
 
-      {context.hostsBar && !counting && (
+      {context.hostsBar && !counting && !instant && (
         // The bar stays up but out of the way of click-to-capture: over it the
         // pointer is a plain arrow and no window is lit, and its own handlers
         // keep a click on it from choosing anything underneath.
         <div data-testid="capture-bar-slot" style={{ cursor: "default" }} onPointerEnter={() => setHovered(null)}>
           {captureBar(hint)}
         </div>
+      )}
+
+      {context.hostsBar && instant && !counting && !drag && (
+        // No bar on the shortcut's shot: one line says what to do. It takes
+        // no pointer events, so the drag can start right over it.
+        <p
+          data-testid="capture-instant-hint"
+          role="status"
+          className="pointer-events-none absolute left-1/2 top-6 max-w-[90vw] -translate-x-1/2 rounded-full bg-[#000]/70 px-4 py-2 text-center text-sm font-medium text-white shadow-lg"
+        >
+          {notice ?? instantHint(context.mode, spaceToggleMode(context.mode, kind, supportedModesOf(context)) === "window")}
+        </p>
       )}
 
       {context.hostsBar && picker !== null && !counting && (

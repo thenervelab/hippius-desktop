@@ -6,9 +6,12 @@ import {
   AlertCircle,
   Check,
   FolderOpen,
+  FolderPlus,
+  Clock,
   FolderSearch,
   Link2,
   MoreHorizontal,
+  Pencil,
   RotateCw,
   Sparkles,
   Trash2,
@@ -21,7 +24,9 @@ import {
   copyCapturePreviewLink,
   discardCapturePreview,
   dismissCapturePreview,
+  editCapturePreview,
   getCapturePreview,
+  getCapturePreviewPointer,
   mintCapturePreviewLink,
   retryCapturePreview,
   revealCapturePreview,
@@ -45,6 +50,8 @@ const COPIED_MS = 1500;
 // compact secondary sized to its label (`shrink-0`) and at most one 32 pt
 // icon button; the rest of the actions live in the More menu.
 const ACTION = "flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-[8px] px-2.5 text-[12px]";
+/** How often the card asks where the pointer is while its timer runs. */
+const POINTER_POLL_MS = 150;
 const PRIMARY_ACTION = `${ACTION} min-w-0 flex-1 ${GLASS_PRIMARY}`;
 const SECONDARY_ACTION = `${ACTION} shrink-0 bg-white/10 font-medium ${GLASS_BUTTON}`;
 const ICON_ACTION = `grid size-8 shrink-0 place-items-center rounded-[8px] bg-white/10 ${GLASS_BUTTON}`;
@@ -172,6 +179,33 @@ export default function CapturePreviewPage() {
   // Once in the drive with its link settled, the card slides away on its own,
   // unless the pointer is on it. Not before the link: it would go before it
   // could say the link was copied.
+  // macOS sends no hover to the card's window (it is never key), so while
+  // the timer runs, ask Rust where the pointer is and hold the card the same
+  // way. Leaving starts the timer over, as the pointer events do.
+  const cardBox = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!settled) return;
+    let inside = false;
+    let stopped = false;
+    const poll = window.setInterval(() => {
+      void getCapturePreviewPointer()
+        .then((at) => {
+          const box = cardBox.current?.getBoundingClientRect();
+          if (stopped || !box) return;
+          const now = !!at && at[0] >= box.left && at[0] <= box.right && at[1] >= box.top && at[1] <= box.bottom;
+          if (now === inside) return;
+          inside = now;
+          setHovered(now);
+          if (!now) setTimerRun((n) => n + 1);
+        })
+        .catch(() => undefined);
+    }, POINTER_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(poll);
+    };
+  }, [settled]);
+
   useEffect(() => {
     if (!settled || hovered) return;
     const t = window.setTimeout(dismiss, AUTO_HIDE_MS);
@@ -179,7 +213,7 @@ export default function CapturePreviewPage() {
   }, [settled, hovered, dismiss, timerRun]);
 
   if (!card || !view) return null;
-  const { percent, failed } = view;
+  const { percent, failed, waiting } = view;
   const uploaded = done;
   const actions = card.actions;
   const failure = card.status.state === "failed" ? card.status.message : null;
@@ -195,6 +229,10 @@ export default function CapturePreviewPage() {
   };
 
   const showInFolder = () => void showCapturePreviewInFolder().catch(() => undefined);
+  // A screenshot's picture opens the editor, as macOS's thumbnail opens
+  // Markup; anything else (a recording) still shows its folder.
+  const canEdit = actions.edit === true;
+  const edit = () => run(editCapturePreview);
 
   const copy = () => {
     void copyCapturePreviewLink()
@@ -212,6 +250,7 @@ export default function CapturePreviewPage() {
   return (
     <div className="flex h-full w-full items-end justify-end p-1.5">
       <div
+        ref={cardBox}
         data-testid="capture-card"
         className={`capture-card-enter relative w-full overflow-hidden rounded-[14px] p-2 ${GLASS_PANEL}`}
         // Mouse events too: a window that is not key may get no pointer events
@@ -240,9 +279,9 @@ export default function CapturePreviewPage() {
 
         <button
           type="button"
-          onClick={failed ? undefined : showInFolder}
-          aria-label={`Show ${card.fileName} in its folder`}
-          title="Show in folder"
+          onClick={failed ? undefined : canEdit ? edit : showInFolder}
+          aria-label={canEdit ? `Edit ${card.fileName}` : `Show ${card.fileName} in its folder`}
+          title={canEdit ? "Edit" : "Show in folder"}
           className={`group relative block aspect-[16/9] w-full overflow-hidden rounded-[9px] bg-white/5 ${GLASS_FOCUS}`}
         >
           {card.thumbnail ? (
@@ -261,7 +300,15 @@ export default function CapturePreviewPage() {
           {!failed && (
             <span className="pointer-events-none absolute inset-0 grid place-items-center bg-[#000]/0 opacity-0 transition duration-150 group-hover:bg-[#000]/35 group-hover:opacity-100 motion-reduce:transition-none">
               <span className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#000]/70 px-3 py-1 text-[12px] font-medium">
-                <FolderOpen className="size-3.5" /> Show in folder
+                {canEdit ? (
+                  <>
+                    <Pencil className="size-3.5" /> Edit
+                  </>
+                ) : (
+                  <>
+                    <FolderOpen className="size-3.5" /> Show in folder
+                  </>
+                )}
               </span>
             </span>
           )}
@@ -272,7 +319,8 @@ export default function CapturePreviewPage() {
               every button whenever anything on it changed. */}
           <p role="status" aria-live="polite" className="flex items-center gap-1.5 text-[12px] leading-[18px] text-white/75">
             {uploaded && <Check aria-hidden className="size-3.5 shrink-0 text-[#30D158]" />}
-            {failed && <AlertCircle aria-hidden className="size-3.5 shrink-0 text-[#FF453A]" />}
+            {waiting && <Clock aria-hidden className="size-3.5 shrink-0 text-white/60" />}
+            {failed && !waiting && <AlertCircle aria-hidden className="size-3.5 shrink-0 text-[#FF453A]" />}
             <span className="truncate">{view.text}</span>
           </p>
           <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)}>
@@ -328,7 +376,16 @@ export default function CapturePreviewPage() {
                   onClick={() => run(retryCapturePreview)}
                   className={actions.upgrade ? SECONDARY_ACTION : PRIMARY_ACTION}
                 >
-                  <RotateCw aria-hidden className="size-3.5 shrink-0" /> Retry
+                  {waiting ? (
+                    // Nothing went wrong: Retry here only asks for the folder.
+                    <>
+                      <FolderPlus aria-hidden className="size-3.5 shrink-0" /> Choose folder
+                    </>
+                  ) : (
+                    <>
+                      <RotateCw aria-hidden className="size-3.5 shrink-0" /> Retry
+                    </>
+                  )}
                 </button>
               )}
               {actions.discard &&
@@ -371,7 +428,7 @@ export default function CapturePreviewPage() {
                   {copied ? "Copied" : "Copy link"}
                 </button>
               )}
-              {(actions.reveal || actions.revokeLink) && (
+              {(actions.reveal || actions.revokeLink || canEdit) && (
                 <button
                   ref={menuButton}
                   type="button"
@@ -385,7 +442,7 @@ export default function CapturePreviewPage() {
                   <MoreHorizontal aria-hidden className="size-4" />
                 </button>
               )}
-              {menuOpen && (actions.reveal || actions.revokeLink) && (
+              {menuOpen && (actions.reveal || actions.revokeLink || canEdit) && (
                 // Opens upward over the picture: the card sits at the window's
                 // bottom edge, so there is no room below.
                 <div
@@ -394,6 +451,20 @@ export default function CapturePreviewPage() {
                   aria-label="More"
                   className={`absolute bottom-10 right-0 z-10 min-w-[170px] rounded-[10px] p-1 ${GLASS_PANEL}`}
                 >
+                  {canEdit && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        edit();
+                      }}
+                      className={MENU_ITEM}
+                    >
+                      <Pencil aria-hidden className="size-3.5 shrink-0" /> Edit screenshot
+                    </button>
+                  )}
                   {actions.reveal && (
                     <button
                       type="button"

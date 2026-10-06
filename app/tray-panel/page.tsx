@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { Window } from "@tauri-apps/api/window";
 import { Upload, Check, AlertCircle } from "lucide-react";
 import "./tray-panel.css";
 import TrayCaptureRow from "./TrayCaptureRow";
+import TrayUploadRow, { ProgressRing } from "./TrayUploadRow";
+import { revealMain } from "./trayMainWindow";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
 import {
   getTraySyncSummary,
@@ -16,10 +17,6 @@ import {
 import type { SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { groupUploadFeed } from "@/app/lib/upload-feed/groupUploadFeed";
-import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
-import { getFileIcon, DIRECTORY_SUFFIX } from "@/app/lib/utils/fileTypeUtils";
-import { formatBytes } from "@/app/lib/utils/formatBytes";
-import { formatUploadedDate } from "@/app/lib/utils/formatUploadedDate";
 import Button from "@/app/components/ui/button";
 import HippiusLogo from "@/app/components/ui/icons/HippiusLogo";
 import Search from "@/app/components/ui/icons/Search";
@@ -180,7 +177,11 @@ export default function TrayPanelPage() {
                 </h3>
                 <ul>
                   {group.items.map((item) => (
-                    <UploadRowItem key={uploadRowKey(item)} item={item} />
+                    <TrayUploadRow
+                      key={uploadRowKey(item)}
+                      item={item}
+                      accountId={menu?.substrateAddress ?? null}
+                    />
                   ))}
                 </ul>
               </section>
@@ -377,13 +378,6 @@ function SyncSummary({ snapshot }: { snapshot: SyncSnapshot }) {
   );
 }
 
-/** A single upload row. Layout mirrors the Figma: the file-type icon aligns
- *  with the filename on the top line, and the size sits below — sharing that
- *  bottom line with the right-aligned status, so size and status line up.
- *
- *  Completed rows show the uploaded time (like the search palette the product
- *  liked); in-flight and failed rows show a live status pill (with a progress
- *  ring while uploading). */
 /** First-load placeholder for the upload list — a faint group heading plus a
  *  handful of rows mirroring `UploadRowItem`'s layout (icon + name + meta).
  *  Uses explicit rgba fills, not `bg-black/x` (dead here: the black palette has
@@ -411,174 +405,11 @@ function UploadRowsSkeleton() {
   );
 }
 
-function UploadRowItem({ item }: { item: UploadFeedItem }) {
-  const rawName = item.actualFileName || item.name;
-  const ext = rawName.includes(".") ? (rawName.split(".").pop() ?? null) : null;
-  const fileType = getFileTypeFromExtension(ext);
-  const { icon: Icon, color } = getFileIcon(fileType ?? undefined, false);
-
-  const sizeText =
-    typeof item.size === "number" && item.size > 0
-      ? formatBytes(item.size)
-      : "—";
-  const uploadedText =
-    item.feedStatus === "completed" ? formatUploadedDate(item.createdAt) : null;
-
-  return (
-    <li className="flex items-start gap-3 py-2.5">
-      {/* Icon column is as tall as the filename's line box and centers the
-          icon within it, so the icon lines up with the filename row (not the
-          very top of the list item). */}
-      <span
-        className={`flex h-5 w-4 shrink-0 items-center justify-center ${color}`}
-      >
-        <Icon className="size-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <MiddleEllipsisName name={displayFileName(item.name)} />
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <span className="truncate font-geist text-[12px] font-medium leading-normal tracking-[-0.24px] text-grey-10 dark:text-white">
-            {sizeText}
-          </span>
-          {uploadedText ? (
-            <span className="shrink-0 font-geist text-[12px] font-medium tracking-[-0.24px] text-grey-10 dark:text-white/50">
-              {uploadedText}
-            </span>
-          ) : (
-            <StatusLabel
-              status={item.feedStatus}
-              progress={item.progressPercent}
-            />
-          )}
-        </div>
-      </div>
-    </li>
-  );
-}
-
-/**
- * Center-truncate a filename with PURE CSS — no width measurement, so it is
- * immune to the webfont-load timing that left the canvas-measuring
- * `MiddleTruncatedName` clipping the extension in this provider-free webview.
- *
- * The head span truncates with the browser's own end-ellipsis; the tail span
- * (the last `TAIL_CHARS` — extension plus a little context) is `shrink-0`, so it
- * is always rendered in full. When the whole name fits, head sizes to its
- * content (no `flex-1`), so there's no gap before the tail and it reads as one
- * contiguous string; when it doesn't, only the head shrinks. The native `title`
- * shows the full name on hover.
- */
-function MiddleEllipsisName({ name }: { name: string }) {
-  const TAIL_CHARS = 10;
-  const textClass =
-    "font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white";
-
-  if (name.length <= TAIL_CHARS + 1) {
-    return (
-      <p className={`truncate ${textClass}`} title={name}>
-        {name}
-      </p>
-    );
-  }
-
-  const head = name.slice(0, name.length - TAIL_CHARS);
-  const tail = name.slice(name.length - TAIL_CHARS);
-  return (
-    <p className={`flex min-w-0 ${textClass}`} title={name}>
-      <span className="min-w-0 truncate">{head}</span>
-      <span className="shrink-0 whitespace-pre">{tail}</span>
-    </p>
-  );
-}
-
 /** Stable React key: drive label + relative path keeps a row identity across
  *  the uploading → completed transition (avoids a remount that would restart
  *  the row's transitions). */
 function uploadRowKey(item: UploadFeedItem): string {
   return `${item.label ?? ""}::${item.actualFileName || item.name}`;
-}
-
-/** Small circular progress ring shown beside the "time left" status while a
- *  file is uploading — mirrors the drive page's ring. `value` is 0–100. */
-function ProgressRing({ value }: { value: number }) {
-  const radius = 5;
-  const circumference = 2 * Math.PI * radius;
-  const clamped = Math.max(0, Math.min(100, value));
-  const offset = circumference * (1 - clamped / 100);
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      className="-rotate-90 shrink-0"
-      aria-hidden="true"
-    >
-      <circle
-        cx="6"
-        cy="6"
-        r={radius}
-        fill="none"
-        stroke="currentColor"
-        strokeOpacity="0.25"
-        strokeWidth="2"
-      />
-      <circle
-        cx="6"
-        cy="6"
-        r={radius}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeDasharray={circumference}
-        strokeDashoffset={offset}
-      />
-    </svg>
-  );
-}
-
-/** Color-coded status label (Geist Mono, 10px, uppercase — Figma tokens). The
- *  current backend feed only emits "uploaded"/"deleted"; the other states
- *  (pending/failed/uploading + a time-left ring) are styled for when richer
- *  per-file progress is wired in. */
-function StatusLabel({
-  status,
-  progress,
-}: {
-  status: string;
-  progress?: number | null;
-}) {
-  const base =
-    "shrink-0 font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px]";
-
-  // Uploading: brand-blue progress ring + live percent (falls back to the
-  // "UPLOADING" word before the first percent arrives).
-  if (status === "uploading") {
-    return (
-      <span className={`flex items-center gap-1.5 text-[#3167DD] ${base}`}>
-        <ProgressRing value={progress ?? 0} />
-        {typeof progress === "number"
-          ? `${Math.round(progress)}%`
-          : "UPLOADING"}
-      </span>
-    );
-  }
-
-  const map: Record<string, { label: string; className: string }> = {
-    completed: { label: "UPLOADED", className: "text-[#04C870]" },
-    uploaded: { label: "UPLOADED", className: "text-[#04C870]" },
-    pending: { label: "PENDING", className: "text-[#FEB101]" },
-    failed: { label: "FAILED", className: "text-[#FF6D61]" },
-    deleted: {
-      label: "DELETED",
-      className: "text-black/40 dark:text-white/40",
-    },
-  };
-  const entry = map[status] ?? {
-    label: status.toUpperCase(),
-    className: "text-black/40 dark:text-white/40",
-  };
-  return <span className={`${base} ${entry.className}`}>{entry.label}</span>;
 }
 
 /** Bottom bar: a single rounded box (Figma tokens — 8px gap, 16px radius,
@@ -770,26 +601,7 @@ async function openMainFiles() {
   }
 }
 
-/** Reveal + focus the `main` window (addressed by label — the popover runs in
- *  its own webview, so `getCurrentWindow()` here is the panel, not main). */
-async function revealMain() {
-  const main = await Window.getByLabel("main");
-  if (!main) return;
-  if (await main.isMinimized()) await main.unminimize();
-  await main.show();
-  await main.setFocus();
-}
-
 // ── Presentation helpers ────────────────────────────────────────────────────
-
-/** Display name for an upload row: strip the internal `.ec_metadata` folder
- *  suffix, but do NOT length-truncate — CSS `truncate` ellipsizes based on the
- *  row's actual available width, so names use the full row before clipping. */
-function displayFileName(rawName: string): string {
-  return rawName.endsWith(DIRECTORY_SUFFIX)
-    ? rawName.slice(0, -DIRECTORY_SUFFIX.length)
-    : rawName;
-}
 
 /** `5cRyFw…Quus`-style short form of a substrate address. */
 function shortenAddress(address: string | null): string {

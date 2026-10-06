@@ -22,6 +22,8 @@ const BUBBLE: CaptureCameraState = {
   recording: false,
   cameraFilmed: true,
   recorderOwnsCamera: false,
+  switchFromPill: false,
+  resizeFromPill: false,
 };
 const RECORDING: CaptureCameraState = { ...BUBBLE, recording: true };
 
@@ -386,3 +388,40 @@ describe("the stage when the recorder has the camera", () => {
   });
 });
 
+
+// The pill switches the camera mid-recording (`capture_camera_switch`): Rust
+// sends the new device in the camera state and this page, the only one that
+// may open a camera, opens it. The window keeps recording all along.
+describe("a camera switched mid-recording", () => {
+  let getUserMedia: ReturnType<typeof vi.fn>;
+  const cameras = [
+    { kind: "videoinput", deviceId: "web-facetime", label: "FaceTime HD Camera", groupId: "" },
+    { kind: "videoinput", deviceId: "web-phone", label: "Ahmad’s iPhone Camera", groupId: "" },
+  ];
+
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    getUserMedia = vi.fn(async () => {
+      const track = { muted: false, readyState: "live", stop: vi.fn(), getSettings: () => ({}), addEventListener: vi.fn() };
+      return { getTracks: () => [track], getVideoTracks: () => [track] };
+    });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { enumerateDevices: vi.fn(async () => cameras), getUserMedia, addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    });
+    tauri.onInvoke("capture_set_cameras", () => null);
+  });
+
+  it("opens the newly chosen camera by name and stays a recording bubble", async () => {
+    setup({ ...RECORDING, deviceId: "1F06", deviceName: "FaceTime HD Camera" });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(getUserMedia.mock.calls[0][0])).toContain("web-facetime");
+    await act(() =>
+      tauri.emitEvent("capture_camera_state", { ...RECORDING, deviceId: "9160", deviceName: "Ahmad's iPhone Camera" }),
+    );
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    expect(JSON.stringify(getUserMedia.mock.calls[1][0])).toContain("web-phone");
+    // No size strip appears: it would be filmed.
+    expect(screen.queryByRole("toolbar", { name: "Camera size" })).toBeNull();
+  });
+});

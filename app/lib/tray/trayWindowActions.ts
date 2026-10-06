@@ -10,7 +10,7 @@ export const TRAY_OPEN_VM_EVENT = "hippius:tray-open-vm";
 export const TRAY_CAPTURE_EVENT = "hippius:tray-capture";
 
 /** Backend event the tray popover emits to open the capture drive picker in
- *  the main window ("Change capture drive…"). */
+ *  the main window ("Captures folder…"). */
 export const TRAY_CAPTURE_DRIVE_EVENT = "hippius:tray-capture-drive";
 
 export async function openAppWindow(): Promise<void> {

@@ -39,7 +39,7 @@ const card = (
 const linked = (status: CapturePreviewCard["status"], id = 1, actions: Partial<Actions> = {}) =>
   card(status, id, { copyLink: true, ...actions }, { link: { state: "public", copied: true }, linkText: "Public link copied" });
 
-const failed = (message: string, reason: "offline" | "storageFull" | "other" = "offline") => ({
+const failed = (message: string, reason: "offline" | "storageFull" | "needsFolder" | "other" = "offline") => ({
   state: "failed" as const,
   message,
   reason,
@@ -51,8 +51,13 @@ const called = (cmd: string) => tauri.core.invoke.mock.calls.filter(([c]) => c =
 const dismissed = () => tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_preview_dismiss").length;
 const listening = (event: string) => tauri.event.listen.mock.calls.filter(([e]) => e === event).length;
 
+// Where Rust says the pointer is over the card's window; null is elsewhere.
+// jsdom lays nothing out, so the card's box is 0 x 0 at the origin.
+let pointer: [number, number] | null = null;
+
 async function setup(first: CapturePreviewCard | null) {
   tauri.onInvoke("capture_preview_context", () => first);
+  tauri.onInvoke("capture_preview_pointer", () => pointer);
   tauri.onInvoke("capture_preview_dismiss", () => null);
   for (const cmd of [
     "capture_preview_copy_link",
@@ -63,6 +68,7 @@ async function setup(first: CapturePreviewCard | null) {
     "capture_preview_reveal",
     "capture_preview_upgrade",
     "capture_preview_show_in_folder",
+    "capture_preview_edit",
   ]) {
     tauri.onInvoke(cmd, () => null);
   }
@@ -74,6 +80,7 @@ async function setup(first: CapturePreviewCard | null) {
 }
 
 beforeEach(() => {
+  pointer = null;
   tauri.reset();
   vi.useFakeTimers({ shouldAdvanceTime: false });
 });
@@ -136,6 +143,44 @@ describe("the preview card", () => {
       await vi.advanceTimersByTimeAsync(1100);
     });
     expect(dismissed()).toBe(1);
+  });
+
+  // macOS sends no hover to the card's window, which is never key: the card
+  // asks Rust where the pointer is instead, and holds the same way.
+  it("holds while Rust says the pointer is on it, though no hover event came", async () => {
+    await setup(card({ state: "uploaded", linkCopied: true }));
+    // A step at a time: React applies the poll's update when each act ends.
+    const wait = async (ms: number) => {
+      for (let t = 0; t < ms; t += 500) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(500);
+        });
+      }
+    };
+    pointer = [0, 0];
+    await wait(AUTO_HIDE_MS * 2);
+    expect(dismissed()).toBe(0);
+    pointer = [500, 500];
+    await wait(AUTO_HIDE_MS - 1000);
+    expect(dismissed()).toBe(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(dismissed()).toBe(1);
+  });
+
+  // The first capture before anyone chose a folder: nothing went wrong, so
+  // the card waits and its button asks for the folder.
+  it("waits for a folder instead of saying the upload failed", async () => {
+    await setup(card(failed("Kept on this computer. It uploads once you choose a folder.", "needsFolder"), 1, { retry: true }));
+    expect(document.querySelector("[aria-live]")).toHaveTextContent("Waiting for a folder");
+    expect(screen.queryByText("Couldn't upload")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_retry")).toBe(1);
   });
 
   it("offers Copy link only once a link exists", async () => {
@@ -317,6 +362,34 @@ describe("the card's actions (Rust decides which)", () => {
       await Promise.resolve();
     });
     expect(called("capture_preview_discard")).toBe(1);
+  });
+
+  // Like macOS's thumbnail opening Markup: a screenshot's picture opens the
+  // editor, and the More menu says so in words for the keyboard.
+  it("opens the editor from a screenshot's picture and from the More menu", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { edit: true }));
+    const picture = screen.getByRole("button", { name: `Edit ${FILE}` });
+    fireEvent.click(picture);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_edit")).toBe(1);
+    expect(called("capture_preview_show_in_folder")).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    const item = screen.getByRole("menuitem", { name: "Edit screenshot" });
+    expect(item).toHaveFocus();
+    fireEvent.click(item);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_edit")).toBe(2);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("keeps the picture as Show in folder when Rust offers no Edit", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1));
+    expect(screen.getByRole("button", { name: `Show ${FILE} in its folder` })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: `Edit ${FILE}` })).toBeNull();
   });
 
   it("offers nothing Rust did not", async () => {

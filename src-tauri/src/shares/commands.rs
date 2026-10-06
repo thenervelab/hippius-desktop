@@ -708,7 +708,7 @@ pub(crate) async fn share_external_file(
 /// sidecar, so the "Shared" badge finds it), `file_id` the hex path_hash the
 /// remote listing carries — the same id `download_remote_file` takes.
 #[allow(clippy::too_many_arguments)] // mirrors hcfs_create_share's surface + the file_id the remote listing adds
-async fn create_remote_share_inner(
+pub(crate) async fn create_remote_share_inner(
     state: &AppState,
     account_id: &str,
     folder_label: &str,

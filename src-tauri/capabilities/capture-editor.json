@@ -1,0 +1,11 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "capture-editor",
+    "description": "Least-privilege capability for the screenshot editor (label capture-editor), a normal window opened by Rust from the capture card or a Drive file's menu. It listens for capture_editor_close_requested and calls the app-defined capture_editor_* commands, which are not capability-gated: Rust hands it the picture and takes the edited one back, so it needs no fs, dialog, opener, clipboard plugin or asset protocol. core permissions only.",
+    "windows": ["capture-editor"],
+    "permissions": [
+        "core:default",
+        "core:event:allow-listen",
+        "core:event:allow-unlisten"
+    ]
+}

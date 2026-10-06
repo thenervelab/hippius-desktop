@@ -160,6 +160,44 @@ mod tests {
         assert!((2..=4).contains(&elapsed), "the pause is not counted: {elapsed}");
     }
 
+    /// Mute, unmute and a microphone switch through this recorder against
+    /// the real helper, mid-recording, and the file is still saved:
+    /// `cargo test --lib mutes_and_switches_the_microphone_for_real -- --ignored`
+    /// on macOS 15+ with the helper built, from a terminal allowed to record
+    /// the screen and the microphone. Set `HIPPIUS_TEST_SECOND_MIC` to
+    /// another microphone's id (`HippiusCapture --list-microphones`) to switch
+    /// to it as well. Leaves the file in the temp dir for a player.
+    #[test]
+    #[ignore = "records the screen and the microphone: needs the helper built and both permissions"]
+    fn mutes_and_switches_the_microphone_for_real() {
+        let out = std::env::temp_dir().join("hippius-real-microphone.mp4");
+        let _ = std::fs::remove_file(&out);
+        // SAFETY: CoreGraphics' main display id, no preconditions.
+        let display_id = unsafe { CGMainDisplayID() };
+        let options = RecordOptions {
+            microphone: true,
+            ..RecordOptions::default()
+        };
+        let mut recorder = start(Selection::Screen { display_id }, &out, options).expect("started");
+        assert!(recorder.microphone(), "this Mac records the microphone (macOS 15+)");
+        thread::sleep(Duration::from_millis(1500));
+        recorder.set_microphone_muted(true).expect("muted");
+        thread::sleep(Duration::from_millis(1500));
+        recorder.set_microphone_muted(false).expect("unmuted");
+        thread::sleep(Duration::from_secs(1));
+        if let Ok(second) = std::env::var("HIPPIUS_TEST_SECOND_MIC") {
+            recorder.switch_microphone(Some(second)).expect("switched");
+            thread::sleep(Duration::from_millis(1500));
+        }
+        let refused = recorder.switch_microphone(Some("no-such-microphone".into())).unwrap_err();
+        assert!(refused.to_string().contains("not connected"), "{refused}");
+        recorder.switch_microphone(None).expect("back to the default");
+        thread::sleep(Duration::from_secs(1));
+        assert!(recorder.take_death().is_none(), "nothing died");
+        let path = recorder.stop().expect("stopped");
+        assert!(std::fs::metadata(&path).unwrap().len() > helper::MIN_PARTIAL_BYTES);
+    }
+
     /// The helper trims the camera stage's margin and rounded corners by a
     /// fixed amount (`stageInset`) worked out from the page's classes. If the
     /// stage's padding or radius changes, the trim must be worked out again

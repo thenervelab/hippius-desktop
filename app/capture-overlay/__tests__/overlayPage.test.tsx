@@ -33,6 +33,7 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
     lastKind: "screenshot",
     lastMode: "area",
     copyLink: true,
+    openLink: true,
     recordCountdownSecs: 3,
   },
   countdownSecs: 0,
@@ -55,6 +56,7 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
   cameraFilmed: true,
   destination: { label: "Work", displayName: "Work" },
   pending: { target: "area", displayId: 1, rect: AREA },
+  instant: false,
   ...over,
 });
 
@@ -73,7 +75,6 @@ function setup(over: Partial<CaptureOverlayContext> = {}) {
     recorderOwnsCamera: false,
   }));
   tauri.onInvoke("capture_refresh_windows", () => []);
-  tauri.onInvoke("capture_destination_choices", () => [{ label: "Work", remote: false }]);
   tauri.onInvoke("capture_cameras", () => []);
   tauri.onInvoke("capture_microphones", () => []);
   tauri.onInvoke("capture_set_pending", () => null);
@@ -151,7 +152,8 @@ describe("the capture overlay's keyboard", () => {
   it("moves through an open menu with the arrow keys, Home and End", async () => {
     setup();
     fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
-    await screen.findByRole("menuitemradio", { name: /Work/ });
+    // Where captures go is said, not chosen, here: the captures drive.
+    expect(await screen.findByTestId("capture-save-to")).toHaveTextContent("Work");
     // Every item, the radios and the copy-link checkbox, in menu order.
     const items = Array.from(
       screen.getByRole("menu", { name: "Capture options" }).querySelectorAll<HTMLElement>('[role^="menuitem"]'),
@@ -513,6 +515,24 @@ describe("the Options menu", () => {
     expect(screen.queryByRole("menuitemcheckbox", { name: "Record system audio" })).toBeNull();
   });
 
+  // As Zight does: the link it just copied opens in the browser, unless
+  // turned off. Offered only while links are made at all.
+  it("turns opening the link in the browser on and off, only while links are copied", async () => {
+    tauri.onInvoke("capture_set_options", (args) => saved((args as { options: CaptureOverlayContext["options"] }).options, 0));
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
+    const open = await screen.findByRole("menuitemcheckbox", { name: "Open the link in your browser" });
+    expect(open).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(open);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: expect.objectContaining({ openLink: false }),
+      }),
+    );
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Copy a share link after capture" }));
+    await waitFor(() => expect(screen.queryByRole("menuitemcheckbox", { name: "Open the link in your browser" })).toBeNull());
+  });
+
   it("turns copying a share link after capture on and off", async () => {
     tauri.onInvoke("capture_set_options", (args) => saved((args as { options: CaptureOverlayContext["options"] }).options, 0));
     setup();
@@ -733,6 +753,31 @@ describe("click to capture", () => {
     );
   });
 
+  // The Record menu's "Entire screen": the bar, its sources and the screen
+  // hint, whatever the address says. Only Rust's `instant` hides the bar
+  // (the shortcut's one-step screenshot), so a stray `instant=1` cannot.
+  it("records the entire screen from the bar: the bar is up, then one click counts down and takes it", async () => {
+    window.history.replaceState({}, "", "/capture-overlay?display=1&instant=1");
+    const { container } = setup({ kind: "recording", mode: "screen", pending: null, countdownSecs: 3, instant: false });
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(screen.queryByTestId("capture-instant-hint")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Microphone:/ })).toBeInTheDocument();
+    const el = surface(container);
+    move(el, 300, 300);
+    expect(await screen.findByText("Click to record this screen")).toBeInTheDocument();
+    vi.useFakeTimers();
+    click(el, 300, 300);
+    expect(screen.getByText("Recording in 3")).toBeInTheDocument();
+    expect(called("capture_select")).toBe(false);
+    // One second per number; each re-render arms the next.
+    for (let i = 0; i < 4; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+    }
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_select", { selection: { target: "screen", displayId: 1 } });
+  });
+
   // Return goes through Rust, which takes the display under the pointer.
   it("asks Rust to take the screen on Return", async () => {
     setup({ mode: "screen", pending: null });
@@ -882,5 +927,140 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
   it("says what Record leads to for a whole screen", async () => {
     setup({ ...PANEL, mode: "screen" });
     expect(await screen.findByRole("status")).toHaveTextContent("then choose a screen in your desktop's sharing dialog");
+  });
+});
+
+describe("the shortcut's one-step area screenshot", () => {
+  const INSTANT = { instant: true, pending: null } as const;
+  const surface = (container: HTMLElement) => container.firstElementChild as HTMLElement;
+  const at = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0 });
+
+  beforeEach(() => {
+    tauri.onInvoke("capture_select", () => new Promise(() => undefined));
+    tauri.onInvoke("capture_set_mode", () => null);
+    window.history.replaceState({}, "", "/capture-overlay?display=1&instant=1");
+    try {
+      localStorage.setItem("hippius:capture-last-area", JSON.stringify({ displayId: 1, rect: AREA }));
+    } catch {
+      // jsdom always has storage; the guard matches the page's own.
+    }
+  });
+
+  afterEach(() => {
+    try {
+      localStorage.removeItem("hippius:capture-last-area");
+    } catch {
+      // see above
+    }
+  });
+
+  it("shows a crosshair with no bar and nothing drawn, only a line saying what to do", async () => {
+    const { container } = setup(INSTANT);
+    const hint = await screen.findByTestId("capture-instant-hint");
+    expect(hint).toHaveTextContent("Drag to capture an area");
+    expect(hint).toHaveTextContent("Esc to cancel");
+    expect(screen.queryByRole("toolbar", { name: "Capture" })).toBeNull();
+    expect(surface(container).style.cursor).toBe("crosshair");
+    // The last area is not brought back, and nothing is handed to Rust.
+    expect(screen.queryByText(/400 × 300|400 x 300/)).toBeNull();
+    expect(called("capture_set_pending")).toBe(false);
+  });
+
+  it("is a crosshair before Rust has answered", async () => {
+    tauri.onInvoke("capture_overlay_context", () => new Promise(() => undefined));
+    render(<CaptureOverlayPage />);
+    expect(await screen.findByTestId("capture-instant-pending")).toHaveStyle({ cursor: "crosshair" });
+  });
+
+  it("takes the area the moment the drag ends, with no button to press", async () => {
+    const { container } = setup(INSTANT);
+    await screen.findByTestId("capture-instant-hint");
+    const el = surface(container);
+    fireEvent.pointerDown(el, at(10, 20));
+    fireEvent.pointerMove(el, at(210, 120));
+    fireEvent.pointerUp(el, at(210, 120));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_select", {
+        selection: { target: "area", displayId: 1, rect: { x: 10, y: 20, width: 200, height: 100 } },
+      }),
+    );
+    expect(confirm).not.toHaveBeenCalled();
+    expect(called("capture_set_pending")).toBe(false);
+  });
+
+  it("takes nothing for a click without a drag", async () => {
+    const { container } = setup(INSTANT);
+    await screen.findByTestId("capture-instant-hint");
+    const el = surface(container);
+    fireEvent.pointerDown(el, at(50, 50));
+    fireEvent.pointerUp(el, at(50, 50));
+    expect(called("capture_select")).toBe(false);
+  });
+
+  it("moves the area being dragged while Space is held, as macOS does", async () => {
+    const { container } = setup(INSTANT);
+    await screen.findByTestId("capture-instant-hint");
+    const el = surface(container);
+    fireEvent.pointerDown(el, at(10, 10));
+    fireEvent.pointerMove(el, at(110, 60));
+    fireEvent.keyDown(window, { key: " " });
+    fireEvent.pointerMove(el, at(160, 90));
+    fireEvent.pointerUp(el, at(160, 90));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_select", {
+        selection: { target: "area", displayId: 1, rect: { x: 60, y: 40, width: 100, height: 50 } },
+      }),
+    );
+    // Space while dragging moves; it does not switch to window mode.
+    expect(called("capture_set_mode")).toBe(false);
+  });
+
+  it("goes back to growing the area when Space is let go", async () => {
+    const { container } = setup(INSTANT);
+    await screen.findByTestId("capture-instant-hint");
+    const el = surface(container);
+    fireEvent.pointerDown(el, at(10, 10));
+    fireEvent.pointerMove(el, at(110, 60));
+    fireEvent.keyDown(window, { key: " " });
+    fireEvent.pointerMove(el, at(160, 90));
+    fireEvent.keyUp(window, { key: " " });
+    fireEvent.pointerMove(el, at(260, 190));
+    fireEvent.pointerUp(el, at(260, 190));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_select", {
+        selection: { target: "area", displayId: 1, rect: { x: 60, y: 40, width: 200, height: 150 } },
+      }),
+    );
+  });
+
+  it("cancels on Escape", async () => {
+    setup(INSTANT);
+    await screen.findByTestId("capture-instant-hint");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(called("capture_cancel")).toBe(true));
+  });
+
+  it("switches to clicking a window on Space before a drag, still without a bar", async () => {
+    setup(INSTANT);
+    expect(await screen.findByTestId("capture-instant-hint")).toHaveTextContent("press Space for a window");
+    fireEvent.keyDown(window, { key: " " });
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_mode", { kind: "screenshot", mode: "window" }),
+    );
+  });
+
+  it("says how to get back to an area in window mode", async () => {
+    setup({ ...INSTANT, mode: "window", windows: [] });
+    expect(await screen.findByTestId("capture-instant-hint")).toHaveTextContent("Space to drag an area");
+    expect(screen.queryByRole("toolbar", { name: "Capture" })).toBeNull();
+  });
+
+  it("draws no hint on the displays that do not host it", async () => {
+    setup({ ...INSTANT, hostsBar: false });
+    await waitFor(() => expect(called("capture_overlay_context")).toBe(true));
+    // Give the context's render a turn before checking.
+    await act(async () => undefined);
+    expect(screen.queryByTestId("capture-instant-hint")).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Capture" })).toBeNull();
   });
 });

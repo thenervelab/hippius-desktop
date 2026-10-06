@@ -32,6 +32,12 @@ export interface CardView {
   /** Rust says the card is finished (in the drive, link settled): it may slide away. */
   settled: boolean;
   failed: boolean;
+  /**
+   * Not uploaded because nobody has said where captures go yet. Still a
+   * `failed` status to Rust (the file is kept and Retry asks for the folder),
+   * but the card waits instead of alarming: no red, and "Choose folder".
+   */
+  waiting: boolean;
 }
 
 /**
@@ -61,6 +67,7 @@ export function cardView(
         done: false,
         settled: false,
         failed: false,
+        waiting: false,
       };
     }
     case "syncing": {
@@ -72,6 +79,7 @@ export function cardView(
         done: false,
         settled: false,
         failed: false,
+        waiting: false,
       };
     }
     case "uploaded":
@@ -81,9 +89,12 @@ export function cardView(
         done: true,
         settled: card.settled ?? true,
         failed: false,
+        waiting: false,
       };
     case "failed":
-      return { percent: null, text: "Couldn't upload", done: false, settled: false, failed: true };
+      return status.reason === "needsFolder"
+        ? { percent: null, text: "Waiting for a folder", done: false, settled: false, failed: true, waiting: true }
+        : { percent: null, text: "Couldn't upload", done: false, settled: false, failed: true, waiting: false };
   }
 }
 

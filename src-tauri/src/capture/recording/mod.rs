@@ -45,6 +45,10 @@ pub struct RecordOptions {
     /// The camera bubble's window (its system window number), added to a
     /// window recording, which otherwise films that one window only.
     pub camera_window: Option<u32>,
+    /// macOS: the app's own windows a screen or area recording still films
+    /// (the main window, the bubble); the helper leaves every other Hippius
+    /// window out (`capture::own_windows`). Empty elsewhere.
+    pub own_windows_filmed: Vec<u32>,
     /// Wayland: the ScreenCast portal's token from an earlier recording of
     /// a whole screen, so the desktop can skip its dialog
     /// (`capture::screencast_token` decides when it applies).
@@ -336,7 +340,34 @@ pub trait Recorder: Send {
         let _ = area;
         Err(AppError::Other("This recording is not waiting for an area.".into()))
     }
+    /// Mute (`true`) or unmute the microphone mid-recording. Muted, the
+    /// microphone is written as silence: the file keeps one continuous audio
+    /// track in step with the picture, and system audio goes on.
+    ///
+    /// # Errors
+    ///
+    /// This recorder has no such control, or refused it.
+    fn set_microphone_muted(&mut self, muted: bool) -> Result<()> {
+        let _ = muted;
+        Err(AppError::Validation(LIVE_MICROPHONE_UNSUPPORTED.into()))
+    }
+    /// Record another microphone (`None` = the system default) from now on,
+    /// in the same file.
+    ///
+    /// # Errors
+    ///
+    /// This recorder has no such control, or the device could not be opened
+    /// (the current one then keeps recording).
+    fn switch_microphone(&mut self, device: Option<String>) -> Result<()> {
+        let _ = device;
+        Err(AppError::Validation(LIVE_MICROPHONE_UNSUPPORTED.into()))
+    }
 }
+
+/// A recorder without mid-recording microphone controls says this. The pill
+/// does not offer them there (`support::live_controls`), so only a hand-made
+/// call ever reads it.
+pub const LIVE_MICROPHONE_UNSUPPORTED: &str = "The microphone can't be changed during a recording on this system yet.";
 
 /// Whether a recording's start was refused because the user closed the
 /// desktop's screen-sharing dialog (Wayland) without choosing: the session
