@@ -14,7 +14,7 @@ paths:
   - "src-tauri/src/tray/**"
   - "app/components/page-sections/drive/highlightEntry.ts"
   - "app/components/page-sections/drive/useDriveHighlight.ts"
-  - "app/tray-panel/TrayCaptureRow.tsx"
+  - "app/tray-panel/TrayTiles.tsx"
   - "macos/HippiusCapture/**"
 ---
 

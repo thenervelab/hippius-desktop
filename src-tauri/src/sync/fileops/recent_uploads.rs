@@ -731,6 +731,105 @@ pub async fn search_files_in_drive(
     map_search_hits(state.inner(), &account_id, &page).await
 }
 
+// ─── Captures ───────────────────────────────────────────────────────────────
+
+/// The newest captures, for the tray popover's Captures tab.
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentCaptures {
+    /// The drive captures are filed in; `None` before one is chosen.
+    pub label: Option<String>,
+    /// Newest first, at most the limit asked for.
+    pub files: Vec<UserFileEntry>,
+}
+
+/// Whether a drive-relative path is a capture: inside the capture folder
+/// (`CaptureDestination::folder`, already normalised: no leading or
+/// trailing slash, empty for the drive's root, which is how the captures
+/// drive keeps them). A folder named like the start of another
+/// ("Shots" vs "Shots 2") does not count.
+#[must_use]
+pub fn in_capture_folder(rel_path: &str, folder: &str) -> bool {
+    let rel = normalize_rel_path(rel_path);
+    if folder.is_empty() {
+        return true;
+    }
+    rel.strip_prefix(folder).is_some_and(|rest| rest.starts_with('/') && rest.len() > 1)
+}
+
+/// The account's newest screenshots and recordings: the files in its
+/// capture folder (`capture::destination`), newest first. What counts as a
+/// capture is decided here, so the popover's Captures tab and the Captures
+/// page can never disagree about it.
+///
+/// The server scopes a search to a drive, not a folder in it, so a capture
+/// folder inside a regular drive is read as the drive's newest rows and
+/// filtered here; the captures drive itself holds nothing else.
+///
+/// # Errors
+///
+/// As [`search_files_in_drive`].
+#[tauri::command]
+pub async fn get_recent_captures(state: tauri::State<'_, AppState>, account_id: String, limit: Option<usize>) -> Result<RecentCaptures> {
+    let account_id = state.require_session_account(&account_id)?;
+    let pool = state.pool()?;
+    let Some(destination) = crate::capture::destination::load(pool, &account_id).await? else {
+        return Ok(RecentCaptures::default());
+    };
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &destination.label).await?;
+    let params = SearchFilesParams {
+        folder_hash: Some(identity.wire_folder_hash.clone()),
+        sort_by: Some("date".into()),
+        sort_order: Some("desc".into()),
+        // A folder in a regular drive shares the drive's newest rows with
+        // everything else in it, so read a full page to find enough.
+        limit: Some(if destination.folder.is_empty() { limit } else { MAX_LIMIT }),
+        ..SearchFilesParams::default()
+    };
+    debug!(account_id = %account_id, label = %destination.label, "Fetching recent captures");
+    let rows = fetch_search_files(state.inner(), &account_id, &identity.wire_ss58, &build_search_query(&params)).await?;
+    let files = rows
+        .into_iter()
+        .filter(|row| !row.is_folder && in_capture_folder(&row.actual_file_name, &destination.folder))
+        .take(limit)
+        .collect();
+    Ok(RecentCaptures {
+        label: Some(destination.label),
+        files,
+    })
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn everything_in_the_captures_drive_is_a_capture() {
+        assert!(in_capture_folder("Screenshot 2026-10-06 at 10.00.00.png", ""));
+        assert!(in_capture_folder("/Recording.mp4", ""));
+    }
+
+    #[test]
+    fn in_a_regular_drive_only_the_capture_folder_counts() {
+        assert!(in_capture_folder("Captures/shot.png", "Captures"));
+        assert!(in_capture_folder("/Captures/shot.png", "Captures"));
+        assert!(in_capture_folder("Work/Captures/shot.png", "Work/Captures"));
+        assert!(!in_capture_folder("report.pdf", "Captures"));
+        assert!(!in_capture_folder("Captures 2/shot.png", "Captures"));
+        assert!(!in_capture_folder("CapturesOld/shot.png", "Captures"));
+        // The folder itself is not a capture.
+        assert!(!in_capture_folder("Captures", "Captures"));
+        assert!(!in_capture_folder("Captures/", "Captures"));
+    }
+
+    #[test]
+    fn the_wire_shape_is_what_the_popover_reads() {
+        let value = serde_json::to_value(RecentCaptures::default()).unwrap();
+        assert_eq!(value, serde_json::json!({ "label": null, "files": [] }));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
+// Edit (the screenshot editor) ships behind the capture flag.
+const flags = vi.hoisted(() => ({ capture: true }));
+vi.mock("@/app/lib/featureFlags", () => ({
+  get SCREEN_CAPTURE_ENABLED() {
+    return flags.capture;
+  },
+}));
+
 import {
+  canEditTrayRow,
   canLinkTrayRow,
   cloudFileIdFor,
   getTrayQuickActions,
@@ -100,7 +109,7 @@ describe("tray row menu, per file state", () => {
   it("does not offer View for a file the viewer cannot open", () => {
     const zip = row({ name: "backup.zip", actualFileName: "backup.zip" });
     expect(ids(zip)).not.toContain("preview");
-    expect(getTrayQuickActions(zip)).toEqual(["show-in-drive", "copy-link"]);
+    expect(getTrayQuickActions(zip)).toEqual(["copy-link"]);
   });
 
   it("disables Delete while the file is still being assigned", () => {
@@ -119,14 +128,62 @@ describe("tray row menu, per file state", () => {
 });
 
 describe("tray row quick actions", () => {
-  it("are folder, link and view for a previewable completed file", () => {
-    expect(getTrayQuickActions(row())).toEqual(["show-in-drive", "copy-link", "preview"]);
+  beforeEach(() => {
+    flags.capture = true;
   });
 
-  it("are only the folder while a file uploads", () => {
-    expect(getTrayQuickActions(row({ feedStatus: "uploading", syncStatus: "uploading" }))).toEqual([
-      "show-in-drive",
+  const shot = (overrides: Partial<UploadFeedItem> = {}) =>
+    row({ name: "Screenshot.png", actualFileName: "Screenshot.png", ...overrides });
+
+  it("are the link alone for a file that is not a picture", () => {
+    expect(getTrayQuickActions(row())).toEqual(["copy-link"]);
+  });
+
+  it("are the link and Edit for a picture on this computer", () => {
+    expect(getTrayQuickActions(shot())).toEqual(["copy-link", "edit"]);
+    expect(getTrayQuickActions(shot({ name: "a.JPG", actualFileName: "a.JPG" }))).toEqual([
+      "copy-link",
+      "edit",
     ]);
+  });
+
+  it("are nothing while a file uploads: no link, and nothing on the server to edit", () => {
+    expect(getTrayQuickActions(shot({ feedStatus: "uploading", syncStatus: "uploading" }))).toEqual([]);
+  });
+});
+
+describe("tray row Edit", () => {
+  beforeEach(() => {
+    flags.capture = true;
+  });
+
+  const shot = (overrides: Partial<UploadFeedItem> = {}) =>
+    row({ name: "Screenshot.png", actualFileName: "Screenshot.png", ...overrides });
+
+  it("is offered for a finished PNG or JPEG in a drive synced here", () => {
+    expect(canEditTrayRow(shot())).toBe(true);
+    expect(ids(shot())).toContain("edit");
+  });
+
+  it("is not offered for what the editor cannot save back", () => {
+    expect(canEditTrayRow(row())).toBe(false);
+    expect(canEditTrayRow(shot({ name: "a.gif", actualFileName: "a.gif" }))).toBe(false);
+    expect(canEditTrayRow(shot({ name: "clip.mp4", actualFileName: "clip.mp4" }))).toBe(false);
+  });
+
+  it("is not offered for a picture with no copy here, with no drive, or in flight", () => {
+    expect(canEditTrayRow(shot({ source: "" }))).toBe(false);
+    expect(canEditTrayRow(shot({ label: undefined }))).toBe(false);
+    expect(canEditTrayRow(shot({ feedStatus: "failed" }))).toBe(false);
+  });
+
+  it("is not offered where the lane has no screenshot editor", () => {
+    flags.capture = false;
+    expect(canEditTrayRow(shot())).toBe(false);
+  });
+
+  it("runs in the popover, not through the main window", () => {
+    expect(runsInMainWindow("edit")).toBe(false);
   });
 });
 
