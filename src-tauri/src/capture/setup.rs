@@ -741,7 +741,9 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert!(refused.contains("Files and Folders") && refused.contains("Documents"), "{refused}");
         }
-        assert!(refused.contains("choose another place"), "{refused}");
+        // macOS words it "..., or choose another place."; elsewhere it is a
+        // sentence of its own, "Choose another place."
+        assert!(refused.to_lowercase().contains("choose another place"), "{refused}");
         let other = folder_refused_copy(&docs, &home(), std::io::ErrorKind::Other);
         assert_eq!(other, "Hippius couldn't make a folder there. Choose another place.");
     }
