@@ -108,7 +108,7 @@ export default function TrayHeaderMenu({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const balanceText = balance === null ? "—" : formatBalanceUsd(balance);
+  const balanceText = balance === null ? "…" : formatBalanceUsd(balance);
   const planText = trayPlanLine(overview);
   const select = useCallback((run: () => Promise<void>) => {
     setOpen(false);
