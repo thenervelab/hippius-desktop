@@ -8,6 +8,7 @@ import {
   HardDrive,
   Link2,
   Pencil,
+  PenLine,
   Share2,
   Trash2,
   type LucideIcon,
@@ -19,6 +20,7 @@ import type {
 
 export const TRAY_ACTION_ICONS: Record<TrayRowActionId, LucideIcon> = {
   preview: Eye,
+  edit: PenLine,
   download: Download,
   "copy-link": Link2,
   share: Share2,

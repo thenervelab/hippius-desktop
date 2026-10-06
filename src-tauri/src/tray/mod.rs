@@ -11,3 +11,4 @@
 pub mod geometry;
 pub mod panel;
 pub mod status_menu;
+pub mod thumbnail;

@@ -20,9 +20,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Mute your microphone during a screen recording.** The recording carries on and stays in sync; it is silent until you unmute. On a Mac.
 - **Switch microphone or camera during a screen recording.** Pick another one from the recording controls without stopping. On a Mac; camera switching works on Windows too.
 - **Change the camera bubble's size during a screen recording.** Small, large or full size, and the saved video changes with it. On a Mac and Windows.
-- **Annotate from the menu bar.** The tray's new Annotate button opens your latest screenshot, or any picture you choose, in the screenshot editor. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
+- **Annotate from the menu bar.** Choose Annotate an image from the Screenshot tile's menu to open any picture in the screenshot editor, or press Edit on a screenshot in the list. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
 
 ### Changed
+
+- **A tidier menu bar window.** Screenshot, Record and Upload sit side by side at the top (drop files on the window to upload them), your captures and all your files are a tab apart, sync status is one short line, and every file shows a small picture of itself with Copy link and Edit a hover away.
 
 - **The screenshot shortcut takes a screenshot in one step.** Press the
   capture shortcut (Cmd+Shift+2 on a Mac), drag over any part of the screen

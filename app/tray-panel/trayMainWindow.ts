@@ -2,6 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { Window } from "@tauri-apps/api/window";
 import { revealFile } from "@/app/lib/utils/revealFile";
+import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
+import {
+  TRAY_OPEN_FILES_TAURI_EVENT,
+  TRAY_UPLOAD_PATHS_EVENT,
+} from "@/app/lib/tray/trayDrop";
 import {
   cloudFileIdFor,
   runsInMainWindow,
@@ -56,6 +61,13 @@ export async function runTrayRowAction(
       await invoke("hide_tray_panel");
       return null;
     }
+    if (id === "edit") {
+      // The editor must not open under the always-on-top popover. Rust
+      // checks the file again (an own drive, synced here, PNG or JPEG).
+      await invoke("hide_tray_panel");
+      await openFileInEditor(item.label ?? "", trayRowRelativePath(item));
+      return null;
+    }
     if (id === "reveal") {
       await revealFile({
         sourcePath: item.source || undefined,
@@ -105,5 +117,35 @@ export async function copyTrayRowLink(
   } catch (error) {
     console.error("[TrayPanel] copy link failed:", error);
     return { status: "failed", message: errorSentence(error) };
+  }
+}
+
+/** Focus the main window and send it to the Drive page, the way the empty
+ *  state's "Upload a File" and the Upload tile do. Routing happens in the
+ *  main window (`TrayNavigationListener`), never in this popover webview. */
+export async function openMainFiles() {
+  try {
+    await revealMain();
+    await emit(TRAY_OPEN_FILES_TAURI_EVENT, {});
+    await invoke("hide_tray_panel");
+  } catch (error) {
+    console.error("[TrayPanel] Failed to open Drive:", error);
+  }
+}
+
+/**
+ * Files dropped on the popover: the main window opens its upload dialog
+ * with them, as a drop on the Drive page would (the dialog asks which
+ * drive, and every upload gate applies there). The popover uploads nothing
+ * itself.
+ */
+export async function uploadDroppedPaths(paths: string[]) {
+  if (paths.length === 0) return;
+  try {
+    await invoke("hide_tray_panel");
+    await revealMain();
+    await emit(TRAY_UPLOAD_PATHS_EVENT, { paths });
+  } catch (error) {
+    console.error("[TrayPanel] Failed to hand the dropped files over:", error);
   }
 }
