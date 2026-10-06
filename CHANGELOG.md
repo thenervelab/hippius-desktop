@@ -150,6 +150,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   again.
 
 - **The capture bar follows you to another screen.** With more than one display, move the pointer to another screen while choosing what to capture and the bar moves there with you, as the Mac's own screenshot bar does.
+
 - **Hippius can be opened during a screen recording.** Clicking its Dock
   icon or switching to it with Cmd+Tab now brings the app up while you
   record.
