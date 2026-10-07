@@ -87,14 +87,28 @@ impl<E: Encoder> Pipeline<E> {
         self.frames_written
     }
 
+    /// The recording starts at `origin` (capture clock, placed): the moment
+    /// the encoder is ready and Start is answered. The encoder is made from
+    /// the first picture, which can take seconds on a slow machine; that
+    /// wait is not part of the recording, so a picture taken during it is
+    /// the opening picture at zero (the newest one wins) and sound from
+    /// before `origin` is dropped. Without a call the first picture is zero.
+    pub fn start_at(&mut self, origin: u64) {
+        self.origin.get_or_insert(origin);
+    }
+
     /// A picture taken at `time`.
     ///
     /// # Errors
     /// The encoder failed.
     pub fn video(&mut self, time: u64, nv12: Vec<u8>) -> Result<(), String> {
         let origin = *self.origin.get_or_insert(time);
-        let Some(at) = time.checked_sub(origin) else {
-            return Ok(());
+        let at = match time.checked_sub(origin) {
+            Some(at) => at,
+            // Taken before the start (while the encoder was being made):
+            // the opening picture, until one after the start has come.
+            None if self.frames_written == 0 && self.hold.held_since().is_none_or(|t| t == 0) => 0,
+            None => return Ok(()),
         };
         match self.hold.push(Arc::new(nv12), at) {
             Some(timed) => self.write_video(&timed),
@@ -215,6 +229,41 @@ mod tests {
         assert!(fake.finished);
         let (start, duration, len) = fake.audio[0];
         assert_eq!((start, duration, len), (0, 200_000, 960 * 2), "20 ms from zero");
+    }
+
+    /// The encoder took 2 s to make from the first picture: the file starts
+    /// when Start was answered, on the newest picture from that wait, and
+    /// the wait itself is not in the file.
+    #[test]
+    fn the_time_spent_making_the_encoder_is_not_recorded() {
+        let mut fake = Fake::default();
+        let mut p = Pipeline::new(&mut fake, &[Source::Microphone]);
+        p.start_at(3_000_000);
+        // Taken while the encoder was being made: the newest is the opening
+        // picture, and sound from then is dropped.
+        p.video(1_000_000, vec![1; 6]).unwrap();
+        p.audio(Source::Microphone, 2_000_000, &packet(20)).unwrap();
+        p.video(2_900_000, vec![2; 6]).unwrap();
+        p.video(3_100_000, vec![3; 6]).unwrap();
+        p.audio(Source::Microphone, 3_100_000, &packet(20)).unwrap();
+        p.finish(4_000_000).unwrap();
+        assert_eq!(fake.video, vec![(0, 1_000_000), (1_000_000, 9_000_000)], "1 s long, not 3");
+        let (start, duration, _) = *fake.audio.last().unwrap();
+        assert_eq!(start + duration, 1_200_000, "sound from 3.1 s lands at 0.1 s");
+    }
+
+    /// Once a picture after the start is in, a late one from before it is
+    /// dropped rather than moved to zero.
+    #[test]
+    fn a_picture_from_before_the_start_is_dropped_once_the_file_moved_on() {
+        let mut fake = Fake::default();
+        let mut p = Pipeline::new(&mut fake, &[]);
+        p.start_at(1_000_000);
+        p.video(1_100_000, vec![0; 6]).unwrap();
+        p.video(1_200_000, vec![0; 6]).unwrap();
+        p.video(900_000, vec![0; 6]).unwrap();
+        p.finish(1_300_000).unwrap();
+        assert_eq!(fake.video, vec![(1_000_000, 1_000_000), (2_000_000, 1_000_000)]);
     }
 
     #[test]
