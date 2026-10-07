@@ -180,11 +180,11 @@ pub async fn get_deposit_address(
 #[tauri::command]
 pub async fn get_marketplace_credits(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     page: Option<i64>,
     limit: Option<i64>,
 ) -> Result<MarketplaceCreditsResult, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let indexer = IndexerClient::for_session(&state, state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(INDEXER_MAX_LIMIT).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
@@ -269,7 +269,10 @@ fn parse_indexer_u64(field: &str, raw: &str) -> u64 {
 /// is not valid JSON. An empty `data` array is *not* an error — it returns
 /// `{ totalBytes: 0, fileCount: 0 }`.
 #[tauri::command]
-pub async fn get_drive_storage_stats(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<DriveStorageStats, AppError> {
+pub async fn get_drive_storage_stats(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<DriveStorageStats, AppError> {
     fetch_drive_storage_stats(state.inner(), &account_id).await
 }
 
@@ -277,7 +280,7 @@ pub async fn get_drive_storage_stats(state: tauri::State<'_, crate::app_state::A
 /// [`crate::billing::storage_overview::get_storage_overview`] so the simple
 /// storage card and any legacy stats consumer read the same indexer row.
 pub(crate) async fn fetch_drive_storage_stats(state: &crate::app_state::AppState, account_id: &str) -> Result<DriveStorageStats, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let indexer = IndexerClient::for_session(state, state.api_client.clone())?;
     let params = [("account_id", account_id), ("storage", "drive"), ("limit", "1")];
     let response: IndexerResponse<DriveStorageRow> = indexer.get("/user-extended-storage-metrics", &params).await?;
 
@@ -345,7 +348,7 @@ pub async fn get_system_balance(
     page: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<BalanceObject>, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let indexer = IndexerClient::for_session(&state, state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     // Server-side cap, mirroring the other indexer readers. The
     // FE's `useSystemBalance.ts` default of 20_000 is silently clamped
@@ -418,7 +421,7 @@ pub async fn get_balance_transfers(
     page: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<TransferObject>, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let indexer = IndexerClient::for_session(&state, state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
@@ -547,11 +550,11 @@ pub struct CreditEventObject {
 #[tauri::command]
 pub async fn get_add_credit_events(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     page: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<CreditEventObject>, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let indexer = IndexerClient::for_session(&state, state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![

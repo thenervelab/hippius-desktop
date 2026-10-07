@@ -104,7 +104,7 @@ async fn cached_drive_events(state: &crate::app_state::AppState, account_id: &st
 /// [`MAX_PAGES`] with a warning rather than looping forever if the
 /// indexer ever returns a runaway count.
 async fn fetch_all_drive_events(state: &crate::app_state::AppState, account_id: &str) -> Result<Vec<DriveCreditEvent>, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let indexer = IndexerClient::for_session(state, state.api_client.clone())?;
     let limit_str = PAGE_LIMIT.to_string();
     let mut all = Vec::new();
 
@@ -231,7 +231,7 @@ fn render_credit_points(dates: &[NaiveDate], cumulative: &BTreeMap<NaiveDate, f6
 #[tauri::command]
 pub async fn get_drive_credits_chart(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     range: String,
 ) -> Result<Vec<ChartPoint>, AppError> {
     let events = cached_drive_events(&state, &account_id).await?;
@@ -244,7 +244,10 @@ pub async fn get_drive_credits_chart(
 /// # Errors
 /// Propagates [`AppError::Api`] from the underlying indexer request.
 #[tauri::command]
-pub async fn get_drive_credits_total(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<f64, AppError> {
+pub async fn get_drive_credits_total(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<f64, AppError> {
     let events = cached_drive_events(&state, &account_id).await?;
     Ok(events
         .iter()
