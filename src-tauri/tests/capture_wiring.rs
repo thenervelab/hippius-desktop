@@ -1413,9 +1413,70 @@ fn linux_webviews_open_devices_only_in_the_capture_windows() {
     assert!(linux.contains("webview_media_gtk::attach(&webview)"));
     let gtk = read("src/capture/webview_media_gtk.rs");
     assert!(gtk.contains("set_enable_media_stream(true)"));
-    assert!(gtk.contains("is::<UserMediaPermissionRequest>()") && gtk.contains("is::<DeviceInfoPermissionRequest>()"));
+    assert!(gtk.contains("downcast_ref::<UserMediaPermissionRequest>()") && gtk.contains("is::<DeviceInfoPermissionRequest>()"));
     assert!(gtk.contains("is_app_origin(&uri)") && gtk.contains("request.deny()"));
     assert!(gtk.contains("return false;"), "other requests keep WebKitGTK's default");
+}
+
+/// The bubble's page loads while the window is being built, before the
+/// media stream is turned on: a page that already finished loading is
+/// loaded again, or it has no `navigator.mediaDevices` for its whole life.
+/// Every answer to a camera request is logged next to the page's own
+/// reports.
+#[test]
+fn linux_reloads_a_page_that_loaded_before_the_media_stream_and_logs_its_answers() {
+    let gtk = read("src/capture/webview_media_gtk.rs");
+    let attach = fn_body(&gtk, "pub fn attach(");
+    let on = attach.find("set_enable_media_stream(true)").expect("media stream on");
+    let reload = attach.find("view.reload()").expect("a loaded page is loaded again");
+    assert!(on < reload, "turn the media stream on before loading the page again");
+    assert!(attach.contains("needs_reload(was_on, view.is_loading(), uri.as_deref())"));
+    assert!(attach.contains("camera: allowed a request for the"));
+}
+
+/// Where PipeWire is too old for `pipewiresrc` to open a camera, the
+/// PipeWire device provider is ranked NONE so WebKitGTK and the recorder
+/// child open cameras with `v4l2src`. It sets an environment variable, so it
+/// runs in `main` before logging (whose writer is a thread) and before the
+/// builder; the recorder child returns earlier and inherits it from the app.
+#[test]
+fn linux_picks_the_camera_provider_before_any_thread_starts() {
+    let main = read("src/main.rs");
+    let body = fn_body(&main, "fn main()");
+    let child = body.find("recorder_child::run(").expect("the recorder child branch");
+    let apply = body
+        .find("crate::capture::camera_provider::apply()")
+        .expect("the provider is chosen in main");
+    let logging = body.find("let _log_guard = init_logging();").expect("logging starts in main");
+    let builder = body.find("Builder::default()").expect("the builder");
+    assert!(child < apply && apply < logging && logging < builder);
+    assert!(body.contains("camera_provider.log();"), "the decision is logged once logging is up");
+    let provider = read("src/capture/camera_provider.rs");
+    assert!(provider.contains("pub const RANK_VAR: &str = \"GST_PLUGIN_FEATURE_RANK\";"));
+    assert!(provider.contains("pub const PROVIDER: &str = \"pipewiredeviceprovider\";"));
+}
+
+/// The camera page reports each step of opening the camera to the app log;
+/// a report command that is not registered fails in a window nobody watches.
+#[test]
+fn the_camera_page_reports_to_the_app_log() {
+    let main = read("src/main.rs");
+    assert!(main.contains("crate::capture::camera_report::capture_camera_report,"));
+    let ipc = read("../app/lib/tauri/capture.ts");
+    assert!(ipc.contains("invoke(\"capture_camera_report\", { step, detail })"));
+    let page = read("../app/capture-camera/page.tsx");
+    for step in [
+        "no-media-devices",
+        "devices",
+        "request",
+        "opened",
+        "playing",
+        "error",
+        "no-frames",
+        "gave-up",
+    ] {
+        assert!(page.contains(&format!("report(\"{step}\"")), "the camera page reports {step}");
+    }
 }
 
 /// Windows' meter is the recorder child's WASAPI client, the same program

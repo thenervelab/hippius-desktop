@@ -173,8 +173,22 @@ name, the same event Windows sends. The bubble's
 `getUserMedia` exists on Linux only because `webview_media_gtk.rs` turns
 WebKitGTK's media stream on and allows user-media and device-info requests,
 for the capture windows and the app's own pages only (pinned in
-`capture_wiring.rs`); `--list-cameras` names cameras as WebKitGTK does
-(both are GStreamer's names). The app probes once
+`capture_wiring.rs`); it runs after the window is built, so a page that
+already finished loading is loaded again (`needs_reload`: its document was
+made without `navigator.mediaDevices`), and every answer is a `camera:` log
+line. `--list-cameras` names cameras as WebKitGTK does
+(both are GStreamer's names). **Old PipeWire cannot open cameras:** with
+`gstreamer1.0-pipewire` installed its device provider hides the V4L2 one in
+`GstDeviceMonitor`, so WebKitGTK (and camera only) open every camera with
+`pipewiresrc`, which below PipeWire 0.3.64 (Ubuntu 22.04 has 0.3.48) stops
+with `not-negotiated` or freezes: a live track with no frame, the bubble on
+its placeholder, while a browser (V4L2 directly) works. `camera_provider`
+reads PipeWire's version from `libpipewire-0.3.so.0.<n>.0` and, below
+0.3.64, sets `GST_PLUGIN_FEATURE_RANK=pipewiredeviceprovider:NONE` in `main`
+before any thread (the monitor uses providers of rank MARGINAL and up); the
+web processes and the recorder child inherit it, so the bar's names, the
+bubble and the recorder still agree. A rank the user set wins. Pinned by
+`camera_provider::tests` and `capture_wiring.rs`. The app probes once
 per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
 `codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
 Wayland (the desktop's dialog). **Wayland records from the panel**
@@ -490,8 +504,20 @@ stop never ends its replacement) and sent as `capture_mic_level` (0..1,
 recording; `emit_phase` stops it on every other phase, before the recorder
 opens the mic. The camera page covers a muted or not-yet-playing camera with
 a placeholder (`showsPlaceholder`) and reopens one muted for
-`MUTE_RECOVERY_MS`, at most `MUTE_RECOVERY_TRIES` in a row. Pinned by
-`onlyCameraCaptures.test.ts`, `mic_meter::tests` and `capture_wiring.rs`.
+`MUTE_RECOVERY_MS`, at most `MUTE_RECOVERY_TRIES` in a row. A stream (or a
+`getUserMedia`) with no first frame in `NO_FRAMES_MS` is opened again once
+(`afterNoFrames`), then the bubble shows "Camera unavailable" and lets the
+camera go; never after the stream's first frame, since WebKit pausing a
+picture is not a failure. **The page reports each step to the app log**
+(`capture_camera_report`, `camera_report.rs`: `camera: <step>: <detail>`,
+`warn` for `no-media-devices`, `error`, `no-frames`, `gave-up`,
+`track-ended`, `track-muted`, else `info`; one line per step per second and
+40 a minute, the rest counted): the cameras listed by name, the constraint
+asked (device ids cut to 8 characters, `cameraReport.ts`), the error's name
+and message, the track and the video. Grep `camera:` in `~/.hippius/logs`.
+Pinned by `onlyCameraCaptures.test.ts`, `cameraPage.test.tsx`,
+`cameraReport.test.ts`, `mic_meter::tests`, `camera_report::tests` and
+`capture_wiring.rs`.
 `camera::wanted_shape` decides the window: while selecting it follows the
 options live (so the bubble can be placed before recording); from Record on it
 follows `recording_camera`, frozen in `select_inner` BEFORE the phase moves, so

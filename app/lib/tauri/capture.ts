@@ -704,6 +704,15 @@ export function getCaptureCameraContext(): Promise<CaptureCameraState> {
   return invoke("capture_camera_context");
 }
 
+/**
+ * One step of the camera page opening the camera, for the app log (Rust
+ * logs it as a `camera:` line, throttled). Diagnostics only: nothing
+ * depends on the answer.
+ */
+export function reportCameraStep(step: string, detail: string): Promise<void> {
+  return invoke("capture_camera_report", { step, detail });
+}
+
 /** The camera window reports the cameras it can open, for the bar's picker. */
 export function setCaptureCameras(cameras: CaptureDevice[]): Promise<void> {
   return invoke("capture_set_cameras", { cameras });
