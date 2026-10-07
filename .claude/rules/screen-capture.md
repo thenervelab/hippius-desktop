@@ -42,7 +42,8 @@ Windows and Linux record in a child process of the app
 through one shared `HelperRecorder`; Windows = WGC + Media Foundation
 fragmented MP4 + WASAPI, no ffmpeg; Linux = portals (`ashpd`, on the zbus 5
 already in the graph) on Wayland, x11rb and `ximagesrc` on X11, GStreamer from
-the distro for the file; Wayland has no overlay (the system picker chooses);
+the distro for the file; Wayland has no live overlay (the system picker
+chooses a recording; a screenshot is chosen over a still, Phase 3 below);
 per-platform rollout lives in Rust (`capture::rollout`), not in new frontend
 flags. Note: xcap 0.9.8's `wgc` feature has no GDI fallback.
 
@@ -137,16 +138,46 @@ made full screen** (`cover_whole_display`) or GNOME and KDE push them below
 their panels and every area read back is shifted; **no content protection**,
 so every Linux session sets `ui_in_grabs` and `settle_compositor` sleeps
 `COMPOSITOR_SETTLE` before the grab; a window shot is the screen where the
-window is (a covered window shows what covers it). Wayland =
-`capture/linux_portal.rs`: `support::start_plan` sends a Wayland screenshot
-past the overlay to `system_picker_screenshot` (session `Capturing` while
-the desktop's tool is open; a cancel there is a quiet cancel, everything
-else `fail_capture`); `settle` MOVES the portal's PNG into the capture
-folder under the Hippius name, never follows a symlink, and says
-`PORTAL_MISSING` / `PORTAL_FAILED` in Rust's words. The frontend branches
-only on Rust's `selection` (one "Take a screenshot…" item, no capture bar)
-and `shortcut.supported` / `unavailableMessage` (no keycaps, Settings shows
-the line). The `rust-linux-test` CI job runs
+window is (a covered window shows what covers it). **Wayland screenshots
+are chosen on a still** (`frozen_shot.rs`, pure; `StartPlan::Frozen` from
+`Surfaces.frozen_screenshot`): `frozen_screenshot` hides the card, waits two
+`COMPOSITOR_SETTLE`s (the main window was hidden at start), asks the
+Screenshot portal with `interactive = false` (`portal_still`: GNOME 42's
+portal takes it at once with a flash and no dialog; newer portals ask once
+and remember; the portal's file is moved into a capture folder by `settle`
+and removed once read, so nothing is left under Pictures), cuts it into one
+slice per GDK monitor (`monitor_slices`: one raster of the layout's
+bounding box at one scale, refused when the two axes' scales disagree by
+more than `SCALE_TOLERANCE`) and opens the ordinary overlay page full screen
+on each monitor (`open_frozen_overlay`, `fullscreen_on_monitor` by GDK
+index; display id = monitor index, bar on GDK's primary), which draws its
+monitor's still behind everything (`capture_overlay_backdrop`, a JPEG data
+URL read once; the context says only `frozen`). Area and entire screen
+only (`modes.screenshot`; no window list), same keys, timer and instant
+shortcut. `finish_screenshot` cuts the selection out of the still
+(`take_from_still`, `pixels_for`: CSS px times the slice's pixels over the
+monitor's logical width, so HiDPI and fractional scaling need nothing more;
+the viewport is assumed to be the monitor's logical size). **The timer
+counts over the live screen**: the page hides the still while counting (the
+overlay is transparent) and `retakes` has Rust take a fresh still once the
+overlays are gone, the frozen one if that fails (`cut_latest`). No display
+watch and no bar follow (both read X11, which is XWayland there), and
+`capture_confirm` takes the bar's display for Entire screen (no pointer on
+Wayland). A refused or missing still, or one that does not fit the
+monitors, hands over to `system_picker_screenshot` (`linux_portal.rs`,
+`interactive = true`: session `Capturing` while the desktop's tool is
+open; a cancel there is a quiet cancel, everything else `fail_capture`;
+`settle` MOVES the portal's PNG into the capture folder under the Hippius
+name, never follows a symlink, and says `PORTAL_MISSING` / `PORTAL_FAILED`
+in Rust's words). `Surfaces.selection` is how a SCREENSHOT is chosen (the
+Capture menu and tray branch on it; overlay everywhere now) and the
+Rust-only `record_selection` how a recording is (the panel on Wayland);
+the overlay page branches on its context's `panel` and `frozen`, never on
+the platform, and `shortcut.supported` / `unavailableMessage` (no keycaps,
+Settings shows the line). The bar switching kind on Wayland swaps the
+windows (`support::switch_plan` → `swap_selection_windows`: the stills'
+overlays give way to the panel for Record, the panel to a fresh still for
+a screenshot). The `rust-linux-test` CI job runs
 the X server test under Xvfb. Pinned by `capture_wiring.rs`.
 
 **Phase 4 (Linux recording) is in code, not yet run on Linux.** The child
@@ -333,9 +364,10 @@ a crosshair before its context loads) means no bar, no area seeded (Rust's
 nothing; Escape cancels; Space before a drag swaps to window click, and
 Space HELD during a drag moves the area (`overlaySelection::shiftDrag`,
 both flows). The size label shows while dragging. It never moves the bar's
-last kind/mode (`StartChoice.remember`, `remembers_mode_switch`). Where
-there is no overlay (Wayland) the shortcut is a plain screenshot: the
-desktop's own tool, already one step. The buttons and the tray keep the bar.
+last kind/mode (`StartChoice.remember`, `remembers_mode_switch`). On
+Wayland it is the same one step on the still (Phase 3); only when no still
+can be had does the desktop's own tool open, already one step. The buttons
+and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
 (see "Screen Recording permission" below). Only

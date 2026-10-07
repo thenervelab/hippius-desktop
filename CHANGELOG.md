@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Screenshots on Linux with Wayland use the Hippius capture bar.** Drag an area or take the entire screen on a still of your desktop, with the same keys, timer and shortcut as on other systems, instead of your desktop's screenshot tool.
 - **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
 - **Edit pictures in your remote folders.** Edit image now works on PNG and
   JPEG files that are only on Hippius, not just ones synced to this computer.
@@ -165,6 +166,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Overview and Drive, for free and paid plans — uploads are paused.
 
 ### Fixed
+
 
 - **The camera bubble shows your camera on Ubuntu 22.04 and similar Linux systems.** It used to stay on its placeholder there; if a camera still cannot start, the bubble now says so instead of waiting for ever.
 - **Linux: a tidier recording bar, and the dock opens Hippius mid-recording.** On Wayland the recording bar is now just the bar, not a large dark box around it, and clicking Hippius in the dock or picking it in Alt+Tab while recording brings the app back.

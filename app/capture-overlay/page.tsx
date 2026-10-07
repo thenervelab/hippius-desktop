@@ -8,6 +8,7 @@ import {
   cancelCapture,
   confirmCapture,
   getCaptureCameraContext,
+  getCaptureOverlayBackdrop,
   getCaptureOverlayContext,
   holdCaptureBar,
   refreshCaptureWindows,
@@ -71,11 +72,18 @@ import {
  * windows, not over Hippius, so the app's light/dark setting says nothing
  * about what is underneath it.
  *
- * Where Rust's `selection` is `systemPicker` (a Wayland recording) this page
- * is the PANEL instead: one small window with the capture bar and no
- * selection surface, since Hippius can neither cover the screen nor see
- * other windows there. Record goes straight to Rust, which has the
- * desktop's own screen-sharing dialog choose the window or screen.
+ * Where Rust says `panel` (a Wayland recording) this page is the PANEL
+ * instead: one small window with the capture bar and no selection surface,
+ * since Hippius can neither cover the screen nor see other windows there.
+ * Record goes straight to Rust, which has the desktop's own screen-sharing
+ * dialog choose the window or screen.
+ *
+ * Where Rust says `frozen` (a Wayland screenshot) the overlay is drawn over
+ * a still of this display that Rust took through the desktop
+ * (`getCaptureOverlayBackdrop`), since a Wayland app cannot see the live
+ * screen. Everything else is the same overlay. The still is hidden while a
+ * countdown runs, so the count is over the live screen as elsewhere, and
+ * Rust takes a fresh still when it ends.
  */
 
 const DIM = "rgba(0, 0, 0, 0.38)";
@@ -143,6 +151,8 @@ export default function CaptureOverlayPage() {
   // The camera window Rust is showing; a "stage" means the camera alone is
   // recorded, so there is nothing on the screen to choose.
   const [cameraShape, setCameraShape] = useState<CameraShape | null>(null);
+  // The still a Wayland screenshot is chosen on (`context.frozen`).
+  const [backdrop, setBackdrop] = useState<string | null>(null);
   // "Choose what to share" is open on this tab; it owns the keyboard then.
   const [picker, setPicker] = useState<ShareTab | null>(null);
   // The capture itself is running (the countdown ended, or there was none):
@@ -210,6 +220,22 @@ export default function CaptureOverlayPage() {
       .then((c) => setCameraShape(c.shape))
       .catch(() => undefined);
   }, [displayId, load]);
+
+  // Read once: the still does not change for the session, and the context
+  // is read again on every mode switch.
+  const frozen = context?.frozen === true;
+  useEffect(() => {
+    if (!frozen || displayId === null) return;
+    let live = true;
+    void getCaptureOverlayBackdrop(displayId)
+      .then((picture) => {
+        if (live) setBackdrop(picture);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [frozen, displayId]);
 
   // The bar switched mode on some display: read the context again (window
   // mode needs this display's window list). The drawn area survives.
@@ -295,7 +321,7 @@ export default function CaptureOverlayPage() {
   // with the mode, the count, or a hidden page.
   const pollingWindows =
     displayId !== null &&
-    context?.selection !== "systemPicker" &&
+    !context?.panel &&
     context?.mode === "window" &&
     !(context.kind === "recording" && cameraShape === "stage") &&
     countdown === null &&
@@ -316,7 +342,7 @@ export default function CaptureOverlayPage() {
     if (!context || displayId === null) return;
     const cameraOnly = context.kind === "recording" && cameraShape === "stage";
     // The panel has no window to click: the desktop's dialog picks one.
-    if (context.mode === "window" && !cameraOnly && context.selection !== "systemPicker") {
+    if (context.mode === "window" && !cameraOnly && !context.panel) {
       setNotice(barHint(context.kind, "window", false));
       return;
     }
@@ -377,7 +403,7 @@ export default function CaptureOverlayPage() {
     }
     // Space swaps window and area, as it does in macOS's ⌘⇧4. Not mid-drag,
     // and not with the camera alone (nothing on screen is chosen then).
-    if (e.key === " " && context && context.selection !== "systemPicker" && !latest.current.dragging) {
+    if (e.key === " " && context && !context.panel && !latest.current.dragging) {
       const stage = context.kind === "recording" && cameraShape === "stage";
       const next = stage ? null : spaceToggleMode(context.mode, context.kind, supportedModesOf(context));
       if (next) {
@@ -425,7 +451,7 @@ export default function CaptureOverlayPage() {
 
   // Wayland's panel: its window is kept the size of the bar and its menus.
   const panelRef = useRef<HTMLDivElement | null>(null);
-  usePanelFit(panelRef, context?.selection === "systemPicker");
+  usePanelFit(panelRef, context?.panel === true);
 
   if (!context || displayId === null) {
     // The shortcut's shot: the crosshair is there from the first frame.
@@ -604,7 +630,7 @@ export default function CaptureOverlayPage() {
     />
   );
 
-  if (context.selection === "systemPicker") {
+  if (context.panel) {
     // The panel: an ordinary window the compositor places, holding the bar
     // and nothing else. The window is transparent and fitted to the bar
     // (`usePanelFit`), so only the bar's own glass shows, as on a Mac; it
@@ -627,136 +653,152 @@ export default function CaptureOverlayPage() {
     );
   }
 
+  // The still is behind everything this page draws (its dim included), and
+  // gone while counting, so the count is over the live screen.
+  const showBackdrop = context.frozen && backdrop !== null && countdown === null;
+
   return (
-    <div
-      className="fixed inset-0 select-none"
-      style={{ cursor, background: highlight || screenLit ? "transparent" : DIM }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerLeave={() => {
-        setPointerHere(false);
-        setHovered(null);
-      }}
-      onDoubleClick={() => {
-        if (mode === "area" && rect) confirm();
-      }}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {highlight && (
-        <div
-          className="pointer-events-none absolute"
-          style={{
-            left: highlight.x,
-            top: highlight.y,
-            width: highlight.width,
-            height: highlight.height,
-            // The dim is a shadow spread from the selection, so everything
-            // outside it darkens and the selection itself stays clear.
-            boxShadow: `0 0 0 100vmax ${DIM}`,
-            outline: mode === "area" ? "1px dashed rgba(255,255,255,0.95)" : `2px solid ${FRAME}`,
-            background: mode === "window" ? "rgba(49,103,221,0.16)" : "transparent",
-          }}
-        >
-          {mode === "area" && isRealDrag(highlight) && !counting && (
-            <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md bg-[#000]/60 px-2 py-0.5 text-xs font-medium tabular-nums text-white">
-              {sizeLabel(highlight)}
-            </span>
-          )}
-          {mode === "window" && hovered && !counting && (
-            <span className="absolute left-1/2 top-1/2 flex max-w-[80%] -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-[#000]/75 px-3.5 py-2 text-sm font-medium text-white shadow-lg">
-              <KindIcon className="size-4 shrink-0" />
-              <span className="truncate">{hovered.appName || hovered.title || "Window"}</span>
-            </span>
-          )}
-        </div>
-      )}
-
-      {mode === "area" && rect && !drag && !counting &&
-        HANDLES.map((h) => {
-          const p = handlePoint(rect, h);
-          return (
-            <span
-              key={h}
-              className="pointer-events-none absolute size-[9px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.35)]"
-              style={{ left: p.x, top: p.y }}
-            />
-          );
-        })}
-
-      {screenLit && (
-        <div
-          className="pointer-events-none absolute inset-0"
-          // A light tint as well as the frame: the display under the pointer
-          // is the one a click (or Return) takes.
-          style={{ outline: `3px solid ${FRAME}`, outlineOffset: -3, background: "rgba(49,103,221,0.08)" }}
-        >
-          {!counting && (
-            <span className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-[#000]/70 px-4 py-2 text-sm font-medium text-white shadow-lg">
-              <KindIcon className="size-4" />
-              {kind === "recording" ? "Click to record this screen" : "Click to capture this screen"}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Always mounted: a live region that appears with its first number
-          is often not announced at all. */}
-      <p className="sr-only" aria-live="assertive" aria-atomic="true">
-        {countdownSpeech}
-      </p>
-
-      {countdown !== null && countdown > 0 && (
-        // Clicking the count goes at once, as Return does.
-        <button
-          type="button"
-          aria-label={`${kind === "recording" ? "Record" : "Capture"} now`}
-          title={`${kind === "recording" ? "Record" : "Capture"} now (${enterKey})`}
-          onClick={skipCountdown}
-          onPointerDown={(e) => e.stopPropagation()}
-          onPointerUp={(e) => e.stopPropagation()}
-          className={`absolute grid size-24 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center rounded-full bg-[#000]/60 text-5xl font-semibold tabular-nums text-white hover:bg-[#000]/75 ${GLASS_FOCUS}`}
-          style={{
-            left: highlight ? highlight.x + highlight.width / 2 : "50%",
-            // Camera only: the stage fills the middle and sits above this
-            // window, so the count goes above it.
-            top: highlight ? highlight.y + highlight.height / 2 : cameraOnly ? "11%" : "50%",
-          }}
-        >
-          <span aria-hidden>{countdown}</span>
-        </button>
-      )}
-
-      {context.hostsBar && !counting && !instant && (
-        // The bar stays up but out of the way of click-to-capture: over it the
-        // pointer is a plain arrow and no window is lit, and its own handlers
-        // keep a click on it from choosing anything underneath.
-        <div data-testid="capture-bar-slot" style={{ cursor: "default" }} onPointerEnter={() => setHovered(null)}>
-          {captureBar(hint)}
-        </div>
-      )}
-
-      {context.hostsBar && instant && !counting && !drag && (
-        // No bar on the shortcut's shot: one line says what to do. It takes
-        // no pointer events, so the drag can start right over it.
-        <p
-          data-testid="capture-instant-hint"
-          role="status"
-          className="pointer-events-none absolute left-1/2 top-6 max-w-[90vw] -translate-x-1/2 rounded-full bg-[#000]/70 px-4 py-2 text-center text-sm font-medium text-white shadow-lg"
-        >
-          {notice ?? instantHint(context.mode, spaceToggleMode(context.mode, kind, supportedModesOf(context)) === "window")}
-        </p>
-      )}
-
-      {context.hostsBar && picker !== null && !counting && (
-        <SharePicker
-          kind={kind}
-          firstTab={picker}
-          barDisplayId={displayId}
-          onChoose={chooseShared}
-          onClose={() => setPicker(null)}
+    <>
+      {showBackdrop && (
+        <img
+          data-testid="capture-backdrop"
+          src={backdrop}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className="pointer-events-none fixed inset-0 block size-full select-none"
         />
       )}
-    </div>
+      <div
+        className="fixed inset-0 select-none"
+        style={{ cursor, background: highlight || screenLit ? "transparent" : DIM }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={() => {
+          setPointerHere(false);
+          setHovered(null);
+        }}
+        onDoubleClick={() => {
+          if (mode === "area" && rect) confirm();
+        }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {highlight && (
+          <div
+            className="pointer-events-none absolute"
+            style={{
+              left: highlight.x,
+              top: highlight.y,
+              width: highlight.width,
+              height: highlight.height,
+              // The dim is a shadow spread from the selection, so everything
+              // outside it darkens and the selection itself stays clear.
+              boxShadow: `0 0 0 100vmax ${DIM}`,
+              outline: mode === "area" ? "1px dashed rgba(255,255,255,0.95)" : `2px solid ${FRAME}`,
+              background: mode === "window" ? "rgba(49,103,221,0.16)" : "transparent",
+            }}
+          >
+            {mode === "area" && isRealDrag(highlight) && !counting && (
+              <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md bg-[#000]/60 px-2 py-0.5 text-xs font-medium tabular-nums text-white">
+                {sizeLabel(highlight)}
+              </span>
+            )}
+            {mode === "window" && hovered && !counting && (
+              <span className="absolute left-1/2 top-1/2 flex max-w-[80%] -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-[#000]/75 px-3.5 py-2 text-sm font-medium text-white shadow-lg">
+                <KindIcon className="size-4 shrink-0" />
+                <span className="truncate">{hovered.appName || hovered.title || "Window"}</span>
+              </span>
+            )}
+          </div>
+        )}
+
+        {mode === "area" && rect && !drag && !counting &&
+          HANDLES.map((h) => {
+            const p = handlePoint(rect, h);
+            return (
+              <span
+                key={h}
+                className="pointer-events-none absolute size-[9px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.35)]"
+                style={{ left: p.x, top: p.y }}
+              />
+            );
+          })}
+
+        {screenLit && (
+          <div
+            className="pointer-events-none absolute inset-0"
+            // A light tint as well as the frame: the display under the pointer
+            // is the one a click (or Return) takes.
+            style={{ outline: `3px solid ${FRAME}`, outlineOffset: -3, background: "rgba(49,103,221,0.08)" }}
+          >
+            {!counting && (
+              <span className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-[#000]/70 px-4 py-2 text-sm font-medium text-white shadow-lg">
+                <KindIcon className="size-4" />
+                {kind === "recording" ? "Click to record this screen" : "Click to capture this screen"}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Always mounted: a live region that appears with its first number
+            is often not announced at all. */}
+        <p className="sr-only" aria-live="assertive" aria-atomic="true">
+          {countdownSpeech}
+        </p>
+
+        {countdown !== null && countdown > 0 && (
+          // Clicking the count goes at once, as Return does.
+          <button
+            type="button"
+            aria-label={`${kind === "recording" ? "Record" : "Capture"} now`}
+            title={`${kind === "recording" ? "Record" : "Capture"} now (${enterKey})`}
+            onClick={skipCountdown}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            className={`absolute grid size-24 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center rounded-full bg-[#000]/60 text-5xl font-semibold tabular-nums text-white hover:bg-[#000]/75 ${GLASS_FOCUS}`}
+            style={{
+              left: highlight ? highlight.x + highlight.width / 2 : "50%",
+              // Camera only: the stage fills the middle and sits above this
+              // window, so the count goes above it.
+              top: highlight ? highlight.y + highlight.height / 2 : cameraOnly ? "11%" : "50%",
+            }}
+          >
+            <span aria-hidden>{countdown}</span>
+          </button>
+        )}
+
+        {context.hostsBar && !counting && !instant && (
+          // The bar stays up but out of the way of click-to-capture: over it the
+          // pointer is a plain arrow and no window is lit, and its own handlers
+          // keep a click on it from choosing anything underneath.
+          <div data-testid="capture-bar-slot" style={{ cursor: "default" }} onPointerEnter={() => setHovered(null)}>
+            {captureBar(hint)}
+          </div>
+        )}
+
+        {context.hostsBar && instant && !counting && !drag && (
+          // No bar on the shortcut's shot: one line says what to do. It takes
+          // no pointer events, so the drag can start right over it.
+          <p
+            data-testid="capture-instant-hint"
+            role="status"
+            className="pointer-events-none absolute left-1/2 top-6 max-w-[90vw] -translate-x-1/2 rounded-full bg-[#000]/70 px-4 py-2 text-center text-sm font-medium text-white shadow-lg"
+          >
+            {notice ?? instantHint(context.mode, spaceToggleMode(context.mode, kind, supportedModesOf(context)) === "window")}
+          </p>
+        )}
+
+        {context.hostsBar && picker !== null && !counting && (
+          <SharePicker
+            kind={kind}
+            firstTab={picker}
+            barDisplayId={displayId}
+            onChoose={chooseShared}
+            onClose={() => setPicker(null)}
+          />
+        )}
+      </div>
+    </>
   );
 }
