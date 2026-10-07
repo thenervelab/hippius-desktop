@@ -1372,10 +1372,17 @@ fn the_wayland_panel_is_fitted_to_the_bar() {
         "sized in logical pixels, never scaled again"
     );
     assert!(fit.contains("CapturePhase::Selecting"), "only while a capture is being chosen");
+    assert!(
+        fit.contains("lock(&state.capture.frozen).is_none()"),
+        "never while a frozen screenshot's full-screen overlays are up"
+    );
     assert!(read("src/main.rs").contains("crate::capture::commands::capture_panel_fit,"));
 
     let page = read("../app/capture-overlay/page.tsx");
-    assert!(page.contains("usePanelFit(panelRef, context?.selection === \"systemPicker\")"));
+    assert!(
+        page.contains("usePanelFit(panelRef, context?.panel === true)"),
+        "only the panel is fitted"
+    );
     assert!(page.contains("layout={panel ? \"panel\" : \"overlay\"}"));
     assert!(!page.contains("GLASS_PANEL"), "the panel draws no glass behind the bar");
     assert!(read("../app/lib/tauri/capture.ts").contains("invoke(\"capture_panel_fit\", { width, height })"));
