@@ -43,6 +43,7 @@ vi.mock("@/app/lib/featureFlags", () => ({
 
 import TrayUploadRow from "../TrayUploadRow";
 import { resetTrayThumbnails } from "../useTrayThumbnail";
+import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 
 const ACCOUNT = "5CPQ46eGx7nRkTyY2pV9wH3aLmZcQ1uS8bDfJ4kN6tWqFdJ";
 
@@ -138,9 +139,13 @@ describe("hover actions", () => {
     expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
     cleanup();
 
-    // A picture with no copy on this computer cannot be edited in place.
-    renderRow(screenshot({ source: "" }), true);
+    // A picture with no copy on this computer and no server id cannot be
+    // edited; with its server id it can (the editor fetches it).
+    renderRow(screenshot({ source: `${REMOTE_SOURCE_PREFIX}shot.png`, fileId: undefined }), true);
     expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
+    cleanup();
+    renderRow(screenshot({ source: "" }), true);
+    expect(screen.getByRole("button", { name: /^Edit:/ })).toBeInTheDocument();
     cleanup();
 
     // Nor where the lane has no screenshot editor.
@@ -175,6 +180,9 @@ describe("hover actions", () => {
       expect(invoke).toHaveBeenCalledWith("capture_editor_open_file", {
         label: "Captures",
         relativePath: "Screenshot 2026-10-06 at 10.00.00.png",
+        // So Rust can edit the server's copy when the file is not here.
+        fileId: "ab".repeat(32),
+        arionHash: "content-hash",
       }),
     );
     const names = invoke.mock.calls.map(([name]) => name);

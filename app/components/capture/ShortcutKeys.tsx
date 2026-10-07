@@ -11,7 +11,8 @@ export default function ShortcutKeys({
   className,
 }: {
   keys: string[];
-  size?: "sm" | "md";
+  /** `lg` is the Settings tile's: the shortcut is what that tile is about. */
+  size?: "sm" | "md" | "lg";
   className?: string;
 }) {
   if (keys.length === 0) return null;
@@ -26,7 +27,11 @@ export default function ShortcutKeys({
             "font-[system-ui,-apple-system,'Segoe_UI',sans-serif]",
             "border-grey-dark-100 bg-grey-light-200 text-grey-10 shadow-[0_1px_0_rgba(0,0,0,0.08)]",
             "dark:border-black-300 dark:bg-black-300 dark:text-white dark:shadow-[0_1px_0_rgba(0,0,0,0.5)]",
-            size === "sm" ? "h-[22px] min-w-[22px] px-1.5 text-[13px]" : "h-7 min-w-7 px-2 text-[14px]",
+            size === "sm"
+              ? "h-[22px] min-w-[22px] px-1.5 text-[13px]"
+              : size === "md"
+                ? "h-7 min-w-7 px-2 text-[14px]"
+                : "h-10 min-w-10 rounded-[8px] border-b-2 px-2.5 text-[18px]",
           )}
         >
           {key}

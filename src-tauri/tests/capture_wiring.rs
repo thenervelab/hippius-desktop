@@ -1720,6 +1720,26 @@ fn hippius_can_be_opened_during_a_recording() {
     assert!(watch.contains("pressedMouseButtons"));
 }
 
+/// A Drive file only on the server is edited too: downloaded the viewer's
+/// way, saved back by upload, and never written into the preview cache.
+#[test]
+fn the_editor_opens_and_saves_a_server_only_file() {
+    let editor = read("src/capture/editor.rs");
+    let open_file = fn_body(&editor, "pub async fn capture_editor_open_file(");
+    assert!(
+        open_file.contains("open_remote_file("),
+        "a server-only file opens through the remote path"
+    );
+    let remote = fn_body(&editor, "async fn open_remote_file(");
+    assert!(remote.contains("is_member"), "a drive shared with this account is refused");
+    assert!(remote.contains("cache_remote_file("), "downloaded the way the viewer downloads it");
+    assert!(remote.contains("SaveTarget::Remote"), "saved back by upload");
+    assert!(
+        remote.contains("temp: PathBuf::new()"),
+        "a save must not write the edit into the preview cache"
+    );
+}
+
 /// The screenshot editor: a layer of the main window, never a window of its
 /// own (no capability, no route, no window builder), opened by Rust telling
 /// the main window after bringing it forward; every command registered; a

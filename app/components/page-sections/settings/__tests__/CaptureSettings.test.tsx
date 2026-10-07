@@ -159,6 +159,21 @@ describe("the capture folder row", () => {
     expect(container).not.toHaveTextContent("/Users/a");
   });
 
+  it("opens the captures folder from the tab when it is on this computer", async () => {
+    setup();
+    tauri.onInvoke("reveal_drive_in_finder", () => null);
+    fireEvent.click(await screen.findByRole("button", { name: "Show in Finder" }, { timeout: 5000 }));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("reveal_drive_in_finder", { label: "Hippius Captures" }),
+    );
+  });
+
+  it("offers no folder to open for a captures drive that is only on the server", async () => {
+    setup(null, null, { ...READY, remote: true, location: null });
+    await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });
+    expect(screen.queryByRole("button", { name: "Show in Finder" })).toBeNull();
+  });
+
   it("names a captures drive that is not synced here", async () => {
     setup(null, null, { ...READY, remote: true, location: null });
     const line = await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });
@@ -316,5 +331,17 @@ describe("the capture card on Linux", () => {
     setup(null, linux({ selection: "systemPicker", systemPickerNote: note, linuxSession: "wayland" }));
     expect(await screen.findByText(note)).toBeInTheDocument();
     expect(screen.getByText("Screenshots")).toBeInTheDocument();
+  });
+});
+
+describe("the tab's layout", () => {
+  // The shortcuts lead the tab as tiles, the keys drawn large under the name.
+  it("draws the screenshot shortcut as a tile with its keys and actions", async () => {
+    setup();
+    const tile = await screen.findByRole("group", { name: "Screenshot shortcut" }, { timeout: 5000 });
+    await waitFor(() => expect(tile.querySelector("kbd")).not.toBeNull());
+    expect(tile.querySelector("kbd")).toHaveAttribute("aria-label", "Shortcut ⇧ ⌘ 2");
+    expect(tile).toHaveTextContent("Change");
+    expect(tile).toHaveTextContent("Turn off");
   });
 });

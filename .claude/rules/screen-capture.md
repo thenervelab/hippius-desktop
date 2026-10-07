@@ -1116,7 +1116,13 @@ close. Ways in: the card's Edit (`actions.edit`, decided in
 `PreviewCard::decide_actions`: a placed PNG/JPEG screenshot whose link is not
 `Creating`; the card's picture opens it, and More has "Edit screenshot"),
 Drive's "Edit image" (`capture_editor_open_file`: own drive synced here,
-`path_in_drive` plus a canonical `starts_with`) and the tray's Annotate. One
+`path_in_drive` plus a canonical `starts_with`; or, when the file is not on
+disk and the caller passes its server `fileId`, `open_remote_file`: own
+drives only (`is_member` refused), downloaded through `cache_remote_file` and
+saved back as `SaveTarget::Remote` into the file's own folder, with an EMPTY
+`temp` so the save never writes the edit into the content-keyed preview
+cache; pinned by `capture_wiring` and `a_server_file_is_split_into_its_folder_and_name`)
+and the tray's Annotate. One
 editor at a time: a second open shows the first again and is refused, so
 unsaved edits are never replaced. The session records the account that
 opened it; `capture_editor_context` forgets one opened by another account.
@@ -1150,7 +1156,17 @@ changes?" with Keep editing focused when there are edits). **Blur and
 pixelate are written into the exported pixels** before the PNG is encoded
 (`exportPng`: drawImage, getImageData, `applyRedactions`, putImageData, then
 the drawings), and blur pixelates first so it cannot be deconvolved; the
-on-screen picture runs the same code.
+on-screen picture runs the same code. **Blur is sized by the box, not only the
+picture** (`blurCell`: at least the picture's `redactionBlock`, at most
+`BLUR_CELLS_ACROSS` = 2 cells across the box's short side, capped at 3 blocks),
+because a fixed half-block left bold text readable through it; pinned by the
+`blur hides text` cases in `pixels.test.ts`, which measure contrast one letter
+stroke apart. **The selected annotation's handles and body win over every tool
+but crop and text** (`grabSelected` in `press`): a handle resizes, the body
+moves (anywhere inside a box shape, only on the shaft of an arrow or line, so a
+new arrow can still start beside one), and only a press elsewhere starts a new
+shape; `cursorAt` shows which. Pinned by `a drawing tool and the shape it just
+drew` in `gesture.test.ts`.
 
 **Save is copy or replace, and Rust refuses a save in a drive that names
 neither** (`requested_mode`, header `x-editor-save-mode`), so a page that did
@@ -1245,7 +1261,13 @@ shown where `SCREEN_CAPTURE_ENABLED` and `captureSupportedAtom`) holds every
 capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`
-before each `capture_set_options`). Pinned by
+before each `capture_set_options`). Layout, in that order: the shortcuts as
+side-by-side tiles (`layout="tile"`, keys at `ShortcutKeys` size `lg`), the
+captures folder row (with "Show in Finder" / "Show in folder" through
+`reveal_drive_in_finder` only for a drive synced here), the options as a grid
+of cards (`layout="cards"`, `@container` columns so they follow the tab's
+width), then `EditedImageSetting`; each setting's icon sits in a
+`SettingIcon` chip. Pinned by
 `CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`,
 `drive/__tests__/recentFilesCapture.test.tsx`
 and `tests/capture_wiring.rs` (content protection, focus, capabilities, every
