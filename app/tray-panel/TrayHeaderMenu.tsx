@@ -45,6 +45,9 @@ const RUN: Record<TrayMenuShortcut, () => Promise<void>> = {
   quit: quitFromTray,
 };
 
+/** The plan row when the plan could not be read. */
+export const PLAN_UNAVAILABLE = "Couldn't load your plan";
+
 /**
  * The ⋮ menu at the header's right end, beside the balance and the bell
  * (which stay where they are): the balance with Top up, the plan, then
@@ -58,33 +61,46 @@ const RUN: Record<TrayMenuShortcut, () => Promise<void>> = {
  */
 export default function TrayHeaderMenu({
   balance,
+  accountId,
   showCapturesFolder,
 }: {
   /** The billing API's exact decimal string; null while unknown. */
   balance: string | null;
+  /** The signed-in account, once its session is ready; null before. */
+  accountId: string | null;
   /** Capture is offered here, so there is a captures folder to open. */
   showCapturesFolder: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [overview, setOverview] = useState<StorageOverview | null>(null);
+  // The last read failed and nothing has loaded since: say so rather than
+  // leave the row loading for ever.
+  const [planFailed, setPlanFailed] = useState(false);
   // Read when used, never during the static export's prerender.
   const mac = isMacPlatform();
 
   // The plan, from the same Rust answer as the Plans page and the header
   // chip. Asked on every open (the popover is long-lived and prewarmed);
-  // the last answer stays on screen meanwhile.
+  // the last answer stays on screen meanwhile. The command is account
+  // scoped, so it waits for the session (`accountId`); asked without one,
+  // Rust refuses it and the row never loaded.
   useEffect(() => {
-    if (!open) return;
+    if (!open || !accountId) return;
     let live = true;
-    invoke<StorageOverview>("get_storage_overview")
+    invoke<StorageOverview>("get_storage_overview", { accountId })
       .then((next) => {
-        if (live) setOverview(next);
+        if (!live) return;
+        setOverview(next);
+        setPlanFailed(false);
       })
-      .catch((error) => console.error("[TrayPanel] storage overview failed:", error));
+      .catch((error) => {
+        console.error("[TrayPanel] storage overview failed:", error);
+        if (live) setPlanFailed(true);
+      });
     return () => {
       live = false;
     };
-  }, [open]);
+  }, [open, accountId]);
 
   // The popover hides on a click outside it (a window blur), which Radix
   // never hears: close the menu with it, so the next open is not stuck open.
@@ -109,7 +125,7 @@ export default function TrayHeaderMenu({
   }, []);
 
   const balanceText = balance === null ? "…" : formatBalanceUsd(balance);
-  const planText = trayPlanLine(overview);
+  const planText = trayPlanLine(overview) ?? (planFailed ? PLAN_UNAVAILABLE : null);
   const select = useCallback((run: () => Promise<void>) => {
     setOpen(false);
     void run();
