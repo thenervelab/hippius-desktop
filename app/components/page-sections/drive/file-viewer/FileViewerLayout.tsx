@@ -9,7 +9,14 @@ import React, {
 } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Share2, Download, Trash2, X, ArrowLeft, ArrowRight } from "lucide-react";
+import { Share2, Download, Trash2, X, ArrowLeft, ArrowRight, PenLine } from "lucide-react";
+import { toast } from "sonner";
+import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
+import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
+import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
+import { isMemberDriveLabel } from "@/app/lib/utils/folderShareGating";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -128,6 +135,7 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const { enterSelectionModeAndSelectFile } = useFileSelection();
+  const memberDriveLabels = useMemberDriveLabels();
 
   const [isMac] = useState(() => {
     if (typeof navigator === "undefined") return false;
@@ -181,6 +189,28 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     // already the full drive-relative path, so there is no base to resolve.
     setShareModalFile(shareTargetFor(file, ""));
   }, [onClose, setShareModalFile, file]);
+
+  // The screenshot editor, for the same pictures the Drive row's "Edit
+  // image" offers (a PNG or JPEG in an own drive). The viewer closes first:
+  // the editor opens over the page behind it. Rust checks the file again.
+  const canEdit = offersImageEditor({
+    name: file.actualFileName || file.name,
+    isFolder: Boolean(file.isFolder),
+    label: file.label,
+    cloudOnly: isCloudOnlyRow(file),
+    serverFileId: file.fileId,
+    memberDrive: isMemberDriveLabel(file.label, memberDriveLabels),
+  });
+  const handleEdit = useCallback(() => {
+    if (!file.label) return;
+    onClose();
+    // The viewer only opens files, whose actualFileName is already the
+    // full drive-relative path (see handleShare).
+    openFileInEditor(file.label, file.actualFileName || file.name, {
+      fileId: file.fileId,
+      arionHash: file.arionCid,
+    }).catch((error) => toast.error(tauriErrorMessage(error)));
+  }, [file, onClose]);
 
   const handleDelete = useCallback(() => {
     onClose();
@@ -284,6 +314,11 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                   <FileViewerTitle file={file} />
                 </div>
                 <div className="flex items-center gap-[13px] pr-[19px]">
+                  {canEdit && (
+                    <ActionButton onClick={handleEdit} ariaLabel="Edit image">
+                      <PenLine className="size-[17px]" strokeWidth={1.8} />
+                    </ActionButton>
+                  )}
                   {canShare && (
                     <ActionButton onClick={handleShare} ariaLabel="Share file">
                       <Share2 className="size-[17px]" strokeWidth={1.8} />

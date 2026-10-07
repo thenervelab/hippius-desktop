@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
 - **Edit pictures in your remote folders.** Edit image now works on PNG and
   JPEG files that are only on Hippius, not just ones synced to this computer.
   Save a copy adds an edited copy beside the original; Replace updates it.
