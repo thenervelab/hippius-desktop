@@ -3647,8 +3647,9 @@ fn announce_link(app: &AppHandle, state: &CaptureState, id: u64, delivered: &sup
 /// asked everywhere it answers (`sync_facts`): the live row, the finished
 /// list (a small file finishes in seconds and leaves the session) and the
 /// set of files it knows are on the server. A card with a public link whose
-/// file the engine lost track of is finished by the bounded fallback in
-/// [`super::preview::link_fallback_applies`].
+/// file the engine has not started on (queued behind other files, or not
+/// picked up) is finished by its link ([`super::preview::link_finishes_card`]):
+/// the capture waits for its own upload, never for the rest of the sync.
 fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, since_ms: i64) {
     tauri::async_runtime::spawn(async move {
         let started = tokio::time::Instant::now();
@@ -3671,8 +3672,12 @@ fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, s
                 break;
             }
             let mut row = sync_facts(&state.sync, &label, &rel_path, since_ms).row();
-            if super::preview::link_fallback_applies(&card, &row, started.elapsed(), state.sync.is_any_sync_in_progress()) {
-                tracing::info!(card = id, "capture card finished by its link: the sync engine has no row for it");
+            if super::preview::link_finishes_card(&card, &row) {
+                tracing::info!(
+                    card = id,
+                    ?row,
+                    "capture card finished by its link: the sync engine has not started on it"
+                );
                 row = super::preview::SyncRow::Completed;
             }
             if let Some(next) = super::preview::status_after_sync_row(&card, &row) {
@@ -3709,6 +3714,7 @@ fn sync_facts(sync: &hcfs_client::engine::runner::SyncRunner, label: &str, rel_p
             .map(|file| match file.status {
                 FileStatus::Completed => SyncRow::Completed,
                 FileStatus::Error => SyncRow::Failed(file.error.as_deref().map(str::to_string)),
+                FileStatus::Pending => SyncRow::Queued,
                 _ => SyncRow::Working,
             });
         let finished = progress
