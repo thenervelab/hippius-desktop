@@ -165,6 +165,90 @@ async fn validate_preview_source(state: &crate::app_state::AppState, source: &Pa
     ))
 }
 
+/// Where a file of one of this account's drives is on this device, for a
+/// viewer row that knows the file only by its drive and drive-relative path.
+///
+/// The upload feed's rows for uploads this device just made (Recent Files,
+/// the tray) come from the live sync snapshot, which names a file by
+/// `label` + relative path and carries neither the on-disk `source` nor the
+/// server's file id. The viewer used to refuse such a row ("This file can't
+/// be previewed"), and it stayed at the top of Recent Files until the page
+/// was left and rebuilt. An upload is read from a drive synced here, so the
+/// file is on disk; this answers where.
+///
+/// `None` when the label is not a drive synced here or the file is not on
+/// disk (the caller then has nothing to show, not an error to raise). The
+/// relative path may not climb out of the drive (`..`, an absolute path, a
+/// drive prefix) and a symlink inside the drive may not lead out of it:
+/// without both, this would turn any path into a readable asset URL.
+#[tauri::command]
+pub async fn resolve_drive_file_source(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    label: String,
+    relative_path: String,
+) -> Result<Option<String>> {
+    let account_id = state.current_account_id()?;
+    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(state.pool()?, &account_id).await?;
+    let Some(root) = sync_paths
+        .iter()
+        .find(|sp| sp.label == label && !sp.path.is_empty() && sp.label != "migration")
+    else {
+        return Ok(None);
+    };
+    let root = PathBuf::from(&root.path);
+    tokio::task::spawn_blocking(move || file_in_drive(&root, &relative_path))
+        .await
+        .map_err(|e| AppError::Other(format!("resolve drive file task failed: {e}")))?
+}
+
+/// `relative` under `root`, as a path the webview may load, when it names an
+/// existing regular file inside `root`. Refuses a path that climbs out
+/// (`Validation`) and answers `None` for a missing file or one that is only
+/// reachable through a link pointing outside `root`.
+///
+/// The returned path is `root` joined with the cleaned relative path, not the
+/// canonical one: the asset scope was armed with the drive's path as stored,
+/// and a canonical form (`/private/var` for `/var` on macOS) would fall
+/// outside it.
+pub(crate) fn file_in_drive(root: &Path, relative: &str) -> Result<Option<String>> {
+    let cleaned = clean_relative(relative).ok_or_else(|| AppError::Validation(format!("{relative} is not a path inside a drive")))?;
+    let candidate = root.join(&cleaned);
+    let (Ok(canonical), Ok(canonical_root)) = (fs::canonicalize(&candidate), fs::canonicalize(root)) else {
+        return Ok(None);
+    };
+    if !canonical.starts_with(&canonical_root) || !canonical.is_file() {
+        return Ok(None);
+    }
+    candidate
+        .to_str()
+        .map(|s| Some(s.replace('\\', "/")))
+        .ok_or_else(|| AppError::Other("drive file path is not valid UTF-8".into()))
+}
+
+/// A drive-relative path as plain components: leading separators dropped
+/// (the server and the snapshot write some paths with a leading `/`), and
+/// `None` for an empty path or one with `..`, a root or a drive prefix in it.
+fn clean_relative(relative: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let trimmed = relative.trim_start_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for part in Path::new(trimmed).components() {
+        match part {
+            Component::Normal(p) => out.push(p),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    // Windows separators inside a path written on another system.
+    if out.as_os_str().is_empty() || trimmed.split(['/', '\\']).any(|seg| seg == "..") {
+        return None;
+    }
+    Some(out)
+}
+
 fn prepare_motion_photo_file(source: &Path, cache_root: &Path) -> Result<MotionPhotoPreview> {
     let mut input = File::open(source)?;
     let total_length = input.metadata()?.len();
@@ -277,6 +361,58 @@ fn path_to_string(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+
+    mod drive_file_source {
+        use super::super::{clean_relative, file_in_drive};
+        use std::fs;
+        use std::path::PathBuf;
+
+        fn drive() -> (tempfile::TempDir, PathBuf) {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let root = dir.path().join("Photos");
+            fs::create_dir_all(root.join("Trips")).unwrap();
+            fs::write(root.join("Trips/beach.png"), b"png").unwrap();
+            (dir, root)
+        }
+
+        // The reported bug: a just-uploaded file in Recent Files names its
+        // file only by drive and relative path, and the viewer refused it.
+        #[test]
+        fn finds_a_file_uploaded_from_a_drive_by_its_relative_path() {
+            let (_dir, root) = drive();
+            let found = file_in_drive(&root, "Trips/beach.png").unwrap().expect("on disk");
+            assert!(found.ends_with("Photos/Trips/beach.png"), "{found}");
+            // The snapshot and the server write some paths with a leading slash.
+            assert_eq!(file_in_drive(&root, "/Trips/beach.png").unwrap(), Some(found));
+        }
+
+        #[test]
+        fn has_nothing_for_a_missing_file_or_a_folder() {
+            let (_dir, root) = drive();
+            assert_eq!(file_in_drive(&root, "Trips/gone.png").unwrap(), None);
+            assert_eq!(file_in_drive(&root, "Trips").unwrap(), None);
+        }
+
+        #[test]
+        fn refuses_a_path_that_climbs_out_of_the_drive() {
+            let (dir, root) = drive();
+            fs::write(dir.path().join("secret.txt"), b"x").unwrap();
+            assert!(file_in_drive(&root, "../secret.txt").is_err());
+            assert!(file_in_drive(&root, "Trips/../../secret.txt").is_err());
+            assert!(file_in_drive(&root, "Trips\\..\\..\\secret.txt").is_err());
+            assert!(file_in_drive(&root, "").is_err());
+            assert_eq!(clean_relative("./Trips/beach.png"), Some(PathBuf::from("Trips/beach.png")));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn will_not_follow_a_link_out_of_the_drive() {
+            let (dir, root) = drive();
+            fs::write(dir.path().join("secret.txt"), b"x").unwrap();
+            std::os::unix::fs::symlink(dir.path().join("secret.txt"), root.join("link.txt")).unwrap();
+            assert_eq!(file_in_drive(&root, "link.txt").unwrap(), None);
+        }
+    }
     use super::*;
 
     fn bundle(still: &[u8], video: &[u8]) -> Vec<u8> {

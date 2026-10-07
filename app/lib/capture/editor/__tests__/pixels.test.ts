@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blur, pixelBox, pixelate, type Pixels } from "../pixels";
+import { BLUR_CELLS_ACROSS, blur, blurCell, pixelBox, pixelate, type Pixels } from "../pixels";
 
 /** A picture of distinct pixels, like text: every pixel differs from its neighbours. */
 function noisy(width: number, height: number, seed = 7): Pixels {
@@ -77,5 +77,74 @@ describe("blur", () => {
     const a = pixel(px, 20, 20);
     const b = pixel(px, 21, 20);
     expect(Math.abs(a[0] - b[0])).toBeLessThan(20);
+  });
+});
+
+/**
+ * A line of "text" at Retina scale: black glyph-sized bars on white, `size`
+ * pixels tall and as wide as a bold letter's strokes, inside a box drawn
+ * tightly around it, like a user boxing an email address to hide it.
+ */
+function textLine(width: number, height: number, stroke: number): Pixels {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const ink = Math.floor(x / stroke) % 2 === 0 && y > height * 0.15 && y < height * 0.85;
+      const v = ink ? 0 : 255;
+      data[i] = v;
+      data[i + 1] = v;
+      data[i + 2] = v;
+      data[i + 3] = 255;
+    }
+  }
+  return { data, width, height };
+}
+
+/**
+ * How much a letter's worth of horizontal travel still changes the picture
+ * along the line's middle row: the largest difference between two pixels one
+ * stroke apart. This is what makes text legible (ink next to paper); a slow
+ * drift across the whole box does not spell anything. Old blur left up to
+ * 147 of 255 here on a 10 px stroke; a wash leaves under a tenth of that.
+ */
+function letterContrast(px: Pixels, stroke: number): number {
+  let most = 0;
+  for (const y of [Math.floor(px.height / 2), Math.floor(px.height * 0.3)]) {
+    for (let x = 0; x + stroke < px.width; x++) {
+      const a = pixel(px, x, y)[0];
+      const b = pixel(px, x + stroke, y)[0];
+      most = Math.max(most, Math.abs(a - b));
+    }
+  }
+  return most;
+}
+
+describe("blur hides text", () => {
+  // The reported bug: blurred text stayed readable. Blur used to pixelate at
+  // half the picture's block whatever the box's size, so letters as wide as
+  // a few blocks kept their shape through the wash.
+  it.each([
+    // [width, height, stroke, block]: a boxed line of text on a Retina shot,
+    // small text on a small picture, a big heading, and a paragraph.
+    [240, 40, 14, 25],
+    [120, 18, 5, 8],
+    [300, 32, 10, 8],
+    [600, 60, 20, 25],
+    [800, 400, 16, 25],
+  ])("leaves no letter-scale contrast in a %ix%i box of %ipx strokes (block %i)", (w, h, stroke, block) => {
+    const px = textLine(w, h, stroke);
+    expect(letterContrast(textLine(w, h, stroke), stroke)).toBe(255);
+    blur(px, { x: 0, y: 0, w, h }, block);
+    expect(letterContrast(px, stroke)).toBeLessThan(24);
+  });
+
+  it("is never finer than the picture's block, and coarser for a taller region", () => {
+    expect(blurCell({ x: 0, y: 0, w: 300, h: 12 }, 8)).toBe(8);
+    expect(blurCell({ x: 0, y: 0, w: 300, h: 40 }, 8)).toBe(40 / BLUR_CELLS_ACROSS);
+    // A dragged-up box (negative size) is measured by its extent.
+    expect(blurCell({ x: 0, y: 0, w: -300, h: -40 }, 8)).toBe(20);
+    // Capped, so a huge region is a wash rather than two giant tiles.
+    expect(blurCell({ x: 0, y: 0, w: 4000, h: 4000 }, 10)).toBe(30);
   });
 });
