@@ -10,6 +10,12 @@
 # clashing package first.
 set -euo pipefail
 
+# A mirror that stops answering used to hang apt until the job's timeout
+# cancelled it. Give each request a timeout and retry it, so a stalled
+# mirror fails over in seconds instead.
+echo 'Acquire::Retries "5"; Acquire::http::Timeout "30"; Acquire::https::Timeout "30";' |
+  sudo tee /etc/apt/apt.conf.d/80-hippius-retries >/dev/null
+
 sudo apt-get update
 sudo apt-get install -y libunwind-dev
 sudo apt-get install -y \

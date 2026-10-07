@@ -624,9 +624,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v ffprobe >/dev/null; then
-            choco install ffmpeg -y --no-progress
-          fi
+          # The Chocolatey feed sometimes answers 504 for a while: retry.
+          for attempt in 1 2 3; do
+            command -v ffprobe >/dev/null && break
+            choco install ffmpeg -y --no-progress || true
+            command -v ffprobe >/dev/null && break
+            # A fresh install is on PATH only from the next step; look there too.
+            [ -x /c/ProgramData/chocolatey/bin/ffprobe.exe ] && export PATH="/c/ProgramData/chocolatey/bin:$PATH" && break
+            echo "ffprobe not installed (attempt $attempt), retrying in 30 s"
+            sleep 30
+          done
           ffprobe -version | head -1
 
       - name: Build the app binary and the runtime test
