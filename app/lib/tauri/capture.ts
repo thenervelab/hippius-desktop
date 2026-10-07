@@ -186,6 +186,13 @@ export interface CaptureOverlayContext extends RecordingAvailability, CaptureSur
    * bar and nothing drawn in advance; releasing the drag takes the shot.
    */
   instant: boolean;
+  /** This window is Wayland's recording panel (the bar alone; the desktop's dialog chooses). */
+  panel: boolean;
+  /**
+   * The overlay is drawn over a still of the desktop (a Wayland screenshot):
+   * `getCaptureOverlayBackdrop` gives this display's picture.
+   */
+  frozen: boolean;
 }
 
 /** `capture_pending_changed`. `rect` is the held area (null when cleared), so every overlay mirrors Rust. */
@@ -704,6 +711,15 @@ export function getCaptureCameraContext(): Promise<CaptureCameraState> {
   return invoke("capture_camera_context");
 }
 
+/**
+ * One step of the camera page opening the camera, for the app log (Rust
+ * logs it as a `camera:` line, throttled). Diagnostics only: nothing
+ * depends on the answer.
+ */
+export function reportCameraStep(step: string, detail: string): Promise<void> {
+  return invoke("capture_camera_report", { step, detail });
+}
+
 /** The camera window reports the cameras it can open, for the bar's picker. */
 export function setCaptureCameras(cameras: CaptureDevice[]): Promise<void> {
   return invoke("capture_set_cameras", { cameras });
@@ -788,6 +804,11 @@ export function setCaptureControlsMenu(open: boolean): Promise<CapturePillMenu> 
   return invoke("capture_controls_menu", { open });
 }
 
+/** Wayland's recording panel: size its window to the bar and any open menu, in CSS pixels. */
+export function fitCapturePanel(width: number, height: number): Promise<void> {
+  return invoke("capture_panel_fit", { width, height });
+}
+
 /** Where a pill menu would open, with nothing moved yet: the side to anchor the pill to first. */
 export function getCaptureControlsMenuSide(): Promise<CapturePillMenu> {
   return invoke("capture_controls_menu_side");
@@ -815,6 +836,11 @@ export function finishCaptureShare(token: number): Promise<void> {
 
 export function getCaptureOverlayContext(displayId: number): Promise<CaptureOverlayContext> {
   return invoke("capture_overlay_context", { displayId });
+}
+
+/** The still this display's overlay is drawn over (a JPEG data URL), or null without one. */
+export function getCaptureOverlayBackdrop(displayId: number): Promise<string | null> {
+  return invoke("capture_overlay_backdrop", { displayId });
 }
 
 export function selectCapture(selection: CaptureSelection): Promise<void> {

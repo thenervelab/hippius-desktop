@@ -300,6 +300,9 @@ pub struct CaptureState {
     /// scale), when the compositor said which (`fill_stream_monitor`): where
     /// the pill must stay out of the area.
     area_monitor: Mutex<Option<(super::area_pick::MonitorBox, f64)>>,
+    /// A Wayland screenshot's still of the desktop, which its overlays show
+    /// and its selection is cut from (`frozen_shot`); `None` elsewhere.
+    frozen: Mutex<Option<super::frozen_shot::FrozenDesktop>>,
 }
 
 /// A Wayland area recording between the desktop's dialog and its crop.
@@ -795,6 +798,42 @@ pub fn on_main_window_focused(app: &AppHandle) {
     }
 }
 
+/// Wayland: watch a capture window (the pill, the camera bubble, its
+/// controls, the card) for the dock or Alt+Tab raising it in place of the
+/// hidden main window ([`on_capture_window_focused`]). Nothing elsewhere.
+fn watch_capture_window_focus(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "linux")]
+    if super::rollout::current_platform() == super::rollout::Platform::LinuxWayland {
+        super::focus_watch_gtk::watch(window);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
+}
+
+/// A capture window took the keyboard (Wayland, `focus_watch_gtk`). With the
+/// pointer elsewhere and a recording on, that is the dock or Alt+Tab
+/// raising it, since the main window is hidden and they cannot see it
+/// ([`super::own_windows::capture_window_focus_shows_main`]): the main window
+/// comes forward and, as with the tray's Open Hippius, the recording's end
+/// then leaves it up.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(super) fn on_capture_window_focused(app: &AppHandle, label: &str, pointer_over: bool, since_mapped: Option<std::time::Duration>) {
+    let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return;
+    };
+    let platform = super::rollout::current_platform();
+    let on_screen = super::own_windows::main_on_screen(platform, main.is_visible().unwrap_or(false), main.is_minimized().unwrap_or(false));
+    let phase = app.state::<AppState>().capture.current();
+    if super::own_windows::capture_window_focus_shows_main(platform, phase, on_screen, pointer_over, since_mapped) {
+        tracing::info!(
+            window = label,
+            "a capture window was raised from the dock or Alt+Tab: the main window comes forward"
+        );
+        bring_main_forward(&main);
+        on_main_window_focused(app);
+    }
+}
+
 fn bring_main_forward(main: &tauri::WebviewWindow) {
     let _ = main.unminimize();
     let _ = main.show();
@@ -824,6 +863,7 @@ async fn fail_capture(app: &AppHandle, e: &AppError) {
     let (recorder, dir) = state.capture.take_leftovers();
     discard_recording(recorder, dir).await;
     lock(&state.capture.selection).take();
+    lock(&state.capture.frozen).take();
     close_overlays(app);
     close_controls(app);
     drop_unused_preview(app, &state.capture);
@@ -880,18 +920,27 @@ fn restore_plan(was_visible: bool, was_focused: bool) -> MainRestore {
     }
 }
 
-/// Hide the app's own windows so they are not in the shot, remembering
-/// whether the main window was visible and in front, and which app the user
-/// was in.
+/// Put the app's own windows away so they are not in the shot, remembering
+/// whether the main window was on screen and in front, and which app the
+/// user was in. The main window is hidden, or minimized on X11 so the dock
+/// can still bring it back ([`super::own_windows::main_away`]).
 async fn hide_own_windows(app: &AppHandle, state: &CaptureState) {
     if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        let visible = main.is_visible().unwrap_or(false);
+        let platform = super::rollout::current_platform();
+        let visible = super::own_windows::main_on_screen(platform, main.is_visible().unwrap_or(false), main.is_minimized().unwrap_or(false));
         state.restore_main.store(visible, Ordering::SeqCst);
         state
             .main_was_focused
             .store(visible && main.is_focused().unwrap_or(false), Ordering::SeqCst);
         if visible {
-            let _ = main.hide();
+            match super::own_windows::main_away(platform) {
+                super::own_windows::MainAway::Hidden => {
+                    let _ = main.hide();
+                }
+                super::own_windows::MainAway::Minimized => {
+                    let _ = main.minimize();
+                }
+            }
         }
     }
     *lock(&state.previous_app) = frontmost_other_app(app).await;
@@ -907,7 +956,13 @@ fn restore_main_window(app: &AppHandle, state: &CaptureState) {
     let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
         return;
     };
-    match restore_plan(visible, focused) {
+    let plan = restore_plan(visible, focused);
+    // Minimized rather than hidden (X11): a minimized window counts as
+    // shown, so it is unminimized first or it would stay in the dock.
+    if plan != MainRestore::Leave && super::own_windows::main_away(super::rollout::current_platform()) == super::own_windows::MainAway::Minimized {
+        let _ = main.unminimize();
+    }
+    match plan {
         MainRestore::Leave => {}
         MainRestore::Behind => show_behind(&main),
         MainRestore::Front => {
@@ -1133,15 +1188,8 @@ pub async fn capture_start(
 
     bring_back_failed_card(&app, &state.capture);
     hide_own_windows(&app, &state.capture).await;
-    if plan == super::support::StartPlan::SystemPicker {
-        // Wayland: no overlay and no bar. The desktop's own screenshot tool
-        // chooses; the card is prepared hidden meanwhile, as for an overlay.
-        if let Err(e) = open_preview_window(&app, None) {
-            tracing::warn!(error = %e, "capture preview card not prepared");
-        }
-        show_card_if_any(&app, &state.capture);
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move { system_picker_screenshot(&app).await });
+    if matches!(plan, super::support::StartPlan::Frozen | super::support::StartPlan::SystemPicker) {
+        start_without_live_overlay(&app, &state.capture, plan);
         return Ok(());
     }
     // Below Windows 10 2004, and anywhere on Linux (X11 has no content
@@ -1230,16 +1278,16 @@ async fn open_capture_ui(app: &AppHandle, state: &CaptureState, areas: &bar::Rem
     Ok(())
 }
 
-/// The panel's size in logical pixels: the bar, the sources above it and an
-/// open menu fit; the compositor decides where it goes.
-const PANEL_SIZE: (f64, f64) = (520.0, 600.0);
-
 /// Wayland's recording panel: the capture bar alone in one ordinary window,
 /// with no selection surface (Hippius can neither cover the screen nor see
 /// other windows there); its Record opens the desktop's screen-sharing
 /// dialog (`support::system_picker_selection`). It is the overlay page in
 /// `capture-overlay-0`, so the overlay's capability and media permission
 /// cover it, and every path that closes overlays closes it.
+///
+/// The window is transparent and only as big as what is in it: it opens at
+/// `PANEL_FIRST_SIZE` and the page fits it to the bar, its sources and any
+/// open menu (`capture_panel_fit`). The compositor decides where it goes.
 async fn open_panel(app: &AppHandle, state: &CaptureState) -> Result<()> {
     let display = panel_display(app);
     *lock(&state.pending) = None;
@@ -1251,13 +1299,45 @@ async fn open_panel(app: &AppHandle, state: &CaptureState) -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
     let window = build_overlay(app, &label, &display, false)?;
-    let _ = window.set_size(tauri::LogicalSize::new(PANEL_SIZE.0, PANEL_SIZE.1));
+    let (width, height) = super::support::PANEL_FIRST_SIZE;
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
     let _ = window.center();
     window
         .show()
         .map_err(|e| AppError::Other(format!("Could not show the capture panel: {e}")))?;
     let _ = window.set_focus();
     Ok(())
+}
+
+/// Wayland's recording panel: size its window to what the page measured
+/// (`width` x `height` CSS pixels, its margin included), so only the bar's
+/// own glass shows and nothing around it catches clicks. Opening a menu
+/// grows it, closing one shrinks it back. A page that is not the panel is
+/// refused.
+#[tauri::command]
+pub fn capture_panel_fit(app: AppHandle, width: f64, height: f64) -> Result<()> {
+    let state = app.state::<AppState>();
+    // On Wayland a recording is chosen in the panel; a screenshot is chosen
+    // on full-screen frozen overlays (`frozen_shot`), which must never be
+    // resized to a bar's size.
+    let panel_open = matches!(state.capture.current(), CapturePhase::Selecting { .. })
+        && super::rollout::current_platform() == super::rollout::Platform::LinuxWayland
+        && lock(&state.capture.frozen).is_none();
+    if !panel_open {
+        return Err(AppError::Validation("No capture panel is open.".into()));
+    }
+    let label = format!("{OVERLAY_LABEL_PREFIX}{}", super::support::PANEL_DISPLAY_ID);
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| AppError::Validation("No capture panel is open.".into()))?;
+    let Some((w, h)) = super::support::panel_window_size(width, height) else {
+        return Err(AppError::Validation("The capture panel's size is not a size.".into()));
+    };
+    // Logical pixels are the page's CSS pixels at every scale (1x, 2x and
+    // GNOME's fractional scaling alike), so no scale factor is applied.
+    window
+        .set_size(tauri::LogicalSize::new(w, h))
+        .map_err(|e| AppError::Other(format!("Could not size the capture panel: {e}")))
 }
 
 /// The display the panel stands for: the primary monitor as GTK reports it
@@ -1477,6 +1557,7 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             .build()
             .map_err(|e| AppError::Other(format!("Could not open the recording controls: {e}")))?;
         raise_above_menu_bar(&window);
+        watch_capture_window_focus(&window);
         // Lay the page out at its full height at once (macOS), before it
         // first draws: the pill is in the middle of it, where the window
         // shows it (`live_controls::fixed_menu_room`).
@@ -2068,6 +2149,12 @@ pub struct OverlayContext {
     /// The shortcut's one-step area screenshot ([`super::instant`]): the page
     /// draws no bar and takes the shot when the drag ends.
     pub instant: bool,
+    /// This window is Wayland's recording panel (the bar alone; the
+    /// desktop's dialog chooses), not a display's overlay.
+    pub panel: bool,
+    /// The overlay is drawn over a still of the desktop
+    /// ([`capture_overlay_backdrop`]), hidden while a countdown runs.
+    pub frozen: bool,
 }
 
 #[tauri::command]
@@ -2076,8 +2163,10 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
     let surfaces = super::support::surfaces();
-    // The panel (system picker) lists no windows: the desktop's dialog does.
-    let windows = if mode == CaptureMode::Window && surfaces.selection == super::support::SelectionUi::Overlay {
+    let plan = super::support::start_plan(&surfaces, kind);
+    // Only the live overlay lists windows: the panel's desktop dialog and
+    // Wayland's still have none.
+    let windows = if mode == CaptureMode::Window && plan == super::support::StartPlan::Overlay {
         tauri::async_runtime::spawn_blocking(move || windows_on_display_blocking(display_id))
             .await
             .map_err(|e| AppError::Other(format!("window listing task failed: {e}")))??
@@ -2093,7 +2182,10 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
     let hosts_bar = lock(&state.capture.bar_display).as_ref().is_some_and(|d| d.id == display_id);
     let pending = *lock(&state.capture.pending);
     let instant = state.capture.instant.load(Ordering::SeqCst);
+    let frozen = lock(&state.capture.frozen).is_some();
     Ok(OverlayContext {
+        panel: plan == super::support::StartPlan::Panel,
+        frozen,
         mode,
         display_id,
         kind,
@@ -2113,6 +2205,15 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         destination,
         pending,
     })
+}
+
+/// The still of `display_id`'s monitor a Wayland screenshot is chosen on (a
+/// JPEG data URL), read once by its overlay; `None` without one. Kept out
+/// of the context, which is read again on every mode switch.
+#[tauri::command]
+pub fn capture_overlay_backdrop(state: tauri::State<'_, AppState>, display_id: u32) -> Option<String> {
+    let index = usize::try_from(display_id).ok()?;
+    lock(&state.capture.frozen).as_ref()?.backdrops.get(index).cloned()
 }
 
 /// The pickable windows on `display_id` again, for window mode's hover: a
@@ -2140,7 +2241,16 @@ pub async fn capture_set_mode(state: tauri::State<'_, AppState>, app: AppHandle,
     {
         return Err(AppError::Validation(why.line().into()));
     }
+    let was = match state.capture.current() {
+        CapturePhase::Selecting { kind, .. } => Some(kind),
+        _ => None,
+    };
     advance(&app, &state.capture, CaptureEvent::SetMode { kind, mode })?;
+    // Wayland: a screenshot is chosen on the frozen overlay and a recording
+    // on the panel, so switching kind swaps the windows.
+    if let Some(next) = was.and_then(|was| super::support::switch_plan(&super::support::surfaces(), was, kind)) {
+        swap_selection_windows(&app, next).await?;
+    }
     // Space during an instant shot is not a choice made on the bar: the bar
     // opens where the user left it next time.
     if super::instant::remembers_mode_switch(state.capture.instant.load(Ordering::SeqCst)) {
@@ -2248,7 +2358,7 @@ pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
                 .ok_or_else(|| AppError::Validation("The camera isn't on screen yet. Try again in a moment.".into()))?;
             Selection::Window { window_id }
         }
-    } else if kind == CaptureKind::Recording && super::support::surfaces().selection == super::support::SelectionUi::SystemPicker {
+    } else if kind == CaptureKind::Recording && super::support::surfaces().record_selection == super::support::SelectionUi::SystemPicker {
         // The panel: the desktop's screen-sharing dialog chooses the window
         // or screen once the recorder asks it.
         super::support::system_picker_selection(mode)
@@ -2256,7 +2366,13 @@ pub async fn capture_confirm(app: AppHandle, display_id: u32) -> Result<()> {
         let pending = *lock(&state.capture.pending);
         // Entire screen: the display under the pointer, as a click takes it.
         let displays = lock(&state.capture.displays).clone();
-        let under_pointer = bar::display_under(&displays, cursor_point(&app, &displays));
+        // Wayland tells an app nothing of the pointer: the bar's display.
+        let frozen = lock(&state.capture.frozen).is_some();
+        let under_pointer = if frozen {
+            None
+        } else {
+            bar::display_under(&displays, cursor_point(&app, &displays))
+        };
         // The window-mode refusal ("Click a window to choose it.") is Rust's
         // too: the bar shows this error as it is.
         bar::resolve_confirm(mode, pending, display_id, under_pointer).map_err(|e| AppError::Validation(e.to_string()))?
@@ -2529,13 +2645,20 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     let state = app.state::<AppState>();
     // A pill prepared while this session was a recording is not needed.
     close_controls(app);
-    let clear = state.capture.ui_in_grabs.load(Ordering::SeqCst);
-    if clear {
-        clear_screen_for_grab(app).await;
-    } else if super::own_windows::hide_card_for_screenshot(super::rollout::current_platform()) {
-        hide_card_for_grab(app).await;
-    }
-    let taken = take_screenshot(selection, clear).await;
+    let frozen = lock(&state.capture.frozen).take();
+    let taken = if let Some(frozen) = frozen {
+        // Wayland: cut from the still the overlay showed (a fresh one after
+        // a countdown).
+        take_from_still(app, selection, frozen).await
+    } else {
+        let clear = state.capture.ui_in_grabs.load(Ordering::SeqCst);
+        if clear {
+            clear_screen_for_grab(app).await;
+        } else if super::own_windows::hide_card_for_screenshot(super::rollout::current_platform()) {
+            hide_card_for_grab(app).await;
+        }
+        take_screenshot(selection, clear).await
+    };
     restore_main_window(app, &state.capture);
     let (image, thumbnail, path) = taken?;
     let card_id = open_preview(app, CaptureKind::Screenshot, &path, thumbnail).await;
@@ -2591,7 +2714,7 @@ async fn system_picker_screenshot(app: &AppHandle) {
 async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
     let state = app.state::<AppState>();
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
-    let answer = super::linux_portal::request().await;
+    let answer = super::linux_portal::request(true).await;
     let settled = {
         let dir = dir.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -2636,6 +2759,302 @@ async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
     Ok(true)
 }
 
+// ── Wayland: screenshots on a still of the desktop ──────────────────────────
+
+/// A screenshot start with no live overlay (Wayland): the card is prepared
+/// hidden, as for an overlay, and either the overlay is drawn over a still
+/// of the desktop taken once the main window is gone ([`frozen_screenshot`],
+/// the desktop's own tool if none) or the desktop's tool chooses at once
+/// ([`system_picker_screenshot`]). A still left by an ended session was
+/// dropped there (`fail_capture`, `cancel_inner`, `finish_screenshot`).
+fn start_without_live_overlay(app: &AppHandle, state: &CaptureState, plan: super::support::StartPlan) {
+    if let Err(e) = open_preview_window(app, None) {
+        tracing::warn!(error = %e, "capture preview card not prepared");
+    }
+    let app = app.clone();
+    if plan == super::support::StartPlan::Frozen {
+        // The card from an earlier capture comes back once the still is in.
+        tauri::async_runtime::spawn(async move { frozen_screenshot(&app).await });
+    } else {
+        show_card_if_any(&app, state);
+        tauri::async_runtime::spawn(async move { system_picker_screenshot(&app).await });
+    }
+}
+
+/// A Wayland screenshot on Hippius's own overlay, drawn over a still of the
+/// desktop (`frozen_shot`): the same bar, keys, timer and instant shortcut
+/// as elsewhere, area and entire screen only. The session stays `Selecting`
+/// while the still is taken. A still the portal refuses, or one that does
+/// not fit the monitors, hands over to the desktop's own tool
+/// ([`system_picker_screenshot`]), so the user is never stuck.
+async fn frozen_screenshot(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let frozen = freeze_desktop(app).await;
+    // Ended meanwhile (signed out, or the bar switched to Record): nothing
+    // is shown.
+    if !matches!(
+        state.capture.current(),
+        CapturePhase::Selecting {
+            kind: CaptureKind::Screenshot,
+            ..
+        }
+    ) {
+        return;
+    }
+    let Some((frozen, scales, primary)) = frozen else {
+        tracing::info!("capture: no still of the desktop; the desktop's screenshot tool takes over");
+        system_picker_screenshot(app).await;
+        return;
+    };
+    if let Err(e) = open_frozen_overlays(app, frozen, &scales, primary).await {
+        fail_capture(app, &e).await;
+    }
+}
+
+/// The still and the monitors it is laid onto (with each one's GDK scale and
+/// which is primary), or `None` when either cannot be had. The main window
+/// was hidden by `capture_start`, and a card left from an earlier capture
+/// goes too, so neither is in the picture.
+async fn freeze_desktop(app: &AppHandle) -> Option<(super::frozen_shot::FrozenDesktop, Vec<f64>, Option<usize>)> {
+    hide_card_for_grab(app).await;
+    tokio::time::sleep(super::linux_x11::COMPOSITOR_SETTLE * 2).await;
+    let image = portal_still().await?;
+    let (monitors, scales, primary) = wayland_monitors(app).await;
+    let built = tauri::async_runtime::spawn_blocking(move || super::frozen_shot::FrozenDesktop::new(image, monitors))
+        .await
+        .ok()
+        .flatten();
+    if built.is_none() {
+        tracing::warn!("capture: the desktop's still does not match its monitors");
+    }
+    built.map(|frozen| (frozen, scales, primary))
+}
+
+/// One non-interactive portal picture of the whole desktop, in memory. The
+/// portal's file (GNOME writes it under Pictures) is moved into a capture
+/// folder and that folder removed once read, so no copy is left behind.
+async fn portal_still() -> Option<image::RgbaImage> {
+    let answer = super::linux_portal::request(false).await;
+    let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root().ok()?).ok()?;
+    let settled = tauri::async_runtime::spawn_blocking(move || {
+        let shot = super::linux_portal::settle(answer, &dir.join("desktop.png"));
+        let _ = std::fs::remove_dir_all(&dir);
+        shot
+    })
+    .await
+    .ok()?;
+    match settled {
+        Ok(super::linux_portal::PortalShot::Taken { image: Some(image), .. }) => Some(image),
+        Ok(super::linux_portal::PortalShot::Taken { image: None, .. }) => {
+            tracing::warn!("capture: the desktop's still could not be read");
+            None
+        }
+        Ok(super::linux_portal::PortalShot::Cancelled) => {
+            tracing::info!("capture: the desktop declined a still of the screen");
+            None
+        }
+        Err(e) => {
+            tracing::info!(error = %e, "capture: no still of the desktop");
+            None
+        }
+    }
+}
+
+/// GDK's monitors in its own order (the order `fullscreen_on_monitor` takes),
+/// each one's scale, and which is primary.
+#[cfg(target_os = "linux")]
+async fn wayland_monitors(app: &AppHandle) -> (Vec<super::area_pick::MonitorBox>, Vec<f64>, Option<usize>) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let posted = app.run_on_main_thread(move || {
+        use gtk::prelude::*;
+        let Some(display) = gtk::gdk::Display::default() else {
+            let _ = tx.send((Vec::new(), Vec::new(), None));
+            return;
+        };
+        let primary = display.primary_monitor();
+        let mut monitors = Vec::new();
+        let mut scales = Vec::new();
+        let mut primary_index = None;
+        for i in 0..display.n_monitors() {
+            let Some(m) = display.monitor(i) else { continue };
+            if primary.as_ref() == Some(&m) {
+                primary_index = Some(monitors.len());
+            }
+            let g = m.geometry();
+            monitors.push(super::area_pick::MonitorBox {
+                x: f64::from(g.x()),
+                y: f64::from(g.y()),
+                width: f64::from(g.width()),
+                height: f64::from(g.height()),
+            });
+            scales.push(f64::from(m.scale_factor().max(1)));
+        }
+        let _ = tx.send((monitors, scales, primary_index));
+    });
+    if posted.is_err() {
+        return (Vec::new(), Vec::new(), None);
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+        .await
+        .ok()
+        .and_then(std::result::Result::ok)
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::unused_async)]
+async fn wayland_monitors(_app: &AppHandle) -> (Vec<super::area_pick::MonitorBox>, Vec<f64>, Option<usize>) {
+    (Vec::new(), Vec::new(), None)
+}
+
+/// An overlay per monitor, each full screen on its own monitor over its
+/// part of the still, the bar on the primary one. No display watch and no
+/// bar follow: the still cannot follow a change, and Wayland gives no
+/// pointer position to follow.
+async fn open_frozen_overlays(app: &AppHandle, frozen: super::frozen_shot::FrozenDesktop, scales: &[f64], primary: Option<usize>) -> Result<()> {
+    let state = app.state::<AppState>();
+    let bar = super::frozen_shot::bar_monitor(frozen.monitors.len(), primary);
+    let displays = super::frozen_shot::display_targets(&frozen.monitors, scales, bar);
+    let instant = state.capture.instant.load(Ordering::SeqCst);
+    let areas = match state.pool() {
+        Ok(pool) => bar::load_areas(pool).await.unwrap_or_default(),
+        Err(_) => bar::RememberedAreas::default(),
+    };
+    let host = displays.get(bar).cloned();
+    *lock(&state.capture.pending) = if instant {
+        None
+    } else {
+        host.as_ref().and_then(|d| remembered_area(&areas, d))
+    };
+    *lock(&state.capture.bar_display) = host;
+    state.capture.bar_held.store(false, Ordering::SeqCst);
+    lock(&state.capture.displays).clone_from(&displays);
+    *lock(&state.capture.frozen) = Some(frozen);
+    for (index, display) in displays.iter().enumerate() {
+        open_frozen_overlay(app, display, index, index == bar, instant).await?;
+    }
+    show_card_if_any(app, &state.capture);
+    Ok(())
+}
+
+async fn open_frozen_overlay(app: &AppHandle, display: &DisplayTarget, index: usize, hosts_bar: bool, instant: bool) -> Result<()> {
+    let label = format!("{OVERLAY_LABEL_PREFIX}{}", display.id);
+    // The panel (`capture-overlay-0`) may still be on its way out after a
+    // switch from Record.
+    if let Some(stale) = app.get_webview_window(&label) {
+        let _ = stale.destroy();
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+    let window = build_overlay(app, &label, display, instant)?;
+    fullscreen_on_monitor(&window, index);
+    window
+        .show()
+        .map_err(|e| AppError::Other(format!("Could not show the capture overlay: {e}")))?;
+    if hosts_bar {
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+/// Full screen on GDK's monitor `index` (an app cannot place a window on
+/// Wayland, but may ask for full screen on a given output).
+#[cfg(target_os = "linux")]
+fn fullscreen_on_monitor(window: &tauri::WebviewWindow, index: usize) {
+    let target = window.clone();
+    let posted = window.run_on_main_thread(move || {
+        use gtk::prelude::*;
+        let Ok(gtk_window) = target.gtk_window() else {
+            let _ = target.set_fullscreen(true);
+            return;
+        };
+        match (WidgetExt::screen(&gtk_window), i32::try_from(index)) {
+            (Some(screen), Ok(i)) => gtk_window.fullscreen_on_monitor(&screen, i),
+            _ => gtk_window.fullscreen(),
+        }
+    });
+    if posted.is_err() {
+        let _ = window.set_fullscreen(true);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn fullscreen_on_monitor(window: &tauri::WebviewWindow, _index: usize) {
+    let _ = window.set_fullscreen(true);
+}
+
+/// The bar switched kind where the two are chosen in different windows
+/// (Wayland): the frozen overlays give way to the panel for Record, the
+/// panel to a fresh still for a screenshot. A panel that cannot open ends
+/// the session, or it would sit in `Selecting` with nothing on screen.
+async fn swap_selection_windows(app: &AppHandle, next: super::support::StartPlan) -> Result<()> {
+    let state = app.state::<AppState>();
+    lock(&state.capture.frozen).take();
+    close_overlays(app);
+    match next {
+        super::support::StartPlan::Panel => {
+            let opened = open_panel(app, &state.capture).await;
+            if let Err(e) = &opened {
+                fail_capture(app, e).await;
+            }
+            opened
+        }
+        super::support::StartPlan::Frozen => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { frozen_screenshot(&app).await });
+            Ok(())
+        }
+        // Never a switch target: those surfaces serve both kinds.
+        super::support::StartPlan::Overlay | super::support::StartPlan::SystemPicker => Ok(()),
+    }
+}
+
+/// The selection cut from the still its overlay showed, or, after a
+/// countdown, from a fresh still taken once the overlays are gone
+/// (`frozen_shot::retakes`; the frozen one if the fresh one cannot be had).
+async fn take_from_still(
+    app: &AppHandle,
+    selection: Selection,
+    frozen: super::frozen_shot::FrozenDesktop,
+) -> Result<(image::RgbaImage, Option<String>, PathBuf)> {
+    let state = app.state::<AppState>();
+    let saved = bar::load_options(state.pool()?).await.unwrap_or_default();
+    let count = super::instant::countdown_secs(
+        state.capture.instant.load(Ordering::SeqCst),
+        super::support::countdown_secs(
+            &super::support::surfaces(),
+            saved.countdown_secs(CaptureKind::Screenshot),
+            CaptureKind::Screenshot,
+        ),
+    );
+    let fresh = if super::frozen_shot::retakes(count) {
+        clear_screen_for_grab(app).await;
+        tokio::time::sleep(super::linux_x11::COMPOSITOR_SETTLE * 2).await;
+        portal_still().await
+    } else {
+        None
+    };
+    let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
+    let name = super::naming::capture_file_name(CaptureKind::Screenshot, chrono::Local::now().naive_local());
+    let path = dir.join(name);
+    let cut = tauri::async_runtime::spawn_blocking(move || {
+        let image = frozen
+            .cut_latest(selection, fresh.as_ref())
+            .ok_or_else(|| AppError::Validation("Drag to select an area to capture.".into()))?;
+        let thumbnail = super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(image.clone())).ok();
+        Ok::<_, AppError>((image, thumbnail))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("capture task failed: {e}")))
+    .and_then(|r| r);
+    match cut {
+        Ok((image, thumbnail)) => Ok((image, thumbnail, path)),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            Err(e)
+        }
+    }
+}
+
 /// Start the recorder on `selection`. Failures return to the caller, which
 /// ends the session through [`fail_capture`]; a session cancelled while the
 /// recorder was starting ends quietly, with the recorder cancelled.
@@ -2643,7 +3062,7 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     let state = app.state::<AppState>();
     let saved = bar::load_options(state.pool()?).await.unwrap_or_default();
     let surfaces = super::support::surfaces();
-    let system_picker = surfaces.selection == super::support::SelectionUi::SystemPicker;
+    let system_picker = surfaces.record_selection == super::support::SelectionUi::SystemPicker;
     // Camera only on Wayland: the recorder opens the camera the stage
     // showed (the stage page lets go of it as the phase moves on), and no
     // desktop dialog is asked.
@@ -3855,6 +4274,7 @@ pub(crate) async fn cancel_inner(app: &AppHandle) -> Result<()> {
     discard_recording(recorder, dir).await;
     *lock(&state.capture.pending) = None;
     lock(&state.capture.selection).take();
+    lock(&state.capture.frozen).take();
     drop_unused_preview(app, &state.capture);
     restore_main_window(app, &state.capture);
     hand_focus_back(app, &state.capture);
@@ -4270,6 +4690,7 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
         .inner_size(PREVIEW_WIDTH, PREVIEW_HEIGHT)
         .build()
         .map_err(|e| AppError::Other(format!("Could not open the capture preview: {e}")))?;
+    watch_capture_window_focus(&window);
     if let Some(d) = display {
         let area = work_area(&app.state::<AppState>().capture, d);
         place(&window, card_frame(area), area.scale);
@@ -5103,6 +5524,7 @@ fn open_camera_window(app: &AppHandle, shape: CameraShape, size: CameraSize, anc
         .accept_first_mouse(true)
         .visible(false);
     let window = builder.build().map_err(|e| AppError::Other(format!("Could not open the camera: {e}")))?;
+    watch_capture_window_focus(&window);
     // WebView2 asks the app before `getUserMedia` may open the camera.
     super::webview_media::allow_capture_devices(&window);
     if let Some((f, scale)) = anchored.or_else(|| camera_frame(app, shape, size)) {
@@ -5335,6 +5757,7 @@ fn bubble_controls_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     match built {
         Ok(window) => {
             raise_bubble_controls(&window);
+            watch_capture_window_focus(&window);
             Some(window)
         }
         Err(e) => {

@@ -1073,22 +1073,69 @@ fn the_mic_meter_lets_go_before_the_recorder_starts() {
     );
 }
 
-/// Wayland: a screenshot goes straight to the desktop's screenshot tool.
-/// No Hippius overlay may open first (on Wayland it could neither cover the
-/// screen nor see the windows under it), and the session is decided by
-/// Rust's surfaces, never by the frontend checking the platform.
+/// Wayland: a screenshot is chosen on Hippius's overlay over a still of the
+/// desktop taken through the portal without its dialog, and the desktop's
+/// own tool takes over only when that still cannot be had. The session is
+/// decided by Rust's surfaces, never by the frontend checking the platform.
 #[test]
-fn a_wayland_screenshot_skips_the_overlay_for_the_desktops_picker() {
+fn a_wayland_screenshot_is_chosen_on_a_still_with_the_desktops_tool_as_fallback() {
     let src = read("src/capture/commands.rs");
     let start = fn_body(&src, "pub async fn capture_start(");
     let plan = start.find("support::start_plan(").expect("capture_start asks for the plan");
-    let picker = start.find("system_picker_screenshot(").expect("the picker path is spawned");
+    let frozen = start.find("start_without_live_overlay(&app").expect("the Wayland screenshot starts");
     let overlay = start.find("open_capture_ui(").expect("the overlay path");
-    assert!(plan < picker && picker < overlay, "the picker returns before any overlay opens");
-    let take = fn_body(&src, "async fn take_with_system_picker(");
-    assert!(take.contains("linux_portal::request()") && take.contains("linux_portal::settle("));
+    assert!(plan < frozen && frozen < overlay, "a Wayland screenshot returns before the live overlay");
+    let branch = fn_body(&src, "fn start_without_live_overlay(");
     assert!(
-        take.find("open_preview(").unwrap() < take.find("CaptureEvent::Captured").unwrap(),
+        branch.contains("frozen_screenshot(&app)") && branch.contains("system_picker_screenshot(&app)"),
+        "the still, or the desktop's tool"
+    );
+    assert!(
+        start.find("hide_own_windows(").unwrap() < frozen,
+        "the main window is gone before the still is taken"
+    );
+
+    let flow = fn_body(&src, "async fn frozen_screenshot(");
+    assert!(
+        flow.find("system_picker_screenshot(app)").unwrap() < flow.find("open_frozen_overlays(").unwrap(),
+        "no still, the desktop's tool: the user is never stuck"
+    );
+    assert!(flow.contains("fail_capture("));
+    let still = fn_body(&src, "async fn portal_still(");
+    assert!(still.contains("linux_portal::request(false)") && still.contains("linux_portal::settle("));
+    assert!(still.contains("remove_dir_all"), "the portal's file leaves no copy behind");
+
+    // One overlay per monitor, full screen on it, with no display watch or
+    // bar follow (both read X11, which on Wayland is only XWayland).
+    let open = fn_body(&src, "async fn open_frozen_overlays(");
+    assert!(open.find("*lock(&state.capture.frozen) = Some(frozen)").unwrap() < open.find("open_frozen_overlay(").unwrap());
+    assert!(!open.contains("spawn_display_watch") && !open.contains("spawn_bar_follow"));
+    let one = fn_body(&src, "async fn open_frozen_overlay(");
+    assert!(one.contains("build_overlay(app, &label, display, instant)") && one.contains("fullscreen_on_monitor(&window, index)"));
+
+    // The shot is cut from the still, a fresh one after a countdown.
+    let finish = fn_body(&src, "async fn finish_screenshot(");
+    assert!(finish.find("take_from_still(").unwrap() < finish.find("take_screenshot(").unwrap());
+    let take = fn_body(&src, "async fn take_from_still(");
+    assert!(take.find("frozen_shot::retakes(").unwrap() < take.find("portal_still()").unwrap());
+    assert!(take.contains("cut_latest("));
+    for ending in ["async fn fail_capture(", "pub(crate) async fn cancel_inner("] {
+        assert!(
+            fn_body(&src, ending).contains("lock(&state.capture.frozen).take()"),
+            "{ending} drops the still"
+        );
+    }
+
+    // The bar switching kind swaps the still's overlays for the panel.
+    let set_mode = fn_body(&src, "pub async fn capture_set_mode(");
+    assert!(set_mode.contains("support::switch_plan(") && set_mode.contains("swap_selection_windows("));
+    assert!(read("src/main.rs").contains("crate::capture::commands::capture_overlay_backdrop,"));
+
+    // The interactive tool, unchanged.
+    let picked = fn_body(&src, "async fn take_with_system_picker(");
+    assert!(picked.contains("linux_portal::request(true)") && picked.contains("linux_portal::settle("));
+    assert!(
+        picked.find("open_preview(").unwrap() < picked.find("CaptureEvent::Captured").unwrap(),
         "the card opens before the session ends, as for an overlay screenshot"
     );
     // A cancel in the desktop's tool is a cancel, not a failure.
@@ -1309,6 +1356,103 @@ fn the_wayland_panel_hands_the_choice_to_the_desktop() {
     assert!(begin.contains("screencast_token::for_start(") && begin.contains("screencast_token::remember("));
 }
 
+/// Wayland's panel is fitted to the bar, not a fixed box: it opens at a
+/// first size, the page measures the bar and any open menu and Rust sizes
+/// the window in logical pixels (the page's CSS pixels at every scale). The
+/// page draws no glass of its own behind the bar.
+#[test]
+fn the_wayland_panel_is_fitted_to_the_bar() {
+    let src = read("src/capture/commands.rs");
+    assert!(!src.contains("PANEL_SIZE"), "no fixed panel size");
+    assert!(fn_body(&src, "async fn open_panel(").contains("support::PANEL_FIRST_SIZE"));
+    let fit = fn_body(&src, "pub fn capture_panel_fit(");
+    assert!(fit.contains("support::panel_window_size(width, height)"));
+    assert!(
+        fit.contains("tauri::LogicalSize::new(w, h)"),
+        "sized in logical pixels, never scaled again"
+    );
+    assert!(fit.contains("CapturePhase::Selecting"), "only while a capture is being chosen");
+    assert!(
+        fit.contains("lock(&state.capture.frozen).is_none()"),
+        "never while a frozen screenshot's full-screen overlays are up"
+    );
+    assert!(read("src/main.rs").contains("crate::capture::commands::capture_panel_fit,"));
+
+    let page = read("../app/capture-overlay/page.tsx");
+    assert!(
+        page.contains("usePanelFit(panelRef, context?.panel === true)"),
+        "only the panel is fitted"
+    );
+    assert!(page.contains("layout={panel ? \"panel\" : \"overlay\"}"));
+    assert!(!page.contains("GLASS_PANEL"), "the panel draws no glass behind the bar");
+    assert!(read("../app/lib/tauri/capture.ts").contains("invoke(\"capture_panel_fit\", { width, height })"));
+}
+
+/// The dock during a recording on Linux. X11: the main window is minimized,
+/// not hidden, so it stays the dock's window (the pill and bubble skip the
+/// taskbar there), and it is unminimized when the recording ends. Wayland:
+/// the dock raises the pill or the bubble (GTK 3 cannot keep a Wayland
+/// window out of it), so each capture window is watched for taking the
+/// keyboard with the pointer elsewhere, which brings the main window and
+/// counts as the user taking it back. Launching Hippius again counts too.
+#[test]
+fn the_linux_dock_brings_hippius_back_during_a_recording() {
+    let src = read("src/capture/commands.rs");
+    let hide = fn_body(&src, "async fn hide_own_windows(");
+    assert!(hide.contains("own_windows::main_on_screen("));
+    assert!(hide.contains("own_windows::main_away(platform)") && hide.contains("main.minimize()") && hide.contains("main.hide()"));
+    let restore = fn_body(&src, "fn restore_main_window(");
+    assert!(
+        restore.find("main.unminimize()").unwrap() < restore.find("match plan {").unwrap(),
+        "a minimized main window is unminimized before it is put back"
+    );
+
+    // Every capture window the dock can raise is watched.
+    for builder in [
+        "fn open_controls(",
+        "fn open_preview_window(",
+        "fn open_camera_window(",
+        "fn bubble_controls_window(",
+    ] {
+        assert!(
+            fn_body(&src, builder).contains("watch_capture_window_focus(&window)"),
+            "{builder} is watched"
+        );
+    }
+    let watch = fn_body(&src, "fn watch_capture_window_focus(");
+    assert!(watch.contains("Platform::LinuxWayland") && watch.contains("focus_watch_gtk::watch(window)"));
+    let focused = fn_body(&src, "pub(super) fn on_capture_window_focused(");
+    assert!(focused.contains("own_windows::capture_window_focus_shows_main("));
+    assert!(
+        focused.find("bring_main_forward(&main)").unwrap() < focused.find("on_main_window_focused(app)").unwrap(),
+        "the main window comes forward and the recording's end leaves it up"
+    );
+
+    let gtk = read("src/capture/focus_watch_gtk.rs");
+    for signal in [
+        "connect_enter_notify_event",
+        "connect_leave_notify_event",
+        "connect_map_event",
+        "connect_focus_in_event",
+    ] {
+        assert!(gtk.contains(signal), "the watch follows {signal}");
+    }
+    assert!(
+        gtk.contains("gdk::NotifyType::Inferior"),
+        "moving onto the webview inside is not leaving the window"
+    );
+    assert!(gtk.contains("commands::on_capture_window_focused("));
+    assert!(read("src/capture/mod.rs").contains("#[cfg(target_os = \"linux\")]\nmod focus_watch_gtk;"));
+
+    let main = read("src/main.rs");
+    let instance = &main[main.find("tauri_plugin_single_instance::init(").unwrap()..];
+    let instance = &instance[..instance.find("deep-link://new-url").unwrap()];
+    assert!(
+        instance.find("window.set_focus()").unwrap() < instance.find("on_main_window_focused(app)").unwrap(),
+        "opening Hippius again mid-recording keeps it up when the recording ends"
+    );
+}
+
 /// WebKitGTK never offers `getUserMedia` unless media stream is on, and
 /// denies what nobody answers: on Linux the camera bubble needs both. Both
 /// are given to the capture windows only (the same gate as WebView2's), for
@@ -1323,9 +1467,70 @@ fn linux_webviews_open_devices_only_in_the_capture_windows() {
     assert!(linux.contains("webview_media_gtk::attach(&webview)"));
     let gtk = read("src/capture/webview_media_gtk.rs");
     assert!(gtk.contains("set_enable_media_stream(true)"));
-    assert!(gtk.contains("is::<UserMediaPermissionRequest>()") && gtk.contains("is::<DeviceInfoPermissionRequest>()"));
+    assert!(gtk.contains("downcast_ref::<UserMediaPermissionRequest>()") && gtk.contains("is::<DeviceInfoPermissionRequest>()"));
     assert!(gtk.contains("is_app_origin(&uri)") && gtk.contains("request.deny()"));
     assert!(gtk.contains("return false;"), "other requests keep WebKitGTK's default");
+}
+
+/// The bubble's page loads while the window is being built, before the
+/// media stream is turned on: a page that already finished loading is
+/// loaded again, or it has no `navigator.mediaDevices` for its whole life.
+/// Every answer to a camera request is logged next to the page's own
+/// reports.
+#[test]
+fn linux_reloads_a_page_that_loaded_before_the_media_stream_and_logs_its_answers() {
+    let gtk = read("src/capture/webview_media_gtk.rs");
+    let attach = fn_body(&gtk, "pub fn attach(");
+    let on = attach.find("set_enable_media_stream(true)").expect("media stream on");
+    let reload = attach.find("view.reload()").expect("a loaded page is loaded again");
+    assert!(on < reload, "turn the media stream on before loading the page again");
+    assert!(attach.contains("needs_reload(was_on, view.is_loading(), uri.as_deref())"));
+    assert!(attach.contains("camera: allowed a request for the"));
+}
+
+/// Where PipeWire is too old for `pipewiresrc` to open a camera, the
+/// PipeWire device provider is ranked NONE so WebKitGTK and the recorder
+/// child open cameras with `v4l2src`. It sets an environment variable, so it
+/// runs in `main` before logging (whose writer is a thread) and before the
+/// builder; the recorder child returns earlier and inherits it from the app.
+#[test]
+fn linux_picks_the_camera_provider_before_any_thread_starts() {
+    let main = read("src/main.rs");
+    let body = fn_body(&main, "fn main()");
+    let child = body.find("recorder_child::run(").expect("the recorder child branch");
+    let apply = body
+        .find("crate::capture::camera_provider::apply()")
+        .expect("the provider is chosen in main");
+    let logging = body.find("let _log_guard = init_logging();").expect("logging starts in main");
+    let builder = body.find("Builder::default()").expect("the builder");
+    assert!(child < apply && apply < logging && logging < builder);
+    assert!(body.contains("camera_provider.log();"), "the decision is logged once logging is up");
+    let provider = read("src/capture/camera_provider.rs");
+    assert!(provider.contains("pub const RANK_VAR: &str = \"GST_PLUGIN_FEATURE_RANK\";"));
+    assert!(provider.contains("pub const PROVIDER: &str = \"pipewiredeviceprovider\";"));
+}
+
+/// The camera page reports each step of opening the camera to the app log;
+/// a report command that is not registered fails in a window nobody watches.
+#[test]
+fn the_camera_page_reports_to_the_app_log() {
+    let main = read("src/main.rs");
+    assert!(main.contains("crate::capture::camera_report::capture_camera_report,"));
+    let ipc = read("../app/lib/tauri/capture.ts");
+    assert!(ipc.contains("invoke(\"capture_camera_report\", { step, detail })"));
+    let page = read("../app/capture-camera/page.tsx");
+    for step in [
+        "no-media-devices",
+        "devices",
+        "request",
+        "opened",
+        "playing",
+        "error",
+        "no-frames",
+        "gave-up",
+    ] {
+        assert!(page.contains(&format!("report(\"{step}\"")), "the camera page reports {step}");
+    }
 }
 
 /// Windows' meter is the recorder child's WASAPI client, the same program
@@ -2109,4 +2314,65 @@ fn the_bar_follows_the_pointer_to_another_display() {
     assert!(main.contains("crate::capture::commands::capture_hold_bar,"));
     let page = read("../app/capture-overlay/page.tsx");
     assert!(page.contains("holdCaptureBar(holdsBar)"), "the bar's overlay holds the bar");
+}
+
+/// GNOME's Wayland session ignores a Wayland client's keep-above, so the
+/// pill and the bubble fell behind other windows and the camera went
+/// missing from the recording. On GNOME Wayland the app connects through
+/// XWayland, which Mutter keeps above: decided before GTK starts (after the
+/// recorder child, which opens no window), and through GDK's allowed
+/// backends, never `GDK_BACKEND`, which every program the app starts would
+/// inherit. XWayland comes first and Wayland after it, so the app still
+/// opens where XWayland cannot.
+#[test]
+fn gnome_wayland_connects_through_xwayland_before_gtk_starts() {
+    let main = read("src/main.rs");
+    let body = fn_body(&main, "fn main()");
+    let chosen = body.find("display_backend::apply()").expect("main chooses the display backend");
+    let recorder = body.find("argv_requests_recorder(").expect("recorder branch");
+    let builder = body.find("Builder::default()").expect("builder");
+    assert!(recorder < chosen, "the recorder child opens no window and needs no backend");
+    assert!(chosen < builder, "GDK reads its allowed backends only before GTK starts");
+
+    let module = read("src/utils/display_backend.rs");
+    let apply = fn_body(&module, "pub fn apply() -> Choice {");
+    assert!(apply.contains("choose(&SessionEnv"), "apply asks the pure decision");
+    assert!(apply.contains("set_allowed_backends(XWAYLAND_FIRST)"));
+    assert!(module.contains("pub const XWAYLAND_FIRST: &str = \"x11,wayland\";"));
+    for forbidden in ["set_var(", "remove_var("] {
+        assert!(
+            !module.contains(forbidden),
+            "the backend choice must not change the environment ({forbidden})"
+        );
+    }
+}
+
+/// An XWayland client on a Wayland session is still on Wayland: its X
+/// connection sees only XWayland windows, so screenshots, recording and the
+/// shortcut must keep using the portals. The session is read from
+/// `XDG_SESSION_TYPE` / `WAYLAND_DISPLAY` alone, which the backend choice
+/// never touches, and never from GDK's display or `GDK_BACKEND`.
+#[test]
+fn an_xwayland_client_keeps_the_wayland_capture_paths() {
+    let rollout = read("src/capture/rollout.rs");
+    let current = fn_body(&rollout, "pub fn current_platform() -> Platform {");
+    assert!(current.contains("\"XDG_SESSION_TYPE\"") && current.contains("\"WAYLAND_DISPLAY\""));
+    for not_read in ["GDK_BACKEND", "\"DISPLAY\"", "gdk::", "Display::default"] {
+        assert!(!current.contains(not_read), "the session must not follow the GDK backend ({not_read})");
+    }
+    let module = read("src/utils/display_backend.rs");
+    assert!(
+        fn_body(&module, "pub fn choose(").contains("rollout::linux_platform("),
+        "the backend choice and the capture paths agree on what Wayland is"
+    );
+}
+
+/// The pill and the bubble ask to stay on top; under XWayland that request
+/// is what Mutter honours.
+#[test]
+fn the_pill_and_the_bubble_ask_to_stay_on_top() {
+    let src = read("src/capture/commands.rs");
+    for builder in ["fn open_controls(", "fn open_camera_window("] {
+        assert!(fn_body(&src, builder).contains(".always_on_top(true)"), "{builder}");
+    }
 }

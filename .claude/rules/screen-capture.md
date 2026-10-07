@@ -42,7 +42,8 @@ Windows and Linux record in a child process of the app
 through one shared `HelperRecorder`; Windows = WGC + Media Foundation
 fragmented MP4 + WASAPI, no ffmpeg; Linux = portals (`ashpd`, on the zbus 5
 already in the graph) on Wayland, x11rb and `ximagesrc` on X11, GStreamer from
-the distro for the file; Wayland has no overlay (the system picker chooses);
+the distro for the file; Wayland has no live overlay (the system picker
+chooses a recording; a screenshot is chosen over a still, Phase 3 below);
 per-platform rollout lives in Rust (`capture::rollout`), not in new frontend
 flags. Note: xcap 0.9.8's `wgc` feature has no GDI fallback.
 
@@ -57,7 +58,7 @@ second window, tray and single-instance handler would start; pinned by
 `capture_wiring.rs`. It serves the protocol with `timeline.rs` (the Swift
 `place` rule: drop samples inside a pause, move later ones back by every
 finished pause, by start time for audio), `sizing.rs` (`alignToPixels`,
-`capped`, `videoBitRate`, pinned against `HippiusCapture.swift`'s literals) and a
+`capped`, `videoBitRate`, the keyframe interval, pinned against `HippiusCapture.swift`'s literals) and a
 `synthetic` test pattern through a text stand-in writer; a real `start` is
 refused with `UnsupportedPlatform`'s line where no platform recorder has
 landed (Linux; Windows has one, below).
@@ -137,16 +138,46 @@ made full screen** (`cover_whole_display`) or GNOME and KDE push them below
 their panels and every area read back is shifted; **no content protection**,
 so every Linux session sets `ui_in_grabs` and `settle_compositor` sleeps
 `COMPOSITOR_SETTLE` before the grab; a window shot is the screen where the
-window is (a covered window shows what covers it). Wayland =
-`capture/linux_portal.rs`: `support::start_plan` sends a Wayland screenshot
-past the overlay to `system_picker_screenshot` (session `Capturing` while
-the desktop's tool is open; a cancel there is a quiet cancel, everything
-else `fail_capture`); `settle` MOVES the portal's PNG into the capture
-folder under the Hippius name, never follows a symlink, and says
-`PORTAL_MISSING` / `PORTAL_FAILED` in Rust's words. The frontend branches
-only on Rust's `selection` (one "Take a screenshot…" item, no capture bar)
-and `shortcut.supported` / `unavailableMessage` (no keycaps, Settings shows
-the line). The `rust-linux-test` CI job runs
+window is (a covered window shows what covers it). **Wayland screenshots
+are chosen on a still** (`frozen_shot.rs`, pure; `StartPlan::Frozen` from
+`Surfaces.frozen_screenshot`): `frozen_screenshot` hides the card, waits two
+`COMPOSITOR_SETTLE`s (the main window was hidden at start), asks the
+Screenshot portal with `interactive = false` (`portal_still`: GNOME 42's
+portal takes it at once with a flash and no dialog; newer portals ask once
+and remember; the portal's file is moved into a capture folder by `settle`
+and removed once read, so nothing is left under Pictures), cuts it into one
+slice per GDK monitor (`monitor_slices`: one raster of the layout's
+bounding box at one scale, refused when the two axes' scales disagree by
+more than `SCALE_TOLERANCE`) and opens the ordinary overlay page full screen
+on each monitor (`open_frozen_overlay`, `fullscreen_on_monitor` by GDK
+index; display id = monitor index, bar on GDK's primary), which draws its
+monitor's still behind everything (`capture_overlay_backdrop`, a JPEG data
+URL read once; the context says only `frozen`). Area and entire screen
+only (`modes.screenshot`; no window list), same keys, timer and instant
+shortcut. `finish_screenshot` cuts the selection out of the still
+(`take_from_still`, `pixels_for`: CSS px times the slice's pixels over the
+monitor's logical width, so HiDPI and fractional scaling need nothing more;
+the viewport is assumed to be the monitor's logical size). **The timer
+counts over the live screen**: the page hides the still while counting (the
+overlay is transparent) and `retakes` has Rust take a fresh still once the
+overlays are gone, the frozen one if that fails (`cut_latest`). No display
+watch and no bar follow (both read X11, which is XWayland there), and
+`capture_confirm` takes the bar's display for Entire screen (no pointer on
+Wayland). A refused or missing still, or one that does not fit the
+monitors, hands over to `system_picker_screenshot` (`linux_portal.rs`,
+`interactive = true`: session `Capturing` while the desktop's tool is
+open; a cancel there is a quiet cancel, everything else `fail_capture`;
+`settle` MOVES the portal's PNG into the capture folder under the Hippius
+name, never follows a symlink, and says `PORTAL_MISSING` / `PORTAL_FAILED`
+in Rust's words). `Surfaces.selection` is how a SCREENSHOT is chosen (the
+Capture menu and tray branch on it; overlay everywhere now) and the
+Rust-only `record_selection` how a recording is (the panel on Wayland);
+the overlay page branches on its context's `panel` and `frozen`, never on
+the platform, and `shortcut.supported` / `unavailableMessage` (no keycaps,
+Settings shows the line). The bar switching kind on Wayland swaps the
+windows (`support::switch_plan` → `swap_selection_windows`: the stills'
+overlays give way to the panel for Record, the panel to a fresh still for
+a screenshot). The `rust-linux-test` CI job runs
 the X server test under Xvfb. Pinned by `capture_wiring.rs`.
 
 **Phase 4 (Linux recording) is in code, not yet run on Linux.** The child
@@ -173,12 +204,35 @@ name, the same event Windows sends. The bubble's
 `getUserMedia` exists on Linux only because `webview_media_gtk.rs` turns
 WebKitGTK's media stream on and allows user-media and device-info requests,
 for the capture windows and the app's own pages only (pinned in
-`capture_wiring.rs`); `--list-cameras` names cameras as WebKitGTK does
-(both are GStreamer's names). The app probes once
+`capture_wiring.rs`); it runs after the window is built, so a page that
+already finished loading is loaded again (`needs_reload`: its document was
+made without `navigator.mediaDevices`), and every answer is a `camera:` log
+line. `--list-cameras` names cameras as WebKitGTK does
+(both are GStreamer's names). **Old PipeWire cannot open cameras:** with
+`gstreamer1.0-pipewire` installed its device provider hides the V4L2 one in
+`GstDeviceMonitor`, so WebKitGTK (and camera only) open every camera with
+`pipewiresrc`, which below PipeWire 0.3.64 (Ubuntu 22.04 has 0.3.48) stops
+with `not-negotiated` or freezes: a live track with no frame, the bubble on
+its placeholder, while a browser (V4L2 directly) works. `camera_provider`
+reads PipeWire's version from `libpipewire-0.3.so.0.<n>.0` and, below
+0.3.64, sets `GST_PLUGIN_FEATURE_RANK=pipewiredeviceprovider:NONE` in `main`
+before any thread (the monitor uses providers of rank MARGINAL and up); the
+web processes and the recorder child inherit it, so the bar's names, the
+bubble and the recorder still agree. A rank the user set wins. Pinned by
+`camera_provider::tests` and `capture_wiring.rs`. The app probes once
 per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
 `codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
 Wayland (the desktop's dialog). **Wayland records from the panel**
 (`StartPlan::Panel`): one `capture-overlay-0` window with the bar alone,
+transparent and fitted to it (opened at `support::PANEL_FIRST_SIZE`; the
+page's `usePanelFit` measures the bar and any open `role="menu"` and calls
+`capture_panel_fit`, CSS pixels = logical pixels at every scale, clamped by
+`panel_window_size`). The bar is at the window's top-left (`barLayout`
+"panel"), the corner a resized Wayland window keeps, so its menus open
+downward, nothing is sized in `vh`/`vw` (the window being fitted) and
+shadows are the pill's tight one; the page draws no glass of its own (it
+used to fill a fixed 520 x 600 window with a framed dark box). The bar's
+toolbar and hint are the drag region,
 no display watch, no countdown on the overlay (`countdownAfterPicker`: the
 pill counts once the dialog is answered), Record resolved by
 `support::system_picker_selection`; a cancel in the desktop's dialog is the
@@ -249,9 +303,9 @@ as quietly as a cancelled dialog. The pill counts after the crop. Before
 the crop it is moved outside the area on the stream's monitor
 (`place_pill_clear_of_stream_area`: `area_pick::area_on_monitor` then
 `camera::pill_outside`, else the monitor's bottom centre), which works
-where the compositor honours an app's window position (X11, XWayland);
-GNOME's own Wayland session places windows itself and may still put it
-inside the area. *Camera only*:
+where the compositor honours an app's window position (X11, XWayland:
+GNOME Wayland included, below); a native Wayland client on GNOME is
+placed by Mutter and may still find it inside the area. *Camera only*:
 `support::camera_only(platform, recorder_camera)` is true on Wayland only
 where the probe's `camera` found a camera source, `decodebin` and
 `videoflip` (`Probe::records_camera`). `capture_confirm` gives a nominal
@@ -263,6 +317,33 @@ child finds the device in `GstDeviceMonitor` by id, then by
 own element (what WebKitGTK makes), retries a busy one for 3 s, tries
 bounded caps then any, mirrors it like the stage and records it with the
 same writer, mixer and pause. Pinned by `capture_wiring.rs`.
+
+**GNOME Wayland runs the app as an XWayland client** (`utils::display_backend`,
+not yet run on Linux). GTK's keep-above is an empty function on Wayland and
+Mutter offers clients no keep-above and no layer-shell, so the pill and the
+bubble fell behind any window raised mid-recording (the camera then missing
+from the video); Mutter honours `_NET_WM_STATE_ABOVE` and window positions
+from X11 clients. `display_backend::choose` (pure, tested everywhere) picks
+XWayland only for a Wayland session (`rollout::linux_platform`, the
+capture paths' own test) with `DISPLAY` set on a desktop whose
+`XDG_CURRENT_DESKTOP` lists GNOME, and never when the user set
+`GDK_BACKEND` or `HIPPIUS_WAYLAND_NATIVE=1`. `apply` runs in `main` after
+the recorder child and CLI branches and before the builder, through
+`gdk_set_allowed_backends("x11,wayland")`: XWayland first, Wayland if it
+cannot connect, and NO environment variable, since `GDK_BACKEND` would push
+the file manager and browser the app starts onto XWayland too. Rules that
+fail silently: **the session stays Wayland** (`current_platform` reads only
+`XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`, so screenshots, ScreenCast, the
+GlobalShortcuts portal and every `LinuxX11` gate are unchanged: the X
+connection sees only XWayland windows); never unset `WAYLAND_DISPLAY` to
+force XWayland, it would flip every capture path to X11. The log carries the
+choice (`display backend chosen`) and the display GTK opened
+(`GTK display opened`). Cost: under Mutter's logical layout (fractional
+scaling, `scale-monitor-framebuffer`) X11 clients are drawn at scale 1 and
+stretched, so the whole app looks soft until `xwayland-native-scaling`
+(GNOME 47+, experimental). Pinned by `display_backend::tests` and
+`capture_wiring::gnome_wayland_connects_through_xwayland_before_gtk_starts`,
+`an_xwayland_client_keeps_the_wayland_capture_paths`.
 
 ## Flow
 
@@ -283,9 +364,10 @@ a crosshair before its context loads) means no bar, no area seeded (Rust's
 nothing; Escape cancels; Space before a drag swaps to window click, and
 Space HELD during a drag moves the area (`overlaySelection::shiftDrag`,
 both flows). The size label shows while dragging. It never moves the bar's
-last kind/mode (`StartChoice.remember`, `remembers_mode_switch`). Where
-there is no overlay (Wayland) the shortcut is a plain screenshot: the
-desktop's own tool, already one step. The buttons and the tray keep the bar.
+last kind/mode (`StartChoice.remember`, `remembers_mode_switch`). On
+Wayland it is the same one step on the still (Phase 3); only when no still
+can be had does the desktop's own tool open, already one step. The buttons
+and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
 (see "Screen Recording permission" below). Only
@@ -306,7 +388,27 @@ the tray popover is visible; and the main window's `Focused(true)` in those
 phases (`on_main_window_focused`) forgets `restore_main`,
 `main_was_focused` and `previous_app`, so Stop neither pushes it behind nor
 hands the keyboard away. Once shown it is filmed like any app if it is in
-what is recorded. A
+what is recorded. **Linux and the dock** (`own_windows::main_away`,
+`capture_window_focus_shows_main`): GNOME's dock and Alt+Tab raise the app's
+first window, visible ones first (`shell_app_compare_windows`), and on
+Wayland the pill and the bubble are ordinary windows of the app (GTK 3's
+skip-taskbar is a no-op there), so with the main window hidden a dock click
+only focused the pill. X11 honours skip-taskbar, so there the main window is
+MINIMIZED, not hidden (the dock's one window; `restore_main_window`
+unminimizes it at the end). Wayland keeps HIDING it: a minimized Wayland
+window comes back only through an xdg-activation token, which mutter
+refuses without fresh input, so the tray's Open Hippius and the end of the
+recording would show "Hippius is ready" instead of the window. Instead
+`focus_watch_gtk.rs` follows the pill, bubble, bubble controls and card
+(GTK crossing events, an `Inferior` leave is not a leave; map time) and a
+focus-in with the pointer elsewhere, more than `MAPPED_FOCUS_GRACE` after
+the window was shown, brings the main window and calls
+`on_main_window_focused`. Known gap: mutter's focus fallback (the focused
+app's window closes and the always-on-top pill is next) reads the same and
+brings the main window too. `main_on_screen` treats a minimized main window
+as not on screen on Linux, so a capture never brings up a window the user
+had minimized. The single-instance handler (Hippius launched again) also
+calls `on_main_window_focused`, like the tray's Open Hippius. A
 display watch (`spawn_display_watch`, 1.5 s) closes overlays of unplugged
 displays, drops a pending area on them, opens overlays on new ones, moves the
 bar, and re-reads the cached work areas.
@@ -434,8 +536,20 @@ stop never ends its replacement) and sent as `capture_mic_level` (0..1,
 recording; `emit_phase` stops it on every other phase, before the recorder
 opens the mic. The camera page covers a muted or not-yet-playing camera with
 a placeholder (`showsPlaceholder`) and reopens one muted for
-`MUTE_RECOVERY_MS`, at most `MUTE_RECOVERY_TRIES` in a row. Pinned by
-`onlyCameraCaptures.test.ts`, `mic_meter::tests` and `capture_wiring.rs`.
+`MUTE_RECOVERY_MS`, at most `MUTE_RECOVERY_TRIES` in a row. A stream (or a
+`getUserMedia`) with no first frame in `NO_FRAMES_MS` is opened again once
+(`afterNoFrames`), then the bubble shows "Camera unavailable" and lets the
+camera go; never after the stream's first frame, since WebKit pausing a
+picture is not a failure. **The page reports each step to the app log**
+(`capture_camera_report`, `camera_report.rs`: `camera: <step>: <detail>`,
+`warn` for `no-media-devices`, `error`, `no-frames`, `gave-up`,
+`track-ended`, `track-muted`, else `info`; one line per step per second and
+40 a minute, the rest counted): the cameras listed by name, the constraint
+asked (device ids cut to 8 characters, `cameraReport.ts`), the error's name
+and message, the track and the video. Grep `camera:` in `~/.hippius/logs`.
+Pinned by `onlyCameraCaptures.test.ts`, `cameraPage.test.tsx`,
+`cameraReport.test.ts`, `mic_meter::tests`, `camera_report::tests` and
+`capture_wiring.rs`.
 `camera::wanted_shape` decides the window: while selecting it follows the
 options live (so the bubble can be placed before recording); from Record on it
 follows `recording_camera`, frozen in `select_inner` BEFORE the phase moves, so
@@ -1094,8 +1208,24 @@ stderr lines are diagnostics and are logged at `warn`.
 - Size is in pixels, `sourceRect` in points: the output is the region times
   the backing scale (`pointPixelScale` on 14+, the display mode on 13),
   aligned outward to even pixels (`alignToPixels`) and capped at a 3840 long
-  edge. H.264 High, keyframe every 2 s, bit rate by pixel count (about 14 Mbps
-  at 1080p, 2..28 Mbps), sRGB tagged BT.709.
+  edge. H.264 High, sRGB tagged BT.709.
+- **Rate control is an average, a keyframe every 4 s** (`videoBitRate`,
+  `keyframeSeconds`; `sizing::RateControl` for Windows and Linux): 5 Mbps at
+  1080p by the square root of the pixel count, 1..10 Mbps (Retina 9.6, 4K 10),
+  so a 10-minute recording is at most about 375 MB at 1080p and 725 MB at
+  Retina. A keyframe is most of a still screen's bytes, which is why 4 s and
+  not 2. The Mac encoder gets the average ONLY: `AVVideoQualityKey` is
+  accepted for H.264 on Apple Silicon but overrides the average with no
+  ceiling (a busy Retina screen measured 40 Mbps) and Intel lacks it;
+  VideoToolbox `DataRateLimits` switches the rate control and softened text
+  on every keyframe. Windows asks for peak-constrained VBR (average, twice
+  it, GOP) through `SetInputMediaType`'s encoding parameters, falling back to
+  the same encoder untuned before the software one (`writer::ATTEMPTS`);
+  Linux puts every encoder in a mode that spends less when still (`va` and
+  `vaapi` VBR, whose `bitrate` means the average and the ceiling
+  respectively; x264 CRF 23 capped by its VBV; OpenH264 quality-first with a
+  max), never their CBR / CQP defaults. Pinned by `sizing` and `linux_plan`
+  tests (Swift literals included) and `writer.rs` tests on Windows.
 - Pause cuts time out: samples are retimed on the writer queue by the host
   time of every finished pause (`place`), video and audio alike, and samples
   inside a pause are dropped. SCK timestamps are host-clock time. The last
