@@ -14,6 +14,7 @@ pub mod desktop_shortcut;
 pub mod destination;
 pub mod device_watch;
 pub mod editor;
+pub mod frozen_shot;
 pub mod geometry;
 pub mod instant;
 pub mod linux_portal;

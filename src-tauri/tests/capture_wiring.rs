@@ -1073,22 +1073,69 @@ fn the_mic_meter_lets_go_before_the_recorder_starts() {
     );
 }
 
-/// Wayland: a screenshot goes straight to the desktop's screenshot tool.
-/// No Hippius overlay may open first (on Wayland it could neither cover the
-/// screen nor see the windows under it), and the session is decided by
-/// Rust's surfaces, never by the frontend checking the platform.
+/// Wayland: a screenshot is chosen on Hippius's overlay over a still of the
+/// desktop taken through the portal without its dialog, and the desktop's
+/// own tool takes over only when that still cannot be had. The session is
+/// decided by Rust's surfaces, never by the frontend checking the platform.
 #[test]
-fn a_wayland_screenshot_skips_the_overlay_for_the_desktops_picker() {
+fn a_wayland_screenshot_is_chosen_on_a_still_with_the_desktops_tool_as_fallback() {
     let src = read("src/capture/commands.rs");
     let start = fn_body(&src, "pub async fn capture_start(");
     let plan = start.find("support::start_plan(").expect("capture_start asks for the plan");
-    let picker = start.find("system_picker_screenshot(").expect("the picker path is spawned");
+    let frozen = start.find("start_without_live_overlay(&app").expect("the Wayland screenshot starts");
     let overlay = start.find("open_capture_ui(").expect("the overlay path");
-    assert!(plan < picker && picker < overlay, "the picker returns before any overlay opens");
-    let take = fn_body(&src, "async fn take_with_system_picker(");
-    assert!(take.contains("linux_portal::request()") && take.contains("linux_portal::settle("));
+    assert!(plan < frozen && frozen < overlay, "a Wayland screenshot returns before the live overlay");
+    let branch = fn_body(&src, "fn start_without_live_overlay(");
     assert!(
-        take.find("open_preview(").unwrap() < take.find("CaptureEvent::Captured").unwrap(),
+        branch.contains("frozen_screenshot(&app)") && branch.contains("system_picker_screenshot(&app)"),
+        "the still, or the desktop's tool"
+    );
+    assert!(
+        start.find("hide_own_windows(").unwrap() < frozen,
+        "the main window is gone before the still is taken"
+    );
+
+    let flow = fn_body(&src, "async fn frozen_screenshot(");
+    assert!(
+        flow.find("system_picker_screenshot(app)").unwrap() < flow.find("open_frozen_overlays(").unwrap(),
+        "no still, the desktop's tool: the user is never stuck"
+    );
+    assert!(flow.contains("fail_capture("));
+    let still = fn_body(&src, "async fn portal_still(");
+    assert!(still.contains("linux_portal::request(false)") && still.contains("linux_portal::settle("));
+    assert!(still.contains("remove_dir_all"), "the portal's file leaves no copy behind");
+
+    // One overlay per monitor, full screen on it, with no display watch or
+    // bar follow (both read X11, which on Wayland is only XWayland).
+    let open = fn_body(&src, "async fn open_frozen_overlays(");
+    assert!(open.find("*lock(&state.capture.frozen) = Some(frozen)").unwrap() < open.find("open_frozen_overlay(").unwrap());
+    assert!(!open.contains("spawn_display_watch") && !open.contains("spawn_bar_follow"));
+    let one = fn_body(&src, "async fn open_frozen_overlay(");
+    assert!(one.contains("build_overlay(app, &label, display, instant)") && one.contains("fullscreen_on_monitor(&window, index)"));
+
+    // The shot is cut from the still, a fresh one after a countdown.
+    let finish = fn_body(&src, "async fn finish_screenshot(");
+    assert!(finish.find("take_from_still(").unwrap() < finish.find("take_screenshot(").unwrap());
+    let take = fn_body(&src, "async fn take_from_still(");
+    assert!(take.find("frozen_shot::retakes(").unwrap() < take.find("portal_still()").unwrap());
+    assert!(take.contains("cut_latest("));
+    for ending in ["async fn fail_capture(", "pub(crate) async fn cancel_inner("] {
+        assert!(
+            fn_body(&src, ending).contains("lock(&state.capture.frozen).take()"),
+            "{ending} drops the still"
+        );
+    }
+
+    // The bar switching kind swaps the still's overlays for the panel.
+    let set_mode = fn_body(&src, "pub async fn capture_set_mode(");
+    assert!(set_mode.contains("support::switch_plan(") && set_mode.contains("swap_selection_windows("));
+    assert!(read("src/main.rs").contains("crate::capture::commands::capture_overlay_backdrop,"));
+
+    // The interactive tool, unchanged.
+    let picked = fn_body(&src, "async fn take_with_system_picker(");
+    assert!(picked.contains("linux_portal::request(true)") && picked.contains("linux_portal::settle("));
+    assert!(
+        picked.find("open_preview(").unwrap() < picked.find("CaptureEvent::Captured").unwrap(),
         "the card opens before the session ends, as for an overlay screenshot"
     );
     // A cancel in the desktop's tool is a cancel, not a failure.

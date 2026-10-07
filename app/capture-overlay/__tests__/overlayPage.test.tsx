@@ -57,6 +57,8 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
   destination: { label: "Work", displayName: "Work" },
   pending: { target: "area", displayId: 1, rect: AREA },
   instant: false,
+  panel: false,
+  frozen: false,
   ...over,
 });
 
@@ -888,16 +890,14 @@ describe("the camera and microphone menus", () => {
   });
 });
 
-/** Rust's context for the Wayland recording panel (`selection: systemPicker`). */
+/** Rust's context for the Wayland recording panel (`panel`). */
 const PANEL: Partial<CaptureOverlayContext> = {
   kind: "recording",
   mode: "window",
   displayId: 0,
-  selection: "systemPicker",
-  modes: { screenshot: [], recording: ["window", "screen"] },
-  screenshotTimer: false,
+  panel: true,
+  modes: { screenshot: ["area", "screen"], recording: ["window", "screen"] },
   recordCountdown: false,
-  systemPickerNote: "Your desktop's screenshot tool opens, so you can choose an area, a window or a whole screen there.",
   linuxSession: "wayland",
   cameraOnlyAvailable: false,
   pending: null,
@@ -913,7 +913,7 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
     await screen.findByRole("toolbar", { name: "Capture" });
     expect(screen.getByTestId("capture-panel")).toHaveAttribute("data-tauri-drag-region");
     expect(screen.queryByRole("button", { name: /Choose (window|screen)/ })).toBeNull();
-    expect(screen.queryByRole("radio", { name: /Capture/ })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Capture a window" })).toBeNull();
     expect(screen.getByRole("radio", { name: "Record a window" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Record entire screen" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("then choose a window in your desktop's sharing dialog");
@@ -947,9 +947,66 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
     expect(screen.getByText("Record system audio")).toBeInTheDocument();
   });
 
+  /** A screenshot is chosen on the frozen overlay: the switch is Rust's, which swaps the windows. */
+  it("hands a switch to a screenshot to Rust", async () => {
+    setup(PANEL);
+    tauri.onInvoke("capture_set_mode", () => null);
+    fireEvent.click(await screen.findByRole("radio", { name: "Capture an area" }));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_mode", { kind: "screenshot", mode: "area" }),
+    );
+  });
+
   it("says what Record leads to for a whole screen", async () => {
     setup({ ...PANEL, mode: "screen" });
     expect(await screen.findByRole("status")).toHaveTextContent("then choose a screen in your desktop's sharing dialog");
+  });
+});
+
+/** Rust's context for a Wayland screenshot, chosen over a still of the desktop. */
+const FROZEN: Partial<CaptureOverlayContext> = {
+  frozen: true,
+  modes: { screenshot: ["area", "screen"], recording: ["window", "screen"] },
+  linuxSession: "wayland",
+};
+const STILL = "data:image/jpeg;base64,c3RpbGw=";
+
+describe("a Wayland screenshot over a still of the desktop", () => {
+  it("draws the overlay over this display's still, read once", async () => {
+    tauri.onInvoke("capture_overlay_backdrop", () => STILL);
+    setup(FROZEN);
+    const still = await screen.findByTestId("capture-backdrop");
+    expect(still).toHaveAttribute("src", STILL);
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_overlay_backdrop", { displayId: 1 });
+    // Behind the selection surface, which keeps its dim and its area.
+    expect(still.nextElementSibling).toContainElement(screen.getByRole("toolbar", { name: "Capture" }));
+    expect(tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_overlay_backdrop")).toHaveLength(1);
+  });
+
+  it("offers an area and the entire screen, never a window", async () => {
+    tauri.onInvoke("capture_overlay_backdrop", () => STILL);
+    setup(FROZEN);
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(screen.getByRole("radio", { name: "Capture an area" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Capture entire screen" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Capture a window" })).toBeNull();
+  });
+
+  /** The timer exists so the screen can change: the count is over the live screen, and Rust takes a fresh still. */
+  it("hides the still while the timer counts", async () => {
+    tauri.onInvoke("capture_overlay_backdrop", () => STILL);
+    setup({ ...FROZEN, countdownSecs: 5 });
+    await screen.findByTestId("capture-backdrop");
+    fireEvent.keyDown(window, { key: "Enter" });
+    await screen.findByRole("button", { name: "Capture now" });
+    expect(screen.queryByTestId("capture-backdrop")).toBeNull();
+  });
+
+  it("asks for no still on the live overlay", async () => {
+    setup();
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(called("capture_overlay_backdrop")).toBe(false);
+    expect(screen.queryByTestId("capture-backdrop")).toBeNull();
   });
 });
 

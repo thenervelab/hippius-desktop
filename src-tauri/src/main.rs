@@ -697,6 +697,7 @@ fn main() {
             // Screen capture
             crate::capture::commands::capture_start,
             crate::capture::commands::capture_overlay_context,
+            crate::capture::commands::capture_overlay_backdrop,
             crate::capture::commands::capture_select,
             crate::capture::commands::capture_pause,
             crate::capture::commands::capture_resume,
