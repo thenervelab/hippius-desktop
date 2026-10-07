@@ -1081,6 +1081,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             isFolder: Boolean(file.isFolder),
             label: file.label,
             cloudOnly: isCloudOnlyRow(file),
+            serverFileId: file.fileId,
             memberDrive: isMemberDriveLabel(file.label, memberDriveLabels),
           })
             ? [
@@ -1095,6 +1096,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                         parentSubFolderPath ?? normalizedSubfolderPath,
                         file.actualFileName || file.name,
                       ),
+                      // A picture only on the server is edited by its id.
+                      { fileId: file.fileId, arionHash: file.arionCid },
                     ).catch((error) => toast.error(tauriErrorMessage(error)));
                   },
                   disabled: itemDeleting,

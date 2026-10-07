@@ -99,9 +99,23 @@ export function copySavedLink(): Promise<CopyLinkOutcome> {
   return invoke("capture_editor_copy_saved_link");
 }
 
-/** "Edit image" on a Drive file. Rust checks the file and shows the editor. */
-export function openFileInEditor(label: string, relativePath: string): Promise<void> {
-  return invoke("capture_editor_open_file", { label, relativePath });
+/**
+ * "Edit image" on a Drive file. Rust checks the file and shows the editor.
+ * `server` names the file on the server (its `fileId` and content hash):
+ * Rust edits that copy when the file is not on this computer, and edits the
+ * local file whenever it is.
+ */
+export function openFileInEditor(
+  label: string,
+  relativePath: string,
+  server?: { fileId?: string | null; arionHash?: string | null },
+): Promise<void> {
+  return invoke("capture_editor_open_file", {
+    label,
+    relativePath,
+    fileId: server?.fileId || null,
+    arionHash: server?.arionHash || null,
+  });
 }
 
 /** The latest screenshot the tray's Annotate offers. Mirrors Rust's `LatestScreenshot`. */
