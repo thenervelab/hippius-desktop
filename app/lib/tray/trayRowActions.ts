@@ -195,6 +195,7 @@ export function canEditTrayRow(item: UploadFeedItem): boolean {
       isFolder: Boolean(item.isFolder),
       label: item.label,
       cloudOnly: isCloudOnlyRow(item),
+      serverFileId: item.fileId,
       memberDrive: false,
     })
   );

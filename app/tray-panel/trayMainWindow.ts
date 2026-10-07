@@ -76,9 +76,13 @@ export async function runTrayRowAction(
     }
     if (id === "edit") {
       // The editor must not open under the always-on-top popover. Rust
-      // checks the file again (an own drive, synced here, PNG or JPEG).
+      // checks the file again (an own drive, PNG or JPEG) and edits the
+      // server's copy, by its id, when the file is not on this computer.
       await invoke("hide_tray_panel");
-      await openFileInEditor(item.label ?? "", trayRowRelativePath(item));
+      await openFileInEditor(item.label ?? "", trayRowRelativePath(item), {
+        fileId: item.fileId,
+        arionHash: item.arionCid,
+      });
       return null;
     }
     if (id === "reveal") {

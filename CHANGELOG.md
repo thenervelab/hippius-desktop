@@ -17,6 +17,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
+- **Edit pictures in your remote folders.** Edit image now works on PNG and
+  JPEG files that are only on Hippius, not just ones synced to this computer.
+  Save a copy adds an edited copy beside the original; Replace updates it.
+
 - **A keyboard shortcut for screen recording.** Press Option-Shift-Command-2 (Ctrl+Alt+Shift+2 on Windows and Linux) from any app to open the capture bar ready to record, and press it again to stop. Change it or turn it off in Settings.
 - **Screenshots & Recording settings in one place.** Both shortcuts, where captures are saved, what happens after a capture and the recording countdown now have their own tab in Settings.
 - **Open a file straight from the menu bar.** Click a screenshot, recording or any file you can preview in the menu bar list and it opens in the Hippius viewer, ready to flip through the rest of that list.
@@ -28,6 +33,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Annotate from the menu bar.** Choose Annotate an image from the Screenshot tile's menu to open any picture in the screenshot editor, or press Edit on a screenshot in the list. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
 
 ### Changed
+
+- **A clearer Screenshots & Recording settings page.** The two shortcuts are
+  shown as large keys at the top, the capture folder can be opened from the
+  page, and the other choices are laid out as cards you can scan at a glance.
 
 - **The screenshot editor opens inside the Hippius window and keeps your original.** It covers the page you were on with the picture front and centre and one toolbar, and Save now offers to keep a copy beside the original (the default) or replace it; you can set your choice in Settings.
 
@@ -154,6 +163,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **The recording controls stay still when you open the microphone or camera menu.** The bar no longer jumps up for a moment before the menu appears.
+
+- **Files in Recent Files open right after they upload.** A file you just
+  uploaded used to say it couldn't be previewed until you left the page and
+  came back, and after a big upload some older files stayed stuck at the top
+  of the list.
+
+- **Blur in the screenshot editor now hides text.** Blurred text, even large
+  or bold, can no longer be read through the blur.
+- **Shapes in the screenshot editor can be moved and resized after you draw
+  them.** Drag a selected arrow, box or blur by its middle to move it, or by a
+  corner or end to resize it, without switching to the select tool.
 
 - **The menu bar window shows your balance and plan.** An empty balance read as "---" instead of $0.00, and the plan in the "..." menu kept loading and never appeared. Both now show, and if the plan can't be loaded the menu says so.
 
