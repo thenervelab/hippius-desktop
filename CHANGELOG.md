@@ -154,6 +154,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **The recording controls stay still when you open the microphone or camera menu.** The bar no longer jumps up for a moment before the menu appears.
+
+- **The menu bar window shows your balance and plan.** An empty balance read as "---" instead of $0.00, and the plan in the "..." menu kept loading and never appeared. Both now show, and if the plan can't be loaded the menu says so.
+
 - **Save is always visible in the screenshot editor.** On a wide window the toolbar covered Save and Copy image; they now sit in their own top bar, clear of the Mac's window buttons, and Save offers Save copy or Replace original.
 - **Upload in the menu bar window opens the upload dialog.** It brings Hippius forward with the Upload File dialog open on the page you were on, instead of only switching to Drive.
 

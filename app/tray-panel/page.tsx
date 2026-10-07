@@ -148,6 +148,7 @@ export default function TrayPanelPage() {
       >
         <Header
           balance={menu?.balance ?? null}
+          accountId={menu?.sessionReady ? (menu.substrateAddress ?? null) : null}
           unreadCount={unreadCount}
           chatUnread={chatUnread}
           showCapturesFolder={hasCapturesTab}
@@ -252,12 +253,15 @@ export default function TrayPanelPage() {
  *  pages and Quit. */
 function Header({
   balance,
+  accountId,
   unreadCount,
   chatUnread,
   showCapturesFolder,
 }: {
   /** The billing API's exact decimal string; dollars, one credit = $1. */
   balance: string | null;
+  /** The signed-in account once its session is ready, for the menu's plan. */
+  accountId: string | null;
   unreadCount: number;
   chatUnread: number;
   /** Capture is offered here, so the menu can open the captures folder. */
@@ -335,7 +339,7 @@ function Header({
             </span>
           )}
         </button>
-        <TrayHeaderMenu balance={balance} showCapturesFolder={showCapturesFolder} />
+        <TrayHeaderMenu balance={balance} accountId={accountId} showCapturesFolder={showCapturesFolder} />
       </div>
     </header>
   );
