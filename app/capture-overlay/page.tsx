@@ -28,7 +28,7 @@ import {
   type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { CAPTURE_ACCENT, GLASS_FOCUS, GLASS_PANEL } from "@/app/lib/capture/glass";
+import { CAPTURE_ACCENT, GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
 import { disabledRecordingNote, supportedModesOf } from "@/app/lib/capture/modes";
 import CaptureBar from "./CaptureBar";
@@ -37,6 +37,7 @@ import { barHint, instantHint, LAST_AREA_KEY, panelHint } from "./barText";
 import { isFromControl } from "./keyNav";
 import { selectionFor, type SharePick } from "./sharePickerState";
 import { pollWindows } from "./windowRefresh";
+import { usePanelFit } from "./panelFit";
 import { captureCursor, isClickToCapture, spaceToggleMode } from "./clickCapture";
 import {
   dragRect,
@@ -448,6 +449,10 @@ export default function CaptureOverlayPage() {
     void holdCaptureBar(holdsBar).catch(() => undefined);
   }, [hostsBar, holdsBar]);
 
+  // Wayland's panel: its window is kept the size of the bar and its menus.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  usePanelFit(panelRef, context?.panel === true);
+
   if (!context || displayId === null) {
     // The shortcut's shot: the crosshair is there from the first frame.
     return instantRequested ? <div data-testid="capture-instant-pending" className="fixed inset-0" style={{ cursor: "crosshair" }} /> : null;
@@ -615,6 +620,7 @@ export default function CaptureOverlayPage() {
       }}
       onConfirm={confirm}
       onCancel={() => void cancelCapture()}
+      layout={panel ? "panel" : "overlay"}
       onOptionsSaved={(saved) =>
         // Rust says what the countdown and the camera are now; the bar does not work them out.
         setContext((c) =>
@@ -625,22 +631,24 @@ export default function CaptureOverlayPage() {
   );
 
   if (context.panel) {
-    // The panel: an ordinary window the compositor places, holding the bar.
-    // Dragging its empty part moves it; Escape and the bar's close button
-    // cancel, Return or Record go on to the desktop's dialog.
+    // The panel: an ordinary window the compositor places, holding the bar
+    // and nothing else. The window is transparent and fitted to the bar
+    // (`usePanelFit`), so only the bar's own glass shows, as on a Mac; it
+    // used to be a fixed 520 x 600 box drawn in glass of its own, a large
+    // dark frame around a small bar. The bar sits at the window's top-left
+    // and its menus open downward, the way the window grows. Dragging the
+    // bar's empty parts moves it; Escape and the bar's close button cancel,
+    // Return or Record go on to the desktop's dialog.
     return (
       <div className="fixed inset-0 select-none" onContextMenu={(e) => e.preventDefault()}>
-        <div
-          data-testid="capture-panel"
-          data-tauri-drag-region
-          className={`absolute inset-0 rounded-[18px] ${GLASS_PANEL}`}
-        />
         <p className="sr-only" aria-live="assertive" aria-atomic="true">
           {countdownSpeech}
         </p>
-        {context.hostsBar && !counting && (
-          <div data-testid="capture-bar-slot">{captureBar(notice ?? panelHint(context.mode, enterKey, cameraOnly), true)}</div>
-        )}
+        <div ref={panelRef} data-testid="capture-panel" className="absolute left-3 top-3 w-max">
+          {context.hostsBar && !counting && (
+            <div data-testid="capture-bar-slot">{captureBar(notice ?? panelHint(context.mode, enterKey, cameraOnly), true)}</div>
+          )}
+        </div>
       </div>
     );
   }

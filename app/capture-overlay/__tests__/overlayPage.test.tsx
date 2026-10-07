@@ -910,8 +910,9 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
 
   it("is the bar alone in a panel, with no selection surface and no list of windows", async () => {
     setup(PANEL);
-    await screen.findByRole("toolbar", { name: "Capture" });
-    expect(screen.getByTestId("capture-panel")).toHaveAttribute("data-tauri-drag-region");
+    const toolbar = await screen.findByRole("toolbar", { name: "Capture" });
+    // The bar's own empty parts move the window: there is nothing else in it.
+    expect(toolbar).toHaveAttribute("data-tauri-drag-region");
     expect(screen.queryByRole("button", { name: /Choose (window|screen)/ })).toBeNull();
     expect(screen.queryByRole("radio", { name: "Capture a window" })).toBeNull();
     expect(screen.getByRole("radio", { name: "Record a window" })).toBeInTheDocument();
@@ -945,6 +946,59 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
     await screen.findByRole("menu", { name: "Capture options" });
     expect(screen.queryByText("Recording countdown")).toBeNull();
     expect(screen.getByText("Record system audio")).toBeInTheDocument();
+  });
+
+  /**
+   * The panel used to draw a 520 x 600 box of dark glass with a border
+   * behind the bar, which on a Wayland desktop was a big dark frame around a
+   * small bar. Now nothing but the bar is drawn, and the window is fitted to
+   * it: grown below the bar when a menu opens, shrunk back when it closes.
+   */
+  it("draws only the bar and fits its window to the bar and an open menu", async () => {
+    const fits: Array<{ width: number; height: number }> = [];
+    tauri.onInvoke("capture_panel_fit", (args) => {
+      fits.push(args as { width: number; height: number });
+      return null;
+    });
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    // jsdom lays nothing out: the bar is 480 x 200 at the panel's 12 px
+    // inset, and a menu hangs 150 px below it.
+    const box = (left: number, top: number, width: number, height: number) =>
+      ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === "capture-panel") return box(12, 12, 480, 200);
+      if (this.getAttribute("role") === "menu") return box(236, 222, 256, 140);
+      return real.call(this);
+    });
+    try {
+      setup(PANEL);
+      await screen.findByRole("toolbar", { name: "Capture" });
+      const panel = screen.getByTestId("capture-panel");
+      // No glass, frame or rounding of the panel's own around the bar.
+      expect(panel.className).not.toMatch(/bg-|border|rounded/);
+      expect(panel).not.toHaveAttribute("data-tauri-drag-region");
+      await waitFor(() => expect(fits).toContainEqual({ width: 504, height: 224 }));
+
+      fireEvent.click(screen.getByRole("button", { name: /Options/ }));
+      await screen.findByRole("menu", { name: "Capture options" });
+      await waitFor(() => expect(fits.at(-1)).toEqual({ width: 504, height: 374 }));
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("menu", { name: "Capture options" })).toBeNull());
+      await waitFor(() => expect(fits.at(-1)).toEqual({ width: 504, height: 224 }));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  /** A full-screen overlay is not fitted to anything. */
+  it("never fits an overlay", async () => {
+    window.history.replaceState({}, "", "/capture-overlay?display=1");
+    setup();
+    await screen.findByRole("toolbar", { name: "Capture" });
+    fireEvent.click(screen.getByRole("button", { name: /Options/ }));
+    await screen.findByRole("menu", { name: "Capture options" });
+    expect(called("capture_panel_fit")).toBe(false);
   });
 
   /** A screenshot is chosen on the frozen overlay: the switch is Rust's, which swaps the windows. */

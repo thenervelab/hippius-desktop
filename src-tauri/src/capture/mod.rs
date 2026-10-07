@@ -14,6 +14,8 @@ pub mod desktop_shortcut;
 pub mod destination;
 pub mod device_watch;
 pub mod editor;
+#[cfg(target_os = "linux")]
+mod focus_watch_gtk;
 pub mod frozen_shot;
 pub mod geometry;
 pub mod instant;

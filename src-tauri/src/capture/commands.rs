@@ -798,6 +798,42 @@ pub fn on_main_window_focused(app: &AppHandle) {
     }
 }
 
+/// Wayland: watch a capture window (the pill, the camera bubble, its
+/// controls, the card) for the dock or Alt+Tab raising it in place of the
+/// hidden main window ([`on_capture_window_focused`]). Nothing elsewhere.
+fn watch_capture_window_focus(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "linux")]
+    if super::rollout::current_platform() == super::rollout::Platform::LinuxWayland {
+        super::focus_watch_gtk::watch(window);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
+}
+
+/// A capture window took the keyboard (Wayland, `focus_watch_gtk`). With the
+/// pointer elsewhere and a recording on, that is the dock or Alt+Tab
+/// raising it, since the main window is hidden and they cannot see it
+/// ([`super::own_windows::capture_window_focus_shows_main`]): the main window
+/// comes forward and, as with the tray's Open Hippius, the recording's end
+/// then leaves it up.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(super) fn on_capture_window_focused(app: &AppHandle, label: &str, pointer_over: bool, since_mapped: Option<std::time::Duration>) {
+    let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return;
+    };
+    let platform = super::rollout::current_platform();
+    let on_screen = super::own_windows::main_on_screen(platform, main.is_visible().unwrap_or(false), main.is_minimized().unwrap_or(false));
+    let phase = app.state::<AppState>().capture.current();
+    if super::own_windows::capture_window_focus_shows_main(platform, phase, on_screen, pointer_over, since_mapped) {
+        tracing::info!(
+            window = label,
+            "a capture window was raised from the dock or Alt+Tab: the main window comes forward"
+        );
+        bring_main_forward(&main);
+        on_main_window_focused(app);
+    }
+}
+
 fn bring_main_forward(main: &tauri::WebviewWindow) {
     let _ = main.unminimize();
     let _ = main.show();
@@ -884,18 +920,27 @@ fn restore_plan(was_visible: bool, was_focused: bool) -> MainRestore {
     }
 }
 
-/// Hide the app's own windows so they are not in the shot, remembering
-/// whether the main window was visible and in front, and which app the user
-/// was in.
+/// Put the app's own windows away so they are not in the shot, remembering
+/// whether the main window was on screen and in front, and which app the
+/// user was in. The main window is hidden, or minimized on X11 so the dock
+/// can still bring it back ([`super::own_windows::main_away`]).
 async fn hide_own_windows(app: &AppHandle, state: &CaptureState) {
     if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        let visible = main.is_visible().unwrap_or(false);
+        let platform = super::rollout::current_platform();
+        let visible = super::own_windows::main_on_screen(platform, main.is_visible().unwrap_or(false), main.is_minimized().unwrap_or(false));
         state.restore_main.store(visible, Ordering::SeqCst);
         state
             .main_was_focused
             .store(visible && main.is_focused().unwrap_or(false), Ordering::SeqCst);
         if visible {
-            let _ = main.hide();
+            match super::own_windows::main_away(platform) {
+                super::own_windows::MainAway::Hidden => {
+                    let _ = main.hide();
+                }
+                super::own_windows::MainAway::Minimized => {
+                    let _ = main.minimize();
+                }
+            }
         }
     }
     *lock(&state.previous_app) = frontmost_other_app(app).await;
@@ -911,7 +956,13 @@ fn restore_main_window(app: &AppHandle, state: &CaptureState) {
     let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
         return;
     };
-    match restore_plan(visible, focused) {
+    let plan = restore_plan(visible, focused);
+    // Minimized rather than hidden (X11): a minimized window counts as
+    // shown, so it is unminimized first or it would stay in the dock.
+    if plan != MainRestore::Leave && super::own_windows::main_away(super::rollout::current_platform()) == super::own_windows::MainAway::Minimized {
+        let _ = main.unminimize();
+    }
+    match plan {
         MainRestore::Leave => {}
         MainRestore::Behind => show_behind(&main),
         MainRestore::Front => {
@@ -1227,16 +1278,16 @@ async fn open_capture_ui(app: &AppHandle, state: &CaptureState, areas: &bar::Rem
     Ok(())
 }
 
-/// The panel's size in logical pixels: the bar, the sources above it and an
-/// open menu fit; the compositor decides where it goes.
-const PANEL_SIZE: (f64, f64) = (520.0, 600.0);
-
 /// Wayland's recording panel: the capture bar alone in one ordinary window,
 /// with no selection surface (Hippius can neither cover the screen nor see
 /// other windows there); its Record opens the desktop's screen-sharing
 /// dialog (`support::system_picker_selection`). It is the overlay page in
 /// `capture-overlay-0`, so the overlay's capability and media permission
 /// cover it, and every path that closes overlays closes it.
+///
+/// The window is transparent and only as big as what is in it: it opens at
+/// `PANEL_FIRST_SIZE` and the page fits it to the bar, its sources and any
+/// open menu (`capture_panel_fit`). The compositor decides where it goes.
 async fn open_panel(app: &AppHandle, state: &CaptureState) -> Result<()> {
     let display = panel_display(app);
     *lock(&state.pending) = None;
@@ -1248,13 +1299,45 @@ async fn open_panel(app: &AppHandle, state: &CaptureState) -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
     let window = build_overlay(app, &label, &display, false)?;
-    let _ = window.set_size(tauri::LogicalSize::new(PANEL_SIZE.0, PANEL_SIZE.1));
+    let (width, height) = super::support::PANEL_FIRST_SIZE;
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
     let _ = window.center();
     window
         .show()
         .map_err(|e| AppError::Other(format!("Could not show the capture panel: {e}")))?;
     let _ = window.set_focus();
     Ok(())
+}
+
+/// Wayland's recording panel: size its window to what the page measured
+/// (`width` x `height` CSS pixels, its margin included), so only the bar's
+/// own glass shows and nothing around it catches clicks. Opening a menu
+/// grows it, closing one shrinks it back. A page that is not the panel is
+/// refused.
+#[tauri::command]
+pub fn capture_panel_fit(app: AppHandle, width: f64, height: f64) -> Result<()> {
+    let state = app.state::<AppState>();
+    // On Wayland a recording is chosen in the panel; a screenshot is chosen
+    // on full-screen frozen overlays (`frozen_shot`), which must never be
+    // resized to a bar's size.
+    let panel_open = matches!(state.capture.current(), CapturePhase::Selecting { .. })
+        && super::rollout::current_platform() == super::rollout::Platform::LinuxWayland
+        && lock(&state.capture.frozen).is_none();
+    if !panel_open {
+        return Err(AppError::Validation("No capture panel is open.".into()));
+    }
+    let label = format!("{OVERLAY_LABEL_PREFIX}{}", super::support::PANEL_DISPLAY_ID);
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| AppError::Validation("No capture panel is open.".into()))?;
+    let Some((w, h)) = super::support::panel_window_size(width, height) else {
+        return Err(AppError::Validation("The capture panel's size is not a size.".into()));
+    };
+    // Logical pixels are the page's CSS pixels at every scale (1x, 2x and
+    // GNOME's fractional scaling alike), so no scale factor is applied.
+    window
+        .set_size(tauri::LogicalSize::new(w, h))
+        .map_err(|e| AppError::Other(format!("Could not size the capture panel: {e}")))
 }
 
 /// The display the panel stands for: the primary monitor as GTK reports it
@@ -1474,6 +1557,7 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             .build()
             .map_err(|e| AppError::Other(format!("Could not open the recording controls: {e}")))?;
         raise_above_menu_bar(&window);
+        watch_capture_window_focus(&window);
         // Lay the page out at its full height at once (macOS), before it
         // first draws: the pill is in the middle of it, where the window
         // shows it (`live_controls::fixed_menu_room`).
@@ -4606,6 +4690,7 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
         .inner_size(PREVIEW_WIDTH, PREVIEW_HEIGHT)
         .build()
         .map_err(|e| AppError::Other(format!("Could not open the capture preview: {e}")))?;
+    watch_capture_window_focus(&window);
     if let Some(d) = display {
         let area = work_area(&app.state::<AppState>().capture, d);
         place(&window, card_frame(area), area.scale);
@@ -5439,6 +5524,7 @@ fn open_camera_window(app: &AppHandle, shape: CameraShape, size: CameraSize, anc
         .accept_first_mouse(true)
         .visible(false);
     let window = builder.build().map_err(|e| AppError::Other(format!("Could not open the camera: {e}")))?;
+    watch_capture_window_focus(&window);
     // WebView2 asks the app before `getUserMedia` may open the camera.
     super::webview_media::allow_capture_devices(&window);
     if let Some((f, scale)) = anchored.or_else(|| camera_frame(app, shape, size)) {
@@ -5671,6 +5757,7 @@ fn bubble_controls_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     match built {
         Ok(window) => {
             raise_bubble_controls(&window);
+            watch_capture_window_focus(&window);
             Some(window)
         }
         Err(e) => {

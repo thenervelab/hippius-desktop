@@ -330,6 +330,33 @@ pub fn switch_plan(surfaces: &Surfaces, from: super::session::CaptureKind, to: s
 /// the id (the desktop's dialog chooses).
 pub const PANEL_DISPLAY_ID: u32 = 0;
 
+/// The panel's first size, in logical pixels, before its page has measured
+/// the bar: roomy enough for the bar and its sources, and transparent where
+/// they do not reach, so nothing but the bar shows while it is refitted.
+pub const PANEL_FIRST_SIZE: (f64, f64) = (560.0, 320.0);
+
+/// The smallest and largest the panel's window is made: a measurement of
+/// nothing (the page between two states) never folds it away, and a runaway
+/// one never covers the screen.
+const PANEL_MIN: (f64, f64) = (240.0, 64.0);
+const PANEL_MAX: (f64, f64) = (1200.0, 900.0);
+
+/// The panel's window for content the page measured at `width` x `height`
+/// CSS pixels (its margin included). CSS pixels are the window's logical
+/// pixels at any scale, fractional included, so the size is used as is,
+/// rounded up to whole pixels so nothing is cut by a fraction. `None` for a
+/// measurement that is not a size.
+#[must_use]
+pub fn panel_window_size(width: f64, height: f64) -> Option<(f64, f64)> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some((
+        width.ceil().clamp(PANEL_MIN.0, PANEL_MAX.0),
+        height.ceil().clamp(PANEL_MIN.1, PANEL_MAX.1),
+    ))
+}
+
 /// What Record in the panel asks the recorder for: a window or a whole
 /// screen, chosen in the desktop's dialog, or an area, which is a screen
 /// chosen there and then drawn on its picture (`area_pick`); its rectangle
@@ -707,5 +734,19 @@ mod tests {
         assert!(wayland.command.is_some_and(|c| c.ends_with(" --record")), "{wayland:?}");
         let v = serde_json::to_value(surfaces_for(Platform::LinuxWayland, true, true)).unwrap();
         assert_eq!(v["recordShortcut"]["via"], "desktopSettings");
+    }
+
+    /// The panel fits what the page measured, in whole logical pixels,
+    /// within sane bounds; a measurement that is not a size changes nothing.
+    #[test]
+    fn the_panel_fits_its_measured_content() {
+        assert_eq!(panel_window_size(486.2, 212.0), Some((487.0, 212.0)));
+        assert_eq!(panel_window_size(10.0, 10.0), Some((240.0, 64.0)));
+        assert_eq!(panel_window_size(5000.0, 5000.0), Some((1200.0, 900.0)));
+        assert_eq!(panel_window_size(0.0, 200.0), None);
+        assert_eq!(panel_window_size(f64::NAN, 200.0), None);
+        assert_eq!(panel_window_size(300.0, f64::INFINITY), None);
+        // The first size is a size the panel may have.
+        assert_eq!(panel_window_size(PANEL_FIRST_SIZE.0, PANEL_FIRST_SIZE.1), Some(PANEL_FIRST_SIZE));
     }
 }

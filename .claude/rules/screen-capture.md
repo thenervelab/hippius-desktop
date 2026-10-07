@@ -210,6 +210,15 @@ per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
 `codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
 Wayland (the desktop's dialog). **Wayland records from the panel**
 (`StartPlan::Panel`): one `capture-overlay-0` window with the bar alone,
+transparent and fitted to it (opened at `support::PANEL_FIRST_SIZE`; the
+page's `usePanelFit` measures the bar and any open `role="menu"` and calls
+`capture_panel_fit`, CSS pixels = logical pixels at every scale, clamped by
+`panel_window_size`). The bar is at the window's top-left (`barLayout`
+"panel"), the corner a resized Wayland window keeps, so its menus open
+downward, nothing is sized in `vh`/`vw` (the window being fitted) and
+shadows are the pill's tight one; the page draws no glass of its own (it
+used to fill a fixed 520 x 600 window with a framed dark box). The bar's
+toolbar and hint are the drag region,
 no display watch, no countdown on the overlay (`countdownAfterPicker`: the
 pill counts once the dialog is answered), Record resolved by
 `support::system_picker_selection`; a cancel in the desktop's dialog is the
@@ -338,7 +347,27 @@ the tray popover is visible; and the main window's `Focused(true)` in those
 phases (`on_main_window_focused`) forgets `restore_main`,
 `main_was_focused` and `previous_app`, so Stop neither pushes it behind nor
 hands the keyboard away. Once shown it is filmed like any app if it is in
-what is recorded. A
+what is recorded. **Linux and the dock** (`own_windows::main_away`,
+`capture_window_focus_shows_main`): GNOME's dock and Alt+Tab raise the app's
+first window, visible ones first (`shell_app_compare_windows`), and on
+Wayland the pill and the bubble are ordinary windows of the app (GTK 3's
+skip-taskbar is a no-op there), so with the main window hidden a dock click
+only focused the pill. X11 honours skip-taskbar, so there the main window is
+MINIMIZED, not hidden (the dock's one window; `restore_main_window`
+unminimizes it at the end). Wayland keeps HIDING it: a minimized Wayland
+window comes back only through an xdg-activation token, which mutter
+refuses without fresh input, so the tray's Open Hippius and the end of the
+recording would show "Hippius is ready" instead of the window. Instead
+`focus_watch_gtk.rs` follows the pill, bubble, bubble controls and card
+(GTK crossing events, an `Inferior` leave is not a leave; map time) and a
+focus-in with the pointer elsewhere, more than `MAPPED_FOCUS_GRACE` after
+the window was shown, brings the main window and calls
+`on_main_window_focused`. Known gap: mutter's focus fallback (the focused
+app's window closes and the always-on-top pill is next) reads the same and
+brings the main window too. `main_on_screen` treats a minimized main window
+as not on screen on Linux, so a capture never brings up a window the user
+had minimized. The single-instance handler (Hippius launched again) also
+calls `on_main_window_focused`, like the tray's Open Hippius. A
 display watch (`spawn_display_watch`, 1.5 s) closes overlays of unplugged
 displays, drops a pending area on them, opens overlays on new ones, moves the
 bar, and re-reads the cached work areas.
