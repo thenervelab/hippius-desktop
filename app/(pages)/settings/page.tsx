@@ -21,8 +21,10 @@ import {
   VPN_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
   API_TOKEN_FEATURE_ENABLED,
+  SCREEN_CAPTURE_ENABLED,
 } from "@/app/lib/featureFlags";
 import {
+  CAPTURE_SETTINGS_SECTION,
   DEFAULT_SETTINGS_SECTION,
   resolveSettingsSection,
 } from "@/app/components/sidebar/settingsNavGating";
@@ -85,6 +87,14 @@ const SECTION_META: Record<
   sync: {
     title: "Sync & Storage",
     description: "Configure your sync folders and storage options.",
+  },
+  [CAPTURE_SETTINGS_SECTION]: {
+    title: "Screenshots & Recording",
+    description:
+      "Shortcuts, where captures are saved, and what happens after you take one.",
+    tooltip:
+      "These apply on this computer. The shortcuts work from any app while Hippius is running, and pressing either one during a recording stops it.",
+    showDescription: true,
   },
   appearance: {
     title: "Appearance",
@@ -153,6 +163,11 @@ function SettingsContent() {
     vpnEnabled: VPN_FEATURE_ENABLED,
     walletEnabled: WALLET_FEATURE_ENABLED,
     apiTokenEnabled: API_TOKEN_FEATURE_ENABLED,
+    // The build flag alone, not Rust's answer as well: the section is
+    // restored from the query string at launch, before Rust has said
+    // whether this computer captures, and the tab hides its own rows
+    // where it cannot.
+    captureEnabled: SCREEN_CAPTURE_ENABLED,
   });
   const meta = SECTION_META[section] ?? SECTION_META[DEFAULT_SETTINGS_SECTION];
 
@@ -190,10 +205,12 @@ function SettingsContent() {
                 when this build carries no extension (Rust answers
                 `unsupported`), so a dev binary shows nothing here. */}
             {isMacPlatform() && <FinderExtensionSetting />}
-            {/* Screen capture: hides itself off-lane or where unsupported. */}
-            <CaptureSettings />
           </>
         )}
+
+        {/* Screen capture: the rows hide themselves where this computer
+            cannot capture. */}
+        {SCREEN_CAPTURE_ENABLED && section === CAPTURE_SETTINGS_SECTION && <CaptureSettings />}
 
         {section === "appearance" && <AppearanceSettings />}
 

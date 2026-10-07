@@ -469,9 +469,22 @@ mod modes {
 mod recording {
     use super::*;
 
-    /// The longest a 3 s take with its 1 s pause cut may read: under the
-    /// 4 s a kept pause gives, over the 3 s plus a runner's round trips.
-    const PAUSE_CUT_CEILING: f64 = 3.8;
+    /// How much longer than the time this test measured as recording the
+    /// file may be. The recorder stamps pause, resume and stop when it reads
+    /// each command (one pipe hop after this test's clock, a few ms) and the
+    /// last picture lasts at least one 33 ms frame. Half the 1 s pause: a
+    /// pause left in the file fails, and so does a file that starts before
+    /// `started` (a hosted Windows runner takes 1.5 to 2.2 s to make the
+    /// H.264 encoder).
+    const LONGER_BY_AT_MOST: f64 = 0.5;
+    /// How much shorter: the same pipe hops the other way, and a frame.
+    const SHORTER_BY_AT_MOST: f64 = 0.25;
+
+    /// Whether a file `duration` s long is the `recorded` s this test
+    /// measured, with the pause cut out.
+    fn pause_cut(duration: f64, recorded: f64) -> bool {
+        (recorded - SHORTER_BY_AT_MOST..=recorded + LONGER_BY_AT_MOST).contains(&duration)
+    }
 
     #[test]
     #[ignore = "runs the built recorder child: scripts/capture-runtime-check.sh"]
@@ -487,8 +500,10 @@ mod recording {
 
     /// The app's own session, by hand: start the screen, pause for a second,
     /// resume, stop. The file must hold one H.264 track (and one AAC track
-    /// when sound was asked for), about 3 s long (the pause cut out), and the
-    /// card's poster must read stills from it.
+    /// when sound was asked for), as long as the time between `started` and
+    /// the pause plus the time between `resumed` and the stop (about 3 s: the
+    /// pause cut out, measured rather than assumed, so a busy runner's slow
+    /// sleep cannot fail it), and the card's poster must read stills from it.
     #[test]
     #[ignore = "records the screen: scripts/capture-runtime-check.sh"]
     fn a_screen_recording_with_a_pause_plays_back() {
@@ -526,14 +541,19 @@ mod recording {
         let (width, height) = (started["width"].as_u64().unwrap_or(0), started["height"].as_u64().unwrap_or(0));
         assert!(width > 0 && height > 0 && width % 2 == 0 && height % 2 == 0, "{started}");
 
+        let recording_from = Instant::now();
         std::thread::sleep(Duration::from_millis(1500));
+        let paused_at = Instant::now();
         child.send(&json!({ "cmd": "pause", "id": 2 }));
         assert_eq!(child.next_json(Duration::from_secs(5), "paused")["event"], json!("paused"));
         std::thread::sleep(Duration::from_secs(1));
         child.send(&json!({ "cmd": "resume", "id": 3 }));
         assert_eq!(child.next_json(Duration::from_secs(5), "resumed")["event"], json!("resumed"));
+        let resumed_at = Instant::now();
         std::thread::sleep(Duration::from_millis(1500));
+        let recorded = (paused_at - recording_from + resumed_at.elapsed()).as_secs_f64();
         child.send(&json!({ "cmd": "stop", "id": 4 }));
+        say!("recorded {recorded:.2} s around a {:.2} s pause", (resumed_at - paused_at).as_secs_f64());
         let stopped = child.next_json(Duration::from_secs(40), "stopped");
         assert_eq!(stopped["event"], json!("stopped"), "{stopped}");
         assert_eq!(child.close(), Some(0), "the recorder must exit 0 after stop and stdin closing");
@@ -564,13 +584,9 @@ mod recording {
                     assert!(audio.is_empty(), "no sound was asked for: {probe}");
                 }
                 let duration: f64 = probe["format"]["duration"].as_str().and_then(|d| d.parse().ok()).unwrap_or(0.0);
-                // 1.5 s + 1.5 s recorded, the 1 s pause cut out: a file of
-                // 4 s or more means the pause was kept. The ceiling leaves
-                // room for a hosted runner's command round trips, which add
-                // up to half a second to the 3 s asked for.
                 assert!(
-                    (2.4..=PAUSE_CUT_CEILING).contains(&duration),
-                    "{duration:.2} s long, expected about 3 s: {probe}"
+                    pause_cut(duration, recorded),
+                    "{duration:.2} s long, expected the {recorded:.2} s recorded: {probe}"
                 );
             }
             None => missing("ffprobe is not installed, so the recording's tracks were not checked"),
@@ -584,8 +600,8 @@ mod recording {
         assert!(!frames.is_empty(), "no still read from the recording: {line}; stderr: {}", poster.stderr);
         let poster_duration = line["duration"].as_f64().unwrap_or(0.0);
         assert!(
-            (2.4..=PAUSE_CUT_CEILING).contains(&poster_duration),
-            "the poster reader says {poster_duration:.2} s"
+            pause_cut(poster_duration, recorded),
+            "the poster reader says {poster_duration:.2} s, expected the {recorded:.2} s recorded"
         );
         for frame in &frames {
             use base64::Engine as _;

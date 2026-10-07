@@ -351,6 +351,94 @@ describe("the camera mid-recording", () => {
   });
 });
 
+// The bar must not move while a menu opens or closes ("the bar jumps up").
+describe("the pill stays put while a menu opens and closes", () => {
+  const MIC = { recorded: true, muted: false, deviceId: null, canMute: true, canSwitch: true };
+  const MICS = [{ id: "BuiltInMicrophoneDevice", name: "MacBook Pro Microphone", isDefault: true }];
+  const withMic: CapturePhaseEvent = { phase: "recording", elapsedSecs: 3, microphone: true, seq: 1 };
+  const anchor = () => document.querySelector("[data-anchor]")?.getAttribute("data-anchor");
+  const order = () =>
+    tauri.core.invoke.mock.calls
+      .map(([c, a]) => (c === "capture_controls_menu" ? `menu:${(a as { open: boolean }).open}` : c))
+      .filter((c) => c === "capture_controls_menu_side" || c.startsWith("menu:"));
+
+  beforeEach(() => {
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    tauri.onInvoke("capture_microphones", () => MICS);
+  });
+
+  // Where the page grows with its window (Windows), the pill was drawn at
+  // the top of a window that had just grown upward, a menu's height above
+  // where it was, until the menu arrived. It is anchored to the bottom
+  // first, and only then is the room asked for.
+  it("anchors the pill to the edge that stays put before the window grows", async () => {
+    let anchoredWhenGrown: string | null | undefined = null;
+    tauri.onInvoke("capture_controls_menu_side", () => ({ above: true }));
+    tauri.onInvoke("capture_controls_menu", (a) => {
+      if ((a as { open: boolean }).open) anchoredWhenGrown = anchor();
+      return { above: true };
+    });
+    setup(withMic);
+    const trigger = await screen.findByRole("button", { name: "Choose a microphone" });
+    expect(anchor()).toBe("middle");
+    fireEvent.click(trigger);
+    await screen.findByRole("menu", { name: "Choose a microphone" });
+    expect(anchoredWhenGrown).toBe("bottom");
+    expect(order()).toEqual(["capture_controls_menu_side", "menu:true"]);
+    const slots = Array.from(document.querySelectorAll("[data-menu-slot]"));
+    expect(slots.map((el) => el.getAttribute("data-menu-slot"))).toEqual(["above", "below"]);
+    expect(slots[0]).toContainElement(screen.getByRole("menu"));
+    expect(slots[1]).toHaveClass("hidden");
+  });
+
+  it("keeps the pill on that edge until the window has shrunk back", async () => {
+    let shrunk: () => void = () => undefined;
+    tauri.onInvoke("capture_controls_menu_side", () => ({ above: true }));
+    tauri.onInvoke("capture_controls_menu", (a) =>
+      (a as { open: boolean }).open ? { above: true } : new Promise((r) => (shrunk = () => r({ above: true }))),
+    );
+    setup(withMic);
+    fireEvent.click(await screen.findByRole("button", { name: "Choose a microphone" }));
+    fireEvent.keyDown(await screen.findByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(anchor()).toBe("bottom");
+    await act(async () => shrunk());
+    expect(anchor()).toBe("middle");
+  });
+
+  it("anchors to the top when the menu opens below, near the top of the screen", async () => {
+    let anchoredWhenGrown: string | null | undefined = null;
+    tauri.onInvoke("capture_controls_menu_side", () => ({ above: false }));
+    tauri.onInvoke("capture_controls_menu", (a) => {
+      if ((a as { open: boolean }).open) anchoredWhenGrown = anchor();
+      return { above: false };
+    });
+    setup(withMic);
+    fireEvent.click(await screen.findByRole("button", { name: "Choose a microphone" }));
+    await screen.findByRole("menu");
+    expect(anchoredWhenGrown).toBe("top");
+  });
+
+  // macOS: the page is laid out once with the room on both sides and never
+  // resized, so nothing in it moves; the window only shows more of it.
+  it("keeps fixed room above and below the pill where Rust lays the page out once", async () => {
+    tauri.onInvoke("capture_controls_context", () => ({ compact: false, filmedNote: null, menuRoom: 300 }));
+    tauri.onInvoke("capture_controls_menu", () => ({ above: true }));
+    setup(withMic);
+    await screen.findByRole("button", { name: "Choose a microphone" });
+    await waitFor(() => expect(document.querySelector<HTMLElement>("[data-menu-slot=above]")?.style.height).toBe("300px"));
+    const below = document.querySelector<HTMLElement>("[data-menu-slot=below]");
+    expect(below?.style.height).toBe("300px");
+    expect(below).not.toHaveClass("hidden");
+    fireEvent.click(screen.getByRole("button", { name: "Choose a microphone" }));
+    const menu = await screen.findByRole("menu");
+    expect(document.querySelector("[data-menu-slot=above]")).toContainElement(menu);
+    // Nothing to anchor: the side is not asked for first.
+    expect(order()).toEqual(["menu:true"]);
+    expect(anchor()).toBe("middle");
+  });
+});
+
 describe("a sound source lost mid-recording", () => {
   const MIC_LOST = "The microphone was disconnected. The recording goes on without it.";
 

@@ -43,6 +43,7 @@ vi.mock("@/app/lib/featureFlags", () => ({
 
 import TrayUploadRow from "../TrayUploadRow";
 import { resetTrayThumbnails } from "../useTrayThumbnail";
+import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 
 const ACCOUNT = "5CPQ46eGx7nRkTyY2pV9wH3aLmZcQ1uS8bDfJ4kN6tWqFdJ";
 
@@ -81,13 +82,23 @@ function screenshot(overrides: Partial<UploadFeedItem> = {}): UploadFeedItem {
   });
 }
 
-function renderRow(item: UploadFeedItem = row(), isCapture = false) {
+function renderRow(
+  item: UploadFeedItem = row(),
+  isCapture = false,
+  siblings?: UploadFeedItem[],
+) {
   return render(
     <ul>
-      <TrayUploadRow item={item} accountId={ACCOUNT} isCapture={isCapture} />
+      <TrayUploadRow item={item} accountId={ACCOUNT} isCapture={isCapture} siblings={siblings} />
     </ul>,
   );
 }
+
+/** The `hippius:tray-file-action` requests the row sent to the main window. */
+const fileActions = () =>
+  (emit.mock.calls as unknown as [string, { action: string; file: { name: string }; siblings?: { name: string }[] }][])
+    .filter(([name]) => name === "hippius:tray-file-action")
+    .map(([, payload]) => payload);
 
 beforeEach(() => {
   invoke.mockReset();
@@ -128,9 +139,13 @@ describe("hover actions", () => {
     expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
     cleanup();
 
-    // A picture with no copy on this computer cannot be edited in place.
-    renderRow(screenshot({ source: "" }), true);
+    // A picture with no copy on this computer and no server id cannot be
+    // edited; with its server id it can (the editor fetches it).
+    renderRow(screenshot({ source: `${REMOTE_SOURCE_PREFIX}shot.png`, fileId: undefined }), true);
     expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
+    cleanup();
+    renderRow(screenshot({ source: "" }), true);
+    expect(screen.getByRole("button", { name: /^Edit:/ })).toBeInTheDocument();
     cleanup();
 
     // Nor where the lane has no screenshot editor.
@@ -165,10 +180,71 @@ describe("hover actions", () => {
       expect(invoke).toHaveBeenCalledWith("capture_editor_open_file", {
         label: "Captures",
         relativePath: "Screenshot 2026-10-06 at 10.00.00.png",
+        // So Rust can edit the server's copy when the file is not here.
+        fileId: "ab".repeat(32),
+        arionHash: "content-hash",
       }),
     );
     const names = invoke.mock.calls.map(([name]) => name);
     expect(names.indexOf("hide_tray_panel")).toBeLessThan(names.indexOf("capture_editor_open_file"));
+  });
+});
+
+describe("opening the file", () => {
+  it("opens a screenshot in the main window's viewer from its picture and name", async () => {
+    const shot = screenshot();
+    const other = screenshot({ name: "Other.png", actualFileName: "Other.png" });
+    renderRow(shot, true, [other, shot]);
+    const open = screen.getByRole("button", { name: `View ${shot.name}` });
+    // One real button holds the picture and the name, so both are the
+    // target and Return on it opens it like a click (a native button).
+    expect(open.tagName).toBe("BUTTON");
+    expect(open).toHaveAttribute("type", "button");
+    expect(open).toContainElement(screen.getByTestId("tray-row-icon"));
+    expect(within(open).getByTitle(shot.name)).toBeInTheDocument();
+    fireEvent.click(open);
+    await waitFor(() => expect(fileActions()).toHaveLength(1));
+    const [request] = fileActions();
+    expect(request.action).toBe("preview");
+    expect(request.file.name).toBe(shot.name);
+    expect(request.siblings?.map((f) => f.name)).toEqual(["Other.png", shot.name]);
+    // The popover-only fields stay in the popover.
+    expect(request.file).not.toHaveProperty("feedStatus");
+    expect(main.setFocus).toHaveBeenCalled();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("hide_tray_panel"));
+  });
+
+  it("opens a recording the same way", async () => {
+    renderRow(screenshot({ name: "Recording.mp4", actualFileName: "Recording.mp4" }), true);
+    fireEvent.click(screen.getByRole("button", { name: "View Recording.mp4" }));
+    await waitFor(() => expect(fileActions()).toHaveLength(1));
+    expect(fileActions()[0]).toMatchObject({ action: "preview", file: { name: "Recording.mp4" } });
+  });
+
+  it("does not open the viewer from the hover actions or the menu button", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "copy_file_share_link"
+        ? Promise.resolve({ status: "copied", url: "https://x", reused: true })
+        : Promise.resolve(undefined),
+    );
+    renderRow(screenshot(), true);
+    fireEvent.click(screen.getByRole("button", { name: /^Copy link/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit:/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^More actions/ }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("capture_editor_open_file", expect.anything()));
+    expect(fileActions()).toEqual([]);
+    await screen.findByText("Link copied");
+    const open = screen.getByRole("button", { name: /^View / });
+    expect(open).not.toContainElement(screen.getByTestId("tray-row-quick-actions"));
+  });
+
+  it("is not offered for a file still on its way, or one the viewer cannot show", () => {
+    renderRow(row({ feedStatus: "uploading", syncStatus: "uploading", progressPercent: 40 }));
+    expect(screen.queryByTestId("tray-row-open")).not.toBeInTheDocument();
+    cleanup();
+    renderRow(row({ name: "archive.zip", actualFileName: "archive.zip" }));
+    expect(screen.queryByTestId("tray-row-open")).not.toBeInTheDocument();
+    expect(screen.getByTitle("archive.zip")).toBeInTheDocument();
   });
 });
 

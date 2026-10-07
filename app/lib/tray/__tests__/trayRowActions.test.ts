@@ -17,8 +17,10 @@ import {
   parseTrayFileActionRequest,
   runsInMainWindow,
   trayDriveLocation,
+  trayRowOpensViewer,
 } from "../trayRowActions";
 import { RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 
 /** A completed server row of a drive synced on this computer, on disk. */
 function row(overrides: Partial<UploadFeedItem> = {}): UploadFeedItem {
@@ -171,8 +173,14 @@ describe("tray row Edit", () => {
     expect(canEditTrayRow(shot({ name: "clip.mp4", actualFileName: "clip.mp4" }))).toBe(false);
   });
 
-  it("is not offered for a picture with no copy here, with no drive, or in flight", () => {
-    expect(canEditTrayRow(shot({ source: "" }))).toBe(false);
+  // Pictures in a remote folder are edited too, by their server id.
+  it("is offered for a picture only on the server when the row has its file id", () => {
+    expect(canEditTrayRow(shot({ source: "" }))).toBe(true);
+  });
+
+  it("is not offered for a picture with no copy here and no file id, with no drive, or in flight", () => {
+    // Marked as only on the server, but with no id to fetch it by.
+    expect(canEditTrayRow(shot({ source: `${REMOTE_SOURCE_PREFIX}Screenshot.png`, fileId: undefined }))).toBe(false);
     expect(canEditTrayRow(shot({ label: undefined }))).toBe(false);
     expect(canEditTrayRow(shot({ feedStatus: "failed" }))).toBe(false);
   });
@@ -227,5 +235,44 @@ describe("cross-window request", () => {
     expect(parseTrayFileActionRequest({ action: "rename" })).toBeNull();
     expect(parseTrayFileActionRequest(null)).toBeNull();
     expect(parseTrayFileActionRequest("rename")).toBeNull();
+  });
+
+  it("keeps the viewer's list only when it holds the file, and drops nameless entries", () => {
+    const file = row({ name: "b.png", actualFileName: "Shots/b.png" });
+    const other = row({ name: "a.png", actualFileName: "Shots/a.png" });
+    expect(
+      parseTrayFileActionRequest({ action: "preview", file, siblings: [other, { name: "" }, file] }),
+    ).toEqual({ action: "preview", file, siblings: [other, file] });
+    // Same name in another drive is another file.
+    expect(
+      parseTrayFileActionRequest({ action: "preview", file, siblings: [other, { ...file, label: "Work" }] }),
+    ).toEqual({ action: "preview", file });
+    expect(parseTrayFileActionRequest({ action: "preview", file, siblings: "nope" })).toEqual({
+      action: "preview",
+      file,
+    });
+  });
+});
+
+describe("opening a row in the viewer", () => {
+  it("opens a finished picture, recording or document the viewer can show", () => {
+    expect(trayRowOpensViewer(row({ name: "shot.png" }))).toBe(true);
+    expect(trayRowOpensViewer(row({ name: "clip.mp4" }))).toBe(true);
+    expect(trayRowOpensViewer(row())).toBe(true);
+    // Cloud-only rows open too: the viewer fetches them.
+    expect(trayRowOpensViewer(row({ name: "shot.png", source: "" }))).toBe(true);
+  });
+
+  it("does not open a file on its way, a folder or a type the viewer cannot show", () => {
+    expect(trayRowOpensViewer(row({ name: "shot.png", feedStatus: "uploading" }))).toBe(false);
+    expect(trayRowOpensViewer(row({ name: "shot.png", feedStatus: "failed" }))).toBe(false);
+    expect(trayRowOpensViewer(row({ name: "Photos", isFolder: true }))).toBe(false);
+    expect(trayRowOpensViewer(row({ name: "archive.zip" }))).toBe(false);
+  });
+
+  it("is the same rule as the menu's View", () => {
+    for (const item of [row(), row({ name: "archive.zip" }), row({ feedStatus: "uploading" })]) {
+      expect(ids(item).includes("preview")).toBe(trayRowOpensViewer(item));
+    }
   });
 });

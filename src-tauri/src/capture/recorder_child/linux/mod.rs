@@ -389,10 +389,11 @@ impl Live for Session {
     }
 
     fn finish(mut self: Box<Self>) -> Result<(), String> {
+        let at = self.shared.now();
         self.stop_sources();
         self.close_desktop();
         let (reply_tx, reply_rx) = mpsc::channel();
-        if !self.shared.send(Msg::Finish(reply_tx)) {
+        if !self.shared.send(Msg::Finish { reply: reply_tx, at }) {
             self.join_writer();
             return Err("The recorder's writer had already stopped.".into());
         }

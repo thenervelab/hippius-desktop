@@ -64,6 +64,7 @@ const SURFACES = {
   microphoneUnavailableMessage: null,
   continuityHint: null,
   shortcut: { supported: true, via: "plugin", unavailableMessage: null },
+  recordShortcut: { supported: true, via: "plugin", unavailableMessage: null },
   systemPickerNote: null,
   linuxSession: null,
 };
@@ -88,10 +89,11 @@ beforeEach(() => {
   drop.handler = null;
   main.show.mockClear();
   tauri.onInvoke("hide_tray_panel", () => null);
-  tauri.onInvoke("capture_get_shortcut", () => ({
-    accelerator: "CommandOrControl+Shift+2",
-    defaultAccelerator: "CommandOrControl+Shift+2",
-  }));
+  tauri.onInvoke("capture_get_shortcut", (args) =>
+    (args as { kind?: string } | undefined)?.kind === "record"
+      ? { accelerator: "CommandOrControl+Alt+Shift+2", defaultAccelerator: "CommandOrControl+Alt+Shift+2" }
+      : { accelerator: "CommandOrControl+Shift+2", defaultAccelerator: "CommandOrControl+Shift+2" },
+  );
 });
 
 /** Each `invoke`/`emit` call's place in the overall call order. */
@@ -126,6 +128,42 @@ describe("the popover's tiles", () => {
     const screenshot = await screen.findByRole("button", { name: "Screenshot" });
     await waitFor(() => expect(screenshot).toHaveAccessibleDescription("Shortcut ⇧⌘2"));
     expect(screenshot).toHaveTextContent("⇧⌘2");
+  });
+
+  // The Record shortcut reads the same way, under Record: the screenshot
+  // keys plus Option by default.
+  it("puts the Record shortcut under Record, as Rust reports it", async () => {
+    tauri.onInvoke("capture_support", () => support());
+    render(<Tiles />);
+    const record = await screen.findByRole("button", { name: "Record" });
+    await waitFor(() => expect(record).toHaveAccessibleDescription("Shortcut ⌥⇧⌘2"));
+    expect(record).toHaveTextContent("⌥⇧⌘2");
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_get_shortcut", { kind: "record" });
+  });
+
+  it("shows no Record keys when that shortcut is off", async () => {
+    tauri.onInvoke("capture_support", () => support());
+    tauri.onInvoke("capture_get_shortcut", (args) =>
+      (args as { kind?: string } | undefined)?.kind === "record"
+        ? { accelerator: null, defaultAccelerator: "CommandOrControl+Alt+Shift+2" }
+        : { accelerator: "CommandOrControl+Shift+2", defaultAccelerator: "CommandOrControl+Shift+2" },
+    );
+    render(<Tiles />);
+    const screenshot = await screen.findByRole("button", { name: "Screenshot" });
+    await waitFor(() => expect(screenshot).toHaveTextContent("⇧⌘2"));
+    expect(screen.getByRole("button", { name: "Record" })).not.toHaveTextContent("2");
+  });
+
+  // Wayland: the desktop's keyboard settings hold the Record shortcut, so its keys are not ours to show.
+  it("shows no Record keys where the desktop holds that shortcut", async () => {
+    tauri.onInvoke("capture_support", () =>
+      support({ recordShortcut: { supported: false, via: "desktopSettings", unavailableMessage: "Add one" } }),
+    );
+    render(<Tiles />);
+    const screenshot = await screen.findByRole("button", { name: "Screenshot" });
+    await waitFor(() => expect(screenshot).toHaveTextContent("⇧⌘2"));
+    expect(screen.getByRole("button", { name: "Record" })).not.toHaveTextContent("2");
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_get_shortcut", { kind: "record" });
   });
 
   it("shows no keys where the desktop, not Hippius, holds the shortcut", async () => {
@@ -267,13 +305,19 @@ describe("the popover's tiles", () => {
 });
 
 describe("the Upload tile", () => {
-  it("opens the main window's Drive page, like the empty state's button", async () => {
+  it("brings the main window forward with its Upload File dialog, not the Drive page", async () => {
     tauri.onInvoke("capture_support", () => support());
     render(<Tiles />);
     fireEvent.click(await screen.findByRole("button", { name: "Upload, or drop files" }));
-    await waitFor(() => expect(tauri.event.emit).toHaveBeenCalledWith("hippius:tray-open-files", {}));
+    await waitFor(() => expect(tauri.event.emit).toHaveBeenCalledWith("hippius:tray-open-upload", {}));
     expect(main.show).toHaveBeenCalled();
-    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("hide_tray_panel"));
+    expect(main.setFocus).toHaveBeenCalled();
+    expect(tauri.event.emit).not.toHaveBeenCalledWith("hippius:tray-open-files", expect.anything());
+    // The popover is out of the way before the dialog is asked for.
+    const hide = tauri.core.invoke.mock.invocationCallOrder[
+      tauri.core.invoke.mock.calls.findIndex(([c]) => c === "hide_tray_panel")
+    ];
+    expect(hide).toBeLessThan(tauri.event.emit.mock.invocationCallOrder[0]);
   });
 
   it("lights up while files are dragged over the popover, and hands a drop to the main window", async () => {

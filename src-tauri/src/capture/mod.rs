@@ -6,6 +6,7 @@
 pub mod activation;
 pub mod area_pick;
 pub mod bar;
+pub mod bubble_controls;
 pub mod camera;
 pub mod commands;
 pub mod deliver;

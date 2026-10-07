@@ -187,7 +187,18 @@ fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
     }
     assert!(facts.contains("same_drive_path("), "the row is matched by its path in the drive");
     let follow = fn_body(&src, "fn spawn_sync_follow(");
-    assert!(follow.contains("link_fallback_applies("), "the bounded fallback must be applied");
+    assert!(
+        follow.contains("link_finishes_card("),
+        "a public link finishes a card the engine has not started on"
+    );
+    assert!(
+        !follow.contains("is_any_sync_in_progress("),
+        "the card waits for its own upload, never for the rest of the sync"
+    );
+    assert!(
+        facts.contains("FileStatus::Pending => SyncRow::Queued"),
+        "a queued row is told apart from a running one"
+    );
     // The cycle is started, never waited for, by the placement.
     let place = fn_body(&read("src/capture/deliver.rs"), "pub async fn place(");
     let spawn = place.find("async_runtime::spawn(").expect("the sync is started in the background");
@@ -674,19 +685,52 @@ fn signing_out_ends_the_capture_and_the_shortcut() {
     let cleared = body.find("auth_logout_internal(").expect("logout_full clears the session");
     assert!(ended < cleared, "the capture ends before the session is cleared");
     let end = fn_body(&read("src/capture/commands.rs"), "pub async fn end_for_logout(");
-    assert!(end.contains("cancel_inner(") && end.contains("shortcut::apply(app, None)"));
+    assert!(end.contains("cancel_inner("));
+    assert!(
+        end.contains("for kind in ShortcutKind::ALL") && end.contains("shortcut::apply(app, kind, None)"),
+        "both shortcuts are let go at sign-out"
+    );
 }
 
-/// The shortcut toggles, decided in Rust; it no longer only emits.
+/// The shortcuts toggle, decided in Rust; they no longer only emit. The
+/// plugin's one handler tells the two apart by the keys pressed.
 #[test]
 fn the_shortcut_is_handled_in_rust() {
     let src = read("src/capture/shortcut.rs");
     let plugin = fn_body(&src, "pub fn plugin(");
-    assert!(plugin.contains("on_shortcut(app)"), "the handler must go through commands::on_shortcut");
-    let on = fn_body(&read("src/capture/commands.rs"), "pub fn on_shortcut(");
+    assert!(plugin.contains("kind_pressed(&registered(), shortcut)"));
+    assert!(
+        plugin.contains("on_shortcut_of(app, kind)"),
+        "the handler must go through commands::on_shortcut_of"
+    );
+    let commands = read("src/capture/commands.rs");
+    let on = fn_body(&commands, "pub fn on_shortcut_of(");
     for action in ["stop_inner(", "cancel_inner(", "SHORTCUT_EVENT", "show_main_window("] {
-        assert!(on.contains(action), "on_shortcut must handle {action}");
+        assert!(on.contains(action), "on_shortcut_of must handle {action}");
     }
+    assert!(fn_body(&commands, "pub fn on_shortcut(").contains("on_shortcut_of(app, ShortcutKind::Screenshot)"));
+    assert!(fn_body(&commands, "pub fn on_record_shortcut(").contains("on_shortcut_of(app, ShortcutKind::Record)"));
+}
+
+/// Both shortcuts are registered at start-up, each with its own problem
+/// line; a change refuses the other one's keys before anything is
+/// registered; and `hippius --record` (a Wayland desktop's own shortcut)
+/// reaches the Record shortcut's action without showing the main window.
+#[test]
+fn the_record_shortcut_is_wired_like_the_screenshot_one() {
+    let commands = read("src/capture/commands.rs");
+    let sync = fn_body(&commands, "pub async fn capture_sync_shortcut(");
+    assert!(sync.contains("shortcut::load_both(") && sync.contains("for kind in ShortcutKind::ALL"));
+    let set = fn_body(&commands, "pub async fn capture_set_shortcut(");
+    let checked = set.find("shortcut::check_not_taken(").expect("the other one's keys are refused");
+    let applied = set.find("shortcut::apply(&app, kind, next)").expect("the new keys are registered");
+    let saved = set.find("shortcut::save(pool, kind, next)").expect("then saved");
+    assert!(checked < applied && applied < saved);
+    let main = read("src/main.rs");
+    let record = main.find("crate::cli::argv_requests_record(&argv)").expect("--record is handled");
+    let shown = main.find("window.unminimize()").expect("the plain second launch shows the window");
+    assert!(record < shown, "--record returns before the main window is shown");
+    assert!(main.contains("crate::capture::commands::on_record_shortcut(app);"));
 }
 
 /// Old capture temp folders are cleared at launch, off the start-up path.
@@ -1529,6 +1573,128 @@ fn the_pill_menus_grow_the_protected_pill_window() {
     assert!(fn_body(&src, "fn open_controls(").contains("pill_menu).take()"));
 }
 
+/// The bar must not move while a menu opens or closes. Growing the pill's
+/// window upward drew the pill at the top of the grown window for a moment
+/// (the page laid out for the old size, or for the side not yet known), a
+/// menu's height above where it was. On macOS the page is therefore laid
+/// out once at full height and never resized: every frame change of the
+/// pill goes through `set_pill_frame`, which places the page inside the
+/// window (`live_controls::page_top`) in the same main-thread turn as the
+/// window, with screen updates held. Elsewhere the page anchors the pill to
+/// the edge that stays put (`capture_controls_menu_side`) before it asks for
+/// the room.
+#[test]
+fn the_pill_never_moves_while_a_menu_opens_or_closes() {
+    let src = read("src/capture/commands.rs");
+    let menu = fn_body(&src, "pub async fn capture_controls_menu(");
+    assert!(menu.contains("set_pill_frame(&window, grown, scale, Some(above))"));
+    assert!(menu.contains("set_pill_frame(&window, back, scale, None)"));
+    assert!(!menu.contains("set_camera_frame("), "the pill's frame is never set without its page");
+    let open = fn_body(&src, "fn open_controls(");
+    assert!(open.contains("set_pill_frame(&window, frame, area.scale, None)"));
+    assert!(
+        !open.contains("place(&window"),
+        "a pill placed without its page would show the wrong slice"
+    );
+    let set = fn_body(&src, "fn set_pill_frame(");
+    for needle in [
+        "disableScreenUpdatesUntilFlush",
+        "setAutoresizingMask: 0usize",
+        "live_controls::page_top(menu, room)",
+        "live_controls::page_height(CONTROLS_HEIGHT, room)",
+        "setFrame: rect display: objc::runtime::YES animate: objc::runtime::NO",
+    ] {
+        assert!(set.contains(needle), "set_pill_frame lost {needle}");
+    }
+    let page_frame = set.find("setFrame: page_frame").expect("the page is placed");
+    let window_frame = set.find("setFrame: rect").expect("the window is placed");
+    assert!(page_frame < window_frame, "the page is placed before the window is drawn at its new size");
+    let side = fn_body(&src, "pub fn capture_controls_menu_side(");
+    assert!(side.contains("live_controls::menu_above("), "the side is the one the window will grow to");
+    assert!(
+        fn_body(&src, "pub async fn capture_controls_context(").contains("live_controls::fixed_menu_room("),
+        "the page is told how much room it keeps"
+    );
+
+    let page = read("../app/capture-controls/page.tsx");
+    let side_call = page.find("getCaptureControlsMenuSide()").expect("the page asks the side first");
+    let grow = page.find("setCaptureControlsMenu(true)").expect("then the room");
+    assert!(side_call < grow, "anchored before the window grows");
+    assert!(
+        page.contains("style={fixed ? { height: menuRoom } : undefined}"),
+        "fixed room on both sides"
+    );
+}
+
+/// The camera bubble's own controls mid-recording are never in the video.
+/// The bubble's window is filmed, so they are a window of their own, which
+/// every recorder leaves out: on macOS the helper films only the main window
+/// and the bubble of Hippius's windows (`filmed_own_windows`, by window
+/// number; the bubble's number is the camera window's alone) or, recording a
+/// window, only that window and the bubble; on Windows the window is content
+/// protected; Linux has none (`bubble_controls::supported`).
+#[test]
+fn the_bubble_controls_are_never_filmed() {
+    let src = read("src/capture/commands.rs");
+    let build = fn_body(&src, "fn bubble_controls_window(");
+    assert!(build.contains("BUBBLE_CONTROLS_LABEL"));
+    assert!(
+        build.contains(".content_protected(super::own_windows::content_protected(") && build.contains("OwnWindow::BubbleControls"),
+        "the controls' protection is own_windows' decision"
+    );
+    assert!(build.contains(".focused(false)") && build.contains(".accept_first_mouse(true)"));
+    // Only the camera window's number is ever remembered as the bubble's.
+    assert_eq!(src.matches("    remember_camera_window_number(").count(), 1);
+    assert!(fn_body(&src, "fn open_camera_window(").contains("remember_camera_window_number(app, &window)"));
+    assert!(
+        src.contains("super::own_windows::filmed_own_windows(main_window_number(app).await, filmed_camera_window(&state.capture))"),
+        "the helper films the main window and the bubble only"
+    );
+    assert!(!fn_body(&src, "fn filmed_camera_window(").contains("BUBBLE_CONTROLS"));
+    let swift = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
+    assert!(swift.contains("SCContentFilter(display: screen, excludingApplications: [app], exceptingWindows: kept)"));
+    assert!(swift.contains("SCContentFilter(display: screen, including: [window, camera])"));
+
+    // Shown from Rust's pointer watch, on the bubble only while recording,
+    // and gone with the camera.
+    let watch = fn_body(&src, "#[cfg(any(target_os = \"macos\", windows))]\nfn spawn_camera_hover_watch(");
+    assert!(watch.contains("bubble_controls::offered(") && watch.contains("bubble_controls::shown("));
+    assert!(watch.contains("bubble_controls::frame("));
+    assert!(fn_body(&src, "async fn end_camera(").contains("close_bubble_controls(app)"));
+
+    let label = src
+        .lines()
+        .find(|l| l.contains("pub const BUBBLE_CONTROLS_LABEL"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("BUBBLE_CONTROLS_LABEL is declared");
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-bubble-controls.json")).expect("capability parses");
+    let windows: Vec<&str> = capability["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    assert_eq!(windows, vec![label]);
+    let permissions: Vec<&str> = capability["permissions"]
+        .as_array()
+        .expect("permissions")
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+    assert!(permissions.iter().all(|p| p.starts_with("core:")), "{permissions:?}");
+    assert!(read("tauri.conf.json").contains("\"capture-bubble-controls\""));
+
+    // The same commands as the pill, so the bar, the bubble and the file agree.
+    let page = read("../app/capture-bubble-controls/page.tsx");
+    for call in ["setCaptureCameraSize(c.target)", "resumeCapture", "pauseCapture"] {
+        assert!(page.contains(call), "the bubble's controls call {call}");
+    }
+    assert!(page.contains("camera.resizeFromPill"), "sizes only where Rust offers them");
+    assert!(!page.contains("title="), "a native tooltip is a window of its own");
+    let shell = read("../app/components/AppShell.tsx");
+    assert!(shell.contains("\"/capture-bubble-controls\""), "a capture route boots provider-free");
+}
+
 /// The bubble's size changes mid-recording by moving its window inside what
 /// is filmed, so the camera in the file follows; the camera only stage is
 /// never resized (it is the recording).
@@ -1622,8 +1788,10 @@ fn a_wayland_area_is_remembered_and_keeps_the_pill_out() {
 #[test]
 fn the_shortcut_starts_the_instant_area_screenshot() {
     let src = read("src/capture/commands.rs");
-    let on = fn_body(&src, "pub fn on_shortcut(");
-    assert!(on.contains("shortcut::ShortcutStart::PRESSED"), "the press says what to start");
+    let on = fn_body(&src, "pub fn on_shortcut_of(");
+    assert!(on.contains("kind.start()"), "the press says what to start");
+    let kinds = fn_body(&read("src/capture/shortcut.rs"), "pub const fn start(");
+    assert!(kinds.contains("Self::Screenshot => ShortcutStart::PRESSED"));
     let start = fn_body(&src, "pub async fn capture_start(");
     assert!(start.contains("instant::start_choice("), "Rust decides what an instant start is");
     assert!(start.contains("state.capture.instant.store(choice.instant"));
@@ -1672,6 +1840,26 @@ fn hippius_can_be_opened_during_a_recording() {
     let watch = read("src/capture/activation.rs");
     assert!(watch.contains("NSApplicationDidBecomeActiveNotification"));
     assert!(watch.contains("pressedMouseButtons"));
+}
+
+/// A Drive file only on the server is edited too: downloaded the viewer's
+/// way, saved back by upload, and never written into the preview cache.
+#[test]
+fn the_editor_opens_and_saves_a_server_only_file() {
+    let editor = read("src/capture/editor.rs");
+    let open_file = fn_body(&editor, "pub async fn capture_editor_open_file(");
+    assert!(
+        open_file.contains("open_remote_file("),
+        "a server-only file opens through the remote path"
+    );
+    let remote = fn_body(&editor, "async fn open_remote_file(");
+    assert!(remote.contains("is_member"), "a drive shared with this account is refused");
+    assert!(remote.contains("cache_remote_file("), "downloaded the way the viewer downloads it");
+    assert!(remote.contains("SaveTarget::Remote"), "saved back by upload");
+    assert!(
+        remote.contains("temp: PathBuf::new()"),
+        "a save must not write the edit into the preview cache"
+    );
 }
 
 /// The screenshot editor: a layer of the main window, never a window of its
