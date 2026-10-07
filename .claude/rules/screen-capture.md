@@ -57,7 +57,7 @@ second window, tray and single-instance handler would start; pinned by
 `capture_wiring.rs`. It serves the protocol with `timeline.rs` (the Swift
 `place` rule: drop samples inside a pause, move later ones back by every
 finished pause, by start time for audio), `sizing.rs` (`alignToPixels`,
-`capped`, `videoBitRate`, pinned against `HippiusCapture.swift`'s literals) and a
+`capped`, `videoBitRate`, the keyframe interval, pinned against `HippiusCapture.swift`'s literals) and a
 `synthetic` test pattern through a text stand-in writer; a real `start` is
 refused with `UnsupportedPlatform`'s line where no platform recorder has
 landed (Linux; Windows has one, below).
@@ -1094,8 +1094,24 @@ stderr lines are diagnostics and are logged at `warn`.
 - Size is in pixels, `sourceRect` in points: the output is the region times
   the backing scale (`pointPixelScale` on 14+, the display mode on 13),
   aligned outward to even pixels (`alignToPixels`) and capped at a 3840 long
-  edge. H.264 High, keyframe every 2 s, bit rate by pixel count (about 14 Mbps
-  at 1080p, 2..28 Mbps), sRGB tagged BT.709.
+  edge. H.264 High, sRGB tagged BT.709.
+- **Rate control is an average, a keyframe every 4 s** (`videoBitRate`,
+  `keyframeSeconds`; `sizing::RateControl` for Windows and Linux): 5 Mbps at
+  1080p by the square root of the pixel count, 1..10 Mbps (Retina 9.6, 4K 10),
+  so a 10-minute recording is at most about 375 MB at 1080p and 725 MB at
+  Retina. A keyframe is most of a still screen's bytes, which is why 4 s and
+  not 2. The Mac encoder gets the average ONLY: `AVVideoQualityKey` is
+  accepted for H.264 on Apple Silicon but overrides the average with no
+  ceiling (a busy Retina screen measured 40 Mbps) and Intel lacks it;
+  VideoToolbox `DataRateLimits` switches the rate control and softened text
+  on every keyframe. Windows asks for peak-constrained VBR (average, twice
+  it, GOP) through `SetInputMediaType`'s encoding parameters, falling back to
+  the same encoder untuned before the software one (`writer::ATTEMPTS`);
+  Linux puts every encoder in a mode that spends less when still (`va` and
+  `vaapi` VBR, whose `bitrate` means the average and the ceiling
+  respectively; x264 CRF 23 capped by its VBV; OpenH264 quality-first with a
+  max), never their CBR / CQP defaults. Pinned by `sizing` and `linux_plan`
+  tests (Swift literals included) and `writer.rs` tests on Windows.
 - Pause cuts time out: samples are retimed on the writer queue by the host
   time of every finished pause (`place`), video and audio alike, and samples
   inside a pause are dropped. SCK timestamps are host-clock time. The last

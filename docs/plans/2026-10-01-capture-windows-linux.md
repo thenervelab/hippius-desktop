@@ -584,7 +584,8 @@ debug or staging build, since beta and production do not offer Record)
 13. Sleep the laptop mid-recording, wake it: the recording ends or goes on,
     and either way the file plays.
 14. 5 min and 60 min recordings at 1080p30 and 4K30: CPU in Task Manager,
-    file size near 14 Mbps (1080p) / 28 Mbps (4K), A/V offset at the end.
+    file size at most about 5 Mbps (1080p) / 10 Mbps (4K) and far less on a
+    still screen, A/V offset at the end.
     Repeat on an NVIDIA or AMD machine (hardware encoder) and in the ARM VM
     (software encoder).
 15. Windows 10: the yellow border shows around the recorded item and is not
