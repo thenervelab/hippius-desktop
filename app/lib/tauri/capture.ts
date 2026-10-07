@@ -788,6 +788,11 @@ export function setCaptureControlsMenu(open: boolean): Promise<CapturePillMenu> 
   return invoke("capture_controls_menu", { open });
 }
 
+/** Wayland's recording panel: size its window to the bar and any open menu, in CSS pixels. */
+export function fitCapturePanel(width: number, height: number): Promise<void> {
+  return invoke("capture_panel_fit", { width, height });
+}
+
 /** Where a pill menu would open, with nothing moved yet: the side to anchor the pill to first. */
 export function getCaptureControlsMenuSide(): Promise<CapturePillMenu> {
   return invoke("capture_controls_menu_side");

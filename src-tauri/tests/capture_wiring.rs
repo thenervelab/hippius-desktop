@@ -1309,6 +1309,96 @@ fn the_wayland_panel_hands_the_choice_to_the_desktop() {
     assert!(begin.contains("screencast_token::for_start(") && begin.contains("screencast_token::remember("));
 }
 
+/// Wayland's panel is fitted to the bar, not a fixed box: it opens at a
+/// first size, the page measures the bar and any open menu and Rust sizes
+/// the window in logical pixels (the page's CSS pixels at every scale). The
+/// page draws no glass of its own behind the bar.
+#[test]
+fn the_wayland_panel_is_fitted_to_the_bar() {
+    let src = read("src/capture/commands.rs");
+    assert!(!src.contains("PANEL_SIZE"), "no fixed panel size");
+    assert!(fn_body(&src, "async fn open_panel(").contains("support::PANEL_FIRST_SIZE"));
+    let fit = fn_body(&src, "pub fn capture_panel_fit(");
+    assert!(fit.contains("support::panel_window_size(width, height)"));
+    assert!(
+        fit.contains("tauri::LogicalSize::new(w, h)"),
+        "sized in logical pixels, never scaled again"
+    );
+    assert!(fit.contains("CapturePhase::Selecting"), "only while a capture is being chosen");
+    assert!(read("src/main.rs").contains("crate::capture::commands::capture_panel_fit,"));
+
+    let page = read("../app/capture-overlay/page.tsx");
+    assert!(page.contains("usePanelFit(panelRef, context?.selection === \"systemPicker\")"));
+    assert!(page.contains("layout={panel ? \"panel\" : \"overlay\"}"));
+    assert!(!page.contains("GLASS_PANEL"), "the panel draws no glass behind the bar");
+    assert!(read("../app/lib/tauri/capture.ts").contains("invoke(\"capture_panel_fit\", { width, height })"));
+}
+
+/// The dock during a recording on Linux. X11: the main window is minimized,
+/// not hidden, so it stays the dock's window (the pill and bubble skip the
+/// taskbar there), and it is unminimized when the recording ends. Wayland:
+/// the dock raises the pill or the bubble (GTK 3 cannot keep a Wayland
+/// window out of it), so each capture window is watched for taking the
+/// keyboard with the pointer elsewhere, which brings the main window and
+/// counts as the user taking it back. Launching Hippius again counts too.
+#[test]
+fn the_linux_dock_brings_hippius_back_during_a_recording() {
+    let src = read("src/capture/commands.rs");
+    let hide = fn_body(&src, "async fn hide_own_windows(");
+    assert!(hide.contains("own_windows::main_on_screen("));
+    assert!(hide.contains("own_windows::main_away(platform)") && hide.contains("main.minimize()") && hide.contains("main.hide()"));
+    let restore = fn_body(&src, "fn restore_main_window(");
+    assert!(
+        restore.find("main.unminimize()").unwrap() < restore.find("match plan {").unwrap(),
+        "a minimized main window is unminimized before it is put back"
+    );
+
+    // Every capture window the dock can raise is watched.
+    for builder in [
+        "fn open_controls(",
+        "fn open_preview_window(",
+        "fn open_camera_window(",
+        "fn bubble_controls_window(",
+    ] {
+        assert!(
+            fn_body(&src, builder).contains("watch_capture_window_focus(&window)"),
+            "{builder} is watched"
+        );
+    }
+    let watch = fn_body(&src, "fn watch_capture_window_focus(");
+    assert!(watch.contains("Platform::LinuxWayland") && watch.contains("focus_watch_gtk::watch(window)"));
+    let focused = fn_body(&src, "pub(super) fn on_capture_window_focused(");
+    assert!(focused.contains("own_windows::capture_window_focus_shows_main("));
+    assert!(
+        focused.find("bring_main_forward(&main)").unwrap() < focused.find("on_main_window_focused(app)").unwrap(),
+        "the main window comes forward and the recording's end leaves it up"
+    );
+
+    let gtk = read("src/capture/focus_watch_gtk.rs");
+    for signal in [
+        "connect_enter_notify_event",
+        "connect_leave_notify_event",
+        "connect_map_event",
+        "connect_focus_in_event",
+    ] {
+        assert!(gtk.contains(signal), "the watch follows {signal}");
+    }
+    assert!(
+        gtk.contains("gdk::NotifyType::Inferior"),
+        "moving onto the webview inside is not leaving the window"
+    );
+    assert!(gtk.contains("commands::on_capture_window_focused("));
+    assert!(read("src/capture/mod.rs").contains("#[cfg(target_os = \"linux\")]\nmod focus_watch_gtk;"));
+
+    let main = read("src/main.rs");
+    let instance = &main[main.find("tauri_plugin_single_instance::init(").unwrap()..];
+    let instance = &instance[..instance.find("deep-link://new-url").unwrap()];
+    assert!(
+        instance.find("window.set_focus()").unwrap() < instance.find("on_main_window_focused(app)").unwrap(),
+        "opening Hippius again mid-recording keeps it up when the recording ends"
+    );
+}
+
 /// WebKitGTK never offers `getUserMedia` unless media stream is on, and
 /// denies what nobody answers: on Linux the camera bubble needs both. Both
 /// are given to the capture windows only (the same gate as WebView2's), for

@@ -166,6 +166,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Linux: a tidier recording bar, and the dock opens Hippius mid-recording.** On Wayland the recording bar is now just the bar, not a large dark box around it, and clicking Hippius in the dock or picking it in Alt+Tab while recording brings the app back.
 - **On Ubuntu and other GNOME desktops, the recording controls and the camera bubble stay on top.** Opening another window, Hippius included, no longer hides them, so the camera stays in your screen recording.
 
 - **The recording controls show again while you record** (macOS). Stop, the timer, mute and the menus were missing, leaving only the camera bubble and the menu bar.
