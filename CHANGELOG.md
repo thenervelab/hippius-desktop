@@ -33,6 +33,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Screen recordings start playing straight away from a share link.** Recordings made on a Mac are now saved so a player can start from the first part of the file. Before, the browser had to download the whole recording before the first frame showed.
+
 - **A clearer Screenshots & Recording settings page.** The two shortcuts are
   shown as large keys at the top, the capture folder can be opened from the
   page, and the other choices are laid out as cards you can scan at a glance.
