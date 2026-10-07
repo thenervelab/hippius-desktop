@@ -7,7 +7,7 @@ import {
   isRedaction,
   stepRadius,
 } from "./model";
-import { blur, pixelate, type Pixels } from "./pixels";
+import { blur, pixelBox, pixelate, type Pixels } from "./pixels";
 
 /**
  * Drawing the document, the same code on screen and in the exported PNG, so
@@ -141,6 +141,31 @@ export function applyRedactions(px: Pixels, doc: Doc, origin: Point, block: numb
     const r: Rect = { x: a.rect.x - origin.x, y: a.rect.y - origin.y, w: a.rect.w, h: a.rect.h };
     if (a.kind === "pixelate") pixelate(px, r, block);
     else blur(px, r, block);
+  }
+}
+
+/** The two calls `redactRegions` makes on a 2D context. */
+export interface PixelSurface {
+  getImageData(x: number, y: number, w: number, h: number): ImageData;
+  putImageData(data: ImageData, x: number, y: number): void;
+}
+
+/**
+ * Write each redaction into `ctx` (a whole `width` x `height` picture),
+ * reading and writing only that redaction's own box. Blur and pixelate read
+ * and change only pixels inside their box, so the result is the same as
+ * running `applyRedactions` over the whole picture, without copying every
+ * pixel of a large screenshot each time a redaction moves. Applied in order,
+ * so one that overlaps another blurs what the earlier one left.
+ */
+export function redactRegions(ctx: PixelSurface, annotations: readonly Annotation[], width: number, height: number, block: number): void {
+  for (const a of annotations) {
+    if (!isRedaction(a)) continue;
+    const box = pixelBox(a.rect, width, height);
+    if (!box) continue;
+    const px = ctx.getImageData(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+    applyRedactions(px, { annotations: [a], crop: null }, { x: box.x0, y: box.y0 }, block);
+    ctx.putImageData(px, box.x0, box.y0);
   }
 }
 

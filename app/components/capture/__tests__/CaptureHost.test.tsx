@@ -159,6 +159,14 @@ describe("CaptureHost", () => {
     expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: "screenshot", mode: "area" });
   });
 
+  // The Record shortcut opens the bar on Record, on the last mode, exactly
+  // as the tray's Record tile does.
+  it("opens the bar on Record for the Record shortcut", async () => {
+    mountHost();
+    await act(() => tauri.emitEvent("capture_shortcut_pressed", { instant: false, kind: "recording" }));
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: "recording", mode: null });
+  });
+
   // The tray popover's Record button sends no mode: the bar opens on the last one.
   it("starts a recording from the tray on the last mode", async () => {
     mountHost();

@@ -2,8 +2,8 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type Annotation, type Doc, type Point, bounds as boxOf, findAnnotation, handlesFor, isRedaction, rectHandles } from "@/app/lib/capture/editor/model";
-import { type Bounds, type Gesture, type Style, drag, press, release } from "@/app/lib/capture/editor/gesture";
-import { applyRedactions, drawAnnotation, fontFor } from "@/app/lib/capture/editor/render";
+import { type Bounds, type Gesture, type Style, cursorAt, drag, press, release } from "@/app/lib/capture/editor/gesture";
+import { drawAnnotation, fontFor, redactRegions } from "@/app/lib/capture/editor/render";
 import { type View, fitView, pannedCenter, toImage, toScreen, zoomOf, zoomedView } from "@/app/lib/capture/editor/view";
 import type { ToolId } from "@/app/lib/capture/editor/model";
 
@@ -65,6 +65,15 @@ export default function EditorCanvas(props: Props) {
   const box = useRef<HTMLDivElement | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // Where the pointer rests over the picture (picture pixels), so the cursor
+  // can say what a press there will do; null while it is elsewhere. Only
+  // stored when the cursor it gives changes, so plain hovering does not
+  // re-render the editor on every move.
+  const [hover, setHover] = useState<Point | null>(null);
+  const hoverCursor = useRef<string | null>(null);
+  // The cursor a drag started with, kept until release: mid-move the shape
+  // slides out from under the pointer's first position.
+  const [heldCursor, setHeldCursor] = useState<string | null>(null);
   const gesture = useRef<Gesture | null>(null);
   const live = useRef<Doc>(doc);
   live.current = doc;
@@ -114,7 +123,8 @@ export default function EditorCanvas(props: Props) {
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  // The picture with its redactions, rebuilt only when a redaction changes.
+  // The picture with its redactions, rebuilt only when a redaction changes,
+  // and then only inside each redaction's own box (`redactRegions`).
   const redactionKey = JSON.stringify(doc.annotations.filter(isRedaction));
   const base = useMemo(() => {
     if (typeof document === "undefined") return null;
@@ -124,23 +134,21 @@ export default function EditorCanvas(props: Props) {
     const ctx = c.getContext("2d", { willReadFrequently: true });
     if (!ctx) return null;
     ctx.drawImage(image, 0, 0);
-    const redactions = JSON.parse(redactionKey) as Doc["annotations"];
-    if (redactions.length > 0) {
-      const px = ctx.getImageData(0, 0, imageW, imageH);
-      applyRedactions(px, { annotations: redactions, crop: null }, { x: 0, y: 0 }, block);
-      ctx.putImageData(px, 0, 0);
-    }
+    redactRegions(ctx, JSON.parse(redactionKey) as Doc["annotations"], imageW, imageH, block);
     return c;
   }, [image, imageW, imageH, redactionKey, block]);
 
-  useEffect(() => {
-    const c = canvas.current;
-    const ctx = c?.getContext("2d");
-    if (!c || !ctx || size.w === 0) return;
+  // The backdrop: the picture's shadow and the picture itself, drawn at the
+  // canvas's size. The shadow is a large blur and the picture a full-size
+  // scale-down, far too slow to repeat on every pointer move, so they are
+  // drawn here once per view or redaction change and copied in each frame.
+  const backdrop = useMemo(() => {
+    if (typeof document === "undefined" || size.w === 0) return null;
+    const c = document.createElement("canvas");
     c.width = Math.round(size.w * dpr);
     c.height = Math.round(size.h * dpr);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, c.width, c.height);
+    const ctx = c.getContext("2d");
+    if (!ctx) return null;
     const s = view.scale * dpr;
     ctx.setTransform(s, 0, 0, s, (view.offsetX - view.region.x * view.scale) * dpr, (view.offsetY - view.region.y * view.scale) * dpr);
     // A soft shadow under the picture, so it lifts off the dark backdrop.
@@ -163,6 +171,28 @@ export default function EditorCanvas(props: Props) {
     ctx.clip();
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(base ?? image, 0, 0);
+    ctx.restore();
+    return c;
+  }, [base, image, view, size.w, size.h, dpr, imageW, imageH]);
+
+  useEffect(() => {
+    const c = canvas.current;
+    const ctx = c?.getContext("2d");
+    if (!c || !ctx || size.w === 0) return;
+    // Setting a canvas's size clears and reallocates it: only on a resize.
+    const w = Math.round(size.w * dpr);
+    const h = Math.round(size.h * dpr);
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+    if (backdrop) ctx.drawImage(backdrop, 0, 0);
+    const s = view.scale * dpr;
+    ctx.setTransform(s, 0, 0, s, (view.offsetX - view.region.x * view.scale) * dpr, (view.offsetY - view.region.y * view.scale) * dpr);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(view.region.x, view.region.y, view.region.w, view.region.h);
+    ctx.clip();
     for (const a of doc.annotations) {
       // The text being typed is drawn by the field over it, not twice.
       if (textEdit?.id && a.id === textEdit.id) continue;
@@ -201,7 +231,7 @@ export default function EditorCanvas(props: Props) {
       if (handles.length > 0) drawHandles(ctx, handles.map((h) => h.at), px);
       else outline(ctx, current, px);
     }
-  }, [base, image, doc, selected, tool, view, size, dpr, imageW, imageH, textEdit]);
+  }, [backdrop, doc, selected, tool, view, size, dpr, imageW, imageH, textEdit]);
 
   const bounds: Bounds = { imageW, imageH, tolerance: GRAB_PT / view.scale, ratio };
   const at = (e: React.PointerEvent) => {
@@ -227,20 +257,55 @@ export default function EditorCanvas(props: Props) {
     props.onSelect(pressed.selected);
     if (!pressed.gesture) return;
     gesture.current = pressed.gesture;
+    setHeldCursor(cursorAt(tool, live.current, selected, p, bounds.tolerance));
     props.onPreview(pressed.doc);
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
 
-  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  // A drag moves the document at most once per screen frame: pointer events
+  // can arrive faster than the screen redraws, and each preview re-renders
+  // the editor. Only the newest point counts.
+  const pending = useRef<Point | null>(null);
+  const frame = useRef<number | null>(null);
+  const onDrag = useRef<() => void>(() => {});
+  onDrag.current = () => {
     const g = gesture.current;
-    if (!g) return;
-    props.onPreview(drag(g, live.current, at(e), bounds));
+    const p = pending.current;
+    pending.current = null;
+    if (g && p) props.onPreview(drag(g, live.current, p, bounds));
+  };
+  const cancelFrame = () => {
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    frame.current = null;
+    pending.current = null;
+  };
+  useEffect(() => cancelFrame, []);
+
+  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const p = at(e);
+    if (!gesture.current) {
+      const next = cursorAt(tool, live.current, selected, p, bounds.tolerance);
+      if (next !== hoverCursor.current) {
+        hoverCursor.current = next;
+        setHover(p);
+      }
+      return;
+    }
+    pending.current = p;
+    if (frame.current === null) {
+      frame.current = requestAnimationFrame(() => {
+        frame.current = null;
+        onDrag.current();
+      });
+    }
   };
 
   const finish = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = gesture.current;
     if (!g) return;
+    cancelFrame();
     gesture.current = null;
+    setHeldCursor(null);
     const done = release(g, drag(g, live.current, at(e), bounds));
     props.onPreview(null);
     // The drawn, moved or resized annotation stays selected, so a colour
@@ -259,7 +324,8 @@ export default function EditorCanvas(props: Props) {
   // The selection bar sits above the annotation, or below it near the top.
   const picked = tool === "crop" || textEdit ? null : findAnnotation(doc, selected);
   const barAt = picked && props.selectionBar ? selectionAnchor(view, boxOf(picked), size.w) : null;
-  const cursor = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
+  // Held while dragging, so the cursor does not flicker back mid-move.
+  const cursor = textEdit ? "text" : (heldCursor ?? cursorAt(tool, doc, selected, hover, bounds.tolerance));
 
   return (
     <div ref={box} className="relative h-full w-full overflow-hidden" data-testid="editor-canvas-box">
@@ -272,6 +338,10 @@ export default function EditorCanvas(props: Props) {
         onPointerMove={onPointerMove}
         onPointerUp={finish}
         onPointerCancel={finish}
+        onPointerLeave={() => {
+          hoverCursor.current = null;
+          setHover(null);
+        }}
       />
       {textEdit && editAt && (
         <textarea

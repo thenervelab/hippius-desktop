@@ -86,7 +86,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes};
+use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -329,6 +329,11 @@ fn main() {
                 crate::capture::commands::on_shortcut(app);
                 return;
             }
+            // `hippius --record`: the Record shortcut, bound the same way.
+            if crate::cli::argv_requests_record(&argv) {
+                crate::capture::commands::on_record_shortcut(app);
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(e) = window.unminimize() {
                     debug!("Failed to unminimize window: {e}");
@@ -492,6 +497,7 @@ fn main() {
             get_thumbnail,
             prepare_motion_photo_preview,
             read_preview_bytes,
+            resolve_drive_file_source,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
@@ -736,6 +742,7 @@ fn main() {
             crate::capture::commands::capture_microphone_switch,
             crate::capture::commands::capture_camera_switch,
             crate::capture::commands::capture_controls_menu,
+            crate::capture::commands::capture_controls_menu_side,
             crate::capture::commands::capture_camera_set_size,
             crate::capture::commands::capture_camera_dismiss,
             crate::capture::commands::capture_share_targets,

@@ -203,15 +203,23 @@ pub fn camera_controls(
 /// How tall the pill's window grows while one of its menus is open.
 pub const MENU_HEIGHT: f64 = 300.0;
 
+/// Whether a menu opens above the pill (`pill`, its window now) or below
+/// it: above unless the pill is too near the top of the usable area
+/// (`work`) and there is more room below.
+#[must_use]
+pub fn menu_above(pill: Frame, work: Frame, menu_height: f64) -> bool {
+    let room_above = pill.y - work.y;
+    let room_below = (work.y + work.height) - (pill.y + pill.height);
+    room_above >= menu_height || room_above >= room_below
+}
+
 /// The pill's window while a menu is open: the same width, `menu_height`
 /// taller, grown upward so the pill itself stays where it is, or downward
 /// when the pill is too near the top of the usable area (`work`). Returns
 /// the frame and whether the menu is above the pill.
 #[must_use]
 pub fn pill_with_menu(pill: Frame, work: Frame, menu_height: f64) -> (Frame, bool) {
-    let room_above = pill.y - work.y;
-    let room_below = (work.y + work.height) - (pill.y + pill.height);
-    let above = room_above >= menu_height || room_above >= room_below;
+    let above = menu_above(pill, work, menu_height);
     let y = if above { pill.y - menu_height } else { pill.y };
     (
         Frame {
@@ -233,6 +241,46 @@ pub fn pill_without_menu(grown: Frame, height: f64, above: bool) -> Frame {
         y: if above { grown.y + grown.height - height } else { grown.y },
         width: grown.width,
         height,
+    }
+}
+
+/// The room the pill's page keeps for a menu above and below the pill, in
+/// points, where the page does not grow with its window.
+///
+/// Growing a webview's window upward moved the pill: the page was laid out
+/// for the old size until it drew again, and a webview keeps its old picture
+/// at the top of the grown window meanwhile, so the pill showed a menu's
+/// height higher for a moment ("the bar jumps up"). On macOS the page is
+/// therefore laid out once, [`MENU_HEIGHT`] above and below the pill
+/// ([`page_height`]), and the window shows only the slice around the pill
+/// ([`page_top`]). Opening a menu moves the window's edge over a page that is
+/// already drawn; the page itself never changes size, so nothing in it moves.
+/// Elsewhere (0) the page is the window's own size and grows with it, and
+/// the pill page anchors the pill to the edge that stays put before the
+/// window grows (`capture_controls_menu_side`).
+#[must_use]
+pub const fn fixed_menu_room(platform: Platform) -> f64 {
+    if matches!(platform, Platform::MacOs) { MENU_HEIGHT } else { 0.0 }
+}
+
+/// How tall the pill's page is with `room` kept above and below the pill
+/// (`pill_height`).
+#[must_use]
+pub fn page_height(pill_height: f64, room: f64) -> f64 {
+    pill_height + 2.0 * room
+}
+
+/// Where the top of the pill's page is, relative to the top of its window
+/// (negative: above it, out of sight), with `room` kept above and below the
+/// pill. `menu` is `None` while no menu is open, else whether it is above.
+/// Closed, the window shows the pill only; with a menu above, the window
+/// grew upward over the room above; with a menu below, it grew downward
+/// over the room below. In each case the pill is where it was on screen.
+#[must_use]
+pub fn page_top(menu: Option<bool>, room: f64) -> f64 {
+    match menu {
+        Some(true) => 0.0,
+        Some(false) | None => -room,
     }
 }
 
@@ -395,5 +443,57 @@ mod tests {
         assert!(!above, "no room above: the menu opens below");
         assert!((grown.y - high.y).abs() < 1e-9);
         assert_eq!(pill_without_menu(grown, high.height, above), high);
+        assert!(menu_above(pill, work, MENU_HEIGHT));
+        assert!(!menu_above(high, work, MENU_HEIGHT));
+    }
+
+    /// The pill's page keeps its room on macOS only, where the window shows
+    /// a slice of a page that never changes size.
+    #[test]
+    fn only_macos_lays_the_pill_page_out_with_room_for_a_menu() {
+        assert!((fixed_menu_room(Platform::MacOs) - MENU_HEIGHT).abs() < 1e-9);
+        for other in [Platform::Windows, Platform::LinuxX11, Platform::LinuxWayland] {
+            assert!(fixed_menu_room(other).abs() < 1e-9, "{other:?}");
+        }
+        assert!((page_height(60.0, MENU_HEIGHT) - (60.0 + 2.0 * MENU_HEIGHT)).abs() < 1e-9);
+    }
+
+    /// The bar must not move when a menu opens or closes: wherever the
+    /// window goes, the pill's row of the page (`room` from its top) lands
+    /// on the same screen points, above or below, near the top or not.
+    #[test]
+    fn the_pill_stays_on_the_same_points_while_a_menu_opens_and_closes() {
+        let work = Frame {
+            x: 0.0,
+            y: 25.0,
+            width: 1440.0,
+            height: 800.0,
+        };
+        let room = fixed_menu_room(Platform::MacOs);
+        for pill in [
+            Frame {
+                x: 550.0,
+                y: 740.0,
+                width: 380.0,
+                height: 60.0,
+            },
+            Frame {
+                x: 550.0,
+                y: 30.0,
+                width: 380.0,
+                height: 60.0,
+            },
+        ] {
+            let on_screen = |window: Frame, menu: Option<bool>| window.y + page_top(menu, room) + room;
+            assert!((on_screen(pill, None) - pill.y).abs() < 1e-9, "closed");
+            let (grown, above) = pill_with_menu(pill, work, MENU_HEIGHT);
+            assert!((on_screen(grown, Some(above)) - pill.y).abs() < 1e-9, "open, above = {above}");
+            // The whole page is below the window's top edge only where the
+            // window starts at the page's top: nothing of the pill is cut.
+            let top = page_top(Some(above), room);
+            assert!(top <= 0.0 && top + page_height(pill.height, room) >= grown.height);
+            let back = pill_without_menu(grown, pill.height, above);
+            assert!((on_screen(back, None) - pill.y).abs() < 1e-9, "closed again");
+        }
     }
 }

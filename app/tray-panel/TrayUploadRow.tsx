@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Check, Link2, MoreHorizontal, PenLine, Play } from "lucide-react";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
@@ -9,6 +9,7 @@ import { fileManagerLabel } from "@/app/lib/utils/isMacPlatform";
 import {
   getTrayQuickActions,
   getTrayRowActions,
+  trayRowOpensViewer,
   type TrayRowActionId,
 } from "@/app/lib/tray/trayRowActions";
 import { formatClipDuration, trayRowSubtitle } from "@/app/lib/tray/trayRowDisplay";
@@ -42,6 +43,11 @@ type Feedback =
  * - the three-dots button, and a right click anywhere on the row, open the
  *   full menu (`getTrayRowActions`).
  *
+ * Pressing the picture or the name (or Return on it) opens the file in the
+ * app's viewer in the main window, the menu's "View": a finished file the
+ * viewer can show (`trayRowOpensViewer`). The hover actions are siblings of
+ * that button, never inside it, so a press on one never opens the viewer.
+ *
  * "Copy link" reports on the row itself, in the subtitle's place: the
  * popover has no toaster, and the result must be seen where the button was
  * pressed.
@@ -50,18 +56,23 @@ export default function TrayUploadRow({
   item,
   accountId,
   isCapture = false,
+  siblings,
 }: {
   item: UploadFeedItem;
   /** The signed-in account, for revealing a file and fetching its picture. */
   accountId: string | null;
   /** Rust listed it as a capture: its subtitle says Screenshot or Recording. */
   isCapture?: boolean;
+  /** The files the viewer can walk from this one: the tab it is listed in. */
+  siblings?: UploadFeedItem[];
 }) {
   const name = displayFileName(item.name);
   const picture = useTrayThumbnail(item, accountId);
 
   const actions = getTrayRowActions(item, fileManagerLabel());
   const quick = getTrayQuickActions(item);
+  const opensViewer = trayRowOpensViewer(item);
+  const subtitleId = useId();
 
   const [menuAnchor, setMenuAnchor] = useState<TrayMenuAnchor | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -95,10 +106,15 @@ export default function TrayUploadRow({
         await copyLink();
         return;
       }
-      const failure = await runTrayRowAction(id, item, accountId);
+      const failure = await runTrayRowAction(
+        id,
+        item,
+        accountId,
+        id === "preview" ? siblings : undefined,
+      );
       if (failure) showFeedback({ kind: "failed", message: failure }, FAILED_MS);
     },
-    [accountId, copyLink, item, showFeedback],
+    [accountId, copyLink, item, showFeedback, siblings],
   );
 
   const closeMenu = useCallback(() => {
@@ -130,11 +146,30 @@ export default function TrayUploadRow({
         setMenuAnchor({ x: event.clientX, y: event.clientY });
       }}
     >
-      <RowThumbnail item={item} picture={picture} />
-      <div className="min-w-0 flex-1">
-        <MiddleEllipsisName name={name} />
-        <RowSubtitle item={item} feedback={feedback} isCapture={isCapture} />
-      </div>
+      {opensViewer ? (
+        <button
+          type="button"
+          data-testid="tray-row-open"
+          aria-label={`View ${name}`}
+          aria-describedby={subtitleId}
+          onClick={() => void run("preview")}
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-primary-50 dark:focus-visible:ring-primary-brand-dark"
+        >
+          <RowThumbnail item={item} picture={picture} />
+          <span className="block min-w-0 flex-1">
+            <MiddleEllipsisName name={name} />
+            <RowSubtitle id={subtitleId} item={item} feedback={feedback} isCapture={isCapture} />
+          </span>
+        </button>
+      ) : (
+        <>
+          <RowThumbnail item={item} picture={picture} />
+          <div className="min-w-0 flex-1">
+            <MiddleEllipsisName name={name} />
+            <RowSubtitle id={subtitleId} item={item} feedback={feedback} isCapture={isCapture} />
+          </div>
+        </>
+      )}
       <div className="flex shrink-0 items-center gap-1">
         {item.feedStatus !== "completed" && (
           <StatusLabel status={item.feedStatus} progress={item.progressPercent} />
@@ -300,10 +335,12 @@ function RowThumbnail({
  *  Announced politely so a screen reader hears "Link copied" without moving
  *  focus. */
 function RowSubtitle({
+  id,
   item,
   feedback,
   isCapture,
 }: {
+  id?: string;
   item: UploadFeedItem;
   feedback: Feedback | null;
   isCapture: boolean;
@@ -329,7 +366,7 @@ function RowSubtitle({
     );
   }
   return (
-    <span aria-live="polite" className="block min-w-0">
+    <span id={id} aria-live="polite" className="block min-w-0">
       {content}
     </span>
   );
@@ -354,19 +391,19 @@ function MiddleEllipsisName({ name }: { name: string }) {
 
   if (name.length <= TAIL_CHARS + 1) {
     return (
-      <p className={`truncate ${textClass}`} title={name}>
+      <span data-testid="tray-row-name" className={`block truncate ${textClass}`} title={name}>
         {name}
-      </p>
+      </span>
     );
   }
 
   const head = name.slice(0, name.length - TAIL_CHARS);
   const tail = name.slice(name.length - TAIL_CHARS);
   return (
-    <p className={`flex min-w-0 ${textClass}`} title={name}>
+    <span data-testid="tray-row-name" className={`flex min-w-0 ${textClass}`} title={name}>
       <span className="min-w-0 truncate">{head}</span>
       <span className="shrink-0 whitespace-pre">{tail}</span>
-    </p>
+    </span>
   );
 }
 

@@ -32,7 +32,7 @@ use super::recording::{self, Microphone, RecordOptions, Recorder};
 use super::screenshot::Selection;
 use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, TransitionError, transition};
 use super::share;
-use super::shortcut::{self, ShortcutAction, ShortcutSetting};
+use super::shortcut::{self, ShortcutAction, ShortcutKind, ShortcutSetting};
 use super::targets::{DisplayTarget, WindowTarget};
 use super::tray_status::{self, TrayClickRoute, TrayText};
 use crate::app_state::AppState;
@@ -101,6 +101,9 @@ pub const OVERLAY_LABEL_PREFIX: &str = "capture-overlay-";
 pub const CONTROLS_LABEL: &str = "capture-controls";
 pub const PREVIEW_LABEL: &str = "capture-preview";
 pub const CAMERA_LABEL: &str = "capture-camera";
+/// The camera bubble's controls mid-recording (`bubble_controls`): a window
+/// of their own over the bubble, because the bubble's own window is filmed.
+pub const BUBBLE_CONTROLS_LABEL: &str = "capture-bubble-controls";
 /// Wayland's area selection: one full-screen window showing the chosen
 /// monitor's picture to draw the area on (`area_pick`).
 pub const AREA_LABEL: &str = "capture-area";
@@ -185,9 +188,10 @@ pub struct CaptureState {
     tray_seq: AtomicU64,
     /// What the tray was last given, so it is written only when that changes.
     tray_last: Mutex<Option<TrayText>>,
-    /// Why the saved shortcut could not be registered at start-up, for
-    /// Settings (`ShortcutSetting::problem`); cleared once one registers.
-    shortcut_problem: Mutex<Option<String>>,
+    /// Why each saved shortcut (screenshot, Record; `ShortcutKind::index`)
+    /// could not be registered at start-up, for Settings
+    /// (`ShortcutSetting::problem`); cleared once that one registers.
+    shortcut_problems: Mutex<[Option<String>; 2]>,
     /// Whether the main window was on screen when the capture started, so it
     /// comes back only if it was there to begin with.
     restore_main: AtomicBool,
@@ -268,11 +272,11 @@ pub struct CaptureState {
     /// it back there.
     bubble_frame: Mutex<Option<camera::Frame>>,
     /// The pointer is over the camera window (the last hover sent). macOS
-    /// only: elsewhere the webview's own hover events are used.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// and Windows, where the bubble's controls are shown from it.
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     camera_hover: AtomicBool,
     /// Which hover watch is current (see `spawn_camera_hover_watch`).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     camera_watch: AtomicU64,
     /// The pill's "Start now" during a countdown after the desktop's dialog
     /// (`count_down_in_pill`).
@@ -1473,6 +1477,12 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             .build()
             .map_err(|e| AppError::Other(format!("Could not open the recording controls: {e}")))?;
         raise_above_menu_bar(&window);
+        // Lay the page out at its full height at once (macOS), before it
+        // first draws: the pill is in the middle of it, where the window
+        // shows it (`live_controls::fixed_menu_room`).
+        if let Some(frame) = current_camera_frame(&window) {
+            set_pill_frame(&window, frame, 1.0, None);
+        }
         window
     };
     if !window.is_visible().unwrap_or(false) {
@@ -1486,9 +1496,9 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
                 height: CONTROLS_HEIGHT,
             };
             let frame = pill_clear_of_area(&state.capture, &d, area).unwrap_or(usual);
-            place(&window, frame, area.scale);
             // Placed at its own size: a menu left open last time is gone.
             lock(&state.capture.pill_menu).take();
+            set_pill_frame(&window, frame, area.scale, None);
         }
     }
     if show {
@@ -3053,6 +3063,10 @@ async fn count_down_in_pill(app: &AppHandle, mut recorder: Box<dyn Recorder>, se
 pub struct ControlsContext {
     pub compact: bool,
     pub filmed_note: Option<&'static str>,
+    /// The room the page keeps above and below the pill for a menu, in
+    /// points (`live_controls::fixed_menu_room`): the page is laid out once
+    /// at that height (macOS), or, at 0, it is the window's own size.
+    pub menu_room: f64,
 }
 
 const PILL_NOTE_SEEN_KEY: &str = "capture_pill_note_seen_v1";
@@ -3069,7 +3083,11 @@ pub async fn capture_controls_context(state: tauri::State<'_, AppState>) -> Resu
             filmed_note = Some(super::support::PILL_FILMED_NOTE);
         }
     }
-    Ok(ControlsContext { compact, filmed_note })
+    Ok(ControlsContext {
+        compact,
+        filmed_note,
+        menu_room: super::live_controls::fixed_menu_room(super::rollout::current_platform()),
+    })
 }
 
 /// The pill's "Start now" during the countdown after the desktop's dialog.
@@ -3629,8 +3647,9 @@ fn announce_link(app: &AppHandle, state: &CaptureState, id: u64, delivered: &sup
 /// asked everywhere it answers (`sync_facts`): the live row, the finished
 /// list (a small file finishes in seconds and leaves the session) and the
 /// set of files it knows are on the server. A card with a public link whose
-/// file the engine lost track of is finished by the bounded fallback in
-/// [`super::preview::link_fallback_applies`].
+/// file the engine has not started on (queued behind other files, or not
+/// picked up) is finished by its link ([`super::preview::link_finishes_card`]):
+/// the capture waits for its own upload, never for the rest of the sync.
 fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, since_ms: i64) {
     tauri::async_runtime::spawn(async move {
         let started = tokio::time::Instant::now();
@@ -3653,8 +3672,12 @@ fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, s
                 break;
             }
             let mut row = sync_facts(&state.sync, &label, &rel_path, since_ms).row();
-            if super::preview::link_fallback_applies(&card, &row, started.elapsed(), state.sync.is_any_sync_in_progress()) {
-                tracing::info!(card = id, "capture card finished by its link: the sync engine has no row for it");
+            if super::preview::link_finishes_card(&card, &row) {
+                tracing::info!(
+                    card = id,
+                    ?row,
+                    "capture card finished by its link: the sync engine has not started on it"
+                );
                 row = super::preview::SyncRow::Completed;
             }
             if let Some(next) = super::preview::status_after_sync_row(&card, &row) {
@@ -3691,6 +3714,7 @@ fn sync_facts(sync: &hcfs_client::engine::runner::SyncRunner, label: &str, rel_p
             .map(|file| match file.status {
                 FileStatus::Completed => SyncRow::Completed,
                 FileStatus::Error => SyncRow::Failed(file.error.as_deref().map(str::to_string)),
+                FileStatus::Pending => SyncRow::Queued,
                 _ => SyncRow::Working,
             });
         let finished = progress
@@ -4503,21 +4527,30 @@ pub fn capture_preview_retry(state: tauri::State<'_, AppState>, app: AppHandle) 
 
 // ── The system-wide shortcut ────────────────────────────────────────────────
 
-/// Register the saved shortcut. Called when the signed-in app mounts; a
+/// Register both saved shortcuts. Called when the signed-in app mounts; a
 /// shortcut another app took since is logged, not raised, so start-up never
 /// fails over it (Settings says so when the user looks).
 #[tauri::command]
 pub async fn capture_sync_shortcut(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
-    let accelerator = shortcut::load(state.pool()?).await?;
-    let problem = match shortcut::apply(&app, accelerator.as_deref()) {
-        Ok(()) => None,
-        Err(e) => {
-            tracing::warn!(error = %e, "capture shortcut not registered");
-            Some(shortcut_problem_text(&e))
-        }
-    };
-    *lock(&state.capture.shortcut_problem) = problem;
+    let in_force = shortcut::load_both(state.pool()?).await?;
+    let mut problems: [Option<String>; 2] = [None, None];
+    for kind in ShortcutKind::ALL {
+        problems[kind.index()] = register_shortcut(&app, kind, in_force[kind.index()].as_deref());
+    }
+    *lock(&state.capture.shortcut_problems) = problems;
     Ok(())
+}
+
+/// Register `accelerator` as the shortcut of `kind`, answering why it did
+/// not register (Rust's sentence for Settings), or `None`. The Record
+/// shortcut is held only where this computer can record: keys that open a
+/// bar which then refuses would be taken from every other app for nothing.
+fn register_shortcut(app: &AppHandle, kind: ShortcutKind, accelerator: Option<&str>) -> Option<String> {
+    let accelerator = accelerator.filter(|_| kind != ShortcutKind::Record || recording::recording_supported());
+    shortcut::apply(app, kind, accelerator).err().map(|e| {
+        tracing::warn!(error = %e, ?kind, "capture shortcut not registered");
+        shortcut_problem_text(&e)
+    })
 }
 
 /// Rust's sentence for a shortcut that did not register, as Settings shows it.
@@ -4528,11 +4561,20 @@ fn shortcut_problem_text(e: &AppError) -> String {
     }
 }
 
+/// What Settings shows for the shortcut of `kind` (the screenshot one when
+/// left out, as older callers mean).
 #[tauri::command]
-pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>) -> Result<ShortcutSetting> {
-    let route = super::support::surfaces().shortcut.via;
-    let portal = route == super::support::ShortcutVia::Portal;
-    let problem = lock(&state.capture.shortcut_problem)
+pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>, kind: Option<ShortcutKind>) -> Result<ShortcutSetting> {
+    let kind = kind.unwrap_or_default();
+    let surfaces = super::support::surfaces();
+    let route = match kind {
+        ShortcutKind::Screenshot => surfaces.shortcut.via,
+        ShortcutKind::Record => surfaces.record_shortcut.via,
+    };
+    // Only the screenshot shortcut is ever bound through the portal, and
+    // only it can be added to GNOME's settings for the user.
+    let portal = kind == ShortcutKind::Screenshot && route == super::support::ShortcutVia::Portal;
+    let problem = lock(&state.capture.shortcut_problems)[kind.index()]
         .clone()
         .or_else(|| portal.then(super::shortcut_portal::problem).flatten());
     let desktop_trigger = if portal { super::shortcut_portal::trigger() } else { None };
@@ -4542,14 +4584,14 @@ pub async fn capture_get_shortcut(state: tauri::State<'_, AppState>) -> Result<S
             super::shortcut_portal::status(),
             super::shortcut_portal::PortalStatus::Available { configurable: true }
         );
-    let added_to_desktop = if route == super::support::ShortcutVia::DesktopSettings {
+    let added_to_desktop = if kind == ShortcutKind::Screenshot && route == super::support::ShortcutVia::DesktopSettings {
         desktop_shortcut_added().await
     } else {
         None
     };
     Ok(ShortcutSetting {
-        accelerator: shortcut::load(state.pool()?).await?,
-        default_accelerator: shortcut::DEFAULT_SHORTCUT.to_string(),
+        accelerator: shortcut::load(state.pool()?, kind).await?,
+        default_accelerator: kind.default_accelerator().to_string(),
         problem,
         desktop_trigger,
         can_change_in_desktop,
@@ -4591,7 +4633,7 @@ pub async fn capture_configure_shortcut(app: AppHandle) -> Result<()> {
 /// when it is off, runs `hippius --capture`.
 #[tauri::command]
 pub async fn capture_add_desktop_shortcut(state: tauri::State<'_, AppState>) -> Result<()> {
-    let accelerator = shortcut::load(state.pool()?)
+    let accelerator = shortcut::load(state.pool()?, ShortcutKind::Screenshot)
         .await?
         .unwrap_or_else(|| shortcut::DEFAULT_SHORTCUT.to_string());
     #[cfg(target_os = "linux")]
@@ -4605,30 +4647,64 @@ pub async fn capture_add_desktop_shortcut(state: tauri::State<'_, AppState>) -> 
     }
 }
 
-/// Change the shortcut (`None` turns it off). Registered before it is saved,
-/// so a shortcut another app holds is refused and the old one stays.
+/// Change the shortcut of `kind` (the screenshot one when left out; `None`
+/// turns it off). The other shortcut's keys are refused
+/// (`shortcut::check_not_taken`). Registered before it is saved, so a
+/// shortcut another app holds is refused and the old one stays.
 #[tauri::command]
-pub async fn capture_set_shortcut(state: tauri::State<'_, AppState>, app: AppHandle, accelerator: Option<String>) -> Result<()> {
+pub async fn capture_set_shortcut(
+    state: tauri::State<'_, AppState>,
+    app: AppHandle,
+    accelerator: Option<String>,
+    kind: Option<ShortcutKind>,
+) -> Result<()> {
+    let kind = kind.unwrap_or_default();
     let pool = state.pool()?;
-    let previous = shortcut::load(pool).await?;
+    let before = shortcut::load_both(pool).await?;
+    let previous = before[kind.index()].clone();
     let next = accelerator.as_deref().map(str::trim).filter(|a| !a.is_empty());
-    if let Err(e) = shortcut::apply(&app, next) {
-        let _ = shortcut::apply(&app, previous.as_deref());
+    shortcut::check_not_taken(kind, next, before[kind.other().index()].as_deref())?;
+    if let Err(e) = shortcut::apply(&app, kind, next) {
+        let _ = shortcut::apply(&app, kind, previous.as_deref());
         return Err(e);
     }
-    lock(&state.capture.shortcut_problem).take();
-    shortcut::save(pool, next).await
+    lock(&state.capture.shortcut_problems)[kind.index()] = None;
+    shortcut::save(pool, kind, next).await?;
+    // A Record shortcut never set follows the screenshot's (`shortcut::
+    // resolve`): moving the screenshot off the Record default's keys turns
+    // the Record default on now, not at the next launch.
+    let other = kind.other();
+    let after = shortcut::load(pool, other).await?;
+    if after != before[other.index()] {
+        let problem = register_shortcut(&app, other, after.as_deref());
+        lock(&state.capture.shortcut_problems)[other.index()] = problem;
+    }
+    Ok(())
 }
 
-/// A press of the system-wide shortcut. It toggles (`shortcut::action_for`):
-/// Stop and Cancel run here; Start goes through the main window so its
-/// refusals reach the same dialogs as the Capture button.
+/// A press of the screenshot shortcut (the plugin's handler goes through
+/// [`on_shortcut_of`]; this is the portal's and `hippius --capture`'s).
 pub fn on_shortcut(app: &AppHandle) {
+    on_shortcut_of(app, ShortcutKind::Screenshot);
+}
+
+/// A press of the Record shortcut from outside the plugin
+/// (`hippius --record`, a Wayland desktop's own shortcut).
+pub fn on_record_shortcut(app: &AppHandle) {
+    on_shortcut_of(app, ShortcutKind::Record);
+}
+
+/// A press of a system-wide shortcut. Both toggle the same way
+/// (`shortcut::action_for`): Stop and Cancel run here; Start goes through
+/// the main window with what `kind` starts (`ShortcutKind::start`: the
+/// instant screenshot, or the bar on Record), so its refusals reach the
+/// same dialogs as the Capture button.
+pub fn on_shortcut_of(app: &AppHandle, kind: ShortcutKind) {
     let state = app.state::<AppState>();
     let signed_in = state.current_account_id().is_ok();
     match shortcut::action_for(state.capture.current(), signed_in) {
         ShortcutAction::Start => {
-            let _ = app.emit(shortcut::SHORTCUT_EVENT, shortcut::ShortcutStart::PRESSED);
+            let _ = app.emit(shortcut::SHORTCUT_EVENT, kind.start());
         }
         ShortcutAction::Stop => {
             let app = app.clone();
@@ -4671,8 +4747,10 @@ pub async fn end_for_logout(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
         let _ = w.close();
     }
-    if let Err(e) = shortcut::apply(app, None) {
-        tracing::warn!(error = %e, "capture shortcut not unregistered at sign-out");
+    for kind in ShortcutKind::ALL {
+        if let Err(e) = shortcut::apply(app, kind, None) {
+            tracing::warn!(error = %e, ?kind, "capture shortcut not unregistered at sign-out");
+        }
     }
 }
 
@@ -4915,6 +4993,7 @@ async fn refresh_native_cameras(app: &AppHandle) -> Vec<CameraDevice> {
 /// The recording is over (stopped, cancelled or failed): forget its camera.
 async fn end_camera(app: &AppHandle) {
     let state = app.state::<AppState>();
+    close_bubble_controls(app);
     lock(&state.capture.recording_camera).take();
     state.capture.camera_hidden.store(false, Ordering::SeqCst);
     // The pill's device menus may have started the device watch.
@@ -5100,50 +5179,204 @@ fn remember_camera_window_number(app: &AppHandle, window: &tauri::WebviewWindow)
 #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn remember_camera_window_number(_app: &AppHandle, _window: &tauri::WebviewWindow) {}
 
-/// Tell the camera page when the pointer is over it, so its size controls
-/// show on hover and are gone otherwise (the window is filmed). AppKit does
-/// not reliably deliver hover to a webview whose window is not the key window,
-/// and the camera never is, so this asks where the pointer is instead. Runs
-/// while the camera window exists.
-#[cfg(target_os = "macos")]
+/// Watch the pointer over the camera window while it exists.
+///
+/// It tells the camera page when the pointer is over it, so its size strip
+/// shows on hover while choosing: AppKit does not reliably deliver hover to a
+/// webview whose window is not the key window, and the camera never is.
+///
+/// Mid-recording it shows the bubble's own controls (`bubble_controls`) on
+/// hover, in their own window over the bubble, which the recording leaves
+/// out: hidden while the bubble moves (dragged, or gliding to a new size)
+/// and shown again where it stops. The webview's own hover cannot do this
+/// on any platform: the controls' window covers part of the bubble, so the
+/// bubble's page would see the pointer leave as it reached them.
+#[cfg(any(target_os = "macos", windows))]
 fn spawn_camera_hover_watch(app: AppHandle) {
-    use cocoa::foundation::NSPoint;
-    use objc::{class, msg_send, sel, sel_impl};
-
     tauri::async_runtime::spawn(async move {
-        let primary_height = tauri::async_runtime::spawn_blocking(list_displays_blocking)
-            .await
-            .ok()
-            .and_then(std::result::Result::ok)
-            .and_then(|d| d.iter().find(|d| d.is_primary).or_else(|| d.first()).map(|d| f64::from(d.height)));
-        let Some(primary_height) = primary_height else { return };
+        #[cfg(target_os = "macos")]
+        let primary_height = {
+            let primary_height = tauri::async_runtime::spawn_blocking(list_displays_blocking)
+                .await
+                .ok()
+                .and_then(std::result::Result::ok)
+                .and_then(|d| d.iter().find(|d| d.is_primary).or_else(|| d.first()).map(|d| f64::from(d.height)));
+            let Some(primary_height) = primary_height else { return };
+            primary_height
+        };
+        #[cfg(not(target_os = "macos"))]
+        let primary_height = 0.0;
         let state = app.state::<AppState>();
+        let platform = super::rollout::current_platform();
         // One watch at a time: a camera window reopened while an older watch
         // is still between ticks retires that one.
         let generation = state.capture.camera_watch.fetch_add(1, Ordering::SeqCst) + 1;
         state.capture.camera_hover.store(false, Ordering::SeqCst);
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(120));
+        let mut interval = tokio::time::interval(BUBBLE_HOVER_EVERY);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_frame: Option<camera::Frame> = None;
+        let mut controls_shown = false;
         loop {
             interval.tick().await;
             if state.capture.camera_watch.load(Ordering::SeqCst) != generation {
-                break;
+                return;
             }
             let Some(window) = app.get_webview_window(CAMERA_LABEL) else { break };
             let Some(frame) = current_camera_frame(&window) else { continue };
-            // SAFETY: a class method that only reads the pointer position.
-            let p: NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
-            let over = frame.contains(p.x, primary_height - p.y);
+            let Some((px, py)) = pointer_point(&app, &window, primary_height) else {
+                continue;
+            };
+            let over = frame.contains(px, py);
             if state.capture.camera_hover.swap(over, Ordering::SeqCst) != over {
                 let _ = app.emit_to(CAMERA_LABEL, CAMERA_HOVER_EVENT, over);
             }
+
+            let moving = super::bubble_controls::moved(last_frame, frame);
+            last_frame = Some(frame);
+            let hidden = state.capture.camera_hidden.load(Ordering::SeqCst);
+            let offered = super::bubble_controls::offered(platform, state.capture.current(), state.capture.recording_camera(), hidden);
+            if !offered {
+                if controls_shown {
+                    hide_bubble_controls(&app);
+                    controls_shown = false;
+                }
+                continue;
+            }
+            // Built hidden as soon as it may be needed, so the first hover
+            // does not wait for a webview to load.
+            let Some(controls) = bubble_controls_window(&app) else { continue };
+            let show = super::bubble_controls::shown(offered, over, moving);
+            if show == controls_shown {
+                continue;
+            }
+            if show {
+                let size = match state.pool() {
+                    Ok(pool) => bar::load_options(pool).await.map(|o| o.camera_size).unwrap_or_default(),
+                    Err(_) => CameraSize::default(),
+                };
+                let scale = window.scale_factor().unwrap_or(1.0);
+                place(&controls, super::bubble_controls::frame(frame, size), scale);
+                show_bubble_controls(&controls);
+            } else {
+                let _ = controls.hide();
+            }
+            controls_shown = show;
         }
+        // The camera window is gone: so is anything shown over it.
+        close_bubble_controls(&app);
     });
 }
 
-/// Elsewhere the webview's own hover events are enough.
-#[cfg(not(target_os = "macos"))]
+/// Linux: the webview's own hover is enough for the strip while choosing,
+/// and there are no bubble controls mid-recording (they would be filmed).
+#[cfg(not(any(target_os = "macos", windows)))]
 fn spawn_camera_hover_watch(_app: AppHandle) {}
+
+/// How often the pointer is checked against the bubble.
+#[cfg(any(target_os = "macos", windows))]
+const BUBBLE_HOVER_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The pointer in the same logical points as [`current_camera_frame`]:
+/// macOS from `+[NSEvent mouseLocation]` (bottom-left origin, flipped by the
+/// primary display's height); Windows from Tauri's physical cursor over the
+/// camera window's own scale.
+#[cfg(target_os = "macos")]
+fn pointer_point(_app: &AppHandle, _window: &tauri::WebviewWindow, primary_height: f64) -> Option<(f64, f64)> {
+    use cocoa::foundation::NSPoint;
+    use objc::{class, msg_send, sel, sel_impl};
+    // SAFETY: a class method that only reads the pointer position.
+    let p: NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
+    Some((p.x, primary_height - p.y))
+}
+
+#[cfg(windows)]
+fn pointer_point(app: &AppHandle, window: &tauri::WebviewWindow, _primary_height: f64) -> Option<(f64, f64)> {
+    let cursor = app.cursor_position().ok()?;
+    let scale = window.scale_factor().ok()?.max(1.0);
+    Some((cursor.x / scale, cursor.y / scale))
+}
+
+/// The bubble's controls' window, built hidden on first need. Not focused and
+/// answering the first click (the bubble is never key, and neither is this),
+/// above the bubble, and left out of the recording: by the helper on macOS
+/// (it films only the main window and the bubble of Hippius's windows), by
+/// content protection on Windows (`own_windows::content_protected`).
+#[cfg(any(target_os = "macos", windows))]
+fn bubble_controls_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    if let Some(w) = app.get_webview_window(BUBBLE_CONTROLS_LABEL) {
+        return Some(w);
+    }
+    let route = if cfg!(dev) {
+        "capture-bubble-controls"
+    } else {
+        "capture-bubble-controls.html"
+    };
+    let built = WebviewWindowBuilder::new(app, BUBBLE_CONTROLS_LABEL, WebviewUrl::App(route.into()))
+        .title("Hippius camera controls")
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .content_protected(super::own_windows::content_protected(
+            super::rollout::current_platform(),
+            super::own_windows::OwnWindow::BubbleControls,
+        ))
+        .focused(false)
+        // Pause and the sizes answer the first click, like the pill's.
+        .accept_first_mouse(true)
+        .inner_size(super::bubble_controls::WIDTH, super::bubble_controls::HEIGHT)
+        .visible(false)
+        .build();
+    match built {
+        Ok(window) => {
+            raise_bubble_controls(&window);
+            Some(window)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "the camera's controls could not open");
+            None
+        }
+    }
+}
+
+/// Above the bubble (level 1001), so the strip is never under the picture.
+#[cfg(target_os = "macos")]
+fn raise_bubble_controls(window: &tauri::WebviewWindow) {
+    set_window_level(window, Some(1002));
+}
+
+#[cfg(windows)]
+fn raise_bubble_controls(_window: &tauri::WebviewWindow) {}
+
+/// Show the controls without taking the keyboard from the recorded app, and
+/// (Windows) on top of the bubble, which is topmost too.
+#[cfg(any(target_os = "macos", windows))]
+fn show_bubble_controls(window: &tauri::WebviewWindow) {
+    show_without_focus(window);
+    #[cfg(windows)]
+    {
+        let _ = window.set_always_on_top(true);
+    }
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn hide_bubble_controls(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(BUBBLE_CONTROLS_LABEL) {
+        let _ = w.hide();
+    }
+}
+
+/// The recording is over or the camera went: the controls go with it.
+fn close_bubble_controls(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(BUBBLE_CONTROLS_LABEL) {
+        let _ = w.destroy();
+    }
+}
 
 /// The camera window's system window number, which is what a window
 /// recording is started with. Camera-only recordings record the stage. Read
@@ -5498,10 +5731,32 @@ pub struct PillMenu {
     pub above: bool,
 }
 
+/// Where a pill menu WILL open, without moving anything: the side the
+/// page anchors the pill to before it asks for the room
+/// (`capture_controls_menu`). Where the page grows with its window
+/// (Windows), a pill drawn at the window's top while the window grew upward
+/// showed a menu's height higher for a moment; anchored to the bottom
+/// first, it stays put. An open menu answers its own side.
+#[tauri::command]
+pub fn capture_controls_menu_side(app: AppHandle) -> Result<PillMenu> {
+    let state = app.state::<AppState>();
+    if let Some(above) = *lock(&state.capture.pill_menu) {
+        return Ok(PillMenu { above });
+    }
+    let window = app
+        .get_webview_window(CONTROLS_LABEL)
+        .ok_or_else(|| AppError::Validation(super::live_controls::NOT_RECORDING.into()))?;
+    let current = current_camera_frame(&window).ok_or_else(|| AppError::Other("The recording controls have no frame.".into()))?;
+    let work = work_area_at(&state.capture, current).map_or(current, |(work, _)| work);
+    Ok(PillMenu {
+        above: super::live_controls::menu_above(current, work, super::live_controls::MENU_HEIGHT),
+    })
+}
+
 /// A pill menu opens (`open`) or closes: the pill's window grows to hold it
 /// (above the pill, or below it near the top of the screen) and shrinks
-/// back, the pill itself staying put. The window is content protected, so
-/// the menu is never in the video.
+/// back, the pill itself staying put (`set_pill_frame`). The window is left
+/// out of the recording like the pill, so the menu is never in the video.
 #[tauri::command]
 pub async fn capture_controls_menu(app: AppHandle, open: bool) -> Result<PillMenu> {
     let state = app.state::<AppState>();
@@ -5516,17 +5771,81 @@ pub async fn capture_controls_menu(app: AppHandle, open: bool) -> Result<PillMen
             let (work, scale) = work_area_at(&state.capture, current).unwrap_or((current, 1.0));
             let (grown, above) = super::live_controls::pill_with_menu(current, work, super::live_controls::MENU_HEIGHT);
             *menu = Some(above);
-            set_camera_frame(&window, grown, scale, false);
+            set_pill_frame(&window, grown, scale, Some(above));
             Ok(PillMenu { above })
         }
         (false, Some(above)) => {
             let scale = work_area_at(&state.capture, current).map_or(1.0, |(_, scale)| scale);
             let back = super::live_controls::pill_without_menu(current, CONTROLS_HEIGHT, above);
             *menu = None;
-            set_camera_frame(&window, back, scale, false);
+            set_pill_frame(&window, back, scale, None);
             Ok(PillMenu { above })
         }
         (false, None) => Ok(PillMenu { above: true }),
+    }
+}
+
+/// Move and size the pill's window in one step, with a menu open above
+/// (`Some(true)`), below (`Some(false)`) or none.
+///
+/// macOS: the page keeps the same height in every state
+/// (`live_controls::page_height`, the pill with a menu's room above and
+/// below) and is placed inside the window so the pill's row lands on the
+/// same screen points (`live_controls::page_top`). The page and the window
+/// change in the same main-thread turn, with screen updates held until both
+/// are done, and the page is never resized, so no stale picture of it can
+/// show the pill anywhere else. Elsewhere the page is the window's size and
+/// [`place`] moves it; the pill page anchors the pill first.
+fn set_pill_frame(window: &tauri::WebviewWindow, f: camera::Frame, scale: f64, menu: Option<bool>) {
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::foundation::{NSPoint, NSRect, NSSize};
+        use objc::{class, msg_send, sel, sel_impl};
+
+        let room = super::live_controls::fixed_menu_room(super::rollout::Platform::MacOs);
+        let page_height = super::live_controls::page_height(CONTROLS_HEIGHT, room);
+        let top = super::live_controls::page_top(menu, room);
+        let hopped = window.with_webview(move |webview| {
+            let page = webview.inner().cast::<objc::runtime::Object>();
+            let ns_window = webview.ns_window().cast::<objc::runtime::Object>();
+            if page.is_null() || ns_window.is_null() {
+                return;
+            }
+            // SAFETY: this window's live NSWindow and its WKWebView, touched
+            // on the main thread (`with_webview` runs there); `screens` is
+            // checked before use.
+            unsafe {
+                let screens: cocoa::base::id = msg_send![class!(NSScreen), screens];
+                let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+                if count == 0 {
+                    return;
+                }
+                let primary: cocoa::base::id = msg_send![screens, objectAtIndex: 0usize];
+                let primary_frame: NSRect = msg_send![primary, frame];
+                let () = msg_send![ns_window, disableScreenUpdatesUntilFlush];
+                // The page keeps its size whatever the window does (no
+                // autoresizing), and is pinned by its bottom-left corner in
+                // the window's content view (AppKit: y up), computed for the
+                // window's NEW height so it holds once the window has grown.
+                let () = msg_send![page, setAutoresizingMask: 0usize];
+                let page_frame = NSRect::new(NSPoint::new(0.0, f.height - top - page_height), NSSize::new(f.width, page_height));
+                let () = msg_send![page, setFrame: page_frame];
+                // AppKit's origin is the primary display's bottom-left, y up.
+                let rect = NSRect::new(
+                    NSPoint::new(f.x, primary_frame.size.height - (f.y + f.height)),
+                    NSSize::new(f.width, f.height),
+                );
+                let () = msg_send![ns_window, setFrame: rect display: objc::runtime::YES animate: objc::runtime::NO];
+            }
+        });
+        if hopped.is_err() {
+            place(window, f, scale);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = menu;
+        place(window, f, scale);
     }
 }
 

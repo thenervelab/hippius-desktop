@@ -1204,6 +1204,14 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         // Fragments every few seconds: if this process is killed mid-way the
         // file on disk still plays up to the last fragment.
         writer.movieFragmentInterval = CMTime(value: 2, timescale: 1)
+        // At Stop the finished file gets its index (the `moov` box) at the
+        // front instead of after the video. A share link's page can then
+        // start playing from the first bytes: with the index last, the
+        // browser asks for the end of the file first, and a share link can
+        // only be read from the start, so the whole file was downloaded
+        // before the first frame showed. A killed helper still leaves its
+        // fragments, as above.
+        writer.shouldOptimizeForNetworkUse = true
         // When the recording started, for Finder, Photos and players (the
         // file's own dates are when it was finished and moved).
         let created = AVMutableMetadataItem()

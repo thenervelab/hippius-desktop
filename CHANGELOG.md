@@ -17,12 +17,28 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
+- **Edit pictures in your remote folders.** Edit image now works on PNG and
+  JPEG files that are only on Hippius, not just ones synced to this computer.
+  Save a copy adds an edited copy beside the original; Replace updates it.
+
+- **A keyboard shortcut for screen recording.** Press Option-Shift-Command-2 (Ctrl+Alt+Shift+2 on Windows and Linux) from any app to open the capture bar ready to record, and press it again to stop. Change it or turn it off in Settings.
+- **Screenshots & Recording settings in one place.** Both shortcuts, where captures are saved, what happens after a capture and the recording countdown now have their own tab in Settings.
+- **Open a file straight from the menu bar.** Click a screenshot, recording or any file you can preview in the menu bar list and it opens in the Hippius viewer, ready to flip through the rest of that list.
+- **A menu in the menu bar window.** The three dots at the top right show your balance with Top up, your plan and how much of it you use, and take you to Hippius, your captures folder, Settings, Help & Support or Quit, with keyboard shortcuts.
 - **Mute your microphone during a screen recording.** The recording carries on and stays in sync; it is silent until you unmute. On a Mac.
 - **Switch microphone or camera during a screen recording.** Pick another one from the recording controls without stopping. On a Mac; camera switching works on Windows too.
 - **Change the camera bubble's size during a screen recording.** Small, large or full size, and the saved video changes with it. On a Mac and Windows.
+- **Controls on the camera bubble while you record.** Point at the bubble to change its size or pause and resume the recording right there. The controls never show up in the video. On a Mac and Windows.
 - **Annotate from the menu bar.** Choose Annotate an image from the Screenshot tile's menu to open any picture in the screenshot editor, or press Edit on a screenshot in the list. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
 
 ### Changed
+
+- **Screen recordings start playing straight away from a share link.** Recordings made on a Mac are now saved so a player can start from the first part of the file. Before, the browser had to download the whole recording before the first frame showed.
+
+- **A clearer Screenshots & Recording settings page.** The two shortcuts are
+  shown as large keys at the top, the capture folder can be opened from the
+  page, and the other choices are laid out as cards you can scan at a glance.
 
 - **The screenshot editor opens inside the Hippius window and keeps your original.** It covers the page you were on with the picture front and centre and one toolbar, and Save now offers to keep a copy beside the original (the default) or replace it; you can set your choice in Settings.
 
@@ -147,6 +163,26 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Overview and Drive, for free and paid plans — uploads are paused.
 
 ### Fixed
+
+- **The recording controls stay still when you open the microphone or camera menu.** The bar no longer jumps up for a moment before the menu appears.
+
+- **The capture card no longer waits for the rest of your sync.** When other files were still syncing, the card could keep saying "waiting for sync" even though the capture's link was ready and already opened. It now says Uploaded as soon as the link works, and shows progress only while the capture itself is uploading. If the link can't be made on the first try (a dropped connection), Hippius tries again, and if it still fails the card stays open with Create link instead of sliding away.
+
+- **Files in Recent Files open right after they upload.** A file you just
+  uploaded used to say it couldn't be previewed until you left the page and
+  came back, and after a big upload some older files stayed stuck at the top
+  of the list.
+
+- **Blur in the screenshot editor now hides text.** Blurred text, even large
+  or bold, can no longer be read through the blur.
+- **Shapes in the screenshot editor can be moved and resized after you draw
+  them.** Drag a selected arrow, box or blur by its middle to move it, or by a
+  corner or end to resize it, without switching to the select tool.
+
+- **The menu bar window shows your balance and plan.** An empty balance read as "---" instead of $0.00, and the plan in the "..." menu kept loading and never appeared. Both now show, and if the plan can't be loaded the menu says so.
+
+- **Save is always visible in the screenshot editor.** On a wide window the toolbar covered Save and Copy image; they now sit in their own top bar, clear of the Mac's window buttons, and Save offers Save copy or Replace original.
+- **Upload in the menu bar window opens the upload dialog.** It brings Hippius forward with the Upload File dialog open on the page you were on, instead of only switching to Drive.
 
 - **Folders sync on the Free plan.** A new folder no longer stays on "Syncing" forever when your account has no credits, and a folder that cannot start syncing now says why instead.
 

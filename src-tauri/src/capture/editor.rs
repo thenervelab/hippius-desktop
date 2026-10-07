@@ -697,16 +697,35 @@ pub async fn capture_preview_edit(state: tauri::State<'_, AppState>, app: AppHan
     open_with(&app, session)
 }
 
-/// "Edit image" on a Drive file: a PNG or JPEG in a drive of this account's
-/// that is synced on this computer.
+/// "Edit image" on a Drive file: a PNG or JPEG in a drive of this account's.
+///
+/// A file on disk in a drive synced here is edited in place and the sync
+/// engine uploads the change. A file that is only on the server (a drive not
+/// synced here, or one whose copy has not come down yet) is edited when the
+/// caller names its server `file_id`: it is downloaded the way the viewer
+/// downloads it and saved back by upload ([`open_remote_file`]). Drives
+/// shared with this account are refused either way.
 #[tauri::command]
-pub async fn capture_editor_open_file(state: tauri::State<'_, AppState>, app: AppHandle, label: String, relative_path: String) -> Result<()> {
+pub async fn capture_editor_open_file(
+    state: tauri::State<'_, AppState>,
+    app: AppHandle,
+    label: String,
+    relative_path: String,
+    file_id: Option<String>,
+    arion_hash: Option<String>,
+) -> Result<()> {
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     refuse_if_open(&app)?;
-    let root = super::destination::own_local_path(pool, &account_id, &label)
-        .await?
-        .ok_or_else(|| AppError::Validation("Only files in your own drives synced on this computer can be edited.".into()))?;
+    let local_root = super::destination::own_local_path(pool, &account_id, &label).await?;
+    let on_disk = match &local_root {
+        Some(root) => path_in_drive(root, &relative_path)?.is_file(),
+        None => false,
+    };
+    if let (Some(file_id), false) = (file_id, on_disk) {
+        return open_remote_file(&state, &app, account_id, label, &relative_path, file_id, arion_hash.unwrap_or_default()).await;
+    }
+    let root = local_root.ok_or_else(|| AppError::Validation("Only files in your own drives can be edited.".into()))?;
     let path = path_in_drive(&root, &relative_path)?;
     let file_name = path
         .file_name()
@@ -751,6 +770,90 @@ pub async fn capture_editor_open_file(state: tauri::State<'_, AppState>, app: Ap
         original: std::sync::Arc::new(original),
     };
     open_with(&app, session)
+}
+
+/// The picture is only on the server: download it into the preview cache
+/// (the viewer's own path, so a picture just viewed opens at once) and edit
+/// that copy. Saving goes back by upload into the file's own folder
+/// ([`SaveTarget::Remote`]): Replace uploads over it under the same name,
+/// Save a copy uploads an edited copy beside it.
+///
+/// The session's `temp` is deliberately empty: a remote save writes the
+/// picture into `temp` when its folder exists, and the preview cache is keyed
+/// by the ORIGINAL's content hash, so writing the edit there would show the
+/// old file's preview as the new picture. An empty path has no folder, so the
+/// save stages in a capture folder of its own.
+async fn open_remote_file(
+    state: &tauri::State<'_, AppState>,
+    app: &AppHandle,
+    account_id: String,
+    label: String,
+    relative_path: &str,
+    file_id: String,
+    arion_hash: String,
+) -> Result<()> {
+    let pool = state.pool()?;
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+    if identity.is_member {
+        return Err(AppError::Validation("Only files in your own drives can be edited.".into()));
+    }
+    let (rel_path, folder, file_name) = remote_edit_parts(relative_path)?;
+    let format = EditableFormat::from_name(&file_name).ok_or_else(|| AppError::Validation("Only PNG and JPEG pictures can be edited.".into()))?;
+    let cached =
+        crate::sync::remote::cache_remote_file(state.clone(), account_id.clone(), label.clone(), file_id, file_name.clone(), arion_hash).await?;
+    let original = read_original(PathBuf::from(cached)).await?;
+    let drive_name = super::destination::load(pool, &account_id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|d| d.label == label)
+        .map_or_else(|| label.clone(), |d| d.display_name);
+    let owner = crate::auth::account_key::account_key(&account_id);
+    let drive_shared = crate::shares::origin::is_shared(pool, &owner, &label, &rel_path).await.unwrap_or(false);
+    let destination = CaptureDestination {
+        folder,
+        ..CaptureDestination::own(&label, &drive_name)
+    };
+    let session = EditorSession {
+        id: next_session_id(state),
+        account_id,
+        origin: EditorOrigin::Drive,
+        file_name,
+        drive_label: label,
+        drive_name,
+        rel_path,
+        format,
+        target: SaveTarget::Remote {
+            destination,
+            temp: PathBuf::new(),
+        },
+        share_token: None,
+        drive_shared,
+        original: std::sync::Arc::new(original),
+    };
+    open_with(app, session)
+}
+
+/// A server file's drive-relative path as the editor keeps it: the path with
+/// `/` separators and no leading one, its folder (empty at the drive's root)
+/// and its name. Refuses a path that is empty or climbs out of the drive.
+///
+/// # Errors
+///
+/// [`AppError::Validation`].
+pub fn remote_edit_parts(relative_path: &str) -> Result<(String, String, String)> {
+    let cleaned = path_in_drive(Path::new(""), relative_path)?;
+    let parts: Vec<&str> = cleaned.iter().filter_map(|p| p.to_str()).collect();
+    let (name, folder) = parts
+        .split_last()
+        .ok_or_else(|| AppError::Validation("That file isn't in this drive.".into()))?;
+    let folder = folder.join("/");
+    let rel_path = if folder.is_empty() {
+        (*name).to_string()
+    } else {
+        format!("{folder}/{name}")
+    };
+    Ok((rel_path, folder, (*name).to_string()))
 }
 
 /// What the editor page shows about the picture; `None` when nothing is
@@ -1368,9 +1471,9 @@ pub async fn capture_annotate_open_latest(state: tauri::State<'_, AppState>, app
         let account_id = state.current_account_id()?;
         match find_latest(&state, &account_id).await? {
             Some(Latest::Card) => capture_preview_edit(state.clone(), app.clone()).await.map(|()| true),
-            Some(Latest::InFolder { label, rel_path, .. }) => {
-                capture_editor_open_file(state.clone(), app.clone(), label, rel_path).await.map(|()| true)
-            }
+            Some(Latest::InFolder { label, rel_path, .. }) => capture_editor_open_file(state.clone(), app.clone(), label, rel_path, None, None)
+                .await
+                .map(|()| true),
             None => Ok(false),
         }
     }
@@ -1470,7 +1573,7 @@ async fn open_picked(state: &tauri::State<'_, AppState>, app: &AppHandle, accoun
     .map_err(|_| AppError::Validation("That file can't be opened. It may have been moved.".into()))?;
 
     if let Some((label, rel_path)) = locate_in_drives(&file, &roots) {
-        return capture_editor_open_file(state.clone(), app.clone(), label, rel_path).await;
+        return capture_editor_open_file(state.clone(), app.clone(), label, rel_path, None, None).await;
     }
 
     let file_name = file
@@ -1611,6 +1714,24 @@ mod tests {
         assert_eq!(path_in_drive(root, "./a.png").unwrap(), root.join("a.png"));
         for bad in ["../other/a.png", "Captures/../../a.png", "", "/", "."] {
             assert!(path_in_drive(root, bad).is_err(), "{bad}");
+        }
+    }
+
+    // A picture only on the server is saved back by upload into its own
+    // folder, so the folder and name must come out of the path exactly.
+    #[test]
+    fn a_server_file_is_split_into_its_folder_and_name() {
+        assert_eq!(
+            remote_edit_parts("/Trips/2026/beach.png").unwrap(),
+            ("Trips/2026/beach.png".into(), "Trips/2026".into(), "beach.png".into())
+        );
+        assert_eq!(
+            remote_edit_parts("shot.jpg").unwrap(),
+            ("shot.jpg".into(), String::new(), "shot.jpg".into())
+        );
+        assert_eq!(remote_edit_parts("./a/./b.png").unwrap(), ("a/b.png".into(), "a".into(), "b.png".into()));
+        for bad in ["../other/a.png", "Trips/../../a.png", "", "/", "."] {
+            assert!(remote_edit_parts(bad).is_err(), "{bad}");
         }
     }
 

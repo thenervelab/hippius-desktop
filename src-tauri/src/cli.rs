@@ -42,6 +42,17 @@ where
     args.into_iter().any(|a| a.as_ref() == crate::capture::desktop_shortcut::CAPTURE_FLAG)
 }
 
+/// True when a second launch asks the running app for the Record
+/// shortcut's action (`hippius --record`, the Record shortcut in a Wayland
+/// desktop's own keyboard settings). Handled like [`argv_requests_capture`].
+pub fn argv_requests_record<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| a.as_ref() == crate::capture::desktop_shortcut::RECORD_FLAG)
+}
+
 /// Write `CARGO_PKG_VERSION` plus a newline and flush.
 ///
 /// Uses `writeln!` rather than `println!` — the crate denies `print_stdout`.
@@ -55,7 +66,7 @@ pub fn write_version(out: &mut impl Write) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{argv_requests_capture, argv_requests_recorder, argv_requests_version, write_version};
+    use super::{argv_requests_capture, argv_requests_record, argv_requests_recorder, argv_requests_version, write_version};
 
     #[test]
     fn the_recorder_flag_is_a_recorder_request() {
@@ -75,6 +86,17 @@ mod tests {
         assert!(!argv_requests_capture(["/usr/bin/hippius", "--captures"]));
         assert!(!argv_requests_capture(["/usr/bin/hippius"]));
         assert!(!argv_requests_recorder(["--capture"]));
+    }
+
+    /// `--record` (the Record shortcut's desktop command) is its own flag:
+    /// never the screenshot's, never the recorder child's.
+    #[test]
+    fn record_flag_is_the_record_shortcuts_and_nothing_else() {
+        assert!(argv_requests_record(["/usr/bin/hippius", "--record"]));
+        assert!(!argv_requests_record(["/usr/bin/hippius", "--capture"]));
+        assert!(!argv_requests_record(["/usr/bin/hippius", "--capture-recorder"]));
+        assert!(!argv_requests_capture(["/usr/bin/hippius", "--record"]));
+        assert!(!argv_requests_recorder(["--record"]));
     }
 
     #[test]

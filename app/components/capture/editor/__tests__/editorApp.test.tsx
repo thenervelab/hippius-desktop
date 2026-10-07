@@ -9,7 +9,8 @@ const tauri = await vi.hoisted(async () => {
 });
 vi.mock("@tauri-apps/api/core", () => tauri.core);
 vi.mock("@tauri-apps/api/event", () => tauri.event);
-vi.mock("@/app/lib/utils/isMacPlatform", () => ({ isMacPlatform: () => true }));
+const platform = vi.hoisted(() => ({ mac: true }));
+vi.mock("@/app/lib/utils/isMacPlatform", () => ({ isMacPlatform: () => platform.mac }));
 
 // The canvas needs a real 2D context; here it is a stand-in that makes one
 // change when asked, reports a fitted zoom, and shows what the editor hands
@@ -83,6 +84,7 @@ beforeEach(() => {
   );
   exportPng.mockClear();
   onClose = vi.fn();
+  platform.mac = true;
 });
 
 afterEach(() => {
@@ -108,7 +110,45 @@ describe("screenshot editor layout", () => {
     expect(screen.getByText(CONTEXT.fileName)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close (Esc)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy image" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save copy" })).toBeDisabled();
+  });
+
+  it("keeps Close, the name, Copy image and Save in one top bar, with the tools on their own row below it", async () => {
+    const toolbar = await open();
+    const bar = screen.getByTestId("editor-top-bar");
+    expect(within(bar).getByRole("button", { name: "Close (Esc)" })).toBeInTheDocument();
+    expect(within(bar).getByText(CONTEXT.fileName)).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "Copy image" })).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "Save copy" })).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "More ways to save" })).toBeInTheDocument();
+    // The toolbar used to be absolutely centred over the bar, where it
+    // covered Copy image and Save on a wide window. It has its own row now.
+    expect(bar).not.toContainElement(toolbar);
+    expect(screen.getByTestId("editor-tools-row")).toContainElement(toolbar);
+    // The actions never shrink; the name truncates first.
+    expect(screen.getByTestId("editor-save-actions").className).toContain("shrink-0");
+  });
+
+  it("leaves room for the macOS traffic lights, and only on macOS", async () => {
+    await open();
+    expect(screen.getByTestId("editor-top-bar").className).toContain("pl-[calc(80px*var(--zoom-inverse,1))]");
+  });
+
+  it("does not inset the bar for traffic lights elsewhere", async () => {
+    platform.mac = false;
+    await open();
+    const bar = screen.getByTestId("editor-top-bar");
+    expect(bar.className).not.toContain("80px");
+    expect(bar.className).toContain("pl-[12px]");
+  });
+
+  it("drags the window from the bar's empty space, never from a button", async () => {
+    await open();
+    const bar = screen.getByTestId("editor-top-bar");
+    expect(bar).toHaveAttribute("data-tauri-drag-region");
+    for (const button of within(bar).getAllByRole("button")) {
+      expect(button).not.toHaveAttribute("data-tauri-drag-region");
+    }
   });
 
   it("has every tool in the one toolbar, each named with its key, and fills the active one with the brand blue", async () => {
@@ -176,7 +216,7 @@ describe("screenshot editor layout", () => {
     expect(within(bar).getByRole("radiogroup", { name: "Thickness" })).toBeInTheDocument();
     fireEvent.click(within(bar).getByRole("button", { name: "Delete" }));
     expect(screen.queryByRole("toolbar", { name: "Selected annotation" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save copy" })).toBeDisabled();
   });
 
   it("zooms from the fitted size in steps, and the middle of the pill fits again", async () => {
@@ -197,9 +237,9 @@ describe("screenshot editor layout", () => {
     expect(undoButton).toBeDisabled();
     draw();
     fireEvent.click(undoButton);
-    expect(screen.getByRole("button", { name: "Save…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save copy" })).toBeDisabled();
     fireEvent.keyDown(layer(), { key: "z", metaKey: true, shiftKey: true });
-    expect(screen.getByRole("button", { name: "Save…" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save copy" })).toBeEnabled();
   });
 
   it("copies the flattened picture and says so", async () => {
@@ -225,7 +265,7 @@ describe("saving", () => {
   it("asks how to save, with Save as a copy first and chosen, and the link warning on Replace", async () => {
     await open();
     draw();
-    fireEvent.click(screen.getByRole("button", { name: "Save…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save copy" }));
     const dialog = await screen.findByRole("dialog", { name: "Save your edits" });
     const radios = within(dialog).getAllByRole("radio");
     expect(radios.map((r) => r.closest("label")?.textContent)).toEqual([
@@ -243,7 +283,7 @@ describe("saving", () => {
   it("saves a copy by default to the open session, then closes with Rust's outcome", async () => {
     await open();
     draw();
-    fireEvent.click(screen.getByRole("button", { name: "Save…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save copy" }));
     const dialog = await screen.findByRole("dialog", { name: "Save your edits" });
     await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "Save copy" })));
     await waitFor(() => expect(onClose).toHaveBeenCalledWith(OUTCOME));
@@ -257,7 +297,7 @@ describe("saving", () => {
   it("replaces the original and remembers the choice when asked to", async () => {
     await open();
     draw();
-    fireEvent.click(screen.getByRole("button", { name: "Save…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save copy" }));
     const dialog = await screen.findByRole("dialog", { name: "Save your edits" });
     fireEvent.click(within(dialog).getByRole("radio", { name: /Replace the original/ }));
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Remember my choice" }));
@@ -271,12 +311,12 @@ describe("saving", () => {
   it("starts over on the safe choice each time the dialog opens", async () => {
     await open();
     draw();
-    fireEvent.click(screen.getByRole("button", { name: "Save…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save copy" }));
     let dialog = await screen.findByRole("dialog", { name: "Save your edits" });
     fireEvent.click(within(dialog).getByRole("radio", { name: /Replace the original/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Save your edits" })).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "Save…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save copy" }));
     dialog = await screen.findByRole("dialog", { name: "Save your edits" });
     expect(within(dialog).getByRole("radio", { name: /Save as a copy/ })).toBeChecked();
   });
@@ -294,13 +334,44 @@ describe("saving", () => {
   it("offers only Save to Captures for a picture from outside the drives, with no dialog and no mode", async () => {
     withContext({ saveKind: "newCapture", hasPublicLink: false, saveNote: "Your original stays as it is." });
     await open();
-    expect(screen.queryByRole("button", { name: "Save…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save copy" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More ways to save" })).not.toBeInTheDocument();
     draw();
     expect(screen.getByText("Your original stays as it is.")).toBeInTheDocument();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save to Captures" })));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(screen.queryByRole("dialog", { name: "Save your edits" })).not.toBeInTheDocument();
     expect(calls("capture_editor_save")[0][2]).toEqual({ headers: { "x-editor-session": "42" } });
+  });
+
+  it("offers both ways to save from the chevron, and Replace original opens the dialog on Replace while asking", async () => {
+    await open();
+    draw();
+    fireEvent.keyDown(screen.getByRole("button", { name: "More ways to save" }), { key: "Enter" });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Save copy", "Replace original"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Replace original" }));
+    const dialog = await screen.findByRole("dialog", { name: "Save your edits" });
+    expect(within(dialog).getByRole("radio", { name: /Replace the original/ })).toBeChecked();
+    expect(calls("capture_editor_save")).toHaveLength(0);
+  });
+
+  it("saves straight away the way picked in the menu when a choice is remembered", async () => {
+    withContext({ savePreference: "copy" });
+    await open();
+    draw();
+    fireEvent.keyDown(screen.getByRole("button", { name: "More ways to save" }), { key: "Enter" });
+    const replace = await screen.findByRole("menuitem", { name: "Replace original" });
+    await act(async () => fireEvent.click(replace));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.queryByRole("dialog", { name: "Save your edits" })).not.toBeInTheDocument();
+    expect(calls("capture_editor_save")[0][2]).toEqual({ headers: { "x-editor-session": "42", "x-editor-save-mode": "replace" } });
+  });
+
+  it("names the main button after a remembered Replace", async () => {
+    withContext({ savePreference: "replace" });
+    await open();
+    expect(screen.getByRole("button", { name: "Replace original" })).toBeDisabled();
   });
 
   it("saves with the keyboard too", async () => {
@@ -317,7 +388,7 @@ describe("saving", () => {
     });
     await open();
     draw();
-    fireEvent.click(screen.getByRole("button", { name: "Save…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save copy" }));
     const dialog = await screen.findByRole("dialog", { name: "Save your edits" });
     await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "Save copy" })));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Storage is full.");
