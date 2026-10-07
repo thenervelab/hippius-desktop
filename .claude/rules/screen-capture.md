@@ -249,9 +249,9 @@ as quietly as a cancelled dialog. The pill counts after the crop. Before
 the crop it is moved outside the area on the stream's monitor
 (`place_pill_clear_of_stream_area`: `area_pick::area_on_monitor` then
 `camera::pill_outside`, else the monitor's bottom centre), which works
-where the compositor honours an app's window position (X11, XWayland);
-GNOME's own Wayland session places windows itself and may still put it
-inside the area. *Camera only*:
+where the compositor honours an app's window position (X11, XWayland:
+GNOME Wayland included, below); a native Wayland client on GNOME is
+placed by Mutter and may still find it inside the area. *Camera only*:
 `support::camera_only(platform, recorder_camera)` is true on Wayland only
 where the probe's `camera` found a camera source, `decodebin` and
 `videoflip` (`Probe::records_camera`). `capture_confirm` gives a nominal
@@ -263,6 +263,33 @@ child finds the device in `GstDeviceMonitor` by id, then by
 own element (what WebKitGTK makes), retries a busy one for 3 s, tries
 bounded caps then any, mirrors it like the stage and records it with the
 same writer, mixer and pause. Pinned by `capture_wiring.rs`.
+
+**GNOME Wayland runs the app as an XWayland client** (`utils::display_backend`,
+not yet run on Linux). GTK's keep-above is an empty function on Wayland and
+Mutter offers clients no keep-above and no layer-shell, so the pill and the
+bubble fell behind any window raised mid-recording (the camera then missing
+from the video); Mutter honours `_NET_WM_STATE_ABOVE` and window positions
+from X11 clients. `display_backend::choose` (pure, tested everywhere) picks
+XWayland only for a Wayland session (`rollout::linux_platform`, the
+capture paths' own test) with `DISPLAY` set on a desktop whose
+`XDG_CURRENT_DESKTOP` lists GNOME, and never when the user set
+`GDK_BACKEND` or `HIPPIUS_WAYLAND_NATIVE=1`. `apply` runs in `main` after
+the recorder child and CLI branches and before the builder, through
+`gdk_set_allowed_backends("x11,wayland")`: XWayland first, Wayland if it
+cannot connect, and NO environment variable, since `GDK_BACKEND` would push
+the file manager and browser the app starts onto XWayland too. Rules that
+fail silently: **the session stays Wayland** (`current_platform` reads only
+`XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`, so screenshots, ScreenCast, the
+GlobalShortcuts portal and every `LinuxX11` gate are unchanged: the X
+connection sees only XWayland windows); never unset `WAYLAND_DISPLAY` to
+force XWayland, it would flip every capture path to X11. The log carries the
+choice (`display backend chosen`) and the display GTK opened
+(`GTK display opened`). Cost: under Mutter's logical layout (fractional
+scaling, `scale-monitor-framebuffer`) X11 clients are drawn at scale 1 and
+stretched, so the whole app looks soft until `xwayland-native-scaling`
+(GNOME 47+, experimental). Pinned by `display_backend::tests` and
+`capture_wiring::gnome_wayland_connects_through_xwayland_before_gtk_starts`,
+`an_xwayland_client_keeps_the_wayland_capture_paths`.
 
 ## Flow
 
