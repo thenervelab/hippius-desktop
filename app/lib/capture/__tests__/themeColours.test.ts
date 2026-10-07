@@ -13,10 +13,11 @@ const ROOTS = [
   "app/capture-overlay",
   "app/capture-controls",
   "app/capture-camera",
+  "app/capture-bubble-controls",
   "app/capture-preview",
   "app/components/capture",
   "app/lib/capture",
-  "app/tray-panel/TrayCaptureRow.tsx",
+  "app/tray-panel/TrayTiles.tsx",
 ];
 const MISSING = /(?:^|[\s"'`:])(?:bg|text|border|ring|from|to|via|fill|stroke|shadow|outline|divide|placeholder)-black(?:\/[\d.]+)?(?=[\s"'`]|$)/m;
 

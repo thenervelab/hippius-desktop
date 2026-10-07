@@ -158,9 +158,61 @@ pub fn from_recording(path: &Path, duration_secs: f64) -> Option<Poster> {
     Some(Poster { url, lit })
 }
 
+#[derive(Deserialize)]
+struct HelperDuration {
+    duration: f64,
+}
+
+/// The file's length in seconds from the helper's JSON line, when it gave
+/// one that makes sense.
+#[must_use]
+pub fn parse_duration(stdout: &str) -> Option<f64> {
+    stdout
+        .lines()
+        .find_map(|line| serde_json::from_str::<HelperDuration>(line.trim()).ok())
+        .map(|d| d.duration)
+        .filter(|d| d.is_finite() && *d >= 0.0)
+}
+
+/// Moments asked for when the file's length is not known yet (a saved
+/// recording opened later, e.g. a row in the tray popover). The helper
+/// clamps each to the real length, so a short file still answers.
+pub const UNKNOWN_LENGTH_PROBE_SECS: f64 = 10.0;
+
+/// A still from a saved recording and its length, for a list row's
+/// thumbnail. `None` where the platform's helper cannot read stills or it
+/// answered nothing usable within `wait`. Blocking.
+#[must_use]
+pub fn still_from_file(path: &Path, wait: Duration) -> Option<(image::DynamicImage, Option<f64>)> {
+    let mut command = super::recording::poster_command()?;
+    command.arg("--poster").arg(path);
+    for t in candidate_times(UNKNOWN_LENGTH_PROBE_SECS) {
+        command.arg(format!("{t:.3}"));
+    }
+    let stdout = super::recording::helper::output_within(command, wait)?;
+    let duration = parse_duration(&stdout);
+    let (picked, _lit) = choose(parse_frames(&stdout))?;
+    Some((picked, duration))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_helpers_duration_is_read_from_its_line() {
+        assert_eq!(parse_duration(r#"{"duration": 42.5, "frames": []}"#), Some(42.5));
+        // Other output around it (a log line) is skipped.
+        assert_eq!(parse_duration("starting\n{\"duration\": 3, \"frames\": []}\n"), Some(3.0));
+    }
+
+    #[test]
+    fn a_missing_or_nonsense_duration_is_none() {
+        assert_eq!(parse_duration(r#"{"frames": []}"#), None);
+        assert_eq!(parse_duration(r#"{"duration": -1, "frames": []}"#), None);
+        assert_eq!(parse_duration("not json"), None);
+        assert_eq!(parse_duration(""), None);
+    }
 
     fn close(a: &[f64], b: &[f64]) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9)

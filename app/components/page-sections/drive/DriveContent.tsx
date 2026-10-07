@@ -16,6 +16,7 @@ import ConfirmationDialog from "@/app/components/ConfirmationDialog";
 import { Trash2 } from "lucide-react";
 import { UnifiedMediaDialog } from "./file-preview";
 import { toast } from "sonner";
+import { takeTrayDrop, TRAY_DROP_WAITING_EVENT } from "@/app/lib/tray/trayDrop";
 import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import { useRemoteFileUpload, useRemoteFolderUpload } from "@/app/lib/hooks/useRemoteUploadActions";
@@ -35,6 +36,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
+import { useDriveRoute } from "./driveRoute";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -155,6 +157,8 @@ const DriveContent: FC<DriveContentProps> = ({
   // Same handoff for `RenameDialog` (also mounted at the layout level).
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { requireUploadRoom } = useCreditCheck();
+  // The page's own empty state for a pinned drive's root (Captures).
+  const { pinned, emptyState: pinnedEmptyState } = useDriveRoute();
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -226,6 +230,88 @@ const DriveContent: FC<DriveContentProps> = ({
       unlisteners.push(un);
     };
 
+    // One path for every drop: one on this page, and files dropped on the
+    // tray popover, which `TrayNavigationListener` parks in `trayDrop` after
+    // sending the window here. A popover drop also reaches the page's own
+    // listener when it is mounted (Tauri delivers a webview's drop to every
+    // window listening for any target). Both open the same dialog with the
+    // same files, and once it is open `isDialogOpen` stops the later one.
+    const handleDroppedPaths = async (paths: string[] | null | undefined) => {
+      // If either upload dialog is already open, the dialog's own
+      // drag-drop listener handles the drop. Skipping here prevents
+      // the table from also showing a "folders not allowed" toast on
+      // a folder drop that the open FolderUploadDialog accepted.
+      if (addButtonRef?.current?.isDialogOpen()) return;
+      if (isFolderUploadOpen) return;
+
+      // A drop has already landed by the time anything can check, so the
+      // refusal has to be spoken. Silence reads as the app being broken,
+      // and the server's own error reads as a fault rather than a
+      // permission.
+      if (writeRefusal) {
+        toast.error(writeRefusal);
+        return;
+      }
+
+      // No plan / full: same dialog as the toolbar buttons, never
+      // open the picker or folder-upload path from a drop.
+      if (!(await requireUploadRoom("file-upload", isStorageFull))) {
+        return;
+      }
+
+      if (isSyncPathEmpty && !isRecentFiles) {
+        toast.info("Please set up sync folder first to upload files.");
+        return;
+      }
+
+      if (!paths || paths.length === 0 || !addButtonRef?.current) return;
+
+      // Classify the drop. Files flow into the AddFile dialog;
+      // a folder drop opens the FolderUploadDialog with the path
+      // pre-filled (one folder at a time: FolderUploadDialog
+      // accepts a single root). Mixed drops upload the files and
+      // surface a single toast about the dropped folders.
+      try {
+        const { filterDroppedPaths } =
+          await import("@/lib/utils/filterDroppedPaths");
+        const { files, folders } = await filterDroppedPaths(paths);
+
+        if (files.length === 0 && folders.length > 0) {
+          if (onAddFolderFromDrop) {
+            if (folders.length > 1) {
+              toast.info("Only the first dropped folder will be used.");
+            }
+            onAddFolderFromDrop(folders[0]);
+          } else {
+            toast.error("Folder uploads aren't available in this view.");
+          }
+          return;
+        }
+
+        if (files.length > 0) {
+          if (folders.length > 0) {
+            toast.info(
+              'Folders were skipped. Use "Upload Folder" to upload a folder.',
+            );
+          }
+          addButtonRef.current.openWithPaths(files);
+        }
+      } catch (err) {
+        console.error("[DragDrop] Error checking paths:", err);
+        // Fallback: pass all paths through; the uploader will surface
+        // per-path errors itself.
+        addButtonRef.current.openWithPaths(paths);
+      }
+    };
+
+    const takeParkedTrayDrop = () => {
+      const paths = takeTrayDrop();
+      if (paths) void handleDroppedPaths(paths);
+    };
+    window.addEventListener(TRAY_DROP_WAITING_EVENT, takeParkedTrayDrop);
+    unlisteners.push(() => window.removeEventListener(TRAY_DROP_WAITING_EVENT, takeParkedTrayDrop));
+    takeParkedTrayDrop();
+
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
@@ -271,73 +357,7 @@ const DriveContent: FC<DriveContentProps> = ({
             clearTimeout(dragTimeoutRef.current);
             dragTimeoutRef.current = null;
           }
-
-          // If either upload dialog is already open, the dialog's own
-          // drag-drop listener handles the drop. Skipping here prevents
-          // the table from also showing a "folders not allowed" toast on
-          // a folder drop that the open FolderUploadDialog accepted.
-          if (addButtonRef?.current?.isDialogOpen()) return;
-          if (isFolderUploadOpen) return;
-
-          // A drop has already landed by the time anything can check, so the
-          // refusal has to be spoken. Silence reads as the app being broken,
-          // and the server's own error reads as a fault rather than a
-          // permission.
-          if (writeRefusal) {
-            toast.error(writeRefusal);
-            return;
-          }
-
-          // No plan / full: same dialog as the toolbar buttons — never
-          // open the picker or folder-upload path from a drop.
-          if (!(await requireUploadRoom("file-upload", isStorageFull))) {
-            return;
-          }
-
-          if (isSyncPathEmpty && !isRecentFiles) {
-            toast.info("Please set up sync folder first to upload files.");
-            return;
-          }
-
-          const paths = event.payload.paths;
-          if (!paths || paths.length === 0 || !addButtonRef?.current) return;
-
-          // Classify the drop. Files flow into the AddFile dialog;
-          // a folder drop opens the FolderUploadDialog with the path
-          // pre-filled (one folder at a time — FolderUploadDialog
-          // accepts a single root). Mixed drops upload the files and
-          // surface a single toast about the dropped folders.
-          try {
-            const { filterDroppedPaths } =
-              await import("@/lib/utils/filterDroppedPaths");
-            const { files, folders } = await filterDroppedPaths(paths);
-
-            if (files.length === 0 && folders.length > 0) {
-              if (onAddFolderFromDrop) {
-                if (folders.length > 1) {
-                  toast.info("Only the first dropped folder will be used.");
-                }
-                onAddFolderFromDrop(folders[0]);
-              } else {
-                toast.error("Folder uploads aren't available in this view.");
-              }
-              return;
-            }
-
-            if (files.length > 0) {
-              if (folders.length > 0) {
-                toast.info(
-                  'Folders were skipped. Use "Upload Folder" to upload a folder.',
-                );
-              }
-              addButtonRef.current.openWithPaths(files);
-            }
-          } catch (err) {
-            console.error("[DragDrop] Error checking paths:", err);
-            // Fallback: pass all paths through — uploader will surface
-            // per-path errors itself.
-            addButtonRef.current.openWithPaths(paths);
-          }
+          await handleDroppedPaths(event.payload.paths);
         });
         safePush(unDragDrop);
         if (cancelled) return;
@@ -490,6 +510,9 @@ const DriveContent: FC<DriveContentProps> = ({
       (!filteredData.length && !searchTerm && activeFilters.length === 0) ||
       error
     ) {
+      if (pinned && pinnedEmptyState && !error && !currentSubfolderPath) {
+        return <>{pinnedEmptyState}</>;
+      }
       return (
         <>
           <FilesNoEntriesFound

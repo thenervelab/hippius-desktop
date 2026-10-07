@@ -15,5 +15,6 @@ pub mod keystore;
 pub mod origin;
 pub mod outside_folder;
 pub(crate) mod owner_wrap;
+pub mod quick_link;
 
 pub use keystore::SqliteShareKeystore;

@@ -4,21 +4,27 @@ paths:
   - "app/capture-overlay/**"
   - "app/capture-controls/**"
   - "app/capture-camera/**"
+  - "app/capture-bubble-controls/**"
   - "app/capture-preview/**"
   - "app/capture-area/**"
+  - "app/components/page-sections/settings/EditedImageSetting.tsx"
+  - "app/components/page-sections/settings/Capture*.tsx"
   - "app/components/capture/**"
+  - "app/components/page-sections/captures/**"
+  - "app/components/page-sections/drive/driveRoute.tsx"
   - "app/lib/capture/**"
   - "src-tauri/src/tray/**"
   - "app/components/page-sections/drive/highlightEntry.ts"
   - "app/components/page-sections/drive/useDriveHighlight.ts"
-  - "app/tray-panel/TrayCaptureRow.tsx"
+  - "app/tray-panel/TrayTiles.tsx"
   - "macos/HippiusCapture/**"
 ---
 
 # Screen capture
 
 Screenshots and (on macOS) recordings of an area, a window or a whole display,
-filed in `<drive>/Captures`, with a public share link copied unless
+filed at the root of the account's own captures drive (`Hippius Captures`,
+"Destination" below), with a public share link copied unless
 `CaptureOptions.copyLink` is off. Design and
 phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
 `SCREEN_CAPTURE_ENABLED = enabledFrom("beta")` (beta and staging, not
@@ -51,7 +57,7 @@ second window, tray and single-instance handler would start; pinned by
 `capture_wiring.rs`. It serves the protocol with `timeline.rs` (the Swift
 `place` rule: drop samples inside a pause, move later ones back by every
 finished pause, by start time for audio), `sizing.rs` (`alignToPixels`,
-`capped`, `videoBitRate`, pinned against `HippiusCapture.swift`'s literals) and a
+`capped`, `videoBitRate`, the keyframe interval, pinned against `HippiusCapture.swift`'s literals) and a
 `synthetic` test pattern through a text stand-in writer; a real `start` is
 refused with `UnsupportedPlatform`'s line where no platform recorder has
 landed (Linux; Windows has one, below).
@@ -200,8 +206,10 @@ single-instance handler turns into `on_shortcut` WITHOUT showing the main
 window, and `desktop_shortcut.rs` writes GNOME's custom keybinding at
 Hippius's own path. Linux marks the tray icon like Windows and, since
 AppIndicator sends no click, puts the recording's menu on it
-(`tray_recording_menu.rs`, rewritten only on a state change; one listener
-added once); the main window puts its menu back on
+(`tray_recording_menu.rs`, rewritten only on a state change; one listener,
+`listen_to_recording_menu`, added at start-up in `main.rs` setup, every
+click read against the phase now by `effect_for` and logged at `info`);
+the main window puts its menu back on
 `capture_tray_icon_released`. The pill is filmed on Linux
 (`support::pill_filmed`): compact until pointed at or focused, a one-time
 note (`capture_controls_context`), and outside an X11 area recording
@@ -222,7 +230,12 @@ answers `start` with `area_still` (the first picture as JPEG, at most
 given), holding every later picture back with no sound open and no file.
 `draw_area` shows `capture-area` (own capability, provider-free route,
 closed by `close_overlays`) full screen on the GTK monitor at the stream's
-place (`monitor_for`, else the compositor's pick); the page sends the drawn
+place (`monitor_for`, else the compositor's pick), with an area already
+drawn: the last one recorded (kept in stream pixels under
+`area_pick::REMEMBERED_AREA_ID` in `capture_last_areas_v1`, fitted by
+`bar::fit_area`), else a centred half of the screen
+(`area_pick::initial_area`), handed to the page as fractions of the
+picture (`AreaContext.initialArea`); the page sends the drawn
 rect in CSS px with the picture's box, Rust maps it to stream pixels
 (`stream_area` over `plan::area_pixels`: ratio = stream width over shown
 width, so HiDPI and fractional scaling need nothing more), destroys the
@@ -232,8 +245,13 @@ and the writer as a plain start would and cuts each picture in Rust
 (`frame::to_nv12` reading the area's rows in place; nothing renegotiates).
 `AreaStep` takes one area, only while drawing; a cancel at any step hands
 the recorder back uncropped to `adopt_recorder`; five minutes undrawn ends
-as quietly as a cancelled dialog. The pill counts after the crop, and may
-sit inside the area (Wayland places no window). *Camera only*:
+as quietly as a cancelled dialog. The pill counts after the crop. Before
+the crop it is moved outside the area on the stream's monitor
+(`place_pill_clear_of_stream_area`: `area_pick::area_on_monitor` then
+`camera::pill_outside`, else the monitor's bottom centre), which works
+where the compositor honours an app's window position (X11, XWayland:
+GNOME Wayland included, below); a native Wayland client on GNOME is
+placed by Mutter and may still find it inside the area. *Camera only*:
 `support::camera_only(platform, recorder_camera)` is true on Wayland only
 where the probe's `camera` found a camera source, `decodebin` and
 `videoflip` (`Probe::records_camera`). `capture_confirm` gives a nominal
@@ -246,21 +264,76 @@ own element (what WebKitGTK makes), retries a busy one for 3 s, tries
 bounded caps then any, mirrors it like the stage and records it with the
 same writer, mixer and pause. Pinned by `capture_wiring.rs`.
 
+**GNOME Wayland runs the app as an XWayland client** (`utils::display_backend`,
+not yet run on Linux). GTK's keep-above is an empty function on Wayland and
+Mutter offers clients no keep-above and no layer-shell, so the pill and the
+bubble fell behind any window raised mid-recording (the camera then missing
+from the video); Mutter honours `_NET_WM_STATE_ABOVE` and window positions
+from X11 clients. `display_backend::choose` (pure, tested everywhere) picks
+XWayland only for a Wayland session (`rollout::linux_platform`, the
+capture paths' own test) with `DISPLAY` set on a desktop whose
+`XDG_CURRENT_DESKTOP` lists GNOME, and never when the user set
+`GDK_BACKEND` or `HIPPIUS_WAYLAND_NATIVE=1`. `apply` runs in `main` after
+the recorder child and CLI branches and before the builder, through
+`gdk_set_allowed_backends("x11,wayland")`: XWayland first, Wayland if it
+cannot connect, and NO environment variable, since `GDK_BACKEND` would push
+the file manager and browser the app starts onto XWayland too. Rules that
+fail silently: **the session stays Wayland** (`current_platform` reads only
+`XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`, so screenshots, ScreenCast, the
+GlobalShortcuts portal and every `LinuxX11` gate are unchanged: the X
+connection sees only XWayland windows); never unset `WAYLAND_DISPLAY` to
+force XWayland, it would flip every capture path to X11. The log carries the
+choice (`display backend chosen`) and the display GTK opened
+(`GTK display opened`). Cost: under Mutter's logical layout (fractional
+scaling, `scale-monitor-framebuffer`) X11 clients are drawn at scale 1 and
+stretched, so the whole app looks soft until `xwayland-native-scaling`
+(GNOME 47+, experimental). Pinned by `display_backend::tests` and
+`capture_wiring::gnome_wayland_connects_through_xwayland_before_gtk_starts`,
+`an_xwayland_client_keeps_the_wayland_capture_paths`.
+
 ## Flow
 
-**Start:** `capture_start(kind?, mode?)` opens an overlay per display; the one
+**Start:** `capture_start(kind?, mode?, instant?)` opens an overlay per display; the one
 under the pointer (`bar::bar_display`, cursor from `NSEvent.mouseLocation`
 flipped to the displays' top-left points on macOS, Tauri's physical cursor on
 Windows) draws the ⌘⇧5-style **capture bar** (`app/capture-overlay/CaptureBar`).
-No kind/mode = the last used (`capture_options_v1`, device-wide). There is no
-"single display, capture at once" shortcut any more: Capture does that.
+No kind/mode = the last used (`capture_options_v1`, device-wide); what a
+start opens is `instant::start_choice`. **The shortcut is a one-step area
+screenshot** (`instant.rs`, like macOS's Cmd+Shift+4 with "copy link"):
+`on_shortcut` emits `ShortcutStart { instant: true }`, `CaptureHost` passes
+it to `capture_start`, and the session's `instant` flag (in
+`OverlayContext.instant` and the overlay URL's `&instant=1`, so the page is
+a crosshair before its context loads) means no bar, no area seeded (Rust's
+`pending` and the page's localStorage area both skipped), no timer
+(`instant::countdown_secs`), and the drag's pointer-up calls
+`capture_select` with the area at once. A click without a drag does
+nothing; Escape cancels; Space before a drag swaps to window click, and
+Space HELD during a drag moves the area (`overlaySelection::shiftDrag`,
+both flows). The size label shows while dragging. It never moves the bar's
+last kind/mode (`StartChoice.remember`, `remembers_mode_switch`). Where
+there is no overlay (Wayland) the shortcut is a plain screenshot: the
+desktop's own tool, already one step. The buttons and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
 (see "Screen Recording permission" below). Only
 the bar's overlay takes focus. The frontmost app (pid) is remembered and
 re-activated when the overlays close; the main window comes back per
 `restore_plan` (hidden stays hidden, behind stays behind via `orderBack:`,
-front only if it was key), and never mid-recording (it would be filmed). A
+front only if it was key), and never mid-recording (it would be filmed).
+**The user can still bring it back mid-recording** (`own_windows.rs`,
+`activation.rs`): the Dock's reopen shows it unless it is already up
+(`on_app_reopen`; NOT `has_visible_windows`, which the pill makes true, so
+the Dock click used to do nothing; never while `Selecting`/`Capturing`,
+where it would land under the overlays and in the shot: the overlays keep
+the keyboard, `reopen_shows_main`), Cmd+Tab sends no reopen so
+`activation::watch` observes `NSApplicationDidBecomeActive` and
+`on_app_activated` shows it during Recording/Paused/Finalizing unless a
+mouse button is down (a click on the pill or card activates the app too) or
+the tray popover is visible; and the main window's `Focused(true)` in those
+phases (`on_main_window_focused`) forgets `restore_main`,
+`main_was_focused` and `previous_app`, so Stop neither pushes it behind nor
+hands the keyboard away. Once shown it is filmed like any app if it is in
+what is recorded. A
 display watch (`spawn_display_watch`, 1.5 s) closes overlays of unplugged
 displays, drops a pending area on them, opens overlays on new ones, moves the
 bar, and re-reads the cached work areas.
@@ -344,7 +417,12 @@ the file. Stop stops the recorder BEFORE `end_camera` (camera only records the
 camera window). Pause/resume run in `spawn_blocking`; the tick `try_lock`s the
 recorder, and every capture lock recovers from poison (`lock`). Restart =
 `Restart` event → back to `Capturing`, the kept `selection` restarted. Pinned
-by the fake-`Recorder` harness in `commands.rs` and `tests/capture_wiring.rs`. Mic and
+by the fake-`Recorder` harness in `commands.rs` and `tests/capture_wiring.rs`. No
+statement locks one capture mutex twice: the first guard lives to the end
+of the statement, so the second `lock` never returns (it hung every capture
+at Record and then starved the async runtime); read a field once
+(`CaptureState::recording_camera`), pinned by
+`capture_wiring::no_capture_statement_locks_the_same_mutex_twice`. Mic and
 click rings come from the saved options, each gated on macOS 15
 (`recording::microphone_supported` / `show_clicks_supported`; the helper reads
 `showClicks`). **The card's picture is a frame of the saved file**
@@ -415,9 +493,11 @@ stale copy back. The strip exists only on a bubble that is not recording
 (`stripShown`, from `CameraState.recording`, which Rust sets from Capturing a
 recording on; the camera page follows no phase of its own): the camera window
 is filmed, so a strip shown mid-recording was in the video; the pill hides
-the bubble instead (no resizing mid-recording: the strip lives in the filmed
-window). The × is "Turn camera off" while choosing and "Hide
-camera" while recording (`cameraCloseLabel`). While choosing it is always mounted, faded until
+the bubble instead, and resizes it from its own menu (the strip lives in
+the filmed window). The × is "Turn camera off" while choosing and "Hide
+camera" while recording (`cameraCloseLabel`). Mid-recording the size is
+changed from the PILL's camera menu or from the bubble's controls window
+(below), never from the bubble's own page. While choosing it is always mounted, faded until
 hovered or focused, so Tab reaches it. Its third button is a toggle
 (`sizeControls`): at full size it is "Exit full size" (Minimize2) back to the
 round size from before (`nextRoundSize`), and Escape on the camera window
@@ -427,7 +507,11 @@ hovered or focused button in its own `role="tooltip"` label. The `<video>` is
 mirrored, so WebKit's start-playback button (shown on a paused or not yet
 playing video) was a backwards triangle on the bubble; CSS cannot remove
 WebKit's modern controls, so the video is `opacity-0` until `playing` (and
-again on `pause`), and the page calls `play()` itself.
+again on `pause`), and the page calls `play()` itself. The video is
+`pointer-events-none` (`VIDEO_TAKES_NO_POINTER`): WebKit drew a pause button
+over a hovered picture mid-recording, dead (the click began a drag) and
+filmed; the frame behind it is the drag region, and pause is the pill's
+and the bubble controls'.
 **The camera page is sized by its window, never by the video**: its root
 is `fixed inset-0` and the frame's shape is `cameraFrameShape` (round:
 `aspect-square`, capped at the window's height; full and stage: fill with
@@ -435,8 +519,32 @@ is `fixed inset-0` and the frame's shape is `cameraFrameShape` (round:
 root took the camera's 16:9 picture as its height and the round bubble was a
 pill, on screen and in every video; pinned by `cameraPage.test.tsx`.
 Hover comes from Rust (`capture_camera_hover`, polling the
-pointer against the frame) because a non-key window does not reliably get
-webview hover on macOS. Screen off = **stage**: a
+pointer against the frame every 100 ms, `spawn_camera_hover_watch`, macOS and
+Windows) because a non-key window does not reliably get webview hover on
+macOS. **Bubble controls mid-recording** (`bubble_controls.rs`, pure;
+`app/capture-bubble-controls`, label `capture-bubble-controls`, its own
+capability): Loom-style sizes (small / large / full toggle, only when
+`resizeFromPill`) and pause / resume on a 148 x 60 pt strip over the
+bubble's lower part (`bubble_controls::frame`, inside the circle at every
+size), shown by the same watch while the pointer is on the bubble and the
+bubble is still (`shown`: hidden while it is dragged or glides, back where
+it stops). It is a WINDOW OF ITS OWN because the bubble's window is filmed;
+the recording leaves it out: macOS by the helper (`filmed_own_windows` lists
+the main window and the camera window's number only; a window recording
+films only that window and the bubble), Windows by content protection
+(`OwnWindow::BubbleControls`), Linux has none (`supported` = not
+`pill_filmed`). Geometric polling, not the webview's hover, on every
+platform: the controls cover part of the bubble, so the bubble's page sees
+the pointer leave as it reaches them. Built hidden on first need while a
+bubble is live (no load wait on the first hover), level 1002 above the
+bubble on macOS, `focused(false)` + `accept_first_mouse(true)`, destroyed
+by `end_camera` and when the camera window goes. It calls only the pill's
+commands (`capture_camera_set_size`, `capture_pause` / `capture_resume`),
+mirrors Rust's phase (by `seq`) and camera state, names the hovered button in
+its own `role="tooltip"` line (no native `title`: a system tooltip is a
+window), and is one Tab stop with arrow keys. Pinned by
+`bubble_controls::tests`, `bubbleControlsPage.test.tsx` and
+`capture_wiring::the_bubble_controls_are_never_filmed`. Screen off = **stage**: a
 centred 16:9 window that `capture_confirm` records as `Selection::Window` by
 its NSWindow `windowNumber`. **The camera window is the one capture window that
 is NOT content-protected** (a protected one films as black), sits at level 1001
@@ -520,7 +628,7 @@ disk.
 **Preview card** (`app/capture-preview`, label `capture-preview`, `preview.rs`):
 prewarmed hidden at `capture_start`, shown when the file exists, bottom-right
 of the bar display's WORK area (`work_area`: NSScreen `visibleFrame`, not the
-full display, or it sits under the Dock), `focused(false)` + content-protected +
+full display, or it sits under the Dock), `focused(false)` + content-protected except on macOS (`own_windows`) +
 `accept_first_mouse(true)` (never key, so without it every button needed two
 clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer bar
 stays mounted and pauses, or the card changes height under the pointer).
@@ -554,11 +662,17 @@ engine's synced set (`finder_bridge::badges::is_synced`, looked up in NFC
 and NFD, never scanned), matched by label + `preview::same_drive_path` (NFC,
 `\` → `/`, leading `/` dropped, absolute paths ending in `relPath`, never
 trimmed). A row whose upload is still encrypting reads `Encrypt`, so both
-actions count. Bounded fallback: a `syncing` card with a public link, no row
-anywhere and an idle engine for `LINK_FALLBACK_AFTER` (45 s) is marked
-uploaded (`link_fallback_applies`). `PreviewCard.settled` (uploaded and the
-link not `Creating`) is what the card's auto-hide waits for, so it never slides
-away before it can say the link was copied.
+actions count. The card waits for its own upload, never for the rest of the
+sync: a `syncing` card with a public link whose file the engine has not
+started on (no row yet, or `SyncRow::Queued`, a `Pending` row behind other
+files) is marked uploaded at once (`link_finishes_card`), because minting the
+link uploads the capture's own encrypted copy. A file the engine is uploading
+right now (`Working`) shows that upload's progress instead. `PreviewCard.settled` (uploaded and the
+link neither `Creating` nor `Failed`) is what the card's auto-hide waits for, so
+it never slides away before it can say the link was copied, and a card whose
+link failed stays up with Create link. `deliver::mint` tries a link three
+times in all (`mint_retry_after`: 1 s, then 3 s) unless the drive is full, since
+a request that did not get through is often fine a second later.
 Rust also owns `link` (`LinkState`), `linkText` ("Public link copied") and
 `actions` (`CardActions`: retry, discard, copyLink, mintLink, revokeLink,
 reveal, upgrade) through `PreviewCard::refreshed`; every change goes through
@@ -573,9 +687,13 @@ when it is true (the card already says it); the notification never names a
 path. A failed card closed by the user is PARKED and comes back on the
 next `capture_start`, until retried or discarded. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in
-folder emits `capture_show_in_folder` → `driveFolderRoute(label, remote,
-"Captures", fileName)` → the Drive page steps into the folder with the row's
-own `generateFolderUrl`, then points the file out (see "Show in folder points
+folder emits `capture_show_in_folder`; a capture in the captures drive
+(`capturesDrive`: the destination's folder is the root) goes to
+`capturesRoute(label, remote, fileName)`, the Captures page, whose pinned
+container takes the same `openLabel` / `openFile` params; an older one in a
+folder goes to `driveFolderRoute(label, remote, folder, fileName)` → the Drive
+page steps into the folder with the row's own `generateFolderUrl`, then
+points the file out (see "Show in folder points
 the file out" below). Retry re-runs `deliver_and_announce` on the kept file, to
 the card's own `destination` (not whatever the capture drive is now).
 `DriveContainer` handles each open request once (`shouldOpenFromUrl`, keyed on
@@ -588,11 +706,77 @@ compare in NFC and are never trimmed.
 clicked, so a stray Escape discarded recordings). The trash and Restart
 (`capture_restart`, which throws the take away) act at once under
 `DISCARD_CONFIRM_SECS` (5 s) and ask first from then on; "Keep recording"
-and Escape at the question give focus back to the button that asked. There is
-no mic mute: the helper has no command for it. The pill applies a phase only
+and Escape at the question give focus back to the button that asked. The pill applies a phase only
 when its `seq` is newer than the one it shows. It drags by
 `data-tauri-drag-region` (`-webkit-app-region` is Electron-only), which needs
 `core:window:allow-start-dragging` in `capture-controls.json`.
+
+**Live controls** (`live_controls.rs`, pure; the pill's `PillMenu.tsx` only
+draws): mid-recording the pill mutes and unmutes the microphone
+(`capture_microphone_mute`), switches microphone (`capture_microphone_switch`)
+and camera (`capture_camera_switch`), and resizes the bubble
+(`capture_camera_set_size`, whose live branch is
+`resize_bubble_while_recording`). `support_for(platform)` decides what is
+offered: macOS all four; Windows the two camera ones (they only move and
+re-point the filmed camera window; the recorder child answers the
+microphone commands with `LIVE_MICROPHONE_UNSUPPORTED`); Linux none, since
+the pill (and so a menu) is filmed there. The pill reads
+the `capture_microphone_state` command and event
+(`MicrophoneState`: `recorded`, `muted`, `deviceId`, `canMute`,
+`canSwitch`) and `CameraState.switchFromPill` / `resizeFromPill`; it never
+works them out. Rules: the recorder answers BEFORE the pill is told
+(`change_microphone`), so a refused switch (a microphone that went away)
+leaves the old one recording and showing, with Rust's line in the menu;
+every start (a restart too) resets the microphone to heard on the device it
+opened (`LiveMicrophone::started`), every ending to nothing (`end_camera`,
+which also stops the device watch the menus start); a switch keeps the
+mute. Both switches are saved as the bar's choice too. The camera is
+switched by the camera page reopening it by name (only that page may call
+`getUserMedia`; a short freeze in the video), asking again with `exact`
+when WebKit opened another camera for the `ideal` id (`openedAnotherCamera`),
+refused where the recorder holds the camera (Wayland camera only). The
+pill's camera menu is on only while live, and the camera state sent at
+Record is still `Capturing`, so `begin_recording` sends it again after
+`adopt_recorder` (`announce_camera`); without it the pill had no camera
+menu (pinned in `capture_wiring.rs`). A bubble resized mid-recording is
+fitted inside what is filmed (`filmed_now`, `camera::resized_while_recording`:
+full = `full_in`, the stage's 16:9 proportions centred in the filmed area,
+no bar block to keep clear of; back to round = where it was before full),
+so the file follows the window. **The menus grow the pill's own window**
+(`capture_controls_menu`, `live_controls::pill_with_menu`: `MENU_HEIGHT`
+taller, upward so the pill stays put, downward near the top of the screen,
+and back on close), which is left out of the recording like the pill, so a
+menu is never filmed. `open_controls` drops a menu left open. **The pill
+never moves while a menu opens or closes.** Growing a webview's window
+upward showed the pill a menu's height higher for a moment: the page was
+laid out for the old size (and anchored to the top until the side came
+back), and a webview keeps its old picture at the top of a grown window
+until it draws again. So on macOS the page is laid out ONCE at
+`page_height` (the pill with `MENU_HEIGHT` above and below,
+`fixed_menu_room`) and never resized: every frame change of the pill goes
+through `set_pill_frame`, which pins the WKWebView (no autoresizing) at
+`page_top` inside the window in the same main-thread turn as the window's
+`setFrame`, under `disableScreenUpdatesUntilFlush`, so a menu opening only
+moves the window's edge over a page already drawn. **WebKit's automatic
+content insets are off for that page** (`setObscuredContentInsets:` zero, and
+`_setAutomaticallyAdjustsContentInsets:` NO / `_setTopContentInset:` 0 where
+they exist): left on, WebKit took the room sticking out above the window
+for a title bar and cut it off the viewport (`innerHeight` 360, not 660),
+so the closed pill was laid out a menu's height lower, below its window,
+and never showed (`live_controls::automatic_top_inset`; pinned by
+`live_controls::tests::the_pill_row_is_inside_its_window_in_every_menu_state`
+and `capture_wiring::the_pill_page_viewport_is_its_whole_frame`). The page keeps the room
+as two fixed slots (`menuRoom` from `capture_controls_context`) and every
+state's root is `fixed inset-0` centred, so the pill sits in the middle,
+where the window shows it. Elsewhere (`menuRoom` 0) the page is the window's
+size: it asks `capture_controls_menu_side` first, anchors the pill to the
+edge that stays put (`flushSync`, one frame), then asks for the room, and
+lets go of the edge only once the window has shrunk back. Pinned by
+`live_controls::tests::the_pill_stays_on_the_same_points_while_a_menu_opens_and_closes`,
+`controlsPage.test.tsx` and
+`capture_wiring::the_pill_never_moves_while_a_menu_opens_or_closes`. The pill window is 380 pt wide for the extra buttons. Pinned by
+`live_controls::tests`, `camera::tests`, `controlsPage.test.tsx` and
+`capture_wiring.rs`.
 
 **Menu bar (Rust owns it; the webview never writes the title):** every
 phase broadcast goes through `emit_phase`, which also calls
@@ -619,7 +803,8 @@ listener (`Builder::on_tray_icon_event` → `tray::panel::on_tray_icon_event`),
 never a webview callback (see tray.md), which asks `commands::on_tray_click`:
 `tray_status::tray_click_route` sends a signed-in click to the popover in
 every phase; Recording/Paused also bring the pill back (without focus; never
-a stop, the pill has Stop) and the popover opens content-protected. A
+a stop, the pill has Stop) and the popover opens content-protected except on
+macOS, where the helper leaves it out of the video (`own_windows`). A
 signed-out click goes to the main window, or only to the pill mid-recording. Pinned
 by `tray_status` unit tests, the `commands.rs` session tests and
 `tests/capture_wiring.rs`. The camera and card
@@ -657,8 +842,10 @@ default `CommandOrControl+Shift+2`, stored `capture_shortcut_v1` (`off` =
 disabled). Registered from `CaptureHost` via `capture_sync_shortcut`. It
 toggles, decided by `shortcut::action_for` in `commands::on_shortcut`:
 recording/paused → stop, selecting → cancel, capturing/finalizing → focus,
-signed out → main window forward, else emit `capture_shortcut_pressed` so a
-start's refusals reach the same dialogs (`useStartCapture`). `logout_full`
+signed out → main window forward, else emit `capture_shortcut_pressed`
+(`ShortcutStart { instant: true }`: the one-step area screenshot, above) so
+a start's refusals reach the same dialogs (`useStartCapture`; the drive
+picker's resume keeps `instant`). `logout_full`
 calls `end_for_logout` first: cancels a live capture, forgets the cards,
 unregisters the shortcut. A new
 shortcut is registered before it is saved, so one another app holds is refused
@@ -672,10 +859,25 @@ product decision. A refusal
 names another copy of Hippius when one is running (`shortcut::held_message`,
 from NSWorkspace's running apps by bundle id or name; Windows says the plain
 sentence). A saved shortcut that did not register at start-up is kept in
-`CaptureState.shortcut_problem` and shown by Settings (`ShortcutSetting.problem`).
+`CaptureState.shortcut_problems[kind]` and shown by Settings (`ShortcutSetting.problem`).
+**Two shortcuts** (`ShortcutKind`, IPC param `kind`, absent = screenshot):
+Record defaults to `CommandOrControl+Alt+Shift+2`, stored
+`capture_record_shortcut_v1`; a press emits `ShortcutStart { instant: false,
+kind: "recording" }` (the bar on Record, on the last mode) and toggles like
+the screenshot one (`on_shortcut_of`). The plugin's one handler tells them
+apart by the keys (`kind_pressed` over `REGISTERED`); `apply` unregisters only
+that kind's keys, never `unregister_all`. `check_not_taken` refuses one the
+other's keys before anything registers; `resolve` makes a never-set Record
+off when the screenshot already has its default's keys (upgrade). Record is
+registered only where `recording_supported()`. On Wayland Record is never
+bound by the portal: `support::record_shortcut_for` says `desktopSettings`
+with `<exe> --record` (`cli::argv_requests_record` → `on_record_shortcut`).
+Pinned by `shortcut::tests` and `capture_wiring::the_record_shortcut_is_wired_like_the_screenshot_one`.
 
 **Delivery is local-first for a drive synced here**: the file is moved into
-`<local root>/Captures` (`free_name` never overwrites) and `trigger_sync_now`
+`<local root>/<folder>` (the root for the captures drive; `free_name` never
+overwrites; `CaptureDestination::upload_folder` is `None` for the root on the
+direct path) and `trigger_sync_now`
 uploads it, STARTED in a spawned task, never awaited (it runs a whole sync
 round of every drive, the upload included); the card is `syncing` and
 follows the sync engine. Uploading
@@ -702,8 +904,18 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
 
 - **Coordinates.** xcap points on macOS / physical on Windows; overlay CSS
   points. `geometry::crop_rect` rounds outward; area crop scale from the image.
-- **Overlays and the control bar are `content_protected(true)`** or they film
-  themselves. Overlays are raised to screen-saver level on macOS; every
+- **Content protection hides a window from EVERY capture**, Google Meet and
+  Zoom included, so it is scoped (`own_windows::content_protected`): the
+  overlays (bar, countdown, hints) are protected everywhere, since they are
+  on screen while a screenshot is read. On macOS the pill, the card and the
+  tray popover are NOT protected: the helper leaves Hippius out of a screen
+  or area recording with ScreenCaptureKit (`excludingApplications: [parent]`,
+  `exceptingWindows` = `ownWindowsFilmed`: the main window and the bubble;
+  windows opened later, the bubble's controls among them, are left out too,
+  verified by hand), and
+  `finish_screenshot` hides a visible card first (`hide_card_for_grab`).
+  Windows keeps protection on all of them (WGC cannot leave windows out);
+  Linux has none. Overlays are raised to screen-saver level on macOS; every
   capture window gets `FullScreenAuxiliary` so it can show over a full-screen
   app without switching Spaces.
 - **Placement.** Work areas are read once per capture (one main-thread hop)
@@ -731,7 +943,8 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   glass, one accent, `GLASS_FOCUS`) and `floating-window.css` (transparent
   window, system font). Text on the glass is never below white/60; every
   `animate-*` carries `motion-reduce:animate-none`.
-- **Capabilities** (`capture-overlay.json`, `capture-controls.json`) must match
+- **Capabilities** (`capture-overlay.json`, `capture-controls.json`,
+  `capture-camera.json`, `capture-bubble-controls.json`) must match
   the window labels and hold `core:` permissions only. The pill is dragged
   (`data-tauri-drag-region`), so its capability has
   `core:window:allow-start-dragging`.
@@ -793,8 +1006,49 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
 - **Local builds:** plain `pnpm tauri:build` has no helper (it only prints a
   notice after, `scripts/capture-helper-notice.mjs`); `pnpm build:mac-local`
   builds, embeds, re-signs and makes a DMG (see macos-packaging.md).
-- **Destination** per account (`capture_destination_v1:<account_key>`); own
-  drives only for now.
+- **Captures drive** (`capture/setup.rs`, `destination.rs`): captures have
+  a drive of their own, never a folder in the user's other drives. Stored per
+  account as `capture_destination_v2:<account_key>` with `folder` empty (the
+  drive's root). `v1` rows (a folder in another drive, picked in a dialog the
+  first capture forced open) are never read: those accounts are asked once,
+  and their old captures stay where they are. **Rust decides when to ask**
+  (`setup::next_step`): stored drive → deliver; a chosen folder whose drive
+  failed (`capture_drive_pending_v1`) → try again; nothing → the capture is
+  kept in `~/.hippius/capture-waiting/<account_key>` (`kept_waiting`) and
+  `keep_here` calls `ask_for_location` AFTER the file is kept: main window
+  forward + `capture_drive_setup_needed`, which `CaptureHost` turns into
+  `CaptureDriveDialog`. The dialog only draws `capture_drive_status`
+  (`ready` / `needsSetup` / `pending`), `capture_drive_location` (a picked
+  folder, checked) and calls `capture_drive_create`. The folder is
+  `Documents/Hippius Captures` (`suggested_dir`; the home folder when
+  Documents is inside a drive); a picked folder gets `Hippius Captures` made
+  inside it (`folder_for_choice`), so the user's own folder is never uploaded
+  whole. `check_location` refuses a folder inside or around another drive, a
+  member drive and `~/.hippius`, and takes an own drive already synced at
+  that exact folder (a setup cut short after the row was written).
+  `permission_note` warns before macOS's Documents/Desktop/Downloads prompt;
+  `folder_refused_copy` explains a refusal. The drive is added through
+  `add_local_sync_folder` (Sync a Folder's path) under `ENSURE_LOCK`; a
+  `Validation` refusal goes back to the dialog, anything else (plan full, no
+  encryption password, offline) saves the folder as pending, keeps captures
+  in it (`kept_in_chosen`, Retry, Reveal, Upgrade, no Discard, not parked)
+  and the next capture or Retry tries again. On success
+  `commands::redeliver_kept_card` sends the card's capture like Retry (link
+  and all) BEFORE `move_waiting` moves the rest in, skipping that file;
+  pinned in `capture_wiring.rs`. Settings and the Capture menus' "Captures
+  folder…" open the same dialog to move it: the new folder becomes the
+  captures drive and the old one stays a drive with its captures in it. The
+  bar's Options menu only names it (`capture-save-to`). Delivery only ever
+  removes the temp folder via `remove_temp_dir` (a kept capture's parent is
+  the user's folder), pinned in `capture_wiring.rs`.
+- **Captures page** (`/captures`, sidebar under Drive, `featureFlag:
+  "capture"`): `CapturesView` reads `capture_drive_status`. Ready: Drive's own
+  `DriveContainer`, pinned through `DriveRouteContext` (`driveRoute.tsx`:
+  `basePath` for folder links and navigation, `pinned` opens it straight in
+  and skips the folder list and its fallback, `hideBreadcrumbRoot`, and the
+  page's `emptyState` at the pinned root), keyed on the drive. Before it
+  exists: an empty state with Screenshot / Record and "Set up the folder
+  now", plus Rust's pending sentence or the waiting count.
 
 ## Screen Recording permission (macOS)
 
@@ -841,7 +1095,11 @@ before asking).
 ## The recording helper (`macos/HippiusCapture/Sources/HippiusCapture.swift`)
 
 **Protocol.** One JSON object per line each way. Every command carries an
-`id` the reply echoes; `wait_for` skips a reply with another id (a late
+`id` the reply echoes (mid-recording also `mute` → `muted`, `unmute` →
+`unmuted`, `switch_microphone` with `microphoneDeviceId`, absent = the
+default → `microphone_switched`, or the helper's refusal: "This recording
+has no microphone.", "That microphone is not connected."; Swift literals
+pinned by `the_microphone_controls_speak_the_helpers_words`); `wait_for` skips a reply with another id (a late
 answer to an earlier command). `ready` and `stream_stopped` carry none.
 `{"ok":false,"event":"stream_stopped","error","saved"}` is unprompted: the
 stream ended on its own (display unplugged, window closed, permission
@@ -863,8 +1121,24 @@ stderr lines are diagnostics and are logged at `warn`.
 - Size is in pixels, `sourceRect` in points: the output is the region times
   the backing scale (`pointPixelScale` on 14+, the display mode on 13),
   aligned outward to even pixels (`alignToPixels`) and capped at a 3840 long
-  edge. H.264 High, keyframe every 2 s, bit rate by pixel count (about 14 Mbps
-  at 1080p, 2..28 Mbps), sRGB tagged BT.709.
+  edge. H.264 High, sRGB tagged BT.709.
+- **Rate control is an average, a keyframe every 4 s** (`videoBitRate`,
+  `keyframeSeconds`; `sizing::RateControl` for Windows and Linux): 5 Mbps at
+  1080p by the square root of the pixel count, 1..10 Mbps (Retina 9.6, 4K 10),
+  so a 10-minute recording is at most about 375 MB at 1080p and 725 MB at
+  Retina. A keyframe is most of a still screen's bytes, which is why 4 s and
+  not 2. The Mac encoder gets the average ONLY: `AVVideoQualityKey` is
+  accepted for H.264 on Apple Silicon but overrides the average with no
+  ceiling (a busy Retina screen measured 40 Mbps) and Intel lacks it;
+  VideoToolbox `DataRateLimits` switches the rate control and softened text
+  on every keyframe. Windows asks for peak-constrained VBR (average, twice
+  it, GOP) through `SetInputMediaType`'s encoding parameters, falling back to
+  the same encoder untuned before the software one (`writer::ATTEMPTS`);
+  Linux puts every encoder in a mode that spends less when still (`va` and
+  `vaapi` VBR, whose `bitrate` means the average and the ceiling
+  respectively; x264 CRF 23 capped by its VBV; OpenH264 quality-first with a
+  max), never their CBR / CQP defaults. Pinned by `sizing` and `linux_plan`
+  tests (Swift literals included) and `writer.rs` tests on Windows.
 - Pause cuts time out: samples are retimed on the writer queue by the host
   time of every finished pause (`place`), video and audio alike, and samples
   inside a pause are dropped. SCK timestamps are host-clock time. The last
@@ -872,6 +1146,14 @@ stderr lines are diagnostics and are logged at `warn`.
 - `movieFragmentInterval` is 2 s, so a killed helper leaves a playable file;
   stdin closing (the app died) FINISHES the file and keeps it. Only `cancel`
   deletes.
+- **Index first.** `shouldOptimizeForNetworkUse = true` writes the finished
+  file as `ftyp, moov, mdat` (checked with these exact writer settings: without
+  it the file was `ftyp, mdat, moov`). With the index last, a browser asks
+  for the end of the file before the first frame, and share links can only be
+  read from the start, so the whole recording downloaded before it played.
+  Windows (`MFTranscodeContainerType_FMPEG4`) and Linux (`mp4mux
+  fragment-duration`) write fragmented files whose index is already first.
+  Pinned by `recordings_put_their_index_first` (`recorder_child/plan.rs`).
 - **One audio track.** Browsers (the share link's page included) and most
   players play only a file's first audio track, so the microphone as a
   second track went unheard. `AudioMixer` mixes the microphone and, only when
@@ -883,6 +1165,28 @@ stderr lines are diagnostics and are logged at `warn`.
   one lags by 300 ms. The mic gets +6 dB (a built-in mic records speech near
   -33 dBFS) and a soft limiter above 0.8 stops clipping. No source = no audio
   track. Pinned by `a_recording_has_one_audio_track`.
+- **Mute writes silence, never a gap.** A muted microphone stays open and
+  each of its buffers is mixed at zero gain (`silent`), decided by the
+  buffer's own capture time against the mute spans (host time, like
+  pauses), so the track stays continuous and in step with the picture and
+  system audio goes on. Dropping the buffers instead would leave the mixer
+  waiting on the microphone and a hole players close up, so the sound would
+  drift ahead of the video. `switch_microphone` sets
+  `microphoneCaptureDeviceID` on the kept `SCStreamConfiguration` and calls
+  `updateConfiguration` on the running stream; while the device changes no
+  microphone buffers arrive, and the mixer's resync places the first new one
+  by its timestamp with silence before it (a built-in microphone switches in
+  well under a second; an iPhone's took about 3.5 s in a hand test). Pinned
+  by `a_muted_or_switched_microphone_keeps_one_continuous_track`; driven for
+  real by the ignored `mutes_and_switches_the_microphone_for_real`.
+- **A screen or area recording leaves Hippius out** (`withoutOwnWindows`):
+  `SCContentFilter(display:excludingApplications: [the parent app],
+  exceptingWindows: ownWindowsFilmed)`, from a listing with
+  `onScreenWindowsOnly: false` (the main window may be hidden at start).
+  With no `ownWindowsFilmed` the whole app is left out; with the parent not
+  listed nothing is (stderr line). This, not `sharingType = .none`, keeps the
+  pill, card and popover out of the video, so other apps' screen sharing
+  still shows them. Pinned by `capture_wiring.rs`.
 - **A window recording with the camera** (`cameraWindowId`, not the window
   itself) is `SCContentFilter(display:including: [window, camera])` cut to the
   window's frame at start: only those two windows are drawn, but the video does
@@ -903,15 +1207,143 @@ Driving the helper by hand (JSON on stdin, probe with AVFoundation) is the
 fastest check: a 3 s display recording, an area with pause/resume, and a
 window recording must each finish with a playable file.
 
+## Screenshot editor
+
+`capture/editor.rs` + `app/components/capture/editor/`. **The editor is a
+full-screen layer of the main window, never a window of its own** (no
+label, capability, route or `WebviewWindowBuilder`): every way in stores the
+session, then `show_in_main_window` hides the tray popover, brings the main
+window forward (`show_main_window`) and emits `capture_editor_open` (the
+session id) to it. `ScreenshotEditorHost` (mounted in `app/(pages)/layout.tsx`
+next to `CaptureHost`) listens, also asks `capture_editor_context` on mount
+so a reload shows the open picture again, and renders `EditorApp` (its own
+`next/dynamic` chunk) as a Radix modal at `z-[1000]` over whatever page is up,
+so closing leaves the user where they were; focus is trapped and returns on
+close. Ways in: the card's Edit (`actions.edit`, decided in
+`PreviewCard::decide_actions`: a placed PNG/JPEG screenshot whose link is not
+`Creating`; the card's picture opens it, and More has "Edit screenshot"),
+Drive's "Edit image" (`capture_editor_open_file`: own drive synced here,
+`path_in_drive` plus a canonical `starts_with`; or, when the file is not on
+disk and the caller passes its server `fileId`, `open_remote_file`: own
+drives only (`is_member` refused), downloaded through `cache_remote_file` and
+saved back as `SaveTarget::Remote` into the file's own folder, with an EMPTY
+`temp` so the save never writes the edit into the content-keyed preview
+cache; pinned by `capture_wiring` and `a_server_file_is_split_into_its_folder_and_name`)
+and the tray's Annotate. One
+editor at a time: a second open shows the first again and is refused, so
+unsaved edits are never replaced. The session records the account that
+opened it; `capture_editor_context` forgets one opened by another account.
+Rust reads the file ONCE into the session (`original`), so a card closing
+meanwhile (which removes a direct upload's temp copy) cannot take the picture
+away; a direct screenshot's temp copy is kept with its card
+(`keep_temp_after_upload`'s `editable`) for exactly this.
+
+The page is a pure model (`app/lib/capture/editor/`: `model.ts` document and
+undo, `gesture.ts` press/drag/release per tool, `view.ts` crop, fit and zoom,
+`pixels.ts`, `render.ts`) drawn on one canvas, hand-rolled rather than Konva
+or Fabric (no dependency, React 19.2 here and react-konva 19.3 wants 19.3).
+Layout: dark chrome on fixed tokens in both themes (`bg-black-600` backdrop,
+`black-primary-bg` pills, active tool `bg-primary-50`); a top bar
+(`editor-top-bar`, `TITLEBAR_BAND_H_54` tall, `titlebarClearanceClass` so the
+macOS traffic lights of the overlay title bar have their 80px; the bar and the
+name are `data-tauri-drag-region`, buttons never) with Close + file name left
+and `SaveActions` right (Copy image, then a split Save: the main part saves by
+the preference and is labelled by `saveLabel`, the chevron offers Save copy and
+Replace original; with "Ask" both open `SaveDialog` on the picked way via
+`initialMode`); the actions are `shrink-0` so the name truncates first. ONE
+floating pill toolbar (`EditorToolbar`: every tool, a colour dot opening colour
+and thickness, undo, redo) on its OWN row below the bar, centred, scrolling
+sideways when narrow: it used to be absolutely centred over the bar, where it
+covered Copy image and Save on any window `lg` or wider. Then a selection bar beside the selected annotation
+(`SelectionBar`, positioned by `selectionAnchor`), and the zoom pill
+(`ZoomPill`, 100% = one picture pixel per screen pixel) at the bottom. Keys
+are handled on the layer and never reach the page (`stopPropagation`); Esc
+steps back: colour panel, selection, crop, then close (asking "Discard
+changes?" with Keep editing focused when there are edits). **Blur and
+pixelate are written into the exported pixels** before the PNG is encoded
+(`exportPng`: drawImage, getImageData, `applyRedactions`, putImageData, then
+the drawings), and blur pixelates first so it cannot be deconvolved; the
+on-screen picture runs the same code. **Blur is sized by the box, not only the
+picture** (`blurCell`: at least the picture's `redactionBlock`, at most
+`BLUR_CELLS_ACROSS` = 2 cells across the box's short side, capped at 3 blocks),
+because a fixed half-block left bold text readable through it; pinned by the
+`blur hides text` cases in `pixels.test.ts`, which measure contrast one letter
+stroke apart. **The selected annotation's handles and body win over every tool
+but crop and text** (`grabSelected` in `press`): a handle resizes, the body
+moves (anywhere inside a box shape, only on the shaft of an arrow or line, so a
+new arrow can still start beside one), and only a press elsewhere starts a new
+shape; `cursorAt` shows which. Pinned by `a drawing tool and the shape it just
+drew` in `gesture.test.ts`.
+
+**Save is copy or replace, and Rust refuses a save in a drive that names
+neither** (`requested_mode`, header `x-editor-save-mode`), so a page that did
+not ask can never write over a file. The page asks in `SaveDialog` ("Save as
+a copy" first and selected, "Replace the original", "Remember my choice"),
+unless the user's `SavePreference` (`user_preferences` key
+`capture_editor_save_mode`, also Settings › Screenshots & Recording, `EditedImageSetting`)
+says which. The option descriptions are Rust's (`copy_note`, `replace_note`):
+the public-link warning only when the file has a link (`drive_shared`, read
+at open). **A copy** (`save_copy`) is a new file beside the original:
+`write_beside` stages a hidden `.hippius-incoming-capture-*.part` and moves it
+with `persist_noclobber` to the first free `unique_copy_name` ("<name>
+(edited).<ext>", then "(edited 2)"...), never touching the original, its
+card or its links; a remote capture's copy is uploaded under a name the
+server does not list in that folder. **A replace** writes with
+`replace_atomically` (hidden staging file, then rename) and nudges sync, or
+re-uploads a remote capture through `upload_files_to_remote_folder_inner`.
+**A file share is a snapshot copy, so the link cannot keep its URL**: on
+replace, a card's link is re-minted from the edited file (`deliver::mint`)
+and the old one revoked, even when the new mint fails (the usual reason to
+edit is to hide something); a Drive file's existing links are left alone (a
+password or expiry cannot be recreated here) and the outcome says they still
+show the earlier picture. Save sends the PNG as the raw body with the session
+in `x-editor-session` (`session_for` refuses a stale one); Rust validates it
+(`decode_checked`: PNG signature, 16384 px a side, 200 MiB) and re-encodes a
+JPEG as JPEG. After a save the host shows Rust's `SaveOutcome` as a toast,
+calls `notifyFilesMutated`, and offers "Copy link" only when `saved_link`
+says there is a link to the SAVED picture (`capture_editor_copy_saved_link`:
+the card's new link, or the tray's quick-link path for a file synced here;
+never a Drive file whose links still show the old picture). Pinned by
+`editor::tests`, `preview::tests::only_a_placed_screenshot_can_be_edited`,
+`capture_wiring::the_screenshot_editor_is_wired_end_to_end`, the
+`app/lib/capture/editor/__tests__` suites, `editorApp.test.tsx`,
+`ScreenshotEditorHost.test.tsx` and `EditedImageSetting.test.tsx`.
+
+**Annotate from the tray** (`capture_annotate_*`, editor.rs). "Latest
+screenshot" is decided in Rust each time (`find_latest`): the card still
+showing when its Edit is offered (card origin, link replaced on save), else
+the newest PNG/JPEG in the capture folder of a drive synced here
+(`newest_editable`, hidden files skipped; opened through
+`capture_editor_open_file`). "Choose image…" is `capture_annotate_pick`:
+Rust shows the dialog itself (`tauri_plugin_dialog`, filter png/jpg/jpeg,
+starting in the capture folder synced here, else Pictures, else Desktop,
+`picker_start`) and reads only the path it answers with, so there is NO IPC
+that takes a path to read; one dialog at a time (`PICKING`). A picked file
+inside one of the account's own unpaused drives synced here
+(`locate_in_drives`, canonical paths, deepest root wins) goes through
+`capture_editor_open_file`, i.e. Drive's own checks and save. Any other file
+(outside every drive, or in a paused or shared drive) is `EditorOrigin::Picked`
++ `SaveTarget::NewCapture`: Save never writes it, it writes
+`edited_copy_name` ("<name> (edited).<ext>", Windows-illegal characters made
+`-`) into a fresh capture temp folder and hands it to
+`commands::deliver_as_new_screenshot` (`open_preview` +
+`deliver_and_announce`), so it gets a card, upload and link exactly like a
+fresh screenshot. Failures to open are a notification (the popover is gone).
+Pinned by the `editor::tests` locate/name/newest/picker tests and
+`capture_wiring::the_screenshot_editor_is_wired_end_to_end` (no path
+argument, dialog source, new-capture branch before any write).
+
 ## Where Capture is offered
 
 The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
 **Screenshot** and **Record**, each a normal toolbar button with a chevron
 that opens its own Radix menu (no separate "…" button): the kind's modes
 ("Capture an area / a window / entire screen", `modeLabel` + `MODE_ICON`),
-each `startCapture(kind, mode)`, then a separator, "Open capture bar" with the
-shortcut's keycaps (`startCapture(kind)`: the bar on that kind's last mode)
-and "Change capture drive…". The modes come from `offeredModes(kind,
+each `startCapture(kind, mode)` (the screenshot "Capture an area" item
+carries the shortcut's keycaps, since the shortcut is that in one step),
+then a separator, "Open capture bar" (`startCapture(kind)`: the bar on that
+kind's last mode)
+and "Captures folder…" (the captures drive dialog). The modes come from `offeredModes(kind,
 captureModesAtom)`: Rust's `capture_support.modes` (`supportedModesOf`, set
 by `CaptureHost`), else all three until it has answered. Rendered in
 the folder list's toolbar (`DriveOnboarding`, `size="compact"`, 26px), the
@@ -931,7 +1363,18 @@ trigger, so no menu opens. The reason is `capture_support.recordingUnavailable`
 disable it. The capture bar's Record modes and Settings show the same line. The tray popover has its labelled Capture button
 (`TrayCaptureButton`, opens the bar on the last mode; its slot is held while
 support is asked). Mode names and icons come from `app/lib/capture/modes.ts`.
-Settings › Sync & Storage has the Capture card (shortcut, drive). Pinned by
+Settings › Screenshots & Recording (section `capture`, after Sync & Storage,
+shown where `SCREEN_CAPTURE_ENABLED` and `captureSupportedAtom`) holds every
+capture setting: `CaptureShortcutSetting` per kind, the captures folder,
+`EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
+recording countdown, system audio, read fresh through `capture_get_options`
+before each `capture_set_options`). Layout, in that order: the shortcuts as
+side-by-side tiles (`layout="tile"`, keys at `ShortcutKeys` size `lg`), the
+captures folder row (with "Show in Finder" / "Show in folder" through
+`reveal_drive_in_finder` only for a drive synced here), the options as a grid
+of cards (`layout="cards"`, `@container` columns so they follow the tab's
+width), then `EditedImageSetting`; each setting's icon sits in a
+`SettingIcon` chip. Pinned by
 `CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`,
 `drive/__tests__/recentFilesCapture.test.tsx`
 and `tests/capture_wiring.rs` (content protection, focus, capabilities, every

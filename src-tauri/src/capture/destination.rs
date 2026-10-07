@@ -1,10 +1,16 @@
-//! Which drive captures are filed in, remembered per account.
+//! Which drive and folder captures are filed in, remembered per account.
 //!
-//! The user picks it on their first capture and can change it in Settings.
-//! Stored in `user_preferences`, which is a single namespace across every
-//! account on the device, so the key carries the account: a drive label is
-//! only meaningful to the account that holds it, and a second account on the
-//! same machine must not inherit the first one's drive.
+//! Captures have a drive of their own (`capture::setup`): the user is asked
+//! where on the first capture, and can move it in Settings. Stored in
+//! `user_preferences`, which is a single namespace across every account on
+//! the device, so the key carries the account: a drive label is only
+//! meaningful to the account that holds it, and a second account on the same
+//! machine must not inherit the first one's drive.
+//!
+//! The key is `v2`. Rows under `capture_destination_v1` named a folder in one
+//! of the user's other drives, picked in a dialog every first capture forced
+//! open; they are never read, so those accounts are asked once where their
+//! captures drive goes. The captures already in those folders stay there.
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -26,12 +32,29 @@ pub struct CaptureDestination {
     pub owner_ss58: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_hash: Option<String>,
+    /// The folder inside the drive, as a path from the drive's root; empty
+    /// for the root itself, which is where the captures drive keeps them.
+    #[serde(default)]
+    pub folder: String,
 }
 
 impl CaptureDestination {
+    /// An own drive, with captures at its root (the captures drive).
+    #[must_use]
+    pub fn own(label: &str, display_name: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            display_name: display_name.to_string(),
+            owner_ss58: None,
+            folder_hash: None,
+            folder: String::new(),
+        }
+    }
+
     /// # Errors
     ///
-    /// [`AppError::Validation`] for an empty label or half a shared-drive identity.
+    /// [`AppError::Validation`] for an empty label, half a shared-drive
+    /// identity, or a folder that is not a plain path inside the drive.
     pub fn validate(&self) -> Result<()> {
         if self.label.trim().is_empty() {
             return Err(AppError::Validation("Choose a drive for your captures.".into()));
@@ -39,19 +62,80 @@ impl CaptureDestination {
         if self.owner_ss58.is_some() != self.folder_hash.is_some() {
             return Err(AppError::Validation("A shared drive needs both its owner and its folder hash.".into()));
         }
+        if normalize_folder(&self.folder)? != self.folder {
+            return Err(AppError::Validation("That folder name isn't valid.".into()));
+        }
         Ok(())
+    }
+
+    /// The capture's path inside the drive (`<name>` at the root,
+    /// `Captures/<name>` in a folder): how the sync engine names its row, and
+    /// what its share link is made from.
+    #[must_use]
+    pub fn rel_path(&self, file_name: &str) -> String {
+        if self.folder.is_empty() {
+            file_name.to_string()
+        } else {
+            format!("{}/{file_name}", self.folder)
+        }
+    }
+
+    /// The folder a direct upload names: `None` for the drive's root, which
+    /// is what the upload takes for "no folder".
+    #[must_use]
+    pub fn upload_folder(&self) -> Option<String> {
+        (!self.folder.is_empty()).then(|| self.folder.clone())
     }
 }
 
-const KEY_PREFIX: &str = "capture_destination_v1:";
+/// The folder as stored: slashes as `/`, none at either end, each name
+/// one a drive can hold on every platform (the Windows rules included, since
+/// a folder Windows cannot create cannot sync to a Windows machine). Blank is
+/// the drive's root.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] with a sentence a person can act on.
+pub fn normalize_folder(raw: &str) -> Result<String> {
+    let path = raw.trim().replace('\\', "/");
+    let path = path.trim_matches('/');
+    if path.is_empty() {
+        return Ok(String::new());
+    }
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        let part = part.trim();
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(AppError::Validation("A folder name cannot be empty, \".\" or \"..\".".into()));
+        }
+        if part.starts_with('.') {
+            // A dot folder is hidden, and the sync engine skips it.
+            return Err(AppError::Validation(
+                "A folder name cannot start with a dot: the folder would not sync.".into(),
+            ));
+        }
+        if part.ends_with('.') || part.contains([':', '*', '?', '"', '<', '>', '|', '\0']) {
+            return Err(AppError::Validation(
+                "A folder name cannot contain : * ? \" < > | or end with a dot.".into(),
+            ));
+        }
+        if part.len() > 255 {
+            return Err(AppError::Validation("That folder name is too long.".into()));
+        }
+        parts.push(part);
+    }
+    Ok(parts.join("/"))
+}
+
+const KEY_PREFIX: &str = "capture_destination_v2:";
 
 fn key_for(account_id: &str) -> String {
     format!("{KEY_PREFIX}{}", crate::auth::account_key::account_key(account_id))
 }
 
-/// The account's capture drive, or `None` if it has not chosen one. A stored
-/// value that no longer parses is treated as unset, so the picker asks again
-/// rather than the capture failing on a stale row.
+/// The account's captures drive, or `None` before one is set up. A stored
+/// value that no longer parses is treated as unset, so the user is asked
+/// again rather than the capture failing on a stale row.
 pub async fn load(pool: &SqlitePool, account_id: &str) -> Result<Option<CaptureDestination>> {
     let raw = crate::utils::preferences::get_user_preference_internal(pool, &key_for(account_id)).await?;
     Ok(raw
@@ -60,74 +144,47 @@ pub async fn load(pool: &SqlitePool, account_id: &str) -> Result<Option<CaptureD
 }
 
 pub async fn save(pool: &SqlitePool, account_id: &str, destination: &CaptureDestination) -> Result<()> {
+    let destination = CaptureDestination {
+        folder: normalize_folder(&destination.folder)?,
+        ..destination.clone()
+    };
     destination.validate()?;
-    let value = serde_json::to_string(destination).map_err(|e| AppError::Other(format!("Could not store the capture drive: {e}")))?;
+    let value = serde_json::to_string(&destination).map_err(|e| AppError::Other(format!("Could not store the capture drive: {e}")))?;
     crate::utils::preferences::save_user_preference_internal(pool, &key_for(account_id), &value).await
 }
 
-/// A drive the capture bar offers under "Save to", with whether it is synced
-/// on this machine. `remote` is what decides how "Show in folder" opens it:
-/// a synced drive and a server-only one open through different paths.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DestinationChoice {
+/// One of this account's drives synced on this machine, as a new captures
+/// folder is checked against: a captures drive is never made inside another
+/// drive, nor around one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriveHere {
     pub label: String,
-    pub remote: bool,
+    pub path: std::path::PathBuf,
+    /// A drive shared WITH this account: never offered as the captures drive.
+    pub member: bool,
 }
 
-/// Own drives synced here first, then own drives only on the server, each
-/// once. A drive synced here is also on the server; listing it twice would
-/// offer one drive by two routes.
-#[must_use]
-pub fn merge_choices(local: Vec<String>, remote: Vec<String>) -> Vec<DestinationChoice> {
-    let mut out: Vec<DestinationChoice> = Vec::with_capacity(local.len() + remote.len());
-    for label in local {
-        if !label.trim().is_empty() && !out.iter().any(|c| c.label == label) {
-            out.push(DestinationChoice { label, remote: false });
-        }
-    }
-    for label in remote {
-        if !label.trim().is_empty() && !out.iter().any(|c| c.label == label) {
-            out.push(DestinationChoice { label, remote: true });
-        }
-    }
-    out
-}
-
-/// This account's own drives synced on this machine, paused ones included:
-/// the picker offers every own drive. A paused one is delivered like a remote
-/// drive (see [`own_local_path`]), so pausing sync never strands a capture.
-/// Drives shared with this account and the migration pseudo-drive are not
-/// offered: captures go to a drive the user owns.
-pub async fn own_local_labels(pool: &SqlitePool, account_id: &str) -> Result<Vec<String>> {
+/// Every drive of this account synced on this machine, paused ones included
+/// (a paused drive still owns its folder).
+pub async fn drives_here(pool: &SqlitePool, account_id: &str) -> Result<Vec<DriveHere>> {
     use sqlx::Row;
     let owner = crate::auth::account_key::account_key(account_id);
     let rows = sqlx::query(
-        "SELECT label FROM sync_paths
-         WHERE owner = ?
-           AND label != 'migration'
-           AND owner_ss58 IS NULL
-           AND wire_folder_hash IS NULL
-         ORDER BY label",
+        "SELECT label, path, owner_ss58 FROM sync_paths
+         WHERE owner = ? AND label != 'migration'
+         ORDER BY id",
     )
     .bind(&owner)
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(|row| row.get::<String, _>("label")).collect())
-}
-
-/// Every drive the capture bar can save to. The server half degrades to
-/// nothing when it cannot be read, so the synced drives are still offered.
-pub async fn choices(pool: &SqlitePool, account_id: &str) -> Result<Vec<DestinationChoice>> {
-    let local = own_local_labels(pool, account_id).await?;
-    let remote = match crate::sync::folders::list_remote_folders_internal(pool, account_id).await {
-        Ok(folders) => folders.into_iter().map(|f| f.label).collect(),
-        Err(e) => {
-            tracing::warn!(error = %e, "capture drive list: remote drives unavailable, offering synced drives only");
-            Vec::new()
-        }
-    };
-    Ok(merge_choices(local, remote))
+    Ok(rows
+        .iter()
+        .map(|row| DriveHere {
+            label: row.get::<String, _>("label"),
+            path: std::path::PathBuf::from(row.get::<String, _>("path")),
+            member: row.get::<Option<String>, _>("owner_ss58").is_some(),
+        })
+        .collect())
 }
 
 /// Where `label` is synced on this machine, when it is one of this account's
@@ -177,12 +234,66 @@ mod tests {
     }
 
     fn own(label: &str) -> CaptureDestination {
-        CaptureDestination {
-            label: label.into(),
-            display_name: label.into(),
-            owner_ss58: None,
-            folder_hash: None,
+        CaptureDestination::own(label, label)
+    }
+
+    #[test]
+    fn a_folder_name_is_stored_in_one_form() {
+        assert_eq!(normalize_folder("Captures").unwrap(), "Captures");
+        assert_eq!(normalize_folder(" /Work\\Screens/ ").unwrap(), "Work/Screens");
+        assert_eq!(normalize_folder("My Shots / 2026").unwrap(), "My Shots/2026");
+        // Blank is the drive's root, where the captures drive keeps them.
+        assert_eq!(normalize_folder("").unwrap(), "");
+        assert_eq!(normalize_folder(" / ").unwrap(), "");
+    }
+
+    /// The captures drive files them at its root: the path in the drive is
+    /// the file name alone, and a direct upload names no folder.
+    #[test]
+    fn a_capture_at_the_drives_root_has_no_folder_in_its_path() {
+        let root = own("Captures");
+        assert_eq!(root.rel_path("a.png"), "a.png");
+        assert_eq!(root.upload_folder(), None);
+        let mut inside = own("Work");
+        inside.folder = "Captures".into();
+        assert_eq!(inside.rel_path("a.png"), "Captures/a.png");
+        assert_eq!(inside.upload_folder().as_deref(), Some("Captures"));
+    }
+
+    /// A name the engine would skip, or Windows could not create, is refused
+    /// with a sentence rather than a capture that never syncs.
+    #[test]
+    fn a_folder_name_that_would_not_sync_is_refused() {
+        for bad in ["a//b", "..", "a/../b", ".hidden", "Work/.git", "Shots.", "a:b", "x?y", "pipe|d"] {
+            assert!(matches!(normalize_folder(bad), Err(AppError::Validation(_))), "{bad:?}");
         }
+        assert!(normalize_folder(&"x".repeat(256)).is_err());
+    }
+
+    /// A choice made before captures had a drive of their own (a folder in
+    /// another drive, under the v1 key) is not read: the account is asked
+    /// where its captures drive goes.
+    #[tokio::test]
+    async fn a_choice_from_before_the_captures_drive_is_not_read() {
+        let pool = pool().await;
+        let v1 = format!("capture_destination_v1:{}", crate::auth::account_key::account_key("5Alice"));
+        crate::utils::preferences::save_user_preference_internal(&pool, &v1, r#"{"label":"Work","displayName":"Work","folder":"Captures"}"#)
+            .await
+            .unwrap();
+        assert_eq!(load(&pool, "5Alice").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_chosen_folder_is_saved_normalised() {
+        let pool = pool().await;
+        let mut d = own("Work");
+        d.folder = "/Screens\\2026/".into();
+        save(&pool, "5Alice", &d).await.unwrap();
+        let loaded = load(&pool, "5Alice").await.unwrap().unwrap();
+        assert_eq!(loaded.folder, "Screens/2026");
+        assert_eq!(loaded.rel_path("a.png"), "Screens/2026/a.png");
+        d.folder = "..".into();
+        assert!(save(&pool, "5Alice", &d).await.is_err());
     }
 
     #[tokio::test]
@@ -213,33 +324,8 @@ mod tests {
         assert_eq!(load(&pool, "5Alice").await.unwrap(), None);
     }
 
-    #[test]
-    fn choices_list_synced_drives_first_and_each_drive_once() {
-        let merged = merge_choices(
-            vec!["Work".into(), "Photos".into()],
-            vec!["Photos".into(), "Archive".into(), String::new(), "Work".into()],
-        );
-        assert_eq!(
-            merged,
-            vec![
-                DestinationChoice {
-                    label: "Work".into(),
-                    remote: false
-                },
-                DestinationChoice {
-                    label: "Photos".into(),
-                    remote: false
-                },
-                DestinationChoice {
-                    label: "Archive".into(),
-                    remote: true
-                },
-            ]
-        );
-    }
-
     #[tokio::test]
-    async fn only_own_drives_are_offered_and_paused_ones_count() {
+    async fn drives_here_and_where_captures_go_through_them() {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::utils::schema::ensure_table_schema(&pool).await.unwrap();
         let owner = crate::auth::account_key::account_key("5Alice");
@@ -258,9 +344,11 @@ mod tests {
             .await
             .unwrap();
         }
+        let here = drives_here(&pool, "5Alice").await.unwrap();
         assert_eq!(
-            own_local_labels(&pool, "5Alice").await.unwrap(),
-            vec!["Paused".to_string(), "Work".to_string()]
+            here.iter().map(|d| (d.label.as_str(), d.member)).collect::<Vec<_>>(),
+            vec![("Work", false), ("Paused", false), ("Team", true)],
+            "added order, member drives marked, never the migration pseudo-drive"
         );
         assert!(is_local(&pool, "5Alice", "Work").await);
         assert_eq!(
@@ -273,7 +361,7 @@ mod tests {
         // so its captures take the direct upload.
         assert_eq!(own_local_path(&pool, "5Alice", "Paused").await.unwrap(), None);
         assert!(!is_local(&pool, "5Alice", "Paused").await);
-        assert!(own_local_labels(&pool, "5Bob").await.unwrap().is_empty());
+        assert!(drives_here(&pool, "5Bob").await.unwrap().is_empty());
     }
 
     #[tokio::test]

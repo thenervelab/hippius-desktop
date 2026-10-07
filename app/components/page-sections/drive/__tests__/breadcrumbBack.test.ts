@@ -40,4 +40,20 @@ describe("resolveBreadcrumbBack", () => {
     back?.go();
     expect(root).toHaveBeenCalledOnce();
   });
+
+  // Pinned to one drive (the Captures page): its root is the top of the
+  // page, with no folder list above it to go back to.
+  it("offers no way up from a pinned drive's root, and its parent below it", () => {
+    const root = vi.fn();
+    expect(resolveBreadcrumbBack([{ label: "Hippius Captures" }], root, { hideRoot: true })).toBeNull();
+    const parent = vi.fn();
+    const back = resolveBreadcrumbBack(
+      [{ label: "Hippius Captures", onClick: parent }, { label: "Older" }],
+      root,
+      { hideRoot: true },
+    );
+    expect(back?.label).toBe("Back to Hippius Captures");
+    back?.go();
+    expect(parent).toHaveBeenCalledOnce();
+  });
 });

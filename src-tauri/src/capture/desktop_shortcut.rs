@@ -31,29 +31,53 @@ pub const GNOME_NAME: &str = "Hippius capture";
 pub const DESKTOP_SETTINGS_LINE: &str =
     "Your desktop doesn't let apps set a shortcut themselves. Add one in your desktop's keyboard settings that runs this command:";
 
+/// The flag a desktop shortcut for the Record shortcut passes: the capture
+/// bar on Record, or stop the recording running.
+pub const RECORD_FLAG: &str = "--record";
+
+/// Settings' line for the Record shortcut on Wayland. The portal session
+/// binds only the screenshot shortcut, so even where the desktop has the
+/// portal, this one is added in the desktop's own keyboard settings.
+pub const RECORD_DESKTOP_SETTINGS_LINE: &str =
+    "Hippius can't set this shortcut on your desktop. Add one in your desktop's keyboard settings that runs this command:";
+
 /// The command line a desktop shortcut runs: this executable, quoted for a
 /// shell when its path needs it, and the flag.
 #[must_use]
 pub fn command_for(exe: &str) -> String {
+    command_with_flag(exe, CAPTURE_FLAG)
+}
+
+/// [`command_for`] with another flag ([`RECORD_FLAG`]).
+#[must_use]
+pub fn command_with_flag(exe: &str, flag: &str) -> String {
     let safe = !exe.is_empty() && exe.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+'));
     if safe {
-        format!("{exe} {CAPTURE_FLAG}")
+        format!("{exe} {flag}")
     } else {
-        format!("'{}' {CAPTURE_FLAG}", exe.replace('\'', r"'\''"))
+        format!("'{}' {flag}", exe.replace('\'', r"'\''"))
     }
+}
+
+fn this_exe() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .unwrap_or_else(|| "hippius".to_string())
 }
 
 /// This app's command, worked out once.
 #[must_use]
 pub fn command() -> &'static str {
     static COMMAND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    COMMAND.get_or_init(|| {
-        let exe = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.to_str().map(str::to_string))
-            .unwrap_or_else(|| "hippius".to_string());
-        command_for(&exe)
-    })
+    COMMAND.get_or_init(|| command_for(&this_exe()))
+}
+
+/// This app's command for the Record shortcut, worked out once.
+#[must_use]
+pub fn record_command() -> &'static str {
+    static COMMAND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    COMMAND.get_or_init(|| command_with_flag(&this_exe(), RECORD_FLAG))
 }
 
 /// Whether this desktop is GNOME (Ubuntu says `ubuntu:GNOME`), where
@@ -198,6 +222,17 @@ mod tests {
         assert_eq!(command_for("/opt/My Apps/Hippius"), "'/opt/My Apps/Hippius' --capture");
         assert_eq!(command_for("/tmp/it's"), r"'/tmp/it'\''s' --capture");
         assert!(command().ends_with(" --capture"));
+    }
+
+    /// The Record shortcut's command is the same app with its own flag,
+    /// quoted the same way.
+    #[test]
+    fn the_record_command_runs_this_app_with_the_record_flag() {
+        assert_eq!(command_with_flag("/usr/bin/hippius", RECORD_FLAG), "/usr/bin/hippius --record");
+        assert_eq!(command_with_flag("/opt/My Apps/Hippius", RECORD_FLAG), "'/opt/My Apps/Hippius' --record");
+        assert!(record_command().ends_with(" --record"));
+        assert_ne!(RECORD_FLAG, CAPTURE_FLAG);
+        assert!(!RECORD_DESKTOP_SETTINGS_LINE.contains('\u{2014}'));
     }
 
     #[test]

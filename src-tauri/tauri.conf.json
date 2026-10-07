@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hippius",
-  "version": "0.6.5-dev.1",
+  "version": "0.6.7-dev.1",
   "identifier": "hippius.com",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -64,7 +64,8 @@
         "capture-overlay",
         "capture-controls",
         "capture-preview",
-        "capture-camera"
+        "capture-camera",
+        "capture-bubble-controls"
       ],
       "dangerousDisableAssetCspModification": [
         "style-src"

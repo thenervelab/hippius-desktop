@@ -171,7 +171,7 @@ export async function tryAutoInitSync(
     try {
       // 15s wall-clock cap per attempt. `auto_init_sync_inner`
       // contains its own bounded operations (HCFS config read,
-      // credit check, per-drive init fan-out), but a deadlock in
+      // per-drive init fan-out), but a deadlock in
       // any one of those would otherwise leave this promise
       // pending forever — and the retry ladder ABOVE relies on
       // `attempt()` returning so it can decide whether to wait for
@@ -215,8 +215,8 @@ export async function tryAutoInitSync(
         return "retry";
       }
       // `MasterMnemonicUnrecoverable` is the specific signal that auth
-      // state hasn't been populated yet. Any other error (insufficient
-      // credits, validation, network) is terminal and must not retry.
+      // state hasn't been populated yet. Any other error (validation,
+      // network) is terminal and must not retry.
       if (isNotReady(err, "MASTER_MNEMONIC_UNRECOVERABLE")) {
         console.warn(
           "[AutoSync] mnemonic not yet recoverable — will retry when auth is ready"

@@ -15,7 +15,6 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::destination::CaptureDestination;
-use super::naming::CAPTURES_FOLDER;
 use super::preview::FailureReason;
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
@@ -27,6 +26,8 @@ pub struct Delivered {
     pub file_name: String,
     /// The drive's display name, for "Saved to …".
     pub drive_name: String,
+    /// The folder in the drive it went into (`Captures` unless changed).
+    pub folder: String,
     /// `None` when the file was saved but the link could not be minted.
     pub share_url: Option<String>,
     /// Why the link is missing, in Rust's words, when it is.
@@ -44,12 +45,14 @@ pub struct Delivered {
     pub placed: std::path::PathBuf,
 }
 
-/// Whether a direct upload's temp copy stays after the upload landed: only
-/// while it has no link, so the card's "Create link" has a file to make one
-/// from. A synced capture's copy is the drive's own file, never the temp one.
+/// Whether a direct upload's temp copy stays after the upload landed: while
+/// it has no link, so the card's "Create link" has a file to make one from,
+/// and for a screenshot, so the card's Edit has the picture to open (the
+/// card removes it when it closes). A synced capture's copy is the drive's
+/// own file, never the temp one.
 #[must_use]
-pub fn keep_temp_after_upload(via_sync: bool, has_link: bool) -> bool {
-    !via_sync && !has_link
+pub fn keep_temp_after_upload(via_sync: bool, has_link: bool, editable: bool) -> bool {
+    !via_sync && (!has_link || editable)
 }
 
 /// Where a capture is once it has been put in the drive, before any link.
@@ -61,11 +64,11 @@ pub struct Placed {
     /// The file went into a synced folder and the sync engine uploads it;
     /// false when it was uploaded directly (and so is on the server now).
     pub via_sync: bool,
-    /// Its name in `Captures` (a synced folder may have renamed it).
+    /// Its name in the capture folder (a synced folder may have renamed it).
     pub file_name: String,
 }
 
-/// Put `file` in the destination's Captures folder: moved into the drive's
+/// Put `file` in the destination's capture folder: moved into the drive's
 /// folder on this machine (the sync engine uploads it), or uploaded
 /// directly to a drive that is only on the server.
 ///
@@ -92,7 +95,8 @@ pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, de
     let (placed, via_sync) = if let Some(root) = local_root {
         let placed = tokio::task::spawn_blocking({
             let file = file.to_path_buf();
-            move || place_in_folder(&root.join(CAPTURES_FOLDER), &file)
+            let dir = root.join(&destination.folder);
+            move || place_in_folder(&dir, &file)
         })
         .await
         .map_err(|e| AppError::Other(format!("capture move task failed: {e}")))??;
@@ -114,7 +118,7 @@ pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, de
             app,
             account_id,
             &destination.label,
-            Some(CAPTURES_FOLDER.to_string()),
+            destination.upload_folder(),
             &[source],
             destination.owner_ss58.clone(),
             destination.folder_hash.clone(),
@@ -149,7 +153,7 @@ pub async fn link_for(state: &AppState, account_id: &str, destination: &CaptureD
     let source = if placed.via_sync {
         LinkSource::Synced {
             label: destination.label.clone(),
-            rel_path: super::preview::rel_path_for(&placed.file_name),
+            rel_path: destination.rel_path(&placed.file_name),
         }
     } else {
         LinkSource::External(placed.placed.clone())
@@ -170,10 +174,11 @@ pub async fn link_for(state: &AppState, account_id: &str, destination: &CaptureD
 impl Delivered {
     /// The broadcast and notification shape for a placed capture and its link.
     #[must_use]
-    pub fn from_parts(placed: &Placed, minted: &Minted, drive_name: &str) -> Self {
+    pub fn from_parts(placed: &Placed, minted: &Minted, destination: &CaptureDestination) -> Self {
         Self {
             file_name: placed.file_name.clone(),
-            drive_name: drive_name.to_string(),
+            drive_name: destination.display_name.clone(),
+            folder: destination.folder.clone(),
             share_url: minted.share_url.clone(),
             link_error: minted.link_error.clone(),
             via_sync: placed.via_sync,
@@ -204,26 +209,55 @@ pub enum LinkSource {
 pub async fn mint(state: &AppState, account_id: &str, source: &LinkSource) -> std::result::Result<crate::shares::commands::ShareLink, String> {
     use crate::shares::commands::ShareChoice;
     use hcfs_client::client::share::ShareTtl;
-    let minted = match source {
-        LinkSource::Synced { label, rel_path } => {
-            crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, None).await
-        }
-        LinkSource::External(path) => {
-            crate::shares::commands::share_external_file(state, account_id, path, ShareTtl::Never, ShareChoice::Public, None).await
-        }
-    };
-    minted.map_err(|e| {
-        tracing::warn!(error = %e, "capture saved, but its share link could not be minted");
-        link_failure_copy(&e)
-    })
+    let mut attempt = 0;
+    loop {
+        let minted = match source {
+            LinkSource::Synced { label, rel_path } => {
+                crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, None).await
+            }
+            LinkSource::External(path) => {
+                crate::shares::commands::share_external_file(state, account_id, path, ShareTtl::Never, ShareChoice::Public, None).await
+            }
+        };
+        let e = match minted {
+            Ok(link) => return Ok(link),
+            Err(e) => e,
+        };
+        let Some(wait) = mint_retry_after(failure_reason(&e), attempt) else {
+            tracing::warn!(error = %e, "capture saved, but its share link could not be minted");
+            return Err(link_failure_copy(&e));
+        };
+        tracing::info!(error = %e, attempt, "capture link not made yet; trying again");
+        tokio::time::sleep(wait).await;
+        attempt += 1;
+    }
+}
+
+/// How long to wait before making a capture's link again after failed
+/// attempt `attempt` (0 = the first), or `None` to give up. A request that
+/// did not get through (offline, a server that did not answer, a dropped
+/// connection) is often fine a second later, and without a link nothing is
+/// copied or opened, so it is tried three times in all. A full drive is not
+/// going to change in seconds, so it is never retried.
+#[must_use]
+pub fn mint_retry_after(reason: FailureReason, attempt: u32) -> Option<std::time::Duration> {
+    const WAITS_MS: [u64; 2] = [1_000, 3_000];
+    if reason == FailureReason::StorageFull {
+        return None;
+    }
+    WAITS_MS
+        .get(usize::try_from(attempt).ok()?)
+        .map(|ms| std::time::Duration::from_millis(*ms))
 }
 
 /// The sentence for a link that could not be made. Never reqwest's own words.
-fn link_failure_copy(e: &AppError) -> String {
+/// Also the tray popover's "Copy link" failure copy (`shares::quick_link`).
+#[must_use]
+pub fn link_failure_copy(e: &AppError) -> String {
     match failure_reason(e) {
         FailureReason::Offline => "You're offline. Create the link when you're back online.".into(),
         FailureReason::StorageFull => STORAGE_FULL.into(),
-        FailureReason::Other => "The link couldn't be created. Try again in a moment.".into(),
+        FailureReason::NeedsFolder | FailureReason::Other => "The link couldn't be created. Try again in a moment.".into(),
     }
 }
 
@@ -249,7 +283,7 @@ pub fn failure_copy(e: &AppError) -> String {
     match failure_reason(e) {
         FailureReason::Offline => OFFLINE.into(),
         FailureReason::StorageFull => STORAGE_FULL.into(),
-        FailureReason::Other => match e {
+        FailureReason::NeedsFolder | FailureReason::Other => match e {
             AppError::Validation(message) => message.clone(),
             _ => UPLOAD_FAILED.into(),
         },
@@ -316,6 +350,16 @@ fn place_in_folder(dir: &Path, file: &Path) -> Result<std::path::PathBuf> {
     place_in_folder_with(dir, file, Path::exists, false, |from, to| std::fs::copy(from, to))
 }
 
+/// Keep a capture in `dir` on this computer, never overwriting: where a
+/// capture waits while no drive can be set up (`capture::setup`).
+///
+/// # Errors
+///
+/// The move or copy failed; `file` is left where it was.
+pub fn keep_in_folder(dir: &Path, file: &Path) -> Result<std::path::PathBuf> {
+    place_in_folder(dir, file)
+}
+
 /// [`place_in_folder`] with the name check and the copy injected, and the
 /// same-volume move skipped when `force_copy`, so tests can fail each step.
 fn place_in_folder_with(
@@ -330,6 +374,12 @@ fn place_in_folder_with(
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| AppError::Other("Capture file has no name".into()))?;
+    // Already there: a capture kept in the folder while no drive could be
+    // set up, sent again once the folder became the drive's. Moving it onto
+    // itself would only rename it to "name (2)".
+    if file.parent() == Some(dir) {
+        return Ok(file.to_path_buf());
+    }
 
     if !force_copy {
         match move_into(dir, name, file, &exists) {
@@ -421,7 +471,12 @@ fn free_name(dir: &Path, name: &str, exists: impl Fn(&Path) -> bool) -> Option<s
 
 /// The notification a delivered capture posts: `(title, body)`.
 pub fn delivered_notice(delivered: &Delivered) -> (String, String) {
-    let saved = format!("{} is in {} › {CAPTURES_FOLDER}.", delivered.file_name, delivered.drive_name);
+    let place = if delivered.folder.is_empty() {
+        delivered.drive_name.clone()
+    } else {
+        format!("{} › {}", delivered.drive_name, delivered.folder)
+    };
+    let saved = format!("{} is in {place}.", delivered.file_name);
     if delivered.share_url.is_some() {
         ("Link copied".into(), saved)
     } else {
@@ -446,10 +501,26 @@ pub fn failed_notice(error: &AppError, card_showing: bool) -> (String, String) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_link_that_did_not_get_through_is_tried_three_times_in_all() {
+        use std::time::Duration;
+        for reason in [FailureReason::Offline, FailureReason::Other, FailureReason::NeedsFolder] {
+            assert_eq!(mint_retry_after(reason, 0), Some(Duration::from_secs(1)), "{reason:?}");
+            assert_eq!(mint_retry_after(reason, 1), Some(Duration::from_secs(3)), "{reason:?}");
+            assert_eq!(mint_retry_after(reason, 2), None, "{reason:?}: three attempts in all");
+        }
+        assert_eq!(
+            mint_retry_after(FailureReason::StorageFull, 0),
+            None,
+            "a full drive will not change in seconds"
+        );
+    }
+
     fn delivered(share_url: Option<&str>) -> Delivered {
         Delivered {
             file_name: "Screenshot 2026-09-22 at 14.03.11.png".into(),
             drive_name: "Work".into(),
+            folder: "Captures".into(),
             share_url: share_url.map(str::to_string),
             link_error: share_url.is_none().then(|| "boom".into()),
             via_sync: false,
@@ -539,11 +610,31 @@ mod tests {
         assert_eq!(std::fs::read(captures.join("Shot.png")).unwrap(), b"older");
     }
 
+    /// A capture kept in the folder while no drive could be set up is sent
+    /// again once that folder is the drive's: it stays as it is, not renamed.
+    #[test]
+    fn a_capture_already_in_the_folder_is_left_as_it_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let captures = tmp.path().join("Hippius").join("Captures");
+        std::fs::create_dir_all(&captures).unwrap();
+        let kept = captures.join("Shot.png");
+        std::fs::write(&kept, b"png").unwrap();
+        assert_eq!(place_in_folder(&captures, &kept).unwrap(), kept);
+        assert_eq!(std::fs::read_dir(&captures).unwrap().count(), 1);
+    }
+
     #[test]
     fn a_delivered_capture_says_the_link_is_copied_and_where_the_file_went() {
         let (title, body) = delivered_notice(&delivered(Some("https://x/share/t#k=1")));
         assert_eq!(title, "Link copied");
         assert_eq!(body, "Screenshot 2026-09-22 at 14.03.11.png is in Work › Captures.");
+        // The captures drive keeps them at its root: the drive alone.
+        let root = Delivered {
+            drive_name: "Captures".into(),
+            folder: String::new(),
+            ..delivered(Some("https://x/share/t#k=1"))
+        };
+        assert_eq!(delivered_notice(&root).1, "Screenshot 2026-09-22 at 14.03.11.png is in Captures.");
     }
 
     /// The capture is safe; only the link is missing, and the notice must
@@ -622,9 +713,18 @@ mod tests {
 
     #[test]
     fn a_direct_upload_keeps_its_temp_copy_only_while_it_has_no_link() {
-        assert!(keep_temp_after_upload(false, false));
-        assert!(!keep_temp_after_upload(false, true));
-        assert!(!keep_temp_after_upload(true, false));
-        assert!(!keep_temp_after_upload(true, true));
+        assert!(keep_temp_after_upload(false, false, false));
+        assert!(!keep_temp_after_upload(false, true, false));
+        assert!(!keep_temp_after_upload(true, false, false));
+        assert!(!keep_temp_after_upload(true, true, false));
+    }
+
+    /// A screenshot's card can open it in the editor, so its temp copy stays
+    /// with the card even once it has a link. A synced one never needs it.
+    #[test]
+    fn a_direct_screenshot_keeps_its_temp_copy_for_the_editor() {
+        assert!(keep_temp_after_upload(false, true, true));
+        assert!(!keep_temp_after_upload(true, true, true));
+        assert!(!keep_temp_after_upload(true, false, true));
     }
 }

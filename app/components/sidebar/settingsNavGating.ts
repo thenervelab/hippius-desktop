@@ -11,7 +11,16 @@ export interface SettingsNavFlags {
   vpnEnabled: boolean;
   walletEnabled: boolean;
   apiTokenEnabled: boolean;
+  /**
+   * Screenshots & Recording: the capture flag AND capture working on this
+   * computer (the gate the capture cards themselves use). Hidden unless
+   * said to be on.
+   */
+  captureEnabled?: boolean;
 }
+
+/** The Screenshots & Recording section, after Sync & Storage. */
+export const CAPTURE_SETTINGS_SECTION = "capture";
 
 export function filterSettingsNavItems<T extends GatedSettingsItem>(
   items: T[],
@@ -21,7 +30,8 @@ export function filterSettingsNavItems<T extends GatedSettingsItem>(
     (item) =>
       (flags.vpnEnabled || item.section !== "vpn") &&
       (flags.walletEnabled || item.section !== "wallets") &&
-      (flags.apiTokenEnabled || item.section !== "api-key"),
+      (flags.apiTokenEnabled || item.section !== "api-key") &&
+      (flags.captureEnabled === true || item.section !== CAPTURE_SETTINGS_SECTION),
   );
 }
 
@@ -50,6 +60,7 @@ export function resolveSettingsSection(
     vpn: flags.vpnEnabled,
     wallets: flags.walletEnabled,
     "api-key": flags.apiTokenEnabled,
+    [CAPTURE_SETTINGS_SECTION]: flags.captureEnabled === true,
   };
   return available[section] === false ? DEFAULT_SETTINGS_SECTION : section;
 }

@@ -3444,9 +3444,8 @@ pub async fn leave_shared_drive(app: tauri::AppHandle, label: String) -> Result<
 /// Sync a drive that was shared with this account: open the grant, allocate a
 /// local member drive row, install the owner's folder key, and start sync.
 ///
-/// NO credit-eligibility gate: storage on a shared drive bills the OWNER
-/// (`initialize_sync_inner` skips its credits pre-gate for member drives on
-/// the same grounds; the server's per-request 402 stays the backstop).
+/// NO eligibility gate: storage on a shared drive bills the OWNER, and the
+/// server's per-request 402 stays the backstop.
 #[tauri::command]
 pub async fn add_shared_drive(
     app: tauri::AppHandle,
@@ -3536,13 +3535,18 @@ pub async fn add_shared_drive(
     if preparing.mark_preparing(&label) {
         sync.emit_snapshot(true);
     }
-    if let Err(e) = crate::sync::lifecycle::initialize_sync_inner(app.clone(), ctx.account_id.clone(), label.clone(), None, true, false, None).await {
+    if let Err(e) = crate::sync::lifecycle::initialize_sync_inner(app.clone(), ctx.account_id.clone(), label.clone(), None, true, None).await {
         if preparing.clear(&label) {
             sync.emit_snapshot(true);
         }
         // The row + seal stay: init failures here are usually transient
         // (network), and the drive resumes through the normal retry surfaces.
+        // Flag the kept drive so it shows the failure and that retry instead
+        // of sitting in its bootstrap-Active state as "Syncing".
         warn!(label = %label, error = %e, "Shared drive added but initial sync init failed");
+        if let Some(status) = crate::sync::lifecycle::init_failure_status(&e, "Failed to start syncing") {
+            crate::sync::status::emit_drive_status(&app, &label, &installed.sync_path, status);
+        }
         return Err(e);
     }
 

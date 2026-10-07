@@ -148,4 +148,68 @@ export function getTraySyncSummary(
   };
 }
 
+/** The popover's one-line sync status, beside the tabs. */
+export interface TraySyncLine {
+  /** `synced` reads green, `active` brand blue with a ring, `failed` red. */
+  tone: "synced" | "active" | "failed";
+  /** "All synced", "Uploading 2 · 64%", "Preparing…", "2 failed". */
+  text: string;
+  /** For the ring while active, 0 to 100. */
+  percent: number;
+  /** The fuller sentence, for the tooltip and screen readers. */
+  detail: string;
+}
+
+/**
+ * The summary above, said in one short line for the tray popover's tabs
+ * row. Idle reads as "All synced": nothing is waiting, which is the
+ * question the line answers. Same precedence as the summary (a failure
+ * outranks completion), because it is read from it.
+ */
+export function getTraySyncLine(snapshot: SyncSnapshot): TraySyncLine {
+  const summary = getTraySyncSummary(snapshot);
+  if (!summary || summary.tone === "completed") {
+    return {
+      tone: "synced",
+      text: "All synced",
+      percent: 100,
+      detail: summary?.detail ?? "Everything is up to date",
+    };
+  }
+  if (summary.tone === "failed") {
+    const failed = snapshot.failedFiles;
+    return {
+      tone: "failed",
+      text: failed > 0 ? `${failed.toLocaleString()} failed` : "Sync failed",
+      percent: summary.percent,
+      detail: summary.detail,
+    };
+  }
+  if (summary.tone === "preparing" || snapshot.actualTotal === 0) {
+    return {
+      tone: "active",
+      text: "Preparing…",
+      percent: summary.percent,
+      detail: summary.detail,
+    };
+  }
+  // The same "neither finished nor failed" count the summary's detail quotes.
+  const remaining = Math.max(
+    0,
+    snapshot.actualTotal -
+      snapshot.syncedCount -
+      snapshot.deletedCount -
+      snapshot.failedFiles,
+  );
+  return {
+    tone: "active",
+    text:
+      remaining > 0
+        ? `Uploading ${remaining.toLocaleString()} · ${summary.percent}%`
+        : `Uploading · ${summary.percent}%`,
+    percent: summary.percent,
+    detail: summary.detail,
+  };
+}
+
 export default getTraySyncSummary;

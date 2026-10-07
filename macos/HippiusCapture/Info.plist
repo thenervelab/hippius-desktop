@@ -11,12 +11,20 @@
   process, and the helper's `--list-cameras` is what the capture bar's camera
   menu shows. CFBundleIdentifier matches the identifier embed-capture-helper.sh
   signs with. Pinned by src-tauri/tests/capture_wiring.rs.
+
+  LSUIElement keeps the helper out of the Dock. Touching the window server
+  (CGMainDisplayID, ScreenCaptureKit) registers the process with the Dock,
+  and without it macOS shows a second Hippius icon that bounces for the
+  whole recording: the helper never finishes launching as an app, so the
+  icon does nothing when clicked.
 -->
 <dict>
     <key>CFBundleIdentifier</key>
     <string>hippius.com.HippiusCapture</string>
     <key>CFBundleName</key>
     <string>HippiusCapture</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>NSCameraUseContinuityCameraDeviceType</key>

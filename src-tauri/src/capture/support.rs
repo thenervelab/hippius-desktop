@@ -105,6 +105,8 @@ pub struct Surfaces {
     /// phones are not offered that way (Continuity is macOS only).
     pub continuity_hint: Option<&'static str>,
     pub shortcut: ShortcutSupport,
+    /// How the Record shortcut works here ([`record_shortcut_for`]).
+    pub record_shortcut: ShortcutSupport,
     /// With the system picker, the line that says the desktop's own tool
     /// chooses what is captured (the Capture menu and Settings show it);
     /// `None` with Hippius's overlay.
@@ -167,6 +169,7 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
         },
         continuity_hint: (platform == Platform::MacOs).then_some(CONTINUITY_HINT),
         shortcut: shortcut_for(platform, super::shortcut_portal::PortalStatus::Missing),
+        record_shortcut: record_shortcut_for(platform),
         system_picker_note: wayland.then_some(WAYLAND_SCREENSHOT_NOTE),
         linux_session: match platform {
             Platform::LinuxX11 => Some(LinuxSession::X11),
@@ -204,6 +207,29 @@ pub fn shortcut_for(platform: Platform, portal: super::shortcut_portal::PortalSt
     }
 }
 
+/// How the Record shortcut works on `platform`: the plugin's key grab
+/// wherever the screenshot shortcut has it. On Wayland always a shortcut
+/// the user adds in the desktop's keyboard settings, running
+/// `<this app> --record`: the portal session binds only the screenshot
+/// shortcut, and that command works on every Wayland desktop.
+#[must_use]
+pub fn record_shortcut_for(platform: Platform) -> ShortcutSupport {
+    match platform {
+        Platform::MacOs | Platform::Windows | Platform::LinuxX11 => ShortcutSupport {
+            supported: true,
+            via: ShortcutVia::Plugin,
+            unavailable_message: None,
+            command: None,
+        },
+        Platform::LinuxWayland => ShortcutSupport {
+            supported: false,
+            via: ShortcutVia::DesktopSettings,
+            unavailable_message: Some(super::desktop_shortcut::RECORD_DESKTOP_SETTINGS_LINE),
+            command: Some(super::desktop_shortcut::record_command()),
+        },
+    }
+}
+
 /// Whether `platform` can record the camera alone. Everywhere but Wayland
 /// the stage window is filmed by its window id; Wayland gives an app no
 /// window ids (and the portal's dialog would make the user pick Hippius's
@@ -237,7 +263,7 @@ pub const fn pill_filmed(platform: Platform) -> bool {
 }
 
 /// The pill's one-time line where it is filmed. Two short lines, sized for
-/// the 340 pt pill.
+/// the 380 pt pill.
 pub const PILL_FILMED_NOTE: &str = "These controls show in screen recordings. They stay small; point at them to use them.";
 
 /// How a capture starts: Hippius's overlay, or (a screenshot on Wayland)
@@ -379,6 +405,7 @@ mod tests {
                 "microphoneUnavailableMessage": null,
                 "continuityHint": CONTINUITY_HINT,
                 "shortcut": { "supported": true, "via": "plugin", "unavailableMessage": null, "command": null },
+                "recordShortcut": { "supported": true, "via": "plugin", "unavailableMessage": null, "command": null },
                 "systemPickerNote": null,
                 "linuxSession": null,
             })
@@ -603,5 +630,29 @@ mod tests {
         assert_eq!(v["linuxSession"], "wayland");
         assert_eq!(v["shortcut"]["via"], "desktopSettings");
         assert!(v["shortcut"]["command"].as_str().is_some_and(|c| c.ends_with(" --capture")));
+    }
+
+    /// The Record shortcut goes where the screenshot one does, except on
+    /// Wayland, where it is always the desktop's keyboard settings with its
+    /// own command: the portal session binds only the screenshot shortcut.
+    #[test]
+    fn the_record_shortcut_route_mirrors_the_screenshot_ones() {
+        for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
+            assert_eq!(
+                record_shortcut_for(platform),
+                shortcut_for(platform, crate::capture::shortcut_portal::PortalStatus::Missing),
+                "{platform:?}"
+            );
+        }
+        let wayland = record_shortcut_for(Platform::LinuxWayland);
+        assert!(!wayland.supported);
+        assert_eq!(wayland.via, ShortcutVia::DesktopSettings);
+        assert_eq!(
+            wayland.unavailable_message,
+            Some(crate::capture::desktop_shortcut::RECORD_DESKTOP_SETTINGS_LINE)
+        );
+        assert!(wayland.command.is_some_and(|c| c.ends_with(" --record")), "{wayland:?}");
+        let v = serde_json::to_value(surfaces_for(Platform::LinuxWayland, true, true)).unwrap();
+        assert_eq!(v["recordShortcut"]["via"], "desktopSettings");
     }
 }

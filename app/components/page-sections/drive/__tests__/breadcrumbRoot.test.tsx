@@ -36,4 +36,14 @@ describe("breadcrumb root", () => {
     expect(screen.getByRole("button", { name: "Drive" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/^Back to/)).not.toBeInTheDocument();
   });
+
+  // The Captures page shows one drive: the drive is the top of the trail.
+  it("leaves the root out on a page pinned to one drive", () => {
+    render(
+      <SyncFolderBreadcrumb onLocalClick={vi.fn()} segments={[{ label: "Hippius Captures" }]} hideRoot />,
+    );
+    expect(screen.queryByRole("button", { name: "Drive" })).not.toBeInTheDocument();
+    expect(screen.getByText("Hippius Captures")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Back to/)).not.toBeInTheDocument();
+  });
 });

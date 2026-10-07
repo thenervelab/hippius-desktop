@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { isIoError } from "@/lib/utils/dispatchTauriError";
+
+/**
+ * `AppError::Io` (a missing path), matched on the structured `kind`. The same
+ * check as `dispatchTauriError.ts::isIoError`, kept here so this helper does
+ * not pull `sonner` into the tray popover's bundle, which reveals files too.
+ */
+function isIoError(error: unknown): boolean {
+  return (error as { kind?: unknown } | null)?.kind === "Io";
+}
 
 interface RevealFileParams {
   /** Direct source path to try first (e.g. file.source). */

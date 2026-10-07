@@ -17,14 +17,30 @@ vi.mock("@/app/lib/capture/shortcutLabel", async (importOriginal) => ({
 
 import CaptureSettings from "../CaptureSettings";
 import { captureRecordingNoteAtom, captureSupportedAtom, captureSurfacesAtom } from "@/app/lib/capture/captureFlow";
-import type { CaptureSurfaces } from "@/app/lib/tauri/capture";
+import type { CaptureDriveStatus, CaptureSurfaces } from "@/app/lib/tauri/capture";
 
 const DEFAULT = "CommandOrControl+Shift+2";
+const DOCS = {
+  path: "/Users/a/Documents/Hippius Captures",
+  place: "Documents › Hippius Captures",
+  permissionNote: null,
+};
+const READY: CaptureDriveStatus = {
+  state: "ready",
+  label: "Hippius Captures",
+  name: "Hippius Captures",
+  remote: false,
+  location: DOCS,
+};
 let accelerator: string | null = DEFAULT;
 
-function setup(recordingNote: string | null = null, surfaces: CaptureSurfaces | null = null) {
+function setup(
+  recordingNote: string | null = null,
+  surfaces: CaptureSurfaces | null = null,
+  drive: CaptureDriveStatus = READY,
+) {
   tauri.onInvoke("capture_get_shortcut", () => ({ accelerator, defaultAccelerator: DEFAULT }));
-  tauri.onInvoke("capture_get_destination", () => ({ label: "Work", displayName: "Work" }));
+  tauri.onInvoke("capture_drive_status", () => drive);
   tauri.onInvoke("capture_set_shortcut", (args) => {
     accelerator = (args as { accelerator: string | null }).accelerator;
     return null;
@@ -116,7 +132,7 @@ describe("the capture shortcut recorder", () => {
       defaultAccelerator: DEFAULT,
       problem: "Another copy of Hippius is using this shortcut. Quit it, or choose another.",
     }));
-    tauri.onInvoke("capture_get_destination", () => ({ label: "Work", displayName: "Work" }));
+    tauri.onInvoke("capture_drive_status", () => READY);
     const store = createStore();
     store.set(captureSupportedAtom, true);
     render(
@@ -134,6 +150,64 @@ describe("the capture shortcut recorder", () => {
   });
 });
 
+describe("the capture folder row", () => {
+  it("says where the captures drive is, and offers to move it", async () => {
+    const { container } = setup();
+    const line = await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });
+    await waitFor(() => expect(line).toHaveTextContent("saved in Documents › Hippius Captures"));
+    expect(screen.getAllByRole("button", { name: "Change" }).length).toBe(2);
+    expect(container).not.toHaveTextContent("/Users/a");
+  });
+
+  it("opens the captures folder from the tab when it is on this computer", async () => {
+    setup();
+    tauri.onInvoke("reveal_drive_in_finder", () => null);
+    fireEvent.click(await screen.findByRole("button", { name: "Show in Finder" }, { timeout: 5000 }));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("reveal_drive_in_finder", { label: "Hippius Captures" }),
+    );
+  });
+
+  it("offers no folder to open for a captures drive that is only on the server", async () => {
+    setup(null, null, { ...READY, remote: true, location: null });
+    await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });
+    expect(screen.queryByRole("button", { name: "Show in Finder" })).toBeNull();
+  });
+
+  it("names a captures drive that is not synced here", async () => {
+    setup(null, null, { ...READY, remote: true, location: null });
+    const line = await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });
+    await waitFor(() => expect(line).toHaveTextContent("saved in your Hippius Captures drive"));
+  });
+
+  // Nothing chosen yet is not a problem to fix: the first capture asks.
+  it("says the first capture asks, with the suggested place, and offers to set it up now", async () => {
+    setup(null, null, { state: "needsSetup", suggested: DOCS, waiting: 0 });
+    const line = await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });
+    await waitFor(() => expect(line).toHaveTextContent("Your first capture asks where to keep them"));
+    expect(line).toHaveTextContent("Documents › Hippius Captures");
+    expect(screen.getByRole("button", { name: "Set up" })).toBeInTheDocument();
+  });
+
+  it("says in Rust's words why a chosen folder has no drive yet", async () => {
+    setup(null, null, { state: "pending", location: DOCS, message: "Your captures are kept on this computer." });
+    const line = await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });
+    await waitFor(() => expect(line).toHaveTextContent("Your captures are kept on this computer."));
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("reads the status again when the captures drive changes", async () => {
+    let drive: CaptureDriveStatus = { state: "needsSetup", suggested: DOCS, waiting: 0 };
+    setup(null, null, drive);
+    tauri.onInvoke("capture_drive_status", () => drive);
+    await screen.findByRole("button", { name: "Set up" }, { timeout: 5000 });
+    drive = READY;
+    await act(() => tauri.emitEvent("capture_drive_changed", null));
+    await waitFor(() => expect(screen.getByTestId("capture-destination-line")).toHaveTextContent("Documents › Hippius Captures"));
+    expect(screen.queryByRole("button", { name: "Set up" })).toBeNull();
+  });
+});
+
 describe("the capture card's recording row", () => {
   it("says in Rust's words when this build cannot record", async () => {
     setup("Screen recording isn't included in this build.");
@@ -143,7 +217,7 @@ describe("the capture card's recording row", () => {
 
   it("is absent when recording works or is not offered here", async () => {
     setup(null);
-    await screen.findByText("Capture drive");
+    await screen.findByText("Capture folder");
     expect(screen.queryByText("Screen recording")).toBeNull();
   });
 });
@@ -257,5 +331,17 @@ describe("the capture card on Linux", () => {
     setup(null, linux({ selection: "systemPicker", systemPickerNote: note, linuxSession: "wayland" }));
     expect(await screen.findByText(note)).toBeInTheDocument();
     expect(screen.getByText("Screenshots")).toBeInTheDocument();
+  });
+});
+
+describe("the tab's layout", () => {
+  // The shortcuts lead the tab as tiles, the keys drawn large under the name.
+  it("draws the screenshot shortcut as a tile with its keys and actions", async () => {
+    setup();
+    const tile = await screen.findByRole("group", { name: "Screenshot shortcut" }, { timeout: 5000 });
+    await waitFor(() => expect(tile.querySelector("kbd")).not.toBeNull());
+    expect(tile.querySelector("kbd")).toHaveAttribute("aria-label", "Shortcut ⇧ ⌘ 2");
+    expect(tile).toHaveTextContent("Change");
+    expect(tile).toHaveTextContent("Turn off");
   });
 });

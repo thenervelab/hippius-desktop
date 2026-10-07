@@ -81,6 +81,18 @@ export function barHint(
 }
 
 /**
+ * The one line the shortcut's one-step screenshot shows (there is no bar):
+ * what to do, and that Escape gets out. `spaceForWindow` is whether Space
+ * switches to clicking a window here.
+ */
+export function instantHint(mode: CaptureMode, spaceForWindow: boolean): string {
+  if (mode === "window") return "Click a window to capture it. Space to drag an area, Esc to cancel";
+  return spaceForWindow
+    ? "Drag to capture an area. Hold Space to move it, press Space for a window, Esc to cancel"
+    : "Drag to capture an area. Hold Space to move it, Esc to cancel";
+}
+
+/**
  * The panel's line (the capture bar alone in a window, where the desktop's
  * own screen-sharing dialog chooses): what Record leads to.
  */

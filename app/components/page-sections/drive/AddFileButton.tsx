@@ -1,20 +1,17 @@
 import { Button } from "@/components/ui";
-import { FilePlus2, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import {
   useState,
   useEffect,
-  useMemo,
   forwardRef,
   useImperativeHandle,
   useCallback,
 } from "react";
 
-import UploadFilesFlow from "./upload-files-flow";
+import UploadFileDialog, { type NestedUploadTarget } from "./UploadFileDialog";
 import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { useAtomValue } from "jotai";
-import PrivacyBadge from "@/components/ui/PrivacyBadge";
-import { FramedDialog } from "@/components/ui/FramedDialog";
 
 import { cn } from "@/lib/utils";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
@@ -53,15 +50,7 @@ type AddButtonProps = {
   // are uploaded into a specific nested subfolder instead of the root of
   // the active sync folder. Used by the nested drive view (breadcrumb-based
   // folder browsing inside DriveContainer).
-  nestedUpload?: {
-    folderName: string;
-    /** Path relative to the sync root, e.g. "Photos/2024". */
-    subfolder?: string;
-    /** Resolved sync-root absolute path for the active drive. */
-    syncBasePath?: string;
-    /** Fired after a successful upload so the parent can refresh listings. */
-    onSuccess?: () => void;
-  };
+  nestedUpload?: NestedUploadTarget;
 };
 
 // Add ref interface for parent components to trigger the dialog.
@@ -154,9 +143,6 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       [isOpen, hasConfiguredDrives, requireUploadRoom, storageBlocked],
     );
 
-    // Memoize title to prevent recalculation
-    const title = useMemo(() => UPLOAD_FILE_LABEL, []);
-
     // Close and reset everything - use useCallback to prevent re-renders
     const closeDialog = useCallback(() => {
       setIsOpen(false);
@@ -203,46 +189,6 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       };
     }, [isOpen, requireUploadRoom, storageBlocked]);
 
-    // Render current step content - memoized to prevent unnecessary re-renders
-    const renderStepContent = useMemo(() => {
-      // In nested mode, hand off to UploadFilesFlow's folder branch so the
-      // upload targets `<syncBasePath>/<subfolder>` instead of the root of
-      // the active sync drive.
-      if (nestedUpload) {
-        return (
-          <UploadFilesFlow
-            key="upload-file-nested"
-            mode="folder"
-            folderName={nestedUpload.folderName}
-            subfolder={nestedUpload.subfolder}
-            syncBasePath={nestedUpload.syncBasePath}
-            initialFiles={droppedFiles}
-            initialPaths={droppedPaths}
-            onSuccess={() => {
-              nestedUpload.onSuccess?.();
-              closeDialog();
-            }}
-            onCancel={closeDialog}
-          />
-        );
-      }
-      return (
-        <UploadFilesFlow
-          key="upload-file"
-          reset={closeDialog}
-          initialFiles={droppedFiles}
-          initialPaths={droppedPaths}
-          defaultFolderLabel={defaultFolderLabel}
-        />
-      );
-    }, [
-      droppedFiles,
-      droppedPaths,
-      closeDialog,
-      defaultFolderLabel,
-      nestedUpload,
-    ]);
-
     return (
       <>
         <Button
@@ -285,23 +231,14 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           )}
         </Button>
 
-        <FramedDialog
+        <UploadFileDialog
           open={isOpen}
           onClose={closeDialog}
-          title={title}
-          icon={<FilePlus2 className="size-4 text-white" />}
-          maxWidth="max-w-[653px]"
-        >
-          {/* Section label row — matches Figma layout */}
-          <div className="mb-2.5 flex items-center justify-between gap-2">
-            <span className="font-geist text-sm font-medium text-grey-60 dark:text-grey-dark-600 tracking-[-0.28px]">
-              {title}
-            </span>
-            <PrivacyBadge variant="file" />
-          </div>
-
-          {renderStepContent}
-        </FramedDialog>
+          initialFiles={droppedFiles}
+          initialPaths={droppedPaths}
+          defaultFolderLabel={defaultFolderLabel}
+          nestedUpload={nestedUpload}
+        />
       </>
     );
   },

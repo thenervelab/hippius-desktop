@@ -86,7 +86,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes};
+use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -120,7 +120,7 @@ use crate::sync::lifecycle::{
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
-use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files_in_drive};
+use crate::sync::recent_uploads::{get_recent_captures, get_recent_uploads, search_files, search_files_in_drive};
 use crate::sync::rekey_probe::probe_rekey_recovery;
 use crate::sync::remote::{
     cache_remote_file, download_remote_file, folder_grant_stats, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped,
@@ -266,10 +266,20 @@ fn main() {
 
     load_env();
 
+    // Linux: the app id GNOME matches windows to the installed app by, set
+    // before GTK starts (`utils::app_id` says why).
+    crate::utils::app_id::apply();
+    // Linux: on GNOME's Wayland session, connect through XWayland so the
+    // recording pill and camera bubble can stay on top (`utils::display_backend`
+    // says why). Before GTK starts; logged once logging is up. The recorder
+    // child and the CLI modes above open no window and never get here.
+    let display_backend = crate::utils::display_backend::apply();
+
     // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
     // The guard must outlive the app so the non-blocking file writer keeps
     // flushing — see `init_logging`. Holding it in this `main` local does that.
     let _log_guard = init_logging();
+    info!(?display_backend, "display backend chosen");
 
     // A packaged app's stderr goes nowhere, so an uncaptured panic is the one
     // event guaranteed to be missing from a support bundle. Installed after
@@ -323,6 +333,11 @@ fn main() {
             // window forward would put it in a recording.
             if crate::cli::argv_requests_capture(&argv) {
                 crate::capture::commands::on_shortcut(app);
+                return;
+            }
+            // `hippius --record`: the Record shortcut, bound the same way.
+            if crate::cli::argv_requests_record(&argv) {
+                crate::capture::commands::on_record_shortcut(app);
                 return;
             }
             if let Some(window) = app.get_webview_window("main") {
@@ -413,6 +428,8 @@ fn main() {
             list_sync_folder_grouped,
             get_recent_files,
             get_recent_uploads,
+            get_recent_captures,
+            crate::tray::thumbnail::get_tray_thumbnail,
             search_files,
             get_user_files,
             filter_file_entries,
@@ -486,9 +503,11 @@ fn main() {
             get_thumbnail,
             prepare_motion_photo_preview,
             read_preview_bytes,
+            resolve_drive_file_source,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
+            crate::shares::quick_link::copy_file_share_link,
             crate::shares::commands::hcfs_create_folder_share,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
@@ -693,15 +712,16 @@ fn main() {
             crate::capture::commands::capture_support,
             crate::capture::commands::capture_open_permission_settings,
             crate::capture::commands::capture_open_privacy_settings,
-            crate::capture::commands::capture_get_destination,
-            crate::capture::commands::capture_set_destination,
             crate::capture::commands::capture_set_mode,
             crate::capture::commands::capture_set_pending,
             crate::capture::commands::capture_confirm,
             crate::capture::commands::capture_get_options,
             crate::capture::commands::capture_set_options,
-            crate::capture::commands::capture_destination_choices,
+            crate::capture::setup::capture_drive_status,
+            crate::capture::setup::capture_drive_location,
+            crate::capture::setup::capture_drive_create,
             crate::capture::commands::capture_preview_context,
+            crate::capture::commands::capture_preview_pointer,
             crate::capture::commands::capture_preview_copy_link,
             crate::capture::commands::capture_preview_show_in_folder,
             crate::capture::commands::capture_preview_dismiss,
@@ -711,6 +731,7 @@ fn main() {
             crate::capture::commands::capture_set_shortcut,
             crate::capture::commands::capture_configure_shortcut,
             crate::capture::commands::capture_skip_countdown,
+            crate::capture::commands::capture_hold_bar,
             crate::capture::commands::capture_area_context,
             crate::capture::commands::capture_area_choose,
             crate::capture::commands::capture_controls_context,
@@ -722,6 +743,12 @@ fn main() {
             crate::capture::commands::capture_mic_meter_start,
             crate::capture::commands::capture_mic_meter_stop,
             crate::capture::commands::capture_camera_toggle,
+            crate::capture::commands::capture_microphone_state,
+            crate::capture::commands::capture_microphone_mute,
+            crate::capture::commands::capture_microphone_switch,
+            crate::capture::commands::capture_camera_switch,
+            crate::capture::commands::capture_controls_menu,
+            crate::capture::commands::capture_controls_menu_side,
             crate::capture::commands::capture_camera_set_size,
             crate::capture::commands::capture_camera_dismiss,
             crate::capture::commands::capture_share_targets,
@@ -737,6 +764,19 @@ fn main() {
             crate::capture::commands::capture_preview_reveal,
             crate::capture::commands::capture_preview_discard,
             crate::capture::commands::capture_preview_upgrade,
+            crate::capture::editor::capture_preview_edit,
+            crate::capture::editor::capture_editor_open_file,
+            crate::capture::editor::capture_editor_context,
+            crate::capture::editor::capture_editor_image,
+            crate::capture::editor::capture_editor_save,
+            crate::capture::editor::capture_editor_copy,
+            crate::capture::editor::capture_editor_close,
+            crate::capture::editor::capture_editor_save_preference,
+            crate::capture::editor::capture_editor_set_save_preference,
+            crate::capture::editor::capture_editor_copy_saved_link,
+            crate::capture::editor::capture_annotate_latest,
+            crate::capture::editor::capture_annotate_open_latest,
+            crate::capture::editor::capture_annotate_pick,
             get_platform_info,
             is_app_translocated,
             // Finder extension enablement. Registered on every platform (they
@@ -842,24 +882,14 @@ fn main() {
 
     app.run(|app_handle, event| {
         match event {
-            // macOS dock icon click with no visible windows. Mirrors the
-            // tray's "Open Hippius" action.
+            // macOS dock icon click: the main window comes forward unless it
+            // is already up. Mirrors the tray's "Open Hippius" action. Not
+            // keyed on `has_visible_windows`: a recording's pill, the capture
+            // card and the camera are visible windows, so a Dock click during
+            // a recording used to do nothing.
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { has_visible_windows, .. } => {
-                if has_visible_windows {
-                    return;
-                }
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    if let Err(e) = window.unminimize() {
-                        debug!("Failed to unminimize window on reopen: {e}");
-                    }
-                    if let Err(e) = window.show() {
-                        debug!("Failed to show window on reopen: {e}");
-                    }
-                    if let Err(e) = window.set_focus() {
-                        debug!("Failed to focus window on reopen: {e}");
-                    }
-                }
+            tauri::RunEvent::Reopen { .. } => {
+                crate::capture::commands::on_app_reopen(app_handle);
             }
 
             // Quitting mid-share: every running Finder mint is told to stop,
@@ -946,6 +976,14 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
             && window.label() == crate::tray::panel::PANEL_LABEL
         {
             crate::tray::panel::on_panel_blur(window.app_handle());
+        }
+
+        // The user brought the main window back during a recording: the
+        // recording's end must leave it where it is.
+        if let tauri::WindowEvent::Focused(true) = event
+            && window.label() == "main"
+        {
+            crate::capture::commands::on_main_window_focused(window.app_handle());
         }
 
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1045,6 +1083,16 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
 
+        // Linux: the recording's tray menu (Stop, Pause, Show recording
+        // controls) is answered by one app-wide listener, added here before
+        // any recording puts that menu on the icon.
+        #[cfg(target_os = "linux")]
+        crate::capture::commands::listen_to_recording_menu(app.handle());
+        // Which display GTK opened: XWayland can be chosen and still fall
+        // back to Wayland (`utils::display_backend`).
+        #[cfg(target_os = "linux")]
+        info!(display = ?crate::utils::display_backend::active_display(), "GTK display opened");
+
         // macOS 26+ (Tahoe) mounts legacy transparent .icns icons onto a white
         // rounded tile in the Dock, but renders a RUNTIME-set application icon
         // as-is (the sticker-style glyph). Tauri performs this runtime set in
@@ -1094,6 +1142,8 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // Say in the log, once, when a release build has no recording helper
         // (Record is shown disabled). Its own thread: it runs `sw_vers`.
         std::thread::spawn(crate::capture::recording::warn_if_helper_missing);
+        // Cmd+Tab to Hippius during a recording shows the main window (macOS).
+        crate::capture::activation::watch(app.handle());
         // Whether a Wayland session has the GlobalShortcuts portal, so
         // Settings shows the right shortcut route.
         #[cfg(target_os = "linux")]

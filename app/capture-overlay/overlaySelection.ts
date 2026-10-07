@@ -25,6 +25,26 @@ export function dragRect(start: Point, current: Point): LogicalRect {
   };
 }
 
+/**
+ * A new area being dragged while Space is held moves instead of growing, as
+ * in macOS's Cmd+Shift+4: both corners move by the pointer's step
+ * (`dx`, `dy`), kept on the display. Returns the new start and current
+ * corners.
+ */
+export function shiftDrag(
+  start: Point,
+  current: Point,
+  dx: number,
+  dy: number,
+  bounds: { width: number; height: number },
+): { start: Point; current: Point } {
+  const rect = dragRect(start, current);
+  const moved = moveRect(rect, dx, dy, bounds);
+  const sx = moved.x - rect.x;
+  const sy = moved.y - rect.y;
+  return { start: { x: start.x + sx, y: start.y + sy }, current: { x: current.x + sx, y: current.y + sy } };
+}
+
 export function isRealDrag(rect: LogicalRect): boolean {
   return rect.width >= MIN_DRAG_POINTS && rect.height >= MIN_DRAG_POINTS;
 }

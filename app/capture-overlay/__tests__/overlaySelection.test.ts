@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   dragRect,
   isRealDrag,
+  shiftDrag,
   sizeLabel,
   windowAt,
 } from "@/app/capture-overlay/overlaySelection";
@@ -57,5 +58,24 @@ describe("windowAt", () => {
 describe("sizeLabel", () => {
   it("rounds to whole points", () => {
     expect(sizeLabel({ x: 0, y: 0, width: 1279.6, height: 720.2 })).toBe("1280 × 720");
+  });
+});
+
+describe("shiftDrag (Space held while dragging a new area)", () => {
+  const screen = { width: 1000, height: 800 };
+
+  it("moves both corners by the pointer's step, keeping the size", () => {
+    const moved = shiftDrag({ x: 10, y: 10 }, { x: 110, y: 60 }, 50, 30, screen);
+    expect(moved).toEqual({ start: { x: 60, y: 40 }, current: { x: 160, y: 90 } });
+  });
+
+  it("keeps the area on the display", () => {
+    const moved = shiftDrag({ x: 900, y: 700 }, { x: 990, y: 790 }, 50, 50, screen);
+    expect(dragRect(moved.start, moved.current)).toEqual({ x: 910, y: 710, width: 90, height: 90 });
+  });
+
+  it("works whichever way the area was dragged", () => {
+    const moved = shiftDrag({ x: 110, y: 60 }, { x: 10, y: 10 }, -20, 0, screen);
+    expect(moved).toEqual({ start: { x: 100, y: 60 }, current: { x: 0, y: 10 } });
   });
 });

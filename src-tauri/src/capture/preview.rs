@@ -52,6 +52,10 @@ pub enum FailureReason {
     Offline,
     /// The plan's storage is full: upgrade, not retry.
     StorageFull,
+    /// Nobody has said where captures go yet: the file is kept on this
+    /// machine and uploads once a folder is chosen. Not a failure, so the
+    /// card waits rather than alarms, and its button asks for the folder.
+    NeedsFolder,
     Other,
 }
 
@@ -107,6 +111,9 @@ pub struct CardActions {
     /// Open the storage plans in the main window: the upload failed because
     /// the plan is full, which Retry alone cannot fix.
     pub upgrade: bool,
+    /// Open the screenshot in the editor: a screenshot in the drive, with a
+    /// file here to read, and no link being made from the unedited picture.
+    pub edit: bool,
 }
 
 /// Everything the card shows, plus what its buttons need.
@@ -156,6 +163,13 @@ pub struct PreviewCard {
     /// if the capture drive was changed since. Never sent to the card.
     #[serde(skip)]
     pub destination: CaptureDestination,
+    /// No drive could be set up yet, so the capture was kept in a folder on
+    /// this computer (`capture::setup`): Retry sets the drive up again
+    /// rather than sending to `destination`, the file is the user's to keep
+    /// (no Discard) and can be revealed, and the card is not brought back on
+    /// the next capture, which makes its own attempt. Never sent to the card.
+    #[serde(skip)]
+    pub kept_locally: bool,
 }
 
 /// The sync engine's row for a capture delivered through a synced folder.
@@ -163,7 +177,9 @@ pub struct PreviewCard {
 pub enum SyncRow {
     /// No row: the cycle has not picked the file up yet.
     Absent,
-    /// Queued or uploading.
+    /// In the engine's queue, behind other files, not started.
+    Queued,
+    /// Being encrypted or uploaded.
     Working,
     Completed,
     /// The engine's own error text, which is never shown as it is.
@@ -215,24 +231,17 @@ impl SyncFacts {
     }
 }
 
-/// How long a synced capture with a public link waits, with the engine idle
-/// and no row for the file anywhere, before its card says Uploaded anyway.
-/// The link is the capture's own encrypted copy on the server, so the file
-/// reached Hippius; the card must not say "uploading" for ever because the
-/// engine's bookkeeping missed it.
-pub const LINK_FALLBACK_AFTER: std::time::Duration = std::time::Duration::from_secs(45);
-
-/// Whether the bounded fallback applies (see [`LINK_FALLBACK_AFTER`]): the
-/// card is still syncing, has a public link, the engine has nothing for the
-/// file (no row, no failure) and is not syncing anything, and it has waited
-/// long enough.
+/// Whether the card's public link finishes it: the card is still syncing,
+/// its link is public and the engine has not started on the file (no row
+/// yet, or queued behind other files). Minting the link uploads the
+/// capture's own encrypted copy, so the capture is on the server and
+/// shareable; the drive copy follows whenever the engine gets to it. A card
+/// whose file the engine is uploading right now shows that upload instead.
 #[must_use]
-pub fn link_fallback_applies(card: &PreviewCard, row: &SyncRow, waited: std::time::Duration, engine_busy: bool) -> bool {
+pub fn link_finishes_card(card: &PreviewCard, row: &SyncRow) -> bool {
     matches!(card.status, PreviewStatus::Syncing { .. })
         && matches!(card.link, LinkState::Public { .. })
-        && *row == SyncRow::Absent
-        && !engine_busy
-        && waited >= LINK_FALLBACK_AFTER
+        && matches!(row, SyncRow::Absent | SyncRow::Queued)
 }
 
 /// What a syncing card becomes given the engine's row, or `None` when it
@@ -244,7 +253,7 @@ pub fn status_after_sync_row(card: &PreviewCard, row: &SyncRow) -> Option<Previe
     let (link_copied, link_error) = card.link_fields();
     let next = match row {
         SyncRow::Absent => return None,
-        SyncRow::Working => PreviewStatus::Syncing { link_copied, link_error },
+        SyncRow::Queued | SyncRow::Working => PreviewStatus::Syncing { link_copied, link_error },
         SyncRow::Completed => PreviewStatus::Uploaded { link_copied, link_error },
         SyncRow::Failed(error) => {
             let (message, reason) = super::deliver::sync_failure_copy(error.as_deref());
@@ -278,7 +287,9 @@ impl PreviewCard {
     pub fn refreshed(self) -> Self {
         let link_text = self.link.text().map(str::to_string);
         let actions = self.decide_actions();
-        let settled = matches!(self.status, PreviewStatus::Uploaded { .. }) && self.link != LinkState::Creating;
+        // A link still being made, or one that failed, holds the card: it
+        // must stay up to say the link was copied, or to offer Create link.
+        let settled = matches!(self.status, PreviewStatus::Uploaded { .. }) && !matches!(self.link, LinkState::Creating | LinkState::Failed { .. });
         Self {
             link_text,
             actions,
@@ -291,15 +302,18 @@ impl PreviewCard {
         let in_drive = matches!(self.status, PreviewStatus::Uploaded { .. } | PreviewStatus::Syncing { .. });
         let has_link = self.share_url.is_some();
         let retryable = matches!(self.status, PreviewStatus::Failed { retryable: true, .. });
+        let kept_here = self.kept_locally && matches!(self.status, PreviewStatus::Failed { .. });
         CardActions {
             retry: retryable,
-            discard: retryable,
+            // A capture kept in the user's own folder is theirs, not a temp
+            // copy to throw away.
+            discard: retryable && !kept_here,
             copy_link: has_link,
             // The link is made from a file on this machine: the synced copy,
             // or the temp copy kept for exactly this.
             mint_link: in_drive && !has_link && self.placed_path.is_some() && self.link != LinkState::Creating,
             revoke_link: has_link && self.share_token.is_some(),
-            reveal: !self.remote && in_drive && self.placed_path.is_some(),
+            reveal: !self.remote && (in_drive || kept_here) && self.placed_path.is_some(),
             upgrade: matches!(
                 self.status,
                 PreviewStatus::Failed {
@@ -307,6 +321,11 @@ impl PreviewCard {
                     ..
                 }
             ),
+            edit: self.kind == CaptureKind::Screenshot
+                && in_drive
+                && self.placed_path.is_some()
+                && self.link != LinkState::Creating
+                && super::editor::EditableFormat::from_name(&self.file_name).is_some(),
         }
     }
 
@@ -330,7 +349,7 @@ impl PreviewCard {
     /// not lose it (it comes back on the next capture).
     #[must_use]
     pub fn is_parkable(&self) -> bool {
-        self.can_retry()
+        self.can_retry() && !self.kept_locally
     }
 
     /// Whether the card's own temp copy is no longer needed once the card
@@ -341,7 +360,9 @@ impl PreviewCard {
     }
 }
 
-/// The card's path in the drive for a file named `file_name`.
+/// The card's path in the drive for a file named `file_name` in the default
+/// `Captures` folder. A card's own path comes from its destination
+/// ([`CaptureDestination::rel_path`]), since the folder can be changed.
 #[must_use]
 pub fn rel_path_for(file_name: &str) -> String {
     format!("{}/{file_name}", super::naming::CAPTURES_FOLDER)
@@ -370,12 +391,8 @@ mod tests {
             share_token: None,
             file_path: PathBuf::from("/tmp/capture/Recording.mp4"),
             placed_path: None,
-            destination: CaptureDestination {
-                label: "Work".into(),
-                display_name: "Work".into(),
-                owner_ss58: None,
-                folder_hash: None,
-            },
+            destination: CaptureDestination::own("Work", "Work"),
+            kept_locally: false,
         }
         .refreshed()
     }
@@ -525,6 +542,69 @@ mod tests {
         assert_eq!(json["upgrade"], true, "sent as `upgrade`");
     }
 
+    /// A capture kept on this computer because no drive could be set up:
+    /// Retry and Reveal, plus Upgrade for a full plan; never Discard (it is
+    /// the user's file in their own folder), and it is not parked to come
+    /// back, since the next capture tries the setup again itself.
+    #[test]
+    fn a_capture_kept_on_this_computer_offers_retry_and_reveal_not_discard() {
+        let mut c = card(4);
+        c.kept_locally = true;
+        c.placed_path = Some(PathBuf::from("/Users/a/Hippius/Captures/Shot.png"));
+        c.status = PreviewStatus::Failed {
+            message: "Saved on this computer in Hippius › Captures. Upgrade your plan to upload it and get a link.".into(),
+            reason: FailureReason::StorageFull,
+            retryable: true,
+        };
+        let c = c.refreshed();
+        assert!(c.actions.retry && c.actions.reveal && c.actions.upgrade, "{:?}", c.actions);
+        assert!(!c.actions.discard, "{:?}", c.actions);
+        assert!(!c.is_parkable());
+        assert!(!c.settled);
+    }
+
+    /// Edit is offered for a screenshot in the drive with a file here, never
+    /// for a recording, before the file is placed, after a failure, or while
+    /// its link is still being made from the unedited picture.
+    #[test]
+    fn only_a_placed_screenshot_can_be_edited() {
+        let shot = |status: PreviewStatus, placed: bool, link: LinkState| {
+            let mut c = card(4);
+            c.kind = CaptureKind::Screenshot;
+            c.file_name = "Screenshot 2026-10-05 at 10.00.00.png".into();
+            c.placed_path = placed.then(|| PathBuf::from("/Users/x/Hippius/Work/Captures/Shot.png"));
+            c.status = status;
+            c.link = link;
+            c.refreshed().actions.edit
+        };
+        let syncing = PreviewStatus::Syncing {
+            link_copied: true,
+            link_error: None,
+        };
+        let uploaded = PreviewStatus::Uploaded {
+            link_copied: true,
+            link_error: None,
+        };
+        assert!(shot(syncing.clone(), true, LinkState::Public { copied: true }));
+        assert!(shot(uploaded.clone(), true, LinkState::None));
+        assert!(!shot(uploaded.clone(), false, LinkState::None), "no file here to open");
+        assert!(!shot(syncing, true, LinkState::Creating), "the link would be made from the old picture");
+        assert!(!shot(PreviewStatus::Uploading, true, LinkState::None));
+        assert!(!shot(failed(true), true, LinkState::None));
+        let mut recording = card(5);
+        recording.placed_path = Some(PathBuf::from("/x/Captures/Recording.mp4"));
+        recording.status = uploaded;
+        assert!(!recording.refreshed().actions.edit);
+        assert_eq!(
+            serde_json::to_value(CardActions {
+                edit: true,
+                ..CardActions::default()
+            })
+            .unwrap()["edit"],
+            true
+        );
+    }
+
     #[test]
     fn an_outcome_lands_only_on_its_own_card() {
         let done = PreviewStatus::Uploaded {
@@ -568,7 +648,7 @@ mod tests {
                 "linkText": "Public link copied",
                 "actions": {
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
-                    "revokeLink": true, "reveal": true, "upgrade": false
+                    "revokeLink": true, "reveal": true, "upgrade": false, "edit": false
                 },
                 "settled": true
             })
@@ -714,27 +794,55 @@ mod tests {
         assert!(copied.refreshed().settled);
     }
 
+    /// A link that could not be made kept nothing on the clipboard and
+    /// opened nothing: the card stays, saying so, with Create link.
     #[test]
-    fn a_link_and_an_idle_engine_finish_a_card_the_engine_lost_track_of() {
-        let long = LINK_FALLBACK_AFTER;
+    fn a_card_whose_link_failed_stays_up_with_create_link() {
+        let mut c = syncing(false);
+        c.status = PreviewStatus::Uploaded {
+            link_copied: false,
+            link_error: Some("The link couldn't be created. Try again in a moment.".into()),
+        };
+        c.link = LinkState::Failed {
+            message: "The link couldn't be created. Try again in a moment.".into(),
+        };
+        // The capture is in the drive's folder on this computer, linkless.
+        c.share_url = None;
+        c.placed_path = Some(std::path::PathBuf::from("/drive/Captures/Shot.png"));
+        let c = c.refreshed();
+        assert!(!c.settled, "it must not slide away without a link");
+        assert!(c.actions.mint_link, "Create link is offered");
+        let mut none = c.clone();
+        none.link = LinkState::None;
+        assert!(none.refreshed().settled, "a capture with no link wanted may slide away");
+    }
+
+    #[test]
+    fn a_public_link_finishes_a_card_the_engine_has_not_started() {
         let c = syncing(true);
-        assert!(link_fallback_applies(&c, &SyncRow::Absent, long, false));
-        // Not before the wait, not while the engine works, not over a row.
-        assert!(!link_fallback_applies(
-            &c,
-            &SyncRow::Absent,
-            long.saturating_sub(std::time::Duration::from_secs(1)),
-            false
-        ));
-        assert!(!link_fallback_applies(&c, &SyncRow::Absent, long, true));
-        assert!(!link_fallback_applies(&c, &SyncRow::Working, long, false));
-        assert!(!link_fallback_applies(&c, &SyncRow::Failed(None), long, false));
+        // Queued behind a long sync, or not picked up yet: the link's own
+        // copy is on the server, so the card does not wait for the queue.
+        assert!(link_finishes_card(&c, &SyncRow::Absent));
+        assert!(link_finishes_card(&c, &SyncRow::Queued));
+        // Its own upload running, done or failed: the engine's row decides.
+        assert!(!link_finishes_card(&c, &SyncRow::Working));
+        assert!(!link_finishes_card(&c, &SyncRow::Completed));
+        assert!(!link_finishes_card(&c, &SyncRow::Failed(None)));
         // No link means no evidence the bytes reached the server.
         let mut no_link = syncing(false);
         no_link.link = LinkState::None;
-        assert!(!link_fallback_applies(&no_link, &SyncRow::Absent, long, false));
+        assert!(!link_finishes_card(&no_link, &SyncRow::Queued));
         let mut creating = syncing(false);
         creating.link = LinkState::Creating;
-        assert!(!link_fallback_applies(&creating, &SyncRow::Absent, long, false));
+        assert!(!link_finishes_card(&creating, &SyncRow::Queued));
+        let mut failed_link = syncing(false);
+        failed_link.link = LinkState::Failed { message: "no".into() };
+        assert!(!link_finishes_card(&failed_link, &SyncRow::Queued));
+    }
+
+    #[test]
+    fn a_queued_card_keeps_syncing_until_its_link_or_its_upload_finishes_it() {
+        let c = syncing(true);
+        assert_eq!(status_after_sync_row(&c, &SyncRow::Queued), None, "still syncing");
     }
 }

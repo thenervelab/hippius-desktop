@@ -20,26 +20,29 @@ import {
 import { disabledRecordingNote, supportedModesOf } from "@/app/lib/capture/modes";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
 import {
+  CAPTURE_DRIVE_SETUP_NEEDED_EVENT,
   getCaptureSupport,
   syncCaptureShortcut,
   type CaptureFailed,
   type CaptureKind,
+  type CaptureShortcutStart,
   type CaptureMode,
   type CaptureShowInFolder,
 } from "@/app/lib/tauri/capture";
-import { BILLING_ROUTE, driveFolderRoute } from "@/app/lib/routes";
+import { BILLING_ROUTE, capturesRoute, driveFolderRoute } from "@/app/lib/routes";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import { openAppWindow, TRAY_CAPTURE_DRIVE_EVENT, TRAY_CAPTURE_EVENT } from "@/app/lib/tray/trayWindowActions";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import CaptureDestinationDialog from "./CaptureDestinationDialog";
+import CaptureDriveDialog from "./CaptureDriveDialog";
 import CapturePermissionDialog from "./CapturePermissionDialog";
 
 /**
  * Mounted once in the protected layout. Owns the capture dialogs and the
  * events that start or finish a capture, so every surface shares them: the
  * system-wide shortcut, the tray, and the preview card's "Show in folder"
- * and "Upgrade", which land here as a navigation to the drive's Captures
- * folder or to the plans.
+ * and "Upgrade", which land here as a navigation to the Captures page (or
+ * the drive an older capture went to) or to the plans. It also asks where
+ * captures go when Rust says a capture is waiting for that answer.
  */
 export default function CaptureHost() {
   const setSupported = useSetAtom(captureSupportedAtom);
@@ -85,15 +88,24 @@ export default function CaptureHost() {
       listen<{ kind?: CaptureKind; mode?: CaptureMode }>(TRAY_CAPTURE_EVENT, (e) => {
         void startCapture(e.payload.kind, e.payload.mode);
       }),
-      // The popover's "Change capture drive…": the picker is this window's.
+      // The popover's "Captures folder…": the dialog is this window's.
       listen(TRAY_CAPTURE_DRIVE_EVENT, () => {
-        void openAppWindow().then(() => setDialog({ kind: "destination", resume: null }));
+        void openAppWindow().then(() => setDialog({ kind: "captureDrive" }));
       }),
-      // The system-wide shortcut opens the bar on whatever was used last.
-      listen("capture_shortcut_pressed", () => void startCapture()),
+      // A capture is waiting for the user to say where captures go. Rust has
+      // brought this window forward and kept the capture safe meanwhile.
+      listen(CAPTURE_DRIVE_SETUP_NEEDED_EVENT, () => setDialog({ kind: "captureDrive" })),
+      // The system-wide shortcuts: what Rust says each starts (the one-step
+      // area screenshot, or the capture bar on Record).
+      listen<CaptureShortcutStart>("capture_shortcut_pressed", (e) =>
+        void startCapture(e.payload?.kind, undefined, e.payload?.instant ?? false),
+      ),
       listen<CaptureShowInFolder>("capture_show_in_folder", (e) => {
+        const file = e.payload.fileName || undefined;
         router.push(
-          driveFolderRoute(e.payload.label, e.payload.remote, e.payload.subfolder, e.payload.fileName || undefined),
+          e.payload.capturesDrive
+            ? capturesRoute(e.payload.label, e.payload.remote, file)
+            : driveFolderRoute(e.payload.label, e.payload.remote, e.payload.subfolder, file),
         );
       }),
       // The card's Upgrade (the plan is full): the plans, where every upgrade prompt goes.
@@ -107,7 +119,7 @@ export default function CaptureHost() {
   if (!SCREEN_CAPTURE_ENABLED) return null;
   return (
     <>
-      <CaptureDestinationDialog />
+      <CaptureDriveDialog />
       <CapturePermissionDialog />
     </>
   );
