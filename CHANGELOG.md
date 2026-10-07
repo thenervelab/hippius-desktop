@@ -164,6 +164,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The recording controls show again while you record** (macOS). Stop, the timer, mute and the menus were missing, leaving only the camera bubble and the menu bar.
 - **Command-comma opens Settings from the main window** (Ctrl+comma on Windows and Linux), not only from the menu bar window.
 - **The recording controls stay still when you open the microphone or camera menu.** The bar no longer jumps up for a moment before the menu appears.
 
