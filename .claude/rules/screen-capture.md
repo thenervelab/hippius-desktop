@@ -1041,6 +1041,14 @@ stderr lines are diagnostics and are logged at `warn`.
 - `movieFragmentInterval` is 2 s, so a killed helper leaves a playable file;
   stdin closing (the app died) FINISHES the file and keeps it. Only `cancel`
   deletes.
+- **Index first.** `shouldOptimizeForNetworkUse = true` writes the finished
+  file as `ftyp, moov, mdat` (checked with these exact writer settings: without
+  it the file was `ftyp, mdat, moov`). With the index last, a browser asks
+  for the end of the file before the first frame, and share links can only be
+  read from the start, so the whole recording downloaded before it played.
+  Windows (`MFTranscodeContainerType_FMPEG4`) and Linux (`mp4mux
+  fragment-duration`) write fragmented files whose index is already first.
+  Pinned by `recordings_put_their_index_first` (`recorder_child/plan.rs`).
 - **One audio track.** Browsers (the share link's page included) and most
   players play only a file's first audio track, so the microphone as a
   second track went unheard. `AudioMixer` mixes the microphone and, only when
