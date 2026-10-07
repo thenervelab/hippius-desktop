@@ -287,7 +287,9 @@ impl PreviewCard {
     pub fn refreshed(self) -> Self {
         let link_text = self.link.text().map(str::to_string);
         let actions = self.decide_actions();
-        let settled = matches!(self.status, PreviewStatus::Uploaded { .. }) && self.link != LinkState::Creating;
+        // A link still being made, or one that failed, holds the card: it
+        // must stay up to say the link was copied, or to offer Create link.
+        let settled = matches!(self.status, PreviewStatus::Uploaded { .. }) && !matches!(self.link, LinkState::Creating | LinkState::Failed { .. });
         Self {
             link_text,
             actions,
@@ -790,6 +792,29 @@ mod tests {
         let mut copied = c.clone();
         copied.link = LinkState::Public { copied: true };
         assert!(copied.refreshed().settled);
+    }
+
+    /// A link that could not be made kept nothing on the clipboard and
+    /// opened nothing: the card stays, saying so, with Create link.
+    #[test]
+    fn a_card_whose_link_failed_stays_up_with_create_link() {
+        let mut c = syncing(false);
+        c.status = PreviewStatus::Uploaded {
+            link_copied: false,
+            link_error: Some("The link couldn't be created. Try again in a moment.".into()),
+        };
+        c.link = LinkState::Failed {
+            message: "The link couldn't be created. Try again in a moment.".into(),
+        };
+        // The capture is in the drive's folder on this computer, linkless.
+        c.share_url = None;
+        c.placed_path = Some(std::path::PathBuf::from("/drive/Captures/Shot.png"));
+        let c = c.refreshed();
+        assert!(!c.settled, "it must not slide away without a link");
+        assert!(c.actions.mint_link, "Create link is offered");
+        let mut none = c.clone();
+        none.link = LinkState::None;
+        assert!(none.refreshed().settled, "a capture with no link wanted may slide away");
     }
 
     #[test]

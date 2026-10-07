@@ -614,8 +614,11 @@ started on (no row yet, or `SyncRow::Queued`, a `Pending` row behind other
 files) is marked uploaded at once (`link_finishes_card`), because minting the
 link uploads the capture's own encrypted copy. A file the engine is uploading
 right now (`Working`) shows that upload's progress instead. `PreviewCard.settled` (uploaded and the
-link not `Creating`) is what the card's auto-hide waits for, so it never slides
-away before it can say the link was copied.
+link neither `Creating` nor `Failed`) is what the card's auto-hide waits for, so
+it never slides away before it can say the link was copied, and a card whose
+link failed stays up with Create link. `deliver::mint` tries a link three
+times in all (`mint_retry_after`: 1 s, then 3 s) unless the drive is full, since
+a request that did not get through is often fine a second later.
 Rust also owns `link` (`LinkState`), `linkText` ("Public link copied") and
 `actions` (`CardActions`: retry, discard, copyLink, mintLink, revokeLink,
 reveal, upgrade) through `PreviewCard::refreshed`; every change goes through
