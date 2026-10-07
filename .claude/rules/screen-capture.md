@@ -730,7 +730,15 @@ until it draws again. So on macOS the page is laid out ONCE at
 through `set_pill_frame`, which pins the WKWebView (no autoresizing) at
 `page_top` inside the window in the same main-thread turn as the window's
 `setFrame`, under `disableScreenUpdatesUntilFlush`, so a menu opening only
-moves the window's edge over a page already drawn. The page keeps the room
+moves the window's edge over a page already drawn. **WebKit's automatic
+content insets are off for that page** (`setObscuredContentInsets:` zero, and
+`_setAutomaticallyAdjustsContentInsets:` NO / `_setTopContentInset:` 0 where
+they exist): left on, WebKit took the room sticking out above the window
+for a title bar and cut it off the viewport (`innerHeight` 360, not 660),
+so the closed pill was laid out a menu's height lower, below its window,
+and never showed (`live_controls::automatic_top_inset`; pinned by
+`live_controls::tests::the_pill_row_is_inside_its_window_in_every_menu_state`
+and `capture_wiring::the_pill_page_viewport_is_its_whole_frame`). The page keeps the room
 as two fixed slots (`menuRoom` from `capture_controls_context`) and every
 state's root is `fixed inset-0` centred, so the pill sits in the middle,
 where the window shows it. Elsewhere (`menuRoom` 0) the page is the window's
