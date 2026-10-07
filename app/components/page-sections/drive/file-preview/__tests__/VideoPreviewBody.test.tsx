@@ -70,6 +70,14 @@ const START_FAILED = "This video didn't start in Hippius. Open it in your video 
 const DECODER_LINE =
   "Videos need an H.264 decoder your system doesn't have. Install gstreamer1.0-libav, then restart Hippius.";
 
+// Lets the IPC answer land without moving the fake clock, so a slow runner
+// can never push the start watchdog past its deadline before the test looks.
+async function settle() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
 function stream() {
   tauri.onInvoke("video_playback_source", () => ({
     kind: "stream",
@@ -113,16 +121,18 @@ describe("VideoPreviewBody", () => {
   });
 
   it("plays the loopback stream on Linux and keeps playing once a frame arrives", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     stream();
     const { unmount } = render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
-    expect(await screen.findByTestId("video-player")).toHaveTextContent(STREAM_URL);
+    await settle();
+    expect(screen.getByTestId("video-player")).toHaveTextContent(STREAM_URL);
     act(() => player.started?.());
     act(() => {
       vi.advanceTimersByTime(20_000);
     });
     expect(screen.getByTestId("video-player")).toBeInTheDocument();
     expect(screen.queryByText(START_FAILED)).toBeNull();
+    vi.useRealTimers();
     // Closing the viewer gives the token back.
     unmount();
     await waitFor(() =>
@@ -131,15 +141,21 @@ describe("VideoPreviewBody", () => {
   });
 
   it("falls back to the system player when no frame arrives in time", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     stream();
     const download = vi.fn();
     render(<VideoPreviewBody file={file} handleFileDownload={download} />);
-    await screen.findByTestId("video-player");
+    await settle();
+    expect(screen.getByTestId("video-player")).toBeInTheDocument();
     act(() => {
-      vi.advanceTimersByTime(8_001);
+      vi.advanceTimersByTime(7_999);
     });
-    expect(await screen.findByText(START_FAILED)).toBeInTheDocument();
+    expect(screen.getByTestId("video-player")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(2);
+    });
+    expect(screen.getByText(START_FAILED)).toBeInTheDocument();
+    vi.useRealTimers();
     expect(screen.queryByTestId("video-player")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Open in your video player/ }));
     await waitFor(() => expect(opener.openPath).toHaveBeenCalledWith("/drive/Captures/Recording.mp4"));

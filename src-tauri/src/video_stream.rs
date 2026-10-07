@@ -828,6 +828,7 @@ mod tests {
     struct Served {
         streams: VideoStreams,
         account: Arc<Mutex<Option<String>>>,
+        #[cfg_attr(not(unix), allow(dead_code))]
         dir: tempfile::TempDir,
         file: PathBuf,
         bytes: Vec<u8>,
