@@ -5828,6 +5828,24 @@ fn set_pill_frame(window: &tauri::WebviewWindow, f: camera::Frame, scale: f64, m
                 // the window's content view (AppKit: y up), computed for the
                 // window's NEW height so it holds once the window has grown.
                 let () = msg_send![page, setAutoresizingMask: 0usize];
+                // The whole page is the page's viewport. WebKit otherwise
+                // treats the part of a WKWebView above its window's top as
+                // obscured (automatic content insets, meant for a title
+                // bar): with the menu room above the window, the viewport
+                // lost `room` points at the top, so the pill was laid out
+                // `room` points lower, below the window, and never seen.
+                let public: bool = msg_send![page, respondsToSelector: sel!(setObscuredContentInsets:)];
+                if public {
+                    let () = msg_send![page, setObscuredContentInsets: NoInsets::default()];
+                }
+                let automatic: bool = msg_send![page, respondsToSelector: sel!(_setAutomaticallyAdjustsContentInsets:)];
+                if automatic {
+                    let () = msg_send![page, _setAutomaticallyAdjustsContentInsets: objc::runtime::NO];
+                }
+                let top_inset: bool = msg_send![page, respondsToSelector: sel!(_setTopContentInset:)];
+                if top_inset {
+                    let () = msg_send![page, _setTopContentInset: 0.0f64];
+                }
                 let page_frame = NSRect::new(NSPoint::new(0.0, f.height - top - page_height), NSSize::new(f.width, page_height));
                 let () = msg_send![page, setFrame: page_frame];
                 // AppKit's origin is the primary display's bottom-left, y up.
@@ -5847,6 +5865,18 @@ fn set_pill_frame(window: &tauri::WebviewWindow, f: camera::Frame, scale: f64, m
         let _ = menu;
         place(window, f, scale);
     }
+}
+
+/// `NSEdgeInsets` of zero, for `-[WKWebView setObscuredContentInsets:]`.
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Default)]
+#[allow(dead_code)] // read by WebKit, not by Rust
+struct NoInsets {
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
 }
 
 /// The usable area (and its scale) of the display under `frame`'s centre.

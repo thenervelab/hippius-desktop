@@ -1626,6 +1626,27 @@ fn the_pill_never_moves_while_a_menu_opens_or_closes() {
     );
 }
 
+/// The pill's page is taller than its window and sticks out above it, which
+/// WebKit took for a title bar: its automatic content insets cut the room
+/// above off the page's viewport, the pill was laid out that much lower,
+/// below the window, and no recording showed its controls. `set_pill_frame`
+/// turns the insets off before it places the page.
+#[test]
+fn the_pill_page_viewport_is_its_whole_frame() {
+    let src = read("src/capture/commands.rs");
+    let set = fn_body(&src, "fn set_pill_frame(");
+    for needle in [
+        "setObscuredContentInsets: NoInsets::default()",
+        "_setAutomaticallyAdjustsContentInsets: objc::runtime::NO",
+        "_setTopContentInset: 0.0f64",
+    ] {
+        assert!(set.contains(needle), "set_pill_frame lost {needle}");
+    }
+    let insets = set.find("_setAutomaticallyAdjustsContentInsets").expect("insets off");
+    let page = set.find("setFrame: page_frame").expect("the page is placed");
+    assert!(insets < page, "the insets are off before the page sticks out of the window");
+}
+
 /// The camera bubble's own controls mid-recording are never in the video.
 /// The bubble's window is filmed, so they are a window of their own, which
 /// every recorder leaves out: on macOS the helper films only the main window

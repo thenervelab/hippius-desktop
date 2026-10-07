@@ -284,6 +284,24 @@ pub fn page_top(menu: Option<bool>, room: f64) -> f64 {
     }
 }
 
+/// How much of the pill's page WebKit would hide at its top if left to
+/// adjust its content insets itself: the part of the WKWebView above the
+/// window's top edge (`page_top` below 0), which it takes for a title bar.
+/// The page's viewport then starts at the window's top, so the pill, `room`
+/// down the page, is drawn `room` points lower than meant. `set_pill_frame`
+/// turns those insets off, so the page's viewport is its whole frame.
+#[must_use]
+pub fn automatic_top_inset(page_top: f64) -> f64 {
+    (-page_top).max(0.0)
+}
+
+/// Where the pill's row is, from the top of its window, with the page at
+/// `page_top` and its viewport starting `top_inset` below the page's top.
+#[must_use]
+pub fn pill_row_top(page_top: f64, top_inset: f64, room: f64) -> f64 {
+    page_top + top_inset + room
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,5 +513,65 @@ mod tests {
             let back = pill_without_menu(grown, pill.height, above);
             assert!((on_screen(back, None) - pill.y).abs() < 1e-9, "closed again");
         }
+    }
+
+    /// The pill must be on screen: in every menu state, near the top and the
+    /// bottom of the usable area, its row lies inside the window, and the
+    /// window inside the usable area. With WebKit's automatic insets left on,
+    /// the closed pill was laid out below its window and never seen.
+    #[test]
+    fn the_pill_row_is_inside_its_window_in_every_menu_state() {
+        let work = Frame {
+            x: 0.0,
+            y: 25.0,
+            width: 1440.0,
+            height: 800.0,
+        };
+        let room = fixed_menu_room(Platform::MacOs);
+        let pill_height = 60.0;
+        let inside = |row: f64, window: Frame| row >= -1e-9 && row + pill_height <= window.height + 1e-9;
+        for y in [
+            work.y,
+            work.y + 5.0,
+            400.0,
+            work.y + work.height - pill_height - 20.0,
+            work.y + work.height - pill_height,
+        ] {
+            let pill = Frame {
+                x: 530.0,
+                y,
+                width: 380.0,
+                height: pill_height,
+            };
+            let (grown, above) = pill_with_menu(pill, work, MENU_HEIGHT);
+            for (window, menu) in [(pill, None), (grown, Some(above))] {
+                let top = page_top(menu, room);
+                let row = pill_row_top(top, 0.0, room);
+                assert!(
+                    inside(row, window),
+                    "y {y}, menu {menu:?}: row at {row} in a window {} tall",
+                    window.height
+                );
+                assert!(
+                    window.y >= work.y - 1e-9 && window.y + window.height <= work.y + work.height + 1e-9,
+                    "y {y}, menu {menu:?}: off the screen"
+                );
+                // The page covers the whole window: nothing of it is empty.
+                assert!(top <= 0.0 && top + page_height(pill_height, room) >= window.height);
+            }
+        }
+        // What the bug was: closed, the page sticks out above the window, and
+        // WebKit's own inset pushed the pill out of it.
+        let closed = page_top(None, room);
+        let pushed = pill_row_top(closed, automatic_top_inset(closed), room);
+        assert!(!inside(
+            pushed,
+            Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 380.0,
+                height: pill_height
+            }
+        ));
     }
 }

@@ -675,27 +675,48 @@ mod tests {
         );
     }
 
+    /// The file is as long as the time spent recording, with the pause cut
+    /// out. Measured, not assumed: on a busy runner the sleeps here run long
+    /// (one took 0.94 s for 0.6 s). The child stamps start, pause, resume and
+    /// stop when it reads each command, so a clock reading just before and
+    /// just after each call brackets every stamp, however slow the machine.
     #[test]
     fn start_pause_resume_stop_leaves_a_file_with_the_pause_cut_out() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("rec.txt");
+        let starting = Instant::now();
         let (recorder, child) = wire(&dest, true);
+        let started = Instant::now();
         let mut recorder: Box<dyn Recorder> = Box::new(recorder.expect("started"));
         std::thread::sleep(Duration::from_millis(300));
+        let pausing = Instant::now();
         recorder.pause().unwrap();
+        let paused = Instant::now();
         std::thread::sleep(Duration::from_millis(400));
+        let resuming = Instant::now();
         recorder.resume().unwrap();
+        let resumed = Instant::now();
         std::thread::sleep(Duration::from_millis(300));
+        let stopping = Instant::now();
         let path = recorder.stop().expect("stopped");
+        let stopped = Instant::now();
         child.join().unwrap();
 
         assert_eq!(path, dest);
         let lines = lines(&dest);
         assert!(lines.iter().any(|l| l.starts_with("video ")), "{lines:?}");
         assert!(lines.iter().any(|l| l.starts_with("audio ")));
-        // 0.6 s recorded; the 0.4 s pause is not in the file.
+        // At least the time certainly recorded, at most the time that could
+        // have been, a frame either way. Neither holds the 0.4 s pause, so a
+        // pause left in the file fails.
+        let micros = |d: Duration| u64::try_from(d.as_micros()).unwrap();
+        let least = micros((pausing - started) + (stopping - resumed));
+        let most = micros((paused - starting) + (stopped - resuming));
         let end = end_of(&lines);
-        assert!((450_000..=900_000).contains(&end), "end at {end} us");
+        assert!(
+            (least.saturating_sub(50_000)..=most + 50_000).contains(&end),
+            "end at {end} us, recorded {least} to {most} us"
+        );
         // No two frames further apart than a frame and a bit: the pause left
         // no hole.
         let frames: Vec<u64> = lines
