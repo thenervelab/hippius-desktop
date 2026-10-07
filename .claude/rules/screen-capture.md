@@ -4,6 +4,7 @@ paths:
   - "app/capture-overlay/**"
   - "app/capture-controls/**"
   - "app/capture-camera/**"
+  - "app/capture-bubble-controls/**"
   - "app/capture-preview/**"
   - "app/capture-area/**"
   - "app/components/page-sections/settings/EditedImageSetting.tsx"
@@ -468,7 +469,8 @@ is filmed, so a strip shown mid-recording was in the video; the pill hides
 the bubble instead, and resizes it from its own menu (the strip lives in
 the filmed window). The × is "Turn camera off" while choosing and "Hide
 camera" while recording (`cameraCloseLabel`). Mid-recording the size is
-changed from the PILL's camera menu instead (below), never from the bubble. While choosing it is always mounted, faded until
+changed from the PILL's camera menu or from the bubble's controls window
+(below), never from the bubble's own page. While choosing it is always mounted, faded until
 hovered or focused, so Tab reaches it. Its third button is a toggle
 (`sizeControls`): at full size it is "Exit full size" (Minimize2) back to the
 round size from before (`nextRoundSize`), and Escape on the camera window
@@ -481,7 +483,8 @@ WebKit's modern controls, so the video is `opacity-0` until `playing` (and
 again on `pause`), and the page calls `play()` itself. The video is
 `pointer-events-none` (`VIDEO_TAKES_NO_POINTER`): WebKit drew a pause button
 over a hovered picture mid-recording, dead (the click began a drag) and
-filmed; the frame behind it is the drag region, and pause is the pill's.
+filmed; the frame behind it is the drag region, and pause is the pill's
+and the bubble controls'.
 **The camera page is sized by its window, never by the video**: its root
 is `fixed inset-0` and the frame's shape is `cameraFrameShape` (round:
 `aspect-square`, capped at the window's height; full and stage: fill with
@@ -489,8 +492,32 @@ is `fixed inset-0` and the frame's shape is `cameraFrameShape` (round:
 root took the camera's 16:9 picture as its height and the round bubble was a
 pill, on screen and in every video; pinned by `cameraPage.test.tsx`.
 Hover comes from Rust (`capture_camera_hover`, polling the
-pointer against the frame) because a non-key window does not reliably get
-webview hover on macOS. Screen off = **stage**: a
+pointer against the frame every 100 ms, `spawn_camera_hover_watch`, macOS and
+Windows) because a non-key window does not reliably get webview hover on
+macOS. **Bubble controls mid-recording** (`bubble_controls.rs`, pure;
+`app/capture-bubble-controls`, label `capture-bubble-controls`, its own
+capability): Loom-style sizes (small / large / full toggle, only when
+`resizeFromPill`) and pause / resume on a 148 x 60 pt strip over the
+bubble's lower part (`bubble_controls::frame`, inside the circle at every
+size), shown by the same watch while the pointer is on the bubble and the
+bubble is still (`shown`: hidden while it is dragged or glides, back where
+it stops). It is a WINDOW OF ITS OWN because the bubble's window is filmed;
+the recording leaves it out: macOS by the helper (`filmed_own_windows` lists
+the main window and the camera window's number only; a window recording
+films only that window and the bubble), Windows by content protection
+(`OwnWindow::BubbleControls`), Linux has none (`supported` = not
+`pill_filmed`). Geometric polling, not the webview's hover, on every
+platform: the controls cover part of the bubble, so the bubble's page sees
+the pointer leave as it reaches them. Built hidden on first need while a
+bubble is live (no load wait on the first hover), level 1002 above the
+bubble on macOS, `focused(false)` + `accept_first_mouse(true)`, destroyed
+by `end_camera` and when the camera window goes. It calls only the pill's
+commands (`capture_camera_set_size`, `capture_pause` / `capture_resume`),
+mirrors Rust's phase (by `seq`) and camera state, names the hovered button in
+its own `role="tooltip"` line (no native `title`: a system tooltip is a
+window), and is one Tab stop with arrow keys. Pinned by
+`bubble_controls::tests`, `bubbleControlsPage.test.tsx` and
+`capture_wiring::the_bubble_controls_are_never_filmed`. Screen off = **stage**: a
 centred 16:9 window that `capture_confirm` records as `Selection::Window` by
 its NSWindow `windowNumber`. **The camera window is the one capture window that
 is NOT content-protected** (a protected one films as black), sits at level 1001
@@ -691,9 +718,28 @@ no bar block to keep clear of; back to round = where it was before full),
 so the file follows the window. **The menus grow the pill's own window**
 (`capture_controls_menu`, `live_controls::pill_with_menu`: `MENU_HEIGHT`
 taller, upward so the pill stays put, downward near the top of the screen,
-and back on close), which is content protected, so a menu is never filmed;
-a native menu or another window would be. `open_controls` drops a menu left
-open. The pill window is 380 pt wide for the extra buttons. Pinned by
+and back on close), which is left out of the recording like the pill, so a
+menu is never filmed. `open_controls` drops a menu left open. **The pill
+never moves while a menu opens or closes.** Growing a webview's window
+upward showed the pill a menu's height higher for a moment: the page was
+laid out for the old size (and anchored to the top until the side came
+back), and a webview keeps its old picture at the top of a grown window
+until it draws again. So on macOS the page is laid out ONCE at
+`page_height` (the pill with `MENU_HEIGHT` above and below,
+`fixed_menu_room`) and never resized: every frame change of the pill goes
+through `set_pill_frame`, which pins the WKWebView (no autoresizing) at
+`page_top` inside the window in the same main-thread turn as the window's
+`setFrame`, under `disableScreenUpdatesUntilFlush`, so a menu opening only
+moves the window's edge over a page already drawn. The page keeps the room
+as two fixed slots (`menuRoom` from `capture_controls_context`) and every
+state's root is `fixed inset-0` centred, so the pill sits in the middle,
+where the window shows it. Elsewhere (`menuRoom` 0) the page is the window's
+size: it asks `capture_controls_menu_side` first, anchors the pill to the
+edge that stays put (`flushSync`, one frame), then asks for the room, and
+lets go of the edge only once the window has shrunk back. Pinned by
+`live_controls::tests::the_pill_stays_on_the_same_points_while_a_menu_opens_and_closes`,
+`controlsPage.test.tsx` and
+`capture_wiring::the_pill_never_moves_while_a_menu_opens_or_closes`. The pill window is 380 pt wide for the extra buttons. Pinned by
 `live_controls::tests`, `camera::tests`, `controlsPage.test.tsx` and
 `capture_wiring.rs`.
 
@@ -830,7 +876,8 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   tray popover are NOT protected: the helper leaves Hippius out of a screen
   or area recording with ScreenCaptureKit (`excludingApplications: [parent]`,
   `exceptingWindows` = `ownWindowsFilmed`: the main window and the bubble;
-  windows opened later are left out too, verified by hand), and
+  windows opened later, the bubble's controls among them, are left out too,
+  verified by hand), and
   `finish_screenshot` hides a visible card first (`hide_card_for_grab`).
   Windows keeps protection on all of them (WGC cannot leave windows out);
   Linux has none. Overlays are raised to screen-saver level on macOS; every
@@ -861,7 +908,8 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
   glass, one accent, `GLASS_FOCUS`) and `floating-window.css` (transparent
   window, system font). Text on the glass is never below white/60; every
   `animate-*` carries `motion-reduce:animate-none`.
-- **Capabilities** (`capture-overlay.json`, `capture-controls.json`) must match
+- **Capabilities** (`capture-overlay.json`, `capture-controls.json`,
+  `capture-camera.json`, `capture-bubble-controls.json`) must match
   the window labels and hold `core:` permissions only. The pill is dragged
   (`data-tauri-drag-region`), so its capability has
   `core:window:allow-start-dragging`.

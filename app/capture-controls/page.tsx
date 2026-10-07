@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronUp, Mic, MicOff, Pause, Play, RotateCcw, Square, Trash2, Video, VideoOff, VolumeX, X } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
@@ -11,6 +12,7 @@ import {
   cancelCapture,
   getCaptureCameraContext,
   getCaptureControlsContext,
+  getCaptureControlsMenuSide,
   getCaptureMicrophoneState,
   getCaptureState,
   muteCaptureMicrophone,
@@ -41,8 +43,17 @@ import { PillMenu, type PillMenuKind } from "./PillMenu";
  * microphone button mutes and unmutes (silence goes into the file), its
  * menu switches to another microphone, and the camera's menu switches the
  * camera and, for a bubble, its size. A menu grows the pill's window
- * (`capture_controls_menu`), which is content protected like the pill, so
- * the menu is never in the video.
+ * (`capture_controls_menu`), which is left out of the recording like the
+ * pill, so the menu is never in the video.
+ *
+ * The pill must not move while a menu opens or closes. On macOS Rust lays
+ * this page out once with room for a menu above and below the pill
+ * (`menuRoom`) and the window shows only the slice around the pill, so a
+ * menu opening moves the window's edge over a page that never changes size.
+ * Elsewhere the page is the window's size: the pill is anchored to the edge
+ * that stays put (`capture_controls_menu_side`) BEFORE the window grows, and
+ * stays anchored there until it has shrunk back. Drawn at the top of a
+ * window that grew upward, it showed a menu's height higher for a moment.
  *
  * Rust owns the session; this page only mirrors `capture_state_changed` and
  * invokes pause/resume/restart/stop/cancel. Content-protected by the window builder so
@@ -67,6 +78,12 @@ function isLive(phase: CapturePhase): phase is Extract<CapturePhase, { phase: "r
 }
 
 const PILL = `flex items-center rounded-full ${GLASS_PILL}`;
+/**
+ * Every state's root fills the page and centres what it shows, so the pill
+ * sits in the middle of the page: where the window shows it, on macOS, the
+ * page being taller than the window (`menuRoom`).
+ */
+const FILL = "fixed inset-0 flex items-center justify-center";
 /** The pill's own row: the window's height when no menu is open (Rust's `CONTROLS_HEIGHT`). */
 const PILL_ROW = "flex h-[60px] w-full shrink-0 items-center justify-center";
 /** The small button beside the microphone and the camera that opens their menu. */
@@ -97,7 +114,17 @@ export default function CaptureControlsPage() {
   const [mic, setMic] = useState<CaptureMicrophoneState | null>(null);
   // The open menu, and whether the window grew above the pill for it.
   const [menu, setMenu] = useState<PillMenuKind | null>(null);
+  // The side the pill is anchored to: kept after a menu closes, so the pill
+  // stays on the edge that does not move while the window shrinks back.
   const [menuAbove, setMenuAbove] = useState(true);
+  // The room Rust keeps above and below the pill in this page (0: none, the
+  // page grows with its window).
+  const [menuRoom, setMenuRoom] = useState(0);
+  // Where the page grows with its window: the window is (or is about to be)
+  // taller than the pill, so the pill keeps to the anchored edge. Until then
+  // the room on both sides is shared, which keeps the pill in the middle.
+  const [holding, setHolding] = useState(false);
+  const holdGen = useRef(0);
   const micMenuRef = useRef<HTMLButtonElement | null>(null);
   const cameraMenuRef = useRef<HTMLButtonElement | null>(null);
   // Seconds left before the recording begins, where it counts here (after
@@ -140,6 +167,7 @@ export default function CaptureControlsPage() {
       .then((c) => {
         setCompact(c.compact);
         setNote(c.filmedNote);
+        setMenuRoom(c.menuRoom ?? 0);
       })
       .catch(() => undefined);
     const unlisteners = [
@@ -193,21 +221,46 @@ export default function CaptureControlsPage() {
   }, [live]);
 
   // Rust grows the window before the menu is drawn in it, and shrinks it
-  // back once it is gone; the pill itself stays where it is.
+  // back once it is gone; the pill itself stays where it is. The anchor
+  // (`menuAbove`) is left as it is on close, so the pill keeps to the edge
+  // that does not move while the window shrinks, and let go only once it
+  // has.
+  const shrink = useCallback(() => {
+    const gen = holdGen.current;
+    void setCaptureControlsMenu(false)
+      .catch(() => undefined)
+      .finally(() => {
+        if (holdGen.current === gen) setHolding(false);
+      });
+  }, []);
   const closeMenu = (refocus = false) => {
     const was = menu;
     setMenu(null);
     if (refocus) (was === "camera" ? cameraMenuRef : micMenuRef).current?.focus();
-    void setCaptureControlsMenu(false).catch(() => undefined);
+    shrink();
   };
   const openMenu = async (kind: PillMenuKind) => {
     if (menu === kind) return closeMenu();
+    if (!menu) {
+      holdGen.current += 1;
+      // The page grows with the window here: anchor the pill to the edge
+      // that stays put, and let that be drawn, before the window grows.
+      if (menuRoom <= 0) {
+        const side = await getCaptureControlsMenuSide().catch(() => null);
+        flushSync(() => {
+          if (side) setMenuAbove(side.above);
+          setHolding(true);
+        });
+        await nextFrame();
+      }
+    }
     try {
       const placed = await setCaptureControlsMenu(true);
       setMenuAbove(placed.above);
       setMenu(kind);
     } catch {
       // No room was made: no menu.
+      setHolding(false);
     }
   };
   // A menu goes with the recording (stopped from the tray, saved), and when
@@ -217,7 +270,7 @@ export default function CaptureControlsPage() {
     if (!menuOpen) return;
     const shut = () => {
       setMenu(null);
-      void setCaptureControlsMenu(false).catch(() => undefined);
+      shrink();
     };
     if (!live) {
       shut();
@@ -225,7 +278,7 @@ export default function CaptureControlsPage() {
     }
     window.addEventListener("blur", shut);
     return () => window.removeEventListener("blur", shut);
-  }, [live, menuOpen]);
+  }, [live, menuOpen, shrink]);
 
   // Asking: Escape and "Keep recording" both mean no, and focus starts on
   // no. Answered no, focus goes back to the button that asked (it is drawn
@@ -263,7 +316,7 @@ export default function CaptureControlsPage() {
   const starting = phase.phase === "capturing" && phase.kind === "recording";
   if (starting && countdown !== null) {
     return (
-      <div className="flex h-full w-full items-center justify-center">
+      <div className={FILL}>
         <div data-tauri-drag-region className={`${PILL} gap-2 py-1.5 pl-3.5 pr-1.5`}>
           <span aria-hidden data-tauri-drag-region className="size-2.5 rounded-full bg-[#FF453A]" />
           <span data-tauri-drag-region role="timer" aria-live="assertive" className="whitespace-nowrap text-sm">
@@ -292,7 +345,7 @@ export default function CaptureControlsPage() {
   }
   if (starting || phase.phase === "finalizing") {
     return (
-      <div className="flex h-full w-full items-center justify-center">
+      <div className={FILL}>
         <div role="status" className={`${PILL} gap-3 px-4 py-2 text-sm`}>
           <span aria-hidden className="size-2 animate-pulse rounded-full bg-[#3167DD] motion-reduce:animate-none" />
           {starting ? "Starting recording…" : "Saving recording…"}
@@ -308,7 +361,7 @@ export default function CaptureControlsPage() {
   if (confirming) {
     const question = QUESTION[confirming];
     return (
-      <div className="flex h-full w-full items-center justify-center">
+      <div className={FILL}>
         <div
           role="alertdialog"
           aria-labelledby="question-title"
@@ -363,7 +416,7 @@ export default function CaptureControlsPage() {
 
   if (note) {
     return (
-      <div className="flex h-full w-full items-center justify-center">
+      <div className={FILL}>
         <div data-tauri-drag-region className={`${PILL} max-w-full gap-2 py-1.5 pl-3.5 pr-1.5`}>
           <span aria-hidden data-tauri-drag-region className="size-2.5 shrink-0 rounded-full bg-[#FF453A]" />
           <p role="status" data-tauri-drag-region className="min-w-0 flex-1 text-[11px] leading-tight text-white/80">
@@ -397,15 +450,36 @@ export default function CaptureControlsPage() {
     <PillMenu kind={menu} microphone={mic} camera={camera} onMicrophone={setMic} onClose={closeMenu} />
   );
 
+  // The room for a menu above and below the pill. Fixed (macOS): both are
+  // always there, `menuRoom` tall, and the window shows the slice it needs.
+  // Otherwise the anchored side takes whatever the window grew by, and the
+  // pill keeps to the other edge.
+  const slot = (above: boolean) => {
+    const open = menu !== null && menuAbove === above;
+    const fixed = menuRoom > 0;
+    const size = fixed ? "shrink-0" : !holding || menuAbove === above ? "min-h-0 flex-1" : "hidden";
+    return (
+      <div
+        data-menu-slot={above ? "above" : "below"}
+        style={fixed ? { height: menuRoom } : undefined}
+        className={`${size} flex flex-col ${above ? "justify-end" : "justify-start"}`}
+      >
+        {open && menuPanel}
+      </div>
+    );
+  };
+
   return (
     <div
-      className={`flex h-full w-full flex-col ${menu && menuAbove ? "justify-end" : "justify-start"}`}
+      data-anchor={menuRoom > 0 || !holding ? "middle" : menuAbove ? "bottom" : "top"}
+      className="fixed inset-0 flex flex-col"
       // A click in the window's empty part, beside the menu, closes it.
       onPointerDown={(e) => {
-        if (menu && e.target === e.currentTarget) closeMenu();
+        const target = e.target as HTMLElement;
+        if (menu && (target === e.currentTarget || target.dataset.menuSlot)) closeMenu();
       }}
     >
-      {menu && menuAbove && menuPanel}
+      {slot(true)}
       <div className={PILL_ROW}>
         <div
           data-tauri-drag-region
@@ -566,7 +640,18 @@ export default function CaptureControlsPage() {
           </div>
         </div>
       </div>
-      {menu && !menuAbove && menuPanel}
+      {slot(false)}
     </div>
   );
+}
+
+/** Wait until the browser has drawn the page as it is now. */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame !== "function") {
+      setTimeout(resolve, 0);
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 }

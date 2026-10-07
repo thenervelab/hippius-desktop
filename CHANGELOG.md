@@ -29,6 +29,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Mute your microphone during a screen recording.** The recording carries on and stays in sync; it is silent until you unmute. On a Mac.
 - **Switch microphone or camera during a screen recording.** Pick another one from the recording controls without stopping. On a Mac; camera switching works on Windows too.
 - **Change the camera bubble's size during a screen recording.** Small, large or full size, and the saved video changes with it. On a Mac and Windows.
+- **Controls on the camera bubble while you record.** Point at the bubble to change its size or pause and resume the recording right there. The controls never show up in the video. On a Mac and Windows.
 - **Annotate from the menu bar.** Choose Annotate an image from the Screenshot tile's menu to open any picture in the screenshot editor, or press Edit on a screenshot in the list. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
 
 ### Changed
@@ -162,6 +163,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Overview and Drive, for free and paid plans — uploads are paused.
 
 ### Fixed
+
+- **The recording controls stay still when you open the microphone or camera menu.** The bar no longer jumps up for a moment before the menu appears.
 
 - **The capture card no longer waits for the rest of your sync.** When other files were still syncing, the card could keep saying "waiting for sync" even though the capture's link was ready and already opened. It now says Uploaded as soon as the link works, and shows progress only while the capture itself is uploading. If the link can't be made on the first try (a dropped connection), Hippius tries again, and if it still fails the card stays open with Create link instead of sliding away.
 
