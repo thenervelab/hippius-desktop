@@ -35,6 +35,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Screen recordings are about half the size, so they upload and share faster.** Text stays just as sharp; a 10-minute recording is now at most about 375 MB at 1080p, where it could be about 1 GB before.
+
 - **Screen recordings start playing straight away from a share link.** Recordings made on a Mac are now saved so a player can start from the first part of the file. Before, the browser had to download the whole recording before the first frame showed.
 
 - **A clearer Screenshots & Recording settings page.** The two shortcuts are
@@ -166,8 +168,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **Linux: a tidier recording bar, and the dock opens Hippius mid-recording.** On Wayland the recording bar is now just the bar, not a large dark box around it, and clicking Hippius in the dock or picking it in Alt+Tab while recording brings the app back.
+- **On Ubuntu and other GNOME desktops, the recording controls and the camera bubble stay on top.** Opening another window, Hippius included, no longer hides them, so the camera stays in your screen recording.
+
 - **The recording controls show again while you record** (macOS). Stop, the timer, mute and the menus were missing, leaving only the camera bubble and the menu bar.
 - **Command-comma opens Settings from the main window** (Ctrl+comma on Windows and Linux), not only from the menu bar window.
+
 - **The recording controls stay still when you open the microphone or camera menu.** The bar no longer jumps up for a moment before the menu appears.
 
 - **The capture card no longer waits for the rest of your sync.** When other files were still syncing, the card could keep saying "waiting for sync" even though the capture's link was ready and already opened. It now says Uploaded as soon as the link works, and shows progress only while the capture itself is uploading. If the link can't be made on the first try (a dropped connection), Hippius tries again, and if it still fails the card stays open with Create link instead of sliding away.
