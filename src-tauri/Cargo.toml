@@ -262,6 +262,13 @@ unicode-normalization = "0.1"
 # magic-byte sniffer in the desktop. The crate has no transitive
 # deps beyond `unicase` and is what hcfs-server itself uses.
 mime_guess = "2.0"
+# The file viewer's loopback video stream (`video_stream.rs`): WebKitGTK
+# cannot play media from Tauri's `asset://` scheme. hyper, hyper-util and
+# http-body-util are already built for reqwest; this adds only their server
+# halves, no new crates.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 # Decode/resize/encode for server-side thumbnail generation (sync/remote.rs).
 # Capped below 0.25.9: image 0.25.9 bumped its `jpeg` feature to require
 # `zune-core ^0.5.0` / `zune-jpeg ^0.5.5`, and `zune-core 0.5.0` has no STABLE

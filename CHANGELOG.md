@@ -167,7 +167,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-
+- **Videos play in the viewer on Linux.** Screen recordings and other videos in your drives now play inside Hippius on Linux instead of showing a black screen. If your system is missing the video decoder, the viewer tells you which package to install and still lets you open the video in your own player.
 - **The camera bubble shows your camera on Ubuntu 22.04 and similar Linux systems.** It used to stay on its placeholder there; if a camera still cannot start, the bubble now says so instead of waiting for ever.
 - **Linux: a tidier recording bar, and the dock opens Hippius mid-recording.** On Wayland the recording bar is now just the bar, not a large dark box around it, and clicking Hippius in the dock or picking it in Alt+Tab while recording brings the app back.
 - **On Ubuntu and other GNOME desktops, the recording controls and the camera bubble stay on top.** Opening another window, Hippius included, no longer hides them, so the camera stays in your screen recording.
@@ -257,10 +257,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **On Linux, the recording controls and camera bubble count as part of
   Hippius** in the app switcher, instead of showing up as separate apps.
-
-- **Videos open in your video player on Linux.** The file viewer now offers
-  "Open in your video player" and Download for videos, instead of a black
-  frame that never played.
 
 - **Stop, Pause and Show recording controls work from the tray menu on
   Linux.**
