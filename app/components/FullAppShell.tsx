@@ -15,6 +15,7 @@ import DeepLinkListener from "@/app/components/auth/DeepLinkListener";
 import TranslocationGuard from "@/app/components/TranslocationGuard";
 import FinderExtensionGuard from "@/app/components/FinderExtensionGuard";
 import ZoomController from "@/app/components/ZoomController";
+import SettingsShortcut from "@/app/components/SettingsShortcut";
 import SplashWrapper from "./splash-screen-v2";
 
 /**
@@ -69,6 +70,7 @@ export default function FullAppShell({ children }: { children: React.ReactNode }
                 <TranslocationGuard />
                 <FinderExtensionGuard />
                 <ZoomController />
+                <SettingsShortcut />
                 <SplashWrapper preventClose={false}>
                   <Suspense fallback={<PageLoader ringFill="once" />}>
                     <div className="flex min-h-screen h-screen">{children}</div>
