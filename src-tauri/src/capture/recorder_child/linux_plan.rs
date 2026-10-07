@@ -43,6 +43,7 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use super::plan::{self, PixelRect};
+use super::sizing::{PEAK_TO_AVERAGE, RateControl};
 use crate::capture::recording::protocol::StartCommand;
 use crate::capture::recording::{MediaDevice, RecordingUnavailable, tidy_devices};
 use crate::capture::targets::DisplayTarget;
@@ -73,21 +74,43 @@ impl H264Encoder {
         }
     }
 
-    /// The element with its bit rate and a keyframe every 2 s at 30 fps
-    /// (the Swift helper's GOP). Units differ: x264 and the VA encoders take
-    /// kbit/s, OpenH264 bit/s.
+    /// The element with the shared rate control: the Swift helper's average,
+    /// a ceiling of [`PEAK_TO_AVERAGE`] times it, and its keyframe interval.
+    /// Each encoder is put in a mode that spends less on a still screen:
+    /// none of them is left in constant bit rate, which pads a still screen
+    /// up to the average (x264's and VA's default), and the old VA-API
+    /// plugin's default (constant QP) ignored the bit rate altogether.
+    ///
+    /// - VA (`va` plugin): VBR; `bitrate` is the average and the ceiling is
+    ///   `bitrate * 100 / target-percentage`.
+    /// - VA-API (`vaapi` plugin): VBR; there `bitrate` is the ceiling and
+    ///   the average is `target-percentage` of it.
+    /// - x264: constant quality ([`X264_CRF`]) with the ceiling as its VBV
+    ///   rate over a one-second buffer, so a still screen costs almost
+    ///   nothing and a busy one stops at the ceiling. `veryfast` keeps a
+    ///   4K30 screen real time on a laptop CPU.
+    /// - OpenH264: its default quality-first rate control with the average
+    ///   as target and the ceiling as its maximum.
+    ///
+    /// Units differ: x264 and the VA encoders take kbit/s, OpenH264 bit/s.
     #[must_use]
-    pub fn element(self, bits_per_second: u32) -> String {
-        let kbps = bits_per_second.div_ceil(1000);
+    pub fn element(self, rate: RateControl) -> String {
+        let (average, peak, keyframes) = (rate.average_kbps(), rate.peak_kbps(), rate.keyframe_frames);
+        let target_percentage = 100 / PEAK_TO_AVERAGE;
         match self {
-            Self::Va => format!("vah264enc bitrate={kbps} key-int-max=60"),
-            Self::Vaapi => format!("vaapih264enc bitrate={kbps} keyframe-period=60"),
-            // `veryfast` keeps a 4K30 screen real time on a laptop CPU.
-            Self::X264 => format!("x264enc bitrate={kbps} key-int-max=60 speed-preset=veryfast"),
-            Self::OpenH264 => format!("openh264enc bitrate={bits_per_second} gop-size=60"),
+            Self::Va => format!("vah264enc rate-control=vbr bitrate={average} target-percentage={target_percentage} key-int-max={keyframes}"),
+            Self::Vaapi => format!("vaapih264enc rate-control=vbr bitrate={peak} target-percentage={target_percentage} keyframe-period={keyframes}"),
+            Self::X264 => {
+                format!("x264enc pass=qual quantizer={X264_CRF} bitrate={peak} vbv-buf-capacity=1000 key-int-max={keyframes} speed-preset=veryfast")
+            }
+            Self::OpenH264 => format!("openh264enc bitrate={} max-bitrate={} gop-size={keyframes}", rate.average, rate.peak),
         }
     }
 }
+
+/// x264's constant-quality level: x264's own default CRF and OBS's "High
+/// Quality, Medium File Size" recording preset. Lower is sharper and bigger.
+pub const X264_CRF: u32 = 23;
 
 /// An AAC encoder element, in the order the plan prefers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -428,7 +451,8 @@ pub fn quoted(value: &str) -> String {
 
 /// Frames per second, as on macOS.
 pub const FPS: u32 = 30;
-/// Fragment length in ms: what a killed recorder can lose at most.
+/// Fragment length in ms: about what a killed recorder can lose (a fragment
+/// may wait for the next keyframe, at most `sizing::KEYFRAME_SECONDS` away).
 pub const FRAGMENT_MS: u32 = 2000;
 /// The named elements the recorder looks up.
 pub const VIDEO_SINK: &str = "video";
@@ -645,7 +669,7 @@ pub fn encode(plan: &EncodePlan) -> String {
         "appsrc name={VIDEO_SRC} format=time is-live=false do-timestamp=false caps={caps} ! \
          queue ! videoconvert ! {venc} ! h264parse ! {unbounded} ! mux. ",
         caps = quoted(&video_caps),
-        venc = plan.encoders.video.element(super::sizing::video_bit_rate(plan.width, plan.height)),
+        venc = plan.encoders.video.element(RateControl::for_size(plan.width, plan.height)),
     );
     if plan.audio {
         let audio_caps = "audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved";
@@ -880,12 +904,23 @@ mod tests {
 
     #[test]
     fn bit_rates_are_in_each_encoders_own_units() {
+        let hd = RateControl::for_size(1920, 1080);
         assert_eq!(
-            H264Encoder::X264.element(14_000_000),
-            "x264enc bitrate=14000 key-int-max=60 speed-preset=veryfast"
+            H264Encoder::X264.element(hd),
+            "x264enc pass=qual quantizer=23 bitrate=10000 vbv-buf-capacity=1000 key-int-max=120 speed-preset=veryfast"
         );
-        assert_eq!(H264Encoder::OpenH264.element(14_000_000), "openh264enc bitrate=14000000 gop-size=60");
-        assert_eq!(H264Encoder::Va.element(2_000_500), "vah264enc bitrate=2001 key-int-max=60");
+        assert_eq!(
+            H264Encoder::OpenH264.element(hd),
+            "openh264enc bitrate=5000000 max-bitrate=10000000 gop-size=120"
+        );
+        assert_eq!(
+            H264Encoder::Va.element(hd),
+            "vah264enc rate-control=vbr bitrate=5000 target-percentage=50 key-int-max=120"
+        );
+        assert_eq!(
+            H264Encoder::Vaapi.element(hd),
+            "vaapih264enc rate-control=vbr bitrate=10000 target-percentage=50 keyframe-period=120"
+        );
         assert_eq!(AacEncoder::Avenc.element(), "avenc_aac bitrate=160000");
     }
 
@@ -1149,8 +1184,8 @@ mod tests {
     #[test]
     fn the_writer_encodes_one_video_and_one_audio_track_in_fragments() {
         let text = encode(&encode_plan(true));
-        let kbps = super::super::sizing::video_bit_rate(3840, 2160).div_ceil(1000);
-        assert!(text.contains(&format!("x264enc bitrate={kbps} ")), "{text}");
+        let peak = RateControl::for_size(3840, 2160).peak_kbps();
+        assert!(text.contains(&format!("x264enc pass=qual quantizer=23 bitrate={peak} ")), "{text}");
         assert!(
             text.contains("caps=\"video/x-raw,format=NV12,width=3840,height=2160,framerate=30/1"),
             "{text}"
@@ -1165,6 +1200,49 @@ mod tests {
             text.matches("queue max-size-buffers=0 max-size-bytes=0 max-size-time=0 ! mux.").count(),
             2
         );
+    }
+
+    /// Every encoder is put in a rate control that spends less on a still
+    /// screen than the average (never their constant-bit-rate or
+    /// constant-QP defaults), with the same ceiling of twice the average and
+    /// the Swift helper's keyframe interval, at every size.
+    #[test]
+    fn every_encoder_spends_less_on_a_still_screen_and_keyframes_alike() {
+        for (w, h) in [(1280, 720), (1920, 1080), (3456, 2234), (3840, 2160)] {
+            let rate = RateControl::for_size(w, h);
+            for encoder in H264Encoder::PREFERENCE {
+                let element = encoder.element(rate);
+                assert!(element.starts_with(encoder.factory()), "{element}");
+                let gop = match encoder {
+                    H264Encoder::Va | H264Encoder::X264 => "key-int-max",
+                    H264Encoder::Vaapi => "keyframe-period",
+                    H264Encoder::OpenH264 => "gop-size",
+                };
+                let keyframes = format!("{gop}={}", rate.keyframe_frames);
+                assert!(element.split(' ').any(|p| p == keyframes), "a keyframe every 4 s: {element}");
+                match encoder {
+                    H264Encoder::Va => {
+                        assert!(element.contains("rate-control=vbr "), "{element}");
+                        // The ceiling is bitrate * 100 / target-percentage.
+                        assert!(element.contains(&format!("bitrate={} target-percentage=50", rate.average_kbps())));
+                        assert_eq!(100 / PEAK_TO_AVERAGE, 50, "a ceiling of twice the average");
+                    }
+                    H264Encoder::Vaapi => {
+                        assert!(element.contains("rate-control=vbr "), "{element}");
+                        // Here bitrate is the ceiling and the average its percentage.
+                        assert!(element.contains(&format!("bitrate={} target-percentage=50", rate.peak_kbps())));
+                    }
+                    H264Encoder::X264 => {
+                        assert!(element.contains("pass=qual quantizer=23 "), "constant quality, not CBR: {element}");
+                        assert!(element.contains(&format!("bitrate={} vbv-buf-capacity=1000", rate.peak_kbps())));
+                    }
+                    H264Encoder::OpenH264 => {
+                        assert!(!element.contains("rate-control="), "its default is quality first: {element}");
+                        assert!(element.contains(&format!("bitrate={} max-bitrate={}", rate.average, rate.peak)));
+                    }
+                }
+            }
+        }
     }
 
     #[test]
