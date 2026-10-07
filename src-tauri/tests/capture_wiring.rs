@@ -1562,6 +1562,128 @@ fn the_pill_menus_grow_the_protected_pill_window() {
     assert!(fn_body(&src, "fn open_controls(").contains("pill_menu).take()"));
 }
 
+/// The bar must not move while a menu opens or closes. Growing the pill's
+/// window upward drew the pill at the top of the grown window for a moment
+/// (the page laid out for the old size, or for the side not yet known), a
+/// menu's height above where it was. On macOS the page is therefore laid
+/// out once at full height and never resized: every frame change of the
+/// pill goes through `set_pill_frame`, which places the page inside the
+/// window (`live_controls::page_top`) in the same main-thread turn as the
+/// window, with screen updates held. Elsewhere the page anchors the pill to
+/// the edge that stays put (`capture_controls_menu_side`) before it asks for
+/// the room.
+#[test]
+fn the_pill_never_moves_while_a_menu_opens_or_closes() {
+    let src = read("src/capture/commands.rs");
+    let menu = fn_body(&src, "pub async fn capture_controls_menu(");
+    assert!(menu.contains("set_pill_frame(&window, grown, scale, Some(above))"));
+    assert!(menu.contains("set_pill_frame(&window, back, scale, None)"));
+    assert!(!menu.contains("set_camera_frame("), "the pill's frame is never set without its page");
+    let open = fn_body(&src, "fn open_controls(");
+    assert!(open.contains("set_pill_frame(&window, frame, area.scale, None)"));
+    assert!(
+        !open.contains("place(&window"),
+        "a pill placed without its page would show the wrong slice"
+    );
+    let set = fn_body(&src, "fn set_pill_frame(");
+    for needle in [
+        "disableScreenUpdatesUntilFlush",
+        "setAutoresizingMask: 0usize",
+        "live_controls::page_top(menu, room)",
+        "live_controls::page_height(CONTROLS_HEIGHT, room)",
+        "setFrame: rect display: objc::runtime::YES animate: objc::runtime::NO",
+    ] {
+        assert!(set.contains(needle), "set_pill_frame lost {needle}");
+    }
+    let page_frame = set.find("setFrame: page_frame").expect("the page is placed");
+    let window_frame = set.find("setFrame: rect").expect("the window is placed");
+    assert!(page_frame < window_frame, "the page is placed before the window is drawn at its new size");
+    let side = fn_body(&src, "pub fn capture_controls_menu_side(");
+    assert!(side.contains("live_controls::menu_above("), "the side is the one the window will grow to");
+    assert!(
+        fn_body(&src, "pub async fn capture_controls_context(").contains("live_controls::fixed_menu_room("),
+        "the page is told how much room it keeps"
+    );
+
+    let page = read("../app/capture-controls/page.tsx");
+    let side_call = page.find("getCaptureControlsMenuSide()").expect("the page asks the side first");
+    let grow = page.find("setCaptureControlsMenu(true)").expect("then the room");
+    assert!(side_call < grow, "anchored before the window grows");
+    assert!(
+        page.contains("style={fixed ? { height: menuRoom } : undefined}"),
+        "fixed room on both sides"
+    );
+}
+
+/// The camera bubble's own controls mid-recording are never in the video.
+/// The bubble's window is filmed, so they are a window of their own, which
+/// every recorder leaves out: on macOS the helper films only the main window
+/// and the bubble of Hippius's windows (`filmed_own_windows`, by window
+/// number; the bubble's number is the camera window's alone) or, recording a
+/// window, only that window and the bubble; on Windows the window is content
+/// protected; Linux has none (`bubble_controls::supported`).
+#[test]
+fn the_bubble_controls_are_never_filmed() {
+    let src = read("src/capture/commands.rs");
+    let build = fn_body(&src, "fn bubble_controls_window(");
+    assert!(build.contains("BUBBLE_CONTROLS_LABEL"));
+    assert!(
+        build.contains(".content_protected(super::own_windows::content_protected(") && build.contains("OwnWindow::BubbleControls"),
+        "the controls' protection is own_windows' decision"
+    );
+    assert!(build.contains(".focused(false)") && build.contains(".accept_first_mouse(true)"));
+    // Only the camera window's number is ever remembered as the bubble's.
+    assert_eq!(src.matches("    remember_camera_window_number(").count(), 1);
+    assert!(fn_body(&src, "fn open_camera_window(").contains("remember_camera_window_number(app, &window)"));
+    assert!(
+        src.contains("super::own_windows::filmed_own_windows(main_window_number(app).await, filmed_camera_window(&state.capture))"),
+        "the helper films the main window and the bubble only"
+    );
+    assert!(!fn_body(&src, "fn filmed_camera_window(").contains("BUBBLE_CONTROLS"));
+    let swift = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
+    assert!(swift.contains("SCContentFilter(display: screen, excludingApplications: [app], exceptingWindows: kept)"));
+    assert!(swift.contains("SCContentFilter(display: screen, including: [window, camera])"));
+
+    // Shown from Rust's pointer watch, on the bubble only while recording,
+    // and gone with the camera.
+    let watch = fn_body(&src, "#[cfg(any(target_os = \"macos\", windows))]\nfn spawn_camera_hover_watch(");
+    assert!(watch.contains("bubble_controls::offered(") && watch.contains("bubble_controls::shown("));
+    assert!(watch.contains("bubble_controls::frame("));
+    assert!(fn_body(&src, "async fn end_camera(").contains("close_bubble_controls(app)"));
+
+    let label = src
+        .lines()
+        .find(|l| l.contains("pub const BUBBLE_CONTROLS_LABEL"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("BUBBLE_CONTROLS_LABEL is declared");
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-bubble-controls.json")).expect("capability parses");
+    let windows: Vec<&str> = capability["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    assert_eq!(windows, vec![label]);
+    let permissions: Vec<&str> = capability["permissions"]
+        .as_array()
+        .expect("permissions")
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+    assert!(permissions.iter().all(|p| p.starts_with("core:")), "{permissions:?}");
+    assert!(read("tauri.conf.json").contains("\"capture-bubble-controls\""));
+
+    // The same commands as the pill, so the bar, the bubble and the file agree.
+    let page = read("../app/capture-bubble-controls/page.tsx");
+    for call in ["setCaptureCameraSize(c.target)", "resumeCapture", "pauseCapture"] {
+        assert!(page.contains(call), "the bubble's controls call {call}");
+    }
+    assert!(page.contains("camera.resizeFromPill"), "sizes only where Rust offers them");
+    assert!(!page.contains("title="), "a native tooltip is a window of its own");
+    let shell = read("../app/components/AppShell.tsx");
+    assert!(shell.contains("\"/capture-bubble-controls\""), "a capture route boots provider-free");
+}
+
 /// The bubble's size changes mid-recording by moving its window inside what
 /// is filmed, so the camera in the file follows; the camera only stage is
 /// never resized (it is the recording).

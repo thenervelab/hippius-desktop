@@ -631,6 +631,13 @@ export interface CaptureControlsContext {
   compact: boolean;
   /** The first time ever, Rust's line saying it is filmed; null afterwards. */
   filmedNote: string | null;
+  /**
+   * The room the page keeps above and below the pill for a menu, in points
+   * (Rust's `live_controls::fixed_menu_room`). Above 0 (macOS) the page is
+   * laid out once at that height and the window shows the slice around the
+   * pill; at 0 the page is the window's own size and grows with it.
+   */
+  menuRoom: number;
 }
 
 export function getCaptureControlsContext(): Promise<CaptureControlsContext> {
@@ -779,6 +786,11 @@ export interface CapturePillMenu {
 /** A pill menu opens or closes: Rust grows the pill's window to hold it, and shrinks it back. */
 export function setCaptureControlsMenu(open: boolean): Promise<CapturePillMenu> {
   return invoke("capture_controls_menu", { open });
+}
+
+/** Where a pill menu would open, with nothing moved yet: the side to anchor the pill to first. */
+export function getCaptureControlsMenuSide(): Promise<CapturePillMenu> {
+  return invoke("capture_controls_menu_side");
 }
 
 /** The bubble's size strip: Rust saves it and glides the window to its new frame. */

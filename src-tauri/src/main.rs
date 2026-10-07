@@ -741,6 +741,7 @@ fn main() {
             crate::capture::commands::capture_microphone_switch,
             crate::capture::commands::capture_camera_switch,
             crate::capture::commands::capture_controls_menu,
+            crate::capture::commands::capture_controls_menu_side,
             crate::capture::commands::capture_camera_set_size,
             crate::capture::commands::capture_camera_dismiss,
             crate::capture::commands::capture_share_targets,
