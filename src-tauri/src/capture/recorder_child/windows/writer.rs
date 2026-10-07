@@ -262,7 +262,7 @@ fn encoding_parameters(rate: sizing::RateControl) -> Result<IMFAttributes, Strin
         MFCreateAttributes(&raw mut attributes, 4).map_err(|e| err("encoder settings", &e))?;
         let attributes = attributes.ok_or("no encoder settings")?;
         for (key, value) in settings {
-            attributes.SetUINT32(&key, value).map_err(|e| err("an encoder setting", &e))?;
+            attributes.SetUINT32(&raw const key, value).map_err(|e| err("an encoder setting", &e))?;
         }
         Ok(attributes)
     }
