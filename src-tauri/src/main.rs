@@ -269,11 +269,17 @@ fn main() {
     // Linux: the app id GNOME matches windows to the installed app by, set
     // before GTK starts (`utils::app_id` says why).
     crate::utils::app_id::apply();
+    // Linux: on GNOME's Wayland session, connect through XWayland so the
+    // recording pill and camera bubble can stay on top (`utils::display_backend`
+    // says why). Before GTK starts; logged once logging is up. The recorder
+    // child and the CLI modes above open no window and never get here.
+    let display_backend = crate::utils::display_backend::apply();
 
     // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
     // The guard must outlive the app so the non-blocking file writer keeps
     // flushing — see `init_logging`. Holding it in this `main` local does that.
     let _log_guard = init_logging();
+    info!(?display_backend, "display backend chosen");
 
     // A packaged app's stderr goes nowhere, so an uncaptured panic is the one
     // event guaranteed to be missing from a support bundle. Installed after
@@ -1087,6 +1093,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // any recording puts that menu on the icon.
         #[cfg(target_os = "linux")]
         crate::capture::commands::listen_to_recording_menu(app.handle());
+        // Which display GTK opened: XWayland can be chosen and still fall
+        // back to Wayland (`utils::display_backend`).
+        #[cfg(target_os = "linux")]
+        info!(display = ?crate::utils::display_backend::active_display(), "GTK display opened");
 
         // macOS 26+ (Tahoe) mounts legacy transparent .icns icons onto a white
         // rounded tile in the Dock, but renders a RUNTIME-set application icon
