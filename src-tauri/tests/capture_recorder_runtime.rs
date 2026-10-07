@@ -472,11 +472,12 @@ mod recording {
     /// How much longer than the time this test measured as recording the
     /// file may be. The recorder stamps pause, resume and stop when it reads
     /// each command (one pipe hop after this test's clock, a few ms) and the
-    /// last picture lasts at least one 33 ms frame. Half the 1 s pause: a
-    /// pause left in the file fails, and so does a file that starts before
-    /// `started` (a hosted Windows runner takes 1.5 to 2.2 s to make the
-    /// H.264 encoder).
-    const LONGER_BY_AT_MOST: f64 = 0.5;
+    /// last picture lasts at least one 33 ms frame. A hosted Windows runner
+    /// has also read 0.54 s over (3.54 s for 3.00 s), so the margin is three
+    /// quarters of the 1 s pause: a pause left in the file still fails, and
+    /// so does a file that starts before `started` (a hosted Windows runner
+    /// takes 1.5 to 2.2 s to make the H.264 encoder).
+    const LONGER_BY_AT_MOST: f64 = 0.75;
     /// How much shorter: the same pipe hops the other way, and a frame.
     const SHORTER_BY_AT_MOST: f64 = 0.25;
 
