@@ -209,18 +209,45 @@ pub enum LinkSource {
 pub async fn mint(state: &AppState, account_id: &str, source: &LinkSource) -> std::result::Result<crate::shares::commands::ShareLink, String> {
     use crate::shares::commands::ShareChoice;
     use hcfs_client::client::share::ShareTtl;
-    let minted = match source {
-        LinkSource::Synced { label, rel_path } => {
-            crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, None).await
-        }
-        LinkSource::External(path) => {
-            crate::shares::commands::share_external_file(state, account_id, path, ShareTtl::Never, ShareChoice::Public, None).await
-        }
-    };
-    minted.map_err(|e| {
-        tracing::warn!(error = %e, "capture saved, but its share link could not be minted");
-        link_failure_copy(&e)
-    })
+    let mut attempt = 0;
+    loop {
+        let minted = match source {
+            LinkSource::Synced { label, rel_path } => {
+                crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, None).await
+            }
+            LinkSource::External(path) => {
+                crate::shares::commands::share_external_file(state, account_id, path, ShareTtl::Never, ShareChoice::Public, None).await
+            }
+        };
+        let e = match minted {
+            Ok(link) => return Ok(link),
+            Err(e) => e,
+        };
+        let Some(wait) = mint_retry_after(failure_reason(&e), attempt) else {
+            tracing::warn!(error = %e, "capture saved, but its share link could not be minted");
+            return Err(link_failure_copy(&e));
+        };
+        tracing::info!(error = %e, attempt, "capture link not made yet; trying again");
+        tokio::time::sleep(wait).await;
+        attempt += 1;
+    }
+}
+
+/// How long to wait before making a capture's link again after failed
+/// attempt `attempt` (0 = the first), or `None` to give up. A request that
+/// did not get through (offline, a server that did not answer, a dropped
+/// connection) is often fine a second later, and without a link nothing is
+/// copied or opened, so it is tried three times in all. A full drive is not
+/// going to change in seconds, so it is never retried.
+#[must_use]
+pub fn mint_retry_after(reason: FailureReason, attempt: u32) -> Option<std::time::Duration> {
+    const WAITS_MS: [u64; 2] = [1_000, 3_000];
+    if reason == FailureReason::StorageFull {
+        return None;
+    }
+    WAITS_MS
+        .get(usize::try_from(attempt).ok()?)
+        .map(|ms| std::time::Duration::from_millis(*ms))
 }
 
 /// The sentence for a link that could not be made. Never reqwest's own words.
@@ -473,6 +500,21 @@ pub fn failed_notice(error: &AppError, card_showing: bool) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_link_that_did_not_get_through_is_tried_three_times_in_all() {
+        use std::time::Duration;
+        for reason in [FailureReason::Offline, FailureReason::Other, FailureReason::NeedsFolder] {
+            assert_eq!(mint_retry_after(reason, 0), Some(Duration::from_secs(1)), "{reason:?}");
+            assert_eq!(mint_retry_after(reason, 1), Some(Duration::from_secs(3)), "{reason:?}");
+            assert_eq!(mint_retry_after(reason, 2), None, "{reason:?}: three attempts in all");
+        }
+        assert_eq!(
+            mint_retry_after(FailureReason::StorageFull, 0),
+            None,
+            "a full drive will not change in seconds"
+        );
+    }
 
     fn delivered(share_url: Option<&str>) -> Delivered {
         Delivered {
