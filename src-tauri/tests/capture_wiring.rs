@@ -187,7 +187,18 @@ fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
     }
     assert!(facts.contains("same_drive_path("), "the row is matched by its path in the drive");
     let follow = fn_body(&src, "fn spawn_sync_follow(");
-    assert!(follow.contains("link_fallback_applies("), "the bounded fallback must be applied");
+    assert!(
+        follow.contains("link_finishes_card("),
+        "a public link finishes a card the engine has not started on"
+    );
+    assert!(
+        !follow.contains("is_any_sync_in_progress("),
+        "the card waits for its own upload, never for the rest of the sync"
+    );
+    assert!(
+        facts.contains("FileStatus::Pending => SyncRow::Queued"),
+        "a queued row is told apart from a running one"
+    );
     // The cycle is started, never waited for, by the placement.
     let place = fn_body(&read("src/capture/deliver.rs"), "pub async fn place(");
     let spawn = place.find("async_runtime::spawn(").expect("the sync is started in the background");

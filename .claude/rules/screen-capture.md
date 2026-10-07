@@ -608,9 +608,12 @@ engine's synced set (`finder_bridge::badges::is_synced`, looked up in NFC
 and NFD, never scanned), matched by label + `preview::same_drive_path` (NFC,
 `\` → `/`, leading `/` dropped, absolute paths ending in `relPath`, never
 trimmed). A row whose upload is still encrypting reads `Encrypt`, so both
-actions count. Bounded fallback: a `syncing` card with a public link, no row
-anywhere and an idle engine for `LINK_FALLBACK_AFTER` (45 s) is marked
-uploaded (`link_fallback_applies`). `PreviewCard.settled` (uploaded and the
+actions count. The card waits for its own upload, never for the rest of the
+sync: a `syncing` card with a public link whose file the engine has not
+started on (no row yet, or `SyncRow::Queued`, a `Pending` row behind other
+files) is marked uploaded at once (`link_finishes_card`), because minting the
+link uploads the capture's own encrypted copy. A file the engine is uploading
+right now (`Working`) shows that upload's progress instead. `PreviewCard.settled` (uploaded and the
 link not `Creating`) is what the card's auto-hide waits for, so it never slides
 away before it can say the link was copied.
 Rust also owns `link` (`LinkState`), `linkText` ("Public link copied") and

@@ -177,7 +177,9 @@ pub struct PreviewCard {
 pub enum SyncRow {
     /// No row: the cycle has not picked the file up yet.
     Absent,
-    /// Queued or uploading.
+    /// In the engine's queue, behind other files, not started.
+    Queued,
+    /// Being encrypted or uploaded.
     Working,
     Completed,
     /// The engine's own error text, which is never shown as it is.
@@ -229,24 +231,17 @@ impl SyncFacts {
     }
 }
 
-/// How long a synced capture with a public link waits, with the engine idle
-/// and no row for the file anywhere, before its card says Uploaded anyway.
-/// The link is the capture's own encrypted copy on the server, so the file
-/// reached Hippius; the card must not say "uploading" for ever because the
-/// engine's bookkeeping missed it.
-pub const LINK_FALLBACK_AFTER: std::time::Duration = std::time::Duration::from_secs(45);
-
-/// Whether the bounded fallback applies (see [`LINK_FALLBACK_AFTER`]): the
-/// card is still syncing, has a public link, the engine has nothing for the
-/// file (no row, no failure) and is not syncing anything, and it has waited
-/// long enough.
+/// Whether the card's public link finishes it: the card is still syncing,
+/// its link is public and the engine has not started on the file (no row
+/// yet, or queued behind other files). Minting the link uploads the
+/// capture's own encrypted copy, so the capture is on the server and
+/// shareable; the drive copy follows whenever the engine gets to it. A card
+/// whose file the engine is uploading right now shows that upload instead.
 #[must_use]
-pub fn link_fallback_applies(card: &PreviewCard, row: &SyncRow, waited: std::time::Duration, engine_busy: bool) -> bool {
+pub fn link_finishes_card(card: &PreviewCard, row: &SyncRow) -> bool {
     matches!(card.status, PreviewStatus::Syncing { .. })
         && matches!(card.link, LinkState::Public { .. })
-        && *row == SyncRow::Absent
-        && !engine_busy
-        && waited >= LINK_FALLBACK_AFTER
+        && matches!(row, SyncRow::Absent | SyncRow::Queued)
 }
 
 /// What a syncing card becomes given the engine's row, or `None` when it
@@ -258,7 +253,7 @@ pub fn status_after_sync_row(card: &PreviewCard, row: &SyncRow) -> Option<Previe
     let (link_copied, link_error) = card.link_fields();
     let next = match row {
         SyncRow::Absent => return None,
-        SyncRow::Working => PreviewStatus::Syncing { link_copied, link_error },
+        SyncRow::Queued | SyncRow::Working => PreviewStatus::Syncing { link_copied, link_error },
         SyncRow::Completed => PreviewStatus::Uploaded { link_copied, link_error },
         SyncRow::Failed(error) => {
             let (message, reason) = super::deliver::sync_failure_copy(error.as_deref());
@@ -798,26 +793,31 @@ mod tests {
     }
 
     #[test]
-    fn a_link_and_an_idle_engine_finish_a_card_the_engine_lost_track_of() {
-        let long = LINK_FALLBACK_AFTER;
+    fn a_public_link_finishes_a_card_the_engine_has_not_started() {
         let c = syncing(true);
-        assert!(link_fallback_applies(&c, &SyncRow::Absent, long, false));
-        // Not before the wait, not while the engine works, not over a row.
-        assert!(!link_fallback_applies(
-            &c,
-            &SyncRow::Absent,
-            long.saturating_sub(std::time::Duration::from_secs(1)),
-            false
-        ));
-        assert!(!link_fallback_applies(&c, &SyncRow::Absent, long, true));
-        assert!(!link_fallback_applies(&c, &SyncRow::Working, long, false));
-        assert!(!link_fallback_applies(&c, &SyncRow::Failed(None), long, false));
+        // Queued behind a long sync, or not picked up yet: the link's own
+        // copy is on the server, so the card does not wait for the queue.
+        assert!(link_finishes_card(&c, &SyncRow::Absent));
+        assert!(link_finishes_card(&c, &SyncRow::Queued));
+        // Its own upload running, done or failed: the engine's row decides.
+        assert!(!link_finishes_card(&c, &SyncRow::Working));
+        assert!(!link_finishes_card(&c, &SyncRow::Completed));
+        assert!(!link_finishes_card(&c, &SyncRow::Failed(None)));
         // No link means no evidence the bytes reached the server.
         let mut no_link = syncing(false);
         no_link.link = LinkState::None;
-        assert!(!link_fallback_applies(&no_link, &SyncRow::Absent, long, false));
+        assert!(!link_finishes_card(&no_link, &SyncRow::Queued));
         let mut creating = syncing(false);
         creating.link = LinkState::Creating;
-        assert!(!link_fallback_applies(&creating, &SyncRow::Absent, long, false));
+        assert!(!link_finishes_card(&creating, &SyncRow::Queued));
+        let mut failed_link = syncing(false);
+        failed_link.link = LinkState::Failed { message: "no".into() };
+        assert!(!link_finishes_card(&failed_link, &SyncRow::Queued));
+    }
+
+    #[test]
+    fn a_queued_card_keeps_syncing_until_its_link_or_its_upload_finishes_it() {
+        let c = syncing(true);
+        assert_eq!(status_after_sync_row(&c, &SyncRow::Queued), None, "still syncing");
     }
 }
