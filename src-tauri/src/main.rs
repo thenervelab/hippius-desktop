@@ -344,6 +344,10 @@ fn main() {
                 if let Err(e) = window.set_focus() {
                     debug!("Failed to set window focus: {e}");
                 }
+                // Opened again mid-recording (the app grid, a launcher): the
+                // user took the app back, so the recording's end leaves it up
+                // even where the desktop withholds the keyboard from it.
+                crate::capture::commands::on_main_window_focused(app);
             }
             // On macOS, a URL-forwarder helper sends deep link URLs
             // via the single-instance socket as argv entries.
@@ -743,6 +747,7 @@ fn main() {
             crate::capture::commands::capture_camera_switch,
             crate::capture::commands::capture_controls_menu,
             crate::capture::commands::capture_controls_menu_side,
+            crate::capture::commands::capture_panel_fit,
             crate::capture::commands::capture_camera_set_size,
             crate::capture::commands::capture_camera_dismiss,
             crate::capture::commands::capture_share_targets,
