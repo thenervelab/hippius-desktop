@@ -25,7 +25,7 @@ vi.mock("@/app/lib/utils/isMacPlatform", () => ({
   default: () => platform.mac,
 }));
 
-import TrayHeaderMenu from "../TrayHeaderMenu";
+import TrayHeaderMenu, { PLAN_UNAVAILABLE } from "../TrayHeaderMenu";
 import { TRAY_OPEN_PAGE_EVENT } from "@/app/lib/tray/trayHeaderMenu";
 
 const OVERVIEW = {
@@ -53,14 +53,20 @@ beforeEach(() => {
   tauri.reset();
   platform.mac = true;
   main.show.mockClear();
-  tauri.onInvoke("get_storage_overview", () => OVERVIEW);
+  // Rust refuses the account-scoped command without the session's account.
+  tauri.onInvoke("get_storage_overview", (args?: Record<string, unknown>) => {
+    if (args?.accountId !== ACCOUNT) throw { kind: "Auth", message: "account_id absent" };
+    return OVERVIEW;
+  });
   tauri.onInvoke("hide_tray_panel", () => null);
   tauri.onInvoke("app_close", () => null);
   tauri.onInvoke("reveal_drive_in_finder", () => null);
 });
 
-async function openMenu(showCapturesFolder = true) {
-  render(<TrayHeaderMenu balance="12.3456" showCapturesFolder={showCapturesFolder} />);
+const ACCOUNT = "5CnpLffpekNuymDX8";
+
+async function openMenu(showCapturesFolder = true, accountId: string | null = ACCOUNT) {
+  render(<TrayHeaderMenu balance="12.3456" accountId={accountId} showCapturesFolder={showCapturesFolder} />);
   fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "Enter" });
   return screen.findByRole("menu", { name: "More" });
 }
@@ -85,6 +91,27 @@ describe("the tray's ⋮ menu", () => {
     ]);
     expect(within(menu).getAllByRole("separator")).toHaveLength(2);
     expect(within(menu).getByRole("menuitem", { name: /^Quit Hippius/ })).toHaveAttribute("aria-keyshortcuts", "Meta+Q");
+  });
+
+  it("asks for the plan as the signed-in account", async () => {
+    const menu = await openMenu();
+    await within(menu).findByTestId("tray-menu-plan");
+    expect(invoked("get_storage_overview")).toEqual([["get_storage_overview", { accountId: ACCOUNT }]]);
+  });
+
+  it("waits for the session before asking for the plan", async () => {
+    const menu = await openMenu(true, null);
+    expect(invoked("get_storage_overview")).toEqual([]);
+    expect(within(menu).queryByTestId("tray-menu-plan")).not.toBeInTheDocument();
+  });
+
+  it("says the plan could not be loaded instead of loading for ever", async () => {
+    tauri.onInvoke("get_storage_overview", () => {
+      throw { kind: "Network", message: "offline" };
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const menu = await openMenu();
+    expect(await within(menu).findByTestId("tray-menu-plan")).toHaveTextContent(PLAN_UNAVAILABLE);
   });
 
   it("shows Ctrl off the Mac", async () => {
@@ -154,7 +181,7 @@ describe("the tray's ⋮ menu", () => {
   });
 
   it("answers its keys while the popover has the keyboard, menu closed", async () => {
-    render(<TrayHeaderMenu balance={null} showCapturesFolder />);
+    render(<TrayHeaderMenu balance={null} accountId={ACCOUNT} showCapturesFolder />);
     await act(async () => fireEvent.keyDown(window, { key: ",", metaKey: true }));
     await waitFor(() => expect(emitted(TRAY_OPEN_PAGE_EVENT)).toEqual([{ page: "settings" }]));
     await act(async () => fireEvent.keyDown(window, { key: "o", metaKey: true }));
