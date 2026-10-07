@@ -161,6 +161,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The capture card no longer waits for the rest of your sync.** When other files were still syncing, the card could keep saying "waiting for sync" even though the capture's link was ready and already opened. It now says Uploaded as soon as the link works, and shows progress only while the capture itself is uploading. If the link can't be made on the first try (a dropped connection), Hippius tries again, and if it still fails the card stays open with Create link instead of sliding away.
+
 - **Files in Recent Files open right after they upload.** A file you just
   uploaded used to say it couldn't be previewed until you left the page and
   came back, and after a big upload some older files stayed stuck at the top
