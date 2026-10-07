@@ -2110,3 +2110,64 @@ fn the_bar_follows_the_pointer_to_another_display() {
     let page = read("../app/capture-overlay/page.tsx");
     assert!(page.contains("holdCaptureBar(holdsBar)"), "the bar's overlay holds the bar");
 }
+
+/// GNOME's Wayland session ignores a Wayland client's keep-above, so the
+/// pill and the bubble fell behind other windows and the camera went
+/// missing from the recording. On GNOME Wayland the app connects through
+/// XWayland, which Mutter keeps above: decided before GTK starts (after the
+/// recorder child, which opens no window), and through GDK's allowed
+/// backends, never `GDK_BACKEND`, which every program the app starts would
+/// inherit. XWayland comes first and Wayland after it, so the app still
+/// opens where XWayland cannot.
+#[test]
+fn gnome_wayland_connects_through_xwayland_before_gtk_starts() {
+    let main = read("src/main.rs");
+    let body = fn_body(&main, "fn main()");
+    let chosen = body.find("display_backend::apply()").expect("main chooses the display backend");
+    let recorder = body.find("argv_requests_recorder(").expect("recorder branch");
+    let builder = body.find("Builder::default()").expect("builder");
+    assert!(recorder < chosen, "the recorder child opens no window and needs no backend");
+    assert!(chosen < builder, "GDK reads its allowed backends only before GTK starts");
+
+    let module = read("src/utils/display_backend.rs");
+    let apply = fn_body(&module, "pub fn apply() -> Choice {");
+    assert!(apply.contains("choose(&SessionEnv"), "apply asks the pure decision");
+    assert!(apply.contains("set_allowed_backends(XWAYLAND_FIRST)"));
+    assert!(module.contains("pub const XWAYLAND_FIRST: &str = \"x11,wayland\";"));
+    for forbidden in ["set_var(", "remove_var("] {
+        assert!(
+            !module.contains(forbidden),
+            "the backend choice must not change the environment ({forbidden})"
+        );
+    }
+}
+
+/// An XWayland client on a Wayland session is still on Wayland: its X
+/// connection sees only XWayland windows, so screenshots, recording and the
+/// shortcut must keep using the portals. The session is read from
+/// `XDG_SESSION_TYPE` / `WAYLAND_DISPLAY` alone, which the backend choice
+/// never touches, and never from GDK's display or `GDK_BACKEND`.
+#[test]
+fn an_xwayland_client_keeps_the_wayland_capture_paths() {
+    let rollout = read("src/capture/rollout.rs");
+    let current = fn_body(&rollout, "pub fn current_platform() -> Platform {");
+    assert!(current.contains("\"XDG_SESSION_TYPE\"") && current.contains("\"WAYLAND_DISPLAY\""));
+    for not_read in ["GDK_BACKEND", "\"DISPLAY\"", "gdk::", "Display::default"] {
+        assert!(!current.contains(not_read), "the session must not follow the GDK backend ({not_read})");
+    }
+    let module = read("src/utils/display_backend.rs");
+    assert!(
+        fn_body(&module, "pub fn choose(").contains("rollout::linux_platform("),
+        "the backend choice and the capture paths agree on what Wayland is"
+    );
+}
+
+/// The pill and the bubble ask to stay on top; under XWayland that request
+/// is what Mutter honours.
+#[test]
+fn the_pill_and_the_bubble_ask_to_stay_on_top() {
+    let src = read("src/capture/commands.rs");
+    for builder in ["fn open_controls(", "fn open_camera_window("] {
+        assert!(fn_body(&src, builder).contains(".always_on_top(true)"), "{builder}");
+    }
+}
