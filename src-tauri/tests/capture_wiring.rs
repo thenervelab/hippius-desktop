@@ -2535,7 +2535,11 @@ fn the_free_recording_limit_is_decided_at_start_and_stops_like_stop() {
         fn_body(&src, "fn spawn_tier_lookup(").contains("allowance::recording_tier("),
         "the lookup reads the tier"
     );
-    let lookup = begin.find("spawn_tier_lookup(app)").expect("the tier is read as the recording starts");
+    assert!(
+        fn_body(&src, "async fn capture_tier(").contains("spawn_tier_lookup(app)"),
+        "a capture without a prefetched read reads it fresh"
+    );
+    let lookup = begin.find("capture_tier(app).await").expect("the tier is read as the recording starts");
     let set = begin
         .find("set_recording_limit(super::allowance::max_recording(")
         .expect("the limit comes from the tier");
@@ -2560,6 +2564,42 @@ fn the_free_recording_limit_is_decided_at_start_and_stops_like_stop() {
             "{builder} builds its event through phase_event"
         );
     }
+}
+
+/// The Free plan's watermark is decided from the same one read of the plan
+/// as the length limit, before the recorder starts (so its first frame has
+/// it), and goes into a screenshot's pixels before its PNG is written. The
+/// read starts with the session, so neither usually waits for it. Each link
+/// fails silently: a free capture without the watermark, or a recording
+/// whose watermark and limit disagree.
+#[test]
+fn the_watermark_follows_the_capture_tier() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    let advanced = start.find("CaptureEvent::Start { kind, mode }").expect("the session starts");
+    let prefetch = start
+        .find("prefetch_tier(&app, &state.capture)")
+        .expect("the plan is read as the session starts");
+    assert!(advanced < prefetch, "only a session that started reads the plan");
+
+    let begin = fn_body(&src, "async fn begin_recording(");
+    let tier = begin.find("let tier = capture_tier(app).await").expect("one read");
+    let mark = begin
+        .find("watermark: super::watermark::applies(tier)")
+        .expect("the watermark follows it");
+    let recorder = begin.find("recording::start(selection").expect("the recorder starts");
+    let limit = begin.find("max_recording(tier)").expect("the limit follows the same read");
+    assert!(tier < mark && mark < recorder && tier < limit);
+    assert_eq!(begin.matches("capture_tier(").count(), 1, "the plan is read once per recording");
+
+    let shot = fn_body(&src, "async fn finish_screenshot(");
+    let stamp = shot.find("watermark::stamp_image(&mut image)").expect("a screenshot is watermarked");
+    let save = shot.find("save_png(&image, &path)").expect("then written");
+    assert!(shot.contains("watermark::applies(capture_tier(app).await)") && stamp < save);
+    assert!(
+        fn_body(&src, "async fn take_with_system_picker(").contains("stamp_portal_shot(&path, image)"),
+        "the desktop's own screenshot tool is watermarked too"
+    );
 }
 
 /// The tier reads the plan through the same fold the storage overview and

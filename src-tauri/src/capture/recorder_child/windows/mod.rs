@@ -215,7 +215,8 @@ fn start_recording(cmd: &StartCommand, out: &Output) -> Result<Started, String> 
         let shared = Arc::clone(&shared);
         let out = Arc::clone(out);
         let output = output.clone();
-        move || writer_loop(&rx, &shared, &out, &output, &sources, &ready_tx)
+        let watermark = cmd.watermark;
+        move || writer_loop(&rx, &shared, &out, &output, &sources, &ready_tx, watermark)
     });
 
     let capture = match wgc::start(target, Arc::clone(&shared), camera) {
@@ -351,6 +352,7 @@ fn writer_loop(
     output: &std::path::Path,
     sources: &[Source],
     ready: &Sender<Result<(u32, u32), String>>,
+    watermark: bool,
 ) {
     let _com = com::Apartment::enter();
     let _media = com::MediaFoundation::start();
@@ -393,6 +395,9 @@ fn writer_loop(
                     match writer::MfWriter::create(output, size.0, size.1, !sources.is_empty()) {
                         Ok(w) => {
                             let mut p = Pipeline::new(w, sources);
+                            if watermark && let Some(stamp) = crate::capture::watermark::Nv12Stamp::new(size.0, size.1) {
+                                p.set_watermark(stamp);
+                            }
                             // Time zero is now, as Start is answered, not
                             // when the first picture was taken: making the
                             // H.264 encoder can take seconds on a slow

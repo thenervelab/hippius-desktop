@@ -50,6 +50,7 @@ pub mod targets;
 pub mod thumbnail;
 pub mod tray_recording_menu;
 pub mod tray_status;
+pub mod watermark;
 pub mod webview_media;
 #[cfg(target_os = "linux")]
 mod webview_media_gtk;
