@@ -30,6 +30,11 @@ export function useStartCapture(): (kind?: CaptureKind, mode?: CaptureMode, inst
         if (refusal.next === "grant-permission") {
           await openAppWindow();
           setDialog({ kind: "permission" });
+        } else if (refusal.next === "recording-limit") {
+          // A Record start on a free plan whose recordings are used up:
+          // nothing opened, so the main window says why.
+          await openAppWindow();
+          setDialog({ kind: "recordingLimit" });
         } else {
           toast.error(refusal.message);
         }

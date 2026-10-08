@@ -6,15 +6,18 @@ import { Camera, Video } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
   cancelCapture,
+  checkRecordingStart,
   confirmCapture,
   getCaptureCameraContext,
   getCaptureOverlayBackdrop,
   getCaptureOverlayContext,
   holdCaptureBar,
+  isRecordingLimitReached,
   refreshCaptureWindows,
   selectCapture,
   setCaptureMode,
   setCapturePending,
+  upgradeFromRecordingLimit,
   type CameraShape,
   type CaptureCameraState,
   type CaptureKind,
@@ -33,6 +36,7 @@ import { enterKeyName } from "@/app/lib/capture/shortcutLabel";
 import { disabledRecordingNote, supportedModesOf } from "@/app/lib/capture/modes";
 import CaptureBar from "./CaptureBar";
 import SharePicker from "./SharePicker";
+import RecordingLimitPanel from "./RecordingLimitPanel";
 import { barHint, instantHint, LAST_AREA_KEY, panelHint } from "./barText";
 import { isFromControl } from "./keyNav";
 import { selectionFor, type SharePick } from "./sharePickerState";
@@ -155,6 +159,9 @@ export default function CaptureOverlayPage() {
   const [backdrop, setBackdrop] = useState<string | null>(null);
   // "Choose what to share" is open on this tab; it owns the keyboard then.
   const [picker, setPicker] = useState<ShareTab | null>(null);
+  // Rust refused Record: the free plan's recordings are used up. The panel
+  // owns the keyboard while it is up.
+  const [limitOpen, setLimitOpen] = useState(false);
   // The capture itself is running (the countdown ended, or there was none):
   // Rust closes this window when it is done, or answers a refusal.
   const [inFlight, setInFlight] = useState(false);
@@ -271,6 +278,13 @@ export default function CaptureOverlayPage() {
       if (submitted.current || !context) return;
       submitted.current = true;
       setNotice(null);
+      // A refusal of either kind: the limit panel for a recording the free
+      // plan has no room for, Rust's line on the bar for anything else.
+      const refused = (error: unknown) => {
+        if (isRecordingLimitReached(error)) setLimitOpen(true);
+        else setNotice(errorMessage(error));
+        submitted.current = false;
+      };
       // `submitted` stays set until the action settles: a second Return
       // while Rust is taking the capture must not start another countdown.
       const run = () => {
@@ -278,23 +292,26 @@ export default function CaptureOverlayPage() {
         setInFlight(true);
         setCountdown(null);
         return action()
-          .catch((error) => {
-            // Rust has already reported a capture failure; a refusal (nothing
-            // drawn yet) is shown here and the user can carry on.
-            setNotice(errorMessage(error));
-            submitted.current = false;
-          })
+          // Rust has already reported a capture failure; a refusal (nothing
+          // drawn yet) is shown here and the user can carry on.
+          .catch(refused)
           .finally(() => {
             inFlightRef.current = false;
             setInFlight(false);
           });
       };
-      if (context.countdownSecs > 0) {
-        pendingAction.current = run;
-        setCountdown(context.countdownSecs);
-      } else {
-        void run();
-      }
+      const begin = () => {
+        if (context.countdownSecs > 0) {
+          pendingAction.current = run;
+          setCountdown(context.countdownSecs);
+        } else {
+          void run();
+        }
+      };
+      // A recording asks Rust's gate first, so a refused Record says so at
+      // once rather than after its countdown. Record asks it again.
+      if (context.kind === "recording") void checkRecordingStart().then(begin, refused);
+      else begin();
     },
     [context],
   );
@@ -372,7 +389,7 @@ export default function CaptureOverlayPage() {
     // The picker answers Return (share the pick) and Escape (close it,
     // leaving the capture bar up) itself; an open bar menu takes the key
     // first and marks it handled.
-    if (picker !== null || e.defaultPrevented) return;
+    if (picker !== null || limitOpen || e.defaultPrevented) return;
     if (e.key === "Escape") {
       if (countdown !== null && !inFlightRef.current) {
         // Esc during the countdown stops it, not the whole capture.
@@ -443,7 +460,7 @@ export default function CaptureOverlayPage() {
   // user is doing: a countdown or capture under way, a drag, the share
   // picker. Only the bar's overlay says so; the others have nothing to hold.
   const hostsBar = context?.hostsBar === true;
-  const holdsBar = countdown !== null || inFlight || drag !== null || picker !== null;
+  const holdsBar = countdown !== null || inFlight || drag !== null || picker !== null || limitOpen;
   useEffect(() => {
     if (!hostsBar) return;
     void holdCaptureBar(holdsBar).catch(() => undefined);
@@ -571,6 +588,13 @@ export default function CaptureOverlayPage() {
           ? captureCursor(kind)
           : "pointer";
 
+  const closeLimit = () => setLimitOpen(false);
+  // Rust closes the bar and the main window opens the plans.
+  const upgradeFromLimit = () => {
+    setLimitOpen(false);
+    void upgradeFromRecordingLimit().catch((error) => setNotice(errorMessage(error)));
+  };
+
   const onMode = (nextKind: CaptureKind, nextMode: CaptureMode) => {
     setNotice(null);
     void setCaptureMode(nextKind, nextMode).catch((error) => setNotice(errorMessage(error)));
@@ -647,6 +671,9 @@ export default function CaptureOverlayPage() {
         <div ref={panelRef} data-testid="capture-panel" className="absolute left-3 top-3 w-max">
           {context.hostsBar && !counting && (
             <div data-testid="capture-bar-slot">{captureBar(notice ?? panelHint(context.mode, enterKey, cameraOnly), true)}</div>
+          )}
+          {context.hostsBar && limitOpen && (
+            <RecordingLimitPanel inline onUpgrade={upgradeFromLimit} onClose={closeLimit} />
           )}
         </div>
       </div>
@@ -788,6 +815,9 @@ export default function CaptureOverlayPage() {
             {notice ?? instantHint(context.mode, spaceToggleMode(context.mode, kind, supportedModesOf(context)) === "window")}
           </p>
         )}
+
+        {/* On the overlay that was clicked or confirmed, bar or not. */}
+        {limitOpen && <RecordingLimitPanel onUpgrade={upgradeFromLimit} onClose={closeLimit} />}
 
         {context.hostsBar && picker !== null && !counting && (
           <SharePicker

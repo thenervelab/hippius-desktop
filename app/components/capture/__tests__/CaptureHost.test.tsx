@@ -29,6 +29,7 @@ vi.mock("@/app/lib/tray/trayWindowActions", async (importOriginal) => ({
 vi.mock("@/app/lib/featureFlags", () => ({ SCREEN_CAPTURE_ENABLED: true }));
 vi.mock("../CaptureDriveDialog", () => ({ default: () => null }));
 vi.mock("../CapturePermissionDialog", () => ({ default: () => null }));
+vi.mock("../RecordingLimitDialog", () => ({ default: () => null }));
 
 import CaptureHost from "../CaptureHost";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
@@ -199,6 +200,19 @@ describe("useStartCapture's answer to a refusal", () => {
     await act(() => start());
     expect(h.openAppWindow).toHaveBeenCalled();
     expect(store.get(captureDialogAtom)).toEqual({ kind: "permission" });
+  });
+
+  // A Record start from the tray, a menu or the record shortcut on a free
+  // plan whose recordings are used up: nothing opened, the app says why.
+  it("brings the app forward with the recording limit dialog", async () => {
+    tauri.onInvoke("capture_start", () => {
+      throw { kind: "NotReady", subkind: "RECORDING_LIMIT_REACHED", message: "You've used your 25 free recordings" };
+    });
+    const { store, start } = hook();
+    await act(() => start("recording"));
+    expect(h.openAppWindow).toHaveBeenCalled();
+    expect(store.get(captureDialogAtom)).toEqual({ kind: "recordingLimit" });
+    expect(h.toastError).not.toHaveBeenCalled();
   });
 
   it("shows anything else as a message, without a dialog", async () => {

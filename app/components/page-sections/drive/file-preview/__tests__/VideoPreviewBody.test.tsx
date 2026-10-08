@@ -167,8 +167,12 @@ describe("VideoPreviewBody", () => {
     stream();
     render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
     await screen.findByTestId("video-player");
-    act(() => player.failed?.());
-    expect(await screen.findByText(START_FAILED)).toBeInTheDocument();
+    // The player hands over a fresh callback on every render; on a slow
+    // runner the one read first can be stale, so report until it lands.
+    await waitFor(() => {
+      act(() => player.failed?.());
+      expect(screen.getByText(START_FAILED)).toBeInTheDocument();
+    });
     expect(screen.getByRole("button", { name: /Open in your video player/ })).toBeEnabled();
   });
 
