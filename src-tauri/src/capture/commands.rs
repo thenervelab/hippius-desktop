@@ -49,6 +49,12 @@ pub const PREVIEW_EVENT: &str = "capture_preview_changed";
 pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
 /// The card's Upgrade: the main window opens the storage plans.
 pub const OPEN_PLANS_EVENT: &str = "capture_open_plans";
+/// A recording was held at the free plan's limit, released or deleted: the
+/// Captures page reads `capture_held_recordings` again.
+pub const HELD_CHANGED_EVENT: &str = "capture_held_changed";
+/// How often held recordings are checked for a free slot or a paid plan
+/// while any are held.
+const RELEASE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 /// The camera window's shape or device changed (`camera::CameraState`); the
 /// camera page and the recording pill both read it.
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
@@ -3104,7 +3110,9 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         camera,
     };
     let microphone_device = options.microphone_device.clone();
-    let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
+    let tmp_root = super::screenshot::capture_tmp_root()?;
+    refuse_a_synced_temp(&state, &tmp_root).await?;
+    let dir = super::screenshot::fresh_capture_dir(&tmp_root)?;
     *lock(&state.capture.recording_dir) = Some(dir.clone());
     let name = super::naming::capture_file_name(CaptureKind::Recording, chrono::Local::now().naive_local());
     let path = dir.join(name);
@@ -3753,6 +3761,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             .filter(|c| c.id == id && !c.kept_locally)
             .map(|c| c.destination.clone())
     });
+    let card_kind = card_id.and_then(|id| lock(&state.capture.preview).as_ref().filter(|c| c.id == id).map(|c| c.kind));
     let outcome = async {
         let account_id = state.current_account_id()?;
         let pool = state.pool()?;
@@ -3768,8 +3777,29 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                 super::setup::Ensured::Kept(kept) => return Ok(Delivery::KeptHere(kept)),
             },
         };
+        // A recording is counted, or held at the free plan's limit, BEFORE
+        // it goes anywhere near the drive: once placed, the engine uploads it.
+        let reserved = if is_recording(path, card_kind) {
+            match recording_gate(&state, &account_id, &destination, path).await {
+                super::recording_allowance::Gate::Hold => return Ok(Delivery::Held { account_id }),
+                super::recording_allowance::Gate::Deliver { reserved } => reserved,
+            }
+        } else {
+            None
+        };
         let (mint_link, open_link) = bar::load_options(pool).await.map_or((true, true), |o| (o.copy_link, o.open_link));
-        let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
+        let placed = match super::deliver::place(&state, app.clone(), &account_id, &destination, path).await {
+            Ok(placed) => placed,
+            Err(refused) => {
+                // Not in the drive: Retry decides again, so the slot is given back.
+                if let Some(hash) = reserved
+                    && let Err(forgot) = super::recording_allowance::forget(pool, &account_id, &hash).await
+                {
+                    tracing::warn!(error = %forgot, "failed recording still counted");
+                }
+                return Err(refused);
+            }
+        };
         Ok::<_, AppError>(Delivery::Placed {
             account_id,
             destination,
@@ -3782,6 +3812,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
 
     match outcome {
         Ok(Delivery::KeptHere(kept)) => keep_here(app, path, card_id, &kept).await,
+        Ok(Delivery::Held { account_id }) => hold_and_announce(app, path, card_id, &account_id).await,
         Ok(Delivery::Placed {
             account_id,
             destination,
@@ -3854,6 +3885,31 @@ pub(super) async fn deliver_as_new_screenshot(app: &AppHandle, path: &Path, thum
     });
 }
 
+/// The recorder writes the file while it records, so where it writes must be
+/// somewhere no drive's sync engine can pick it up before delivery decides
+/// (a free plan at its limit holds the recording instead of uploading it).
+/// The temp root is a hidden app folder, which the engine never walks; this
+/// refuses to record should that ever stop being true.
+async fn refuse_a_synced_temp(state: &AppState, tmp_root: &Path) -> Result<()> {
+    let (Ok(account_id), Ok(pool)) = (state.current_account_id(), state.pool()) else {
+        return Ok(());
+    };
+    let roots: Vec<PathBuf> = destination::drives_here(pool, &account_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| d.path)
+        .collect();
+    if super::recording_allowance::unsynced_by_every_drive(tmp_root, &roots) {
+        Ok(())
+    } else {
+        tracing::error!("the capture temp folder is inside a synced drive; not recording");
+        Err(AppError::Validation(
+            "Hippius can't record right now: its temporary folder is inside a synced folder.".into(),
+        ))
+    }
+}
+
 /// Where [`deliver_and_announce`] got to.
 enum Delivery {
     /// In the drive (or on its way through the sync engine).
@@ -3866,6 +3922,220 @@ enum Delivery {
     },
     /// No captures drive yet: keep it on this computer.
     KeptHere(super::setup::Kept),
+    /// A recording on a free plan at its limit: sealed, not uploaded.
+    Held { account_id: String },
+}
+
+/// Whether the capture at `path` is a recording, which the free plan counts
+/// (screenshots never are). The card's kind when there is a card, else the
+/// file's own type.
+fn is_recording(path: &Path, kind: Option<CaptureKind>) -> bool {
+    kind.map_or_else(
+        || {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| ["mp4", "mov", "webm", "mkv"].iter().any(|v| e.eq_ignore_ascii_case(v)))
+        },
+        |k| k == CaptureKind::Recording,
+    )
+}
+
+/// The free plan's verdict on a finished recording for `destination`. Its
+/// hash is salted with the drive's own namespace, the one the sync engine
+/// salts the drive's files with. Fails open: a recording is never held
+/// because the count could not be read.
+async fn recording_gate(state: &AppState, account_id: &str, destination: &CaptureDestination, path: &Path) -> super::recording_allowance::Gate {
+    let salt = destination.owner_ss58.clone().unwrap_or_else(|| account_id.to_string());
+    match super::recording_allowance::gate(state, account_id, &salt, path).await {
+        Ok(gate) => gate,
+        Err(e) => {
+            tracing::warn!(error = %e, "recording allowance not checked; delivering");
+            super::recording_allowance::Gate::Deliver { reserved: None }
+        }
+    }
+}
+
+/// A recording held at the free plan's limit: sealed into the app's holding
+/// folder (the plaintext goes), and the card says why with Upgrade and
+/// Delete. Released on its own when a slot frees up or the plan changes
+/// ([`spawn_release_watch`]).
+async fn hold_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>, account_id: &str) {
+    use super::recording_allowance::{HELD_MESSAGE, NOT_HELD_MESSAGE};
+    let state = app.state::<AppState>();
+    let thumbnail = card_id.and_then(|id| {
+        lock(&state.capture.preview)
+            .as_ref()
+            .filter(|c| c.id == id)
+            .and_then(|c| c.thumbnail.clone())
+    });
+    match super::recording_allowance::hold(&state, account_id, path, thumbnail).await {
+        Ok(held) => {
+            remove_temp_dir(path);
+            let shown = card_id.is_some_and(|id| {
+                update_card(app, &state.capture, id, |card| {
+                    card.status = PreviewStatus::Held {
+                        message: HELD_MESSAGE.to_string(),
+                    };
+                    card.held_id = Some(held.id.clone());
+                    card.file_path.clone_from(&held.sealed_path);
+                    card.placed_path = None;
+                    card.kept_locally = false;
+                    card.link = LinkState::None;
+                })
+            });
+            let _ = app.emit(HELD_CHANGED_EVENT, ());
+            if !shown {
+                notify(app, "Recording not uploaded".into(), HELD_MESSAGE.into());
+            }
+            spawn_release_watch(app);
+        }
+        Err(e) => {
+            // Still never uploaded: the file stays in the app's hidden temp
+            // folder and Retry decides again.
+            tracing::warn!(error = %e, "recording over the free limit could not be sealed; kept in the temp folder");
+            let shown = card_id.is_some_and(|id| {
+                update_card(app, &state.capture, id, |card| {
+                    card.status = PreviewStatus::Failed {
+                        message: NOT_HELD_MESSAGE.into(),
+                        reason: super::preview::FailureReason::Other,
+                        retryable: path.exists(),
+                    };
+                })
+            });
+            let _ = app.emit(
+                FAILED_EVENT,
+                FailedPayload {
+                    message: NOT_HELD_MESSAGE.into(),
+                    card_showing: shown,
+                },
+            );
+            if !shown {
+                notify(app, "Recording not uploaded".into(), NOT_HELD_MESSAGE.into());
+            }
+        }
+    }
+}
+
+/// Check held recordings every [`RELEASE_CHECK_EVERY`] while any are held,
+/// releasing them as slots free up or the plan becomes paid. One watcher at
+/// a time; started when a recording is held and when the signed-in app or
+/// the Captures page opens.
+pub(crate) fn spawn_release_watch(app: &AppHandle) {
+    static WATCHING: AtomicBool = AtomicBool::new(false);
+    if WATCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            if release_held(&app).await {
+                tokio::time::sleep(RELEASE_CHECK_EVERY).await;
+                continue;
+            }
+            WATCHING.store(false, Ordering::SeqCst);
+            // A recording held between the last check and the store above
+            // found the watcher still running; take it on rather than leave
+            // it to the next start.
+            if !any_held(&app).await || WATCHING.swap(true, Ordering::SeqCst) {
+                break;
+            }
+        }
+    });
+}
+
+async fn any_held(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let (Ok(account_id), Ok(pool)) = (state.current_account_id(), state.pool()) else {
+        return false;
+    };
+    super::recording_allowance::list_held(pool, &account_id)
+        .await
+        .is_ok_and(|held| !held.is_empty())
+}
+
+/// One check: release as many held recordings as the plan now allows,
+/// oldest first, each delivered like a fresh recording (card, upload, link).
+/// Returns whether any are still held.
+async fn release_held(app: &AppHandle) -> bool {
+    use super::recording_allowance as allowance;
+    let state = app.state::<AppState>();
+    let (Ok(account_id), Ok(pool)) = (state.current_account_id(), state.pool()) else {
+        // Signed out: the next sign-in starts the watch again.
+        return false;
+    };
+    let held = match allowance::list_held(pool, &account_id).await {
+        Ok(held) => held,
+        Err(e) => {
+            tracing::warn!(error = %e, "held recordings not read");
+            return true;
+        }
+    };
+    if held.is_empty() {
+        return false;
+    }
+    if let Err(e) = allowance::refresh(&state, &account_id).await {
+        tracing::warn!(error = %e, "recording allowance ledger not refreshed");
+    }
+    // An unreadable count frees no slot.
+    let counted = allowance::counted(pool, &account_id).await.unwrap_or(usize::MAX);
+    let plan = allowance::current_plan(&state, &account_id).await;
+    let n = allowance::release_count(plan, counted, held.len());
+    let mut released = 0;
+    for recording in held.iter().take(n) {
+        match allowance::unseal_for_release(&state, &account_id, recording).await {
+            Ok(path) => {
+                released += 1;
+                forget_held_card(&state.capture, &recording.id);
+                let card_id = open_preview(app, CaptureKind::Recording, &path, recording.thumbnail.clone()).await;
+                deliver_and_announce(app, &path, card_id).await;
+            }
+            Err(e) => tracing::warn!(error = %e, "held recording could not be released; kept held"),
+        }
+    }
+    if released > 0 {
+        tracing::info!(released, "held recordings released");
+        let _ = app.emit(HELD_CHANGED_EVENT, ());
+    }
+    held.len() > released
+}
+
+/// A held recording left the holding folder (released or deleted): its
+/// card, on screen or parked, must not bring it back.
+fn forget_held_card(state: &CaptureState, id: &str) {
+    lock(&state.preview).take_if(|c| c.held_id.as_deref() == Some(id));
+    lock(&state.parked).take_if(|c| c.held_id.as_deref() == Some(id));
+}
+
+/// The account's held recordings, for the Captures page, with Rust's sentence.
+/// Opening the page also starts the release watch, so a slot freed or a plan
+/// bought since launch is acted on.
+#[tauri::command]
+pub async fn capture_held_recordings(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<super::recording_allowance::HeldList> {
+    let account_id = state.current_account_id()?;
+    let items = super::recording_allowance::list_held(state.pool()?, &account_id).await?;
+    if !items.is_empty() {
+        spawn_release_watch(&app);
+    }
+    Ok(super::recording_allowance::HeldList {
+        message: super::recording_allowance::HELD_MESSAGE.into(),
+        items,
+    })
+}
+
+/// Delete a held recording for good, from the Captures page or its card.
+#[tauri::command]
+pub async fn capture_held_delete(state: tauri::State<'_, AppState>, app: AppHandle, id: String) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    super::recording_allowance::delete_held(state.pool()?, &account_id, &id).await?;
+    let showing = lock(&state.capture.preview)
+        .as_ref()
+        .is_some_and(|c| c.held_id.as_deref() == Some(id.as_str()));
+    forget_held_card(&state.capture, &id);
+    if showing && let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
+        let _ = w.close();
+    }
+    let _ = app.emit(HELD_CHANGED_EVENT, ());
+    Ok(())
 }
 
 /// A card opened before its drive existed takes the drive setup chose: its
@@ -4554,6 +4824,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         placed_path: None,
         destination,
         kept_locally: awaiting_setup,
+        held_id: None,
     }
     .refreshed();
     let replaced = lock(&state.capture.preview).replace(card.clone());
@@ -4850,6 +5121,21 @@ pub fn capture_preview_discard(state: tauri::State<'_, AppState>, app: AppHandle
     let card = card_for(&state.capture, |c| c.actions.discard, "There is nothing to discard.")?;
     lock(&state.capture.preview).take();
     lock(&state.capture.parked).take_if(|p| p.id == card.id);
+    if let Some(id) = card.held_id.clone() {
+        // A held recording: its sealed copy and its record go.
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let deleted = match (state.current_account_id(), state.pool()) {
+                (Ok(account_id), Ok(pool)) => super::recording_allowance::delete_held(pool, &account_id, &id).await,
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            };
+            if let Err(e) = deleted {
+                tracing::warn!(error = %e, "held recording not deleted");
+            }
+            let _ = app.emit(HELD_CHANGED_EVENT, ());
+        });
+    }
     remove_temp_dir(&card.file_path);
     if let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
         let _ = w.close();
@@ -4959,6 +5245,9 @@ pub async fn capture_sync_shortcut(state: tauri::State<'_, AppState>, app: AppHa
         problems[kind.index()] = register_shortcut(&app, kind, in_force[kind.index()].as_deref());
     }
     *lock(&state.capture.shortcut_problems) = problems;
+    // The signed-in app is up: recordings held in an earlier session are
+    // checked for a free slot or a paid plan bought meanwhile.
+    spawn_release_watch(&app);
     Ok(())
 }
 

@@ -987,6 +987,24 @@ fragments) older than 7 days go; a folder holding a capture (`.mp4`/`.mov`/
 `.png` that is not `poster.png`) is NEVER removed, since the helper keeps a
 playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
 
+**Free plan recording allowance** (`recording_allowance.rs`): 25 recordings
+on the free plan, screenshots never counted, paid plans uncounted. Decided in
+`deliver_and_announce` BEFORE `deliver::place` (`recording_gate`): a known
+free plan at the limit is held, an unknown plan fails open. A held recording
+is sealed (chunked ChaCha20-Poly1305, key = `derive_key(mnemonic, account,
+INFO_HELD_RECORDING)`, never stored) into `~/.hippius/held-recordings/<account_key>`,
+its plaintext removed, and the card shows `PreviewStatus::Held` (Upgrade,
+Delete; parked like a failed card). The count is a per-account SQLite ledger
+keyed by the salted content hash, freed only when a seen hash is in none of
+the own drives' trees (`sync::files::content_hashes_present`) and every one
+was read; moving or renaming keeps it. `spawn_release_watch` (60 s, while any
+are held; started by a hold, `capture_sync_shortcut` and the Captures page)
+releases oldest first through the normal delivery, and only on a known plan.
+The plan is read at ONE call site, `recording_allowance::current_plan`.
+Per device only until the server enforces it. Pinned by the module's tests and
+`capture_wiring::a_recording_is_counted_or_held_before_it_reaches_the_drive`
+/ `the_recorder_never_writes_into_a_synced_folder`.
+
 ## Rules that fail silently
 
 - **Coordinates.** xcap points on macOS / physical on Windows; overlay CSS

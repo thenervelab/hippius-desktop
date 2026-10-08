@@ -167,6 +167,66 @@ fn the_temp_copy_is_removed_only_after_the_upload_lands() {
     assert!(!keep.contains("remove_dir_all"), "a kept capture never removes a folder itself");
 }
 
+/// A free plan at its recording limit holds the recording: the verdict comes
+/// BEFORE the file is placed in the drive (once there, the sync engine
+/// uploads it), a held recording never reaches `place` or a link, and its
+/// plaintext goes only after it was sealed.
+#[test]
+fn a_recording_is_counted_or_held_before_it_reaches_the_drive() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "async fn deliver_and_announce(");
+    let gate = body.find("recording_gate(").expect("recordings pass the allowance gate");
+    let hold = body.find("Gate::Hold => return Ok(Delivery::Held").expect("a held recording stops there");
+    let place = body.find("super::deliver::place(").expect("delivery places the file");
+    assert!(gate < place && hold < place, "the gate must come before the file is placed");
+    assert!(body.contains("is_recording(path, card_kind)"), "only recordings are counted");
+    assert!(
+        body.contains("recording_allowance::forget(pool, &account_id, &hash)"),
+        "a placement that failed gives its slot back"
+    );
+    assert!(body.contains("Ok(Delivery::Held { account_id }) => hold_and_announce("));
+
+    let held = fn_body(&src, "async fn hold_and_announce(");
+    for forbidden in ["deliver::place(", "link_for(", "mint(", "trigger_sync_now"] {
+        assert!(!held.contains(forbidden), "a held recording is never uploaded or shared ({forbidden})");
+    }
+    let sealed = held.find("recording_allowance::hold(").expect("a held recording is sealed");
+    let removed = held.find("remove_temp_dir(path)").expect("its temp folder goes once sealed");
+    assert!(sealed < removed, "the plaintext goes only after sealing");
+
+    // Released recordings are delivered exactly like a fresh one.
+    let release = fn_body(&src, "async fn release_held(");
+    let unseal = release.find("unseal_for_release(").expect("release unseals");
+    let deliver = release
+        .find("deliver_and_announce(app, &path, card_id)")
+        .expect("then delivers as normal");
+    assert!(unseal < deliver);
+    assert!(
+        release.contains("release_count(plan, counted, held.len())"),
+        "only as many as the plan allows"
+    );
+
+    // The plan is read in one place, for the integration swap.
+    let allowance = read("src/capture/recording_allowance.rs");
+    assert_eq!(allowance.matches("fetch_plan_read(").count(), 1, "one plan read call site");
+    assert!(fn_body(&allowance, "pub async fn current_plan(").contains("fetch_plan_read(state)"));
+}
+
+/// The recorder writes the in-progress file under a hidden app folder that
+/// no drive's engine walks, and refuses to record should a drive ever hold
+/// it, so nothing can upload a recording before delivery has decided.
+#[test]
+fn the_recorder_never_writes_into_a_synced_folder() {
+    let src = read("src/capture/commands.rs");
+    let begin = fn_body(&src, "async fn begin_recording(");
+    let check = begin.find("refuse_a_synced_temp(&state, &tmp_root)").expect("the temp root is checked");
+    let dir = begin.find("fresh_capture_dir(&tmp_root)").expect("the recording's folder is made there");
+    assert!(check < dir, "checked before the folder is made");
+    assert!(fn_body(&src, "async fn refuse_a_synced_temp(").contains("unsynced_by_every_drive("));
+    let shot = read("src/capture/screenshot.rs");
+    assert!(fn_body(&shot, "pub fn capture_tmp_root(").contains(r#"join(".hippius")"#));
+}
+
 /// The card hears that the file is in the drive before the link is made,
 /// and a synced capture is followed from that moment. Waiting for both held
 /// the card on "Preparing upload" through the whole upload and the mint.
@@ -760,6 +820,8 @@ fn the_card_and_session_commands_are_registered() {
         "capture_preview_reveal",
         "capture_preview_discard",
         "capture_preview_upgrade",
+        "capture_held_recordings",
+        "capture_held_delete",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),

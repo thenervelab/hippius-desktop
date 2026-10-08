@@ -803,6 +803,55 @@ pub(crate) async fn fetch_can_share_drives(state: &crate::app_state::AppState) -
     ))
 }
 
+/// What the account's Drive plan read came to, before any rule is applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PlanRead {
+    /// A plan was found; its CODE (never the marketing name).
+    Plan(String),
+    /// Every subscription read succeeded and found no plan: the free tier.
+    NoPlan,
+    /// A read failed, or found a subscription it could not name.
+    Unknown,
+}
+
+/// The same three subscription reads and the same resolution as
+/// [`fetch_can_share_drives`], reduced to the plan code.
+///
+/// TEMPORARY source for `capture::recording_allowance::current_plan`, until
+/// `capture::allowance::recording_tier` lands; see that call site.
+///
+/// # Errors
+///
+/// [`AppError::Auth`] when nobody is signed in.
+pub(crate) async fn fetch_plan_read(state: &crate::app_state::AppState) -> Result<PlanRead, AppError> {
+    let account_id = state.current_session_account()?;
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
+    let (drive_sub_result, drive_plans_result, active_result) = tokio::join!(
+        client.get::<serde_json::Value>("/api/drive/subscription/", &account_id),
+        client.get::<serde_json::Value>("/api/drive/plans/", &account_id),
+        client.get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id),
+    );
+    let (Ok(drive_sub), Ok(active)) = (drive_sub_result, active_result) else {
+        return Ok(PlanRead::Unknown);
+    };
+    let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
+    Ok(plan_read_from(&drive_sub, &drive_plans, &active))
+}
+
+/// [`fetch_plan_read`]'s decision over payloads that were read.
+fn plan_read_from(drive_sub: &serde_json::Value, drive_plans: &serde_json::Value, active: &serde_json::Value) -> PlanRead {
+    if let Some(plan) = plan_from_drive_subscription(drive_sub, drive_plans).or_else(|| plan_from_subscription(active)) {
+        return PlanRead::Plan(plan.code);
+    }
+    // An active drive subscription the plan list could not resolve is still
+    // decided by its own code, as `resolve_can_share_drives` does.
+    let active_drive = drive_sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    match drive_sub.get("plan").and_then(serde_json::Value::as_str) {
+        Some(code) if active_drive => PlanRead::Plan(code.to_string()),
+        _ => PlanRead::NoPlan,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -824,6 +873,17 @@ mod tests {
         assert_eq!(starter["canShareDrives"], false, "Starter cannot share");
         let max = serde_json::to_value(build_overview(0, Some(pro_plan(1)), None, None, true)).unwrap();
         assert_eq!(max["canShareDrives"], true, "Max can share");
+    }
+
+    /// The recording allowance's plan read: no plan anywhere is the free
+    /// tier, an active drive plan is named by its code.
+    #[test]
+    fn a_plan_read_names_the_code_or_says_there_is_none() {
+        let none = serde_json::json!({ "active": false });
+        let no_legacy = serde_json::json!({ "has_subscription": false });
+        assert_eq!(plan_read_from(&none, &serde_json::json!([]), &no_legacy), PlanRead::NoPlan);
+        let max = serde_json::json!({ "active": true, "plan": "max" });
+        assert_eq!(plan_read_from(&max, &serde_json::json!([]), &no_legacy), PlanRead::Plan("max".into()));
     }
 
     #[test]

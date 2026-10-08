@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { CapturePreviewCard } from "@/app/lib/tauri/capture";
 
@@ -390,6 +390,53 @@ describe("the card's actions (Rust decides which)", () => {
     await setup(linked({ state: "uploaded", linkCopied: true }, 1));
     expect(screen.getByRole("button", { name: `Show ${FILE} in its folder` })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: `Edit ${FILE}` })).toBeNull();
+  });
+
+  describe("a recording held at the free plan's limit", () => {
+    const HELD = "You've used your 25 free recordings. Upgrade to share this one, or delete an older recording.";
+    const held = () =>
+      card({ state: "held", message: HELD }, 7, { upgrade: true, discard: true }, { kind: "recording", fileName: "Recording.mp4" });
+
+    it("says why, with a held badge and the two ways out", async () => {
+      await setup(held());
+      expect(screen.getByTestId("held-badge")).toHaveTextContent("Held");
+      expect(document.querySelector("[aria-live]")).toHaveTextContent("Not uploaded");
+      expect(screen.getByText(HELD)).toBeInTheDocument();
+      // It is going nowhere yet: no destination line, no progress bar.
+      expect(screen.queryByText("Work › Captures")).toBeNull();
+      expect(screen.queryByRole("progressbar")).toBeNull();
+      const actions = screen.getByTestId("capture-actions");
+      expect(within(actions).getAllByRole("button").map((b) => b.textContent?.trim())).toEqual(["Upgrade", "Delete"]);
+    });
+
+    it("upgrades or deletes through Rust, and never shares or opens a folder", async () => {
+      await setup(held());
+      fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(called("capture_preview_upgrade")).toBe(1);
+      expect(called("capture_preview_discard")).toBe(1);
+      // The picture opens nothing: the file is not in any folder.
+      fireEvent.click(screen.getByRole("button", { name: "Recording.mp4, kept on this computer" }));
+      expect(called("capture_preview_show_in_folder")).toBe(0);
+      for (const name of ["Copy link", "Create link", "Retry", "Show in folder", "More"]) {
+        expect(screen.queryByRole("button", { name })).toBeNull();
+      }
+    });
+
+    it("stays up: it is not settled", async () => {
+      await setup(held());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUTO_HIDE_MS * 2);
+      });
+      expect(dismissed()).toBe(0);
+      expect(screen.queryByTestId("auto-hide-timer")).toBeNull();
+    });
   });
 
   it("offers nothing Rust did not", async () => {
