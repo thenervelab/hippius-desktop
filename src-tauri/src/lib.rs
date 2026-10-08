@@ -37,6 +37,7 @@ pub mod sync;
 pub mod tray;
 pub mod updates;
 pub mod utils;
+pub mod video_stream;
 pub mod vpn;
 pub mod wallet;
 

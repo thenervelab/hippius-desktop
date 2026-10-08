@@ -240,6 +240,14 @@ pub struct Probe {
     /// `None` from an older probe.
     #[serde(default)]
     pub camera: Option<bool>,
+    /// The highest-ranked H.264 decoder GStreamer would pick (what
+    /// WebKitGTK plays a video with; `video_stream::decoder_missing_line`).
+    /// Found by caps, not by name, as WebKit's own registry scan does.
+    #[serde(default)]
+    pub h264_decoder: Option<String>,
+    /// The same for AAC, the sound of every Hippius recording.
+    #[serde(default)]
+    pub aac_decoder: Option<String>,
 }
 
 impl Probe {
@@ -267,6 +275,9 @@ impl Probe {
             session: Some(if wayland { "wayland" } else { "x11" }.to_string()),
             screencast_portal: None,
             camera: Some(NEEDED_FOR_CAMERA.iter().all(|e| installed(e)) && CAMERA_SOURCES.iter().any(|e| installed(e))),
+            // Decoders are found by caps in the child (`linux::probe`).
+            h264_decoder: None,
+            aac_decoder: None,
         }
     }
 

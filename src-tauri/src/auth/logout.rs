@@ -113,6 +113,10 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
     let state = app.state::<crate::app_state::AppState>();
     auth_logout_internal(&state, &account_id).await?;
 
+    // 2b. Stop the viewer's video stream and forget its tokens, so no URL
+    //     minted for this account plays after it signed out.
+    state.video_stream.stop().await;
+
     // 3. Clear sync progress data
     if let Err(e) = crate::sync::progress::clear_all_data(&state.sync) {
         warn!("sp_clear_all_data during logout failed: {e}");
