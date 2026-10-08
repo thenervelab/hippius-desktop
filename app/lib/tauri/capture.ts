@@ -934,3 +934,22 @@ export function createCaptureDrive(folder: string | null): Promise<CaptureDriveS
 export function isScreenRecordingPermissionMissing(error: unknown): boolean {
   return isNotReady(error, "SCREEN_RECORDING_PERMISSION");
 }
+
+/** A recording was refused before it started: the free plan's recordings are used up. */
+export function isRecordingLimitReached(error: unknown): boolean {
+  return isNotReady(error, "RECORDING_LIMIT_REACHED");
+}
+
+/**
+ * Ask Rust's recording gate whether a recording may start now, before the
+ * bar counts down; refuses with `RECORDING_LIMIT_REACHED`. Record asks it
+ * again, so this only spares the countdown.
+ */
+export function checkRecordingStart(): Promise<void> {
+  return invoke("capture_check_recording_start");
+}
+
+/** The limit dialog's Upgrade from the capture bar: Rust closes the bar and the main window opens the plans. */
+export function upgradeFromRecordingLimit(): Promise<void> {
+  return invoke("capture_limit_upgrade");
+}

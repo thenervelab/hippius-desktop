@@ -173,7 +173,7 @@ fn the_temp_copy_is_removed_only_after_the_upload_lands() {
 /// Nothing is recorded and then held back.
 #[test]
 fn every_recording_start_path_goes_through_the_one_gate() {
-    const GATE: &str = "recording_allowance::require_can_start(&state).await?";
+    const GATE: &str = "recording_allowance::require_can_start(&state).await";
     let src = read("src/capture/commands.rs");
 
     // The tray's Record tile, the Capture menus' Record items and the record
@@ -211,6 +211,12 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     let begin = restart.find("begin_recording(&app, selection)").expect("and started again");
     assert!(gate < discard && gate < begin, "a refused restart keeps the recording");
 
+    // The bar asks the same gate before its countdown, so a refusal is not
+    // counted down to.
+    assert!(fn_body(&src, "pub async fn capture_check_recording_start(").contains(GATE));
+    // A refused Restart says so outside the filmed screen.
+    assert!(restart.contains("notify(&app, LIMIT_TITLE.into(), LIMIT_BODY.into())"));
+
     // No other path can start the recorder.
     assert_eq!(
         src.matches("begin_recording(").count(),
@@ -228,6 +234,21 @@ fn every_recording_start_path_goes_through_the_one_gate() {
         fn_body(&allowance, "pub async fn recording_count(").contains("remote::list_remote_folder_files_inner("),
         "the count comes from the server listing the remote-folder browser uses"
     );
+}
+
+/// The app's dialog and the bar's panel say what Rust's refusal says.
+#[test]
+fn the_limit_dialog_uses_rusts_words() {
+    let allowance = read("src/capture/recording_allowance.rs");
+    let words = read("../app/lib/capture/recordingLimit.ts");
+    for name in ["LIMIT_TITLE", "LIMIT_BODY"] {
+        let line = allowance
+            .lines()
+            .find(|l| l.starts_with(&format!("pub const {name}: &str = ")))
+            .unwrap_or_else(|| panic!("{name} is declared"));
+        let text = line.split('"').nth(1).expect("a string literal");
+        assert!(words.contains(&format!("\"{text}\"")), "{name} differs in recordingLimit.ts");
+    }
 }
 
 /// Delivery no longer decides anything about the count: every recording that
@@ -882,6 +903,7 @@ fn the_card_and_session_commands_are_registered() {
         "capture_preview_discard",
         "capture_preview_upgrade",
         "capture_limit_upgrade",
+        "capture_check_recording_start",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),

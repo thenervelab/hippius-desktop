@@ -4462,8 +4462,14 @@ pub async fn capture_restart(app: AppHandle) -> Result<()> {
     let state = app.state::<AppState>();
     let selection = (*lock(&state.capture.selection)).ok_or_else(|| AppError::Validation("No recording is in progress.".into()))?;
     // A restart starts a new recording: refused before the take is thrown
-    // away, so a refusal leaves the recording going.
-    super::recording_allowance::require_can_start(&state).await?;
+    // away, so a refusal leaves the recording going. The pill has no room
+    // for the dialog and the main window would be filmed, so a notification
+    // says why.
+    if let Err(refused) = super::recording_allowance::require_can_start(&state).await {
+        use super::recording_allowance::{LIMIT_BODY, LIMIT_TITLE};
+        notify(&app, LIMIT_TITLE.into(), LIMIT_BODY.into());
+        return Err(refused);
+    }
     advance(&app, &state.capture, CaptureEvent::Restart)?;
     let (recorder, dir) = state.capture.take_leftovers();
     discard_recording(recorder, dir).await;
@@ -5078,6 +5084,14 @@ pub fn capture_preview_upgrade(state: tauri::State<'_, AppState>, app: AppHandle
     show_main_window(&app);
     let _ = app.emit(OPEN_PLANS_EVENT, ());
     Ok(())
+}
+
+/// The capture bar asks the recording gate before its countdown, so a
+/// refused Record says so at once instead of after counting down. Record
+/// itself asks the same gate again (`select_inner`).
+#[tauri::command]
+pub async fn capture_check_recording_start(state: tauri::State<'_, AppState>) -> Result<()> {
+    super::recording_allowance::require_can_start(&state).await
 }
 
 /// The recording limit dialog's Upgrade, from the capture bar: the bar

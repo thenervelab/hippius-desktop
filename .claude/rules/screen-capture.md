@@ -1006,22 +1006,33 @@ fragments) older than 7 days go; a folder holding a capture (`.mp4`/`.mov`/
 playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
 
 **Free plan recording allowance** (`recording_allowance.rs`): 25 recordings
-on the free plan, screenshots never counted, paid plans uncounted. Decided in
-`deliver_and_announce` BEFORE `deliver::place` (`recording_gate`): a known
-free plan at the limit is held, an unknown plan fails open. A held recording
-is sealed (chunked ChaCha20-Poly1305, key = `derive_key(mnemonic, account,
-INFO_HELD_RECORDING)`, never stored) into `~/.hippius/held-recordings/<account_key>`,
-its plaintext removed, and the card shows `PreviewStatus::Held` (Upgrade,
-Delete; parked like a failed card). The count is a per-account SQLite ledger
-keyed by the salted content hash, freed only when a seen hash is in none of
-the own drives' trees (`sync::files::content_hashes_present`) and every one
-was read; moving or renaming keeps it. `spawn_release_watch` (60 s, while any
-are held; started by a hold, `capture_sync_shortcut` and the Captures page)
-releases oldest first through the normal delivery, and only on a known plan.
-The plan is read at ONE call site, `recording_allowance::current_plan`.
-Per device only until the server enforces it. Pinned by the module's tests and
-`capture_wiring::a_recording_is_counted_or_held_before_it_reaches_the_drive`
-/ `the_recorder_never_writes_into_a_synced_folder`.
+on a limited plan (`LIMITED_TIERS`, Free only; screenshots never counted).
+**Decided when a recording STARTS, never after**: ONE gate,
+`require_can_start`, refuses with `NotReady(RecordingLimitReached)` before
+anything records, called by `capture_start` (kind Recording: tray, menus,
+record shortcut), `select_inner` (the bar's Record, clicks, share picker,
+camera only), `capture_restart` (before the take is discarded; it notifies,
+the pill has no room) and `capture_check_recording_start` (the bar asks
+before its countdown). Pinned by
+`capture_wiring::every_recording_start_path_goes_through_the_one_gate`. The
+count is the server listing of the account's own captures drive
+(`list_remote_folder_files_inner`, label from `destination` when own, else
+`CAPTURES_DIR_NAME`), files named like `Recording YYYY-MM-DD at HH.MM.SS`
+`.mp4/.webm/.mov` with an optional ` (N)` (`is_recording_name`), so console
+uploads and other devices count. Cached per account on
+`CaptureState.recording_counts` for `COUNT_TTL` (30 s), warmed when the bar
+opens; a delivered recording counts at once (`note_delivered`, until listed
+or `PENDING_FOR`); a completed sync of the drive, a remote folder delete and
+a sync reset drop it. **Fails open**: unknown plan or unreadable count
+(error, `COUNT_WITHIN` timeout) never blocks; a paid last-known tier skips the
+listing; a count at the limit is confirmed by a fresh `recording_tier`. The
+FE only draws: `RecordingLimitDialog` (main window, via `useStartCapture`) and
+`capture-overlay/RecordingLimitPanel` (Upgrade = `capture_limit_upgrade`),
+in Rust's words (`recordingLimit.ts`, pinned to `LIMIT_TITLE`/`LIMIT_BODY`).
+Nothing is held any more; `held_recordings.rs` keeps only the way out for
+recordings an earlier build sealed under `~/.hippius/held-recordings`
+(`release_held` once per sign-in from `capture_sync_shortcut`, as many as
+`release_count` allows, delivered like fresh ones).
 
 ## Rules that fail silently
 

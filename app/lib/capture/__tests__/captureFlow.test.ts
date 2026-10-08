@@ -20,6 +20,12 @@ describe("classifyCaptureRefusal", () => {
     });
   });
 
+  it("sends a refused recording on a used-up free plan to the limit dialog", () => {
+    expect(classifyCaptureRefusal(notReady("RECORDING_LIMIT_REACHED", "Reworded later"))).toEqual({
+      next: "recording-limit",
+    });
+  });
+
   it("shows anything else as Rust worded it", () => {
     expect(classifyCaptureRefusal({ kind: "Validation", message: "That window has closed." })).toEqual({
       next: "show-error",

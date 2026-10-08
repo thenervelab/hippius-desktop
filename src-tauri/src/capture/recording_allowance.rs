@@ -315,7 +315,8 @@ pub async fn check_start(state: &AppState) -> StartVerdict {
         return StartVerdict::Allowed;
     }
     let counted = recording_count(state, &account_id).await;
-    if decide_start(Some(LIMITED_TIERS[0]), counted) == StartVerdict::Allowed {
+    // Under the limit (or unreadable) is allowed on any plan: no plan read.
+    if counted.is_none_or(|n| n < FREE_RECORDING_LIMIT) {
         return StartVerdict::Allowed;
     }
     let tier = super::allowance::recording_tier(state, &account).await;
