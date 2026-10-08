@@ -10,6 +10,7 @@ import {
   Clock,
   FolderSearch,
   Link2,
+  Lock,
   MoreHorizontal,
   Pencil,
   RotateCw,
@@ -73,10 +74,10 @@ const MENU_ITEM = `flex h-8 w-full items-center gap-2 whitespace-nowrap rounded-
  * label ever wraps. A failed card offers Upgrade / Retry / Discard the same
  * way, Discard becoming an icon when all three are there.
  *
- * Sized for Rust's 316 x 330 pt window in every state (16:9 picture, the
- * failure reason on one line with the whole of it in the tooltip): the card
- * sits at the window's bottom, so anything taller is cut off at the TOP,
- * close button first.
+ * Sized for Rust's 316 x 346 pt window in every state (16:9 picture, the
+ * failure reason on one line with the whole of it in the tooltip, a notice on
+ * two): the card sits at the window's bottom, so anything taller is cut off
+ * at the TOP, close button first.
  */
 export default function CapturePreviewPage() {
   const [card, setCard] = useState<CapturePreviewCard | null>(null);
@@ -213,10 +214,11 @@ export default function CapturePreviewPage() {
   }, [settled, hovered, dismiss, timerRun]);
 
   if (!card || !view) return null;
-  const { percent, failed, waiting } = view;
+  const { percent, failed, waiting, held } = view;
   const uploaded = done;
   const actions = card.actions;
-  const failure = card.status.state === "failed" ? card.status.message : null;
+  // Rust's sentence: why it failed, or why a recording is held.
+  const failure = card.status.state === "failed" || card.status.state === "held" ? card.status.message : null;
   const fileManager = fileManagerLabel();
 
   /** One card action at a time; Rust reports what went wrong on the card itself. */
@@ -279,9 +281,9 @@ export default function CapturePreviewPage() {
 
         <button
           type="button"
-          onClick={failed ? undefined : canEdit ? edit : showInFolder}
-          aria-label={canEdit ? `Edit ${card.fileName}` : `Show ${card.fileName} in its folder`}
-          title={canEdit ? "Edit" : "Show in folder"}
+          onClick={failed || held ? undefined : canEdit ? edit : showInFolder}
+          aria-label={held ? `${card.fileName}, kept on this computer` : canEdit ? `Edit ${card.fileName}` : `Show ${card.fileName} in its folder`}
+          title={held ? undefined : canEdit ? "Edit" : "Show in folder"}
           className={`group relative block aspect-[16/9] w-full overflow-hidden rounded-[9px] bg-white/5 ${GLASS_FOCUS}`}
         >
           {card.thumbnail ? (
@@ -297,7 +299,16 @@ export default function CapturePreviewPage() {
               <Video className="size-3" /> Recording
             </span>
           )}
-          {!failed && (
+          {held && (
+            // Held at the free plan's limit: on this computer only, no link.
+            <span
+              data-testid="held-badge"
+              className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-[#000]/70 px-2 py-0.5 text-[11px] font-medium"
+            >
+              <Lock aria-hidden className="size-3" /> Held
+            </span>
+          )}
+          {!failed && !held && (
             <span className="pointer-events-none absolute inset-0 grid place-items-center bg-[#000]/0 opacity-0 transition duration-150 group-hover:bg-[#000]/35 group-hover:opacity-100 motion-reduce:transition-none">
               <span className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#000]/70 px-3 py-1 text-[12px] font-medium">
                 {canEdit ? (
@@ -321,12 +332,23 @@ export default function CapturePreviewPage() {
             {uploaded && <Check aria-hidden className="size-3.5 shrink-0 text-[#30D158]" />}
             {waiting && <Clock aria-hidden className="size-3.5 shrink-0 text-white/60" />}
             {failed && !waiting && <AlertCircle aria-hidden className="size-3.5 shrink-0 text-[#FF453A]" />}
+            {held && <Lock aria-hidden className="size-3.5 shrink-0 text-white/60" />}
             <span className="truncate">{view.text}</span>
           </p>
-          <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)}>
-            {destinationText(card)}
-          </p>
-          {!uploaded && !failed && (
+          {/* A held recording is going nowhere yet; its two-line reason takes
+              this line's room, so the card keeps its height. Otherwise Rust's
+              line about the capture (a Free plan recording stopped at its
+              limit) takes the destination's place, two lines at most. */}
+          {held ? null : card.notice ? (
+            <p className="line-clamp-2 text-[11.5px] leading-4 text-white/85" data-testid="capture-notice">
+              {card.notice}
+            </p>
+          ) : (
+            <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)}>
+              {destinationText(card)}
+            </p>
+          )}
+          {!uploaded && !failed && !held && (
             <div
               className="h-1 overflow-hidden rounded-full bg-white/15"
               role="progressbar"
@@ -355,14 +377,30 @@ export default function CapturePreviewPage() {
             </div>
           )}
           {failure && (
-            <p className={`line-clamp-1 text-[11.5px] leading-4 ${GLASS_MUTED}`} title={failure}>
+            <p className={`${held ? "line-clamp-2" : "line-clamp-1"} text-[11.5px] leading-4 ${GLASS_MUTED}`} title={failure}>
               {failure}
             </p>
           )}
         </div>
 
         <div className="relative mt-2 flex gap-1.5" data-testid="capture-actions">
-          {failed ? (
+          {held ? (
+            // The two ways out Rust offers: a paid plan, or deleting this one.
+            // Deleting an older recording frees a slot too; that happens in
+            // the drive, and this one is then released on its own.
+            <>
+              {actions.upgrade && (
+                <button type="button" onClick={() => run(upgradeFromCapturePreview)} className={PRIMARY_ACTION}>
+                  <Sparkles aria-hidden className="size-3.5 shrink-0" /> Upgrade
+                </button>
+              )}
+              {actions.discard && (
+                <button type="button" disabled={busy} onClick={() => run(discardCapturePreview)} className={SECONDARY_ACTION}>
+                  <Trash2 aria-hidden className="size-3.5 shrink-0" /> Delete
+                </button>
+              )}
+            </>
+          ) : failed ? (
             <>
               {actions.upgrade && (
                 <button type="button" onClick={() => run(upgradeFromCapturePreview)} className={PRIMARY_ACTION}>
@@ -415,9 +453,16 @@ export default function CapturePreviewPage() {
             </>
           ) : (
             <>
-              <button type="button" onClick={showInFolder} className={PRIMARY_ACTION}>
-                <FolderOpen aria-hidden className="size-3.5 shrink-0" /> Show in folder
-              </button>
+              {actions.upgrade ? (
+                // Show in folder stays one click away on the picture.
+                <button type="button" onClick={() => run(upgradeFromCapturePreview)} className={PRIMARY_ACTION}>
+                  <Sparkles aria-hidden className="size-3.5 shrink-0" /> Upgrade
+                </button>
+              ) : (
+                <button type="button" onClick={showInFolder} className={PRIMARY_ACTION}>
+                  <FolderOpen aria-hidden className="size-3.5 shrink-0" /> Show in folder
+                </button>
+              )}
               {actions.mintLink ? (
                 <button type="button" disabled={busy} onClick={() => run(mintCapturePreviewLink)} className={SECONDARY_ACTION}>
                   <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link

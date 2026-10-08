@@ -722,7 +722,7 @@ full display, or it sits under the Dock), `focused(false)` + content-protected e
 `accept_first_mouse(true)` (never key, so without it every button needed two
 clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer bar
 stays mounted and pauses, or the card changes height under the pointer).
-It must fit 316 x 330 in every state: it sits at the window's bottom, so an
+It must fit 316 x 346 in every state: it sits at the window's bottom, so an
 overflow clips the TOP (the close button first). Hence the 16:9 picture and
 the one-line failure reason with the full text in `title`, and ONE row of
 actions where no label wraps (`whitespace-nowrap` on every text button): one
@@ -800,6 +800,21 @@ and Escape at the question give focus back to the button that asked. The pill ap
 when its `seq` is newer than the one it shows. It drags by
 `data-tauri-drag-region` (`-webkit-app-region` is Electron-only), which needs
 `core:window:allow-start-dragging` in `capture-controls.json`.
+
+**Free plan length cap** (`allowance.rs`): Free plan recordings stop at
+`FREE_MAX_RECORDING` (5 min of RECORDED time, the recorder's
+`RecordedClock`, pauses left out); paid plans have no limit; screenshots are
+untouched. `begin_recording` decides the tier once, alongside the recorder's
+start (`recording_tier`, bounded by `LOOKUP_WITHIN`), and stores the limit on
+`CaptureState`; `tick_once` stops at it through `stop_inner`, exactly like
+Stop, and the card gets `stopped_at_free_limit` (Rust's `notice`, Upgrade,
+no auto-hide). The tier reads the plan through
+`storage_overview::PlanReads`, the same fold the overview and sharing use;
+the overview remembers it on every read, per account, in memory and in
+`user_preferences`. **It fails open**: no fresh verdict uses the last one
+kept, none ever seen means no cap. The pill shows Rust's `remainingSecs`
+(on `PhaseEvent`, last minute only). Other recording limits read the same
+`RecordingTier` / `recording_tier`.
 
 **Live controls** (`live_controls.rs`, pure; the pill's `PillMenu.tsx` only
 draws): mid-recording the pill mutes and unmutes the microphone
@@ -989,6 +1004,24 @@ thread) empty folders older than 24 h and leftover-only ones (poster,
 fragments) older than 7 days go; a folder holding a capture (`.mp4`/`.mov`/
 `.png` that is not `poster.png`) is NEVER removed, since the helper keeps a
 playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
+
+**Free plan recording allowance** (`recording_allowance.rs`): 25 recordings
+on the free plan, screenshots never counted, paid plans uncounted. Decided in
+`deliver_and_announce` BEFORE `deliver::place` (`recording_gate`): a known
+free plan at the limit is held, an unknown plan fails open. A held recording
+is sealed (chunked ChaCha20-Poly1305, key = `derive_key(mnemonic, account,
+INFO_HELD_RECORDING)`, never stored) into `~/.hippius/held-recordings/<account_key>`,
+its plaintext removed, and the card shows `PreviewStatus::Held` (Upgrade,
+Delete; parked like a failed card). The count is a per-account SQLite ledger
+keyed by the salted content hash, freed only when a seen hash is in none of
+the own drives' trees (`sync::files::content_hashes_present`) and every one
+was read; moving or renaming keeps it. `spawn_release_watch` (60 s, while any
+are held; started by a hold, `capture_sync_shortcut` and the Captures page)
+releases oldest first through the normal delivery, and only on a known plan.
+The plan is read at ONE call site, `recording_allowance::current_plan`.
+Per device only until the server enforces it. Pinned by the module's tests and
+`capture_wiring::a_recording_is_counted_or_held_before_it_reaches_the_drive`
+/ `the_recorder_never_writes_into_a_synced_folder`.
 
 ## Rules that fail silently
 

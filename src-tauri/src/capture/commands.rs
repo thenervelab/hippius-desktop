@@ -49,6 +49,12 @@ pub const PREVIEW_EVENT: &str = "capture_preview_changed";
 pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
 /// The card's Upgrade: the main window opens the storage plans.
 pub const OPEN_PLANS_EVENT: &str = "capture_open_plans";
+/// A recording was held at the free plan's limit, released or deleted: the
+/// Captures page reads `capture_held_recordings` again.
+pub const HELD_CHANGED_EVENT: &str = "capture_held_changed";
+/// How often held recordings are checked for a free slot or a paid plan
+/// while any are held.
+const RELEASE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_mins(1);
 /// The camera window's shape or device changed (`camera::CameraState`); the
 /// camera page and the recording pill both read it.
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
@@ -110,9 +116,11 @@ pub const AREA_LABEL: &str = "capture-area";
 
 /// The card's window, in logical points; the card fills it.
 const PREVIEW_WIDTH: f64 = 316.0;
-/// Tall enough for the picture, two lines, the progress or timer bar and the
-/// buttons; at 290 the top of the picture was clipped.
-const PREVIEW_HEIGHT: f64 = 330.0;
+/// Tall enough for the picture, three lines (a recording's notice takes two),
+/// the progress or timer bar and the buttons; at 290 the top of the picture
+/// was clipped. The card sits at the window's bottom, so a shorter card leaves
+/// the top of the window empty and transparent.
+const PREVIEW_HEIGHT: f64 = 346.0;
 /// Gap between the card and the display's bottom-right corner.
 const PREVIEW_MARGIN: f64 = 16.0;
 /// The recording pill's window, in logical points.
@@ -176,6 +184,11 @@ pub struct PhaseEvent {
     #[serde(flatten)]
     pub phase: CapturePhase,
     pub seq: u64,
+    /// Seconds left before a Free plan recording stops on its own, sent only
+    /// in the last minute (`allowance::remaining_to_show`), for the pill to
+    /// show instead of the time recorded.
+    #[serde(rename = "remainingSecs", skip_serializing_if = "Option::is_none")]
+    pub remaining_secs: Option<u64>,
 }
 
 #[derive(Default)]
@@ -216,6 +229,14 @@ pub struct CaptureState {
     selection: Mutex<Option<Selection>>,
     /// Cancels the elapsed-time tick task.
     tick_cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// The live recording's length limit in seconds of recorded time, 0 for
+    /// none. Decided from the plan as the recording starts (`allowance`).
+    recording_limit_secs: AtomicU64,
+    /// The live recording reached its length limit and is being stopped for
+    /// it: its card says so, with an Upgrade.
+    stopped_at_limit: AtomicBool,
+    /// The last recording tier seen per account (`allowance::TierCache`).
+    pub(crate) recording_tiers: super::allowance::TierCache,
     /// The display the capture bar is on; the preview card opens there too.
     bar_display: Mutex<Option<DisplayTarget>>,
     /// The displays of this capture, as last listed.
@@ -344,6 +365,36 @@ impl CaptureState {
         super::live_controls::camera_controls(phase, camera, hidden, recorder_opens_camera(camera), support)
     }
 
+    /// The live recording's length limit, `None` for none.
+    fn recording_limit(&self) -> Option<std::time::Duration> {
+        match self.recording_limit_secs.load(Ordering::SeqCst) {
+            0 => None,
+            secs => Some(std::time::Duration::from_secs(secs)),
+        }
+    }
+
+    fn set_recording_limit(&self, limit: Option<std::time::Duration>) {
+        self.recording_limit_secs.store(limit.map_or(0, |l| l.as_secs().max(1)), Ordering::SeqCst);
+    }
+
+    /// Whether a recording with `recorded_secs` of recorded time is due to
+    /// stop at its limit: running (not paused) and at or past it.
+    fn at_recording_limit(&self, recorded_secs: u64) -> bool {
+        matches!(self.current(), CapturePhase::Recording { .. }) && super::allowance::limit_reached(recorded_secs, self.recording_limit())
+    }
+
+    /// `phase` as broadcast, numbered `seq`, with the time left before the
+    /// recording's limit when it is close.
+    fn phase_event(&self, phase: CapturePhase, seq: u64) -> PhaseEvent {
+        let remaining_secs = match phase {
+            CapturePhase::Recording { elapsed_secs, .. } | CapturePhase::Paused { elapsed_secs, .. } => {
+                super::allowance::remaining_to_show(elapsed_secs, self.recording_limit())
+            }
+            _ => None,
+        };
+        PhaseEvent { phase, seq, remaining_secs }
+    }
+
     fn stop_ticks(&self) {
         if let Some(tx) = lock(&self.tick_cancel).take() {
             let _ = tx.send(());
@@ -357,10 +408,7 @@ impl CaptureState {
         let mut guard = lock(&self.phase);
         let next = transition(guard.unwrap_or(CapturePhase::Idle), event).map_err(transition_error)?;
         *guard = Some(next);
-        emit(PhaseEvent {
-            phase: next,
-            seq: self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1,
-        });
+        emit(self.phase_event(next, self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1));
         Ok(next)
     }
 
@@ -368,18 +416,12 @@ impl CaptureState {
     /// (the displays changed under an open capture bar).
     fn rebroadcast(&self, emit: impl FnOnce(PhaseEvent)) {
         let guard = lock(&self.phase);
-        emit(PhaseEvent {
-            phase: guard.unwrap_or(CapturePhase::Idle),
-            seq: self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1,
-        });
+        emit(self.phase_event(guard.unwrap_or(CapturePhase::Idle), self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1));
     }
 
     fn snapshot(&self) -> PhaseEvent {
         let guard = lock(&self.phase);
-        PhaseEvent {
-            phase: guard.unwrap_or(CapturePhase::Idle),
-            seq: self.phase_seq.load(Ordering::SeqCst),
-        }
+        self.phase_event(guard.unwrap_or(CapturePhase::Idle), self.phase_seq.load(Ordering::SeqCst))
     }
 
     /// Take a recorder that has just started, but only if the session is
@@ -410,10 +452,7 @@ impl CaptureState {
         };
         *lock(&self.recorder) = Some(recorder);
         *guard = Some(next);
-        emit(PhaseEvent {
-            phase: next,
-            seq: self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1,
-        });
+        emit(self.phase_event(next, self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1));
         Ok(next)
     }
 
@@ -3055,6 +3094,18 @@ async fn take_from_still(
     }
 }
 
+/// The plan decides the recording's length limit, once, as it starts
+/// (`allowance`). Read alongside the recorder's own start, so it adds no
+/// wait; with no account or no verdict there is no limit.
+fn spawn_tier_lookup(app: &AppHandle) -> tauri::async_runtime::JoinHandle<Option<super::allowance::RecordingTier>> {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let account = state.current_session_account().ok()?;
+        super::allowance::recording_tier(state.inner(), &account).await
+    })
+}
+
 /// Start the recorder on `selection`. Failures return to the caller, which
 /// ends the session through [`fail_capture`]; a session cancelled while the
 /// recorder was starting ends quietly, with the recorder cancelled.
@@ -3104,7 +3155,10 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         camera,
     };
     let microphone_device = options.microphone_device.clone();
-    let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
+    let tmp_root = super::screenshot::capture_tmp_root()?;
+    refuse_a_synced_temp(&state, &tmp_root).await?;
+    let tier_lookup = spawn_tier_lookup(app);
+    let dir = super::screenshot::fresh_capture_dir(&tmp_root)?;
     *lock(&state.capture.recording_dir) = Some(dir.clone());
     let name = super::naming::capture_file_name(CaptureKind::Recording, chrono::Local::now().naive_local());
     let path = dir.join(name);
@@ -3155,6 +3209,9 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         recorder = count_down_in_pill(app, recorder, count).await?;
     }
 
+    let tier = tier_lookup.await.ok().flatten();
+    state.capture.set_recording_limit(super::allowance::max_recording(tier));
+    state.capture.stopped_at_limit.store(false, Ordering::SeqCst);
     let recorded_microphone = recorder.microphone();
     if let Err(orphan) = state.capture.adopt_recorder(recorder, |e| emit_phase(app, e)) {
         // Cancelled (or ended) while the recorder was starting. It must not
@@ -3593,6 +3650,19 @@ fn tick_once(app: &AppHandle) -> Tick {
     if !matches!(state.capture.current(), CapturePhase::Recording { .. } | CapturePhase::Paused { .. }) {
         return Tick::Done;
     }
+    // A Free plan recording at its length limit ends exactly as Stop would:
+    // saved, uploaded and shared as usual, its card saying why.
+    if state.capture.at_recording_limit(elapsed) {
+        tracing::info!(recorded_secs = elapsed, "recording reached the plan's length limit; stopping it");
+        state.capture.stopped_at_limit.store(true, Ordering::SeqCst);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = stop_inner(&app).await {
+                tracing::warn!(error = %e, "could not save the recording that reached its length limit");
+            }
+        });
+        return Tick::Done;
+    }
     let _ = advance(app, &state.capture, CaptureEvent::Tick { elapsed_secs: elapsed });
     Tick::Continue
 }
@@ -3753,6 +3823,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             .filter(|c| c.id == id && !c.kept_locally)
             .map(|c| c.destination.clone())
     });
+    let card_kind = card_id.and_then(|id| lock(&state.capture.preview).as_ref().filter(|c| c.id == id).map(|c| c.kind));
     let outcome = async {
         let account_id = state.current_account_id()?;
         let pool = state.pool()?;
@@ -3769,7 +3840,9 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             },
         };
         let (mint_link, open_link) = bar::load_options(pool).await.map_or((true, true), |o| (o.copy_link, o.open_link));
-        let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
+        let Some(placed) = place_unless_held(&state, app, &account_id, &destination, path, card_kind).await? else {
+            return Ok(Delivery::Held { account_id });
+        };
         Ok::<_, AppError>(Delivery::Placed {
             account_id,
             destination,
@@ -3782,6 +3855,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
 
     match outcome {
         Ok(Delivery::KeptHere(kept)) => keep_here(app, path, card_id, &kept).await,
+        Ok(Delivery::Held { account_id }) => hold_and_announce(app, path, card_id, &account_id).await,
         Ok(Delivery::Placed {
             account_id,
             destination,
@@ -3854,6 +3928,31 @@ pub(super) async fn deliver_as_new_screenshot(app: &AppHandle, path: &Path, thum
     });
 }
 
+/// The recorder writes the file while it records, so where it writes must be
+/// somewhere no drive's sync engine can pick it up before delivery decides
+/// (a free plan at its limit holds the recording instead of uploading it).
+/// The temp root is a hidden app folder, which the engine never walks; this
+/// refuses to record should that ever stop being true.
+async fn refuse_a_synced_temp(state: &AppState, tmp_root: &Path) -> Result<()> {
+    let (Ok(account_id), Ok(pool)) = (state.current_account_id(), state.pool()) else {
+        return Ok(());
+    };
+    let roots: Vec<PathBuf> = destination::drives_here(pool, &account_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| d.path)
+        .collect();
+    if super::recording_allowance::unsynced_by_every_drive(tmp_root, &roots) {
+        Ok(())
+    } else {
+        tracing::error!("the capture temp folder is inside a synced drive; not recording");
+        Err(AppError::Validation(
+            "Hippius can't record right now: its temporary folder is inside a synced folder.".into(),
+        ))
+    }
+}
+
 /// Where [`deliver_and_announce`] got to.
 enum Delivery {
     /// In the drive (or on its way through the sync engine).
@@ -3866,6 +3965,253 @@ enum Delivery {
     },
     /// No captures drive yet: keep it on this computer.
     KeptHere(super::setup::Kept),
+    /// A recording on a free plan at its limit: sealed, not uploaded.
+    Held { account_id: String },
+}
+
+/// Put the capture in the drive, unless it is a recording a free plan at its
+/// limit holds (`None`). A recording is counted, or held, BEFORE it goes
+/// anywhere near the drive: once placed, the engine uploads it. A placement
+/// that fails gives its slot back, so Retry decides again.
+async fn place_unless_held(
+    state: &AppState,
+    app: &AppHandle,
+    account_id: &str,
+    destination: &CaptureDestination,
+    path: &Path,
+    card_kind: Option<CaptureKind>,
+) -> Result<Option<super::deliver::Placed>> {
+    let reserved = if is_recording(path, card_kind) {
+        match recording_gate(state, account_id, destination, path).await {
+            super::recording_allowance::Gate::Hold => return Ok(None),
+            super::recording_allowance::Gate::Deliver { reserved } => reserved,
+        }
+    } else {
+        None
+    };
+    match super::deliver::place(state, app.clone(), account_id, destination, path).await {
+        Ok(placed) => Ok(Some(placed)),
+        Err(refused) => {
+            if let Some(hash) = reserved
+                && let Err(forgot) = super::recording_allowance::forget(state.pool()?, account_id, &hash).await
+            {
+                tracing::warn!(error = %forgot, "failed recording still counted");
+            }
+            Err(refused)
+        }
+    }
+}
+
+/// Whether the capture at `path` is a recording, which the free plan counts
+/// (screenshots never are). The card's kind when there is a card, else the
+/// file's own type.
+fn is_recording(path: &Path, kind: Option<CaptureKind>) -> bool {
+    kind.map_or_else(
+        || {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| ["mp4", "mov", "webm", "mkv"].iter().any(|v| e.eq_ignore_ascii_case(v)))
+        },
+        |k| k == CaptureKind::Recording,
+    )
+}
+
+/// The free plan's verdict on a finished recording for `destination`. Its
+/// hash is salted with the drive's own namespace, the one the sync engine
+/// salts the drive's files with. Fails open: a recording is never held
+/// because the count could not be read.
+async fn recording_gate(state: &AppState, account_id: &str, destination: &CaptureDestination, path: &Path) -> super::recording_allowance::Gate {
+    let salt = destination.owner_ss58.clone().unwrap_or_else(|| account_id.to_string());
+    match super::recording_allowance::gate(state, account_id, &salt, path).await {
+        Ok(gate) => gate,
+        Err(e) => {
+            tracing::warn!(error = %e, "recording allowance not checked; delivering");
+            super::recording_allowance::Gate::Deliver { reserved: None }
+        }
+    }
+}
+
+/// A recording held at the free plan's limit: sealed into the app's holding
+/// folder (the plaintext goes), and the card says why with Upgrade and
+/// Delete. Released on its own when a slot frees up or the plan changes
+/// ([`spawn_release_watch`]).
+async fn hold_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>, account_id: &str) {
+    use super::recording_allowance::{HELD_MESSAGE, NOT_HELD_MESSAGE};
+    let state = app.state::<AppState>();
+    let thumbnail = card_id.and_then(|id| {
+        lock(&state.capture.preview)
+            .as_ref()
+            .filter(|c| c.id == id)
+            .and_then(|c| c.thumbnail.clone())
+    });
+    match super::recording_allowance::hold(&state, account_id, path, thumbnail).await {
+        Ok(held) => {
+            remove_temp_dir(path);
+            let shown = card_id.is_some_and(|id| {
+                update_card(app, &state.capture, id, |card| {
+                    card.status = PreviewStatus::Held {
+                        message: HELD_MESSAGE.to_string(),
+                    };
+                    card.held_id = Some(held.id.clone());
+                    card.file_path.clone_from(&held.sealed_path);
+                    card.placed_path = None;
+                    card.kept_locally = false;
+                    card.link = LinkState::None;
+                })
+            });
+            let _ = app.emit(HELD_CHANGED_EVENT, ());
+            if !shown {
+                notify(app, "Recording not uploaded".into(), HELD_MESSAGE.into());
+            }
+            spawn_release_watch(app);
+        }
+        Err(e) => {
+            // Still never uploaded: the file stays in the app's hidden temp
+            // folder and Retry decides again.
+            tracing::warn!(error = %e, "recording over the free limit could not be sealed; kept in the temp folder");
+            let shown = card_id.is_some_and(|id| {
+                update_card(app, &state.capture, id, |card| {
+                    card.status = PreviewStatus::Failed {
+                        message: NOT_HELD_MESSAGE.into(),
+                        reason: super::preview::FailureReason::Other,
+                        retryable: path.exists(),
+                    };
+                })
+            });
+            let _ = app.emit(
+                FAILED_EVENT,
+                FailedPayload {
+                    message: NOT_HELD_MESSAGE.into(),
+                    card_showing: shown,
+                },
+            );
+            if !shown {
+                notify(app, "Recording not uploaded".into(), NOT_HELD_MESSAGE.into());
+            }
+        }
+    }
+}
+
+/// Check held recordings every [`RELEASE_CHECK_EVERY`] while any are held,
+/// releasing them as slots free up or the plan becomes paid. One watcher at
+/// a time; started when a recording is held and when the signed-in app or
+/// the Captures page opens.
+pub(crate) fn spawn_release_watch(app: &AppHandle) {
+    static WATCHING: AtomicBool = AtomicBool::new(false);
+    if WATCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            if release_held(&app).await {
+                tokio::time::sleep(RELEASE_CHECK_EVERY).await;
+                continue;
+            }
+            WATCHING.store(false, Ordering::SeqCst);
+            // A recording held between the last check and the store above
+            // found the watcher still running; take it on rather than leave
+            // it to the next start.
+            if !any_held(&app).await || WATCHING.swap(true, Ordering::SeqCst) {
+                break;
+            }
+        }
+    });
+}
+
+async fn any_held(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let (Ok(account_id), Ok(pool)) = (state.current_account_id(), state.pool()) else {
+        return false;
+    };
+    super::recording_allowance::list_held(pool, &account_id)
+        .await
+        .is_ok_and(|held| !held.is_empty())
+}
+
+/// One check: release as many held recordings as the plan now allows,
+/// oldest first, each delivered like a fresh recording (card, upload, link).
+/// Returns whether any are still held.
+async fn release_held(app: &AppHandle) -> bool {
+    use super::recording_allowance as allowance;
+    let state = app.state::<AppState>();
+    let (Ok(account_id), Ok(pool)) = (state.current_account_id(), state.pool()) else {
+        // Signed out: the next sign-in starts the watch again.
+        return false;
+    };
+    let held = match allowance::list_held(pool, &account_id).await {
+        Ok(held) => held,
+        Err(e) => {
+            tracing::warn!(error = %e, "held recordings not read");
+            return true;
+        }
+    };
+    if held.is_empty() {
+        return false;
+    }
+    if let Err(e) = allowance::refresh(&state, &account_id).await {
+        tracing::warn!(error = %e, "recording allowance ledger not refreshed");
+    }
+    // An unreadable count frees no slot.
+    let counted = allowance::counted(pool, &account_id).await.unwrap_or(usize::MAX);
+    let plan = allowance::current_plan(&state, &account_id).await;
+    let n = allowance::release_count(plan, counted, held.len());
+    let mut released = 0;
+    for recording in held.iter().take(n) {
+        match allowance::unseal_for_release(&state, &account_id, recording).await {
+            Ok(path) => {
+                released += 1;
+                forget_held_card(&state.capture, &recording.id);
+                let card_id = open_preview(app, CaptureKind::Recording, &path, recording.thumbnail.clone()).await;
+                deliver_and_announce(app, &path, card_id).await;
+            }
+            Err(e) => tracing::warn!(error = %e, "held recording could not be released; kept held"),
+        }
+    }
+    if released > 0 {
+        tracing::info!(released, "held recordings released");
+        let _ = app.emit(HELD_CHANGED_EVENT, ());
+    }
+    held.len() > released
+}
+
+/// A held recording left the holding folder (released or deleted): its
+/// card, on screen or parked, must not bring it back.
+fn forget_held_card(state: &CaptureState, id: &str) {
+    lock(&state.preview).take_if(|c| c.held_id.as_deref() == Some(id));
+    lock(&state.parked).take_if(|c| c.held_id.as_deref() == Some(id));
+}
+
+/// The account's held recordings, for the Captures page, with Rust's sentence.
+/// Opening the page also starts the release watch, so a slot freed or a plan
+/// bought since launch is acted on.
+#[tauri::command]
+pub async fn capture_held_recordings(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<super::recording_allowance::HeldList> {
+    let account_id = state.current_account_id()?;
+    let items = super::recording_allowance::list_held(state.pool()?, &account_id).await?;
+    if !items.is_empty() {
+        spawn_release_watch(&app);
+    }
+    Ok(super::recording_allowance::HeldList {
+        message: super::recording_allowance::HELD_MESSAGE.into(),
+        items,
+    })
+}
+
+/// Delete a held recording for good, from the Captures page or its card.
+#[tauri::command]
+pub async fn capture_held_delete(state: tauri::State<'_, AppState>, app: AppHandle, id: String) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    super::recording_allowance::delete_held(state.pool()?, &account_id, &id).await?;
+    let showing = lock(&state.capture.preview)
+        .as_ref()
+        .is_some_and(|c| c.held_id.as_deref() == Some(id.as_str()));
+    forget_held_card(&state.capture, &id);
+    if showing && let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
+        let _ = w.close();
+    }
+    let _ = app.emit(HELD_CHANGED_EVENT, ());
+    Ok(())
 }
 
 /// A card opened before its drive existed takes the drive setup chose: its
@@ -4196,6 +4542,9 @@ pub async fn capture_stop(app: AppHandle) -> Result<()> {
 /// the stream with the file still open.
 pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
     let state = app.state::<AppState>();
+    // Read and cleared before anything can fail, so a later recording's
+    // card never inherits it.
+    let at_limit = state.capture.stopped_at_limit.swap(false, Ordering::SeqCst);
     advance(app, &state.capture, CaptureEvent::Stop)?;
     state.capture.stop_ticks();
     // The pill goes at once (it is never filmed); the camera stays until the
@@ -4242,6 +4591,9 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
         .flatten();
     let poster = super::poster::pick(from_file, at_start);
     let card_id = open_preview(app, CaptureKind::Recording, &path, poster).await;
+    if at_limit && let Some(id) = card_id {
+        update_card(app, &state.capture, id, |card| card.stopped_at_free_limit = true);
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         deliver_and_announce(&app, &path, card_id).await;
@@ -4554,6 +4906,9 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         placed_path: None,
         destination,
         kept_locally: awaiting_setup,
+        held_id: None,
+        stopped_at_free_limit: false,
+        notice: None,
     }
     .refreshed();
     let replaced = lock(&state.capture.preview).replace(card.clone());
@@ -4850,6 +5205,21 @@ pub fn capture_preview_discard(state: tauri::State<'_, AppState>, app: AppHandle
     let card = card_for(&state.capture, |c| c.actions.discard, "There is nothing to discard.")?;
     lock(&state.capture.preview).take();
     lock(&state.capture.parked).take_if(|p| p.id == card.id);
+    if let Some(id) = card.held_id.clone() {
+        // A held recording: its sealed copy and its record go.
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let deleted = match (state.current_account_id(), state.pool()) {
+                (Ok(account_id), Ok(pool)) => super::recording_allowance::delete_held(pool, &account_id, &id).await,
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            };
+            if let Err(e) = deleted {
+                tracing::warn!(error = %e, "held recording not deleted");
+            }
+            let _ = app.emit(HELD_CHANGED_EVENT, ());
+        });
+    }
     remove_temp_dir(&card.file_path);
     if let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
         let _ = w.close();
@@ -4891,11 +5261,12 @@ pub fn capture_preview_show_in_folder(state: tauri::State<'_, AppState>, app: Ap
 }
 
 /// The card's Upgrade, offered when the upload failed because the plan is
-/// full: the main window comes forward on the plans. The card stays, so the
-/// capture can be retried once there is room.
+/// full, or when a Free plan recording stopped at its length limit: the main
+/// window comes forward on the plans. The card stays, so the capture can be
+/// retried once there is room.
 #[tauri::command]
 pub fn capture_preview_upgrade(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
-    card_for(&state.capture, |c| c.actions.upgrade, "There is no capture waiting for more storage.")?;
+    card_for(&state.capture, |c| c.actions.upgrade, "There is no capture to upgrade for.")?;
     show_main_window(&app);
     let _ = app.emit(OPEN_PLANS_EVENT, ());
     Ok(())
@@ -4959,6 +5330,9 @@ pub async fn capture_sync_shortcut(state: tauri::State<'_, AppState>, app: AppHa
         problems[kind.index()] = register_shortcut(&app, kind, in_force[kind.index()].as_deref());
     }
     *lock(&state.capture.shortcut_problems) = problems;
+    // The signed-in app is up: recordings held in an earlier session are
+    // checked for a free slot or a paid plan bought meanwhile.
+    spawn_release_watch(&app);
     Ok(())
 }
 
@@ -6452,7 +6826,7 @@ mod tests {
         let laptop = windows_area(0, 0, 2880, 1728, 1.5);
         let p = physical_frame(card_frame(laptop), laptop.scale);
         assert_eq!(p.width, 474, "316 points at 150 %");
-        assert_eq!(p.height, 495, "330 points at 150 %");
+        assert_eq!(p.height, 519, "346 points at 150 %");
         assert_eq!(p.x + i32::try_from(p.width).unwrap(), 2880 - margin * 3 / 2);
         assert_eq!(p.y + i32::try_from(p.height).unwrap(), 1728 - margin * 3 / 2);
 
@@ -6478,7 +6852,7 @@ mod tests {
         let p = physical_frame(card_frame(left), left.scale);
         assert!(p.x < 0 && p.x > -2560, "{p:?}");
         assert_eq!(p.x + i32::try_from(p.width).unwrap(), -20, "16 points of margin at 125 %");
-        // 330 points is 412.5 pixels at 125 %: within a pixel of the margin.
+        // 346 points is 432.5 pixels at 125 %: within a pixel of the margin.
         assert!((p.y + i32::try_from(p.height).unwrap() - (1200 - 20)).abs() <= 1, "{p:?}");
     }
 
@@ -6700,6 +7074,32 @@ mod tests {
         assert!(matches!(state.current(), CapturePhase::Recording { elapsed_secs: 0, .. }));
     }
 
+    /// A Free plan recording is due to stop at its limit only while it runs
+    /// (a paused one waits for Resume), and its broadcasts carry the time
+    /// left only in the last minute. No limit, nothing of either.
+    #[test]
+    fn the_length_limit_stops_a_running_recording_and_counts_down_its_last_minute() {
+        let calls = Arc::new(Calls::default());
+        let state = recording(&calls);
+        assert!(!state.at_recording_limit(10_000), "no limit, never due");
+        state.set_recording_limit(super::super::allowance::max_recording(Some(super::super::allowance::RecordingTier::Free)));
+        assert!(!state.at_recording_limit(299));
+        assert!(state.at_recording_limit(300));
+
+        let mut seen = Vec::new();
+        state.apply(CaptureEvent::Tick { elapsed_secs: 239 }, |e| seen.push(e)).unwrap();
+        state.apply(CaptureEvent::Tick { elapsed_secs: 240 }, |e| seen.push(e)).unwrap();
+        state.apply(CaptureEvent::Pause, |e| seen.push(e)).unwrap();
+        assert_eq!(seen.iter().map(|e| e.remaining_secs).collect::<Vec<_>>(), [None, Some(60), Some(60)]);
+        assert!(!state.at_recording_limit(300), "a paused recording is not cut");
+        assert_eq!(serde_json::to_value(seen[2]).unwrap()["remainingSecs"], 60);
+        assert_eq!(state.snapshot().remaining_secs, Some(60), "a seed carries it too");
+
+        state.set_recording_limit(super::super::allowance::max_recording(Some(super::super::allowance::RecordingTier::Paid)));
+        assert_eq!(state.snapshot().remaining_secs, None);
+        assert!(serde_json::to_value(state.snapshot()).unwrap().get("remainingSecs").is_none());
+    }
+
     /// Two changes racing are broadcast in the order they happened.
     #[test]
     fn phase_events_are_numbered_in_order() {
@@ -6796,6 +7196,7 @@ mod tests {
                 microphone: true,
             },
             seq: 9,
+            remaining_secs: None,
         };
         assert_eq!(
             serde_json::to_value(e).unwrap(),
@@ -6804,6 +7205,7 @@ mod tests {
         let idle = PhaseEvent {
             phase: CapturePhase::Idle,
             seq: 1,
+            remaining_secs: None,
         };
         assert_eq!(serde_json::to_value(idle).unwrap(), serde_json::json!({ "phase": "idle", "seq": 1 }));
     }

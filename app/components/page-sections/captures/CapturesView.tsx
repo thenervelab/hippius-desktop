@@ -7,6 +7,7 @@ import { Camera, HardDrive } from "lucide-react";
 import PageHeader from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import CaptureButtons from "@/app/components/capture/CaptureButtons";
+import HeldRecordings from "@/app/components/page-sections/captures/HeldRecordings";
 import DriveContainer from "@/app/components/page-sections/drive/DriveContainer";
 import { DriveRouteContext, type DriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { useCaptureDriveStatus } from "@/app/lib/hooks/useCaptureDriveStatus";
@@ -78,6 +79,8 @@ export default function CapturesView() {
         // every drive; before it exists they are here and in the card.
         actions={route ? null : <CaptureButtons />}
       />
+      {/* Recordings held at the free plan's limit; nothing when there are none. */}
+      <HeldRecordings className="mx-3 mb-3" />
       {route ? (
         // Keyed on the drive: a moved captures drive is a different drive,
         // opened fresh rather than over the old one's view.
