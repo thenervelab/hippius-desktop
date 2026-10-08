@@ -42,7 +42,8 @@ Windows and Linux record in a child process of the app
 through one shared `HelperRecorder`; Windows = WGC + Media Foundation
 fragmented MP4 + WASAPI, no ffmpeg; Linux = portals (`ashpd`, on the zbus 5
 already in the graph) on Wayland, x11rb and `ximagesrc` on X11, GStreamer from
-the distro for the file; Wayland has no overlay (the system picker chooses);
+the distro for the file; Wayland has no live overlay (the system picker
+chooses a recording; a screenshot is chosen over a still, Phase 3 below);
 per-platform rollout lives in Rust (`capture::rollout`), not in new frontend
 flags. Note: xcap 0.9.8's `wgc` feature has no GDI fallback.
 
@@ -137,16 +138,46 @@ made full screen** (`cover_whole_display`) or GNOME and KDE push them below
 their panels and every area read back is shifted; **no content protection**,
 so every Linux session sets `ui_in_grabs` and `settle_compositor` sleeps
 `COMPOSITOR_SETTLE` before the grab; a window shot is the screen where the
-window is (a covered window shows what covers it). Wayland =
-`capture/linux_portal.rs`: `support::start_plan` sends a Wayland screenshot
-past the overlay to `system_picker_screenshot` (session `Capturing` while
-the desktop's tool is open; a cancel there is a quiet cancel, everything
-else `fail_capture`); `settle` MOVES the portal's PNG into the capture
-folder under the Hippius name, never follows a symlink, and says
-`PORTAL_MISSING` / `PORTAL_FAILED` in Rust's words. The frontend branches
-only on Rust's `selection` (one "Take a screenshot…" item, no capture bar)
-and `shortcut.supported` / `unavailableMessage` (no keycaps, Settings shows
-the line). The `rust-linux-test` CI job runs
+window is (a covered window shows what covers it). **Wayland screenshots
+are chosen on a still** (`frozen_shot.rs`, pure; `StartPlan::Frozen` from
+`Surfaces.frozen_screenshot`): `frozen_screenshot` hides the card, waits two
+`COMPOSITOR_SETTLE`s (the main window was hidden at start), asks the
+Screenshot portal with `interactive = false` (`portal_still`: GNOME 42's
+portal takes it at once with a flash and no dialog; newer portals ask once
+and remember; the portal's file is moved into a capture folder by `settle`
+and removed once read, so nothing is left under Pictures), cuts it into one
+slice per GDK monitor (`monitor_slices`: one raster of the layout's
+bounding box at one scale, refused when the two axes' scales disagree by
+more than `SCALE_TOLERANCE`) and opens the ordinary overlay page full screen
+on each monitor (`open_frozen_overlay`, `fullscreen_on_monitor` by GDK
+index; display id = monitor index, bar on GDK's primary), which draws its
+monitor's still behind everything (`capture_overlay_backdrop`, a JPEG data
+URL read once; the context says only `frozen`). Area and entire screen
+only (`modes.screenshot`; no window list), same keys, timer and instant
+shortcut. `finish_screenshot` cuts the selection out of the still
+(`take_from_still`, `pixels_for`: CSS px times the slice's pixels over the
+monitor's logical width, so HiDPI and fractional scaling need nothing more;
+the viewport is assumed to be the monitor's logical size). **The timer
+counts over the live screen**: the page hides the still while counting (the
+overlay is transparent) and `retakes` has Rust take a fresh still once the
+overlays are gone, the frozen one if that fails (`cut_latest`). No display
+watch and no bar follow (both read X11, which is XWayland there), and
+`capture_confirm` takes the bar's display for Entire screen (no pointer on
+Wayland). A refused or missing still, or one that does not fit the
+monitors, hands over to `system_picker_screenshot` (`linux_portal.rs`,
+`interactive = true`: session `Capturing` while the desktop's tool is
+open; a cancel there is a quiet cancel, everything else `fail_capture`;
+`settle` MOVES the portal's PNG into the capture folder under the Hippius
+name, never follows a symlink, and says `PORTAL_MISSING` / `PORTAL_FAILED`
+in Rust's words). `Surfaces.selection` is how a SCREENSHOT is chosen (the
+Capture menu and tray branch on it; overlay everywhere now) and the
+Rust-only `record_selection` how a recording is (the panel on Wayland);
+the overlay page branches on its context's `panel` and `frozen`, never on
+the platform, and `shortcut.supported` / `unavailableMessage` (no keycaps,
+Settings shows the line). The bar switching kind on Wayland swaps the
+windows (`support::switch_plan` → `swap_selection_windows`: the stills'
+overlays give way to the panel for Record, the panel to a fresh still for
+a screenshot). The `rust-linux-test` CI job runs
 the X server test under Xvfb. Pinned by `capture_wiring.rs`.
 
 **Phase 4 (Linux recording) is in code, not yet run on Linux.** The child
@@ -173,12 +204,38 @@ name, the same event Windows sends. The bubble's
 `getUserMedia` exists on Linux only because `webview_media_gtk.rs` turns
 WebKitGTK's media stream on and allows user-media and device-info requests,
 for the capture windows and the app's own pages only (pinned in
-`capture_wiring.rs`); `--list-cameras` names cameras as WebKitGTK does
-(both are GStreamer's names). The app probes once
+`capture_wiring.rs`); it runs after the window is built, so a page that
+already finished loading is loaded again (`needs_reload`: its document was
+made without `navigator.mediaDevices`), and every answer is a `camera:` log
+line. `--list-cameras` names cameras as WebKitGTK does
+(both are GStreamer's names). **Old PipeWire cannot open cameras:** with
+`gstreamer1.0-pipewire` installed its device provider hides the V4L2 one in
+`GstDeviceMonitor`, so WebKitGTK (and camera only) open every camera with
+`pipewiresrc`, which below PipeWire 0.3.64 (Ubuntu 22.04 has 0.3.48) stops
+with `not-negotiated` or freezes: a live track with no frame, the bubble on
+its placeholder, while a browser (V4L2 directly) works. `camera_provider`
+reads PipeWire's version from `libpipewire-0.3.so.0.<n>.0` and, below
+0.3.64, sets `GST_PLUGIN_FEATURE_RANK=pipewiredeviceprovider:NONE` in `main`
+before any thread (the monitor uses providers of rank MARGINAL and up); the
+web processes and the recorder child inherit it, so the bar's names, the
+bubble and the recorder still agree. A rank the user set wins. Pinned by
+`camera_provider::tests` and `capture_wiring.rs`. The app probes once
 per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
 `codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
-Wayland (the desktop's dialog). **Wayland records from the panel**
+Wayland (the desktop's dialog). The same probe reports `h264Decoder` /
+`aacDecoder` (by caps, rank MARGINAL and up) for the file viewer's player
+(`video_stream::decoder_missing_line`); asking for them runs the probe even
+where the lane keeps recording off. **Wayland records from the panel**
 (`StartPlan::Panel`): one `capture-overlay-0` window with the bar alone,
+transparent and fitted to it (opened at `support::PANEL_FIRST_SIZE`; the
+page's `usePanelFit` measures the bar and any open `role="menu"` and calls
+`capture_panel_fit`, CSS pixels = logical pixels at every scale, clamped by
+`panel_window_size`). The bar is at the window's top-left (`barLayout`
+"panel"), the corner a resized Wayland window keeps, so its menus open
+downward, nothing is sized in `vh`/`vw` (the window being fitted) and
+shadows are the pill's tight one; the page draws no glass of its own (it
+used to fill a fixed 520 x 600 window with a framed dark box). The bar's
+toolbar and hint are the drag region,
 no display watch, no countdown on the overlay (`countdownAfterPicker`: the
 pill counts once the dialog is answered), Record resolved by
 `support::system_picker_selection`; a cancel in the desktop's dialog is the
@@ -310,9 +367,10 @@ a crosshair before its context loads) means no bar, no area seeded (Rust's
 nothing; Escape cancels; Space before a drag swaps to window click, and
 Space HELD during a drag moves the area (`overlaySelection::shiftDrag`,
 both flows). The size label shows while dragging. It never moves the bar's
-last kind/mode (`StartChoice.remember`, `remembers_mode_switch`). Where
-there is no overlay (Wayland) the shortcut is a plain screenshot: the
-desktop's own tool, already one step. The buttons and the tray keep the bar.
+last kind/mode (`StartChoice.remember`, `remembers_mode_switch`). On
+Wayland it is the same one step on the still (Phase 3); only when no still
+can be had does the desktop's own tool open, already one step. The buttons
+and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
 (see "Screen Recording permission" below). Only
@@ -333,7 +391,27 @@ the tray popover is visible; and the main window's `Focused(true)` in those
 phases (`on_main_window_focused`) forgets `restore_main`,
 `main_was_focused` and `previous_app`, so Stop neither pushes it behind nor
 hands the keyboard away. Once shown it is filmed like any app if it is in
-what is recorded. A
+what is recorded. **Linux and the dock** (`own_windows::main_away`,
+`capture_window_focus_shows_main`): GNOME's dock and Alt+Tab raise the app's
+first window, visible ones first (`shell_app_compare_windows`), and on
+Wayland the pill and the bubble are ordinary windows of the app (GTK 3's
+skip-taskbar is a no-op there), so with the main window hidden a dock click
+only focused the pill. X11 honours skip-taskbar, so there the main window is
+MINIMIZED, not hidden (the dock's one window; `restore_main_window`
+unminimizes it at the end). Wayland keeps HIDING it: a minimized Wayland
+window comes back only through an xdg-activation token, which mutter
+refuses without fresh input, so the tray's Open Hippius and the end of the
+recording would show "Hippius is ready" instead of the window. Instead
+`focus_watch_gtk.rs` follows the pill, bubble, bubble controls and card
+(GTK crossing events, an `Inferior` leave is not a leave; map time) and a
+focus-in with the pointer elsewhere, more than `MAPPED_FOCUS_GRACE` after
+the window was shown, brings the main window and calls
+`on_main_window_focused`. Known gap: mutter's focus fallback (the focused
+app's window closes and the always-on-top pill is next) reads the same and
+brings the main window too. `main_on_screen` treats a minimized main window
+as not on screen on Linux, so a capture never brings up a window the user
+had minimized. The single-instance handler (Hippius launched again) also
+calls `on_main_window_focused`, like the tray's Open Hippius. A
 display watch (`spawn_display_watch`, 1.5 s) closes overlays of unplugged
 displays, drops a pending area on them, opens overlays on new ones, moves the
 bar, and re-reads the cached work areas.
@@ -461,8 +539,20 @@ stop never ends its replacement) and sent as `capture_mic_level` (0..1,
 recording; `emit_phase` stops it on every other phase, before the recorder
 opens the mic. The camera page covers a muted or not-yet-playing camera with
 a placeholder (`showsPlaceholder`) and reopens one muted for
-`MUTE_RECOVERY_MS`, at most `MUTE_RECOVERY_TRIES` in a row. Pinned by
-`onlyCameraCaptures.test.ts`, `mic_meter::tests` and `capture_wiring.rs`.
+`MUTE_RECOVERY_MS`, at most `MUTE_RECOVERY_TRIES` in a row. A stream (or a
+`getUserMedia`) with no first frame in `NO_FRAMES_MS` is opened again once
+(`afterNoFrames`), then the bubble shows "Camera unavailable" and lets the
+camera go; never after the stream's first frame, since WebKit pausing a
+picture is not a failure. **The page reports each step to the app log**
+(`capture_camera_report`, `camera_report.rs`: `camera: <step>: <detail>`,
+`warn` for `no-media-devices`, `error`, `no-frames`, `gave-up`,
+`track-ended`, `track-muted`, else `info`; one line per step per second and
+40 a minute, the rest counted): the cameras listed by name, the constraint
+asked (device ids cut to 8 characters, `cameraReport.ts`), the error's name
+and message, the track and the video. Grep `camera:` in `~/.hippius/logs`.
+Pinned by `onlyCameraCaptures.test.ts`, `cameraPage.test.tsx`,
+`cameraReport.test.ts`, `mic_meter::tests`, `camera_report::tests` and
+`capture_wiring.rs`.
 `camera::wanted_shape` decides the window: while selecting it follows the
 options live (so the bubble can be placed before recording); from Record on it
 follows `recording_camera`, frozen in `select_inner` BEFORE the phase moves, so
@@ -632,7 +722,7 @@ full display, or it sits under the Dock), `focused(false)` + content-protected e
 `accept_first_mouse(true)` (never key, so without it every button needed two
 clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer bar
 stays mounted and pauses, or the card changes height under the pointer).
-It must fit 316 x 330 in every state: it sits at the window's bottom, so an
+It must fit 316 x 346 in every state: it sits at the window's bottom, so an
 overflow clips the TOP (the close button first). Hence the 16:9 picture and
 the one-line failure reason with the full text in `title`, and ONE row of
 actions where no label wraps (`whitespace-nowrap` on every text button): one
@@ -710,6 +800,21 @@ and Escape at the question give focus back to the button that asked. The pill ap
 when its `seq` is newer than the one it shows. It drags by
 `data-tauri-drag-region` (`-webkit-app-region` is Electron-only), which needs
 `core:window:allow-start-dragging` in `capture-controls.json`.
+
+**Free plan length cap** (`allowance.rs`): Free plan recordings stop at
+`FREE_MAX_RECORDING` (5 min of RECORDED time, the recorder's
+`RecordedClock`, pauses left out); paid plans have no limit; screenshots are
+untouched. `begin_recording` decides the tier once, alongside the recorder's
+start (`recording_tier`, bounded by `LOOKUP_WITHIN`), and stores the limit on
+`CaptureState`; `tick_once` stops at it through `stop_inner`, exactly like
+Stop, and the card gets `stopped_at_free_limit` (Rust's `notice`, Upgrade,
+no auto-hide). The tier reads the plan through
+`storage_overview::PlanReads`, the same fold the overview and sharing use;
+the overview remembers it on every read, per account, in memory and in
+`user_preferences`. **It fails open**: no fresh verdict uses the last one
+kept, none ever seen means no cap. The pill shows Rust's `remainingSecs`
+(on `PhaseEvent`, last minute only). Other recording limits read the same
+`RecordingTier` / `recording_tier`.
 
 **Live controls** (`live_controls.rs`, pure; the pill's `PillMenu.tsx` only
 draws): mid-recording the pill mutes and unmutes the microphone
@@ -899,6 +1004,35 @@ thread) empty folders older than 24 h and leftover-only ones (poster,
 fragments) older than 7 days go; a folder holding a capture (`.mp4`/`.mov`/
 `.png` that is not `poster.png`) is NEVER removed, since the helper keeps a
 playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
+
+**Free plan recording allowance** (`recording_allowance.rs`): 25 recordings
+on a limited plan (`LIMITED_TIERS`, Free only; screenshots never counted).
+**Decided when a recording STARTS, never after**: ONE gate,
+`require_can_start`, refuses with `NotReady(RecordingLimitReached)` before
+anything records, called by `capture_start` (kind Recording: tray, menus,
+record shortcut), `select_inner` (the bar's Record, clicks, share picker,
+camera only), `capture_restart` (before the take is discarded; it notifies,
+the pill has no room) and `capture_check_recording_start` (the bar asks
+before its countdown). Pinned by
+`capture_wiring::every_recording_start_path_goes_through_the_one_gate`. The
+count is the server listing of the account's own captures drive
+(`list_remote_folder_files_inner`, label from `destination` when own, else
+`CAPTURES_DIR_NAME`), files named like `Recording YYYY-MM-DD at HH.MM.SS`
+`.mp4/.webm/.mov` with an optional ` (N)` (`is_recording_name`), so console
+uploads and other devices count. Cached per account on
+`CaptureState.recording_counts` for `COUNT_TTL` (30 s), warmed when the bar
+opens; a delivered recording counts at once (`note_delivered`, until listed
+or `PENDING_FOR`); a completed sync of the drive, a remote folder delete and
+a sync reset drop it. **Fails open**: unknown plan or unreadable count
+(error, `COUNT_WITHIN` timeout) never blocks; a paid last-known tier skips the
+listing; a count at the limit is confirmed by a fresh `recording_tier`. The
+FE only draws: `RecordingLimitDialog` (main window, via `useStartCapture`) and
+`capture-overlay/RecordingLimitPanel` (Upgrade = `capture_limit_upgrade`),
+in Rust's words (`recordingLimit.ts`, pinned to `LIMIT_TITLE`/`LIMIT_BODY`).
+Nothing is held any more; `held_recordings.rs` keeps only the way out for
+recordings an earlier build sealed under `~/.hippius/held-recordings`
+(`release_held` once per sign-in from `capture_sync_shortcut`, as many as
+`release_count` allows, delivered like fresh ones).
 
 ## Rules that fail silently
 

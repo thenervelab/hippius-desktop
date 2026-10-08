@@ -507,14 +507,29 @@ export default function CaptureControlsPage() {
               paused ? "bg-amber-400" : "animate-pulse bg-[#FF453A] shadow-[0_0_0_3px_rgba(255,69,58,0.25)] motion-reduce:animate-none"
             }`}
           />
-          <span
-            data-tauri-drag-region
-            className="min-w-[3.25rem] font-mono text-sm tabular-nums tracking-tight"
-            role="timer"
-            aria-label={`Recording time ${mmss(phase.elapsedSecs)}${paused ? ", paused" : ""}`}
-          >
-            {mmss(phase.elapsedSecs)}
-          </span>
+          {/* In a Free plan recording's last minute Rust sends the time left,
+              shown in place of the time recorded. */}
+          {phase.remainingSecs !== undefined ? (
+            <span
+              data-tauri-drag-region
+              className="min-w-[3.25rem] whitespace-nowrap font-mono text-sm tabular-nums tracking-tight text-amber-300"
+              role="timer"
+              aria-label={`Recording time ${mmss(phase.elapsedSecs)}, ${mmss(phase.remainingSecs)} left${paused ? ", paused" : ""}`}
+            >
+              {mmss(phase.remainingSecs)}
+              {/* Small, so the pill keeps to its window's width. */}
+              <span className="ml-1 font-sans text-[11px] tracking-normal">left</span>
+            </span>
+          ) : (
+            <span
+              data-tauri-drag-region
+              className="min-w-[3.25rem] font-mono text-sm tabular-nums tracking-tight"
+              role="timer"
+              aria-label={`Recording time ${mmss(phase.elapsedSecs)}${paused ? ", paused" : ""}`}
+            >
+              {mmss(phase.elapsedSecs)}
+            </span>
+          )}
           {phase.microphone &&
             (micLost ? (
               <MicOff className="size-3.5 text-amber-400" role="img" aria-label={lost?.message}>

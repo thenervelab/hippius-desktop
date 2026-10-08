@@ -10,9 +10,10 @@
 # clashing package first.
 set -euo pipefail
 
-sudo apt-get update
-sudo apt-get install -y libunwind-dev
-sudo apt-get install -y \
+retry="$(dirname "$0")/apt-get-retry.sh"
+bash "$retry" update
+bash "$retry" install -y libunwind-dev
+bash "$retry" install -y \
   libgtk-3-dev \
   libwebkit2gtk-4.1-dev \
   libappindicator3-dev \

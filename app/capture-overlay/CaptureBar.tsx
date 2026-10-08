@@ -18,7 +18,8 @@ import {
   type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { MODE_ICON } from "@/app/lib/capture/modes";
-import { GLASS_BAR, GLASS_BUTTON, GLASS_FOCUS, GLASS_LINK, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
+import { GLASS_BUTTON, GLASS_FOCUS, GLASS_LINK, GLASS_MUTED, GLASS_PRIMARY } from "@/app/lib/capture/glass";
+import { barClasses, type BarClasses, type BarLayout } from "./barLayout";
 import {
   barGroups,
   CAMERA_NOT_FILMED,
@@ -174,9 +175,12 @@ function OptionsMenu({
   screenshotTimer,
   recordCountdown,
   systemAudioAvailable,
+  className,
   onOptions,
 }: {
   menuRef: React.RefObject<HTMLDivElement | null>;
+  /** Where and how it is drawn (`barClasses`). */
+  className: string;
   kind: CaptureKind;
   options: CaptureOptions;
   destination: CaptureDestination | null;
@@ -194,7 +198,7 @@ function OptionsMenu({
       ref={menuRef}
       role="menu"
       aria-label="Capture options"
-      className={`absolute bottom-[calc(100%+10px)] right-0 max-h-[60vh] w-64 overflow-y-auto rounded-[12px] p-1.5 ${GLASS_PANEL}`}
+      className={`overflow-y-auto rounded-[12px] p-1.5 ${className}`}
     >
       {/* Captures have a drive of their own; where it is changes in Hippius
           (Settings, the Captures page), not per capture here. */}
@@ -335,6 +339,7 @@ function SourceRow({
   captionAction,
   triggerRef,
   menuRef,
+  menuClassName,
   onOpen,
   onPick,
   onToggle,
@@ -361,6 +366,8 @@ function SourceRow({
   extra?: React.ReactNode;
   triggerRef?: React.RefObject<HTMLButtonElement | null>;
   menuRef?: React.RefObject<HTMLDivElement | null>;
+  /** Where and how the device menu is drawn (`barClasses`). */
+  menuClassName?: string;
   onOpen?: () => void;
   onPick?: (deviceId: string) => void;
   onToggle: () => void;
@@ -417,7 +424,7 @@ function SourceRow({
           role="menu"
           aria-label={`Choose a ${noun}`}
           aria-busy={loading || devices === null}
-          className={`absolute bottom-[calc(100%+6px)] left-2 right-2 z-10 max-h-[50vh] overflow-y-auto rounded-[12px] p-1.5 ${GLASS_PANEL}`}
+          className={`overflow-y-auto rounded-[12px] p-1.5 ${menuClassName ?? ""}`}
         >
           {devices === null ? (
             <>
@@ -513,10 +520,12 @@ function SourcesPanel({
   cameraTrigger,
   microphoneTrigger,
   menuRef,
+  classes,
   onMenu,
   onOptions,
 }: {
   options: CaptureOptions;
+  classes: BarClasses;
   microphoneAvailable: boolean;
   /** Rust's line for why the microphone is off here; shown under the dimmed row. */
   microphoneUnavailableMessage: string | null;
@@ -589,7 +598,7 @@ function SourcesPanel({
   });
 
   return (
-    <div role="group" aria-label="Recording sources" className={`w-[300px] max-w-[calc(100vw-32px)] rounded-[14px] p-1 ${GLASS_BAR}`}>
+    <div role="group" aria-label="Recording sources" className={`rounded-[14px] p-1 ${classes.sources}`}>
       {cameraOnlyAvailable && (
         <SourceRow
           icon={options.screen ? Monitor : MonitorOff}
@@ -613,6 +622,7 @@ function SourcesPanel({
         open={menu === "camera"}
         triggerRef={cameraTrigger}
         menuRef={menuRef}
+        menuClassName={classes.deviceMenu}
         onOpen={() => toggleMenu("camera")}
         onPick={(id) => pick(pickCamera(options, id))}
         onToggle={() => pick(pickCamera(options, options.camera ? null : (options.cameraDevice ?? "default")))}
@@ -632,6 +642,7 @@ function SourcesPanel({
         disabled={!microphoneAvailable}
         triggerRef={microphoneTrigger}
         menuRef={menuRef}
+        menuClassName={classes.deviceMenu}
         extra={micOn ? <MicMeter deviceId={options.microphoneDevice} /> : null}
         onOpen={() => toggleMenu("microphone")}
         onPick={(id) => pick(pickMicrophone(options, id))}
@@ -674,6 +685,8 @@ interface Props {
   chooseAvailable?: boolean;
   /** Whether "Record system audio" is offered (Rust's `systemAudio`); offered when left out. */
   systemAudioAvailable?: boolean;
+  /** On a full-screen overlay (left out) or alone in Wayland's fitted panel (`barLayout`). */
+  layout?: BarLayout;
   /** Camera only (the Screen switch) can be recorded here. */
   cameraOnlyAvailable: boolean;
   /** Whether the camera, if on, is in the video for this mode. */
@@ -694,6 +707,10 @@ interface Props {
 
 export default function CaptureBar(props: Props) {
   const { kind, mode, options, destination, hint } = props;
+  const layout = props.layout ?? "overlay";
+  const classes = barClasses(layout);
+  // In the panel the bar's empty parts move the window, as its title bar would.
+  const dragRegion = layout === "panel" ? { "data-tauri-drag-region": true } : {};
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   // Why a disabled mode cannot be picked, shown in place of the hint once one is clicked.
   const [modeNote, setModeNote] = useState<string | null>(null);
@@ -796,7 +813,7 @@ export default function CaptureBar(props: Props) {
   return (
     <div
       data-capture-bar
-      className="absolute bottom-10 left-1/2 flex -translate-x-1/2 flex-col items-center gap-2.5"
+      className={classes.column}
       // The bar is a control, not part of the selection surface under it.
       onPointerDown={(e) => e.stopPropagation()}
       onPointerUp={(e) => e.stopPropagation()}
@@ -805,7 +822,7 @@ export default function CaptureBar(props: Props) {
     >
       {/* Polite: a refusal ("Drag to choose an area first") replaces the
           hint, and a screen reader should hear it. */}
-      <p role="status" aria-live="polite" className="rounded-full bg-[#000]/70 px-3.5 py-1.5 text-[13px] text-white/90 shadow-lg">
+      <p {...dragRegion} role="status" aria-live="polite" className="rounded-full bg-[#000]/70 px-3.5 py-1.5 text-[13px] text-white/90 shadow-lg">
         {modeNote ?? hint}
       </p>
       {kind === "recording" && (
@@ -815,6 +832,7 @@ export default function CaptureBar(props: Props) {
           microphoneUnavailableMessage={props.microphoneUnavailableMessage ?? null}
           cameraUnavailableMessage={props.cameraUnavailableMessage ?? null}
           privacyBlocked={props.privacyBlocked ?? NOTHING_BLOCKED}
+          classes={classes}
           continuityHint={props.continuityHint ?? null}
           cameraOnlyAvailable={props.cameraOnlyAvailable}
           cameraFilmed={props.cameraFilmed}
@@ -826,7 +844,7 @@ export default function CaptureBar(props: Props) {
           onOptions={saveOptions}
         />
       )}
-      <div role="toolbar" aria-label="Capture" className={`flex items-center gap-1 rounded-[14px] p-1.5 ${GLASS_BAR}`}>
+      <div {...dragRegion} role="toolbar" aria-label="Capture" className={`flex items-center gap-1 rounded-[14px] p-1.5 ${classes.toolbar}`}>
         <button
           type="button"
           aria-label="Close"
@@ -878,6 +896,7 @@ export default function CaptureBar(props: Props) {
           {menu === "options" && (
             <OptionsMenu
               menuRef={menuRef}
+              className={classes.optionsMenu}
               kind={kind}
               options={options}
               destination={destination}

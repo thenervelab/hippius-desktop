@@ -552,6 +552,8 @@ pub async fn delete_remote_folder(
     }
 
     info!("Remote folder '{label}' deleted: {files_deleted} files removed, was_local={was_local}");
+    // A deleted captures drive holds no recordings any more.
+    crate::capture::recording_allowance::invalidate_label(&state, &label);
 
     Ok(DeleteRemoteFolderResult { files_deleted, was_local })
 }

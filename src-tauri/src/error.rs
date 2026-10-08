@@ -191,6 +191,11 @@ pub enum NotReadyKind {
     /// to. Raised by `capture::commands::capture_start` so the FE opens the
     /// destination picker and retries, rather than guessing a drive.
     CaptureDestinationUnset,
+    /// A recording was refused before it started: a known Free plan already
+    /// has its 25 recordings in the captures drive
+    /// (`capture::recording_allowance`). The FE shows the limit dialog
+    /// (Upgrade / Not now); screenshots are never refused with it.
+    RecordingLimitReached,
     /// The server cannot send drive invitations by email (`503
     /// email_invites_unavailable`: no mail service configured). The FE keeps
     /// the "Invite by email" option and says, inline, that email invites are
@@ -263,6 +268,7 @@ impl NotReadyKind {
             Self::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
             Self::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
             Self::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
+            Self::RecordingLimitReached => "RECORDING_LIMIT_REACHED",
             Self::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
             Self::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
             Self::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
@@ -357,6 +363,12 @@ impl std::fmt::Display for NotReadyKind {
             Self::CaptureDestinationUnset => {
                 write!(f, "Choose where your captures should be saved first.")
             }
+            Self::RecordingLimitReached => write!(
+                f,
+                "{} {}",
+                crate::capture::recording_allowance::LIMIT_TITLE,
+                crate::capture::recording_allowance::LIMIT_BODY
+            ),
             Self::MassDeleteNothingHeld => write!(f, "These files are no longer waiting for a decision."),
             Self::MassDeleteHoldChanged { held } => {
                 let held = crate::sync::mass_delete_hold::group_thousands(*held);
@@ -855,6 +867,7 @@ mod tests {
                 NotReadyKind::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
                 NotReadyKind::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
                 NotReadyKind::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
+                NotReadyKind::RecordingLimitReached => "RECORDING_LIMIT_REACHED",
                 NotReadyKind::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
@@ -890,6 +903,7 @@ mod tests {
             NotReadyKind::SharedDrivesNotEntitled,
             NotReadyKind::ScreenRecordingPermission,
             NotReadyKind::CaptureDestinationUnset,
+            NotReadyKind::RecordingLimitReached,
             NotReadyKind::EmailInvitesUnavailable,
             NotReadyKind::FolderInvitesUnavailable,
             NotReadyKind::FolderEditorInvitesUnavailable,

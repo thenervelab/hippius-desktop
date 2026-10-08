@@ -1,8 +1,12 @@
-//! Screenshots on Wayland, through the desktop's own screenshot tool.
+//! Screenshots on Wayland, through the xdg-desktop-portal Screenshot
+//! interface.
 //!
-//! A Wayland app can neither see other windows nor draw over the screen, so
-//! there is no Hippius overlay there: `capture_start` asks the
-//! xdg-desktop-portal Screenshot interface with `interactive = true`, and the
+//! A Wayland app can neither see other windows nor read the screen itself.
+//! First choice (`frozen_shot`): ask with `interactive = false` for a still
+//! of the whole desktop, which Hippius's overlay is drawn over. GNOME 42's
+//! portal takes it at once with no dialog (and a flash); newer portals ask
+//! once whether to allow it and remember. When that is refused or does not
+//! fit the monitors, `interactive = true`: the
 //! desktop's tool (GNOME Shell's screenshot UI, KDE's dialog, the wlroots
 //! portal's picker) lets the user choose an area, a window or a screen. The
 //! portal answers with a `file://` URI of the PNG it wrote, usually in
@@ -187,25 +191,27 @@ pub fn settle(answer: PortalAnswer, dest: &Path) -> Result<PortalShot> {
     })
 }
 
-/// Ask the desktop's screenshot tool for a screenshot, letting the user
-/// choose what (`interactive`). Waits as long as the user takes.
+/// Ask the portal for a screenshot: `interactive`, the desktop's own tool
+/// lets the user choose what (and waits as long as the user takes); not, a
+/// still of the whole desktop at once (or after the desktop's one-time
+/// permission question).
 #[cfg(target_os = "linux")]
-pub async fn request() -> PortalAnswer {
+pub async fn request(interactive: bool) -> PortalAnswer {
     use ashpd::desktop::screenshot::Screenshot;
 
-    let sent = Screenshot::request().interactive(true).modal(false).send().await;
+    let sent = Screenshot::request().interactive(interactive).modal(false).send().await;
     match sent.and_then(|request| request.response()) {
         Ok(shot) => PortalAnswer::Saved(shot.uri().as_str().to_string()),
         Err(e) => classify(&e),
     }
 }
 
-/// No portal outside Linux. `capture_start` only takes this path where
-/// `support::Surfaces::selection` is the system picker (Wayland), so this
-/// answer is never reached; it keeps the session code the same on every OS.
+/// No portal outside Linux. `capture_start` only takes this path on
+/// Wayland, so this answer is never reached; it keeps the session code the
+/// same on every OS.
 #[cfg(not(target_os = "linux"))]
 #[allow(clippy::unused_async)]
-pub async fn request() -> PortalAnswer {
+pub async fn request(_interactive: bool) -> PortalAnswer {
     PortalAnswer::Missing
 }
 

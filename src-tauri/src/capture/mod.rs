@@ -4,17 +4,24 @@
 //! Design and phasing: `docs/plans/2026-09-22-screen-capture.md`.
 
 pub mod activation;
+pub mod allowance;
 pub mod area_pick;
 pub mod bar;
 pub mod bubble_controls;
 pub mod camera;
+pub mod camera_provider;
+pub mod camera_report;
 pub mod commands;
 pub mod deliver;
 pub mod desktop_shortcut;
 pub mod destination;
 pub mod device_watch;
 pub mod editor;
+#[cfg(target_os = "linux")]
+mod focus_watch_gtk;
+pub mod frozen_shot;
 pub mod geometry;
+pub mod held_recordings;
 pub mod instant;
 pub mod linux_portal;
 pub mod linux_x11;
@@ -29,6 +36,7 @@ pub mod preview;
 pub mod privacy;
 pub mod recorder_child;
 pub mod recording;
+pub mod recording_allowance;
 pub mod rollout;
 pub mod screencast_token;
 pub mod screenshot;

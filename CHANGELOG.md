@@ -17,6 +17,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **The free plan includes 25 screen recordings.** Every recording in your Hippius Captures drive counts, including ones made on the web or on another computer. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.
+- **Screenshots on Linux with Wayland use the Hippius capture bar.** Drag an area or take the entire screen on a still of your desktop, with the same keys, timer and shortcut as on other systems, instead of your desktop's screenshot tool.
 - **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
 - **Edit pictures in your remote folders.** Edit image now works on PNG and
   JPEG files that are only on Hippius, not just ones synced to this computer.
@@ -41,6 +43,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   finding out when they try to join. The Subscription Plans page now shows how
   many people you can share a drive with on each plan (Plus 3, Max 8, Scale
   20), and marks Plus as the most popular.
+
+- **Screen recordings on the Free plan stop at 5 minutes.** The recording is saved, uploaded and shared as usual, the timer shows the time left in the last minute, and an Upgrade button is right there for longer recordings. Paid plans have no limit, and paused time does not count.
+
 - **Screen recordings are about half the size, so they upload and share faster.** Text stays just as sharp; a 10-minute recording is now at most about 375 MB at 1080p, where it could be about 1 GB before.
 
 - **Screen recordings start playing straight away from a share link.** Recordings made on a Mac are now saved so a player can start from the first part of the file. Before, the browser had to download the whole recording before the first frame showed.
@@ -173,6 +178,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Videos play in the viewer on Linux.** Screen recordings and other videos in your drives now play inside Hippius on Linux instead of showing a black screen. If your system is missing the video decoder, the viewer tells you which package to install and still lets you open the video in your own player.
+- **The camera bubble shows your camera on Ubuntu 22.04 and similar Linux systems.** It used to stay on its placeholder there; if a camera still cannot start, the bubble now says so instead of waiting for ever.
+- **Linux: a tidier recording bar, and the dock opens Hippius mid-recording.** On Wayland the recording bar is now just the bar, not a large dark box around it, and clicking Hippius in the dock or picking it in Alt+Tab while recording brings the app back.
 - **On Ubuntu and other GNOME desktops, the recording controls and the camera bubble stay on top.** Opening another window, Hippius included, no longer hides them, so the camera stays in your screen recording.
 
 - **The recording controls show again while you record** (macOS). Stop, the timer, mute and the menus were missing, leaving only the camera bubble and the menu bar.
@@ -260,10 +268,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **On Linux, the recording controls and camera bubble count as part of
   Hippius** in the app switcher, instead of showing up as separate apps.
-
-- **Videos open in your video player on Linux.** The file viewer now offers
-  "Open in your video player" and Download for videos, instead of a black
-  frame that never played.
 
 - **Stop, Pause and Show recording controls work from the tray menu on
   Linux.**

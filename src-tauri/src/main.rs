@@ -41,6 +41,7 @@ mod test_helpers;
 pub mod tray;
 pub mod updates;
 mod utils;
+pub mod video_stream;
 pub mod vpn;
 pub mod wallet;
 
@@ -266,6 +267,12 @@ fn main() {
 
     load_env();
 
+    // Linux: where PipeWire's `pipewiresrc` is too old to open a camera,
+    // cameras open through V4L2 (`capture::camera_provider`). It sets an
+    // environment variable, so it runs here, before any thread starts.
+    #[cfg(target_os = "linux")]
+    let camera_provider = crate::capture::camera_provider::apply();
+
     // Linux: the app id GNOME matches windows to the installed app by, set
     // before GTK starts (`utils::app_id` says why).
     crate::utils::app_id::apply();
@@ -297,6 +304,8 @@ fn main() {
         arch = identity.arch,
         "Application starting"
     );
+    #[cfg(target_os = "linux")]
+    camera_provider.log();
 
     // hcfs hashes and encrypts on a rayon pool it owns, and that pool runs at
     // FULL priority on every core unless the host opts out. The default is
@@ -350,6 +359,10 @@ fn main() {
                 if let Err(e) = window.set_focus() {
                     debug!("Failed to set window focus: {e}");
                 }
+                // Opened again mid-recording (the app grid, a launcher): the
+                // user took the app back, so the recording's end leaves it up
+                // even where the desktop withholds the keyboard from it.
+                crate::capture::commands::on_main_window_focused(app);
             }
             // On macOS, a URL-forwarder helper sends deep link URLs
             // via the single-instance socket as argv entries.
@@ -504,6 +517,10 @@ fn main() {
             prepare_motion_photo_preview,
             read_preview_bytes,
             resolve_drive_file_source,
+            // The viewer's video source: the asset URL, or on Linux the
+            // loopback stream (WebKitGTK cannot play media from `asset://`).
+            crate::video_stream::video_playback_source,
+            crate::video_stream::video_stream_release,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
@@ -703,6 +720,7 @@ fn main() {
             // Screen capture
             crate::capture::commands::capture_start,
             crate::capture::commands::capture_overlay_context,
+            crate::capture::commands::capture_overlay_backdrop,
             crate::capture::commands::capture_select,
             crate::capture::commands::capture_pause,
             crate::capture::commands::capture_resume,
@@ -738,6 +756,7 @@ fn main() {
             crate::capture::commands::capture_add_desktop_shortcut,
             crate::capture::commands::capture_camera_context,
             crate::capture::commands::capture_set_cameras,
+            crate::capture::camera_report::capture_camera_report,
             crate::capture::commands::capture_cameras,
             crate::capture::commands::capture_microphones,
             crate::capture::commands::capture_mic_meter_start,
@@ -749,6 +768,7 @@ fn main() {
             crate::capture::commands::capture_camera_switch,
             crate::capture::commands::capture_controls_menu,
             crate::capture::commands::capture_controls_menu_side,
+            crate::capture::commands::capture_panel_fit,
             crate::capture::commands::capture_camera_set_size,
             crate::capture::commands::capture_camera_dismiss,
             crate::capture::commands::capture_share_targets,
@@ -763,6 +783,8 @@ fn main() {
             crate::capture::commands::capture_preview_revoke_link,
             crate::capture::commands::capture_preview_reveal,
             crate::capture::commands::capture_preview_discard,
+            crate::capture::commands::capture_limit_upgrade,
+            crate::capture::commands::capture_check_recording_start,
             crate::capture::commands::capture_preview_upgrade,
             crate::capture::editor::capture_preview_edit,
             crate::capture::editor::capture_editor_open_file,

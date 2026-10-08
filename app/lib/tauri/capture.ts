@@ -19,14 +19,18 @@ export type CapturePhase =
   | { phase: "idle" }
   | { phase: "selecting"; kind: CaptureKind; mode: CaptureMode }
   | { phase: "capturing"; kind: CaptureKind }
-  | { phase: "recording"; elapsedSecs: number; microphone: boolean }
-  | { phase: "paused"; elapsedSecs: number; microphone: boolean }
+  | { phase: "recording"; elapsedSecs: number; microphone: boolean; remainingSecs?: number }
+  | { phase: "paused"; elapsedSecs: number; microphone: boolean; remainingSecs?: number }
   | { phase: "finalizing" };
 
 /**
  * `capture_state_changed` and `capture_state`: the phase plus `seq`, a number
  * that only goes up. A surface seeded from `capture_state` drops any event
  * whose `seq` is not newer than what it holds. Mirrors Rust's `PhaseEvent`.
+ *
+ * `remainingSecs` (recording and paused only): the seconds left before a Free
+ * plan recording stops on its own, present only in its last minute (Rust's
+ * `allowance::remaining_to_show`).
  */
 export type CapturePhaseEvent = CapturePhase & { seq: number };
 
@@ -186,6 +190,13 @@ export interface CaptureOverlayContext extends RecordingAvailability, CaptureSur
    * bar and nothing drawn in advance; releasing the drag takes the shot.
    */
   instant: boolean;
+  /** This window is Wayland's recording panel (the bar alone; the desktop's dialog chooses). */
+  panel: boolean;
+  /**
+   * The overlay is drawn over a still of the desktop (a Wayland screenshot):
+   * `getCaptureOverlayBackdrop` gives this display's picture.
+   */
+  frozen: boolean;
 }
 
 /** `capture_pending_changed`. `rect` is the held area (null when cleared), so every overlay mirrors Rust. */
@@ -368,6 +379,8 @@ export interface CapturePreviewCard {
    * uploaded.
    */
   settled?: boolean;
+  /** Rust's line about the capture itself (a Free plan recording stopped at its limit); absent = none. */
+  notice?: string;
 }
 
 /** `capture_show_in_folder`: where to show the capture. */
@@ -704,6 +717,15 @@ export function getCaptureCameraContext(): Promise<CaptureCameraState> {
   return invoke("capture_camera_context");
 }
 
+/**
+ * One step of the camera page opening the camera, for the app log (Rust
+ * logs it as a `camera:` line, throttled). Diagnostics only: nothing
+ * depends on the answer.
+ */
+export function reportCameraStep(step: string, detail: string): Promise<void> {
+  return invoke("capture_camera_report", { step, detail });
+}
+
 /** The camera window reports the cameras it can open, for the bar's picker. */
 export function setCaptureCameras(cameras: CaptureDevice[]): Promise<void> {
   return invoke("capture_set_cameras", { cameras });
@@ -788,6 +810,11 @@ export function setCaptureControlsMenu(open: boolean): Promise<CapturePillMenu> 
   return invoke("capture_controls_menu", { open });
 }
 
+/** Wayland's recording panel: size its window to the bar and any open menu, in CSS pixels. */
+export function fitCapturePanel(width: number, height: number): Promise<void> {
+  return invoke("capture_panel_fit", { width, height });
+}
+
 /** Where a pill menu would open, with nothing moved yet: the side to anchor the pill to first. */
 export function getCaptureControlsMenuSide(): Promise<CapturePillMenu> {
   return invoke("capture_controls_menu_side");
@@ -815,6 +842,11 @@ export function finishCaptureShare(token: number): Promise<void> {
 
 export function getCaptureOverlayContext(displayId: number): Promise<CaptureOverlayContext> {
   return invoke("capture_overlay_context", { displayId });
+}
+
+/** The still this display's overlay is drawn over (a JPEG data URL), or null without one. */
+export function getCaptureOverlayBackdrop(displayId: number): Promise<string | null> {
+  return invoke("capture_overlay_backdrop", { displayId });
 }
 
 export function selectCapture(selection: CaptureSelection): Promise<void> {
@@ -901,4 +933,23 @@ export function createCaptureDrive(folder: string | null): Promise<CaptureDriveS
 /** `capture_start` refused because macOS has not granted Screen Recording. */
 export function isScreenRecordingPermissionMissing(error: unknown): boolean {
   return isNotReady(error, "SCREEN_RECORDING_PERMISSION");
+}
+
+/** A recording was refused before it started: the free plan's recordings are used up. */
+export function isRecordingLimitReached(error: unknown): boolean {
+  return isNotReady(error, "RECORDING_LIMIT_REACHED");
+}
+
+/**
+ * Ask Rust's recording gate whether a recording may start now, before the
+ * bar counts down; refuses with `RECORDING_LIMIT_REACHED`. Record asks it
+ * again, so this only spares the countdown.
+ */
+export function checkRecordingStart(): Promise<void> {
+  return invoke("capture_check_recording_start");
+}
+
+/** The limit dialog's Upgrade from the capture bar: Rust closes the bar and the main window opens the plans. */
+export function upgradeFromRecordingLimit(): Promise<void> {
+  return invoke("capture_limit_upgrade");
 }
