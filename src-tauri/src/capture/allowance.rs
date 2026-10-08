@@ -38,10 +38,10 @@ use crate::billing::storage_overview::{PlanInfo, PlanReads};
 
 /// The longest a Free plan recording runs. Recorded time only: paused time
 /// does not count.
-pub const FREE_MAX_RECORDING: Duration = Duration::from_secs(5 * 60);
+pub const FREE_MAX_RECORDING: Duration = Duration::from_mins(5);
 
 /// From how far before the limit the pill shows the time left.
-pub const REMAINING_SHOWN_FROM: Duration = Duration::from_secs(60);
+pub const REMAINING_SHOWN_FROM: Duration = Duration::from_mins(1);
 
 /// How long a recording's start waits for a fresh plan read before it uses
 /// the last one it knows. The read runs alongside the recorder's own start,
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn only_free_has_a_length_limit_and_unknown_has_none() {
-        assert_eq!(max_recording(Some(RecordingTier::Free)), Some(Duration::from_secs(300)));
+        assert_eq!(max_recording(Some(RecordingTier::Free)), Some(Duration::from_mins(5)));
         assert_eq!(max_recording(Some(RecordingTier::Paid)), None);
         assert_eq!(max_recording(None), None, "fail open");
     }
