@@ -38,6 +38,11 @@ export interface CardView {
    * but the card waits instead of alarming: no red, and "Choose folder".
    */
   waiting: boolean;
+  /**
+   * A recording held at the free plan's limit: not uploaded and no link, with
+   * Upgrade and Delete as the ways out. Neither a failure (no red) nor done.
+   */
+  held: boolean;
 }
 
 /**
@@ -68,6 +73,7 @@ export function cardView(
         settled: false,
         failed: false,
         waiting: false,
+        held: false,
       };
     }
     case "syncing": {
@@ -80,6 +86,7 @@ export function cardView(
         settled: false,
         failed: false,
         waiting: false,
+        held: false,
       };
     }
     case "uploaded":
@@ -90,11 +97,14 @@ export function cardView(
         settled: card.settled ?? true,
         failed: false,
         waiting: false,
+        held: false,
       };
     case "failed":
       return status.reason === "needsFolder"
-        ? { percent: null, text: "Waiting for a folder", done: false, settled: false, failed: true, waiting: true }
-        : { percent: null, text: "Couldn't upload", done: false, settled: false, failed: true, waiting: false };
+        ? { percent: null, text: "Waiting for a folder", done: false, settled: false, failed: true, waiting: true, held: false }
+        : { percent: null, text: "Couldn't upload", done: false, settled: false, failed: true, waiting: false, held: false };
+    case "held":
+      return { percent: null, text: "Not uploaded", done: false, settled: false, failed: false, waiting: false, held: true };
   }
 }
 

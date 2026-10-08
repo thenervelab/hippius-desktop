@@ -331,7 +331,40 @@ export type CapturePreviewStatus =
   | { state: "syncing"; linkCopied: boolean; linkError?: string }
   | { state: "uploaded"; linkCopied: boolean; linkError?: string }
   /** `message` is Rust's sentence; `retryable` = Retry applies (false when the sync queue retries it). */
-  | { state: "failed"; message: string; reason: CaptureFailureReason; retryable: boolean };
+  | { state: "failed"; message: string; reason: CaptureFailureReason; retryable: boolean }
+  /**
+   * A recording on a free plan that has used its recordings: kept on this
+   * computer, not uploaded, no link. `message` is Rust's sentence. Released on
+   * its own once a slot frees up or the plan changes.
+   */
+  | { state: "held"; message: string };
+
+/** One recording held at the free plan's limit. Mirrors Rust's `HeldRecording`. */
+export interface HeldRecording {
+  id: string;
+  fileName: string;
+  /** When it was held, ms since the epoch. */
+  heldAt: number;
+  thumbnail?: string;
+}
+
+/** `capture_held_recordings`. Mirrors Rust's `HeldList`. */
+export interface HeldRecordings {
+  /** Rust's sentence about why they are held. */
+  message: string;
+  /** Oldest first: the order they are released in. */
+  items: HeldRecording[];
+}
+
+/** The recordings held at the free plan's limit, with Rust's sentence. */
+export function getHeldRecordings(): Promise<HeldRecordings> {
+  return invoke("capture_held_recordings");
+}
+
+/** Delete a held recording for good. */
+export function deleteHeldRecording(id: string): Promise<void> {
+  return invoke("capture_held_delete", { id });
+}
 
 /** What the card says about the link. Mirrors Rust's `LinkState`. */
 export type CaptureLinkState =
