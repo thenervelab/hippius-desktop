@@ -167,41 +167,98 @@ fn the_temp_copy_is_removed_only_after_the_upload_lands() {
     assert!(!keep.contains("remove_dir_all"), "a kept capture never removes a folder itself");
 }
 
-/// A free plan at its recording limit holds the recording: the verdict comes
-/// BEFORE the file is placed in the drive (once there, the sync engine
-/// uploads it), a held recording never reaches `place` or a link, and its
-/// plaintext goes only after it was sealed.
+/// The free plan's recording limit is decided at the START of a recording,
+/// by ONE gate, `recording_allowance::require_can_start`, on every path that
+/// can start one, and before anything records or a take is thrown away.
+/// Nothing is recorded and then held back.
 #[test]
-fn a_recording_is_counted_or_held_before_it_reaches_the_drive() {
+fn every_recording_start_path_goes_through_the_one_gate() {
+    const GATE: &str = "recording_allowance::require_can_start(&state).await?";
+    let src = read("src/capture/commands.rs");
+
+    // The tray's Record tile, the Capture menus' Record items and the record
+    // shortcut all reach Rust through `capture_start` with the kind set.
+    let start = fn_body(&src, "pub async fn capture_start(");
+    let gate = start.find(GATE).expect("capture_start asks the gate");
+    assert!(
+        start[..gate].contains("kind == Some(CaptureKind::Recording)"),
+        "only a Record start is gated; a screenshot never is"
+    );
+    let opened = start
+        .find("advance(&app, &state.capture, CaptureEvent::Start")
+        .expect("the session starts");
+    assert!(gate < opened, "refused before any window opens");
+
+    // The bar's Record, an overlay click, the share picker and camera only all
+    // take the selection through `select_inner`.
+    for caller in ["pub async fn capture_confirm(", "pub async fn capture_select("] {
+        assert!(fn_body(&src, caller).contains("select_inner(&app, selection).await"), "{caller}");
+    }
+    let select = fn_body(&src, "async fn select_inner(");
+    let gate = select.find(GATE).expect("select_inner asks the gate");
+    assert!(
+        select[..gate].contains("if kind == CaptureKind::Recording"),
+        "a screenshot is never gated"
+    );
+    let moved = select.find("CaptureEvent::Selected").expect("the phase moves on");
+    let begin = select.find("begin_recording(app, selection)").expect("then the recorder starts");
+    assert!(gate < moved && gate < begin, "refused while the bar is still up, before anything records");
+
+    // Restart starts a new recording: gated before the take is discarded.
+    let restart = fn_body(&src, "pub async fn capture_restart(");
+    let gate = restart.find(GATE).expect("Restart asks the gate");
+    let discard = restart.find("discard_recording(").expect("the take is thrown away");
+    let begin = restart.find("begin_recording(&app, selection)").expect("and started again");
+    assert!(gate < discard && gate < begin, "a refused restart keeps the recording");
+
+    // No other path can start the recorder.
+    assert_eq!(
+        src.matches("begin_recording(").count(),
+        3,
+        "begin_recording is defined once and called only from select_inner and capture_restart"
+    );
+
+    // The gate reads the plan the way the length cap does, and the count
+    // from the server's listing of the captures drive, failing open.
+    let allowance = read("src/capture/recording_allowance.rs");
+    let check = fn_body(&allowance, "pub async fn check_start(");
+    assert!(check.contains("allowance::recording_tier(state, &account)"));
+    assert!(check.contains("recording_count(state, &account_id)"));
+    assert!(
+        fn_body(&allowance, "pub async fn recording_count(").contains("remote::list_remote_folder_files_inner("),
+        "the count comes from the server listing the remote-folder browser uses"
+    );
+}
+
+/// Delivery no longer decides anything about the count: every recording that
+/// was allowed to start is placed and shared as usual, and is counted at once.
+#[test]
+fn a_delivered_recording_is_placed_as_usual_and_counted() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
-    assert!(
-        body.contains("place_unless_held(&state, app, &account_id, &destination, path, card_kind).await? else {")
-            && body.contains("return Ok(Delivery::Held { account_id });"),
-        "delivery places through the gate, and a held recording stops there"
-    );
-    assert!(!body.contains("super::deliver::place("), "no placement around the gate");
-    assert!(body.contains("Ok(Delivery::Held { account_id }) => hold_and_announce("));
-    let placing = fn_body(&src, "async fn place_unless_held(");
-    let gate = placing.find("recording_gate(").expect("recordings pass the allowance gate");
-    let hold = placing.find("Gate::Hold => return Ok(None)").expect("a held recording is not placed");
-    let place = placing.find("super::deliver::place(").expect("delivery places the file");
-    assert!(gate < place && hold < place, "the gate must come before the file is placed");
-    assert!(placing.contains("is_recording(path, card_kind)"), "only recordings are counted");
-    assert!(
-        placing.contains("recording_allowance::forget(state.pool()?, account_id, &hash)"),
-        "a placement that failed gives its slot back"
-    );
-
-    let held = fn_body(&src, "async fn hold_and_announce(");
-    for forbidden in ["deliver::place(", "link_for(", "mint(", "trigger_sync_now"] {
-        assert!(!held.contains(forbidden), "a held recording is never uploaded or shared ({forbidden})");
+    assert!(body.contains("super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?"));
+    for gone in ["place_unless_held", "Delivery::Held", "hold_and_announce", "recording_gate("] {
+        assert!(!src.contains(gone), "nothing holds a recording after the fact ({gone})");
     }
-    let sealed = held.find("recording_allowance::hold(").expect("a held recording is sealed");
-    let removed = held.find("remove_temp_dir(path)").expect("its temp folder goes once sealed");
-    assert!(sealed < removed, "the plaintext goes only after sealing");
+    let placed = body.find("announce_placed(").expect("the card hears it is placed");
+    let noted = body
+        .find("recording_allowance::note_delivered(&state, &account_id, &destination, &placed.file_name)")
+        .expect("a delivered recording counts at once");
+    assert!(placed < noted);
+    // A sync cycle or a delete in the drive makes the next start read the
+    // count again.
+    let bridge = read("src/sync/projection/tauri_bridge.rs");
+    assert!(bridge.contains("recording_allowance::invalidate_label(&app_state, &payload.label)"));
+    assert!(bridge.contains("recording_allowance::clear(&app_state)"));
+    assert!(read("src/sync/fileops/folders.rs").contains("recording_allowance::invalidate_label(&state, &label)"));
+}
 
-    // Released recordings are delivered exactly like a fresh one.
+/// Recordings an earlier build held are still released once allowed, each
+/// delivered exactly like a fresh one, and only as many as the plan allows.
+#[test]
+fn recordings_held_by_an_earlier_build_are_released_like_fresh_ones() {
+    let src = read("src/capture/commands.rs");
+    assert!(fn_body(&src, "pub async fn capture_sync_shortcut(").contains("spawn_release_held(&app)"));
     let release = fn_body(&src, "async fn release_held(");
     let unseal = release.find("unseal_for_release(").expect("release unseals");
     let deliver = release
@@ -209,18 +266,16 @@ fn a_recording_is_counted_or_held_before_it_reaches_the_drive() {
         .expect("then delivers as normal");
     assert!(unseal < deliver);
     assert!(
-        release.contains("release_count(plan, counted, held.len())"),
+        release.contains("release_count(tier, counted, waiting.len())"),
         "only as many as the plan allows"
     );
-
-    let allowance = read("src/capture/recording_allowance.rs");
-    // The count reads the plan the same way the length cap does.
-    assert!(fn_body(&allowance, "pub async fn current_plan(").contains("allowance::recording_tier(state, &account)"));
+    let held = read("src/capture/held_recordings.rs");
+    assert!(!held.contains("pub async fn hold("), "nothing is held any more");
 }
 
 /// The recorder writes the in-progress file under a hidden app folder that
 /// no drive's engine walks, and refuses to record should a drive ever hold
-/// it, so nothing can upload a recording before delivery has decided.
+/// it, so nothing can upload a half-written recording.
 #[test]
 fn the_recorder_never_writes_into_a_synced_folder() {
     let src = read("src/capture/commands.rs");
@@ -826,8 +881,7 @@ fn the_card_and_session_commands_are_registered() {
         "capture_preview_reveal",
         "capture_preview_discard",
         "capture_preview_upgrade",
-        "capture_held_recordings",
-        "capture_held_delete",
+        "capture_limit_upgrade",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),

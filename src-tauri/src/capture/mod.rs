@@ -21,6 +21,7 @@ pub mod editor;
 mod focus_watch_gtk;
 pub mod frozen_shot;
 pub mod geometry;
+pub mod held_recordings;
 pub mod instant;
 pub mod linux_portal;
 pub mod linux_x11;

@@ -1,383 +1,361 @@
-//! The free plan's recording allowance: 25 recordings in total.
+//! The free plan's recording allowance: 25 recordings in the captures drive.
 //!
 //! Screenshots are never counted and sharing is never limited; paid plans
-//! have no count at all. Like Loom, deleting a recording frees its slot and
-//! moving or renaming one does not.
-//!
-//! A free account at the limit can still record, but the finished recording
-//! is HELD: it is not uploaded and no link is minted. It is sealed (encrypted
-//! with a key only this app holds) into a hidden folder no drive syncs, and
-//! the plaintext is removed, so copying the held file into a synced folder or
-//! the app's Upload sends only ciphertext nobody can open. When a slot frees
-//! up or the plan changes to a paid one, held recordings are released oldest
-//! first and delivered exactly like a fresh one (upload, link, card).
+//! have no count at all. The limit is enforced when a recording STARTS: a
+//! known limited plan that already has [`FREE_RECORDING_LIMIT`] recordings
+//! is refused before anything records ([`require_can_start`], the one gate
+//! every start path calls). Nothing is recorded and then held back.
 //!
 //! # What is counted
 //!
-//! A per-account ledger in SQLite, one row per recording this app delivered,
-//! keyed by the recording's salted content hash, the same `BLAKE3(ss58 ||
-//! plaintext)` the sync engine stores for every file. A row stops counting
-//! once the hash is in none of the account's drives synced here (on disk, on
-//! the server or in the last synced base, `sync::files::content_hashes_present`).
-//! Content, not path: a moved or renamed recording keeps its hash and stays
-//! counted; a deleted one is gone from every tree and frees its slot.
+//! The recordings in the account's own captures drive ("Hippius Captures",
+//! `naming::CAPTURES_DIR_NAME`, or the label `capture::destination` keeps for
+//! it), read from the HCFS SERVER's listing of that drive, the same listing
+//! the remote-folder browser reads (`list_remote_folder_files_inner`). So a
+//! recording uploaded from the web console, another computer or an older
+//! build counts, and one deleted anywhere stops counting. A recording is a
+//! video named the way the app names one ([`is_recording_name`]); every
+//! other file in the drive, screenshots included, is ignored.
 //!
-//! The rules are cautious in one direction only: a row is never freed on a
-//! read that could not see everything. It must have been seen in a drive at
-//! least once, every own drive here must have been read, and at least one of
-//! them must share the row's salt. Anything less leaves it counted.
+//! The count is cached per account for [`COUNT_TTL`] so pressing Record does
+//! not wait on a full listing each time. A recording this app has just
+//! delivered counts at once ([`note_delivered`]) even before its upload shows
+//! in the listing, and a completed sync or a delete in the drive drops the
+//! cached listing ([`invalidate_label`]), so the next start reads it again.
 //!
-//! KNOWN GAPS, until the server enforces this: the ledger is per device, so
-//! recordings made on another device or before a reinstall are not counted
-//! here, and a file uploaded through the website is not either. A recording
-//! delivered to a drive not synced on this machine is never seen, so it stays
-//! counted. While a recording runs its plaintext fragments sit in the app's
-//! hidden temp folder (`screenshot::capture_tmp_root`), as every recording's do.
+//! # Failing open
 //!
-//! The decision is Rust's alone; the card only draws `PreviewStatus::Held`.
+//! Like the length cap (`capture::allowance`), the limit fails open: an
+//! unknown plan, or a count that cannot be read (offline, listing timed out),
+//! never blocks a recording. Only a KNOWN limited plan with a KNOWN count at
+//! the limit does.
 
-use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-use serde::Serialize;
-use sqlx::{Row, SqlitePool};
-use zeroize::Zeroizing;
+use hcfs_client::drive::remote::RemoteFileInfo;
 
+use super::allowance::RecordingTier;
 use crate::app_state::AppState;
-use crate::error::{AppError, Result};
+use crate::error::{AppError, NotReadyKind, Result};
 
-/// Recordings a free account can have before new ones are held.
+/// Recordings a limited plan can have in its captures drive.
 pub const FREE_RECORDING_LIMIT: usize = 25;
 
-/// What a held recording's card (and the Captures page) says.
-pub const HELD_MESSAGE: &str = "You've used your 25 free recordings. Upgrade to share this one, or delete an older recording.";
+/// The plans whose recordings are counted. Free only. To limit another plan
+/// too, give it its own tier in `allowance::resolve_recording_tier` and add
+/// it here; nothing else reads who is limited.
+pub const LIMITED_TIERS: &[RecordingTier] = &[RecordingTier::Free];
 
-/// What a held recording's card says when it could not even be sealed: it
-/// stays in the app's own hidden folder and Retry tries again.
-pub const NOT_HELD_MESSAGE: &str = "This recording couldn't be put aside. Retry in a moment.";
+/// The refusal's title and body, shown by the app's limit dialog.
+pub const LIMIT_TITLE: &str = "You've used your 25 free recordings";
+pub const LIMIT_BODY: &str = "Upgrade your plan to record more, or delete an older recording.";
 
-/// The plan, as far as the recording count goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecordingPlan {
-    Free,
-    Paid,
-}
+/// How long a listed count answers before the server is asked again.
+pub const COUNT_TTL: Duration = Duration::from_secs(30);
 
-/// The account's plan for the recording count; `None` when it cannot be told.
-/// The same reading as the recording length cap (`capture::allowance`), so
-/// the two free plan rules can never disagree about who is on the free plan.
-pub async fn current_plan(state: &AppState, account_id: &str) -> Option<RecordingPlan> {
-    let _ = account_id;
-    let account = state.current_session_account().ok()?;
-    match super::allowance::recording_tier(state, &account).await? {
-        super::allowance::RecordingTier::Free => Some(RecordingPlan::Free),
-        super::allowance::RecordingTier::Paid => Some(RecordingPlan::Paid),
-    }
-}
+/// How long a start waits for the listing before it fails open.
+pub const COUNT_WITHIN: Duration = Duration::from_secs(5);
 
-/// What happens to a finished recording.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
-    Deliver,
-    Hold,
-}
+/// How long a recording this app delivered counts on its own, while its
+/// upload may not be in the server's listing yet.
+pub const PENDING_FOR: Duration = Duration::from_mins(10);
 
-/// Hold only on a KNOWN free plan at the limit. An unknown plan fails open:
-/// a recording is never held because the app could not read the plan.
+/// Video extensions a recording can have.
+const RECORDING_EXTENSIONS: [&str; 3] = ["mp4", "webm", "mov"];
+
+/// Whether `tier` counts recordings.
 #[must_use]
-pub fn decide(plan: Option<RecordingPlan>, counted: usize) -> Verdict {
-    match plan {
-        Some(RecordingPlan::Free) if counted >= FREE_RECORDING_LIMIT => Verdict::Hold,
-        _ => Verdict::Deliver,
-    }
+pub fn is_limited(tier: RecordingTier) -> bool {
+    LIMITED_TIERS.contains(&tier)
 }
 
-/// How many of `held` recordings to release now. Only on a KNOWN plan: a
-/// failed plan read must not hand a free account its held recordings.
+/// Whether `name` (a file's basename) is a recording the app made:
+/// `Recording YYYY-MM-DD at HH.MM.SS.mp4` (or `.webm` / `.mov`), with an
+/// optional ` (N)` before the extension for a second file of the same name.
+/// Screenshots and any other video are not.
 #[must_use]
-pub fn release_count(plan: Option<RecordingPlan>, counted: usize, held: usize) -> usize {
-    match plan {
-        Some(RecordingPlan::Paid) => held,
-        Some(RecordingPlan::Free) => held.min(FREE_RECORDING_LIMIT.saturating_sub(counted)),
-        None => 0,
+pub fn is_recording_name(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    if !RECORDING_EXTENSIONS.iter().any(|v| ext.eq_ignore_ascii_case(v)) {
+        return false;
+    }
+    let stem = strip_copy_suffix(stem);
+    let Some(rest) = stem.strip_prefix("Recording ") else {
+        return false;
+    };
+    let Some((date, time)) = rest.split_once(" at ") else {
+        return false;
+    };
+    shaped_like(date, "dddd-dd-dd") && shaped_like(time, "dd.dd.dd")
+}
+
+/// `stem` without a trailing ` (N)`, N one or more digits.
+fn strip_copy_suffix(stem: &str) -> &str {
+    let Some(open) = stem.strip_suffix(')').and_then(|s| s.rfind(" (").map(|i| (s, i))) else {
+        return stem;
+    };
+    let (inner, at) = open;
+    let digits = &inner[at + 2..];
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        &stem[..at]
+    } else {
+        stem
     }
 }
 
-// ── The ledger ──────────────────────────────────────────────────────────────
-
-/// Created on first use rather than in `utils::schema`: nothing else reads it.
-const LEDGER_DDL: &str = "CREATE TABLE IF NOT EXISTS capture_recording_ledger (
-    owner TEXT NOT NULL,
-    salted_hash TEXT NOT NULL,
-    salt_ss58 TEXT NOT NULL,
-    file_name TEXT NOT NULL,
-    delivered_at INTEGER NOT NULL,
-    seen INTEGER NOT NULL DEFAULT 0,
-    gone INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (owner, salted_hash)
-)";
-
-const HELD_DDL: &str = "CREATE TABLE IF NOT EXISTS capture_held_recordings (
-    id TEXT PRIMARY KEY,
-    owner TEXT NOT NULL,
-    file_name TEXT NOT NULL,
-    sealed_path TEXT NOT NULL,
-    held_at INTEGER NOT NULL,
-    thumbnail TEXT
-)";
-
-async fn ensure_tables(pool: &SqlitePool) -> Result<()> {
-    sqlx::query(LEDGER_DDL).execute(pool).await?;
-    sqlx::query(HELD_DDL).execute(pool).await?;
-    Ok(())
+/// `value` matches `pattern`, where `d` is any ASCII digit and every other
+/// character must be itself.
+fn shaped_like(value: &str, pattern: &str) -> bool {
+    value.len() == pattern.len()
+        && value.bytes().zip(pattern.bytes()).all(|(v, p)| match p {
+            b'd' => v.is_ascii_digit(),
+            other => v == other,
+        })
 }
 
-fn owner_of(account_id: &str) -> String {
+/// The recordings in a drive's server listing, by their path in the drive,
+/// so the same name in two folders is two recordings.
+#[must_use]
+pub fn recording_paths(files: &[RemoteFileInfo]) -> HashSet<String> {
+    files.iter().filter(|f| is_recording_name(&f.name)).map(|f| f.path.clone()).collect()
+}
+
+/// What starting a recording comes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartVerdict {
+    Allowed,
+    /// A known limited plan with a known count at or past the limit.
+    LimitReached,
+}
+
+/// Refuse only a KNOWN limited plan with a KNOWN count at the limit. An
+/// unknown plan or an unreadable count fails open.
+#[must_use]
+pub fn decide_start(tier: Option<RecordingTier>, counted: Option<usize>) -> StartVerdict {
+    match (tier, counted) {
+        (Some(tier), Some(n)) if is_limited(tier) && n >= FREE_RECORDING_LIMIT => StartVerdict::LimitReached,
+        _ => StartVerdict::Allowed,
+    }
+}
+
+// ── The count cache ─────────────────────────────────────────────────────────
+
+/// One account's count: the last listing, and recordings delivered since
+/// that may not be in it yet.
+#[derive(Debug, Default)]
+struct Counted {
+    /// The captures drive's label and the recordings its listing held, and when.
+    listed: Option<(String, HashSet<String>, Instant)>,
+    /// Paths of recordings this app delivered, and when.
+    pending: Vec<(String, Instant)>,
+}
+
+/// Per-account counts, keyed by `account_key`.
+#[derive(Debug, Default)]
+pub struct CountCache {
+    accounts: Mutex<HashMap<String, Counted>>,
+}
+
+impl CountCache {
+    fn with<R>(&self, f: impl FnOnce(&mut HashMap<String, Counted>) -> R) -> R {
+        f(&mut self.accounts.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    /// The count for `account` while its listing is fresh, else `None`.
+    pub fn fresh(&self, account: &str, now: Instant) -> Option<usize> {
+        self.with(|all| {
+            let counted = all.get_mut(account)?;
+            counted.pending.retain(|(_, at)| now.saturating_duration_since(*at) < PENDING_FOR);
+            let (_, listed, at) = counted.listed.as_ref()?;
+            (now.saturating_duration_since(*at) < COUNT_TTL).then(|| total(listed, &counted.pending))
+        })
+    }
+
+    /// Keep a listing of `label`'s recordings for `account`; returns the count.
+    pub fn store(&self, account: &str, label: &str, listed: HashSet<String>, now: Instant) -> usize {
+        self.with(|all| {
+            let counted = all.entry(account.to_string()).or_default();
+            // A delivered recording the listing now holds needs no pending row.
+            counted
+                .pending
+                .retain(|(path, at)| !listed.contains(path) && now.saturating_duration_since(*at) < PENDING_FOR);
+            let n = total(&listed, &counted.pending);
+            counted.listed = Some((label.to_string(), listed, now));
+            n
+        })
+    }
+
+    /// A recording at `path` was just delivered to the captures drive.
+    pub fn note_delivered(&self, account: &str, path: &str, now: Instant) {
+        self.with(|all| {
+            let counted = all.entry(account.to_string()).or_default();
+            if !counted.pending.iter().any(|(p, _)| p == path) {
+                counted.pending.push((path.to_string(), now));
+            }
+        });
+    }
+
+    /// Drop every listing of `label`: it changed (a sync cycle, a delete).
+    pub fn invalidate_label(&self, label: &str) {
+        self.with(|all| {
+            for counted in all.values_mut() {
+                if counted.listed.as_ref().is_some_and(|(l, _, _)| l == label) {
+                    counted.listed = None;
+                }
+            }
+        });
+    }
+
+    /// Forget everything (sign-out).
+    pub fn clear(&self) {
+        self.with(HashMap::clear);
+    }
+}
+
+/// The listed recordings plus the delivered ones the listing does not hold.
+fn total(listed: &HashSet<String>, pending: &[(String, Instant)]) -> usize {
+    listed.len() + pending.iter().filter(|(p, _)| !listed.contains(p)).count()
+}
+
+fn account_key(account_id: &str) -> String {
     crate::auth::account_key::account_key(account_id)
 }
 
-/// A delivered recording the ledger still counts.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LedgerEntry {
-    pub hash: [u8; 32],
-    /// The ss58 the hash is salted with; only a drive with the same salt can
-    /// say whether it holds the recording.
-    pub salt: String,
-    /// Found in a drive at least once. Until then it is never freed: a
-    /// recording just moved into the folder has not been scanned yet.
-    pub seen: bool,
+/// The account's own captures drive: the one `destination` keeps when it is
+/// the account's own, else the default name, which is the drive's label on
+/// another computer or in the console.
+async fn captures_label(state: &AppState, account_id: &str) -> Result<String> {
+    let stored = super::destination::load(state.pool()?, account_id).await?;
+    Ok(stored
+        .filter(|d| d.owner_ss58.is_none())
+        .map_or_else(|| super::naming::CAPTURES_DIR_NAME.to_string(), |d| d.label))
 }
 
-/// How many recordings the ledger counts for `account_id`.
-///
-/// # Errors
-///
-/// The database could not be read.
-pub async fn counted(pool: &SqlitePool, account_id: &str) -> Result<usize> {
-    ensure_tables(pool).await?;
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM capture_recording_ledger WHERE owner = ? AND gone = 0")
-        .bind(owner_of(account_id))
-        .fetch_one(pool)
-        .await?;
-    Ok(usize::try_from(n).unwrap_or(0))
-}
-
-async fn ledger_entries(pool: &SqlitePool, account_id: &str) -> Result<Vec<LedgerEntry>> {
-    let rows = sqlx::query("SELECT salted_hash, salt_ss58, seen FROM capture_recording_ledger WHERE owner = ? AND gone = 0")
-        .bind(owner_of(account_id))
-        .fetch_all(pool)
-        .await?;
-    Ok(rows
-        .iter()
-        .filter_map(|row| {
-            let hash = decode_hash(&row.get::<String, _>("salted_hash"))?;
-            Some(LedgerEntry {
-                hash,
-                salt: row.get("salt_ss58"),
-                seen: row.get::<i64, _>("seen") != 0,
-            })
-        })
-        .collect())
-}
-
-fn decode_hash(hex_hash: &str) -> Option<[u8; 32]> {
-    hex::decode(hex_hash).ok()?.try_into().ok()
-}
-
-/// Count `hash` for `account_id` (a recording about to be delivered).
-/// Idempotent: a recording counted already stays one row.
-///
-/// # Errors
-///
-/// The database could not be written.
-pub async fn reserve(pool: &SqlitePool, account_id: &str, hash: &[u8; 32], salt: &str, file_name: &str, now_ms: i64) -> Result<()> {
-    ensure_tables(pool).await?;
-    sqlx::query(
-        "INSERT INTO capture_recording_ledger (owner, salted_hash, salt_ss58, file_name, delivered_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(owner, salted_hash) DO UPDATE SET gone = 0, seen = 0, salt_ss58 = excluded.salt_ss58",
-    )
-    .bind(owner_of(account_id))
-    .bind(hex::encode(hash))
-    .bind(salt)
-    .bind(file_name)
-    .bind(now_ms)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Whether the ledger already counts `hash` (a retry of a recording whose
-/// delivery started before).
-async fn is_counted(pool: &SqlitePool, account_id: &str, hash: &[u8; 32]) -> Result<bool> {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM capture_recording_ledger WHERE owner = ? AND salted_hash = ? AND gone = 0")
-        .bind(owner_of(account_id))
-        .bind(hex::encode(hash))
-        .fetch_one(pool)
-        .await?;
-    Ok(n > 0)
-}
-
-/// Un-count `hash`: its delivery failed before the file reached the drive,
-/// so Retry decides again.
-///
-/// # Errors
-///
-/// The database could not be written.
-pub async fn forget(pool: &SqlitePool, account_id: &str, hash: &[u8; 32]) -> Result<()> {
-    ensure_tables(pool).await?;
-    sqlx::query("DELETE FROM capture_recording_ledger WHERE owner = ? AND salted_hash = ? AND seen = 0")
-        .bind(owner_of(account_id))
-        .bind(hex::encode(hash))
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-/// What one drive synced here was found to hold, of the hashes asked about.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DriveView {
-    pub ss58: String,
-    pub present: HashSet<[u8; 32]>,
-}
-
-/// What a refresh learnt about a ledger entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Presence {
-    /// Found in a drive (first time).
-    Seen,
-    /// Seen before and now in none of the drives: deleted. Frees its slot.
-    Gone,
-}
-
-/// Decide what changed for each entry. `drives` holds one item per own
-/// drive synced here, `None` for one whose state could not be read now.
-#[must_use]
-pub fn reconcile(entries: &[LedgerEntry], drives: &[Option<DriveView>]) -> Vec<([u8; 32], Presence)> {
-    let all_read = drives.iter().all(Option::is_some);
-    let mut changes = Vec::new();
-    for entry in entries {
-        let same_salt: Vec<&DriveView> = drives.iter().flatten().filter(|d| d.ss58 == entry.salt).collect();
-        if same_salt.iter().any(|d| d.present.contains(&entry.hash)) {
-            if !entry.seen {
-                changes.push((entry.hash, Presence::Seen));
-            }
-        } else if entry.seen && all_read && !same_salt.is_empty() {
-            changes.push((entry.hash, Presence::Gone));
+/// The recordings in the account's captures drive: the cached count while
+/// fresh, else a new server listing. `None` when it cannot be read, which
+/// the gate reads as "allowed".
+pub async fn recording_count(state: &AppState, account_id: &str) -> Option<usize> {
+    let key = account_key(account_id);
+    if let Some(n) = state.capture.recording_counts.fresh(&key, Instant::now()) {
+        return Some(n);
+    }
+    let label = match captures_label(state, account_id).await {
+        Ok(label) => label,
+        Err(e) => {
+            tracing::warn!(error = %e, "recording count: captures drive unknown; not limiting");
+            return None;
         }
-    }
-    changes
-}
-
-async fn apply(pool: &SqlitePool, account_id: &str, changes: &[([u8; 32], Presence)]) -> Result<()> {
-    let owner = owner_of(account_id);
-    for (hash, presence) in changes {
-        let column = match presence {
-            Presence::Seen => "UPDATE capture_recording_ledger SET seen = 1 WHERE owner = ? AND salted_hash = ?",
-            Presence::Gone => "UPDATE capture_recording_ledger SET gone = 1 WHERE owner = ? AND salted_hash = ?",
-        };
-        sqlx::query(column).bind(&owner).bind(hex::encode(hash)).execute(pool).await?;
-    }
-    Ok(())
-}
-
-/// Bring the ledger up to date with the account's drives synced here.
-///
-/// # Errors
-///
-/// The database could not be read or written.
-pub async fn refresh(state: &AppState, account_id: &str) -> Result<()> {
-    let pool = state.pool()?;
-    ensure_tables(pool).await?;
-    let entries = ledger_entries(pool, account_id).await?;
-    if entries.is_empty() {
-        return Ok(());
-    }
-    let wanted: HashSet<[u8; 32]> = entries.iter().map(|e| e.hash).collect();
-    let drives = super::destination::drives_here(pool, account_id).await?;
-    let mut views = Vec::new();
-    for drive in drives.iter().filter(|d| !d.member) {
-        let view = crate::sync::files::content_hashes_present(&state.sync, &drive.label, &wanted)
-            .await
-            .map(|(ss58, present)| DriveView { ss58, present });
-        views.push(view);
-    }
-    let changes = reconcile(&entries, &views);
-    if !changes.is_empty() {
-        tracing::info!(changes = changes.len(), "recording allowance ledger updated from the drives");
-    }
-    apply(pool, account_id, &changes).await
-}
-
-// ── The gate ────────────────────────────────────────────────────────────────
-
-/// What delivery does with a finished recording.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Gate {
-    /// Deliver it. `reserved` is the ledger row this delivery added, which
-    /// a failed placement gives back ([`forget`]).
-    Deliver {
-        reserved: Option<[u8; 32]>,
-    },
-    Hold,
-}
-
-/// One decision at a time, so two recordings finishing together cannot both
-/// take the last slot.
-static GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// Decide whether `file` (a finished recording, salted with `salt_ss58`, the
-/// destination drive's namespace) is delivered or held, and count it when
-/// delivered. The plan is only asked for at the limit.
-///
-/// # Errors
-///
-/// The file could not be hashed or the ledger not read; the caller fails
-/// open (delivers).
-pub async fn gate(state: &AppState, account_id: &str, salt_ss58: &str, file: &Path) -> Result<Gate> {
-    let hash = salted_hash(file, salt_ss58).await?;
-    let pool = state.pool()?;
-    ensure_tables(pool).await?;
-    let _one_at_a_time = GATE.lock().await;
-    if is_counted(pool, account_id, &hash).await? {
-        return Ok(Gate::Deliver { reserved: None });
-    }
-    if let Err(e) = refresh(state, account_id).await {
-        tracing::warn!(error = %e, "recording allowance ledger not refreshed");
-    }
-    let n = counted(pool, account_id).await?;
-    let plan = if n >= FREE_RECORDING_LIMIT {
-        current_plan(state, account_id).await
-    } else {
-        None
     };
-    match decide(plan, n) {
-        Verdict::Hold => {
-            tracing::info!(counted = n, "free plan at its recording limit; recording held");
-            Ok(Gate::Hold)
+    let listing = tokio::time::timeout(
+        COUNT_WITHIN,
+        crate::sync::remote::list_remote_folder_files_inner(state, account_id, &label),
+    )
+    .await;
+    match listing {
+        Ok(Ok(files)) => Some(
+            state
+                .capture
+                .recording_counts
+                .store(&key, &label, recording_paths(&files), Instant::now()),
+        ),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "recording count: captures drive not listed; not limiting");
+            None
         }
-        Verdict::Deliver => {
-            let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            reserve(pool, account_id, &hash, salt_ss58, &name, chrono::Utc::now().timestamp_millis()).await?;
-            Ok(Gate::Deliver { reserved: Some(hash) })
+        Err(_) => {
+            tracing::warn!("recording count: the captures drive listing took too long; not limiting");
+            None
         }
     }
 }
 
-async fn salted_hash(file: &Path, salt: &str) -> Result<[u8; 32]> {
-    let (file, salt) = (file.to_path_buf(), salt.to_string());
-    tokio::task::spawn_blocking(move || hcfs_client::crypto::compute_salted_hash_file(&file, &salt))
-        .await
-        .map_err(|e| AppError::Other(format!("recording hash task failed: {e}")))?
-        .map(|(hash, _)| hash)
-        .map_err(|e| AppError::Other(format!("recording could not be hashed: {e}")))
+/// A recording was delivered to `destination`: it counts from now on, even
+/// before the server lists it.
+pub async fn note_delivered(state: &AppState, account_id: &str, destination: &super::destination::CaptureDestination, file_name: &str) {
+    if !is_recording_name(file_name) || destination.owner_ss58.is_some() {
+        return;
+    }
+    if captures_label(state, account_id).await.is_ok_and(|label| label == destination.label) {
+        state
+            .capture
+            .recording_counts
+            .note_delivered(&account_key(account_id), &destination.rel_path(file_name), Instant::now());
+    }
+}
+
+/// The drive `label` changed (a sync cycle completed, files were deleted):
+/// its count is read again on the next start.
+pub fn invalidate_label(state: &AppState, label: &str) {
+    state.capture.recording_counts.invalidate_label(label);
+}
+
+/// Forget every count (the signed-in account changed).
+pub fn clear(state: &AppState) {
+    state.capture.recording_counts.clear();
+}
+
+/// THE gate for starting a recording. Every start path (the bar's Record, the
+/// record shortcut, the tray's and menus' Record, Restart) calls this before
+/// anything records, so a refusal costs the user nothing.
+///
+/// The plan is read cheaply first (the last verdict kept); a paid plan never
+/// waits on a listing. A count at the limit is confirmed against a fresh plan
+/// read, so an upgrade a moment ago is honoured.
+pub async fn check_start(state: &AppState) -> StartVerdict {
+    let (Ok(account), Ok(account_id)) = (state.current_session_account(), state.current_account_id()) else {
+        return StartVerdict::Allowed;
+    };
+    let quick = state.capture.recording_tiers.last_known(state.pool().ok(), account.as_str()).await;
+    if quick.is_some_and(|tier| !is_limited(tier)) {
+        return StartVerdict::Allowed;
+    }
+    let counted = recording_count(state, &account_id).await;
+    if decide_start(Some(LIMITED_TIERS[0]), counted) == StartVerdict::Allowed {
+        return StartVerdict::Allowed;
+    }
+    let tier = super::allowance::recording_tier(state, &account).await;
+    let verdict = decide_start(tier, counted);
+    if verdict == StartVerdict::LimitReached {
+        tracing::info!(counted = ?counted, "recording refused: the free plan's recordings are used up");
+    }
+    verdict
+}
+
+/// [`check_start`] as the refusal every start command returns.
+///
+/// # Errors
+///
+/// [`NotReadyKind::RecordingLimitReached`] when the limit is reached.
+pub async fn require_can_start(state: &AppState) -> Result<()> {
+    match check_start(state).await {
+        StartVerdict::Allowed => Ok(()),
+        StartVerdict::LimitReached => Err(AppError::NotReady(NotReadyKind::RecordingLimitReached)),
+    }
+}
+
+/// Fill the count ahead of a Record press (the capture bar just opened), so
+/// the press itself does not wait on the listing. Only for a plan that could
+/// be limited.
+pub async fn warm(state: &AppState) {
+    let (Ok(account), Ok(account_id)) = (state.current_session_account(), state.current_account_id()) else {
+        return;
+    };
+    let quick = state.capture.recording_tiers.last_known(state.pool().ok(), account.as_str()).await;
+    if quick.is_none_or(is_limited) {
+        let _ = recording_count(state, &account_id).await;
+    }
 }
 
 /// Whether a file at `path` can never be picked up by the sync engine of any
 /// drive rooted at `drive_roots`: it is outside every one of them, or inside
 /// through a hidden (dot) folder, which the engine never walks. The recorder
-/// writes only where this holds (`commands::begin_recording`).
+/// writes only where this holds (`commands::begin_recording`), so a file
+/// still being written is never uploaded half done.
 #[must_use]
 pub fn unsynced_by_every_drive(path: &Path, drive_roots: &[PathBuf]) -> bool {
     drive_roots.iter().all(|root| match path.strip_prefix(root) {
@@ -389,584 +367,177 @@ pub fn unsynced_by_every_drive(path: &Path, drive_roots: &[PathBuf]) -> bool {
     })
 }
 
-// ── Sealing ─────────────────────────────────────────────────────────────────
-
-/// `HHRSEAL1 || nonce prefix (7) || plaintext length (u64 BE)`, then the
-/// plaintext in 1 MiB chunks, each ChaCha20-Poly1305 with its own nonce
-/// (`prefix || chunk index (u32 BE) || last flag`), the STREAM construction:
-/// a chunk cannot be dropped, reordered or cut short without the tag
-/// failing, and the file never has to fit in memory.
-const SEAL_MAGIC: &[u8; 8] = b"HHRSEAL1";
-const SEAL_CHUNK: usize = 1 << 20;
-const SEAL_TAG: usize = 16;
-const SEAL_PREFIX: usize = 7;
-
-fn chunk_nonce(prefix: [u8; SEAL_PREFIX], index: u32, last: bool) -> chacha20poly1305::Nonce {
-    let mut nonce = [0u8; 12];
-    nonce[..SEAL_PREFIX].copy_from_slice(&prefix);
-    nonce[SEAL_PREFIX..11].copy_from_slice(&index.to_be_bytes());
-    nonce[11] = u8::from(last);
-    nonce.into()
-}
-
-fn chunk_count(len: u64) -> Result<u32> {
-    let chunk = SEAL_CHUNK as u64;
-    u32::try_from(len.div_ceil(chunk).max(1)).map_err(|_| AppError::Other("recording too large to seal".into()))
-}
-
-fn aad_for(account_id: &str) -> Vec<u8> {
-    format!("{}:{account_id}", crate::crypto::store::INFO_HELD_RECORDING).into_bytes()
-}
-
-/// Encrypt `src` into `dst` (written beside it under a hidden name, then
-/// renamed, so a half-written file never carries the real name).
-///
-/// # Errors
-///
-/// Reading, encrypting or writing failed; `dst` is not left behind.
-pub fn seal_file(key: &[u8; 32], account_id: &str, src: &Path, dst: &Path) -> Result<()> {
-    use chacha20poly1305::aead::{Aead, AeadCore, OsRng, Payload};
-    use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
-
-    let partial = partial_path(dst);
-    let result = (|| -> Result<()> {
-        let mut input = std::fs::File::open(src)?;
-        let len = input.metadata()?.len();
-        let chunks = chunk_count(len)?;
-        let random = ChaCha20Poly1305::generate_nonce(&mut OsRng);
-        let mut prefix = [0u8; SEAL_PREFIX];
-        prefix.copy_from_slice(&random[..SEAL_PREFIX]);
-        let cipher = ChaCha20Poly1305::new(key.into());
-        let aad = aad_for(account_id);
-        let mut out = std::io::BufWriter::new(std::fs::File::create(&partial)?);
-        out.write_all(SEAL_MAGIC)?;
-        out.write_all(&prefix)?;
-        out.write_all(&len.to_be_bytes())?;
-        let mut buf = vec![0u8; SEAL_CHUNK];
-        let mut left = len;
-        for index in 0..chunks {
-            let take = usize::try_from(left.min(SEAL_CHUNK as u64)).unwrap_or(SEAL_CHUNK);
-            input.read_exact(&mut buf[..take])?;
-            left -= take as u64;
-            let sealed = cipher
-                .encrypt(
-                    &chunk_nonce(prefix, index, index + 1 == chunks),
-                    Payload {
-                        msg: &buf[..take],
-                        aad: &aad,
-                    },
-                )
-                .map_err(|e| AppError::Crypto(format!("recording could not be sealed: {e}")))?;
-            out.write_all(&sealed)?;
-        }
-        // The file must not have grown since its length was read.
-        if input.read(&mut [0u8; 1])? != 0 {
-            return Err(AppError::Other("recording changed while it was being sealed".into()));
-        }
-        let file = out.into_inner().map_err(|e| AppError::Io(e.into_error()))?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&partial, dst)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&partial);
-    }
-    result
-}
-
-/// Decrypt a file [`seal_file`] wrote back into `dst`.
-///
-/// # Errors
-///
-/// Not a sealed recording, the wrong key or account, or a file that was cut
-/// short or tampered with; `dst` is not left behind.
-pub fn unseal_file(key: &[u8; 32], account_id: &str, src: &Path, dst: &Path) -> Result<()> {
-    use chacha20poly1305::aead::{Aead, Payload};
-    use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
-
-    let partial = partial_path(dst);
-    let result = (|| -> Result<()> {
-        let mut input = std::io::BufReader::new(std::fs::File::open(src)?);
-        let mut magic = [0u8; 8];
-        input.read_exact(&mut magic)?;
-        if &magic != SEAL_MAGIC {
-            return Err(AppError::Crypto("not a held recording".into()));
-        }
-        let mut prefix = [0u8; SEAL_PREFIX];
-        input.read_exact(&mut prefix)?;
-        let mut len_bytes = [0u8; 8];
-        input.read_exact(&mut len_bytes)?;
-        let len = u64::from_be_bytes(len_bytes);
-        let chunks = chunk_count(len)?;
-        let cipher = ChaCha20Poly1305::new(key.into());
-        let aad = aad_for(account_id);
-        let mut out = std::io::BufWriter::new(std::fs::File::create(&partial)?);
-        let mut buf = vec![0u8; SEAL_CHUNK + SEAL_TAG];
-        let mut left = len;
-        for index in 0..chunks {
-            let take = usize::try_from(left.min(SEAL_CHUNK as u64)).unwrap_or(SEAL_CHUNK);
-            input.read_exact(&mut buf[..take + SEAL_TAG])?;
-            left -= take as u64;
-            let plain = cipher
-                .decrypt(
-                    &chunk_nonce(prefix, index, index + 1 == chunks),
-                    Payload {
-                        msg: &buf[..take + SEAL_TAG],
-                        aad: &aad,
-                    },
-                )
-                .map_err(|_| AppError::Crypto("held recording could not be opened: wrong key or damaged file".into()))?;
-            out.write_all(&plain)?;
-        }
-        if input.read(&mut [0u8; 1])? != 0 {
-            return Err(AppError::Crypto("held recording has data after its end".into()));
-        }
-        let file = out.into_inner().map_err(|e| AppError::Io(e.into_error()))?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&partial, dst)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&partial);
-    }
-    result
-}
-
-/// A hidden sibling of `dst` to write into first.
-fn partial_path(dst: &Path) -> PathBuf {
-    let name = dst.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    dst.with_file_name(format!(".{name}.partial"))
-}
-
-/// The key held recordings are sealed with: derived from the account's
-/// mnemonic (as the drive password's is, `crypto::store`), so it is never
-/// written anywhere and a sealed file is useless on another account or
-/// without this app.
-fn held_key(state: &AppState, account_id: &str) -> Result<Zeroizing<[u8; 32]>> {
-    let guard = state.auth.lock()?;
-    let mnemonic = guard
-        .mnemonic
-        .as_deref()
-        .ok_or_else(|| AppError::Crypto("no key to seal the recording with".into()))?;
-    crate::crypto::store::derive_key(mnemonic, account_id, crate::crypto::store::INFO_HELD_RECORDING)
-}
-
-// ── Held recordings ─────────────────────────────────────────────────────────
-
-/// A recording waiting for a free slot or a paid plan.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HeldRecording {
-    pub id: String,
-    pub file_name: String,
-    /// When it was held, ms since the epoch.
-    pub held_at: i64,
-    /// The card's small JPEG `data:` URL, when there was one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thumbnail: Option<String>,
-    /// The sealed file. Never sent anywhere.
-    #[serde(skip)]
-    pub sealed_path: PathBuf,
-}
-
-/// Where held recordings are sealed: under `~/.hippius`, a hidden folder the
-/// sync engine never walks even inside a synced home folder, one folder per
-/// account, the user's alone.
-///
-/// # Errors
-///
-/// No home folder.
-pub fn held_root() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| AppError::Other("No home directory".into()))?;
-    Ok(home.join(".hippius").join("held-recordings"))
-}
-
-fn held_dir(root: &Path, account_id: &str) -> Result<PathBuf> {
-    let dir = root.join(owner_of(account_id));
-    std::fs::create_dir_all(&dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))?;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(dir)
-}
-
-/// Seal `file` into the holding folder, record it, and remove the plaintext.
-///
-/// # Errors
-///
-/// No key (signed out), or the file could not be sealed or recorded; the
-/// plaintext is then left where it was (the app's hidden temp folder).
-pub async fn hold(state: &AppState, account_id: &str, file: &Path, thumbnail: Option<String>) -> Result<HeldRecording> {
-    let pool = state.pool()?;
-    ensure_tables(pool).await?;
-    let key = held_key(state, account_id)?;
-    let id = uuid::Uuid::new_v4().simple().to_string();
-    let file_name = file
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .ok_or_else(|| AppError::Other("Recording has no name".into()))?;
-    let sealed_path = held_dir(&held_root()?, account_id)?.join(format!("{id}.sealed"));
-    tokio::task::spawn_blocking({
-        let (account, src, dst) = (account_id.to_string(), file.to_path_buf(), sealed_path.clone());
-        move || seal_file(&key, &account, &src, &dst)
-    })
-    .await
-    .map_err(|e| AppError::Other(format!("seal task failed: {e}")))??;
-    let held = HeldRecording {
-        id,
-        file_name,
-        held_at: chrono::Utc::now().timestamp_millis(),
-        thumbnail,
-        sealed_path,
-    };
-    if let Err(e) = insert_held(pool, account_id, &held).await {
-        let _ = std::fs::remove_file(&held.sealed_path);
-        return Err(e);
-    }
-    // Only now, with the sealed copy recorded: the plaintext goes.
-    if let Err(e) = std::fs::remove_file(file) {
-        tracing::warn!(error = %e, "held recording sealed; its plaintext could not be removed");
-    }
-    Ok(held)
-}
-
-async fn insert_held(pool: &SqlitePool, account_id: &str, held: &HeldRecording) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO capture_held_recordings (id, owner, file_name, sealed_path, held_at, thumbnail)
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&held.id)
-    .bind(owner_of(account_id))
-    .bind(&held.file_name)
-    .bind(held.sealed_path.to_string_lossy().as_ref())
-    .bind(held.held_at)
-    .bind(held.thumbnail.as_deref())
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// The account's held recordings, oldest first: the order they are released in.
-///
-/// # Errors
-///
-/// The database could not be read.
-pub async fn list_held(pool: &SqlitePool, account_id: &str) -> Result<Vec<HeldRecording>> {
-    ensure_tables(pool).await?;
-    let rows = sqlx::query(
-        "SELECT id, file_name, sealed_path, held_at, thumbnail FROM capture_held_recordings
-         WHERE owner = ? ORDER BY held_at, rowid",
-    )
-    .bind(owner_of(account_id))
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .iter()
-        .map(|row| HeldRecording {
-            id: row.get("id"),
-            file_name: row.get("file_name"),
-            held_at: row.get("held_at"),
-            thumbnail: row.get("thumbnail"),
-            sealed_path: PathBuf::from(row.get::<String, _>("sealed_path")),
-        })
-        .collect())
-}
-
-/// Delete a held recording for good (the user's choice, or after release).
-/// Returns whether there was one.
-///
-/// # Errors
-///
-/// The database could not be written.
-pub async fn delete_held(pool: &SqlitePool, account_id: &str, id: &str) -> Result<bool> {
-    ensure_tables(pool).await?;
-    let owner = owner_of(account_id);
-    let path: Option<String> = sqlx::query_scalar("SELECT sealed_path FROM capture_held_recordings WHERE owner = ? AND id = ?")
-        .bind(&owner)
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-    let Some(path) = path else { return Ok(false) };
-    sqlx::query("DELETE FROM capture_held_recordings WHERE owner = ? AND id = ?")
-        .bind(&owner)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    if let Err(e) = std::fs::remove_file(&path)
-        && e.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(error = %e, "held recording forgotten; its sealed file could not be removed");
-    }
-    Ok(true)
-}
-
-/// Take a held recording out: decrypt it into a fresh capture temp folder
-/// under its own name, forget it, and return the file to deliver.
-///
-/// # Errors
-///
-/// No key, or the sealed file could not be opened; it is then kept held.
-pub async fn unseal_for_release(state: &AppState, account_id: &str, held: &HeldRecording) -> Result<PathBuf> {
-    let key = held_key(state, account_id)?;
-    let name = Path::new(&held.file_name)
-        .file_name()
-        .ok_or_else(|| AppError::Other("Held recording has no name".into()))?
-        .to_os_string();
-    let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
-    let dst = dir.join(name);
-    let unsealed = tokio::task::spawn_blocking({
-        let (account, src, dst) = (account_id.to_string(), held.sealed_path.clone(), dst.clone());
-        move || unseal_file(&key, &account, &src, &dst)
-    })
-    .await
-    .map_err(|e| AppError::Other(format!("unseal task failed: {e}")))
-    .and_then(|r| r);
-    if let Err(e) = unsealed {
-        let _ = std::fs::remove_dir_all(&dir);
-        return Err(e);
-    }
-    delete_held(state.pool()?, account_id, &held.id).await?;
-    Ok(dst)
-}
-
-/// What the Captures page lists while recordings are held.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HeldList {
-    pub message: String,
-    pub items: Vec<HeldRecording>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ACCOUNT: &str = "5Alice";
-
-    async fn pool() -> SqlitePool {
-        SqlitePool::connect("sqlite::memory:").await.unwrap()
-    }
-
-    fn hash(n: u8) -> [u8; 32] {
-        [n; 32]
-    }
-
-    fn drive(ss58: &str, present: &[[u8; 32]]) -> Option<DriveView> {
-        Some(DriveView {
-            ss58: ss58.into(),
-            present: present.iter().copied().collect(),
-        })
-    }
-
-    fn entry(n: u8, seen: bool) -> LedgerEntry {
-        LedgerEntry {
-            hash: hash(n),
-            salt: ACCOUNT.into(),
-            seen,
-        }
+    fn listed(names: &[&str]) -> Vec<RemoteFileInfo> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, path)| RemoteFileInfo {
+                file_id: format!("{i:064x}"),
+                path: (*path).to_string(),
+                name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                size_bytes: 1,
+                arion_hash: None,
+                created_at: 0,
+                updated_at: 0,
+                salted_hash: String::new(),
+                revision_seq: 1,
+                revision_id: String::new(),
+            })
+            .collect()
     }
 
     #[test]
-    fn hold_only_a_free_plan_at_the_limit() {
-        let free = Some(RecordingPlan::Free);
-        assert_eq!(decide(free, 0), Verdict::Deliver);
+    fn a_recording_is_named_the_way_the_app_names_one() {
+        for name in [
+            "Recording 2026-09-22 at 09.00.05.mp4",
+            "Recording 2026-09-22 at 09.00.05.webm",
+            "Recording 2026-09-22 at 09.00.05.mov",
+            "Recording 2026-09-22 at 09.00.05.MP4",
+            "Recording 2026-09-22 at 09.00.05 (2).mp4",
+            "Recording 2026-09-22 at 09.00.05 (13).mov",
+        ] {
+            assert!(is_recording_name(name), "{name}");
+        }
+        // The app's own name for a fresh recording is one.
+        let fresh = super::super::naming::capture_file_name(
+            super::super::session::CaptureKind::Recording,
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 2).unwrap().and_hms_opt(3, 4, 5).unwrap(),
+        );
+        assert!(is_recording_name(&fresh), "{fresh}");
+    }
+
+    #[test]
+    fn screenshots_and_other_videos_are_not_recordings() {
+        for name in [
+            "Screenshot 2026-09-22 at 09.00.05.png",
+            "Recording 2026-09-22 at 09.00.05.png",
+            "Recording 2026-09-22 at 09.00.05.mkv",
+            "holiday.mp4",
+            "My Recording 2026-09-22 at 09.00.05.mp4",
+            "Recording 2026-09-22 at 09.00.05 copy.mp4",
+            "Recording 2026-09-22 at 09.00.05 ().mp4",
+            "Recording 2026-09-22 at 09.00.05 (x).mp4",
+            "Recording 2026-9-22 at 09.00.05.mp4",
+            "Recording 2026-09-22 at 09:00:05.mp4",
+            "Recording 2026-09-22 09.00.05.mp4",
+            "Recording.mp4",
+            "Recording 2026-09-22 at 09.00.05",
+        ] {
+            assert!(!is_recording_name(name), "{name}");
+        }
+    }
+
+    /// The count from a server listing: recordings anywhere in the drive,
+    /// a " (2)" copy included; screenshots and other files never.
+    #[test]
+    fn the_count_comes_from_the_drive_listing() {
+        let files = listed(&[
+            "Recording 2026-09-22 at 09.00.05.mp4",
+            "Recording 2026-09-22 at 09.00.05 (2).mp4",
+            "Screenshot 2026-09-22 at 09.00.05.png",
+            "notes.txt",
+            "holiday.mp4",
+            "Old/Recording 2025-01-01 at 10.00.00.webm",
+            // Same name in another folder is another recording.
+            "Old/Recording 2026-09-22 at 09.00.05.mp4",
+        ]);
+        assert_eq!(recording_paths(&files).len(), 4);
+        assert!(recording_paths(&listed(&[])).is_empty());
+    }
+
+    #[test]
+    fn only_a_known_limited_plan_with_a_known_count_at_the_limit_is_refused() {
+        let free = Some(RecordingTier::Free);
+        assert_eq!(decide_start(free, Some(0)), StartVerdict::Allowed);
         assert_eq!(
-            decide(free, FREE_RECORDING_LIMIT - 1),
-            Verdict::Deliver,
-            "the 25th recording is delivered"
+            decide_start(free, Some(FREE_RECORDING_LIMIT - 1)),
+            StartVerdict::Allowed,
+            "the 25th recording may start"
         );
-        assert_eq!(decide(free, FREE_RECORDING_LIMIT), Verdict::Hold, "the 26th is held");
-        assert_eq!(decide(free, FREE_RECORDING_LIMIT + 3), Verdict::Hold);
-        assert_eq!(decide(Some(RecordingPlan::Paid), 500), Verdict::Deliver, "paid plans have no count");
-        assert_eq!(decide(None, 500), Verdict::Deliver, "an unknown plan fails open");
-    }
-
-    #[test]
-    fn release_follows_the_free_slots_and_never_an_unknown_plan() {
-        assert_eq!(release_count(Some(RecordingPlan::Paid), 40, 3), 3, "an upgrade releases everything");
-        assert_eq!(release_count(Some(RecordingPlan::Free), 24, 3), 1, "one slot, one recording");
-        assert_eq!(release_count(Some(RecordingPlan::Free), 22, 2), 2);
-        assert_eq!(release_count(Some(RecordingPlan::Free), 25, 3), 0);
-        assert_eq!(release_count(Some(RecordingPlan::Free), 30, 3), 0);
-        assert_eq!(release_count(None, 0, 3), 0, "a failed plan read releases nothing");
-    }
-
-    /// A recording deleted from the drive is in none of its trees: it frees
-    /// its slot. Moved or renamed it keeps its content hash, so it is still
-    /// found and stays counted.
-    #[test]
-    fn delete_frees_a_slot_and_move_or_rename_keeps_it() {
-        let entries = [entry(1, true), entry(2, true)];
-        // Recording 1 was renamed or moved to another drive: same hash, found.
-        let drives = [drive(ACCOUNT, &[]), drive(ACCOUNT, &[hash(1)])];
-        assert_eq!(reconcile(&entries, &drives), vec![(hash(2), Presence::Gone)], "only the deleted one goes");
-    }
-
-    #[test]
-    fn nothing_is_freed_on_a_read_that_could_not_see_everything() {
-        let entries = [entry(1, true)];
-        assert!(
-            reconcile(&entries, &[drive(ACCOUNT, &[]), None]).is_empty(),
-            "a drive mid-sync could hold it"
-        );
-        assert!(
-            reconcile(&entries, &[drive("5Other", &[])]).is_empty(),
-            "a drive salted otherwise cannot answer for it"
-        );
-        assert!(reconcile(&entries, &[]).is_empty(), "no drive here at all says nothing");
-        // Never seen: just moved into the folder and not scanned yet.
-        assert!(reconcile(&[entry(3, false)], &[drive(ACCOUNT, &[])]).is_empty());
-        // Seen for the first time.
         assert_eq!(
-            reconcile(&[entry(3, false)], &[drive(ACCOUNT, &[hash(3)])]),
-            vec![(hash(3), Presence::Seen)]
+            decide_start(free, Some(FREE_RECORDING_LIMIT)),
+            StartVerdict::LimitReached,
+            "the 26th may not"
         );
-    }
-
-    /// The count end to end over the ledger: reserved recordings count, a
-    /// deleted one stops, a moved one does not, and a failed delivery gives
-    /// its reservation back.
-    #[tokio::test]
-    async fn the_ledger_counts_what_is_still_in_the_drives() {
-        let pool = pool().await;
-        for n in 1..=3 {
-            reserve(&pool, ACCOUNT, &hash(n), ACCOUNT, "r.mp4", i64::from(n)).await.unwrap();
-        }
-        assert_eq!(counted(&pool, ACCOUNT).await.unwrap(), 3);
-        assert_eq!(counted(&pool, "5Bob").await.unwrap(), 0, "per account");
-        // Reserving the same recording again (a retry) is still one.
-        reserve(&pool, ACCOUNT, &hash(1), ACCOUNT, "r.mp4", 9).await.unwrap();
-        assert_eq!(counted(&pool, ACCOUNT).await.unwrap(), 3);
-
-        // All three scanned into the drive.
-        let all = [drive(ACCOUNT, &[hash(1), hash(2), hash(3)])];
-        let entries = ledger_entries(&pool, ACCOUNT).await.unwrap();
-        apply(&pool, ACCOUNT, &reconcile(&entries, &all)).await.unwrap();
-        // 1 renamed (still there), 2 deleted, 3 moved to another drive.
-        let later = [drive(ACCOUNT, &[hash(1)]), drive(ACCOUNT, &[hash(3)])];
-        let entries = ledger_entries(&pool, ACCOUNT).await.unwrap();
-        apply(&pool, ACCOUNT, &reconcile(&entries, &later)).await.unwrap();
-        assert_eq!(counted(&pool, ACCOUNT).await.unwrap(), 2, "only the deleted recording freed its slot");
-
-        // A delivery that never reached the drive is given back.
-        reserve(&pool, ACCOUNT, &hash(4), ACCOUNT, "r.mp4", 10).await.unwrap();
-        forget(&pool, ACCOUNT, &hash(4)).await.unwrap();
-        assert_eq!(counted(&pool, ACCOUNT).await.unwrap(), 2);
-        // But one already seen in a drive is never forgotten that way.
-        forget(&pool, ACCOUNT, &hash(1)).await.unwrap();
-        assert_eq!(counted(&pool, ACCOUNT).await.unwrap(), 2);
-    }
-
-    const KEY: [u8; 32] = [7; 32];
-
-    fn plaintext(len: usize) -> Vec<u8> {
-        (0..len).map(|i| u8::try_from(i % 251).unwrap()).collect()
-    }
-
-    #[test]
-    fn a_sealed_recording_round_trips_and_hides_its_content() {
-        let dir = tempfile::tempdir().unwrap();
-        // Over two chunks, not a multiple of one, and a recognisable marker.
-        let mut data = plaintext(SEAL_CHUNK * 2 + 123);
-        let marker = b"ftypisomRECORDING-PLAINTEXT-MARKER";
-        data[..marker.len()].copy_from_slice(marker);
-        let src = dir.path().join("Recording.mp4");
-        std::fs::write(&src, &data).unwrap();
-        let sealed = dir.path().join("x.sealed");
-        seal_file(&KEY, ACCOUNT, &src, &sealed).unwrap();
-
-        let bytes = std::fs::read(&sealed).unwrap();
-        assert!(
-            !bytes.windows(marker.len()).any(|w| w == marker),
-            "the sealed file must not contain the plaintext"
+        assert_eq!(decide_start(free, Some(40)), StartVerdict::LimitReached);
+        assert_eq!(
+            decide_start(Some(RecordingTier::Paid), Some(500)),
+            StartVerdict::Allowed,
+            "paid plans have no count"
         );
-        assert!(!bytes.windows(32).any(|w| w == &data[1000..1032]), "no plaintext run survives");
-
-        let back = dir.path().join("back.mp4");
-        unseal_file(&KEY, ACCOUNT, &sealed, &back).unwrap();
-        assert_eq!(std::fs::read(&back).unwrap(), data);
-        assert!(!partial_path(&back).exists() && !partial_path(&sealed).exists());
+        assert_eq!(decide_start(None, Some(500)), StartVerdict::Allowed, "an unknown plan fails open");
+        assert_eq!(decide_start(free, None), StartVerdict::Allowed, "an unreadable count fails open");
     }
 
     #[test]
-    fn an_empty_recording_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("empty.mp4");
-        std::fs::write(&src, b"").unwrap();
-        let sealed = dir.path().join("e.sealed");
-        seal_file(&KEY, ACCOUNT, &src, &sealed).unwrap();
-        let back = dir.path().join("back.mp4");
-        unseal_file(&KEY, ACCOUNT, &sealed, &back).unwrap();
-        assert!(std::fs::read(&back).unwrap().is_empty());
+    fn only_the_free_plan_is_limited() {
+        assert!(is_limited(RecordingTier::Free));
+        assert!(!is_limited(RecordingTier::Paid));
     }
 
-    /// A copied sealed file is useless elsewhere: another key or account
-    /// cannot open it, and a cut or edited one is refused, never half-written.
+    fn set(paths: &[&str]) -> HashSet<String> {
+        paths.iter().map(|p| (*p).to_string()).collect()
+    }
+
     #[test]
-    fn a_sealed_recording_opens_only_whole_with_its_key_and_account() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("r.mp4");
-        std::fs::write(&src, plaintext(SEAL_CHUNK + 10)).unwrap();
-        let sealed = dir.path().join("r.sealed");
-        seal_file(&KEY, ACCOUNT, &src, &sealed).unwrap();
-        let back = dir.path().join("back.mp4");
-
-        assert!(unseal_file(&[8; 32], ACCOUNT, &sealed, &back).is_err(), "another key");
-        assert!(unseal_file(&KEY, "5Bob", &sealed, &back).is_err(), "another account");
-
-        let bytes = std::fs::read(&sealed).unwrap();
-        let cut = dir.path().join("cut.sealed");
-        std::fs::write(&cut, &bytes[..bytes.len() - SEAL_TAG - 10]).unwrap();
-        assert!(unseal_file(&KEY, ACCOUNT, &cut, &back).is_err(), "cut short");
-        // Dropping the last chunk entirely must fail too (the last-chunk flag).
-        let header = SEAL_MAGIC.len() + SEAL_PREFIX + 8;
-        let first_only = dir.path().join("first.sealed");
-        std::fs::write(&first_only, &bytes[..header + SEAL_CHUNK + SEAL_TAG]).unwrap();
-        assert!(unseal_file(&KEY, ACCOUNT, &first_only, &back).is_err(), "a dropped chunk");
-        let mut flipped = bytes.clone();
-        flipped[header + 5] ^= 1;
-        let edited = dir.path().join("edited.sealed");
-        std::fs::write(&edited, flipped).unwrap();
-        assert!(unseal_file(&KEY, ACCOUNT, &edited, &back).is_err(), "edited");
-        assert!(unseal_file(&KEY, ACCOUNT, &src, &back).is_err(), "a plain file is not a sealed one");
-        assert!(!back.exists(), "a failed unseal leaves nothing under the real name");
-        assert!(!partial_path(&back).exists());
+    fn a_listing_answers_for_its_ttl_then_is_read_again() {
+        let cache = CountCache::default();
+        let t0 = Instant::now();
+        assert_eq!(cache.fresh("a", t0), None, "nothing listed yet");
+        assert_eq!(cache.store("a", "Hippius Captures", set(&["r1", "r2"]), t0), 2);
+        assert_eq!(cache.fresh("a", t0 + Duration::from_secs(29)), Some(2));
+        assert_eq!(cache.fresh("a", t0 + COUNT_TTL), None, "stale after the TTL");
+        assert_eq!(cache.fresh("b", t0), None, "per account");
     }
 
-    /// Released oldest first, whatever order they were written in.
-    #[tokio::test]
-    async fn held_recordings_are_listed_oldest_first_and_deleted_with_their_file() {
-        let pool = pool().await;
-        ensure_tables(&pool).await.unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        for (id, at) in [("b", 20), ("c", 30), ("a", 10)] {
-            let sealed_path = dir.path().join(format!("{id}.sealed"));
-            std::fs::write(&sealed_path, b"x").unwrap();
-            let held = HeldRecording {
-                id: id.into(),
-                file_name: format!("{id}.mp4"),
-                held_at: at,
-                thumbnail: None,
-                sealed_path,
-            };
-            insert_held(&pool, ACCOUNT, &held).await.unwrap();
-        }
-        let held = list_held(&pool, ACCOUNT).await.unwrap();
-        assert_eq!(held.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
-        // One free slot: only the oldest goes.
-        let n = release_count(Some(RecordingPlan::Free), FREE_RECORDING_LIMIT - 1, held.len());
-        assert_eq!(held.iter().take(n).map(|h| h.id.as_str()).collect::<Vec<_>>(), ["a"]);
+    /// A recording just delivered counts before the server lists it, and
+    /// only once after it does.
+    #[test]
+    fn a_delivered_recording_counts_at_once_and_only_once() {
+        let cache = CountCache::default();
+        let t0 = Instant::now();
+        cache.store("a", "Hippius Captures", set(&["r1"]), t0);
+        cache.note_delivered("a", "r2", t0);
+        cache.note_delivered("a", "r2", t0);
+        assert_eq!(cache.fresh("a", t0), Some(2));
+        // The next listing holds it.
+        assert_eq!(cache.store("a", "Hippius Captures", set(&["r1", "r2"]), t0 + COUNT_TTL), 2);
+        // Delivered with nothing listed yet: it still counts once listed.
+        let other = CountCache::default();
+        other.note_delivered("a", "r9", t0);
+        assert_eq!(other.store("a", "Hippius Captures", set(&[]), t0), 1);
+        // A pending row that never shows up expires.
+        assert_eq!(other.store("a", "Hippius Captures", set(&[]), t0 + PENDING_FOR), 0);
+    }
 
-        assert!(list_held(&pool, "5Bob").await.unwrap().is_empty(), "per account");
-        assert!(delete_held(&pool, ACCOUNT, "b").await.unwrap());
-        assert!(!dir.path().join("b.sealed").exists(), "its sealed file goes with it");
-        assert!(!delete_held(&pool, ACCOUNT, "b").await.unwrap());
-        assert_eq!(list_held(&pool, ACCOUNT).await.unwrap().len(), 2);
+    /// A completed sync or a delete in the captures drive drops its listing;
+    /// another drive's does not.
+    #[test]
+    fn a_change_in_the_drive_drops_its_listing() {
+        let cache = CountCache::default();
+        let t0 = Instant::now();
+        cache.store("a", "Hippius Captures", set(&["r1"]), t0);
+        cache.invalidate_label("Work");
+        assert_eq!(cache.fresh("a", t0), Some(1));
+        cache.invalidate_label("Hippius Captures");
+        assert_eq!(cache.fresh("a", t0), None);
+        cache.store("a", "Hippius Captures", set(&["r1"]), t0);
+        cache.clear();
+        assert_eq!(cache.fresh("a", t0), None);
+    }
+
+    /// The refusal is structured so the app shows its dialog, and says the
+    /// same as the dialog.
+    #[test]
+    fn the_refusal_is_the_limit_dialog() {
+        let json = serde_json::to_value(AppError::NotReady(NotReadyKind::RecordingLimitReached)).unwrap();
+        assert_eq!(json["subkind"], "RECORDING_LIMIT_REACHED");
+        assert_eq!(json["message"], format!("{LIMIT_TITLE} {LIMIT_BODY}"));
+        assert!(LIMIT_TITLE.contains(&FREE_RECORDING_LIMIT.to_string()));
     }
 
     /// The recorder writes under `~/.hippius`: hidden, so no drive's engine
@@ -977,21 +548,19 @@ mod tests {
         let tmp = home.join(".hippius").join("capture-tmp");
         let drives = [home.clone(), home.join("Documents/Hippius Captures"), PathBuf::from("/Volumes/X")];
         assert!(unsynced_by_every_drive(&tmp, &drives));
-        assert!(unsynced_by_every_drive(&home.join(".hippius/held-recordings"), &drives));
         // The captures folder itself, or any visible folder in a drive, is not.
         assert!(!unsynced_by_every_drive(&home.join("Documents/Hippius Captures/tmp"), &drives));
         assert!(!unsynced_by_every_drive(&home.join("Movies"), std::slice::from_ref(&home)));
         assert!(unsynced_by_every_drive(&home.join("Movies"), &[]));
     }
 
-    /// The real temp and holding roots are both somewhere no drive syncs.
+    /// The real temp root is somewhere no drive syncs.
     #[test]
-    fn the_capture_temp_and_holding_roots_are_hidden_app_folders() {
+    fn the_capture_temp_root_is_a_hidden_app_folder() {
         let _home = crate::test_helpers::HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = dirs::home_dir().unwrap();
-        for root in [super::super::screenshot::capture_tmp_root().unwrap(), held_root().unwrap()] {
-            assert!(root.starts_with(home.join(".hippius")), "{}", root.display());
-            assert!(unsynced_by_every_drive(&root, std::slice::from_ref(&home)), "{}", root.display());
-        }
+        let root = super::super::screenshot::capture_tmp_root().unwrap();
+        assert!(root.starts_with(home.join(".hippius")), "{}", root.display());
+        assert!(unsynced_by_every_drive(&root, std::slice::from_ref(&home)), "{}", root.display());
     }
 }
