@@ -9,6 +9,7 @@ pub mod area_pick;
 pub mod bar;
 pub mod bubble_controls;
 pub mod camera;
+pub mod camera_access;
 pub mod camera_provider;
 pub mod camera_report;
 pub mod commands;

@@ -235,7 +235,20 @@ export interface CaptureCameraState {
   switchFromPill: boolean;
   /** The pill offers the bubble's sizes mid-recording. */
   resizeFromPill: boolean;
+  /**
+   * What the system said about the camera (Rust's `camera_access`; Linux
+   * asks before the bubble opens it): the page waits while `asking` and
+   * says why after a no. Absent or `unknown`: open it and see.
+   */
+  access?: CaptureCameraAccess;
+  /** Whether the system sees a camera at all, when it said. */
+  cameraPresent?: boolean | null;
+  /** Where this system's camera switch is, for the "allow it in" line. */
+  privacyPlace?: string;
 }
+
+/** Rust's `CameraAccess`. */
+export type CaptureCameraAccess = "unknown" | "asking" | "granted" | "denied" | "turnedOff";
 
 /**
  * `capture_microphone_state`: the live recording's microphone, for the pill.

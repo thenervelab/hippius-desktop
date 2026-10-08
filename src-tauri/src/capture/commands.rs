@@ -265,6 +265,14 @@ pub struct CaptureState {
     camera_lock: tokio::sync::Mutex<()>,
     /// The camera window on screen, and in which shape.
     camera_shape: Mutex<Option<CameraShape>>,
+    /// What the system said about the camera (Linux asks its Camera portal
+    /// before the bubble opens it, `camera_access`).
+    camera_access: super::camera_access::AccessState,
+    /// Numbers each recording start (`start_recording`). A start still
+    /// waiting on the desktop's dialog when the user cancelled and pressed
+    /// Record again is superseded: it must neither take the new session's
+    /// place nor end it when it finally fails.
+    recording_start: AtomicU64,
     /// The camera this recording started with; the window stays until stop.
     recording_camera: Mutex<Option<CameraShape>>,
     /// The bubble was hidden from the pill for part of a recording.
@@ -338,7 +346,7 @@ struct AreaPick {
 pub type CameraDevice = recording::MediaDevice;
 
 impl CaptureState {
-    fn current(&self) -> CapturePhase {
+    pub fn current(&self) -> CapturePhase {
         lock(&self.phase).unwrap_or(CapturePhase::Idle)
     }
 
@@ -2257,7 +2265,7 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         camera_only_available: camera_only_supported(),
         recording_availability: recording::RecordingAvailability::now(),
         surfaces,
-        privacy: super::privacy::device_privacy(),
+        privacy: super::privacy::device_privacy(state.capture.camera_access.current()),
         destination,
         pending,
     })
@@ -2691,7 +2699,7 @@ async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
             *lock(&state.capture.selection) = Some(selection);
             // The camera page learns the recording is under way.
             sync_camera(app).await;
-            begin_recording(app, selection).await
+            start_recording(app, selection).await
         }
     };
     if let Err(e) = &taken {
@@ -3132,7 +3140,24 @@ fn spawn_tier_lookup(app: &AppHandle) -> tauri::async_runtime::JoinHandle<Option
 /// Start the recorder on `selection`. Failures return to the caller, which
 /// ends the session through [`fail_capture`]; a session cancelled while the
 /// recorder was starting ends quietly, with the recorder cancelled.
-async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
+async fn start_recording(app: &AppHandle, selection: Selection) -> Result<()> {
+    let state = app.state::<AppState>();
+    let start = state.capture.recording_start.fetch_add(1, Ordering::SeqCst) + 1;
+    let started = begin_recording(app, selection, start).await;
+    if let Err(e) = &started
+        && super::session::start_superseded(start, state.capture.recording_start.load(Ordering::SeqCst))
+    {
+        // Cancelled while the desktop's dialog was up, and Record pressed
+        // again since: the newer start owns the session, so this failure
+        // ends nothing.
+        tracing::info!(error = %e, "an earlier recording start ended after a newer one began; the newer one is kept");
+        return Ok(());
+    }
+    started
+}
+
+/// [`start_recording`]'s work, for the start numbered `start`.
+async fn begin_recording(app: &AppHandle, selection: Selection, start: u64) -> Result<()> {
     let state = app.state::<AppState>();
     let saved = bar::load_options(state.pool()?).await.unwrap_or_default();
     let surfaces = super::support::surfaces();
@@ -3236,6 +3261,13 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
     state.capture.set_recording_limit(super::allowance::max_recording(tier));
     state.capture.stopped_at_limit.store(false, Ordering::SeqCst);
     let recorded_microphone = recorder.microphone();
+    if super::session::start_superseded(start, state.capture.recording_start.load(Ordering::SeqCst)) {
+        // A newer start owns the session (its pill, camera and folder): only
+        // this start's own recorder and folder go.
+        tracing::info!("an earlier recording start finished after a newer one began; it is thrown away");
+        discard_recording(Some(recorder), Some(dir)).await;
+        return Ok(());
+    }
     if let Err(orphan) = state.capture.adopt_recorder(recorder, |e| emit_phase(app, e)) {
         // Cancelled (or ended) while the recorder was starting. It must not
         // keep recording the screen with no pill and nothing to stop it.
@@ -4473,7 +4505,7 @@ pub async fn capture_restart(app: AppHandle) -> Result<()> {
     advance(&app, &state.capture, CaptureEvent::Restart)?;
     let (recorder, dir) = state.capture.take_leftovers();
     discard_recording(recorder, dir).await;
-    let started = begin_recording(&app, selection).await;
+    let started = start_recording(&app, selection).await;
     if let Err(e) = &started {
         fail_capture(&app, e).await;
     }
@@ -4508,8 +4540,22 @@ pub struct CaptureSupport {
     pub surfaces: super::support::Surfaces,
 }
 
+/// Async, and the work on a blocking thread: on Linux the answer waits for
+/// the recorder's once-per-launch probe (`recording::linux::machine`, up to
+/// 20 s on a first run while GStreamer builds its registry). A sync command
+/// runs on the GTK main thread, which then froze until GNOME offered to
+/// force-quit the app.
 #[tauri::command]
-pub fn capture_support() -> CaptureSupport {
+pub async fn capture_support() -> CaptureSupport {
+    tauri::async_runtime::spawn_blocking(support_now).await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "capture support was not read off the main thread");
+        support_now()
+    })
+}
+
+/// What `capture_support` answers, read now (may wait on the Linux probe).
+#[must_use]
+pub fn support_now() -> CaptureSupport {
     CaptureSupport {
         supported: capture_supported(),
         recording: recording::recording_supported(),
@@ -5459,6 +5505,10 @@ async fn sync_camera(app: &AppHandle) {
             if let Err(e) = open_camera_window(app, shape, options.camera_size, anchored.map(|(f, scale, _)| (f, scale))) {
                 tracing::warn!(error = %e, "camera window could not open");
             }
+            // Linux: ask the system for the camera before the bubble opens
+            // it. The bubble waits while the question is up (the state sent
+            // below says `asking`).
+            ask_camera_access(app);
         }
     }
     if wanted.is_none() {
@@ -5466,6 +5516,95 @@ async fn sync_camera(app: &AppHandle) {
     }
     let camera_state = camera_state_for(app, wanted, hidden, &options).await;
     let _ = app.emit(CAMERA_STATE_EVENT, camera_state);
+}
+
+/// How long the Camera portal may take to answer before Hippius assumes the
+/// system is showing its question and moves its own windows aside. A
+/// stored answer comes back in a few milliseconds.
+const CAMERA_QUESTION_AFTER: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Ask the system for the camera (Linux, `camera_access`), once at a time,
+/// then send the camera state again so the bubble opens the camera or says
+/// why it cannot. Off Linux, or with a yes already given this run, nothing
+/// happens. Never fails: a portal that cannot be reached leaves the bubble
+/// to try by itself.
+fn ask_camera_access(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let platform = super::rollout::current_platform();
+    if !super::camera_access::should_ask(platform, state.capture.camera_access.current()) {
+        return;
+    }
+    if !state.capture.camera_access.begin_asking() {
+        return;
+    }
+    tracing::info!("camera: asking the system for the camera before the bubble opens it");
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut asked = tokio::spawn(super::camera_access::ask_portal());
+        let (answer, aside) = if let Ok(answer) = tokio::time::timeout(CAMERA_QUESTION_AFTER, &mut asked).await {
+            (answer, Vec::new())
+        } else {
+            // The system's question is on screen: Hippius's windows are kept
+            // above everything, so they step aside until it is answered, or
+            // the question could be hidden behind them.
+            let aside = step_aside_for_system_question(&app);
+            (asked.await, aside)
+        };
+        let (access, present) = answer.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "camera: the camera question ended without an answer");
+            (super::camera_access::CameraAccess::Unknown, None)
+        });
+        let state = app.state::<AppState>();
+        state.capture.camera_access.finish_asking(access, present);
+        come_back_after_system_question(&app, &aside);
+        // The bubble learns the answer (and opens the camera, or says why not).
+        sync_camera(&app).await;
+    });
+}
+
+/// Hide the capture windows that are on screen, so a system dialog is not
+/// under them; returns their labels.
+fn step_aside_for_system_question(app: &AppHandle) -> Vec<String> {
+    let mut aside = Vec::new();
+    // Never mid-recording: the bubble and the pill are in the video.
+    if matches!(
+        app.state::<AppState>().capture.current(),
+        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } | CapturePhase::Finalizing
+    ) {
+        return aside;
+    }
+    for (label, window) in app.webview_windows() {
+        let ours =
+            label.starts_with(OVERLAY_LABEL_PREFIX) || [CAMERA_LABEL, CONTROLS_LABEL, BUBBLE_CONTROLS_LABEL, AREA_LABEL].contains(&label.as_str());
+        if ours && window.is_visible().unwrap_or(false) && window.hide().is_ok() {
+            aside.push(label);
+        }
+    }
+    if !aside.is_empty() {
+        tracing::info!(
+            windows = aside.len(),
+            "camera: capture windows moved aside for the system's camera question"
+        );
+    }
+    aside
+}
+
+/// Put back what [`step_aside_for_system_question`] hid, if the capture is
+/// still going (a cancel meanwhile closed them for good).
+fn come_back_after_system_question(app: &AppHandle, aside: &[String]) {
+    if aside.is_empty() {
+        return;
+    }
+    let state = app.state::<AppState>();
+    if state.capture.current() == CapturePhase::Idle {
+        return;
+    }
+    for label in aside {
+        if let Some(window) = app.get_webview_window(label) {
+            show_without_focus(&window);
+        }
+    }
+    focus_active_ui(app, &state.capture);
 }
 
 /// Where the bubble goes while an area recording is being chosen: inside the
@@ -5599,6 +5738,9 @@ async fn camera_state_for(app: &AppHandle, shape: Option<CameraShape>, hidden: b
         recorder_owns_camera: recording && recorder_opens_camera(shape),
         switch_from_pill,
         resize_from_pill,
+        access: state.capture.camera_access.current(),
+        camera_present: state.capture.camera_access.camera_present(),
+        privacy_place: super::camera_access::privacy_place(super::rollout::current_platform()),
     }
 }
 

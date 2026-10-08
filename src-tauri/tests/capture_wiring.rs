@@ -201,14 +201,14 @@ fn every_recording_start_path_goes_through_the_one_gate() {
         "a screenshot is never gated"
     );
     let moved = select.find("CaptureEvent::Selected").expect("the phase moves on");
-    let begin = select.find("begin_recording(app, selection)").expect("then the recorder starts");
+    let begin = select.find("start_recording(app, selection)").expect("then the recorder starts");
     assert!(gate < moved && gate < begin, "refused while the bar is still up, before anything records");
 
     // Restart starts a new recording: gated before the take is discarded.
     let restart = fn_body(&src, "pub async fn capture_restart(");
     let gate = restart.find(GATE).expect("Restart asks the gate");
     let discard = restart.find("discard_recording(").expect("the take is thrown away");
-    let begin = restart.find("begin_recording(&app, selection)").expect("and started again");
+    let begin = restart.find("start_recording(&app, selection)").expect("and started again");
     assert!(gate < discard && gate < begin, "a refused restart keeps the recording");
 
     // The bar asks the same gate before its countdown, so a refusal is not
@@ -219,9 +219,14 @@ fn every_recording_start_path_goes_through_the_one_gate() {
 
     // No other path can start the recorder.
     assert_eq!(
-        src.matches("begin_recording(").count(),
+        src.matches("start_recording(").count(),
         3,
-        "begin_recording is defined once and called only from select_inner and capture_restart"
+        "start_recording is defined once and called only from select_inner and capture_restart"
+    );
+    assert_eq!(
+        src.matches("begin_recording(").count(),
+        2,
+        "begin_recording is defined once and called only from start_recording"
     );
 
     // The gate reads the plan the way the length cap does, and the count
@@ -1176,7 +1181,7 @@ fn capture_follows_the_rollout_gate() {
     let src = read("src/capture/commands.rs");
     assert!(fn_body(&src, "pub fn capture_supported()").contains("rollout::allows(super::rollout::Feature::Screenshots)"));
     assert!(fn_body(&src, "pub async fn capture_start(").contains("!capture_supported()"));
-    assert!(fn_body(&src, "pub fn capture_support()").contains("supported: capture_supported()"));
+    assert!(fn_body(&src, "pub fn support_now()").contains("supported: capture_supported()"));
     let recording = read("src/capture/recording/mod.rs");
     assert!(fn_body(&recording, "pub fn recording_unavailable()").contains("rollout::allows(super::rollout::Feature::Recording)"));
 }
@@ -1438,7 +1443,7 @@ fn the_linux_recorder_opens_the_camera_only_where_no_window_can_be_filmed() {
     assert!(camera_state.contains("recorder_owns_camera: recording && recorder_opens_camera(shape)"));
     let page = read("../app/capture-camera/page.tsx");
     assert!(
-        page.contains("const live = !!camera?.shape && !camera.hidden && !handedOver;"),
+        page.contains("const live = !!camera?.shape && !camera.hidden && !handedOver && accessProblem === null;"),
         "the stage page closes its stream when the recorder has the camera"
     );
 }
@@ -1758,7 +1763,7 @@ fn the_privacy_settings_button_opens_only_rusts_pages() {
     let commands = read("src/capture/commands.rs");
     let open = fn_body(&commands, "pub fn capture_open_privacy_settings(");
     assert!(open.contains("privacy::settings_uri_for(") && open.contains("open_url(uri"));
-    assert!(fn_body(&commands, "pub async fn capture_overlay_context(").contains("privacy::device_privacy()"));
+    assert!(fn_body(&commands, "pub async fn capture_overlay_context(").contains("privacy::device_privacy("));
     let bar = read("../app/capture-overlay/CaptureBar.tsx");
     assert!(bar.contains("openCapturePrivacySettings(device)"));
     assert!(!bar.contains("ms-settings:"), "the bar never names a Settings URI itself");
@@ -2575,4 +2580,104 @@ fn the_recording_tier_reads_the_plan_the_way_the_overview_does() {
     let overview = read("src/billing/storage_overview.rs");
     assert!(fn_body(&overview, "pub async fn get_storage_overview(").contains("allowance::remember("));
     assert!(fn_body(&overview, "pub(crate) async fn fetch_can_share_drives(").contains("fetch_plan_reads("));
+}
+
+/// Linux asks the system for the camera before the bubble opens it, moves
+/// the capture windows aside while the system's question is up, and sends
+/// the answer to the bubble; the bubble's state carries it (`camera_access`).
+#[test]
+fn linux_asks_for_the_camera_before_the_bubble_opens_it() {
+    let src = read("src/capture/commands.rs");
+    let sync = fn_body(&src, "async fn sync_camera(");
+    let open = sync.find("open_camera_window(app, shape").expect("the bubble opens here");
+    let ask = sync.find("ask_camera_access(app)").expect("sync_camera asks for the camera");
+    assert!(ask > open, "asked as the bubble opens, so its state says `asking`");
+    assert!(
+        ask < sync.find("camera_state_for(app, wanted").expect("state sent"),
+        "asked before the state goes out"
+    );
+    let asking = fn_body(&src, "fn ask_camera_access(");
+    assert!(asking.contains("camera_access::should_ask("), "only where the platform asks");
+    assert!(asking.contains("begin_asking()"), "one question at a time");
+    let step_aside = asking.find("step_aside_for_system_question(&app)").expect("windows step aside");
+    let finish = asking.find("finish_asking(access, present)").expect("the answer is kept");
+    let back = asking.find("come_back_after_system_question(&app, &aside)").expect("windows come back");
+    let resend = asking.find("sync_camera(&app).await").expect("the bubble learns the answer");
+    assert!(step_aside < finish && finish < back && back < resend);
+    assert!(
+        fn_body(&src, "fn step_aside_for_system_question(").contains("CapturePhase::Recording"),
+        "never mid-recording: the bubble and pill are in the video"
+    );
+    let state = fn_body(&src, "async fn camera_state_for(");
+    assert!(state.contains("access: state.capture.camera_access.current()"));
+    assert!(state.contains("privacy_place: super::camera_access::privacy_place("));
+    assert!(fn_body(&src, "pub async fn capture_overlay_context(").contains("device_privacy(state.capture.camera_access.current())"));
+    let cargo = read("Cargo.toml");
+    assert!(
+        cargo.lines().any(|l| l.starts_with("ashpd") && l.contains("\"camera\"")),
+        "ashpd's Camera portal is switched on"
+    );
+}
+
+/// `capture_support` waits on the Linux recorder's probe (up to 20 s on a
+/// first run): as a sync command it ran on the GTK main thread and froze the
+/// app until GNOME offered to force-quit it.
+#[test]
+fn capture_support_never_blocks_the_main_thread() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "pub async fn capture_support()");
+    assert!(body.contains("spawn_blocking(support_now)"), "{body}");
+    assert!(!src.contains("pub fn capture_support()"), "a sync command runs on the main thread");
+}
+
+/// Closing the main window quits on Windows and Linux, but never during a
+/// capture: the close is then the desktop's (the window is hidden), and
+/// quitting threw the recording away with the app.
+#[test]
+fn closing_the_main_window_mid_capture_hides_it_instead_of_quitting() {
+    let main = read("src/main.rs");
+    let handler = &main[main.find("WindowEvent::CloseRequested").expect("close handler")..];
+    let guard = handler.find("closing_main_quits(phase)").expect("the capture guard");
+    let quit = handler.find("crate::tray::panel::quit_desktop").expect("quit");
+    let non_mac = handler.find("#[cfg(not(target_os = \"macos\"))]").expect("non-mac branch");
+    assert!(non_mac < guard && guard < quit, "checked before the quit");
+    assert!(handler[guard..quit].contains("api.prevent_close()") && handler[guard..quit].contains("return;"));
+}
+
+/// A crash leaves evidence: the panic hook writes `crash.log` synchronously,
+/// and on Linux GLib's messages (GTK's fatal errors included) reach the log.
+#[test]
+fn a_crash_leaves_a_record_beside_the_logs() {
+    let main = read("src/main.rs");
+    let hook = main.find("diagnostics::install_panic_hook();").expect("panic hook");
+    let bridge = main.find("diagnostics::install_glib_log_bridge();").expect("glib bridge");
+    let logging = main.find("let _log_guard = init_logging();").expect("logging");
+    let builder = main.find("let builder = Builder::default()").expect("builder");
+    assert!(logging < hook && hook < bridge && bridge < builder);
+    let diagnostics = read("src/diagnostics.rs");
+    let install = fn_body(&diagnostics, "pub fn install_panic_hook()");
+    let write = install.find("append_crash_record(").expect("written at once");
+    let traced = install.find("tracing::error!(").expect("and traced");
+    assert!(write < traced, "the file first: the queued log line can die with the process");
+}
+
+/// A recording start cancelled while the desktop's dialog was up, then
+/// overtaken by a new Record, must neither adopt its recorder into the new
+/// session nor end it when it fails: it throws away only its own recorder
+/// and folder.
+#[test]
+fn a_superseded_recording_start_leaves_the_new_session_alone() {
+    let src = read("src/capture/commands.rs");
+    let wrapper = fn_body(&src, "async fn start_recording(");
+    assert!(wrapper.contains("recording_start.fetch_add(1"), "each start is numbered");
+    let failed = wrapper.find("start_superseded(start").expect("a failure checks the number");
+    assert!(wrapper[failed..].contains("return Ok(());"), "a superseded failure ends nothing");
+    let start = fn_body(&src, "async fn begin_recording(");
+    let check = start.find("start_superseded(start").expect("checked before adopting");
+    let adopt = start.find("adopt_recorder(recorder").expect("adopt");
+    assert!(check < adopt);
+    assert!(
+        start[check..adopt].contains("discard_recording(Some(recorder), Some(dir))"),
+        "only its own folder"
+    );
 }
