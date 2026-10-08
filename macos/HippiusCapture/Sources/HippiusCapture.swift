@@ -771,16 +771,26 @@ func capped(_ width: Int, _ height: Int) -> (Int, Int) {
     return (max(2, Int(Double(width) * k) & ~1), max(2, Int(Double(height) * k) & ~1))
 }
 
-/// Average bit rate for a 30 fps screen recording. About 14 Mbps at 1080p,
-/// growing with the square root of the pixel count (screens are mostly
-/// still, and text stays sharp well below a linear rise), bounded to
-/// 2..28 Mbps so a 4K or Retina recording stays shareable. The encoder
-/// spends far less than this on a still screen.
+/// Average bit rate for a 30 fps recording: 5 Mbps at 1080p, growing with
+/// the square root of the pixel count (screens are mostly still, and text
+/// stays sharp well below a linear rise), bounded to 1..10 Mbps (a Retina
+/// laptop's whole screen 9.6, 4K 10). VideoToolbox treats it as an average:
+/// a still screen spends far less, a busy one is held to it. A quality
+/// target was measured and left out: it overrides the average with no
+/// ceiling, and Intel Macs do not have it. So was a data rate limit: it
+/// softened text on every keyframe. Mirrored, with the
+/// keyframe interval, by `recorder_child/sizing.rs` for Windows and Linux.
 func videoBitRate(width: Int, height: Int) -> Int {
     let ratio = Double(width * height) / (1920.0 * 1080.0)
-    let bps = 14_000_000 * ratio.squareRoot()
-    return Int(min(28_000_000, max(2_000_000, bps)))
+    let bps = 5_000_000 * ratio.squareRoot()
+    return Int(min(10_000_000, max(1_000_000, bps)))
 }
+
+/// Seconds between keyframes at most. A keyframe repaints the whole screen,
+/// so on a still screen it is most of the file (4 s instead of 2 s took a
+/// still 1080p desktop from 2.5 to 1.5 Mbps); seeking in a share link
+/// decodes at most 4 s from the keyframe before, which is quick.
+let keyframeSeconds = 4
 
 private func hostNow() -> CMTime {
     CMClockGetTime(CMClockGetHostTimeClock())
@@ -1227,10 +1237,11 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
                 AVVideoAverageBitRateKey: videoBitRate(width: width, height: height),
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoExpectedSourceFrameRateKey: 30,
-                // A keyframe at least every 2 s, so seeking in a shared link
-                // lands quickly.
-                AVVideoMaxKeyFrameIntervalKey: 60,
-                AVVideoMaxKeyFrameIntervalDurationKey: 2,
+                // A keyframe at least every `keyframeSeconds`, so seeking in
+                // a shared link lands quickly; by frames and by time, since
+                // a still screen sends few frames.
+                AVVideoMaxKeyFrameIntervalKey: keyframeSeconds * 30,
+                AVVideoMaxKeyFrameIntervalDurationKey: keyframeSeconds,
                 AVVideoAllowFrameReorderingKey: false
             ] as [String: Any],
             // The stream is converted to sRGB above; say so, or players guess.

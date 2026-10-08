@@ -8,9 +8,10 @@
 //! Only the shortcut starts one. The Screenshot and Record buttons and the
 //! tray keep the capture bar, with its options and its remembered area.
 //!
-//! Where Hippius draws no overlay (a Wayland screenshot goes to the desktop's
-//! own screenshot tool), the shortcut opens that tool instead: it is already
-//! one step there.
+//! On Wayland the overlay is drawn over a still of the desktop
+//! (`frozen_shot`), so the shortcut is the same one step there. Where no
+//! still can be had, the desktop's own screenshot tool opens instead: it is
+//! already one step.
 
 use super::session::{CaptureKind, CaptureMode};
 use super::support::{SelectionUi, Surfaces};
@@ -38,7 +39,7 @@ pub fn instant_area_offered(surfaces: &Surfaces) -> bool {
 
 /// The capture a start opens. `instant` (the shortcut) is an area
 /// screenshot in one step where [`instant_area_offered`], and a plain
-/// screenshot elsewhere (the desktop's own tool on Wayland). Otherwise the
+/// screenshot elsewhere. Otherwise the
 /// bar opens on `requested`, or on the last kind and mode used, a recording
 /// falling back to a screenshot where recording has gone (`recording_ok`).
 #[must_use]
@@ -139,20 +140,20 @@ mod tests {
         );
     }
 
-    /// Wayland has no overlay: the shortcut takes a screenshot with the
-    /// desktop's own tool, which is one step already, and no bar mode is
+    /// Wayland draws the overlay over a still of the desktop, so the
+    /// shortcut is the same one-step area shot there; no bar mode is
     /// remembered.
     #[test]
-    fn wayland_shortcut_is_the_desktops_screenshot_tool() {
+    fn the_wayland_shortcut_is_a_one_step_area_shot_on_the_still() {
         let s = wayland();
-        assert!(!instant_area_offered(&s));
+        assert!(instant_area_offered(&s));
         let choice = start_choice(&s, true, (None, None), (CaptureKind::Recording, CaptureMode::Screen), true);
-        assert_eq!(choice.kind, CaptureKind::Screenshot);
-        assert!(!choice.instant);
+        assert_eq!((choice.kind, choice.mode), (CaptureKind::Screenshot, CaptureMode::Area));
+        assert!(choice.instant);
         assert!(!choice.remember);
         assert_eq!(
             super::super::support::start_plan(&s, choice.kind),
-            super::super::support::StartPlan::SystemPicker
+            super::super::support::StartPlan::Frozen
         );
     }
 
