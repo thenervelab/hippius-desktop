@@ -246,7 +246,7 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: |
-          bash scripts/apt-get-retry.sh install -y --no-install-recommends xvfb
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends xvfb
           bash ../scripts/with-xvfb.sh -- cargo test --lib capture::linux_x11 -- --ignored
 
       # Linux recording's real writer: the recorder child's GStreamer
@@ -258,7 +258,7 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: |
-          bash scripts/apt-get-retry.sh install -y --no-install-recommends gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
           cargo test --lib capture::recorder_child::linux -- --ignored --test-threads=1
 
   # The required `rust-linux` check: both Linux halves, as one status.
@@ -696,7 +696,7 @@ jobs:
       - name: Install GStreamer plugins, Xvfb, PulseAudio and ffprobe
         run: |
           set -euo pipefail
-          bash scripts/apt-get-retry.sh install -y --no-install-recommends \
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-pipewire \
             gstreamer1.0-pulseaudio gstreamer1.0-tools \

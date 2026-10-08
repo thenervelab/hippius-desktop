@@ -1160,6 +1160,15 @@ fn every_apt_call_goes_through_the_retry_wrapper() {
                 !line.contains("apt-get ") || line.contains("apt-get-retry.sh"),
                 "{file} calls apt-get directly: {line}"
             );
+            // Steps run from different directories (several from
+            // `src-tauri/`), so a workflow names the wrapper from the
+            // workspace root, never relative to wherever the step runs.
+            if file.contains(".github/") && line.contains("apt-get-retry.sh") {
+                assert!(
+                    line.contains("bash \"$GITHUB_WORKSPACE/scripts/apt-get-retry.sh\""),
+                    "{file} must call the wrapper from the workspace root: {line}"
+                );
+            }
         }
     }
 }
