@@ -110,9 +110,11 @@ pub const AREA_LABEL: &str = "capture-area";
 
 /// The card's window, in logical points; the card fills it.
 const PREVIEW_WIDTH: f64 = 316.0;
-/// Tall enough for the picture, two lines, the progress or timer bar and the
-/// buttons; at 290 the top of the picture was clipped.
-const PREVIEW_HEIGHT: f64 = 330.0;
+/// Tall enough for the picture, three lines (a recording's notice takes two),
+/// the progress or timer bar and the buttons; at 290 the top of the picture
+/// was clipped. The card sits at the window's bottom, so a shorter card leaves
+/// the top of the window empty and transparent.
+const PREVIEW_HEIGHT: f64 = 346.0;
 /// Gap between the card and the display's bottom-right corner.
 const PREVIEW_MARGIN: f64 = 16.0;
 /// The recording pill's window, in logical points.
@@ -176,6 +178,11 @@ pub struct PhaseEvent {
     #[serde(flatten)]
     pub phase: CapturePhase,
     pub seq: u64,
+    /// Seconds left before a Free plan recording stops on its own, sent only
+    /// in the last minute (`allowance::remaining_to_show`), for the pill to
+    /// show instead of the time recorded.
+    #[serde(rename = "remainingSecs", skip_serializing_if = "Option::is_none")]
+    pub remaining_secs: Option<u64>,
 }
 
 #[derive(Default)]
@@ -216,6 +223,14 @@ pub struct CaptureState {
     selection: Mutex<Option<Selection>>,
     /// Cancels the elapsed-time tick task.
     tick_cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// The live recording's length limit in seconds of recorded time, 0 for
+    /// none. Decided from the plan as the recording starts (`allowance`).
+    recording_limit_secs: AtomicU64,
+    /// The live recording reached its length limit and is being stopped for
+    /// it: its card says so, with an Upgrade.
+    stopped_at_limit: AtomicBool,
+    /// The last recording tier seen per account (`allowance::TierCache`).
+    pub(crate) recording_tiers: super::allowance::TierCache,
     /// The display the capture bar is on; the preview card opens there too.
     bar_display: Mutex<Option<DisplayTarget>>,
     /// The displays of this capture, as last listed.
@@ -344,6 +359,36 @@ impl CaptureState {
         super::live_controls::camera_controls(phase, camera, hidden, recorder_opens_camera(camera), support)
     }
 
+    /// The live recording's length limit, `None` for none.
+    fn recording_limit(&self) -> Option<std::time::Duration> {
+        match self.recording_limit_secs.load(Ordering::SeqCst) {
+            0 => None,
+            secs => Some(std::time::Duration::from_secs(secs)),
+        }
+    }
+
+    fn set_recording_limit(&self, limit: Option<std::time::Duration>) {
+        self.recording_limit_secs.store(limit.map_or(0, |l| l.as_secs().max(1)), Ordering::SeqCst);
+    }
+
+    /// Whether a recording with `recorded_secs` of recorded time is due to
+    /// stop at its limit: running (not paused) and at or past it.
+    fn at_recording_limit(&self, recorded_secs: u64) -> bool {
+        matches!(self.current(), CapturePhase::Recording { .. }) && super::allowance::limit_reached(recorded_secs, self.recording_limit())
+    }
+
+    /// `phase` as broadcast, numbered `seq`, with the time left before the
+    /// recording's limit when it is close.
+    fn phase_event(&self, phase: CapturePhase, seq: u64) -> PhaseEvent {
+        let remaining_secs = match phase {
+            CapturePhase::Recording { elapsed_secs, .. } | CapturePhase::Paused { elapsed_secs, .. } => {
+                super::allowance::remaining_to_show(elapsed_secs, self.recording_limit())
+            }
+            _ => None,
+        };
+        PhaseEvent { phase, seq, remaining_secs }
+    }
+
     fn stop_ticks(&self) {
         if let Some(tx) = lock(&self.tick_cancel).take() {
             let _ = tx.send(());
@@ -357,10 +402,7 @@ impl CaptureState {
         let mut guard = lock(&self.phase);
         let next = transition(guard.unwrap_or(CapturePhase::Idle), event).map_err(transition_error)?;
         *guard = Some(next);
-        emit(PhaseEvent {
-            phase: next,
-            seq: self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1,
-        });
+        emit(self.phase_event(next, self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1));
         Ok(next)
     }
 
@@ -368,18 +410,12 @@ impl CaptureState {
     /// (the displays changed under an open capture bar).
     fn rebroadcast(&self, emit: impl FnOnce(PhaseEvent)) {
         let guard = lock(&self.phase);
-        emit(PhaseEvent {
-            phase: guard.unwrap_or(CapturePhase::Idle),
-            seq: self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1,
-        });
+        emit(self.phase_event(guard.unwrap_or(CapturePhase::Idle), self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1));
     }
 
     fn snapshot(&self) -> PhaseEvent {
         let guard = lock(&self.phase);
-        PhaseEvent {
-            phase: guard.unwrap_or(CapturePhase::Idle),
-            seq: self.phase_seq.load(Ordering::SeqCst),
-        }
+        self.phase_event(guard.unwrap_or(CapturePhase::Idle), self.phase_seq.load(Ordering::SeqCst))
     }
 
     /// Take a recorder that has just started, but only if the session is
@@ -410,10 +446,7 @@ impl CaptureState {
         };
         *lock(&self.recorder) = Some(recorder);
         *guard = Some(next);
-        emit(PhaseEvent {
-            phase: next,
-            seq: self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1,
-        });
+        emit(self.phase_event(next, self.phase_seq.fetch_add(1, Ordering::SeqCst) + 1));
         Ok(next)
     }
 
@@ -3104,6 +3137,17 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         camera,
     };
     let microphone_device = options.microphone_device.clone();
+    // The plan decides the recording's length limit, once, as it starts
+    // (`allowance`). Read alongside the recorder's own start, so it adds no
+    // wait; with no account or no verdict there is no limit.
+    let tier_lookup = tauri::async_runtime::spawn({
+        let app = app.clone();
+        async move {
+            let state = app.state::<AppState>();
+            let account = state.current_session_account().ok()?;
+            super::allowance::recording_tier(state.inner(), &account).await
+        }
+    });
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     *lock(&state.capture.recording_dir) = Some(dir.clone());
     let name = super::naming::capture_file_name(CaptureKind::Recording, chrono::Local::now().naive_local());
@@ -3155,6 +3199,9 @@ async fn begin_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         recorder = count_down_in_pill(app, recorder, count).await?;
     }
 
+    let tier = tier_lookup.await.ok().flatten();
+    state.capture.set_recording_limit(super::allowance::max_recording(tier));
+    state.capture.stopped_at_limit.store(false, Ordering::SeqCst);
     let recorded_microphone = recorder.microphone();
     if let Err(orphan) = state.capture.adopt_recorder(recorder, |e| emit_phase(app, e)) {
         // Cancelled (or ended) while the recorder was starting. It must not
@@ -3591,6 +3638,19 @@ fn tick_once(app: &AppHandle) -> Tick {
         return Tick::Done;
     }
     if !matches!(state.capture.current(), CapturePhase::Recording { .. } | CapturePhase::Paused { .. }) {
+        return Tick::Done;
+    }
+    // A Free plan recording at its length limit ends exactly as Stop would:
+    // saved, uploaded and shared as usual, its card saying why.
+    if state.capture.at_recording_limit(elapsed) {
+        tracing::info!(recorded_secs = elapsed, "recording reached the plan's length limit; stopping it");
+        state.capture.stopped_at_limit.store(true, Ordering::SeqCst);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = stop_inner(&app).await {
+                tracing::warn!(error = %e, "could not save the recording that reached its length limit");
+            }
+        });
         return Tick::Done;
     }
     let _ = advance(app, &state.capture, CaptureEvent::Tick { elapsed_secs: elapsed });
@@ -4196,6 +4256,9 @@ pub async fn capture_stop(app: AppHandle) -> Result<()> {
 /// the stream with the file still open.
 pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
     let state = app.state::<AppState>();
+    // Read and cleared before anything can fail, so a later recording's
+    // card never inherits it.
+    let at_limit = state.capture.stopped_at_limit.swap(false, Ordering::SeqCst);
     advance(app, &state.capture, CaptureEvent::Stop)?;
     state.capture.stop_ticks();
     // The pill goes at once (it is never filmed); the camera stays until the
@@ -4242,6 +4305,9 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
         .flatten();
     let poster = super::poster::pick(from_file, at_start);
     let card_id = open_preview(app, CaptureKind::Recording, &path, poster).await;
+    if at_limit && let Some(id) = card_id {
+        update_card(app, &state.capture, id, |card| card.stopped_at_free_limit = true);
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         deliver_and_announce(&app, &path, card_id).await;
@@ -4554,6 +4620,8 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         placed_path: None,
         destination,
         kept_locally: awaiting_setup,
+        stopped_at_free_limit: false,
+        notice: None,
     }
     .refreshed();
     let replaced = lock(&state.capture.preview).replace(card.clone());
@@ -4891,11 +4959,12 @@ pub fn capture_preview_show_in_folder(state: tauri::State<'_, AppState>, app: Ap
 }
 
 /// The card's Upgrade, offered when the upload failed because the plan is
-/// full: the main window comes forward on the plans. The card stays, so the
-/// capture can be retried once there is room.
+/// full, or when a Free plan recording stopped at its length limit: the main
+/// window comes forward on the plans. The card stays, so the capture can be
+/// retried once there is room.
 #[tauri::command]
 pub fn capture_preview_upgrade(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
-    card_for(&state.capture, |c| c.actions.upgrade, "There is no capture waiting for more storage.")?;
+    card_for(&state.capture, |c| c.actions.upgrade, "There is no capture to upgrade for.")?;
     show_main_window(&app);
     let _ = app.emit(OPEN_PLANS_EVENT, ());
     Ok(())
@@ -6452,7 +6521,7 @@ mod tests {
         let laptop = windows_area(0, 0, 2880, 1728, 1.5);
         let p = physical_frame(card_frame(laptop), laptop.scale);
         assert_eq!(p.width, 474, "316 points at 150 %");
-        assert_eq!(p.height, 495, "330 points at 150 %");
+        assert_eq!(p.height, 519, "346 points at 150 %");
         assert_eq!(p.x + i32::try_from(p.width).unwrap(), 2880 - margin * 3 / 2);
         assert_eq!(p.y + i32::try_from(p.height).unwrap(), 1728 - margin * 3 / 2);
 
@@ -6478,7 +6547,7 @@ mod tests {
         let p = physical_frame(card_frame(left), left.scale);
         assert!(p.x < 0 && p.x > -2560, "{p:?}");
         assert_eq!(p.x + i32::try_from(p.width).unwrap(), -20, "16 points of margin at 125 %");
-        // 330 points is 412.5 pixels at 125 %: within a pixel of the margin.
+        // 346 points is 432.5 pixels at 125 %: within a pixel of the margin.
         assert!((p.y + i32::try_from(p.height).unwrap() - (1200 - 20)).abs() <= 1, "{p:?}");
     }
 
@@ -6700,6 +6769,32 @@ mod tests {
         assert!(matches!(state.current(), CapturePhase::Recording { elapsed_secs: 0, .. }));
     }
 
+    /// A Free plan recording is due to stop at its limit only while it runs
+    /// (a paused one waits for Resume), and its broadcasts carry the time
+    /// left only in the last minute. No limit, nothing of either.
+    #[test]
+    fn the_length_limit_stops_a_running_recording_and_counts_down_its_last_minute() {
+        let calls = Arc::new(Calls::default());
+        let state = recording(&calls);
+        assert!(!state.at_recording_limit(10_000), "no limit, never due");
+        state.set_recording_limit(super::super::allowance::max_recording(Some(super::super::allowance::RecordingTier::Free)));
+        assert!(!state.at_recording_limit(299));
+        assert!(state.at_recording_limit(300));
+
+        let mut seen = Vec::new();
+        state.apply(CaptureEvent::Tick { elapsed_secs: 239 }, |e| seen.push(e)).unwrap();
+        state.apply(CaptureEvent::Tick { elapsed_secs: 240 }, |e| seen.push(e)).unwrap();
+        state.apply(CaptureEvent::Pause, |e| seen.push(e)).unwrap();
+        assert_eq!(seen.iter().map(|e| e.remaining_secs).collect::<Vec<_>>(), [None, Some(60), Some(60)]);
+        assert!(!state.at_recording_limit(300), "a paused recording is not cut");
+        assert_eq!(serde_json::to_value(seen[2]).unwrap()["remainingSecs"], 60);
+        assert_eq!(state.snapshot().remaining_secs, Some(60), "a seed carries it too");
+
+        state.set_recording_limit(super::super::allowance::max_recording(Some(super::super::allowance::RecordingTier::Paid)));
+        assert_eq!(state.snapshot().remaining_secs, None);
+        assert!(serde_json::to_value(state.snapshot()).unwrap().get("remainingSecs").is_none());
+    }
+
     /// Two changes racing are broadcast in the order they happened.
     #[test]
     fn phase_events_are_numbered_in_order() {
@@ -6796,6 +6891,7 @@ mod tests {
                 microphone: true,
             },
             seq: 9,
+            remaining_secs: None,
         };
         assert_eq!(
             serde_json::to_value(e).unwrap(),
@@ -6804,6 +6900,7 @@ mod tests {
         let idle = PhaseEvent {
             phase: CapturePhase::Idle,
             seq: 1,
+            remaining_secs: None,
         };
         assert_eq!(serde_json::to_value(idle).unwrap(), serde_json::json!({ "phase": "idle", "seq": 1 }));
     }

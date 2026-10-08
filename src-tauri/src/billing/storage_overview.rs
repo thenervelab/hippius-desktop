@@ -556,6 +556,25 @@ fn free_plan_bytes(plans: &serde_json::Value) -> Option<u64> {
         .filter(|b| *b > 0)
 }
 
+/// The catalogue's entry for plan `code`. The catalogue arrives as a bare
+/// array or `{ results: [...] }`, the same tolerance the FE's
+/// `useDrivePlans` select applies.
+fn catalogue_entry<'a>(plans: &'a serde_json::Value, code: &str) -> Option<&'a serde_json::Value> {
+    let catalogue = plans.as_array().or_else(|| plans.get("results").and_then(serde_json::Value::as_array));
+    catalogue.and_then(|list| list.iter().find(|p| p.get("code").and_then(serde_json::Value::as_str) == Some(code)))
+}
+
+/// Whether a drive-rail plan code is the free tier: the code `free`, or a
+/// catalogue entry marked `is_free`. The one place that rule lives; the
+/// recording length cap (`capture::allowance`) asks it too.
+pub(crate) fn drive_code_is_free(code: &str, plans: &serde_json::Value) -> bool {
+    code.eq_ignore_ascii_case("free")
+        || catalogue_entry(plans, code)
+            .and_then(|p| p.get("is_free"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+}
+
 /// Map the DRIVE-rail subscription (`/api/drive/subscription/`) onto
 /// [`PlanInfo`], joining the plans catalogue for the price the subscription
 /// payload does not carry. This is the rail the Subscription Plans page
@@ -573,10 +592,9 @@ fn plan_from_drive_subscription(sub: &serde_json::Value, plans: &serde_json::Val
     let code = sub.get("plan").and_then(serde_json::Value::as_str).unwrap_or("");
     // The catalogue arrives as a bare array or `{ results: [...] }` — the
     // same tolerance the FE's `useDrivePlans` select applies.
-    let catalogue = plans.as_array().or_else(|| plans.get("results").and_then(serde_json::Value::as_array));
-    let entry = catalogue.and_then(|list| list.iter().find(|p| p.get("code").and_then(serde_json::Value::as_str) == Some(code)));
+    let entry = catalogue_entry(plans, code);
 
-    if code.eq_ignore_ascii_case("free") || entry.and_then(|p| p.get("is_free")).and_then(serde_json::Value::as_bool).unwrap_or(false) {
+    if drive_code_is_free(code, plans) {
         return None;
     }
 
@@ -694,23 +712,17 @@ pub async fn get_storage_overview(
     );
 
     let stats = stats_result?;
-    // Whether each subscription read succeeded, before the soft defaults
-    // below erase the difference: a plan that could not be loaded must not
-    // read as the free tier to the sharing rule.
-    let drive_sub_read = drive_sub_result.is_ok();
-    let legacy_read = active_result.is_ok();
-    let drive_sub = drive_sub_result.unwrap_or_else(|_| serde_json::json!({ "active": false }));
-    let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
-    let active = active_result.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
+    let reads = PlanReads::from_results(drive_sub_result, drive_plans_result, active_result);
 
     // Credits no longer price a capacity; the balance rides along purely
     // for display (the plan card / top-up cell).
     let credits_hip = credits_result.ok().map(|planck| crate::blockchain::convert::planck_to_hip(&planck));
 
-    // The drive rail (what the Subscription Plans page subscribes through)
-    // wins; the legacy Stripe storage subscription stays as the fallback for
-    // accounts that predate drive plans.
-    let plan = plan_from_drive_subscription(&drive_sub, &drive_plans).or_else(|| plan_from_subscription(&active));
+    // The recording length cap keys on the same plan; remembering it on
+    // every overview keeps its last verdict fresh for an offline start.
+    if let Some(tier) = crate::capture::allowance::tier_from_reads(&reads) {
+        crate::capture::allowance::remember(state.inner(), &account_id, tier).await;
+    }
 
     // Indexer empty-row is success + 0 bytes (not an error). Probe local
     // own-drive dir_stats only then, so a lagging indexer cannot paint
@@ -725,7 +737,7 @@ pub async fn get_storage_overview(
     // The free SKU's allowance comes from the catalogue already fetched
     // above, mapped to its marketed size like any other grant (the free plan
     // is 10 GiB, sold as "10 GB").
-    let free_tier_bytes = free_plan_bytes(&drive_plans).map(|raw| marketed_plan_size(raw).0);
+    let free_tier_bytes = free_plan_bytes(&reads.drive_plans).map(|raw| marketed_plan_size(raw).0);
 
     // How the account signed in decides whether the included allowance
     // applies at all. Read from the session row, the same column
@@ -739,14 +751,14 @@ pub async fn get_storage_overview(
 
     let mut overview = build_overview(
         stats.total_bytes,
-        plan,
+        reads.plan.clone(),
         free_tier_bytes,
         credits_hip,
         free_tier_entitled(provider.as_deref()),
     );
     overview.used_pending = used_pending(stats.total_bytes, local_bytes);
     overview.can_share_drives =
-        crate::billing::sharing_entitlement::resolve_can_share_drives(overview.plan.as_ref(), drive_sub_read.then_some(&drive_sub), legacy_read);
+        crate::billing::sharing_entitlement::resolve_can_share_drives(overview.plan.as_ref(), reads.drive_sub.as_ref(), reads.legacy_read);
 
     // The header states this the moment the balance is short; the
     // notification waits until the renewal is close. Raised from here
@@ -784,23 +796,75 @@ pub async fn get_storage_overview(
 /// [`AppError::Auth`] when nobody is signed in.
 pub(crate) async fn fetch_can_share_drives(state: &crate::app_state::AppState) -> Result<bool, AppError> {
     let account_id = state.current_session_account()?;
+    let reads = fetch_plan_reads(state, &account_id).await?;
+    Ok(crate::billing::sharing_entitlement::resolve_can_share_drives(
+        reads.plan.as_ref(),
+        reads.drive_sub.as_ref(),
+        reads.legacy_read,
+    ))
+}
+
+/// What the account's plan reads came back with, before any soft default
+/// erases whether each read succeeded: a plan that could not be loaded must
+/// not read as the free tier to a rule that keys on it.
+pub(crate) struct PlanReads {
+    /// The resolved paid plan (drive rail first, then the legacy card
+    /// subscription); `None` for the free tier or when nothing was read.
+    pub plan: Option<PlanInfo>,
+    /// The drive-rail subscription payload, `None` when it could not be read.
+    pub drive_sub: Option<serde_json::Value>,
+    /// The drive plans catalogue (`[]` when it could not be read).
+    pub drive_plans: serde_json::Value,
+    /// Whether the legacy card subscription was read.
+    pub legacy_read: bool,
+}
+
+impl PlanReads {
+    /// Fold the three subscription answers into one, the same way for every
+    /// caller, so the overview, sharing and the recording length cap can
+    /// never read the plan differently. The drive rail (what the
+    /// Subscription Plans page subscribes through) wins; the legacy Stripe
+    /// storage subscription is the fallback for accounts that predate drive
+    /// plans.
+    pub(crate) fn from_results<E>(
+        drive_sub: Result<serde_json::Value, E>,
+        drive_plans: Result<serde_json::Value, E>,
+        active: Result<serde_json::Value, E>,
+    ) -> Self {
+        let drive_sub = drive_sub.ok();
+        let legacy_read = active.is_ok();
+        let drive_plans = drive_plans.unwrap_or_else(|_| serde_json::json!([]));
+        let active = active.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
+        let inactive = serde_json::json!({ "active": false });
+        let plan = plan_from_drive_subscription(drive_sub.as_ref().unwrap_or(&inactive), &drive_plans).or_else(|| plan_from_subscription(&active));
+        Self {
+            plan,
+            drive_sub,
+            drive_plans,
+            legacy_read,
+        }
+    }
+}
+
+/// Read the account's plan: the drive-rail subscription, the plans
+/// catalogue and the legacy card subscription, without the indexer read and
+/// the local disk walk the full overview pays for.
+///
+/// # Errors
+///
+/// [`AppError`] only when the database pool is not ready; every network
+/// failure is carried in the returned [`PlanReads`].
+pub(crate) async fn fetch_plan_reads(
+    state: &crate::app_state::AppState,
+    account_id: &crate::app_state::SessionAccount,
+) -> Result<PlanReads, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let (drive_sub_result, drive_plans_result, active_result) = tokio::join!(
-        client.get::<serde_json::Value>("/api/drive/subscription/", &account_id),
-        client.get::<serde_json::Value>("/api/drive/plans/", &account_id),
-        client.get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id),
+        client.get::<serde_json::Value>("/api/drive/subscription/", account_id),
+        client.get::<serde_json::Value>("/api/drive/plans/", account_id),
+        client.get::<serde_json::Value>("/api/billing/stripe/active-subscription/", account_id),
     );
-    let drive_sub_read = drive_sub_result.is_ok();
-    let legacy_read = active_result.is_ok();
-    let drive_sub = drive_sub_result.unwrap_or_else(|_| serde_json::json!({ "active": false }));
-    let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
-    let active = active_result.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
-    let plan = plan_from_drive_subscription(&drive_sub, &drive_plans).or_else(|| plan_from_subscription(&active));
-    Ok(crate::billing::sharing_entitlement::resolve_can_share_drives(
-        plan.as_ref(),
-        drive_sub_read.then_some(&drive_sub),
-        legacy_read,
-    ))
+    Ok(PlanReads::from_results(drive_sub_result, drive_plans_result, active_result))
 }
 
 #[cfg(test)]

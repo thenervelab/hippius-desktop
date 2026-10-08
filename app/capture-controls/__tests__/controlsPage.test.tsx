@@ -538,3 +538,31 @@ describe("where the pill is filmed (Linux)", () => {
     expect(screen.getByRole("group", { name: "Recording controls" })).not.toHaveAttribute("tabindex");
   });
 });
+
+describe("a Free plan recording near its limit", () => {
+  it("shows the time recorded until Rust sends the time left", async () => {
+    setup(recording(200));
+    expect(await screen.findByRole("timer")).toHaveTextContent("03:20");
+    expect(screen.getByRole("timer")).not.toHaveTextContent("left");
+  });
+
+  // Rust decides when (the last minute) and how much; the pill only draws it.
+  it("shows the time left in its last minute, paused or not", async () => {
+    setup({ phase: "recording", elapsedSecs: 241, microphone: false, remainingSecs: 59, seq: 1 });
+    const timer = await screen.findByRole("timer");
+    expect(timer).toHaveTextContent("00:59left");
+    expect(timer).toHaveAccessibleName("Recording time 04:01, 00:59 left");
+    await act(() =>
+      tauri.emitEvent("capture_state_changed", { phase: "paused", elapsedSecs: 250, microphone: false, remainingSecs: 50, seq: 2 }),
+    );
+    expect(screen.getByRole("timer")).toHaveAccessibleName("Recording time 04:10, 00:50 left, paused");
+  });
+
+  it("shows the time left on the small pill where it is filmed (Linux)", async () => {
+    tauri.onInvoke("capture_controls_context", () => ({ compact: true, filmedNote: null }));
+    setup({ phase: "recording", elapsedSecs: 290, microphone: false, remainingSecs: 10, seq: 1 });
+    await screen.findByRole("group", { name: "Recording controls" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop recording" })).toBeNull());
+    expect(screen.getByRole("timer")).toHaveTextContent("00:10left");
+  });
+});
