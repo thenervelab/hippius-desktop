@@ -1373,9 +1373,9 @@ async fn open_panel(app: &AppHandle, state: &CaptureState) -> Result<()> {
 #[tauri::command]
 pub fn capture_panel_fit(app: AppHandle, width: f64, height: f64) -> Result<()> {
     let state = app.state::<AppState>();
-    // On Wayland a recording is chosen in the panel; a screenshot is chosen
-    // on full-screen frozen overlays (`frozen_shot`), which must never be
-    // resized to a bar's size.
+    // On Wayland a recording is chosen in the panel; a screenshot on a
+    // still (`frozen_shot`, off for now) is chosen on full-screen overlays,
+    // which must never be resized to a bar's size.
     let panel_open = matches!(state.capture.current(), CapturePhase::Selecting { .. })
         && super::rollout::current_platform() == super::rollout::Platform::LinuxWayland
         && lock(&state.capture.frozen).is_none();
@@ -3045,9 +3045,10 @@ fn fullscreen_on_monitor(window: &tauri::WebviewWindow, _index: usize) {
 }
 
 /// The bar switched kind where the two are chosen in different windows
-/// (Wayland): the frozen overlays give way to the panel for Record, the
-/// panel to a fresh still for a screenshot. A panel that cannot open ends
-/// the session, or it would sit in `Selecting` with nothing on screen.
+/// (Wayland): the screenshot's windows give way to the panel for Record, and
+/// the panel to the desktop's screenshot tool (or a still, where that is on)
+/// for a screenshot. A panel that cannot open ends the session, or it would
+/// sit in `Selecting` with nothing on screen.
 async fn swap_selection_windows(app: &AppHandle, next: super::support::StartPlan) -> Result<()> {
     let state = app.state::<AppState>();
     lock(&state.capture.frozen).take();
@@ -3065,8 +3066,16 @@ async fn swap_selection_windows(app: &AppHandle, next: super::support::StartPlan
             tauri::async_runtime::spawn(async move { frozen_screenshot(&app).await });
             Ok(())
         }
-        // Never a switch target: those surfaces serve both kinds.
-        super::support::StartPlan::Overlay | super::support::StartPlan::SystemPicker => Ok(()),
+        // The panel offers no screenshot modes there, but a switch that
+        // still arrives must not leave the session choosing with nothing on
+        // screen: the desktop's tool chooses, as from the Capture menu.
+        super::support::StartPlan::SystemPicker => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { system_picker_screenshot(&app).await });
+            Ok(())
+        }
+        // Never a switch target: the overlay serves both kinds.
+        super::support::StartPlan::Overlay => Ok(()),
     }
 }
 
