@@ -42,6 +42,14 @@ pub enum PreviewStatus {
         reason: FailureReason,
         retryable: bool,
     },
+    /// A recording on a free plan at its recording limit: sealed on this
+    /// computer, not uploaded and with no link
+    /// (`capture::recording_allowance`). `message` is Rust's sentence; the
+    /// card offers Upgrade and Delete, and it is released on its own once a
+    /// slot frees up or the plan changes.
+    Held {
+        message: String,
+    },
 }
 
 /// Why an upload failed, as far as the card's next step goes.
@@ -109,7 +117,8 @@ pub struct CardActions {
     /// Reveal the file in Finder / Explorer (a drive synced here).
     pub reveal: bool,
     /// Open the storage plans in the main window: the upload failed because
-    /// the plan is full, which Retry alone cannot fix.
+    /// the plan is full, which Retry alone cannot fix, or a Free plan
+    /// recording stopped at its length limit.
     pub upgrade: bool,
     /// Open the screenshot in the editor: a screenshot in the drive, with a
     /// file here to read, and no link being made from the unedited picture.
@@ -146,6 +155,10 @@ pub struct PreviewCard {
     /// The capture is in the drive and its link has settled: the card may
     /// slide away on its own. Worked out in [`PreviewCard::refreshed`].
     pub settled: bool,
+    /// One line about the capture itself, in Rust's words: why a Free plan
+    /// recording stopped on its own. Worked out in [`PreviewCard::refreshed`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
     /// The link Copy link puts on the clipboard. Never sent to the card.
     #[serde(skip)]
     pub share_url: Option<String>,
@@ -170,6 +183,15 @@ pub struct PreviewCard {
     /// the next capture, which makes its own attempt. Never sent to the card.
     #[serde(skip)]
     pub kept_locally: bool,
+    /// The held recording this card shows (`recording_allowance`), whose
+    /// sealed file `file_path` then is. Delete removes it. Never sent to the card.
+    #[serde(skip)]
+    pub held_id: Option<String>,
+    /// A Free plan recording that stopped at its length limit
+    /// (`capture::allowance`): the card says so and offers Upgrade, and
+    /// stays until closed so the line is not missed. Never sent to the card.
+    #[serde(skip)]
+    pub stopped_at_free_limit: bool,
 }
 
 /// The sync engine's row for a capture delivered through a synced folder.
@@ -289,11 +311,17 @@ impl PreviewCard {
         let actions = self.decide_actions();
         // A link still being made, or one that failed, holds the card: it
         // must stay up to say the link was copied, or to offer Create link.
-        let settled = matches!(self.status, PreviewStatus::Uploaded { .. }) && !matches!(self.link, LinkState::Creating | LinkState::Failed { .. });
+        // A card explaining a stopped recording stays until it is closed:
+        // sliding away on its own, the reason would go unread.
+        let settled = matches!(self.status, PreviewStatus::Uploaded { .. })
+            && !matches!(self.link, LinkState::Creating | LinkState::Failed { .. })
+            && !self.stopped_at_free_limit;
+        let notice = self.stopped_at_free_limit.then(|| super::allowance::FREE_LIMIT_NOTICE.to_string());
         Self {
             link_text,
             actions,
             settled,
+            notice,
             ..self
         }
     }
@@ -303,24 +331,28 @@ impl PreviewCard {
         let has_link = self.share_url.is_some();
         let retryable = matches!(self.status, PreviewStatus::Failed { retryable: true, .. });
         let kept_here = self.kept_locally && matches!(self.status, PreviewStatus::Failed { .. });
+        let held = self.is_held();
         CardActions {
             retry: retryable,
             // A capture kept in the user's own folder is theirs, not a temp
-            // copy to throw away.
-            discard: retryable && !kept_here,
+            // copy to throw away. A held recording can be deleted: it frees
+            // nothing, but it is the user's way out besides upgrading.
+            discard: (retryable && !kept_here) || held,
             copy_link: has_link,
             // The link is made from a file on this machine: the synced copy,
             // or the temp copy kept for exactly this.
             mint_link: in_drive && !has_link && self.placed_path.is_some() && self.link != LinkState::Creating,
             revoke_link: has_link && self.share_token.is_some(),
             reveal: !self.remote && (in_drive || kept_here) && self.placed_path.is_some(),
-            upgrade: matches!(
-                self.status,
-                PreviewStatus::Failed {
-                    reason: FailureReason::StorageFull,
-                    ..
-                }
-            ),
+            upgrade: held
+                || self.stopped_at_free_limit
+                || matches!(
+                    self.status,
+                    PreviewStatus::Failed {
+                        reason: FailureReason::StorageFull,
+                        ..
+                    }
+                ),
             edit: self.kind == CaptureKind::Screenshot
                 && in_drive
                 && self.placed_path.is_some()
@@ -349,7 +381,13 @@ impl PreviewCard {
     /// not lose it (it comes back on the next capture).
     #[must_use]
     pub fn is_parkable(&self) -> bool {
-        self.can_retry() && !self.kept_locally
+        (self.can_retry() && !self.kept_locally) || self.is_held()
+    }
+
+    /// A recording held at the free plan's limit, sealed on this computer.
+    #[must_use]
+    pub fn is_held(&self) -> bool {
+        matches!(self.status, PreviewStatus::Held { .. }) && self.held_id.is_some()
     }
 
     /// Whether the card's own temp copy is no longer needed once the card
@@ -393,8 +431,72 @@ mod tests {
             placed_path: None,
             destination: CaptureDestination::own("Work", "Work"),
             kept_locally: false,
+            held_id: None,
+            stopped_at_free_limit: false,
+            notice: None,
         }
         .refreshed()
+    }
+
+    /// A held recording offers only Upgrade and Delete: nothing uploads it
+    /// and no link can be made from it. It comes back after its card closes.
+    #[test]
+    fn a_held_recording_offers_upgrade_and_delete_and_nothing_that_shares() {
+        let mut c = card(4);
+        c.status = PreviewStatus::Held {
+            message: crate::capture::recording_allowance::HELD_MESSAGE.into(),
+        };
+        c.held_id = Some("abc".into());
+        c.placed_path = Some(PathBuf::from("/x"));
+        let c = c.refreshed();
+        assert_eq!(
+            c.actions,
+            CardActions {
+                discard: true,
+                upgrade: true,
+                ..CardActions::default()
+            }
+        );
+        assert!(!c.settled, "it never slides away on its own");
+        assert!(c.is_parkable(), "closing the card does not lose it");
+        assert!(!c.temp_copy_done_with());
+        let wire = serde_json::to_value(&c).unwrap();
+        assert_eq!(wire["status"]["state"], "held");
+        assert_eq!(wire["status"]["message"], crate::capture::recording_allowance::HELD_MESSAGE);
+        assert!(wire.get("heldId").is_none(), "the held id stays in Rust");
+    }
+
+    /// A Free plan recording stopped at its limit: the card says why in
+    /// Rust's words, offers Upgrade whatever the upload did, and does not
+    /// slide away before the line is read.
+    #[test]
+    fn a_recording_stopped_at_the_free_limit_says_so_and_offers_upgrade() {
+        let uploaded = || PreviewStatus::Uploaded {
+            link_copied: true,
+            link_error: None,
+        };
+        let plain = card(1).with_outcome(1, uploaded(), Some("https://x".into())).unwrap();
+        assert!(plain.settled);
+        assert_eq!(plain.notice, None);
+        assert!(!plain.actions.upgrade);
+
+        let capped = PreviewCard {
+            stopped_at_free_limit: true,
+            ..card(2)
+        }
+        .refreshed();
+        assert_eq!(
+            capped.notice.as_deref(),
+            Some("Free recordings stop at 5 minutes. Upgrade for longer recordings.")
+        );
+        assert!(capped.actions.upgrade, "while uploading too");
+        let done = capped.with_outcome(2, uploaded(), Some("https://x".into())).unwrap();
+        assert!(done.actions.upgrade && done.actions.copy_link, "{:?}", done.actions);
+        assert!(!done.settled, "it stays until closed");
+        let json = serde_json::to_value(&done).unwrap();
+        assert_eq!(json["notice"], super::super::allowance::FREE_LIMIT_NOTICE);
+        assert!(json.get("stoppedAtFreeLimit").is_none(), "the flag itself stays in Rust");
+        assert!(serde_json::to_value(&plain).unwrap().get("notice").is_none());
     }
 
     fn syncing(copied: bool) -> PreviewCard {

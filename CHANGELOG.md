@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **The free plan includes 25 screen recordings.** Screenshots and sharing stay unlimited. Past 25, a new recording waits on your computer, not uploaded or shared, until you upgrade or delete an older recording, and then it uploads on its own.
 - **Screenshots on Linux with Wayland use the Hippius capture bar.** Drag an area or take the entire screen on a still of your desktop, with the same keys, timer and shortcut as on other systems, instead of your desktop's screenshot tool.
 - **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
 - **Edit pictures in your remote folders.** Edit image now works on PNG and
@@ -34,6 +35,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Annotate from the menu bar.** Choose Annotate an image from the Screenshot tile's menu to open any picture in the screenshot editor, or press Edit on a screenshot in the list. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
 
 ### Changed
+
+- **Screen recordings on the Free plan stop at 5 minutes.** The recording is saved, uploaded and shared as usual, the timer shows the time left in the last minute, and an Upgrade button is right there for longer recordings. Paid plans have no limit, and paused time does not count.
 
 - **Screen recordings are about half the size, so they upload and share faster.** Text stays just as sharp; a 10-minute recording is now at most about 375 MB at 1080p, where it could be about 1 GB before.
 

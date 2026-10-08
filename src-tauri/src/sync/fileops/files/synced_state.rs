@@ -126,6 +126,33 @@ pub(super) async fn shared_sync_state_for_label(sync: &SyncRunner, label: &str) 
     manager.shared_sync_state().await.ok()
 }
 
+/// Which of `wanted` (salted content hashes, `BLAKE3(ss58 || plaintext)`)
+/// this drive holds anywhere in its sync state: on disk (the `local` tree),
+/// on the server (`remote`) or in the last synced base (`synced`), plus the
+/// ss58 its hashes are salted with. A hash only compares within one salt.
+///
+/// Keyed by content, never by path, so a file moved or renamed inside the
+/// drive is still found. `None` when the drive is not loaded or a sync cycle
+/// holds its lock (`shared_sync_state_for_label`): the caller must read that
+/// as "unknown", never as "absent".
+///
+/// Read by `capture::recording_allowance` to tell whether a recording the
+/// app delivered is still in the account's drives.
+pub(crate) async fn content_hashes_present(
+    sync: &SyncRunner,
+    label: &str,
+    wanted: &std::collections::HashSet<[u8; 32]>,
+) -> Option<(String, std::collections::HashSet<[u8; 32]>)> {
+    let state = shared_sync_state_for_label(sync, label).await?;
+    let found = [&state.local, &state.remote, &state.synced]
+        .into_iter()
+        .flat_map(|tree| tree.files.values())
+        .map(|file| file.salted_hash)
+        .filter(|hash| wanted.contains(hash))
+        .collect();
+    Some((state.ss58_address.to_string(), found))
+}
+
 /// Maximum time `synced_paths_and_excludes_for_label` is willing to
 /// wait for a drive's first reconcile to settle before reading the
 /// cache. Sized to comfortably cover the production retry schedule

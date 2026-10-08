@@ -4,6 +4,7 @@
 //! Design and phasing: `docs/plans/2026-09-22-screen-capture.md`.
 
 pub mod activation;
+pub mod allowance;
 pub mod area_pick;
 pub mod bar;
 pub mod bubble_controls;
@@ -34,6 +35,7 @@ pub mod preview;
 pub mod privacy;
 pub mod recorder_child;
 pub mod recording;
+pub mod recording_allowance;
 pub mod rollout;
 pub mod screencast_token;
 pub mod screenshot;

@@ -783,6 +783,8 @@ fn main() {
             crate::capture::commands::capture_preview_revoke_link,
             crate::capture::commands::capture_preview_reveal,
             crate::capture::commands::capture_preview_discard,
+            crate::capture::commands::capture_held_recordings,
+            crate::capture::commands::capture_held_delete,
             crate::capture::commands::capture_preview_upgrade,
             crate::capture::editor::capture_preview_edit,
             crate::capture::editor::capture_editor_open_file,
