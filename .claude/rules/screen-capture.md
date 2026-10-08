@@ -222,7 +222,10 @@ bubble and the recorder still agree. A rank the user set wins. Pinned by
 `camera_provider::tests` and `capture_wiring.rs`. The app probes once
 per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
 `codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
-Wayland (the desktop's dialog). **Wayland records from the panel**
+Wayland (the desktop's dialog). The same probe reports `h264Decoder` /
+`aacDecoder` (by caps, rank MARGINAL and up) for the file viewer's player
+(`video_stream::decoder_missing_line`); asking for them runs the probe even
+where the lane keeps recording off. **Wayland records from the panel**
 (`StartPlan::Panel`): one `capture-overlay-0` window with the bar alone,
 transparent and fitted to it (opened at `support::PANEL_FIRST_SIZE`; the
 page's `usePanelFit` measures the bar and any open `role="menu"` and calls

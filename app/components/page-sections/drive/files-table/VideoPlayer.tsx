@@ -23,10 +23,10 @@ import VideoPlayerError from "./VideoPlayerError";
 // which is available regardless of the `withGlobalTauri` setting)
 const isTauri = isTauriRuntime();
 
-// Platform info loaded from Rust. The file viewer does not mount this player
-// on Linux at all (`supportsInAppVideo` is false there: WebKitGTK showed a
-// recording as a black frame; see `VideoPreviewBody`). Elsewhere a file
-// reaches the media element and only falls back after a real decoder error.
+// Platform info loaded from Rust. On Linux the viewer hands this player a
+// loopback URL from Rust (`video_playback_source`; WebKitGTK cannot play
+// media from `asset://`) and watches for the first frame itself through
+// `onPlaybackStarted` / `onPlaybackFailed` (see `VideoPreviewBody`).
 let _unsupportedEngine = false;
 if (isTauri) {
   import("@tauri-apps/api/core").then(({ invoke }) =>
@@ -83,13 +83,19 @@ interface VideoPlayerProps {
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
+  /** The first frame is ready (`loadeddata`). */
+  onPlaybackStarted?: () => void;
+  /** The media element reported an error. */
+  onPlaybackFailed?: () => void;
 }
 
 const VideoPlayer: React.FC<VideoPlayerProps> = ({
   videoUrl,
   fileFormat,
   file,
-  handleFileDownload
+  handleFileDownload,
+  onPlaybackStarted,
+  onPlaybackFailed,
 }) => {
   const [error, setError] = useState<string>("");
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -363,6 +369,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onLoadedData={() => {
           clearLoadTimer();
           stopStallWatch();
+          onPlaybackStarted?.();
         }}
         onCanPlay={() => {
           clearLoadTimer();
@@ -388,6 +395,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           );
           clearLoadTimer();
           stopStallWatch();
+          onPlaybackFailed?.();
           setError(
             "This video format (." + fileFormat + ") can't be played in the built-in player.",
           );
