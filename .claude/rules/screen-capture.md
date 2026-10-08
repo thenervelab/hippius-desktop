@@ -1285,9 +1285,23 @@ stderr lines are diagnostics and are logged at `warn`.
   it the file was `ftyp, mdat, moov`). With the index last, a browser asks
   for the end of the file before the first frame, and share links can only be
   read from the start, so the whole recording downloaded before it played.
-  Windows (`MFTranscodeContainerType_FMPEG4`) and Linux (`mp4mux
-  fragment-duration`) write fragmented files whose index is already first.
-  Pinned by `recordings_put_their_index_first` (`recorder_child/plan.rs`).
+  Windows (`MFTranscodeContainerType_FMPEG4`) writes fragmented files whose
+  index is already first. Linux writes fragments while recording (`mp4mux
+  fragment-duration`, so a killed recorder leaves a playable file) and at
+  Stop rewrites them as one movie with its index first, nothing re-encoded
+  (`linux_plan::faststart`: `qtdemux ! mp4mux faststart=true`, run by
+  `encoder::faststart_in_place`, checked with `index_first` before it
+  replaces the file; on any failure the fragments stay). Why: GStreamer
+  1.20 (Ubuntu 22.04) writes one `trun` per picture with implicit data
+  offsets, which Chrome's demuxer reads from the wrong place
+  (`PIPELINE_ERROR_DECODE`, the share page's "can't be played"); and for
+  ANY fragmented file Chrome walks every fragment back and forth before
+  the first frame (about two backward jumps per fragment, measured), which
+  on a share link restarts the download each time. Pinned by
+  `recordings_put_their_index_first` (`recorder_child/plan.rs`) and the
+  Linux self-test (`index_first`). The encoder only ever gets 8-bit 4:2:0
+  (`linux_plan::ENCODER_INPUT`): from RGB, x264 picks 4:4:4 and writes
+  "High 4:4:4 Predictive".
 - **One audio track.** Browsers (the share link's page included) and most
   players play only a file's first audio track, so the microphone as a
   second track went unheard. `AudioMixer` mixes the microphone and, only when

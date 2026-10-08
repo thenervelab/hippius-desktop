@@ -651,6 +651,14 @@ pub fn meter_capture(device: Option<&str>) -> String {
     )
 }
 
+/// What the encoder is given: 8-bit 4:2:0 only (NV12, or I420 for
+/// OpenH264, which takes nothing else). Left to choose, x264 takes the
+/// first format it can, and from RGB that is 4:4:4, which it writes as
+/// H.264 "High 4:4:4 Predictive": a profile browsers' hardware decoders and
+/// some browsers refuse. The pictures arrive as NV12 today; this keeps a
+/// change upstream from ever producing such a file.
+pub const ENCODER_INPUT: &str = "video/x-raw,format={ NV12, I420 }";
+
 /// What the file is written with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodePlan {
@@ -678,8 +686,9 @@ pub fn encode(plan: &EncodePlan) -> String {
     );
     let mut out = format!(
         "appsrc name={VIDEO_SRC} format=time is-live=false do-timestamp=false caps={caps} ! \
-         queue ! videoconvert ! {venc} ! h264parse ! {unbounded} ! mux. ",
+         queue ! videoconvert ! capsfilter caps={planar} ! {venc} ! h264parse ! {unbounded} ! mux. ",
         caps = quoted(&video_caps),
+        planar = quoted(ENCODER_INPUT),
         venc = plan.encoders.video.element(RateControl::for_size(plan.width, plan.height)),
     );
     if plan.audio {
@@ -698,6 +707,96 @@ pub fn encode(plan: &EncodePlan) -> String {
         quoted(&plan.output)
     );
     out
+}
+
+/// The finished recording rewritten as one ordinary MP4 with its index
+/// (`moov`) first, the layout the macOS helper writes
+/// (`shouldOptimizeForNetworkUse`). Nothing is re-encoded: `qtdemux` reads
+/// the fragments back and `mp4mux faststart=true` writes the samples once,
+/// its index ahead of them (the samples wait in `temp`, next to the file,
+/// not in a `/tmp` that may be memory).
+///
+/// Why: the fragments are only there so a killed recorder leaves a file
+/// that plays. Kept in the finished file they cost two ways. GStreamer 1.20
+/// (Ubuntu 22.04) writes one `trun` per picture, all but the first without
+/// a data offset, which Chrome's demuxer reads from the wrong place: the
+/// file fails to decode in Chrome ("PIPELINE_ERROR_DECODE") and a share
+/// link shows "can't be played". And with any GStreamer, Chrome walks every
+/// fragment of a fragmented file before it plays, jumping back each time,
+/// which on a share link (the server ignores Range) restarts the download.
+/// A file with its index first is read once, front to back, everywhere.
+#[must_use]
+pub fn faststart(input: &str, output: &str, temp: &str, audio: bool) -> String {
+    let mut out = format!(
+        "filesrc location={input} ! qtdemux name=demux \
+         mp4mux name=remux faststart=true faststart-file={temp} ! filesink location={output} \
+         demux.video_0 ! queue ! remux.video_0",
+        input = quoted(input),
+        output = quoted(output),
+        temp = quoted(temp),
+    );
+    if audio {
+        out.push_str(" demux.audio_0 ! queue ! remux.audio_0");
+    }
+    out
+}
+
+/// Where [`faststart`] writes: the rewritten file, then its samples while
+/// the index is built, both next to the recording (`<name>.remux`,
+/// `<name>.samples`). The recording itself is replaced only once the
+/// rewrite is whole.
+#[must_use]
+pub fn remux_paths(output: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let with = |suffix: &str| {
+        let mut name = output.as_os_str().to_os_string();
+        name.push(suffix);
+        std::path::PathBuf::from(name)
+    };
+    (with(".remux"), with(".samples"))
+}
+
+/// The four-letter types of an MP4's top-level boxes, in file order, read
+/// from the box headers alone (a few bytes per box, whatever the size).
+///
+/// # Errors
+/// The file could not be read or ends inside a box header.
+pub fn top_level_boxes<R: std::io::Read + std::io::Seek>(file: &mut R) -> std::io::Result<Vec<[u8; 4]>> {
+    use std::io::SeekFrom;
+    let len = file.seek(SeekFrom::End(0))?;
+    let mut at = 0u64;
+    let mut boxes = Vec::new();
+    while at + 8 <= len {
+        file.seek(SeekFrom::Start(at))?;
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header)?;
+        let size32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        let kind = [header[4], header[5], header[6], header[7]];
+        let size = match size32 {
+            0 => len - at,
+            1 => {
+                let mut large = [0u8; 8];
+                file.read_exact(&mut large)?;
+                u64::from_be_bytes(large)
+            }
+            n => u64::from(n),
+        };
+        if size < 8 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "a box shorter than its header"));
+        }
+        boxes.push(kind);
+        at = at.saturating_add(size);
+    }
+    Ok(boxes)
+}
+
+/// Whether top-level `boxes` make one ordinary movie with its index first:
+/// a `moov` ahead of the first `mdat`, and no fragments (`moof`).
+#[must_use]
+pub fn index_first(boxes: &[[u8; 4]]) -> bool {
+    let moov = boxes.iter().position(|b| b == b"moov");
+    let mdat = boxes.iter().position(|b| b == b"mdat");
+    let fragmented = boxes.iter().any(|b| b == b"moof");
+    matches!((moov, mdat), (Some(i), Some(j)) if i < j) && !fragmented
 }
 
 /// What an X11 recording reads, from the start command and the displays
@@ -1254,6 +1353,91 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The encoder only ever gets 8-bit 4:2:0: from RGB, x264 would pick
+    /// 4:4:4 and write "High 4:4:4 Predictive".
+    #[test]
+    fn the_encoder_is_given_4_2_0_only() {
+        for audio in [true, false] {
+            let text = encode(&encode_plan(audio));
+            assert!(
+                text.contains("videoconvert ! capsfilter caps=\"video/x-raw,format={ NV12, I420 }\" ! x264enc "),
+                "{text}"
+            );
+        }
+        assert!(!ENCODER_INPUT.contains("444") && !ENCODER_INPUT.contains("BGR") && !ENCODER_INPUT.contains("10LE"));
+    }
+
+    /// The finished file is remuxed, not re-encoded, with its index first;
+    /// the audio track is linked only when the recording has one (a link to
+    /// a track that never comes would hold the muxer forever).
+    #[test]
+    fn the_finished_file_is_remuxed_with_its_index_first() {
+        let text = faststart("/c/Recording 1.mp4", "/c/Recording 1.mp4.remux", "/c/Recording 1.mp4.samples", true);
+        assert!(
+            text.starts_with("filesrc location=\"/c/Recording 1.mp4\" ! qtdemux name=demux "),
+            "{text}"
+        );
+        assert!(text.contains(
+            "mp4mux name=remux faststart=true faststart-file=\"/c/Recording 1.mp4.samples\" ! filesink location=\"/c/Recording 1.mp4.remux\""
+        ));
+        assert!(text.contains("demux.video_0 ! queue ! remux.video_0"));
+        assert!(text.contains("demux.audio_0 ! queue ! remux.audio_0"));
+        for encoder in ["x264enc", "openh264enc", "vah264enc", "vaapih264enc", "avenc_aac", "videoconvert"] {
+            assert!(!text.contains(encoder), "nothing is re-encoded: {text}");
+        }
+        let silent = faststart("/a.f", "/a.mp4", "/a.t", false);
+        assert!(!silent.contains("audio"), "{silent}");
+        assert!(silent.contains("demux.video_0 ! queue ! remux.video_0"));
+    }
+
+    fn mp4_box(kind: [u8; 4], payload: usize) -> Vec<u8> {
+        let mut b = u32::try_from(8 + payload).unwrap().to_be_bytes().to_vec();
+        b.extend_from_slice(&kind);
+        b.resize(8 + payload, 0);
+        b
+    }
+
+    /// The layout check reads box headers only: the fragmented file a
+    /// recorder writes is not index-first, the rewritten one is, and so is
+    /// a 64-bit `mdat` (a recording past 4 GB).
+    #[test]
+    fn the_layout_check_tells_fragments_from_an_index_first_movie() {
+        let read = |parts: &[Vec<u8>]| top_level_boxes(&mut std::io::Cursor::new(parts.concat())).unwrap();
+        let fragmented = read(&[
+            mp4_box(*b"ftyp", 24),
+            mp4_box(*b"moov", 100),
+            mp4_box(*b"moof", 50),
+            mp4_box(*b"mdat", 1000),
+            mp4_box(*b"moof", 50),
+            mp4_box(*b"mdat", 900),
+            mp4_box(*b"mfra", 40),
+        ]);
+        assert_eq!(fragmented.len(), 7);
+        assert!(!index_first(&fragmented), "fragments");
+        let rewritten = read(&[
+            mp4_box(*b"ftyp", 24),
+            mp4_box(*b"moov", 400),
+            mp4_box(*b"uuid", 30),
+            mp4_box(*b"mdat", 5000),
+        ]);
+        assert!(index_first(&rewritten));
+        let index_last = read(&[mp4_box(*b"ftyp", 24), mp4_box(*b"mdat", 5000), mp4_box(*b"moov", 400)]);
+        assert!(!index_first(&index_last), "index at the end");
+        let mut large = 1u32.to_be_bytes().to_vec();
+        large.extend_from_slice(b"mdat");
+        large.extend_from_slice(&24u64.to_be_bytes());
+        large.resize(24, 0);
+        assert!(index_first(&read(&[mp4_box(*b"ftyp", 8), mp4_box(*b"moov", 10), large])));
+        assert!(top_level_boxes(&mut std::io::Cursor::new(vec![0, 0, 0, 3, b'b', b'a', b'd', b'!'])).is_err());
+    }
+
+    #[test]
+    fn the_rewrite_lands_next_to_the_recording() {
+        let (remuxed, samples) = remux_paths(std::path::Path::new("/c/Recording 1.mp4"));
+        assert_eq!(remuxed, std::path::Path::new("/c/Recording 1.mp4.remux"));
+        assert_eq!(samples, std::path::Path::new("/c/Recording 1.mp4.samples"));
     }
 
     #[test]
