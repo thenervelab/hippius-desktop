@@ -334,6 +334,9 @@ describe("the camera mid-recording", () => {
     withCamera(BUBBLE);
     fireEvent.click(await screen.findByRole("button", { name: "Camera options" }));
     await screen.findByRole("menu");
+    // The blur listener is added by an effect after the menu renders; on a
+    // slow runner it may not have run yet when findByRole returns.
+    await act(async () => {});
     act(() => {
       window.dispatchEvent(new Event("blur"));
     });
