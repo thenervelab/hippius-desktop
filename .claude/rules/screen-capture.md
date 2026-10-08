@@ -222,7 +222,10 @@ bubble and the recorder still agree. A rank the user set wins. Pinned by
 `camera_provider::tests` and `capture_wiring.rs`. The app probes once
 per launch (`--probe`, warmed at launch by `warn_if_helper_missing`) for
 `codecsMissing` / `portalMissing`, and waits up to 5 minutes for `started` on
-Wayland (the desktop's dialog). **Wayland records from the panel**
+Wayland (the desktop's dialog). The same probe reports `h264Decoder` /
+`aacDecoder` (by caps, rank MARGINAL and up) for the file viewer's player
+(`video_stream::decoder_missing_line`); asking for them runs the probe even
+where the lane keeps recording off. **Wayland records from the panel**
 (`StartPlan::Panel`): one `capture-overlay-0` window with the bar alone,
 transparent and fitted to it (opened at `support::PANEL_FIRST_SIZE`; the
 page's `usePanelFit` measures the bar and any open `role="menu"` and calls
@@ -719,7 +722,7 @@ full display, or it sits under the Dock), `focused(false)` + content-protected e
 `accept_first_mouse(true)` (never key, so without it every button needed two
 clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer bar
 stays mounted and pauses, or the card changes height under the pointer).
-It must fit 316 x 330 in every state: it sits at the window's bottom, so an
+It must fit 316 x 346 in every state: it sits at the window's bottom, so an
 overflow clips the TOP (the close button first). Hence the 16:9 picture and
 the one-line failure reason with the full text in `title`, and ONE row of
 actions where no label wraps (`whitespace-nowrap` on every text button): one
@@ -797,6 +800,21 @@ and Escape at the question give focus back to the button that asked. The pill ap
 when its `seq` is newer than the one it shows. It drags by
 `data-tauri-drag-region` (`-webkit-app-region` is Electron-only), which needs
 `core:window:allow-start-dragging` in `capture-controls.json`.
+
+**Free plan length cap** (`allowance.rs`): Free plan recordings stop at
+`FREE_MAX_RECORDING` (5 min of RECORDED time, the recorder's
+`RecordedClock`, pauses left out); paid plans have no limit; screenshots are
+untouched. `begin_recording` decides the tier once, alongside the recorder's
+start (`recording_tier`, bounded by `LOOKUP_WITHIN`), and stores the limit on
+`CaptureState`; `tick_once` stops at it through `stop_inner`, exactly like
+Stop, and the card gets `stopped_at_free_limit` (Rust's `notice`, Upgrade,
+no auto-hide). The tier reads the plan through
+`storage_overview::PlanReads`, the same fold the overview and sharing use;
+the overview remembers it on every read, per account, in memory and in
+`user_preferences`. **It fails open**: no fresh verdict uses the last one
+kept, none ever seen means no cap. The pill shows Rust's `remainingSecs`
+(on `PhaseEvent`, last minute only). Other recording limits read the same
+`RecordingTier` / `recording_tier`.
 
 **Live controls** (`live_controls.rs`, pure; the pill's `PillMenu.tsx` only
 draws): mid-recording the pill mutes and unmutes the microphone

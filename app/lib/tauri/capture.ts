@@ -19,14 +19,18 @@ export type CapturePhase =
   | { phase: "idle" }
   | { phase: "selecting"; kind: CaptureKind; mode: CaptureMode }
   | { phase: "capturing"; kind: CaptureKind }
-  | { phase: "recording"; elapsedSecs: number; microphone: boolean }
-  | { phase: "paused"; elapsedSecs: number; microphone: boolean }
+  | { phase: "recording"; elapsedSecs: number; microphone: boolean; remainingSecs?: number }
+  | { phase: "paused"; elapsedSecs: number; microphone: boolean; remainingSecs?: number }
   | { phase: "finalizing" };
 
 /**
  * `capture_state_changed` and `capture_state`: the phase plus `seq`, a number
  * that only goes up. A surface seeded from `capture_state` drops any event
  * whose `seq` is not newer than what it holds. Mirrors Rust's `PhaseEvent`.
+ *
+ * `remainingSecs` (recording and paused only): the seconds left before a Free
+ * plan recording stops on its own, present only in its last minute (Rust's
+ * `allowance::remaining_to_show`).
  */
 export type CapturePhaseEvent = CapturePhase & { seq: number };
 
@@ -408,6 +412,8 @@ export interface CapturePreviewCard {
    * uploaded.
    */
   settled?: boolean;
+  /** Rust's line about the capture itself (a Free plan recording stopped at its limit); absent = none. */
+  notice?: string;
 }
 
 /** `capture_show_in_folder`: where to show the capture. */

@@ -447,3 +447,52 @@ describe("the card's actions (Rust decides which)", () => {
     expect(screen.queryByRole("button", { name: /^Show in (Finder|Explorer|file manager)$/ })).toBeNull();
   });
 });
+
+describe("a recording stopped at the Free plan's limit", () => {
+  const NOTICE = "Free recordings stop at 5 minutes. Upgrade for longer recordings.";
+  const capped = (status: CapturePreviewCard["status"], actions: Partial<Actions> = {}) =>
+    card(status, 1, { upgrade: true, ...actions }, { kind: "recording", notice: NOTICE, settled: false });
+
+  it("says why in Rust's words, with Upgrade where Show in folder was", async () => {
+    await setup(capped({ state: "uploaded", linkCopied: true }, { copyLink: true }));
+    expect(screen.getByTestId("capture-notice")).toHaveTextContent(NOTICE);
+    expect(screen.queryByText("Work › Captures")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show in folder" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_upgrade")).toBe(1);
+    expect(screen.getByRole("button", { name: "Copy link" })).toBeEnabled();
+  });
+
+  // Rust holds the card (not settled) so the line is not missed.
+  it("stays until it is closed", async () => {
+    await setup(capped({ state: "uploaded", linkCopied: true }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_HIDE_MS * 2);
+    });
+    expect(dismissed()).toBe(0);
+  });
+
+  it("keeps its actions on one line while it uploads and once it is in", async () => {
+    const states = [
+      capped({ state: "uploading" }),
+      capped({ state: "syncing", linkCopied: true }, { copyLink: true, reveal: true, revokeLink: true }),
+    ];
+    for (const [i, c] of states.entries()) {
+      const view = await setup({ ...c, id: i + 1 });
+      const buttons = Array.from(screen.getByTestId("capture-actions").querySelectorAll("button"));
+      expect(buttons.length, `state ${i}`).toBeLessThanOrEqual(3);
+      expect(buttons.filter((b) => b.classList.contains("flex-1")).length, `state ${i}`).toBe(1);
+      view.unmount();
+    }
+  });
+
+  it("shows the drive as before for any other card", async () => {
+    await setup(card({ state: "uploaded", linkCopied: true }));
+    expect(screen.queryByTestId("capture-notice")).toBeNull();
+    expect(screen.getByText("Work › Captures")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show in folder" })).toBeInTheDocument();
+  });
+});

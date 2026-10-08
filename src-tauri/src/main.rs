@@ -41,6 +41,7 @@ mod test_helpers;
 pub mod tray;
 pub mod updates;
 mod utils;
+pub mod video_stream;
 pub mod vpn;
 pub mod wallet;
 
@@ -516,6 +517,10 @@ fn main() {
             prepare_motion_photo_preview,
             read_preview_bytes,
             resolve_drive_file_source,
+            // The viewer's video source: the asset URL, or on Linux the
+            // loopback stream (WebKitGTK cannot play media from `asset://`).
+            crate::video_stream::video_playback_source,
+            crate::video_stream::video_stream_release,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,

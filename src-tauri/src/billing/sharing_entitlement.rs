@@ -48,7 +48,7 @@ pub fn plan_code_allows_sharing(code: Option<&str>) -> bool {
 }
 
 /// The drive-rail subscription's plan code, when it names an active plan.
-fn active_drive_plan_code(sub: &serde_json::Value) -> Option<&str> {
+pub(crate) fn active_drive_plan_code(sub: &serde_json::Value) -> Option<&str> {
     if !sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false) {
         return None;
     }

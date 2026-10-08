@@ -76,6 +76,7 @@ jobs:
   # post-merge coverage.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
       capture: ${{ steps.diff.outputs.capture }}
@@ -190,6 +191,7 @@ jobs:
     # Pushes always run.
     if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -216,6 +218,7 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -243,7 +246,7 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: |
-          sudo apt-get install -y --no-install-recommends xvfb
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends xvfb
           bash ../scripts/with-xvfb.sh -- cargo test --lib capture::linux_x11 -- --ignored
 
       # Linux recording's real writer: the recorder child's GStreamer
@@ -255,7 +258,7 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: |
-          sudo apt-get install -y --no-install-recommends gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
           cargo test --lib capture::recorder_child::linux -- --ignored --test-threads=1
 
   # The required `rust-linux` check: both Linux halves, as one status.
@@ -302,6 +305,7 @@ jobs:
       (github.event_name == 'pull_request' && needs.changes.outputs.capture == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: macos-latest
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -328,6 +332,7 @@ jobs:
       (github.event_name == 'pull_request' && needs.changes.outputs.capture == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: macos-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -392,6 +397,7 @@ jobs:
       (github.event_name == 'pull_request' && needs.changes.outputs.capture == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -624,9 +630,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v ffprobe >/dev/null; then
-            choco install ffmpeg -y --no-progress
-          fi
+          # The Chocolatey feed sometimes answers 504 for a while: retry.
+          for attempt in 1 2 3; do
+            command -v ffprobe >/dev/null && break
+            choco install ffmpeg -y --no-progress || true
+            command -v ffprobe >/dev/null && break
+            # A fresh install is on PATH only from the next step; look there too.
+            [ -x /c/ProgramData/chocolatey/bin/ffprobe.exe ] && export PATH="/c/ProgramData/chocolatey/bin:$PATH" && break
+            echo "ffprobe not installed (attempt $attempt), retrying in 30 s"
+            sleep 30
+          done
           ffprobe -version | head -1
 
       - name: Build the app binary and the runtime test
@@ -683,7 +696,7 @@ jobs:
       - name: Install GStreamer plugins, Xvfb, PulseAudio and ffprobe
         run: |
           set -euo pipefail
-          sudo apt-get install -y --no-install-recommends \
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-pipewire \
             gstreamer1.0-pulseaudio gstreamer1.0-tools \
@@ -738,6 +751,7 @@ jobs:
       (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -782,6 +796,7 @@ jobs:
     # configured in deny.toml but not yet enforced — see the [licenses] note
     # there for the sign-off it's blocked on.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -839,6 +854,7 @@ jobs:
     # module tree from the crate root. Keeping the tree clean keeps `cargo fmt`
     # safe to run on a single file.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -861,6 +877,7 @@ jobs:
     # catches the unquoted-`$GITHUB_ENV` SC2086 class. Workflow SECURITY (vs
     # correctness) is gated separately by the `zizmor` job below.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -895,6 +912,7 @@ jobs:
     # The ubuntu runner ships shellcheck, so unlike actionlint and zizmor there
     # is no binary to fetch or pin here.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -915,6 +933,7 @@ jobs:
     # setup-node in the release workflow) is justified inline with a
     # `# zizmor: ignore[cache-poisoning]` comment.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -937,6 +956,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

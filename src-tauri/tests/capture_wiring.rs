@@ -213,10 +213,9 @@ fn a_recording_is_counted_or_held_before_it_reaches_the_drive() {
         "only as many as the plan allows"
     );
 
-    // The plan is read in one place, for the integration swap.
     let allowance = read("src/capture/recording_allowance.rs");
-    assert_eq!(allowance.matches("fetch_plan_read(").count(), 1, "one plan read call site");
-    assert!(fn_body(&allowance, "pub async fn current_plan(").contains("fetch_plan_read(state)"));
+    // The count reads the plan the same way the length cap does.
+    assert!(fn_body(&allowance, "pub async fn current_plan(").contains("allowance::recording_tier(state, &account)"));
 }
 
 /// The recorder writes the in-progress file under a hidden app folder that
@@ -2444,4 +2443,60 @@ fn the_pill_and_the_bubble_ask_to_stay_on_top() {
     for builder in ["fn open_controls(", "fn open_camera_window("] {
         assert!(fn_body(&src, builder).contains(".always_on_top(true)"), "{builder}");
     }
+}
+
+/// The Free plan's length limit is decided from the plan when a recording
+/// starts, set before the recording is adopted (so its first phase already
+/// carries it), and enforced by the tick through the same `stop_inner` Stop
+/// uses, so the file is saved and delivered as usual. Each link fails
+/// silently: a recording that is never capped, or one that is cut without
+/// being saved.
+#[test]
+fn the_free_recording_limit_is_decided_at_start_and_stops_like_stop() {
+    let src = read("src/capture/commands.rs");
+    let begin = fn_body(&src, "async fn begin_recording(");
+    assert!(
+        fn_body(&src, "fn spawn_tier_lookup(").contains("allowance::recording_tier("),
+        "the lookup reads the tier"
+    );
+    let lookup = begin.find("spawn_tier_lookup(app)").expect("the tier is read as the recording starts");
+    let set = begin
+        .find("set_recording_limit(super::allowance::max_recording(")
+        .expect("the limit comes from the tier");
+    let adopt = begin.find("adopt_recorder(").expect("the recorder is adopted");
+    assert!(lookup < set && set < adopt, "the limit is set before the recording is adopted");
+
+    let tick = fn_body(&src, "fn tick_once(");
+    let at_limit = tick.find("at_recording_limit(elapsed)").expect("each tick checks the limit");
+    let after = &tick[at_limit..];
+    let branch = &after[..after.find("return Tick::Done").expect("the loop ends")];
+    assert!(branch.contains("stopped_at_limit.store(true") && branch.contains("stop_inner(&app)"));
+
+    let stop = fn_body(&src, "pub(crate) async fn stop_inner(");
+    assert!(stop.contains("stopped_at_limit.swap(false"), "the flag is read once and cleared");
+    assert!(stop.contains("card.stopped_at_free_limit = true"), "the card says why");
+
+    // The pill's time left rides on every phase broadcast.
+    assert!(fn_body(&src, "fn phase_event(").contains("allowance::remaining_to_show("));
+    for builder in ["fn apply(", "fn rebroadcast(", "fn snapshot(", "fn adopt_recorder("] {
+        assert!(
+            fn_body(&src, builder).contains("self.phase_event("),
+            "{builder} builds its event through phase_event"
+        );
+    }
+}
+
+/// The tier reads the plan through the same fold the storage overview and
+/// sharing use, never a parse or a request of its own, and the overview
+/// keeps the last verdict fresh.
+#[test]
+fn the_recording_tier_reads_the_plan_the_way_the_overview_does() {
+    let allowance = read("src/capture/allowance.rs");
+    assert!(allowance.contains("storage_overview::fetch_plan_reads("));
+    assert!(allowance.contains("sharing_entitlement::active_drive_plan_code("));
+    assert!(allowance.contains("storage_overview::drive_code_is_free("));
+    assert!(!allowance.contains("\"/api/"), "no request of its own");
+    let overview = read("src/billing/storage_overview.rs");
+    assert!(fn_body(&overview, "pub async fn get_storage_overview(").contains("allowance::remember("));
+    assert!(fn_body(&overview, "pub(crate) async fn fetch_can_share_drives(").contains("fetch_plan_reads("));
 }

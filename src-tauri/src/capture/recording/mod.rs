@@ -295,6 +295,60 @@ pub fn meter_command(device: Option<&str>) -> Option<std::process::Command> {
     }
 }
 
+/// How much has been recorded: running time only, pauses left out.
+///
+/// The pill's time and the free plan's length cap (`capture::allowance`) both
+/// read this, so a recording paused for an hour is still a five-minute one.
+/// The `_at` forms take the time as an argument so the arithmetic can be
+/// tested without waiting.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RecordedClock {
+    running_since: Option<std::time::Instant>,
+    accumulated: std::time::Duration,
+}
+
+impl RecordedClock {
+    /// Frames are being written from now on (the start, a resume, a crop).
+    pub fn start(&mut self) {
+        self.start_at(std::time::Instant::now());
+    }
+
+    pub fn start_at(&mut self, now: std::time::Instant) {
+        if self.running_since.is_none() {
+            self.running_since = Some(now);
+        }
+    }
+
+    /// Nothing is written from now on (a pause, the stop): the time so far is kept.
+    pub fn freeze(&mut self) {
+        self.freeze_at(std::time::Instant::now());
+    }
+
+    pub fn freeze_at(&mut self, now: std::time::Instant) {
+        if let Some(since) = self.running_since.take() {
+            self.accumulated += now.saturating_duration_since(since);
+        }
+    }
+
+    #[must_use]
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.elapsed_at(std::time::Instant::now())
+    }
+
+    #[must_use]
+    pub fn elapsed_at(&self, now: std::time::Instant) -> std::time::Duration {
+        self.accumulated
+            + self
+                .running_since
+                .map_or(std::time::Duration::ZERO, |since| now.saturating_duration_since(since))
+    }
+
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.running_since.is_some()
+    }
+}
+
 /// A live recording session. One at a time; owned by `CaptureState`.
 pub trait Recorder: Send {
     fn pause(&mut self) -> Result<()>;
@@ -645,6 +699,30 @@ pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Paused time is not recorded time: 200 s, a 500 s pause, then 100 s
+    /// more is a 300 s recording, not an 800 s one.
+    #[test]
+    fn the_recorded_clock_leaves_pauses_out() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        let mut clock = RecordedClock::default();
+        assert_eq!(clock.elapsed_at(at(50)), Duration::ZERO, "nothing before the start");
+        clock.start_at(t0);
+        assert_eq!(clock.elapsed_at(at(200)).as_secs(), 200);
+        clock.freeze_at(at(200));
+        assert!(!clock.is_running());
+        assert_eq!(clock.elapsed_at(at(700)).as_secs(), 200, "a pause does not count");
+        clock.start_at(at(700));
+        assert_eq!(clock.elapsed_at(at(800)).as_secs(), 300);
+        // A second start while running does not reset the run in progress.
+        clock.start_at(at(750));
+        assert_eq!(clock.elapsed_at(at(800)).as_secs(), 300);
+        clock.freeze_at(at(800));
+        clock.freeze_at(at(900));
+        assert_eq!(clock.elapsed_at(at(1000)).as_secs(), 300, "a second freeze adds nothing");
+    }
 
     #[test]
     fn a_mac_with_no_helper_is_told_the_build_lacks_it() {

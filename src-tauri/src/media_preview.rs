@@ -134,35 +134,46 @@ pub async fn read_preview_bytes(
 ///
 /// Both roots are canonicalised before the prefix test, so a `..` segment or a
 /// symlink pointing out of a sync folder resolves to its real location and
-/// fails the check rather than escaping it.
-async fn validate_preview_source(state: &crate::app_state::AppState, source: &Path) -> Result<PathBuf> {
-    let canonical_source = tokio::fs::canonicalize(source).await?;
-    let preview_root = dirs::home_dir()
-        .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
-        .join(".hippius")
-        .join("preview-cache");
-    if let Ok(canonical_preview_root) = tokio::fs::canonicalize(&preview_root).await
-        && canonical_source.starts_with(canonical_preview_root)
-    {
-        return Ok(canonical_source);
+/// fails the check rather than escaping it. The video stream
+/// (`video_stream.rs`) runs every file it serves through this same gate.
+pub(crate) async fn validate_preview_source(state: &crate::app_state::AppState, source: &Path) -> Result<PathBuf> {
+    let mut roots = vec![preview_cache_root()?];
+    // The preview cache alone needs no account; only consult the drives when
+    // the file is not there, as before.
+    if let Ok(found) = path_under_roots(source, &roots) {
+        return Ok(found);
     }
-
     let account_id = state.current_account_id()?;
     let sync_paths = crate::sync::folders::get_all_sync_paths_internal(state.pool()?, &account_id).await?;
-    for sync_path in sync_paths {
-        if sync_path.path.is_empty() {
-            continue;
-        }
-        if let Ok(canonical_root) = tokio::fs::canonicalize(&sync_path.path).await
-            && canonical_source.starts_with(canonical_root)
+    roots.extend(sync_paths.into_iter().filter(|p| !p.path.is_empty()).map(|p| PathBuf::from(p.path)));
+    let source = source.to_path_buf();
+    tokio::task::spawn_blocking(move || path_under_roots(&source, &roots))
+        .await
+        .map_err(|e| AppError::Other(format!("preview gate task failed: {e}")))?
+}
+
+/// `$HOME/.hippius/preview-cache`, where cloud-only files are decrypted for
+/// the viewer.
+fn preview_cache_root() -> Result<PathBuf> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
+        .join(".hippius")
+        .join("preview-cache"))
+}
+
+/// The pure half of [`validate_preview_source`]: `source`'s real location
+/// when it sits under one of `roots` (each canonicalised; a root that does
+/// not exist is skipped), else a refusal. A missing source is an error too.
+pub(crate) fn path_under_roots(source: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
+    let canonical_source = fs::canonicalize(source)?;
+    for root in roots {
+        if let Ok(canonical_root) = fs::canonicalize(root)
+            && canonical_source.starts_with(&canonical_root)
         {
             return Ok(canonical_source);
         }
     }
-
-    Err(AppError::Validation(
-        "image preview source is outside the account's registered drives".into(),
-    ))
+    Err(AppError::Validation("preview source is outside the account's registered drives".into()))
 }
 
 /// Where a file of one of this account's drives is on this device, for a
@@ -414,6 +425,45 @@ mod tests {
         }
     }
     use super::*;
+
+    /// The gate every preview and the video stream go through: only a file
+    /// under a drive or the preview cache, judged by its real location.
+    mod gate {
+        use super::super::path_under_roots;
+        use std::fs;
+
+        #[test]
+        fn allows_a_file_under_a_root_and_refuses_one_outside() {
+            let dir = tempfile::tempdir().unwrap();
+            let drive = dir.path().join("Drive");
+            fs::create_dir_all(drive.join("Captures")).unwrap();
+            fs::write(drive.join("Captures/Recording.mp4"), b"mp4").unwrap();
+            fs::write(dir.path().join("secret.mp4"), b"x").unwrap();
+            let roots = vec![dir.path().join("missing-cache"), drive.clone()];
+
+            let found = path_under_roots(&drive.join("Captures/Recording.mp4"), &roots).unwrap();
+            assert_eq!(found, fs::canonicalize(drive.join("Captures/Recording.mp4")).unwrap());
+            assert!(path_under_roots(&dir.path().join("secret.mp4"), &roots).is_err());
+            assert!(path_under_roots(&drive.join("../secret.mp4"), &roots).is_err(), "`..` resolves first");
+            assert!(path_under_roots(&drive.join("Captures/gone.mp4"), &roots).is_err());
+            assert!(path_under_roots(&drive.join("Captures/Recording.mp4"), &[]).is_err());
+            // A sibling whose name starts like the drive is not inside it.
+            fs::create_dir_all(dir.path().join("Drive2")).unwrap();
+            fs::write(dir.path().join("Drive2/a.mp4"), b"x").unwrap();
+            assert!(path_under_roots(&dir.path().join("Drive2/a.mp4"), &roots).is_err());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_link_out_of_a_root_is_refused() {
+            let dir = tempfile::tempdir().unwrap();
+            let drive = dir.path().join("Drive");
+            fs::create_dir_all(&drive).unwrap();
+            fs::write(dir.path().join("secret.mp4"), b"x").unwrap();
+            std::os::unix::fs::symlink(dir.path().join("secret.mp4"), drive.join("link.mp4")).unwrap();
+            assert!(path_under_roots(&drive.join("link.mp4"), std::slice::from_ref(&drive)).is_err());
+        }
+    }
 
     fn bundle(still: &[u8], video: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::from(still);

@@ -45,7 +45,6 @@ use sqlx::{Row, SqlitePool};
 use zeroize::Zeroizing;
 
 use crate::app_state::AppState;
-use crate::billing::storage_overview::PlanRead;
 use crate::error::{AppError, Result};
 
 /// Recordings a free account can have before new ones are held.
@@ -65,45 +64,15 @@ pub enum RecordingPlan {
     Paid,
 }
 
-/// Plan codes this build knows to be paid. `solo` is sold as Starter.
-const PAID_PLAN_CODES: [&str; 4] = ["solo", "duo", "max", "scale"];
-
-/// A plan read as a recording plan; `None` = unknown. No plan at all is the
-/// free tier; a code this build has never heard of is unknown, not free.
-#[must_use]
-pub(crate) fn plan_from_read(read: &PlanRead) -> Option<RecordingPlan> {
-    match read {
-        PlanRead::NoPlan => Some(RecordingPlan::Free),
-        PlanRead::Unknown => None,
-        PlanRead::Plan(code) => {
-            let code = code.trim().to_ascii_lowercase();
-            if code == "free" {
-                Some(RecordingPlan::Free)
-            } else if PAID_PLAN_CODES.contains(&code.as_str()) {
-                Some(RecordingPlan::Paid)
-            } else {
-                None
-            }
-        }
-    }
-}
-
 /// The account's plan for the recording count; `None` when it cannot be told.
-///
-/// ── INTEGRATION POINT ── the ONE place the plan is read. Swap the body for
-/// `super::allowance::recording_tier(state, &state.current_session_account().ok()?).await`
-/// mapped `RecordingTier::Free => RecordingPlan::Free`, `RecordingTier::Paid
-/// => RecordingPlan::Paid` (its `None` stays `None`) once that lands (the
-/// recording length cap change), and drop
-/// `billing::storage_overview::fetch_plan_read` with it.
+/// The same reading as the recording length cap (`capture::allowance`), so
+/// the two free plan rules can never disagree about who is on the free plan.
 pub async fn current_plan(state: &AppState, account_id: &str) -> Option<RecordingPlan> {
     let _ = account_id;
-    match crate::billing::storage_overview::fetch_plan_read(state).await {
-        Ok(read) => plan_from_read(&read),
-        Err(e) => {
-            tracing::warn!(error = %e, "plan not read for the recording allowance; not holding");
-            None
-        }
+    let account = state.current_session_account().ok()?;
+    match super::allowance::recording_tier(state, &account).await? {
+        super::allowance::RecordingTier::Free => Some(RecordingPlan::Free),
+        super::allowance::RecordingTier::Paid => Some(RecordingPlan::Paid),
     }
 }
 
@@ -815,18 +784,6 @@ mod tests {
         assert_eq!(decide(free, FREE_RECORDING_LIMIT + 3), Verdict::Hold);
         assert_eq!(decide(Some(RecordingPlan::Paid), 500), Verdict::Deliver, "paid plans have no count");
         assert_eq!(decide(None, 500), Verdict::Deliver, "an unknown plan fails open");
-    }
-
-    #[test]
-    fn a_plan_read_maps_to_free_paid_or_unknown() {
-        assert_eq!(plan_from_read(&PlanRead::NoPlan), Some(RecordingPlan::Free));
-        assert_eq!(plan_from_read(&PlanRead::Plan(" Free ".into())), Some(RecordingPlan::Free));
-        for code in ["solo", "duo", "max", "scale"] {
-            assert_eq!(plan_from_read(&PlanRead::Plan(code.into())), Some(RecordingPlan::Paid), "{code}");
-        }
-        assert_eq!(plan_from_read(&PlanRead::Plan(String::new())), None, "a plan with no code is unknown");
-        assert_eq!(plan_from_read(&PlanRead::Plan("enterprise".into())), None);
-        assert_eq!(plan_from_read(&PlanRead::Unknown), None);
     }
 
     #[test]
