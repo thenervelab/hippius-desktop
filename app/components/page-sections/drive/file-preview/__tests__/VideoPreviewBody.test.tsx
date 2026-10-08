@@ -1,14 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
 /**
- * Linux plays no video in the viewer (Rust's `supportsInAppVideo` is false:
- * WebKitGTK showed a screen recording as a black frame with a spinner), so
- * the viewer offers the system's video player and Download instead, like
- * the Linux PDF path. macOS and Windows keep the built-in player.
+ * Rust decides how a video plays (`video_playback_source`): the asset URL on
+ * macOS and Windows; on Linux a loopback stream (WebKitGTK cannot play media
+ * from `asset://`), or no player with a line naming the package when there
+ * is no H.264 decoder. A stream that errors or shows no frame in time falls
+ * back to the system's video player and Download, never a spinner forever.
  */
 const tauri = await vi.hoisted(async () => {
   const { makeTauriMock } = await import("@/app/lib/test-utils/tauriMock");
@@ -28,8 +29,26 @@ vi.mock("@/app/lib/hooks/useViewableFileUrl", () => ({
   default: () => resolved.value,
 }));
 
+// The player stands in for vidstack: it shows its URL and hands the test its
+// callbacks, so a test can play the first frame or an error.
+const player = vi.hoisted(() => ({
+  started: undefined as undefined | (() => void),
+  failed: undefined as undefined | (() => void),
+}));
 vi.mock("@/app/components/page-sections/drive/files-table/VideoPlayer", () => ({
-  default: ({ videoUrl }: { videoUrl: string }) => <div data-testid="video-player">{videoUrl}</div>,
+  default: ({
+    videoUrl,
+    onPlaybackStarted,
+    onPlaybackFailed,
+  }: {
+    videoUrl: string;
+    onPlaybackStarted?: () => void;
+    onPlaybackFailed?: () => void;
+  }) => {
+    player.started = onPlaybackStarted;
+    player.failed = onPlaybackFailed;
+    return <div data-testid="video-player">{videoUrl}</div>;
+  },
 }));
 
 vi.mock("@/app/lib/wallet-auth-context", () => ({
@@ -46,16 +65,34 @@ const file = {
   syncStatus: "synced",
 } as unknown as FormattedUserFile;
 
-function platform(supportsInAppVideo: boolean) {
-  tauri.onInvoke("get_platform_info", () => ({
-    os: supportsInAppVideo ? "macos" : "linux",
-    supportsInAppVideo,
+const STREAM_URL = `http://127.0.0.1:40123/v/${"a".repeat(64)}`;
+const START_FAILED = "This video didn't start in Hippius. Open it in your video player, or download it.";
+const DECODER_LINE =
+  "Videos need an H.264 decoder your system doesn't have. Install gstreamer1.0-libav, then restart Hippius.";
+
+// Lets the IPC answer land without moving the fake clock, so a slow runner
+// can never push the start watchdog past its deadline before the test looks.
+async function settle() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
+function stream() {
+  tauri.onInvoke("video_playback_source", () => ({
+    kind: "stream",
+    url: STREAM_URL,
+    startWithinMs: 8000,
+    startFailedMessage: START_FAILED,
   }));
 }
 
 beforeEach(() => {
   tauri.reset();
+  tauri.onInvoke("video_stream_release", () => undefined);
   opener.openPath.mockClear();
+  player.started = undefined;
+  player.failed = undefined;
   resolved.value = {
     url: "asset://localhost/drive/Captures/Recording.mp4",
     localPath: "/drive/Captures/Recording.mp4",
@@ -64,45 +101,112 @@ beforeEach(() => {
   };
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("VideoPreviewBody", () => {
-  it("keeps the built-in player where the webview plays video", async () => {
-    platform(true);
+  it("plays the asset URL where the webview plays video", async () => {
+    tauri.onInvoke("video_playback_source", () => ({ kind: "webview" }));
     render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
-    expect(await screen.findByTestId("video-player")).toBeInTheDocument();
+    expect(await screen.findByTestId("video-player")).toHaveTextContent(
+      "asset://localhost/drive/Captures/Recording.mp4",
+    );
+    expect(tauri.core.invoke).toHaveBeenCalledWith("video_playback_source", {
+      sourcePath: "/drive/Captures/Recording.mp4",
+    });
+    // No watchdog off Linux: the player keeps its own error handling.
+    expect(player.started).toBeUndefined();
     expect(screen.queryByText("Open in your video player")).toBeNull();
   });
 
-  it("offers the system video player and Download on Linux, never the player", async () => {
-    platform(false);
+  it("plays the loopback stream on Linux and keeps playing once a frame arrives", async () => {
+    vi.useFakeTimers();
+    stream();
+    const { unmount } = render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
+    await settle();
+    expect(screen.getByTestId("video-player")).toHaveTextContent(STREAM_URL);
+    act(() => player.started?.());
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(screen.getByTestId("video-player")).toBeInTheDocument();
+    expect(screen.queryByText(START_FAILED)).toBeNull();
+    vi.useRealTimers();
+    // Closing the viewer gives the token back.
+    unmount();
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("video_stream_release", { url: STREAM_URL }),
+    );
+  });
+
+  it("falls back to the system player when no frame arrives in time", async () => {
+    vi.useFakeTimers();
+    stream();
     const download = vi.fn();
     render(<VideoPreviewBody file={file} handleFileDownload={download} />);
-    const open = await screen.findByRole("button", { name: /Open in your video player/ });
+    await settle();
+    expect(screen.getByTestId("video-player")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(7_999);
+    });
+    expect(screen.getByTestId("video-player")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(2);
+    });
+    expect(screen.getByText(START_FAILED)).toBeInTheDocument();
+    vi.useRealTimers();
     expect(screen.queryByTestId("video-player")).toBeNull();
-    fireEvent.click(open);
+    fireEvent.click(screen.getByRole("button", { name: /Open in your video player/ }));
     await waitFor(() => expect(opener.openPath).toHaveBeenCalledWith("/drive/Captures/Recording.mp4"));
     fireEvent.click(screen.getByRole("button", { name: /Download File/ }));
     expect(download).toHaveBeenCalledWith(file, "5Test");
   });
 
-  // A cloud-only recording is fetched into the preview cache first; until
-  // then the button waits rather than opening nothing.
-  it("waits for a cloud-only file before opening it", async () => {
-    platform(false);
+  it("falls back at once when the player errors", async () => {
+    stream();
+    render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
+    await screen.findByTestId("video-player");
+    act(() => player.failed?.());
+    expect(await screen.findByText(START_FAILED)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open in your video player/ })).toBeEnabled();
+  });
+
+  it("says which package to install when there is no H.264 decoder, and never mounts the player", async () => {
+    tauri.onInvoke("video_playback_source", () => ({ kind: "decoderMissing", message: DECODER_LINE }));
+    render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
+    expect(await screen.findByText(DECODER_LINE)).toBeInTheDocument();
+    expect(screen.queryByTestId("video-player")).toBeNull();
+    expect(screen.getByRole("button", { name: /Open in your video player/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Download File/ })).toBeInTheDocument();
+  });
+
+  it("offers the system player when Rust refuses the file", async () => {
+    tauri.onInvoke("video_playback_source", () => {
+      throw { kind: "Validation", message: "outside" };
+    });
+    render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
+    expect(
+      await screen.findByText("This video can't be played here. Open it in your video player, or download it."),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("video-player")).toBeNull();
+  });
+
+  // A cloud-only video is fetched into the preview cache first; Rust is asked
+  // only once there is a local copy.
+  it("waits for a cloud-only file before asking how to play it", async () => {
+    stream();
     resolved.value = { url: "", localPath: "", isLoading: true, error: null };
     render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
-    const open = await screen.findByRole("button", { name: /Open in your video player/ });
-    expect(open).toBeDisabled();
-    expect(screen.getByText("Getting the video ready to open…")).toBeInTheDocument();
-    fireEvent.click(open);
-    expect(opener.openPath).not.toHaveBeenCalled();
+    expect(screen.getByText("Loading video…")).toBeInTheDocument();
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("video_playback_source", expect.anything());
   });
 
   it("says why when the file could not be fetched, and still offers Download", async () => {
-    platform(false);
     resolved.value = { url: "", localPath: "", isLoading: false, error: "This file can't be previewed." };
     render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
     expect(await screen.findByText("This file can't be previewed.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Open in your video player/ })).toBeNull();
     expect(screen.getByRole("button", { name: /Download File/ })).toBeInTheDocument();
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("video_playback_source", expect.anything());
   });
 });

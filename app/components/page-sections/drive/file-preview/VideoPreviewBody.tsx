@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Film } from "lucide-react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
@@ -10,7 +10,24 @@ import { useViewableFileUrl } from "@/app/lib/hooks/useViewableFileUrl";
 import PreviewSurface from "./PreviewSurface";
 import { PreviewFallback, PreviewLoading } from "./PreviewState";
 
-// Linux: hand the file to the system's default video player (`xdg-open`
+/**
+ * How Rust says to play a video (`video_playback_source`, `video_stream.rs`).
+ * `webview`: the asset URL (macOS, Windows). `stream`: a loopback URL
+ * (Linux, where WebKitGTK cannot play media from `asset://`), with how long
+ * the player may take to show a frame and the line to show if it does not.
+ * `decoderMissing` / `unavailable`: no player, Rust's line instead.
+ */
+export type VideoPlayback =
+  | { kind: "webview" }
+  | { kind: "stream"; url: string; startWithinMs: number; startFailedMessage: string }
+  | { kind: "decoderMissing"; message: string }
+  | { kind: "unavailable"; message: string };
+
+// Shown only when the IPC itself failed (the file is outside the viewer's
+// gate, or nobody is signed in), so Rust had no line to give.
+const CANNOT_PLAY = "This video can't be played here. Open it in your video player, or download it.";
+
+// Hand the file to the system's default video player (`xdg-open` on Linux,
 // through the opener plugin), as the Linux PDF path does.
 async function openInVideoPlayer(filePath: string) {
   try {
@@ -22,41 +39,54 @@ async function openInVideoPlayer(filePath: string) {
 }
 
 /**
- * Whether this platform plays videos in the viewer, from Rust's
- * `get_platform_info` (`supportsInAppVideo`); `null` until it answers. A
- * failed answer keeps the built-in player, as before.
+ * Ask Rust how to play the file at `localPath`; `null` until it answers. A
+ * stream's token is released when the viewer moves on or closes.
  */
-function useInAppVideo(): boolean | null {
-  const [supported, setSupported] = useState<boolean | null>(null);
+function useVideoPlayback(localPath: string): { playback: VideoPlayback | null; failed: boolean } {
+  const [state, setState] = useState<{ playback: VideoPlayback | null; failed: boolean }>({
+    playback: null,
+    failed: false,
+  });
   useEffect(() => {
+    setState({ playback: null, failed: false });
+    if (!localPath) return;
     let cancelled = false;
-    invoke<{ supportsInAppVideo?: boolean }>("get_platform_info")
-      .then((info) => {
-        if (!cancelled) setSupported(info?.supportsInAppVideo !== false);
+    let streamUrl: string | null = null;
+    invoke<VideoPlayback>("video_playback_source", { sourcePath: localPath })
+      .then((playback) => {
+        if (playback?.kind === "stream") streamUrl = playback.url;
+        if (cancelled) {
+          if (streamUrl) void invoke("video_stream_release", { url: streamUrl }).catch(() => {});
+          return;
+        }
+        setState({ playback, failed: false });
       })
-      .catch(() => {
-        if (!cancelled) setSupported(true);
+      .catch((err: unknown) => {
+        console.error("Failed to prepare the video for playback:", err);
+        if (!cancelled) setState({ playback: null, failed: true });
       });
     return () => {
       cancelled = true;
+      if (streamUrl) void invoke("video_stream_release", { url: streamUrl }).catch(() => {});
     };
-  }, []);
-  return supported;
+  }, [localPath]);
+  return state;
 }
 
 /**
  * Video renderer body for the unified viewer.
  *
- * The player streams from the resolved URL rather than buffered bytes, so a
- * large file starts immediately and is never held in memory — which is why
- * video (like image and PDF) stays on the URL path instead of going through
+ * The player streams from a URL rather than buffered bytes, so a large file
+ * starts immediately and is never held in memory, which is why video (like
+ * image and PDF) stays on the URL path instead of going through
  * `read_preview_bytes`.
  *
- * On Linux (Rust's `supportsInAppVideo` is false) there is no player: the
- * WebKitGTK webview showed a screen recording as a black frame with a
- * spinner. The viewer says so and offers Download and the system's video
- * player, which opens the local copy (a cloud-only file is fetched into the
- * preview cache first, as for PDFs).
+ * Rust decides how it plays (`video_playback_source`). On Linux the URL is
+ * the app's loopback stream, and the player gets `startWithinMs` to show its
+ * first frame: if it errors or no frame comes in time, the viewer offers the
+ * system's video player and Download with Rust's line, never a spinner that
+ * runs forever. Without an H.264 decoder there is no player at all, only
+ * that offer and the package to install.
  */
 const VideoPreviewBody: React.FC<{
   file: FormattedUserFile;
@@ -69,29 +99,24 @@ const VideoPreviewBody: React.FC<{
   // on disk (sidebar-search results that live only on the server).
   const { url: resolvedUrl, localPath, isLoading, error: resolveError } = useViewableFileUrl(file);
   const { fileFormat } = getFilePartsFromFileName(file.name);
-  const inAppVideo = useInAppVideo();
+  const { playback, failed: playbackFailed } = useVideoPlayback(resolveError ? "" : localPath);
 
-  if (inAppVideo === false) {
-    return (
-      <PreviewSurface className="items-center justify-center">
-        <PreviewFallback
-          icon={<Film className="mx-auto mb-3 size-12 text-primary-50" aria-hidden />}
-          title="Play this video in your video player"
-          description={
-            resolveError ??
-            (isLoading
-              ? "Getting the video ready to open…"
-              : "Videos don't play inside Hippius on Linux. Open it in your video player, or download it.")
-          }
-          file={file}
-          handleFileDownload={handleFileDownload}
-          openExternallyLabel="Open in your video player"
-          openExternallyPending={isLoading}
-          onOpenExternally={localPath && !resolveError ? () => void openInVideoPlayer(localPath) : undefined}
-        />
-      </PreviewSurface>
-    );
-  }
+  // The start watchdog, for a stream only.
+  const [startFailed, setStartFailed] = useState(false);
+  const [started, setStarted] = useState(false);
+  const streamUrl = playback?.kind === "stream" ? playback.url : null;
+  const startWithinMs = playback?.kind === "stream" ? playback.startWithinMs : 0;
+  useEffect(() => {
+    setStartFailed(false);
+    setStarted(false);
+  }, [streamUrl]);
+  useEffect(() => {
+    if (!streamUrl || started || startFailed) return;
+    const timer = window.setTimeout(() => setStartFailed(true), startWithinMs);
+    return () => window.clearTimeout(timer);
+  }, [streamUrl, startWithinMs, started, startFailed]);
+  const onPlaybackStarted = useCallback(() => setStarted(true), []);
+  const onPlaybackFailed = useCallback(() => setStartFailed(true), []);
 
   if (resolveError) {
     return (
@@ -106,6 +131,34 @@ const VideoPreviewBody: React.FC<{
     );
   }
 
+  const fallbackLine =
+    playback?.kind === "decoderMissing" || playback?.kind === "unavailable"
+      ? playback.message
+      : playback?.kind === "stream" && startFailed
+        ? playback.startFailedMessage
+        : playbackFailed
+          ? CANNOT_PLAY
+          : null;
+
+  if (fallbackLine) {
+    return (
+      <PreviewSurface className="items-center justify-center">
+        <PreviewFallback
+          icon={<Film className="mx-auto mb-3 size-12 text-primary-50" aria-hidden />}
+          title="Play this video in your video player"
+          description={fallbackLine}
+          file={file}
+          handleFileDownload={handleFileDownload}
+          openExternallyLabel="Open in your video player"
+          onOpenExternally={localPath ? () => void openInVideoPlayer(localPath) : undefined}
+        />
+      </PreviewSurface>
+    );
+  }
+
+  const playUrl =
+    playback?.kind === "stream" ? playback.url : playback?.kind === "webview" ? resolvedUrl : "";
+
   return (
     <PreviewSurface className="items-center justify-center">
       <div
@@ -116,15 +169,17 @@ const VideoPreviewBody: React.FC<{
           "animate-scale-in-95-0.4",
         )}
       >
-        {resolvedUrl && inAppVideo ? (
+        {playUrl && !isLoading ? (
           <VideoPlayer
-            key={resolvedUrl}
-            videoUrl={resolvedUrl}
+            key={playUrl}
+            videoUrl={playUrl}
             isFromIpfs={false}
             isFromLocal={true}
             fileFormat={fileFormat}
             file={file}
             handleFileDownload={handleFileDownload}
+            onPlaybackStarted={streamUrl ? onPlaybackStarted : undefined}
+            onPlaybackFailed={streamUrl ? onPlaybackFailed : undefined}
           />
         ) : (
           <PreviewLoading title="Loading video…" />
