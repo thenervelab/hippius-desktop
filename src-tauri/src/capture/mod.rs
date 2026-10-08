@@ -4,6 +4,7 @@
 //! Design and phasing: `docs/plans/2026-09-22-screen-capture.md`.
 
 pub mod activation;
+pub mod allowance;
 pub mod area_pick;
 pub mod bar;
 pub mod bubble_controls;
