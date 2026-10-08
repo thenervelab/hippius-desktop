@@ -91,9 +91,10 @@ pub(crate) fn plan_from_read(read: &PlanRead) -> Option<RecordingPlan> {
 /// The account's plan for the recording count; `None` when it cannot be told.
 ///
 /// ── INTEGRATION POINT ── the ONE place the plan is read. Swap the body for
-/// `super::allowance::recording_tier(state, account_id).await` mapped
-/// `RecordingTier::Free => RecordingPlan::Free`, `RecordingTier::Paid =>
-/// RecordingPlan::Paid` (its `None` stays `None`) once that lands, and drop
+/// `super::allowance::recording_tier(state, &state.current_session_account().ok()?).await`
+/// mapped `RecordingTier::Free => RecordingPlan::Free`, `RecordingTier::Paid
+/// => RecordingPlan::Paid` (its `None` stays `None`) once that lands (the
+/// recording length cap change), and drop
 /// `billing::storage_overview::fetch_plan_read` with it.
 pub async fn current_plan(state: &AppState, account_id: &str) -> Option<RecordingPlan> {
     let _ = account_id;
@@ -431,9 +432,9 @@ const SEAL_CHUNK: usize = 1 << 20;
 const SEAL_TAG: usize = 16;
 const SEAL_PREFIX: usize = 7;
 
-fn chunk_nonce(prefix: &[u8; SEAL_PREFIX], index: u32, last: bool) -> chacha20poly1305::Nonce {
+fn chunk_nonce(prefix: [u8; SEAL_PREFIX], index: u32, last: bool) -> chacha20poly1305::Nonce {
     let mut nonce = [0u8; 12];
-    nonce[..SEAL_PREFIX].copy_from_slice(prefix);
+    nonce[..SEAL_PREFIX].copy_from_slice(&prefix);
     nonce[SEAL_PREFIX..11].copy_from_slice(&index.to_be_bytes());
     nonce[11] = u8::from(last);
     nonce.into()
@@ -480,7 +481,7 @@ pub fn seal_file(key: &[u8; 32], account_id: &str, src: &Path, dst: &Path) -> Re
             left -= take as u64;
             let sealed = cipher
                 .encrypt(
-                    &chunk_nonce(&prefix, index, index + 1 == chunks),
+                    &chunk_nonce(prefix, index, index + 1 == chunks),
                     Payload {
                         msg: &buf[..take],
                         aad: &aad,
@@ -540,7 +541,7 @@ pub fn unseal_file(key: &[u8; 32], account_id: &str, src: &Path, dst: &Path) -> 
             left -= take as u64;
             let plain = cipher
                 .decrypt(
-                    &chunk_nonce(&prefix, index, index + 1 == chunks),
+                    &chunk_nonce(prefix, index, index + 1 == chunks),
                     Payload {
                         msg: &buf[..take + SEAL_TAG],
                         aad: &aad,
@@ -1022,7 +1023,7 @@ mod tests {
         assert!(unsynced_by_every_drive(&home.join(".hippius/held-recordings"), &drives));
         // The captures folder itself, or any visible folder in a drive, is not.
         assert!(!unsynced_by_every_drive(&home.join("Documents/Hippius Captures/tmp"), &drives));
-        assert!(!unsynced_by_every_drive(&home.join("Movies"), &[home.clone()]));
+        assert!(!unsynced_by_every_drive(&home.join("Movies"), std::slice::from_ref(&home)));
         assert!(unsynced_by_every_drive(&home.join("Movies"), &[]));
     }
 

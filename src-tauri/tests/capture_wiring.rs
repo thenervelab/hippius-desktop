@@ -175,16 +175,23 @@ fn the_temp_copy_is_removed_only_after_the_upload_lands() {
 fn a_recording_is_counted_or_held_before_it_reaches_the_drive() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
-    let gate = body.find("recording_gate(").expect("recordings pass the allowance gate");
-    let hold = body.find("Gate::Hold => return Ok(Delivery::Held").expect("a held recording stops there");
-    let place = body.find("super::deliver::place(").expect("delivery places the file");
-    assert!(gate < place && hold < place, "the gate must come before the file is placed");
-    assert!(body.contains("is_recording(path, card_kind)"), "only recordings are counted");
     assert!(
-        body.contains("recording_allowance::forget(pool, &account_id, &hash)"),
+        body.contains("place_unless_held(&state, app, &account_id, &destination, path, card_kind).await? else {")
+            && body.contains("return Ok(Delivery::Held { account_id });"),
+        "delivery places through the gate, and a held recording stops there"
+    );
+    assert!(!body.contains("super::deliver::place("), "no placement around the gate");
+    assert!(body.contains("Ok(Delivery::Held { account_id }) => hold_and_announce("));
+    let placing = fn_body(&src, "async fn place_unless_held(");
+    let gate = placing.find("recording_gate(").expect("recordings pass the allowance gate");
+    let hold = placing.find("Gate::Hold => return Ok(None)").expect("a held recording is not placed");
+    let place = placing.find("super::deliver::place(").expect("delivery places the file");
+    assert!(gate < place && hold < place, "the gate must come before the file is placed");
+    assert!(placing.contains("is_recording(path, card_kind)"), "only recordings are counted");
+    assert!(
+        placing.contains("recording_allowance::forget(state.pool()?, account_id, &hash)"),
         "a placement that failed gives its slot back"
     );
-    assert!(body.contains("Ok(Delivery::Held { account_id }) => hold_and_announce("));
 
     let held = fn_body(&src, "async fn hold_and_announce(");
     for forbidden in ["deliver::place(", "link_for(", "mint(", "trigger_sync_now"] {

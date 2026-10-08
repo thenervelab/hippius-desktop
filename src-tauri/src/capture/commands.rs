@@ -54,7 +54,7 @@ pub const OPEN_PLANS_EVENT: &str = "capture_open_plans";
 pub const HELD_CHANGED_EVENT: &str = "capture_held_changed";
 /// How often held recordings are checked for a free slot or a paid plan
 /// while any are held.
-const RELEASE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+const RELEASE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_mins(1);
 /// The camera window's shape or device changed (`camera::CameraState`); the
 /// camera page and the recording pill both read it.
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
@@ -3777,28 +3777,9 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                 super::setup::Ensured::Kept(kept) => return Ok(Delivery::KeptHere(kept)),
             },
         };
-        // A recording is counted, or held at the free plan's limit, BEFORE
-        // it goes anywhere near the drive: once placed, the engine uploads it.
-        let reserved = if is_recording(path, card_kind) {
-            match recording_gate(&state, &account_id, &destination, path).await {
-                super::recording_allowance::Gate::Hold => return Ok(Delivery::Held { account_id }),
-                super::recording_allowance::Gate::Deliver { reserved } => reserved,
-            }
-        } else {
-            None
-        };
         let (mint_link, open_link) = bar::load_options(pool).await.map_or((true, true), |o| (o.copy_link, o.open_link));
-        let placed = match super::deliver::place(&state, app.clone(), &account_id, &destination, path).await {
-            Ok(placed) => placed,
-            Err(refused) => {
-                // Not in the drive: Retry decides again, so the slot is given back.
-                if let Some(hash) = reserved
-                    && let Err(forgot) = super::recording_allowance::forget(pool, &account_id, &hash).await
-                {
-                    tracing::warn!(error = %forgot, "failed recording still counted");
-                }
-                return Err(refused);
-            }
+        let Some(placed) = place_unless_held(&state, app, &account_id, &destination, path, card_kind).await? else {
+            return Ok(Delivery::Held { account_id });
         };
         Ok::<_, AppError>(Delivery::Placed {
             account_id,
@@ -3924,6 +3905,39 @@ enum Delivery {
     KeptHere(super::setup::Kept),
     /// A recording on a free plan at its limit: sealed, not uploaded.
     Held { account_id: String },
+}
+
+/// Put the capture in the drive, unless it is a recording a free plan at its
+/// limit holds (`None`). A recording is counted, or held, BEFORE it goes
+/// anywhere near the drive: once placed, the engine uploads it. A placement
+/// that fails gives its slot back, so Retry decides again.
+async fn place_unless_held(
+    state: &AppState,
+    app: &AppHandle,
+    account_id: &str,
+    destination: &CaptureDestination,
+    path: &Path,
+    card_kind: Option<CaptureKind>,
+) -> Result<Option<super::deliver::Placed>> {
+    let reserved = if is_recording(path, card_kind) {
+        match recording_gate(state, account_id, destination, path).await {
+            super::recording_allowance::Gate::Hold => return Ok(None),
+            super::recording_allowance::Gate::Deliver { reserved } => reserved,
+        }
+    } else {
+        None
+    };
+    match super::deliver::place(state, app.clone(), account_id, destination, path).await {
+        Ok(placed) => Ok(Some(placed)),
+        Err(refused) => {
+            if let Some(hash) = reserved
+                && let Err(forgot) = super::recording_allowance::forget(state.pool()?, account_id, &hash).await
+            {
+                tracing::warn!(error = %forgot, "failed recording still counted");
+            }
+            Err(refused)
+        }
+    }
 }
 
 /// Whether the capture at `path` is a recording, which the free plan counts
