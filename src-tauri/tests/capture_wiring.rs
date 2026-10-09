@@ -1217,13 +1217,29 @@ fn the_mic_meter_lets_go_before_the_recorder_starts() {
     );
 }
 
-/// Wayland: a screenshot is chosen on Hippius's overlay over a still of the
-/// desktop taken through the portal without its dialog, and the desktop's
-/// own tool takes over only when that still cannot be had. The session is
-/// decided by Rust's surfaces, never by the frontend checking the platform.
+/// Wayland: a screenshot goes straight to the desktop's own tool (the
+/// portal with `interactive = true`), so GNOME's screenshot UI is the one
+/// selection step and no share dialog follows a still taken first. The
+/// still's path (`frozen_shot`) stays wired but is off in `support`. The
+/// session is decided by Rust's surfaces, never by the frontend checking
+/// the platform.
 #[test]
-fn a_wayland_screenshot_is_chosen_on_a_still_with_the_desktops_tool_as_fallback() {
+fn a_wayland_screenshot_goes_to_the_desktops_tool() {
+    let support = read("src/capture/support.rs");
+    let surfaces = fn_body(&support, "pub fn surfaces_for(");
+    assert!(
+        surfaces.contains("selection: if wayland { SelectionUi::SystemPicker }"),
+        "Wayland screenshots are chosen in the desktop's tool"
+    );
+    assert!(surfaces.contains("frozen_screenshot: false,"), "no still first, on any platform");
+    assert!(surfaces.contains("system_picker_note: wayland.then_some(WAYLAND_SCREENSHOT_NOTE)"));
+
     let src = read("src/capture/commands.rs");
+    // The panel switching to a screenshot hands it to the desktop's tool
+    // rather than leaving the session choosing with nothing on screen.
+    let swap = fn_body(&src, "async fn swap_selection_windows(");
+    let picker = swap.find("StartPlan::SystemPicker =>").expect("a switch to the desktop's tool");
+    assert!(swap[picker..].contains("system_picker_screenshot(&app)"));
     let start = fn_body(&src, "pub async fn capture_start(");
     let plan = start.find("support::start_plan(").expect("capture_start asks for the plan");
     let frozen = start.find("start_without_live_overlay(&app").expect("the Wayland screenshot starts");

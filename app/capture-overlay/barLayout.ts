@@ -12,6 +12,15 @@ import { GLASS_BAR, GLASS_PANEL, GLASS_PANEL_TIGHT, GLASS_PILL } from "@/app/lib
  *   Nothing is sized from the viewport there (it is the window being fitted,
  *   so `vh` / `vw` would chase their own tail), and shadows are tight so the
  *   window's edge never cuts one into a hard line.
+ *
+ *   A camera or microphone menu there opens downward from its row in the
+ *   sources panel, which is ABOVE the toolbar, so it falls over the
+ *   toolbar. The glass's `backdrop-blur` makes the sources panel and the
+ *   toolbar each a stacking context, painted in page order, so the menu's
+ *   own z-index stays inside its panel and the later toolbar was drawn
+ *   over it: the menu opened hidden behind the bar. The sources panel is
+ *   therefore lifted above the toolbar (`relative z-20`); it never overlaps
+ *   the toolbar otherwise, so only an open menu shows the difference.
  */
 export type BarLayout = "overlay" | "panel";
 
@@ -33,7 +42,7 @@ export function barClasses(layout: BarLayout): BarClasses {
     return {
       column: "relative flex flex-col items-center gap-2.5",
       toolbar: GLASS_PILL,
-      sources: `w-[300px] ${GLASS_PILL}`,
+      sources: `relative z-20 w-[300px] ${GLASS_PILL}`,
       optionsMenu: `absolute top-[calc(100%+10px)] right-0 max-h-[360px] w-64 ${GLASS_PANEL_TIGHT}`,
       deviceMenu: `absolute top-[calc(100%+6px)] left-2 right-2 z-10 max-h-[280px] ${GLASS_PANEL_TIGHT}`,
     };
