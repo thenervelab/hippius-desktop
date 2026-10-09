@@ -233,7 +233,7 @@ pub(crate) fn classify(e: &ashpd::Error) -> PortalAnswer {
 /// The D-Bus error names that mean nobody serves the portal (Screenshot,
 /// and the recorder's ScreenCast).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn is_missing_service(error_name: &str) -> bool {
+pub(crate) fn is_missing_service(error_name: &str) -> bool {
     matches!(
         error_name,
         "org.freedesktop.DBus.Error.ServiceUnknown"

@@ -218,7 +218,26 @@ for the capture windows and the app's own pages only (pinned in
 `capture_wiring.rs`); it runs after the window is built, so a page that
 already finished loading is loaded again (`needs_reload`: its document was
 made without `navigator.mediaDevices`), and every answer is a `camera:` log
-line. `--list-cameras` names cameras as WebKitGTK does
+line. **WebKitGTK 2.50+ opens every camera through the Camera portal**
+(`PipeWireCaptureDeviceManager`: `IsCameraPresent`, `AccessCamera`, the
+portal's PipeWire fd; no V4L2 fallback, and nothing at all below PipeWire
+0.3.64), and the portal asks once per app, host apps included, and keeps a
+missed or dismissed question as "no". So `camera_access.rs` asks first: as
+`sync_camera` opens the bubble, `ask_camera_access` calls `AccessCamera`
+(ashpd `camera`), and if no answer comes in `CAMERA_QUESTION_AFTER` the
+capture windows (all kept above) are hidden until it does, never
+mid-recording. `CameraState.access` (`asking` / `granted` / `denied` /
+`turnedOff` for the lockdown's `NotAllowed` / `unknown` without a portal)
+keeps the page from calling `getUserMedia` until yes; a yes is kept for the
+run, anything else is asked again on the next open (a stored answer comes
+back without a dialog). The bar's camera row gets Rust's line
+(`privacy::with_linux_camera`) and the bubble says why in plain words
+(`cameraProblem.ts`, `privacyPlace` from Rust), the hint on a small bubble
+only while pointed at. The microphone needs no ask (no portal for host
+apps; meter and recorder read it in-process). Pinned by
+`camera_access::tests`, `privacy::tests`, `cameraProblem.test.ts`,
+`cameraPage.test.tsx` and
+`capture_wiring::linux_asks_for_the_camera_before_the_bubble_opens_it`. `--list-cameras` names cameras as WebKitGTK does
 (both are GStreamer's names). **Old PipeWire cannot open cameras:** with
 `gstreamer1.0-pipewire` installed its device provider hides the V4L2 one in
 `GstDeviceMonitor`, so WebKitGTK (and camera only) open every camera with

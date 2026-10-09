@@ -292,6 +292,10 @@ fn main() {
     // event guaranteed to be missing from a support bundle. Installed after
     // logging init so the hook's error! has a subscriber to land in.
     diagnostics::install_panic_hook();
+    // Linux: GTK's and GLib's own warnings and fatal errors into the same log
+    // (and a fatal one straight to `crash.log`), not only to stderr.
+    #[cfg(target_os = "linux")]
+    diagnostics::install_glib_log_bridge();
 
     // Which build wrote this log file — support's first question. The bundle
     // also carries the same facts as system-info.txt, for logs old enough
@@ -1028,9 +1032,24 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
 
             #[cfg(not(target_os = "macos"))]
             {
+                // Mid-capture the close is the desktop's (the main window is
+                // hidden), not the user's: hide instead of quitting, so the
+                // recording is not thrown away with the app. No exit follows
+                // here, so cancelling is safe (H-003 is cancel THEN exit).
+                let phase = window.app_handle().state::<crate::app_state::AppState>().capture.current();
+                if !crate::capture::own_windows::closing_main_quits(phase) {
+                    api.prevent_close();
+                    info!(
+                        ?phase,
+                        "Window close requested during a capture: hiding the main window instead of quitting"
+                    );
+                    if let Err(e) = window.hide() {
+                        warn!("Failed to hide window: {e}");
+                    }
+                    return;
+                }
                 // Do not cancel the close: doing so and then exit(0) from
                 // inside the GTK/WebKit handler orphans the process (H-003).
-                let _ = api;
                 info!("Window close requested — exiting app");
                 crate::tray::panel::quit_desktop(window.app_handle());
             }

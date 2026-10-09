@@ -46,6 +46,7 @@ import {
   describeTrack,
   describeVideo,
 } from "./cameraReport";
+import { problemFromAccess, problemFromError, problemText, type CameraProblem } from "./cameraProblem";
 
 /**
  * The camera, Loom style: a round bubble over the screen (small or large), a
@@ -116,7 +117,9 @@ function playVideo(video: HTMLVideoElement | null) {
 
 export default function CaptureCameraPage() {
   const [camera, setCamera] = useState<CaptureCameraState | null>(null);
-  const [failed, setFailed] = useState(false);
+  /** Why the camera is not showing, once opening it failed (null: no failure). */
+  const [problem, setProblem] = useState<CameraProblem | null>(null);
+  const failed = problem !== null;
   const stripRef = useRef<HTMLDivElement | null>(null);
   // Rust reports the pointer over the window (a window that is not key does
   // not always get the webview's own hover on macOS); the webview's own
@@ -189,7 +192,11 @@ export default function CaptureCameraPage() {
 
   // The recorder has the camera: this page must not hold it.
   const handedOver = !!camera?.recorderOwnsCamera;
-  const live = !!camera?.shape && !camera.hidden && !handedOver;
+  // Rust asks the system for the camera first (Linux): while the question is
+  // up, or after a no, the page never calls getUserMedia.
+  const accessProblem = problemFromAccess(camera?.access);
+  const cameraPresent = camera?.cameraPresent;
+  const live = !!camera?.shape && !camera.hidden && !handedOver && accessProblem === null;
   const deviceId = camera?.deviceId ?? null;
   const deviceName = camera?.deviceName ?? null;
 
@@ -221,7 +228,7 @@ export default function CaptureCameraPage() {
     const media = navigator.mediaDevices;
     if (!media?.getUserMedia) {
       report("no-media-devices", describeMediaSupport(navigator, window.isSecureContext, window.location.origin));
-      setFailed(true);
+      setProblem("unsupported");
       return;
     }
     const force = forceReopen.current;
@@ -259,7 +266,7 @@ export default function CaptureCameraPage() {
         muteTries.current = 0;
         setMuted(false);
       });
-      setFailed(false);
+      setProblem(null);
     };
 
     const open = async () => {
@@ -332,8 +339,10 @@ export default function CaptureCameraPage() {
       if (stale()) return;
       report("error", `${describeError(e)} (while ${stage.current})`);
       stage.current = "failed";
-      setFailed(true);
+      setProblem(problemFromError(e, cameraPresent));
     });
+    // `cameraPresent` only words a failure; it never reopens the camera.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, deviceId, deviceName, devicesSeen]);
 
   // A camera that stays muted is opened again, a bounded number of times.
@@ -370,7 +379,7 @@ export default function CaptureCameraPage() {
       streamRef.current = null;
       openFor.current = null;
       stage.current = "gave up";
-      setFailed(true);
+      setProblem("noPicture");
     }, NO_FRAMES_MS);
     return () => window.clearTimeout(t);
   }, [live, playing, failed, devicesSeen]);
@@ -431,6 +440,12 @@ export default function CaptureCameraPage() {
   const hasStrip = bubble && stripShown(camera);
   const placeholder = showsPlaceholder(playing, muted);
   const hovered = hoverRust || hoverDom;
+  const shownProblem = accessProblem ?? problem;
+  const problemCopy = shownProblem ? problemText(shownProblem, camera.privacyPlace) : null;
+  // A small round bubble has room for the title only; the line saying what
+  // to do shows on the larger shapes, and on the small one while pointed at.
+  // The system's question is always explained: the user has to act on it.
+  const showsHint = !round || camera.size === "large" || hovered || shownProblem === "asking";
   const closeLabel = cameraCloseLabel(camera);
   const controls = sizeControls(camera.size, lastRound);
   // The Tab stop: the size shown now, or the full-size toggle while full.
@@ -465,15 +480,23 @@ export default function CaptureCameraPage() {
         data-testid="camera-frame"
         className={`relative cursor-grab overflow-hidden bg-[#1c1d21] shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-2 ring-white/85 transition-[border-radius] duration-200 active:cursor-grabbing motion-reduce:transition-none ${cameraFrameShape(round)}`}
       >
-        {failed ? (
+        {problemCopy ? (
           <div
             data-tauri-drag-region
-            className="flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-center text-[12px] leading-snug text-white/75"
+            data-testid="camera-problem"
+            data-problem={shownProblem ?? undefined}
+            role="status"
+            className={`flex h-full w-full flex-col items-center justify-center gap-1.5 bg-gradient-to-br from-[#2a2c33] to-[#1c1d21] px-5 text-center leading-snug text-white/85 ${
+              shownProblem === "asking" ? "animate-pulse motion-reduce:animate-none" : ""
+            }`}
           >
-            <VideoOff className="pointer-events-none size-6" aria-hidden />
-            <span className="pointer-events-none">
-              {round ? "Camera unavailable" : "The camera could not be opened. Check it is connected and allowed in System Settings."}
-            </span>
+            {shownProblem === "asking" ? (
+              <Video className="pointer-events-none size-6 text-white/75" aria-hidden />
+            ) : (
+              <VideoOff className="pointer-events-none size-6 text-white/75" aria-hidden />
+            )}
+            <span className="pointer-events-none text-[13px] font-medium">{problemCopy.title}</span>
+            {showsHint && <span className="pointer-events-none text-[11px] text-white/70">{problemCopy.hint}</span>}
           </div>
         ) : (
           <video
@@ -510,7 +533,7 @@ export default function CaptureCameraPage() {
           />
         )}
 
-        {!failed && placeholder && (
+        {!problemCopy && placeholder && (
           // Until the first frame (and while muted): a soft placeholder, never
           // a black disc. The bubble is filmed, so it says nothing in words.
           <div
