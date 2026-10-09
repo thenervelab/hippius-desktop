@@ -4,6 +4,7 @@ import { Trash2 } from "lucide-react";
 import ConfirmationDialog from "@/app/components/ConfirmationDialog";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { deleteShareLinksNote } from "./deleteShareLinksNote";
 
 interface DeleteConfirmationDialogProps {
   open: boolean;
@@ -64,6 +65,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           cannot be undone.
         </>
       }
+      helperText={deleteShareLinksNote(selectedFiles)}
       button={confirmLabel}
       icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
       iconBgColor={DESTRUCTIVE_BG}
