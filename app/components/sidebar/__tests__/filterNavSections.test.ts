@@ -114,11 +114,15 @@ describe("filterNavSections", () => {
     expect(infra(false)).not.toContain("Captures /captures");
   });
 
-  it("wires the Captures entry to SCREEN_CAPTURE_ENABLED by default", () => {
+  // The flag is on in production for every platform, but Rust turns capture
+  // on for macOS only: a caller that does not say capture is available here
+  // must not get the entry.
+  it("hides the Captures entry unless the caller says capture is available", () => {
     const labels = filterNavSections(navSections, { shareEnabled: true }).flatMap((s) =>
       s.items.map((i) => i.label),
     );
-    expect(labels.includes("Captures")).toBe(SCREEN_CAPTURE_ENABLED);
+    expect(SCREEN_CAPTURE_ENABLED).toBe(true);
+    expect(labels).not.toContain("Captures");
   });
 
   // Pins the WIRING (not today's flag values, which are release decisions):

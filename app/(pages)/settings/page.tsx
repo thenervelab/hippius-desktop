@@ -21,8 +21,8 @@ import {
   VPN_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
   API_TOKEN_FEATURE_ENABLED,
-  SCREEN_CAPTURE_ENABLED,
 } from "@/app/lib/featureFlags";
+import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
 import {
   CAPTURE_SETTINGS_SECTION,
   DEFAULT_SETTINGS_SECTION,
@@ -156,6 +156,12 @@ const SECTION_META: Record<
 
 function SettingsContent() {
   const searchParams = useSearchParams();
+  // The capture flag AND Rust's answer for this computer: production builds
+  // carry capture everywhere but turn it on for macOS only. While Rust has
+  // not answered, the section is kept rather than reset: it is restored from
+  // the query string at launch, before the answer, and the tab hides its
+  // own rows until then. Once Rust says no, it falls back like any gated one.
+  const captureSection = useCaptureAvailability() !== "unavailable";
   // Resolved against the feature gates, not just read: the section comes
   // from the query string, so a hidden sidebar entry does not make it
   // unreachable. See `resolveSettingsSection`.
@@ -163,11 +169,7 @@ function SettingsContent() {
     vpnEnabled: VPN_FEATURE_ENABLED,
     walletEnabled: WALLET_FEATURE_ENABLED,
     apiTokenEnabled: API_TOKEN_FEATURE_ENABLED,
-    // The build flag alone, not Rust's answer as well: the section is
-    // restored from the query string at launch, before Rust has said
-    // whether this computer captures, and the tab hides its own rows
-    // where it cannot.
-    captureEnabled: SCREEN_CAPTURE_ENABLED,
+    captureEnabled: captureSection,
   });
   const meta = SECTION_META[section] ?? SECTION_META[DEFAULT_SETTINGS_SECTION];
 
@@ -210,7 +212,7 @@ function SettingsContent() {
 
         {/* Screen capture: the rows hide themselves where this computer
             cannot capture. */}
-        {SCREEN_CAPTURE_ENABLED && section === CAPTURE_SETTINGS_SECTION && <CaptureSettings />}
+        {captureSection && section === CAPTURE_SETTINGS_SECTION && <CaptureSettings />}
 
         {section === "appearance" && <AppearanceSettings />}
 

@@ -14,6 +14,7 @@ import {
   capturePermissionPaneAtom,
   captureRecordingAtom,
   captureRecordingNoteAtom,
+  captureSupportKnownAtom,
   captureSupportedAtom,
   captureSurfacesAtom,
 } from "@/app/lib/capture/captureFlow";
@@ -47,6 +48,7 @@ import RecordingLimitDialog from "./RecordingLimitDialog";
  */
 export default function CaptureHost() {
   const setSupported = useSetAtom(captureSupportedAtom);
+  const setSupportKnown = useSetAtom(captureSupportKnownAtom);
   const setRecording = useSetAtom(captureRecordingAtom);
   const setRecordingNote = useSetAtom(captureRecordingNoteAtom);
   const setPermissionPane = useSetAtom(capturePermissionPaneAtom);
@@ -68,6 +70,7 @@ export default function CaptureHost() {
         setPermissionPane(s.permissionPane);
         setModes(supportedModesOf(s));
         setSurfaces(s);
+        setSupportKnown(true);
         // The saved shortcut is registered once the signed-in app is up.
         if (s.supported) void syncCaptureShortcut().catch(() => undefined);
       })
@@ -75,8 +78,9 @@ export default function CaptureHost() {
         setSupported(false);
         setRecording(false);
         setRecordingNote(null);
+        setSupportKnown(true);
       });
-  }, [setSupported, setRecording, setRecordingNote, setPermissionPane, setModes, setSurfaces]);
+  }, [setSupported, setSupportKnown, setRecording, setRecordingNote, setPermissionPane, setModes, setSurfaces]);
 
   useEffect(() => {
     if (!SCREEN_CAPTURE_ENABLED) return;

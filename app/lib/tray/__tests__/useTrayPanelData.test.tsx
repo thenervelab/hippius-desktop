@@ -21,13 +21,9 @@ let chatUnreadSeed = 0;
 
 let capturesResult: unknown = { label: null, files: [] };
 
-// The Captures tab ships behind the capture flag.
-const flags = vi.hoisted(() => ({ capture: true }));
-vi.mock("@/app/lib/featureFlags", () => ({
-  get SCREEN_CAPTURE_ENABLED() {
-    return flags.capture;
-  },
-}));
+// The Captures list is fetched only where capture is on for this computer
+// (the flag AND Rust's support), which the popover passes in.
+const flags = { capture: true };
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
@@ -82,7 +78,7 @@ describe("useTrayPanelData loading gate (F-3)", () => {
   });
 
   it("clears loading (shows empty state, not an infinite skeleton) when a logged-in session never hydrates", async () => {
-    const { result } = renderHook(() => useTrayPanelData());
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
 
     // Mount refresh ran once (boot-gap grace) — skeleton still up.
     await waitFor(() => expect(result.current.menu?.sessionReady).toBe(false));
@@ -104,7 +100,7 @@ describe("useTrayPanelData loading gate (F-3)", () => {
       substrateAddress: "5EZi38SomeAddrLvJs",
       sessionReady: true,
     };
-    const { result } = renderHook(() => useTrayPanelData());
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
   });
@@ -127,7 +123,7 @@ describe("useTrayPanelData chat unread", () => {
   });
 
   it("seeds from chat_get_unread_count and follows chat_unread_changed", async () => {
-    const { result } = renderHook(() => useTrayPanelData());
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
     await waitFor(() => expect(result.current.chatUnread).toBe(4));
 
     await waitFor(() =>
@@ -174,7 +170,7 @@ describe("useTrayPanelData captures", () => {
   });
 
   it("asks Rust for the account's captures and lists them as finished rows", async () => {
-    const { result } = renderHook(() => useTrayPanelData());
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
     await waitFor(() => expect(result.current.captures).toHaveLength(1));
     expect(result.current.captures[0]).toMatchObject({ name: "Screenshot 1.png", feedStatus: "completed" });
     expect(invoke).toHaveBeenCalledWith("get_recent_captures", {
@@ -186,17 +182,30 @@ describe("useTrayPanelData captures", () => {
   it("shows no captures, and keeps the rest, when Rust could not list them", async () => {
     capturesResult = new Error("offline");
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const { result } = renderHook(() => useTrayPanelData());
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.captures).toEqual([]);
     error.mockRestore();
   });
 
-  it("does not ask where the lane has capture off", async () => {
+  // A production build carries the flag on Windows and Linux too, where Rust
+  // reports capture unsupported.
+  it("does not ask where capture is off for this computer", async () => {
     flags.capture = false;
-    const { result } = renderHook(() => useTrayPanelData());
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(invoke).not.toHaveBeenCalledWith("get_recent_captures", expect.anything());
     expect(result.current.captures).toEqual([]);
+  });
+
+  // Rust answers `capture_support` after the popover's first refresh.
+  it("fetches the captures once capture turns out to be on here", async () => {
+    const { result, rerender } = renderHook(({ on }) => useTrayPanelData(on), {
+      initialProps: { on: false },
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(invoke).not.toHaveBeenCalledWith("get_recent_captures", expect.anything());
+    rerender({ on: true });
+    await waitFor(() => expect(result.current.captures).toHaveLength(1));
   });
 });
