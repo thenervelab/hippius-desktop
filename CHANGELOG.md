@@ -17,7 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
-- **Free plan screenshots and recordings carry a small Hippius watermark.** It sits in the bottom-right corner and stays on the file when you share or download it. Paid plans have no watermark.
+- **Free plan screenshots and recordings carry a small Hippius watermark.** It sits in the bottom-right corner and stays on the file when you share or download it. Paid plans have no watermark. Recordings made on Linux do not carry it yet.
 - **The free plan includes 25 screen recordings.** Every recording in your Hippius Captures drive counts, including ones made on the web or on another computer. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.
 - **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
 - **Edit pictures in your remote folders.** Edit image now works on PNG and
@@ -170,15 +170,15 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Linux screen recordings play from share links in Chrome.** Recordings made on Ubuntu 22.04 opened as "This video can't be played in the browser"; every Linux recording is now saved in the layout browsers read straight through, so it starts playing at once. If a video in the Hippius viewer on Linux keeps stopping to load, Hippius offers to open it in your video player, and a stalled video now picks up where it stopped instead of starting over.
+- **Screen recording on Linux works again on Ubuntu and other GNOME desktops.** Recordings no longer stop the moment you press Record or fail when you stop them, the area you draw lines up with your screen on scaled displays, and the camera is not asked for again each time the bubble opens.
+- **Videos that keep stopping in the Linux viewer can open in your video player.** If a video in the Hippius viewer on Linux keeps stopping to load, Hippius offers to open it in your video player, and a stalled video now picks up where it stopped instead of starting over.
 - **Screenshots on Linux with Wayland take one step again.** Screenshot opens your desktop's own screenshot tool straight away, where you choose an area, a window or a whole screen, and Hippius uploads the result like any other capture. You are no longer shown the Hippius capture bar first and then asked by GNOME to share a picture of your whole screen. The Screenshot menu says how it works on your desktop.
 - **The camera and microphone menus show on the Linux recording bar.** On Wayland they opened behind the bar's buttons; they now open over them, where you can pick a device.
 - **Videos play in the viewer on Linux.** Screen recordings and other videos in your drives now play inside Hippius on Linux instead of showing a black screen. If your system is missing the video decoder, the viewer tells you which package to install and still lets you open the video in your own player.
-- **Hippius asks for your camera on Linux before using it.** Turning the camera on now brings up your system's camera question first, with Hippius's own windows out of the way so you can answer it. If the camera is not allowed, missing, busy or sends no picture, the bubble says which and what to do, instead of only "Camera unavailable".
+- **The camera bubble says why the camera did not start.** If the camera is not allowed, missing, busy or sends no picture, the bubble says which and what to do, instead of only "Camera unavailable".
 - **Recording on Linux no longer closes Hippius.** Closing the Hippius window while a capture is under way (for example from the dock) now hides it and keeps the recording going, and the app no longer freezes while it first checks what your system can record.
 - **The camera bubble shows your camera on Ubuntu 22.04 and similar Linux systems.** It used to stay on its placeholder there; if a camera still cannot start, the bubble now says so instead of waiting for ever.
 - **Linux: a tidier recording bar, and the dock opens Hippius mid-recording.** On Wayland the recording bar is now just the bar, not a large dark box around it, and clicking Hippius in the dock or picking it in Alt+Tab while recording brings the app back.
-- **On Ubuntu and other GNOME desktops, the recording controls and the camera bubble stay on top.** Opening another window, Hippius included, no longer hides them, so the camera stays in your screen recording.
 
 - **The recording controls show again while you record** (macOS). Stop, the timer, mute and the menus were missing, leaving only the camera bubble and the menu bar.
 - **Command-comma opens Settings from the main window** (Ctrl+comma on Windows and Linux), not only from the menu bar window.

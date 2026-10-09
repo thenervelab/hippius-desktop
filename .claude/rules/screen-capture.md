@@ -222,22 +222,13 @@ line. **WebKitGTK 2.50+ opens every camera through the Camera portal**
 (`PipeWireCaptureDeviceManager`: `IsCameraPresent`, `AccessCamera`, the
 portal's PipeWire fd; no V4L2 fallback, and nothing at all below PipeWire
 0.3.64), and the portal asks once per app, host apps included, and keeps a
-missed or dismissed question as "no". So `camera_access.rs` asks first: as
-`sync_camera` opens the bubble, `ask_camera_access` calls `AccessCamera`
-(ashpd `camera`), and if no answer comes in `CAMERA_QUESTION_AFTER` the
-capture windows (all kept above) are hidden until it does, never
-mid-recording. `CameraState.access` (`asking` / `granted` / `denied` /
-`turnedOff` for the lockdown's `NotAllowed` / `unknown` without a portal)
-keeps the page from calling `getUserMedia` until yes; a yes is kept for the
-run, anything else is asked again on the next open (a stored answer comes
-back without a dialog). The bar's camera row gets Rust's line
-(`privacy::with_linux_camera`) and the bubble says why in plain words
-(`cameraProblem.ts`, `privacyPlace` from Rust), the hint on a small bubble
-only while pointed at. The microphone needs no ask (no portal for host
-apps; meter and recorder read it in-process). Pinned by
-`camera_access::tests`, `privacy::tests`, `cameraProblem.test.ts`,
-`cameraPage.test.tsx` and
-`capture_wiring::linux_asks_for_the_camera_before_the_bubble_opens_it`. `--list-cameras` names cameras as WebKitGTK does
+missed or dismissed question as "no". `camera_access.rs` holds a pre-check
+that asks `AccessCamera` before the bubble opens, but it is **not wired**:
+it was rolled back with the Linux recorder changes, so the bubble opens the
+camera through WebKit's own request, `CameraState.access` stays `unknown`
+and the bar's camera row carries no Linux line. The bubble still says why a
+camera failed in plain words (`cameraProblem.ts`). Pinned by
+`capture_wiring::linux_bubble_opens_the_camera_without_a_portal_pre_check`. `--list-cameras` names cameras as WebKitGTK does
 (both are GStreamer's names). **Old PipeWire cannot open cameras:** with
 `gstreamer1.0-pipewire` installed its device provider hides the V4L2 one in
 `GstDeviceMonitor`, so WebKitGTK (and camera only) open every camera with
@@ -351,8 +342,11 @@ own element (what WebKitGTK makes), retries a busy one for 3 s, tries
 bounded caps then any, mirrors it like the stage and records it with the
 same writer, mixer and pause. Pinned by `capture_wiring.rs`.
 
-**GNOME Wayland runs the app as an XWayland client** (`utils::display_backend`,
-not yet run on Linux). GTK's keep-above is an empty function on Wayland and
+**GNOME Wayland can run the app as an XWayland client, but only when
+`HIPPIUS_XWAYLAND=1` is set** (`utils::display_backend`; native Wayland by
+default, since under XWayland on a scaled display the Wayland area overlay
+and its still were drawn at the wrong size, and Linux recording regressed on
+real machines). What follows is how it works when asked for. GTK's keep-above is an empty function on Wayland and
 Mutter offers clients no keep-above and no layer-shell, so the pill and the
 bubble fell behind any window raised mid-recording (the camera then missing
 from the video); Mutter honours `_NET_WM_STATE_ABOVE` and window positions
@@ -856,8 +850,10 @@ starts it at `capture_start`, `capture_tier` takes it before the recorder
 starts (so the first frame has it) and before a screenshot's PNG is written;
 the same verdict sets the length limit. Where it is drawn: screenshots in
 `finish_screenshot` (and `stamp_portal_shot` for the desktop's tool);
-Windows and Linux recordings in the child's `Pipeline` (`Nv12Stamp`, after
-the bubble is composited, from `StartCommand.watermark`); macOS in the Swift
+Windows recordings in the child's `Pipeline` (`Nv12Stamp`, after the bubble
+is composited, from `StartCommand.watermark`); Linux recordings carry NO
+watermark for now (the Linux child ignores `watermark`, rolled back with
+the recorder); macOS in the Swift
 helper, which gets every size as an atlas (`watermarkAtlas`, written beside
 the recording by `recording::macos::start` and removed once the helper
 answered) and stamps each SCK frame once as it is appended. Pinned by
@@ -1315,10 +1311,10 @@ stderr lines are diagnostics and are logged at `warn`.
   on every keyframe. Windows asks for peak-constrained VBR (average, twice
   it, GOP) through `SetInputMediaType`'s encoding parameters, falling back to
   the same encoder untuned before the software one (`writer::ATTEMPTS`);
-  Linux puts every encoder in a mode that spends less when still (`va` and
-  `vaapi` VBR, whose `bitrate` means the average and the ceiling
-  respectively; x264 CRF 23 capped by its VBV; OpenH264 quality-first with a
-  max), never their CBR / CQP defaults. Pinned by `sizing` and `linux_plan`
+  Linux gives each encoder the average with its own default rate control
+  and a keyframe every 2 s (`linux_plan::KEYFRAME_FRAMES`): the VBR /
+  constant-quality modes with a ceiling were rolled back with the other
+  Linux recorder changes. Pinned by `sizing` and `linux_plan`
   tests (Swift literals included) and `writer.rs` tests on Windows.
 - Pause cuts time out: samples are retimed on the writer queue by the host
   time of every finished pause (`place`), video and audio alike, and samples
@@ -1333,22 +1329,13 @@ stderr lines are diagnostics and are logged at `warn`.
   for the end of the file before the first frame, and share links can only be
   read from the start, so the whole recording downloaded before it played.
   Windows (`MFTranscodeContainerType_FMPEG4`) writes fragmented files whose
-  index is already first. Linux writes fragments while recording (`mp4mux
-  fragment-duration`, so a killed recorder leaves a playable file) and at
-  Stop rewrites them as one movie with its index first, nothing re-encoded
-  (`linux_plan::faststart`: `qtdemux ! mp4mux faststart=true`, run by
-  `encoder::faststart_in_place`, checked with `index_first` before it
-  replaces the file; on any failure the fragments stay). Why: GStreamer
-  1.20 (Ubuntu 22.04) writes one `trun` per picture with implicit data
-  offsets, which Chrome's demuxer reads from the wrong place
-  (`PIPELINE_ERROR_DECODE`, the share page's "can't be played"); and for
-  ANY fragmented file Chrome walks every fragment back and forth before
-  the first frame (about two backward jumps per fragment, measured), which
-  on a share link restarts the download each time. Pinned by
-  `recordings_put_their_index_first` (`recorder_child/plan.rs`) and the
-  Linux self-test (`index_first`). The encoder only ever gets 8-bit 4:2:0
-  (`linux_plan::ENCODER_INPUT`): from RGB, x264 picks 4:4:4 and writes
-  "High 4:4:4 Predictive".
+  index is already first. Linux writes fragmented files too (`mp4mux
+  fragment-duration`, so a killed recorder leaves a playable file). A
+  rewrite at Stop with the index first (`qtdemux ! mp4mux faststart=true`)
+  and an NV12/I420 capsfilter before the encoder were tried and rolled
+  back: recordings failed on real GNOME Wayland machines while CI's Xvfb
+  run passed. Pinned by `recordings_put_their_index_first`
+  (`recorder_child/plan.rs`).
 - **One audio track.** Browsers (the share link's page included) and most
   players play only a file's first audio track, so the microphone as a
   second track went unheard. `AudioMixer` mixes the microphone and, only when

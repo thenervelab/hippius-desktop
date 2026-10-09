@@ -2483,8 +2483,10 @@ fn the_bar_follows_the_pointer_to_another_display() {
 
 /// GNOME's Wayland session ignores a Wayland client's keep-above, so the
 /// pill and the bubble fell behind other windows and the camera went
-/// missing from the recording. On GNOME Wayland the app connects through
-/// XWayland, which Mutter keeps above: decided before GTK starts (after the
+/// missing from the recording. XWayland, which Mutter keeps above, is only
+/// used when `HIPPIUS_XWAYLAND` asks for it (native Wayland by default:
+/// XWayland drew the area overlay at the wrong size on scaled displays). It
+/// is decided before GTK starts (after the
 /// recorder child, which opens no window), and through GDK's allowed
 /// backends, never `GDK_BACKEND`, which every program the app starts would
 /// inherit. XWayland comes first and Wayland after it, so the app still
@@ -2502,6 +2504,10 @@ fn gnome_wayland_connects_through_xwayland_before_gtk_starts() {
     let module = read("src/utils/display_backend.rs");
     let apply = fn_body(&module, "pub fn apply() -> Choice {");
     assert!(apply.contains("choose(&SessionEnv"), "apply asks the pure decision");
+    assert!(
+        fn_body(&module, "pub fn choose(").contains("if !truthy(env.xwayland_opt_in)"),
+        "native Wayland unless XWayland is asked for"
+    );
     assert!(apply.contains("set_allowed_backends(XWAYLAND_FIRST)"));
     assert!(module.contains("pub const XWAYLAND_FIRST: &str = \"x11,wayland\";"));
     for forbidden in ["set_var(", "remove_var("] {
@@ -2638,41 +2644,28 @@ fn the_recording_tier_reads_the_plan_the_way_the_overview_does() {
     assert!(fn_body(&overview, "pub(crate) async fn fetch_can_share_drives(").contains("fetch_plan_reads("));
 }
 
-/// Linux asks the system for the camera before the bubble opens it, moves
-/// the capture windows aside while the system's question is up, and sends
-/// the answer to the bubble; the bubble's state carries it (`camera_access`).
+/// The bubble opens the camera itself on Linux, as it did before the Camera
+/// portal pre-check: nothing asks the portal ahead of `getUserMedia` or
+/// moves the capture windows aside, so the camera state's `access` stays
+/// `unknown` and the page opens the camera and says what failed if it
+/// fails. `camera_access` keeps the answer types for when the pre-check is
+/// wired again.
 #[test]
-fn linux_asks_for_the_camera_before_the_bubble_opens_it() {
+fn linux_bubble_opens_the_camera_without_a_portal_pre_check() {
     let src = read("src/capture/commands.rs");
     let sync = fn_body(&src, "async fn sync_camera(");
-    let open = sync.find("open_camera_window(app, shape").expect("the bubble opens here");
-    let ask = sync.find("ask_camera_access(app)").expect("sync_camera asks for the camera");
-    assert!(ask > open, "asked as the bubble opens, so its state says `asking`");
-    assert!(
-        ask < sync.find("camera_state_for(app, wanted").expect("state sent"),
-        "asked before the state goes out"
-    );
-    let asking = fn_body(&src, "fn ask_camera_access(");
-    assert!(asking.contains("camera_access::should_ask("), "only where the platform asks");
-    assert!(asking.contains("begin_asking()"), "one question at a time");
-    let step_aside = asking.find("step_aside_for_system_question(&app)").expect("windows step aside");
-    let finish = asking.find("finish_asking(access, present)").expect("the answer is kept");
-    let back = asking.find("come_back_after_system_question(&app, &aside)").expect("windows come back");
-    let resend = asking.find("sync_camera(&app).await").expect("the bubble learns the answer");
-    assert!(step_aside < finish && finish < back && back < resend);
-    assert!(
-        fn_body(&src, "fn step_aside_for_system_question(").contains("CapturePhase::Recording"),
-        "never mid-recording: the bubble and pill are in the video"
-    );
+    assert!(sync.contains("open_camera_window(app, shape"), "the bubble opens here");
+    for gone in [
+        "ask_camera_access",
+        "step_aside_for_system_question",
+        "come_back_after_system_question",
+        "camera_access::ask_portal",
+        "begin_asking()",
+    ] {
+        assert!(!src.contains(gone), "no camera pre-check: {gone}");
+    }
     let state = fn_body(&src, "async fn camera_state_for(");
     assert!(state.contains("access: state.capture.camera_access.current()"));
-    assert!(state.contains("privacy_place: super::camera_access::privacy_place("));
-    assert!(fn_body(&src, "pub async fn capture_overlay_context(").contains("device_privacy(state.capture.camera_access.current())"));
-    let cargo = read("Cargo.toml");
-    assert!(
-        cargo.lines().any(|l| l.starts_with("ashpd") && l.contains("\"camera\"")),
-        "ashpd's Camera portal is switched on"
-    );
 }
 
 /// `capture_support` waits on the Linux recorder's probe (up to 20 s on a
