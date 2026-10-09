@@ -962,6 +962,19 @@ export function checkRecordingStart(): Promise<void> {
   return invoke("capture_check_recording_start");
 }
 
+/** Rust's `recording_allowance::FreePlanNotice`: only ever sent for a known free plan. */
+export interface FreePlanNotice {
+  /** Recordings counted so far, capped at `limit`; null when the count cannot be read. */
+  used: number | null;
+  limit: number;
+  maxRecordingMins: number;
+}
+
+/** The free plan's notice, or null for a paid plan or one that cannot be read. */
+export function getFreePlanNotice(): Promise<FreePlanNotice | null> {
+  return invoke("capture_free_plan_notice");
+}
+
 /** The limit dialog's Upgrade from the capture bar: Rust closes the bar and the main window opens the plans. */
 export function upgradeFromRecordingLimit(): Promise<void> {
   return invoke("capture_limit_upgrade");

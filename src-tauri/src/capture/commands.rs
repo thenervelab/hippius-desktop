@@ -5212,6 +5212,14 @@ pub async fn capture_check_recording_start(state: tauri::State<'_, AppState>) ->
     super::recording_allowance::require_can_start(&state).await
 }
 
+/// The free plan's notice for the capture bar and the Captures page
+/// (`recording_allowance::current_free_plan_notice`); `None` for any plan
+/// that is not known to be free.
+#[tauri::command]
+pub async fn capture_free_plan_notice(state: tauri::State<'_, AppState>) -> Result<Option<super::recording_allowance::FreePlanNotice>> {
+    Ok(super::recording_allowance::current_free_plan_notice(&state).await)
+}
+
 /// The recording limit dialog's Upgrade, from the capture bar: the bar
 /// closes and the main window opens the plans (`capture_open_plans`, where
 /// every upgrade prompt goes).

@@ -1083,6 +1083,12 @@ counted once a fresh tier read says Free); a count at the limit is confirmed by 
 FE only draws: `RecordingLimitDialog` (main window, via `useStartCapture`) and
 `capture-overlay/RecordingLimitPanel` (Upgrade = `capture_limit_upgrade`),
 in Rust's words (`recordingLimit.ts`, pinned to `LIMIT_TITLE`/`LIMIT_BODY`).
+Before a capture the free plan is told: `capture_free_plan_notice`
+(`current_free_plan_notice`, fresh `recording_tier` then the count) returns
+`FreePlanNotice { used (capped at the limit, null when unread), limit,
+maxRecordingMins }` for a KNOWN Free tier only, `None` for paid or unknown;
+the bar draws one line under its toolbar and the Captures page "X of 25 free
+recordings used" (`lib/capture/freePlanNotice.ts`). Nothing for paid/unknown.
 Nothing is held any more; `held_recordings.rs` keeps only the way out for
 recordings an earlier build sealed under `~/.hippius/held-recordings`
 (`release_held` once per sign-in from `capture_sync_shortcut`, as many as

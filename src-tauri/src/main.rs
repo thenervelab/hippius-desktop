@@ -789,6 +789,7 @@ fn main() {
             crate::capture::commands::capture_preview_discard,
             crate::capture::commands::capture_limit_upgrade,
             crate::capture::commands::capture_check_recording_start,
+            crate::capture::commands::capture_free_plan_notice,
             crate::capture::commands::capture_preview_upgrade,
             crate::capture::editor::capture_preview_edit,
             crate::capture::editor::capture_editor_open_file,

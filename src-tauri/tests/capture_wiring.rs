@@ -912,6 +912,7 @@ fn the_card_and_session_commands_are_registered() {
         "capture_preview_upgrade",
         "capture_limit_upgrade",
         "capture_check_recording_start",
+        "capture_free_plan_notice",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),

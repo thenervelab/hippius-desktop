@@ -360,6 +360,44 @@ pub async fn warm(state: &AppState) {
     }
 }
 
+/// What the free plan's notice says before a capture (the capture bar and
+/// the Captures page): captures carry a watermark, recordings stop at
+/// `max_recording_mins`, and `used` of `limit` recordings are used.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FreePlanNotice {
+    /// Recordings counted so far, at most `limit`; `None` when the count
+    /// cannot be read, and the notice leaves the count out.
+    pub used: Option<usize>,
+    pub limit: usize,
+    pub max_recording_mins: u64,
+}
+
+/// The notice for a known limited plan, `None` for any other (a paid plan,
+/// or a plan that cannot be read: nothing is said that may not hold).
+#[must_use]
+pub fn free_plan_notice(tier: Option<RecordingTier>, counted: Option<usize>) -> Option<FreePlanNotice> {
+    let tier = tier.filter(|t| is_limited(*t))?;
+    Some(FreePlanNotice {
+        used: counted.map(|n| n.min(FREE_RECORDING_LIMIT)),
+        limit: FREE_RECORDING_LIMIT,
+        max_recording_mins: tier.max_recording().map_or(0, |d| d.as_secs() / 60),
+    })
+}
+
+/// [`free_plan_notice`] for the signed-in account: a fresh plan read, and
+/// the count only for a limited plan.
+pub async fn current_free_plan_notice(state: &AppState) -> Option<FreePlanNotice> {
+    let (Ok(account), Ok(account_id)) = (state.current_session_account(), state.current_account_id()) else {
+        return None;
+    };
+    let tier = super::allowance::recording_tier(state, &account).await?;
+    if !is_limited(tier) {
+        return None;
+    }
+    free_plan_notice(Some(tier), recording_count(state, &account_id).await)
+}
+
 /// Whether a file at `path` can never be picked up by the sync engine of any
 /// drive rooted at `drive_roots`: it is outside every one of them, or inside
 /// through a hidden (dot) folder, which the engine never walks. The recorder
@@ -515,6 +553,27 @@ mod tests {
     fn only_the_free_plan_is_limited() {
         assert!(is_limited(RecordingTier::Free));
         assert!(!is_limited(RecordingTier::Paid));
+    }
+
+    /// Only a known free plan gets the notice; the count is capped at the
+    /// limit and left out when it cannot be read.
+    #[test]
+    fn the_free_plan_notice_is_for_a_known_free_plan_only() {
+        let free = Some(RecordingTier::Free);
+        assert_eq!(
+            free_plan_notice(free, Some(3)),
+            Some(FreePlanNotice {
+                used: Some(3),
+                limit: 25,
+                max_recording_mins: 5
+            })
+        );
+        assert_eq!(free_plan_notice(free, Some(40)).unwrap().used, Some(25));
+        assert_eq!(free_plan_notice(free, None).unwrap().used, None);
+        assert_eq!(free_plan_notice(Some(RecordingTier::Paid), Some(3)), None);
+        assert_eq!(free_plan_notice(None, Some(3)), None);
+        let json = serde_json::to_value(free_plan_notice(free, Some(1)).unwrap()).unwrap();
+        assert_eq!(json, serde_json::json!({ "used": 1, "limit": 25, "maxRecordingMins": 5 }));
     }
 
     fn set(paths: &[&str]) -> HashSet<String> {
