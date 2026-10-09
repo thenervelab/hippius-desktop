@@ -169,6 +169,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Linux screen recordings play from share links in Chrome.** Recordings made on Ubuntu 22.04 opened as "This video can't be played in the browser"; every Linux recording is now saved in the layout browsers read straight through, so it starts playing at once. If a video in the Hippius viewer on Linux keeps stopping to load, Hippius offers to open it in your video player, and a stalled video now picks up where it stopped instead of starting over.
 - **Screenshots on Linux with Wayland take one step again.** Screenshot opens your desktop's own screenshot tool straight away, where you choose an area, a window or a whole screen, and Hippius uploads the result like any other capture. You are no longer shown the Hippius capture bar first and then asked by GNOME to share a picture of your whole screen. The Screenshot menu says how it works on your desktop.
 - **The camera and microphone menus show on the Linux recording bar.** On Wayland they opened behind the bar's buttons; they now open over them, where you can pick a device.
 - **Videos play in the viewer on Linux.** Screen recordings and other videos in your drives now play inside Hippius on Linux instead of showing a black screen. If your system is missing the video decoder, the viewer tells you which package to install and still lets you open the video in your own player.

@@ -68,7 +68,9 @@ use crate::capture::rollout::{Platform, current_platform};
 /// stream can take a moment to negotiate).
 const FIRST_FRAME_WITHIN: Duration = Duration::from_secs(15);
 /// Finishing the file is time-boxed; fragments already written still play.
-const FINISH_WITHIN: Duration = Duration::from_secs(30);
+/// The encoder's end (30 s) plus rewriting the file with its index first
+/// (`encoder::REMUX_WITHIN`, 60 s), inside the app's two minutes for Stop.
+const FINISH_WITHIN: Duration = Duration::from_secs(100);
 
 /// Diagnostics go to stderr, which the app logs at `warn`.
 pub(crate) fn say(line: &str) {
