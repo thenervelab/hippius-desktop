@@ -362,6 +362,8 @@ export interface CapturePreviewActions {
   /** "Create link". */
   mintLink: boolean;
   revokeLink: boolean;
+  /** Open this link in Shared Links, to change who can open it. Absent from an older backend = no. */
+  manageLink?: boolean;
   /** Reveal in Finder / Show in Explorer. */
   reveal: boolean;
   /** Open the storage plans: the upload failed because the plan is full. */
@@ -385,6 +387,8 @@ export interface CapturePreviewCard {
   link: CaptureLinkState;
   /** Rust's line about the link ("Public link copied"); absent = say nothing. */
   linkText?: string;
+  /** Rust's line on who can open the link ("Anyone with the link can view. Never expires."); absent = none. */
+  linkNote?: string;
   actions: CapturePreviewActions;
   /**
    * In the drive with its link settled (Rust's `settled`): only then does the
@@ -518,6 +522,7 @@ export interface CaptureFailed {
 // `capture_preview_changed` → `CapturePreviewCard | null`,
 // `capture_show_in_folder` → `CaptureShowInFolder`,
 // `capture_open_plans` → nothing (the card's Upgrade),
+// `capture_manage_link` → `CaptureManageLink` (the card's Manage link),
 // `capture_shortcut_pressed` → `CaptureShortcutStart`,
 // `capture_camera_state` → `CaptureCameraState`,
 // `capture_cameras` → `CaptureDevice[]`,
@@ -609,6 +614,16 @@ export function mintCapturePreviewLink(): Promise<void> {
 /** Revoke the public link this capture made. */
 export function revokeCapturePreviewLink(): Promise<void> {
   return invoke("capture_preview_revoke_link");
+}
+
+/** "Manage link": the main window opens Shared Links at this capture's link. */
+export function manageCapturePreviewLink(): Promise<void> {
+  return invoke("capture_preview_manage_link");
+}
+
+/** `capture_manage_link`: the share whose row Shared Links points out. */
+export interface CaptureManageLink {
+  shareToken: string;
 }
 
 /** Reveal the capture's file in Finder / Explorer (a drive synced here). */

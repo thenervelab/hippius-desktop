@@ -785,6 +785,7 @@ fn main() {
             crate::capture::commands::capture_relaunch_for_permission,
             crate::capture::commands::capture_preview_mint_link,
             crate::capture::commands::capture_preview_revoke_link,
+            crate::capture::commands::capture_preview_manage_link,
             crate::capture::commands::capture_preview_reveal,
             crate::capture::commands::capture_preview_discard,
             crate::capture::commands::capture_limit_upgrade,

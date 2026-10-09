@@ -148,6 +148,12 @@ describe("CaptureHost", () => {
     expect(h.push).toHaveBeenCalledWith("/settings?section=billing");
   });
 
+  it("opens Shared Links at the capture's link on the card's Manage link", async () => {
+    mountHost();
+    await act(() => tauri.emitEvent("capture_manage_link", { shareToken: "tok1" }));
+    expect(h.push).toHaveBeenCalledWith("/shares?highlight=file%3Atok1");
+  });
+
   // The shortcut is the one-step area screenshot: Rust's payload says so and
   // is passed straight on; the tray opens the bar.
   it("starts the shortcut's one-step screenshot, and the tray's capture on the last mode or the asked one", async () => {

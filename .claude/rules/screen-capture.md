@@ -757,7 +757,7 @@ actions where no label wraps (`whitespace-nowrap` on every text button): one
 primary that takes the spare room (Show in folder, or Upgrade / Retry), one
 compact secondary sized to its label (Copy link / Create link / Retry /
 Discard) and at most one 32 pt icon button with an `aria-label`. Show in
-Finder / Explorer and Revoke link live in the "More" menu (opens upward over
+Finder / Explorer, Manage link and Revoke link live in the "More" menu (opens upward over
 the picture, focus on its first item, arrows move, Escape closes and refocuses
 More); with Upgrade, Retry and Discard all present, Discard is the icon.
 Pinned by `previewPage.test.tsx` across every state. It listens to upload progress only while `uploading` / `syncing`
@@ -791,9 +791,17 @@ it never slides away before it can say the link was copied, and a card whose
 link failed stays up with Create link. `deliver::mint` tries a link three
 times in all (`mint_retry_after`: 1 s, then 3 s) unless the drive is full, since
 a request that did not get through is often fine a second later.
-Rust also owns `link` (`LinkState`), `linkText` ("Public link copied") and
+Rust also owns `link` (`LinkState`), `linkText` ("Public link copied"),
+`linkNote` (`LinkState::note`, `PUBLIC_LINK_NOTE` "Anyone with the link can
+view. Never expires." for a public link; drawn in the destination line's
+place, destination in its `title`, so the card's height is unchanged; a
+`notice` still wins that slot) and
 `actions` (`CardActions`: retry, discard, copyLink, mintLink, revokeLink,
-reveal, upgrade) through `PreviewCard::refreshed`; every change goes through
+manageLink, reveal, upgrade). Capture links stay public and never expire by
+design; More > Manage link (`capture_preview_manage_link`) shows the main
+window and emits `capture_manage_link { shareToken }` to it only, and
+`CaptureHost` opens `sharesPageHref([fileShareRowId(token)])`. All of it comes
+through `PreviewCard::refreshed`; every change goes through
 `update_card`. The card draws exactly those buttons and says `linkText` after
 "Uploaded". `upgrade` (a `storageFull` failure) calls `capture_preview_upgrade`,
 which brings the main window forward and emits `capture_open_plans`;

@@ -49,6 +49,8 @@ pub const PREVIEW_EVENT: &str = "capture_preview_changed";
 pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
 /// The card's Upgrade: the main window opens the storage plans.
 pub const OPEN_PLANS_EVENT: &str = "capture_open_plans";
+/// The card's Manage link: the main window opens Shared Links at this link.
+pub const MANAGE_LINK_EVENT: &str = "capture_manage_link";
 /// The camera window's shape or device changed (`camera::CameraState`); the
 /// camera page and the recording pill both read it.
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
@@ -4846,6 +4848,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         status: PreviewStatus::Uploading,
         link: LinkState::None,
         link_text: None,
+        link_note: None,
         actions: super::preview::CardActions::default(),
         settled: false,
         share_url: None,
@@ -5129,6 +5132,28 @@ pub async fn capture_preview_revoke_link(state: tauri::State<'_, AppState>, app:
         c.link = LinkState::Revoked;
         c.status = with_link_fields(&c.status, false, None);
     });
+    Ok(())
+}
+
+/// What Manage link sends the main window: the share's token, which names
+/// its row in Shared Links. Sent to the main window only, never to the card.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManageLink {
+    share_token: String,
+}
+
+/// Manage link: the main window comes forward on Shared Links with this
+/// capture's link pointed out, where who can open it and when it expires
+/// are changed. The card stays as it is.
+#[tauri::command]
+pub async fn capture_preview_manage_link(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    let card = card_for(&state.capture, |c| c.actions.manage_link, "This capture has no link to manage.")?;
+    let share_token = card
+        .share_token
+        .ok_or_else(|| AppError::Validation("This capture has no link to manage.".into()))?;
+    show_main_window(&app);
+    let _ = app.emit_to(MAIN_WINDOW_LABEL, MANAGE_LINK_EVENT, ManageLink { share_token });
     Ok(())
 }
 
