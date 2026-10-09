@@ -286,7 +286,10 @@ keycaps, since the desktop has the last word), gated by the lane's
 `ShortcutPortal` row; without a portal `support::shortcut_for` says
 `desktopSettings` with `shortcut.command` (`<exe> --capture`), which the
 single-instance handler turns into `on_shortcut` WITHOUT showing the main
-window, and `desktop_shortcut.rs` writes GNOME's custom keybinding at
+window (on the launch that STARTS the app, setup keeps it,
+`remember_launch_shortcut`, and `CaptureHost` calls `capture_launch_shortcut`
+once its listeners are up, which runs `on_shortcut_of` once if within
+`LAUNCH_SHORTCUT_FOR`; `--record` the same), and `desktop_shortcut.rs` writes GNOME's custom keybinding at
 Hippius's own path. Linux marks the tray icon like Windows and, since
 AppIndicator sends no click, puts the recording's menu on it
 (`tray_recording_menu.rs`, rewritten only on a state change; one listener,

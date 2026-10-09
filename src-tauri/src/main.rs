@@ -791,6 +791,7 @@ fn main() {
             crate::capture::commands::capture_limit_upgrade,
             crate::capture::commands::capture_check_recording_start,
             crate::capture::commands::capture_free_plan_notice,
+            crate::capture::commands::capture_launch_shortcut,
             crate::capture::commands::capture_preview_upgrade,
             crate::capture::editor::capture_preview_edit,
             crate::capture::editor::capture_editor_open_file,
@@ -1125,6 +1126,11 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
+
+        // `hippius --capture` / `--record` that started the app: the
+        // single-instance handler below sees them only when it is already
+        // running, so this launch's are kept for the signed-in app.
+        crate::capture::commands::remember_launch_shortcut(app.handle(), std::env::args().skip(1).collect::<Vec<_>>());
 
         // Linux: the recording's tray menu (Stop, Pause, Show recording
         // controls) is answered by one app-wide listener, added here before

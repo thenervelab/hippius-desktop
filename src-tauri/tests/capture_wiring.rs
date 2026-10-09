@@ -914,6 +914,7 @@ fn the_card_and_session_commands_are_registered() {
         "capture_limit_upgrade",
         "capture_check_recording_start",
         "capture_free_plan_notice",
+        "capture_launch_shortcut",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),
@@ -2756,4 +2757,17 @@ fn a_failed_capture_is_offered_again_after_a_restart() {
     assert!(fn_body(&src, "async fn bring_back_failed_or_kept(").contains("next_kept_failed(app).await"));
     let kept = read("src/capture/kept_failed.rs");
     assert!(!kept.contains("remove_dir"), "nothing here deletes a capture");
+}
+
+/// `--capture` / `--record` on the launch that starts the app are kept in
+/// setup and run by the signed-in app once it listens; a second launch is
+/// still the single-instance handler's.
+#[test]
+fn a_launch_for_a_capture_shortcut_is_not_dropped() {
+    let main = read("src/main.rs");
+    assert!(main.contains("remember_launch_shortcut(app.handle(), std::env::args()"));
+    let commands = read("src/capture/commands.rs");
+    let run = fn_body(&commands, "pub fn capture_launch_shortcut(");
+    assert!(run.contains(".take()"), "run once");
+    assert!(run.contains("on_shortcut_of(&app, kind)"), "exactly what the shortcut does");
 }

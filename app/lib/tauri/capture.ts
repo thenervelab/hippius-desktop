@@ -990,6 +990,11 @@ export function getFreePlanNotice(): Promise<FreePlanNotice | null> {
   return invoke("capture_free_plan_notice");
 }
 
+/** Run the `--capture` / `--record` that started the app, once; Rust decides whether one is due. */
+export function takeCaptureLaunchShortcut(): Promise<void> {
+  return invoke("capture_launch_shortcut");
+}
+
 /** The limit dialog's Upgrade from the capture bar: Rust closes the bar and the main window opens the plans. */
 export function upgradeFromRecordingLimit(): Promise<void> {
   return invoke("capture_limit_upgrade");

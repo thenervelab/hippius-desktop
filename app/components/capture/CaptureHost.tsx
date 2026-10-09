@@ -24,6 +24,7 @@ import {
   CAPTURE_DRIVE_SETUP_NEEDED_EVENT,
   getCaptureSupport,
   syncCaptureShortcut,
+  takeCaptureLaunchShortcut,
   type CaptureFailed,
   type CaptureKind,
   type CaptureManageLink,
@@ -123,6 +124,11 @@ export default function CaptureHost() {
         router.push(sharesPageHref([fileShareRowId(e.payload.shareToken)])),
       ),
     ];
+    // `hippius --capture` / `--record` that started the app: Rust runs it
+    // once this window listens for the start it emits.
+    void Promise.all(unlisteners)
+      .then(() => takeCaptureLaunchShortcut())
+      .catch(() => undefined);
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
     };

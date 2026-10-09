@@ -233,6 +233,9 @@ pub struct CaptureState {
     stopped_at_limit: AtomicBool,
     /// The last recording tier seen per account (`allowance::TierCache`).
     pub(crate) recording_tiers: super::allowance::TierCache,
+    /// `hippius --capture` / `--record` that started the app, and when:
+    /// run once the signed-in app is listening (`capture_launch_shortcut`).
+    launch_shortcut: Mutex<Option<(ShortcutKind, std::time::Instant)>>,
     /// This session's plan read, started with the session so the capture
     /// rarely waits for it (`prefetch_tier`, `capture_tier`).
     tier_lookup: Mutex<Option<tauri::async_runtime::JoinHandle<Option<super::allowance::RecordingTier>>>>,
@@ -5568,6 +5571,58 @@ pub fn on_record_shortcut(app: &AppHandle) {
     on_shortcut_of(app, ShortcutKind::Record);
 }
 
+/// How long a launch's `--capture` / `--record` waits for the signed-in app.
+/// Later (the user signed in long after), a bar opening out of nowhere would
+/// surprise more than help.
+pub const LAUNCH_SHORTCUT_FOR: std::time::Duration = std::time::Duration::from_mins(2);
+
+/// The shortcut a launch's argv asks for: `--capture` is the capture
+/// shortcut, `--record` the Record one (`--capture` wins if both are there).
+#[must_use]
+pub fn launch_shortcut_for<I, S>(args: I) -> Option<ShortcutKind>
+where
+    I: IntoIterator<Item = S> + Clone,
+    S: AsRef<str>,
+{
+    if crate::cli::argv_requests_capture(args.clone()) {
+        Some(ShortcutKind::Screenshot)
+    } else if crate::cli::argv_requests_record(args) {
+        Some(ShortcutKind::Record)
+    } else {
+        None
+    }
+}
+
+/// The launch's shortcut, if it is still worth running at `now`.
+#[must_use]
+pub fn launch_shortcut_due(pending: Option<(ShortcutKind, std::time::Instant)>, now: std::time::Instant) -> Option<ShortcutKind> {
+    pending.and_then(|(kind, at)| (now.saturating_duration_since(at) < LAUNCH_SHORTCUT_FOR).then_some(kind))
+}
+
+/// `hippius --capture` / `--record` that STARTED the app (the single-instance
+/// handler only sees them when it is already running). Kept until the
+/// signed-in app is up and listening, since a start goes through it.
+pub fn remember_launch_shortcut<I, S>(app: &AppHandle, args: I)
+where
+    I: IntoIterator<Item = S> + Clone,
+    S: AsRef<str>,
+{
+    if let Some(kind) = launch_shortcut_for(args) {
+        tracing::info!(?kind, "launched for a capture shortcut; it runs once the app is signed in");
+        *lock(&app.state::<AppState>().capture.launch_shortcut) = Some((kind, std::time::Instant::now()));
+    }
+}
+
+/// The signed-in app is listening for capture starts: the launch's
+/// `--capture` / `--record` does now what the shortcut does, once.
+#[tauri::command]
+pub fn capture_launch_shortcut(state: tauri::State<'_, AppState>, app: AppHandle) {
+    let pending = lock(&state.capture.launch_shortcut).take();
+    if let Some(kind) = launch_shortcut_due(pending, std::time::Instant::now()) {
+        on_shortcut_of(&app, kind);
+    }
+}
+
 /// A press of a system-wide shortcut. Both toggle the same way
 /// (`shortcut::action_for`): Stop and Cancel run here; Start goes through
 /// the main window with what `kind` starts (`ShortcutKind::start`: the
@@ -6885,6 +6940,25 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
+
+    /// `hippius --capture` / `--record` that start the app run once the
+    /// signed-in app is up, unless that took so long it would surprise.
+    #[test]
+    fn a_launch_for_a_shortcut_runs_it_once_the_app_is_up() {
+        assert_eq!(launch_shortcut_for(["--capture"]), Some(ShortcutKind::Screenshot));
+        assert_eq!(launch_shortcut_for(["--record"]), Some(ShortcutKind::Record));
+        assert_eq!(launch_shortcut_for(["--record", "--capture"]), Some(ShortcutKind::Screenshot));
+        assert_eq!(launch_shortcut_for(Vec::<String>::new()), None);
+        assert_eq!(launch_shortcut_for(["hippiusapp://callback"]), None);
+        let at = std::time::Instant::now();
+        assert_eq!(launch_shortcut_due(Some((ShortcutKind::Record, at)), at), Some(ShortcutKind::Record));
+        assert_eq!(
+            launch_shortcut_due(Some((ShortcutKind::Record, at)), at + LAUNCH_SHORTCUT_FOR),
+            None,
+            "too late"
+        );
+        assert_eq!(launch_shortcut_due(None, at), None);
+    }
 
     /// Windows' work area in physical pixels, as `read_work_areas` turns it
     /// into the area's own logical units.

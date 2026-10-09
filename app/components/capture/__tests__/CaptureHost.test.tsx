@@ -142,6 +142,11 @@ describe("CaptureHost", () => {
     expect(h.toastError).not.toHaveBeenCalled();
   });
 
+  it("asks Rust to run a launch's capture shortcut once it listens", async () => {
+    mountHost();
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_launch_shortcut"));
+  });
+
   it("opens the plans on the card's Upgrade", async () => {
     mountHost();
     await act(() => tauri.emitEvent("capture_open_plans", null));
